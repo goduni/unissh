@@ -17,6 +17,8 @@ dist/
 dist-ssr/
 build/Release/
 out/
+# Local skill/tooling output — never commit (repo ships product code only).
+graphify-out/
 *.tsbuildinfo
 logs/
 *.log
