@@ -175,17 +175,17 @@ export function FileRow({
         {isUp ? ".." : entry.name}
       </span>
       {!isUp && showPerms && (
-        <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3, width: 78, textAlign: "left" }}>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt2, width: 78, textAlign: "left" }}>
           {modeString(entry.mode)}
         </span>
       )}
       {!isUp && showModified && (
-        <span style={{ fontSize: 11, color: p.txt3, width: 96, textAlign: "right" }}>
+        <span style={{ fontSize: 11, color: p.txt2, width: 96, textAlign: "right" }}>
           {entry.mtime ? fmtDate(entry.mtime) : ""}
         </span>
       )}
       {!isUp && (
-        <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3, width: 70, textAlign: "right" }}>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt2, width: 70, textAlign: "right" }}>
           {isDir ? "—" : fmtSize(entry.size)}
         </span>
       )}
