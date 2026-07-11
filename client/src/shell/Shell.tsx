@@ -239,10 +239,17 @@ function NavItem({
   badge?: string;
 }) {
   const p = usePalette();
+  // Hover fill is React state, not an imperative e.currentTarget.style mutation:
+  // a direct DOM write desyncs from React's style model, so on a theme switch the
+  // reconciler sees background unchanged ("transparent" both renders) and leaves a
+  // stale old-theme fill until the next mouse event. Declaring it keeps it in sync.
+  const [hover, setHover] = useState(false);
   return (
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
         ...BTN_RESET,
         display: "flex",
@@ -255,17 +262,11 @@ function NavItem({
         margin: sub ? "0 8px 0 22px" : "0 8px",
         borderRadius: 8,
         cursor: "pointer",
-        background: "transparent",
+        background: !active && hover ? p.bg2 : "transparent",
         color: active ? p.txt : p.txt2,
         boxShadow: active ? `inset 2px 0 0 ${p.accent}` : "none",
         fontSize: 13,
         fontWeight: active ? 600 : 500,
-      }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = p.bg2;
-      }}
-      onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.background = "transparent";
       }}
     >
       {icon && <Icon name={icon} size={15} color={active ? p.accent : p.txt3} stroke={1.7} />}
@@ -311,6 +312,40 @@ function NavGroup({
       </div>
       {children}
     </>
+  );
+}
+
+/** Ghost chevron that folds the sidebar to the icon rail. Borderless and quiet so
+ *  it sits beside the vault card without competing; a subtle fill appears on hover. */
+function CollapseToggle({ onClick }: { onClick: () => void }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      title={t("common.minimize")}
+      aria-label={t("common.minimize")}
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        ...BTN_RESET,
+        flexShrink: 0,
+        width: 32,
+        height: 32,
+        borderRadius: 8,
+        border: "1px solid transparent",
+        background: hover ? p.bg1 : "transparent",
+        color: hover ? p.txt2 : p.txt3,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        transition: "background .12s ease, color .12s ease",
+      }}
+    >
+      <Icon name="cl" size={15} />
+    </button>
   );
 }
 
@@ -785,31 +820,12 @@ export function Sidebar({
           borderTop: `1px solid ${p.line}`,
           padding: "10px 12px 0",
           display: "flex",
-          alignItems: "stretch",
-          gap: 8,
+          alignItems: "center",
+          gap: 6,
         }}
       >
         <VaultSwitcher />
-        <button
-          title={t("common.minimize")}
-          aria-label={t("common.minimize")}
-          onClick={onToggleCollapse}
-          style={{
-            flexShrink: 0,
-            width: 34,
-            alignSelf: "stretch",
-            borderRadius: 10,
-            border: `1px solid ${p.line}`,
-            background: p.bg1,
-            color: p.txt2,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="cl" size={14} />
-        </button>
+        <CollapseToggle onClick={onToggleCollapse} />
       </div>
     </div>
   );
