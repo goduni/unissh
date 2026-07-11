@@ -75,6 +75,7 @@ function MSeg<T extends string>({
       {options.map((o) => (
         <button
           key={o.id}
+          type="button"
           onClick={() => set(o.id)}
           style={{
             flex: 1,
@@ -86,13 +87,15 @@ function MSeg<T extends string>({
             borderRadius: 9,
             cursor: "pointer",
             textAlign: "left",
-            background: value === o.id ? p.accentSoft : p.bg2,
+            // De-decor: active segment reads as a neutral raised tile + ink text,
+            // never an accent fill.
+            background: value === o.id ? p.bg4 : p.bg2,
             color: value === o.id ? p.txt : p.txt2,
-            border: `1px solid ${value === o.id ? p.accentLine : p.line}`,
+            border: `1px solid ${value === o.id ? p.line2 : p.line}`,
           }}
         >
           <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700 }}>
-            <Icon name={o.icon} size={14} color={value === o.id ? p.accent : p.txt3} />
+            <Icon name={o.icon} size={14} color={value === o.id ? p.txt : p.txt3} />
             {o.label}
           </span>
           {o.desc && <span style={{ fontSize: 10.5, color: p.txt3, fontWeight: 500 }}>{o.desc}</span>}
@@ -389,6 +392,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   const seg = (id: AuthSeg, lbl: string, icon: IconName) => (
     <button
       key={id}
+      type="button"
       onClick={() => {
         authTouched.current = true;
         setAuth(id);
@@ -405,9 +409,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
         fontFamily: UI,
         fontSize: 13,
         fontWeight: auth === id ? 700 : 600,
-        background: auth === id ? p.accentSoft : p.bg2,
-        color: auth === id ? p.accent : p.txt2,
-        border: `1px solid ${auth === id ? p.accentLine : p.line}`,
+        // De-decor: active auth segment = neutral raised tile + ink text.
+        background: auth === id ? p.bg4 : p.bg2,
+        color: auth === id ? p.txt : p.txt2,
+        border: `1px solid ${auth === id ? p.line2 : p.line}`,
       }}
     >
       <Icon name={icon} size={15} />
@@ -1048,39 +1053,18 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
 
           {/* ProxyJump */}
           <div style={{ borderRadius: 11, border: `1px solid ${p.line}`, background: p.bg2, padding: 12 }}>
-            <label
-              onClick={() => setUseJump(!useJump)}
-              style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
-            >
-              <span
-                style={{
-                  width: 34,
-                  height: 20,
-                  borderRadius: 11,
-                  background: useJump ? p.accent : p.bg4,
-                  position: "relative",
-                  flexShrink: 0,
-                }}
-              >
-                <span
-                  style={{
-                    position: "absolute",
-                    top: 2,
-                    left: useJump ? 16 : 2,
-                    width: 16,
-                    height: 16,
-                    borderRadius: "50%",
-                    background: "#fff",
-                    transition: "left .15s",
-                  }}
-                />
-              </span>
-              <Icon name="branch" size={15} color={useJump ? p.purple : p.txt3} />
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Toggle
+                checked={useJump}
+                onChange={setUseJump}
+                aria-label={t("modals.host.proxyJump")}
+              />
+              <Icon name="branch" size={15} color={useJump ? p.txt2 : p.txt3} />
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{t("modals.host.proxyJump")}</div>
                 <div style={{ fontSize: 11, color: p.txt3 }}>{t("modals.host.proxyJumpDesc")}</div>
               </div>
-            </label>
+            </div>
             {useJump && (
               <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
                 {refHosts.length > 0 && (
@@ -1097,9 +1081,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                           cursor: "pointer",
                           fontSize: 12.5,
                           fontWeight: jMode === m ? 700 : 600,
-                          background: jMode === m ? p.accentSoft : p.bg2,
-                          color: jMode === m ? p.accent : p.txt2,
-                          border: `1px solid ${jMode === m ? p.accentLine : p.line}`,
+                          // De-decor: active jump-mode = neutral raised tile + ink text.
+                          background: jMode === m ? p.bg4 : p.bg2,
+                          color: jMode === m ? p.txt : p.txt2,
+                          border: `1px solid ${jMode === m ? p.line2 : p.line}`,
                         }}
                       >
                         {m === "inline"
@@ -1160,8 +1145,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                 {groups.map((g) => {
                   const on = groupId === g.groupId;
                   return (
-                    <span
+                    <button
                       key={g.groupId}
+                      type="button"
+                      aria-pressed={on}
                       onClick={() => pickGroup(g.groupId)}
                       style={{
                         display: "inline-flex",
@@ -1170,21 +1157,25 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                         padding: "7px 12px",
                         borderRadius: 9,
                         cursor: "pointer",
+                        fontFamily: UI,
                         fontSize: 13,
-                        fontWeight: 600,
-                        background: on ? p.accentSoft : p.bg2,
-                        color: on ? p.accent : p.txt2,
-                        border: `1px solid ${on ? p.accentLine : p.line}`,
+                        fontWeight: on ? 700 : 600,
+                        // De-decor: selected group = neutral raised tile + ink text.
+                        background: on ? p.bg4 : p.bg2,
+                        color: on ? p.txt : p.txt2,
+                        border: `1px solid ${on ? p.line2 : p.line}`,
                       }}
                     >
                       <Icon name="folder" size={14} />
                       {g.label}
-                    </span>
+                    </button>
                   );
                 })}
                 {/* pending new group (created on save) shown as a selected chip */}
                 {groupId === NEW_GROUP && newGroupName.trim() && (
-                  <span
+                  <button
+                    type="button"
+                    aria-pressed={true}
                     onClick={() => setAddingGroup(true)}
                     title={t("modals.host.editNewGroup")}
                     style={{
@@ -1194,16 +1185,18 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       padding: "7px 12px",
                       borderRadius: 9,
                       cursor: "pointer",
+                      fontFamily: UI,
                       fontSize: 13,
-                      fontWeight: 600,
-                      background: p.accentSoft,
-                      color: p.accent,
-                      border: `1px solid ${p.accentLine}`,
+                      fontWeight: 700,
+                      // De-decor: selected pending group = neutral raised tile + ink text.
+                      background: p.bg4,
+                      color: p.txt,
+                      border: `1px solid ${p.line2}`,
                     }}
                   >
                     <Icon name="folder" size={14} />
                     {newGroupName.trim()}
-                  </span>
+                  </button>
                 )}
                 {/* create a new group inline */}
                 {addingGroup ? (
@@ -1238,7 +1231,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     }}
                   />
                 ) : (
-                  <span
+                  <button
+                    type="button"
                     onClick={() => setAddingGroup(true)}
                     style={{
                       display: "inline-flex",
@@ -1247,6 +1241,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       padding: "7px 12px",
                       borderRadius: 9,
                       cursor: "pointer",
+                      fontFamily: UI,
                       fontSize: 13,
                       fontWeight: 600,
                       background: "transparent",
@@ -1256,10 +1251,12 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   >
                     <Icon name="plus" size={13} />
                     {t("modals.host.newGroup")}
-                  </span>
+                  </button>
                 )}
                 {/* no group */}
-                <span
+                <button
+                  type="button"
+                  aria-pressed={groupId === ""}
                   onClick={() => pickGroup("")}
                   style={{
                     display: "inline-flex",
@@ -1268,15 +1265,17 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     padding: "7px 12px",
                     borderRadius: 9,
                     cursor: "pointer",
+                    fontFamily: UI,
                     fontSize: 13,
-                    fontWeight: 600,
-                    background: groupId === "" ? p.accentSoft : "transparent",
-                    color: groupId === "" ? p.accent : p.txt3,
-                    border: `1px solid ${groupId === "" ? p.accentLine : p.line2}`,
+                    fontWeight: groupId === "" ? 700 : 600,
+                    // De-decor: selected "No group" = neutral raised tile + ink text.
+                    background: groupId === "" ? p.bg4 : "transparent",
+                    color: groupId === "" ? p.txt : p.txt3,
+                    border: `1px solid ${p.line2}`,
                   }}
                 >
                   {t("modals.host.noGroup")}
-                </span>
+                </button>
               </div>
             </Field>
           </div>
@@ -1298,14 +1297,16 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                 }}
               >
                 {tags.map((tg) => (
-                  <span
+                  <button
                     key={tg}
+                    type="button"
                     onClick={() => setTags(tags.filter((x) => x !== tg))}
-                    style={{ cursor: "pointer" }}
+                    style={{ ...BTN_RESET, cursor: "pointer", display: "inline-flex" }}
                     title={t("modals.host.removeTag")}
+                    aria-label={t("modals.host.removeTag")}
                   >
                     <Tag mono>#{tg}</Tag>
-                  </span>
+                  </button>
                 ))}
                 <input
                   {...NO_AUTOCORRECT}
@@ -1696,14 +1697,11 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [viaId, setViaId] = useState(hosts[0]?.profileId ?? "");
   const m = T_META[type];
-  const [src, setSrc] = useState(m.src);
-  const [dst, setDst] = useState(m.dst);
-
-  const setKind = (t: TLetter) => {
-    setType(t);
-    setSrc(T_META[t].src);
-    setDst(T_META[t].dst);
-  };
+  // Start empty and surface the example (m.src / m.dst) as PLACEHOLDER only — never
+  // seed real host:port values into state, or a user could open a live forward to a
+  // sample host they never typed.
+  const [src, setSrc] = useState("");
+  const [dst, setDst] = useState("");
 
   const open = async () => {
     if (!vault) {
@@ -1796,7 +1794,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
       <Field label={t("modals.tunnel.forwardType")}>
         <MSeg
           value={type}
-          set={setKind}
+          set={setType}
           options={[
             { id: "L", label: "Local -L", icon: "ar", desc: t("modals.tunnel.localDesc") },
             { id: "R", label: "Remote -R", icon: "cl", desc: t("modals.tunnel.remoteDesc") },
@@ -1827,7 +1825,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
         }}
       >
         <Field label={tDyn(m.srcLKey)} w="100%">
-          <Input value={src} mono accent onChange={setSrc} />
+          <Input value={src} placeholder={m.src} mono accent onChange={setSrc} />
         </Field>
         <span
           style={{
@@ -1860,7 +1858,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
               SOCKS5
             </div>
           ) : (
-            <Input value={dst} mono onChange={setDst} />
+            <Input value={dst} placeholder={m.dst} mono onChange={setDst} />
           )}
         </Field>
       </div>
@@ -2570,12 +2568,20 @@ function CopyKeyToServerModal({
         <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, flex: 1 }}>
           {t("modals.copyKey.hostsLabel")}
         </div>
-        <span onClick={selectAll} style={{ fontSize: 12, color: p.accent, cursor: "pointer" }}>
+        <button
+          type="button"
+          onClick={selectAll}
+          style={{ ...BTN_RESET, fontFamily: UI, fontSize: 12, color: p.accent, cursor: "pointer" }}
+        >
           {t("modals.copyKey.selectAll")}
-        </span>
-        <span onClick={clearAll} style={{ fontSize: 12, color: p.txt3, cursor: "pointer" }}>
+        </button>
+        <button
+          type="button"
+          onClick={clearAll}
+          style={{ ...BTN_RESET, fontFamily: UI, fontSize: 12, color: p.txt3, cursor: "pointer" }}
+        >
           {t("modals.copyKey.clear")}
-        </span>
+        </button>
       </div>
       {hosts.length === 0 ? (
         <div style={{ fontSize: 13, color: p.txt3, padding: "10px 2px" }}>
@@ -2620,7 +2626,7 @@ function CopyKeyToServerModal({
                     justifyContent: "center",
                     background: on ? p.accent : "transparent",
                     border: `1px solid ${on ? p.accent : p.line2}`,
-                    color: "#fff",
+                    color: p.accentInk ?? "#fff",
                   }}
                 >
                   {on && <Icon name="check" size={12} />}
