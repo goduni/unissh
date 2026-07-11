@@ -935,14 +935,13 @@ function SettingsAbout() {
             width: 56,
             height: 56,
             borderRadius: 16,
-            background: `linear-gradient(140deg, ${p.accent}, ${p.purple})`,
+            background: p.accent,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            boxShadow: `0 10px 26px -10px ${p.accent}`,
           }}
         >
-          <Icon name="terminal" size={26} color="#fff" stroke={2} />
+          <Icon name="terminal" size={26} color={p.accentInk} stroke={2} />
         </span>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.4 }}>UniSSH</div>
@@ -1102,8 +1101,9 @@ function SettingsVaults() {
                 style={{
                   fontSize: 10.5,
                   fontWeight: 600,
-                  color: p.accent,
-                  background: p.accentSoft,
+                  color: p.txt2,
+                  background: p.bg3,
+                  border: `1px solid ${p.line}`,
                   padding: "1px 7px",
                   borderRadius: 6,
                 }}
@@ -1144,6 +1144,7 @@ function SettingsVaults() {
             icon="trash"
             disabled={vaults.length <= 1}
             onClick={() => remove(v)}
+            style={{ color: p.red, borderColor: rgba(p.red, 0.4) }}
           >
             {t("common.delete")}
           </Btn>
@@ -1319,9 +1320,9 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
                 cursor: "pointer",
                 fontSize: 13,
                 fontWeight: mode === m ? 700 : 600,
-                background: mode === m ? p.accentSoft : p.bg2,
-                color: mode === m ? p.accent : p.txt2,
-                border: `1px solid ${mode === m ? p.accentLine : p.line}`,
+                background: mode === m ? p.bg3 : p.bg2,
+                color: mode === m ? p.txt : p.txt2,
+                border: `1px solid ${mode === m ? p.line2 : p.line}`,
               }}
             >
               {t(
@@ -1544,9 +1545,9 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
                     style={{
                       fontSize: 10.5,
                       fontWeight: 600,
-                      color: p.accent,
-                      background: p.accentSoft,
-                      border: `1px solid ${p.accentLine}`,
+                      color: p.txt2,
+                      background: p.bg3,
+                      border: `1px solid ${p.line}`,
                       padding: "1px 7px",
                       borderRadius: 6,
                     }}
@@ -2277,8 +2278,8 @@ function CloudServersList({
                         fontWeight: 700,
                         letterSpacing: 0.4,
                         textTransform: "uppercase",
-                        color: p.accent,
-                        border: `1px solid ${rgba(p.accent, 0.5)}`,
+                        color: p.txt2,
+                        border: `1px solid ${p.line2}`,
                         borderRadius: 6,
                         padding: "1px 6px",
                       }}
@@ -2504,10 +2505,7 @@ function SettingsCloud() {
       )}
 
       <SectionLabel>{t("serverCloud.sectionSession")}</SectionLabel>
-      <SettingRow
-        title={serverLabel(s)}
-        desc={s.hasSession ? t("serverCloud.hasSession") : t("serverCloud.noSession")}
-      >
+      <SettingRow title={serverLabel(s)}>
         <span
           style={{
             display: "inline-flex",
@@ -2700,9 +2698,9 @@ export function ViewSettings() {
                 borderRadius: 9,
                 cursor: "pointer",
                 textAlign: "left",
-                border: "none",
-                background: on ? p.accentSoft : "transparent",
-                color: on ? p.accent : p.txt2,
+                border: `1px solid ${on ? p.line : "transparent"}`,
+                background: on ? p.bg3 : "transparent",
+                color: on ? p.txt : p.txt2,
                 fontFamily: UI,
                 fontSize: 13.5,
                 fontWeight: on ? 700 : 500,
@@ -2710,7 +2708,7 @@ export function ViewSettings() {
                 flexShrink: isMobile ? 0 : undefined,
               }}
             >
-              <Icon name={tb.icon} size={16} color={on ? p.accent : p.txt3} />
+              <Icon name={tb.icon} size={16} color={on ? p.txt : p.txt3} />
               {tDyn(tb.labelKey)}
             </button>
           );
