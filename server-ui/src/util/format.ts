@@ -2,7 +2,7 @@
 import i18n from "../i18n";
 
 export function fmtNum(n: number): string {
-  return n.toLocaleString("ru-RU");
+  return n.toLocaleString(i18n.language || "ru-RU");
 }
 
 export function fmtBytes(n: number): string {

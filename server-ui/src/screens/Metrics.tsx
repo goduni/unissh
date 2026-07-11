@@ -8,6 +8,7 @@ import { KeysetGate } from "../ui/overlays";
 import { Btn, Card, ErrorCard, KpiCard, Spinner } from "../ui/primitives";
 import type { MetricsPoint } from "../api/types";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 export function Metrics() {
   const { t } = useTranslation();
@@ -146,7 +147,7 @@ function MetricsBody() {
           }}
         >
           <span style={{ fontWeight: 700, fontSize: 13.5 }}>Ряды метрик</span>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: "var(--txt3)" }}>
+          <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--txt3)" }}>
             /v1/admin/metrics/summary
           </span>
         </div>
@@ -161,12 +162,12 @@ function MetricsBody() {
                 borderBottom: "1px solid var(--line)",
               }}
             >
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--txt2)" }}>
+              <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--txt2)" }}>
                 {name}
               </span>
               <span
                 style={{
-                  fontFamily: "'JetBrains Mono', monospace",
+                  fontFamily: MONO,
                   fontSize: 12,
                   color: "var(--txt)",
                   fontWeight: 600,
@@ -212,10 +213,10 @@ function DeltaChart({
           marginBottom: 10,
         }}
       >
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, fontWeight: 700, color: "var(--txt)" }}>
+        <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 700, color: "var(--txt)" }}>
           {name}
         </span>
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--txt3)" }}>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--txt3)" }}>
           Δ/{sampleInterval}s · окно {retained}
         </span>
       </div>

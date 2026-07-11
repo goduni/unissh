@@ -12,6 +12,7 @@ import { Icon } from "../ui/icons";
 import { Btn, PubkeyChip, Tag, ZkBanner } from "../ui/primitives";
 import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 interface DecodedEvent {
   /** Event name (server-observed) or a placeholder for opaque/client blobs. */
@@ -250,7 +251,7 @@ function AuditBody() {
       label: "seq",
       width: "86px",
       render: (row) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{row.seq}</span>
+        <span style={{ fontFamily: MONO, fontSize: 12 }}>{row.seq}</span>
       ),
     },
     {
@@ -263,7 +264,7 @@ function AuditBody() {
           <div style={{ minWidth: 0 }}>
             <div
               style={{
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: MONO,
                 fontSize: 12,
                 fontWeight: 600,
                 overflow: "hidden",
@@ -278,7 +279,7 @@ function AuditBody() {
                 style={{
                   fontSize: 11,
                   color: "var(--txt3)",
-                  fontFamily: "'JetBrains Mono', monospace",
+                  fontFamily: MONO,
                   marginTop: 1,
                   overflow: "hidden",
                   textOverflow: "ellipsis",

@@ -8,6 +8,7 @@ import { DataTable, type Column } from "../ui/DataTable";
 import { KeysetGate } from "../ui/overlays";
 import { PubkeyChip, Tag, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 export function Vaults() {
   const { t } = useTranslation();
@@ -32,7 +33,7 @@ function VaultsBody() {
       width: "1.3fr",
       render: (r) => (
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{truncId(r.vault_id)}</span>
+          <span style={{ fontFamily: MONO }}>{truncId(r.vault_id)}</span>
           {r.tombstone ? <Tag tone="red">TOMB</Tag> : null}
         </span>
       ),
@@ -48,7 +49,7 @@ function VaultsBody() {
       label: "epoch",
       width: "70px",
       render: (r) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{r.latest_epoch}</span>
+        <span style={{ fontFamily: MONO }}>{r.latest_epoch}</span>
       ),
     },
     {
@@ -56,7 +57,7 @@ function VaultsBody() {
       label: "version",
       width: "78px",
       render: (r) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{r.latest_version}</span>
+        <span style={{ fontFamily: MONO }}>{r.latest_version}</span>
       ),
     },
     {
@@ -70,7 +71,7 @@ function VaultsBody() {
       label: "cache_policy",
       width: "132px",
       render: (r) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--txt3)" }}>
+        <span style={{ fontFamily: MONO, color: "var(--txt3)" }}>
           {CACHE_POLICY_LABEL[r.cache_policy]}
         </span>
       ),

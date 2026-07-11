@@ -21,6 +21,7 @@ import {
   initialsOf,
 } from "../ui/primitives";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 export function Accounts() {
   const { t } = useTranslation();
@@ -81,7 +82,7 @@ function AccountsBody() {
                 <Tag tone="amber">ADMIN</Tag>
               ) : null}
             </span>
-            <span style={{ fontSize: 11, color: "var(--txt3)", fontFamily: "'JetBrains Mono', monospace" }}>
+            <span style={{ fontSize: 11, color: "var(--txt3)", fontFamily: MONO }}>
               {a.handle ?? "—"}
             </span>
           </span>
@@ -163,7 +164,7 @@ function AccountsBody() {
                     </span>
                     {a.is_admin ? <Tag tone="amber">ADMIN</Tag> : null}
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: "'JetBrains Mono', monospace" }}>{a.handle ?? "—"}</div>
+                  <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: MONO }}>{a.handle ?? "—"}</div>
                 </div>
                 <StatusDot status={a.status === "active" ? "online" : "offline"} size={8} />
               </div>
@@ -273,7 +274,7 @@ function AccountDrawer({
             <span style={{ fontSize: 16, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
             {account.is_admin ? <Tag tone="amber">ADMIN</Tag> : null}
           </div>
-          <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: "'JetBrains Mono', monospace" }}>{account.handle ?? "—"}</div>
+          <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: MONO }}>{account.handle ?? "—"}</div>
         </div>
         <button onClick={onClose} style={{ border: "none", background: "transparent", color: "var(--txt3)", cursor: "pointer", display: "flex" }}>
           <Icon name="plus" size={18} style={{ transform: "rotate(45deg)" }} />
@@ -339,4 +340,4 @@ function DrawerRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-const mono: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: "var(--txt2)" };
+const mono: React.CSSProperties = { fontFamily: MONO, fontSize: 12.5, color: "var(--txt2)" };

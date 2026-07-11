@@ -11,6 +11,7 @@ import { DataTable, type Column } from "../ui/DataTable";
 import { KeysetGate } from "../ui/overlays";
 import { Btn, RoleBadge, StateBadge } from "../ui/primitives";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 export function Invites() {
   const { t } = useTranslation();
@@ -109,4 +110,4 @@ function InvitesBody() {
   );
 }
 
-const mono: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: "var(--txt2)" };
+const mono: React.CSSProperties = { fontFamily: MONO, fontSize: 12.5, color: "var(--txt2)" };

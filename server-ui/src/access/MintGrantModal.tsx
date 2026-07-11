@@ -6,6 +6,7 @@ import { fmtDate } from "../util/format";
 import { Icon } from "../ui/icons";
 import { Btn, Field, TextInput } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
+import { MONO } from "../theme/tokens";
 
 const TIERS: { value: string; label: string }[] = [
   { value: "", label: "screen.enroll.tierDefault" },
@@ -118,7 +119,7 @@ export function MintGrantModal() {
               <span
                 style={{
                   flex: 1,
-                  fontFamily: "'JetBrains Mono', monospace",
+                  fontFamily: MONO,
                   fontSize: 12.5,
                   color: "var(--accent)",
                   wordBreak: "break-all",

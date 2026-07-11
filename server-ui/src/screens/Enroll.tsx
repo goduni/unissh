@@ -8,6 +8,7 @@ import { fmtDate, fmtRelative } from "../util/format";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Btn, StateBadge, TierBadge } from "../ui/primitives";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 export function Enroll() {
   const { t } = useTranslation();
@@ -124,4 +125,4 @@ function EnrollBody() {
   );
 }
 
-const mono: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: "var(--txt2)" };
+const mono: React.CSSProperties = { fontFamily: MONO, fontSize: 12.5, color: "var(--txt2)" };

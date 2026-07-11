@@ -6,6 +6,8 @@ import { useSession } from "../store/session";
 import { useTenant } from "../store/tenant";
 import { useUi, type Route } from "../store/ui";
 import { useAsync } from "../util/useAsync";
+import { fmtNum } from "../util/format";
+import { MONO } from "../theme/tokens";
 import { Icon, type IconName } from "../ui/icons";
 import { KpiCard, Spinner, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
@@ -48,7 +50,7 @@ export function Overview() {
     },
     {
       label: "Σ next_seq",
-      value: opsOv.data ? opsOv.data.instance_generation.toLocaleString("ru") : "…",
+      value: opsOv.data ? fmtNum(opsOv.data.instance_generation) : "…",
       icon: "layers" as const,
       mono: true,
     },
@@ -72,16 +74,16 @@ export function Overview() {
         { label: t("nav.accounts"), value: String(adminOv.data.accounts), icon: "server" as const, route: "accounts" as Route, delta: t("screen.overview.deltaAdmins", { count: adminOv.data.admins }) },
         { label: t("nav.devices"), value: String(adminOv.data.devices), icon: "fingerprint" as const, route: "devices" as Route, delta: t("screen.overview.deltaSessions", { count: adminOv.data.active_sessions }) },
         { label: t("nav.vaults"), value: String(adminOv.data.vaults), icon: "lock" as const, route: "vaults" as Route },
-        { label: t("nav.objects"), value: adminOv.data.objects.toLocaleString("ru"), icon: "layers" as const, route: "objects" as Route },
+        { label: t("nav.objects"), value: fmtNum(adminOv.data.objects), icon: "layers" as const, route: "objects" as Route },
         { label: t("nav.invites"), value: String(adminOv.data.pending_invites), icon: "tag" as const, route: "invites" as Route, delta: t("screen.overview.deltaPending") },
-        { label: "next_seq", value: adminOv.data.next_seq.toLocaleString("ru"), icon: "refresh" as const, route: "maint" as Route },
+        { label: "next_seq", value: fmtNum(adminOv.data.next_seq), icon: "refresh" as const, route: "maint" as Route },
       ]
     : opsOv.data
       ? [
           { label: t("nav.tenants"), value: String(opsOv.data.tenants), icon: "database" as const, route: "tenants" as Route },
           { label: t("nav.accounts"), value: String(opsOv.data.accounts), icon: "server" as const, route: "accounts" as Route },
-          { label: t("nav.objects"), value: opsOv.data.objects.toLocaleString("ru"), icon: "layers" as const, route: "objects" as Route },
-          { label: "Σ next_seq", value: opsOv.data.instance_generation.toLocaleString("ru"), icon: "refresh" as const, route: "maint" as Route },
+          { label: t("nav.objects"), value: fmtNum(opsOv.data.objects), icon: "layers" as const, route: "objects" as Route },
+          { label: "Σ next_seq", value: fmtNum(opsOv.data.instance_generation), icon: "refresh" as const, route: "maint" as Route },
         ]
       : [];
 
@@ -125,7 +127,7 @@ export function Overview() {
               >
                 {s.label}
               </div>
-              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: s.mono ? "'JetBrains Mono', monospace" : "inherit" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: s.mono ? MONO : "inherit" }}>
                 {s.value}
               </div>
             </div>

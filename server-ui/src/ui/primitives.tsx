@@ -5,6 +5,7 @@ import {
 } from "react";
 import { usePrefs } from "../store/prefs";
 import { Icon, type IconName } from "./icons";
+import { MONO } from "../theme/tokens";
 
 // ── Btn ────────────────────────────────────────────────────────
 type BtnVariant = "primary" | "outline" | "ghost" | "soft" | "danger";
@@ -297,7 +298,7 @@ export function Tag({
         borderRadius: 6,
         padding: "2px 7px",
         whiteSpace: "nowrap",
-        fontFamily: mono ? "var(--mono, 'JetBrains Mono', monospace)" : "inherit",
+        fontFamily: mono ? `var(--mono, ${MONO})` : "inherit",
       }}
     >
       {children}
@@ -419,7 +420,7 @@ export function PubkeyChip({
         alignItems: "center",
         gap: 6,
         maxWidth: "100%",
-        fontFamily: "'JetBrains Mono', monospace",
+        fontFamily: MONO,
         fontSize: 11.5,
         color: "var(--txt2)",
       }}
@@ -537,7 +538,7 @@ export function KpiCard({
       </div>
       <div
         style={{
-          fontFamily: "'JetBrains Mono', monospace",
+          fontFamily: MONO,
           fontSize: 28,
           fontWeight: 700,
           marginTop: 10,
@@ -594,7 +595,7 @@ export function Field({
           <span
             style={{
               fontSize: 10,
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: MONO,
               color: "var(--txt3)",
               opacity: 0.65,
               whiteSpace: "nowrap",
@@ -651,7 +652,7 @@ export function TextInput({
         background: "var(--bg2)",
         border: "1px solid var(--line)",
         color: "var(--txt)",
-        fontFamily: mono ? "'JetBrains Mono', monospace" : "inherit",
+        fontFamily: mono ? MONO : "inherit",
         fontSize: 13,
         outline: "none",
       }}

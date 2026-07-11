@@ -4,6 +4,7 @@ import { useUi } from "../store/ui";
 import { useTheme } from "../theme/ThemeProvider";
 import { usePrefs } from "../store/prefs";
 import { Icon } from "../ui/icons";
+import { MONO } from "../theme/tokens";
 
 export function Titlebar() {
   const { t } = useTranslation();
@@ -49,7 +50,7 @@ export function Titlebar() {
               alignItems: "center",
               justifyContent: "center",
               color: "#fff",
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: MONO,
               fontWeight: 700,
               fontSize: 11,
             }}

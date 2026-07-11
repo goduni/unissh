@@ -12,6 +12,7 @@ import { Icon } from "../ui/icons";
 import { KeysetGate, Modal } from "../ui/overlays";
 import { Btn, PubkeyChip, Spinner, Tag, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 export function Grants() {
   const { t } = useTranslation();
@@ -65,7 +66,7 @@ function GrantsBody() {
               key={v.vault_id}
               onClick={() => setSel(v.vault_id)}
               style={{
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: MONO,
                 fontSize: 12,
                 padding: "6px 11px",
                 borderRadius: 8,
@@ -94,7 +95,7 @@ function GrantsBody() {
               </Btn>
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 30, fontWeight: 700, letterSpacing: -1 }}>
+              <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 700, letterSpacing: -1 }}>
                 {grants.data?.key_epoch ?? "—"}
               </span>
               <span style={{ fontSize: 11.5, color: "var(--green)", fontWeight: 700 }}>{t("screen.grants.current")}</span>
@@ -379,7 +380,7 @@ function RotateModal({
           <Icon name="alert" size={15} color="var(--amber)" style={{ marginTop: 1 }} />
           <div style={{ fontSize: 12, color: "var(--txt2)", lineHeight: 1.5 }}>
             Генерируется <b style={{ color: "var(--txt)" }}>свежий VK</b>, заново wrap'ится под x25519 каждого
-            члена (из <code style={{ color: "var(--amber)", fontFamily: "'JetBrains Mono', monospace" }}>/v1/accounts</code>),
+            члена (из <code style={{ color: "var(--amber)", fontFamily: MONO }}>/v1/accounts</code>),
             подписывается keyset'ом и публикуется эпохой {currentEpoch + 1} с read-deny эпохи {currentEpoch}. Требует crypto-wasm.
           </div>
         </div>
@@ -392,7 +393,7 @@ function RotateModal({
               <div key={m.pub} style={{ display: "grid", gridTemplateColumns: "1fr 120px 140px 90px", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--line)", alignItems: "center", opacity: removed ? 0.5 : 1 }}>
                 <div style={{ minWidth: 0 }}>
                   <PubkeyChip value={m.pub} />
-                  <div style={{ fontSize: 11, color: m.x25519 ? "var(--txt3)" : "var(--red)", fontFamily: "'JetBrains Mono', monospace" }}>
+                  <div style={{ fontSize: 11, color: m.x25519 ? "var(--txt3)" : "var(--red)", fontFamily: MONO }}>
                     {m.who ?? (m.x25519 ? "—" : t("screen.grants.noAccount"))}
                   </div>
                 </div>

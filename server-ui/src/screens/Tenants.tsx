@@ -12,6 +12,7 @@ import { DataTable, type Column } from "../ui/DataTable";
 import { Btn, Field, TextInput, StateBadge, TierBadge, gradientFor } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 export function Tenants() {
   const { t } = useTranslation();
@@ -108,7 +109,7 @@ export function Tenants() {
             </span>
             <span
               style={{
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: MONO,
                 fontSize: 11,
                 color: "var(--txt3)",
                 whiteSpace: "nowrap",
@@ -218,7 +219,7 @@ export function Tenants() {
             <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>{t("screen.tenants.renameModalTitle")}</div>
             <div
               style={{
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: MONO,
                 fontSize: 11.5,
                 color: "var(--txt3)",
                 marginBottom: 16,
@@ -248,7 +249,7 @@ export function Tenants() {
   );
 }
 
-const mono: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: "var(--txt2)" };
+const mono: React.CSSProperties = { fontFamily: MONO, fontSize: 12.5, color: "var(--txt2)" };
 
 function tile(seed: string): React.CSSProperties {
   let h = 0;

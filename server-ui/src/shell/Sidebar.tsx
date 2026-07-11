@@ -10,6 +10,7 @@ import { truncId } from "../util/bytes";
 import { Icon } from "../ui/icons";
 import { gradientFor } from "../ui/primitives";
 import { NAV } from "./nav";
+import { MONO } from "../theme/tokens";
 
 export function Sidebar() {
   const { t } = useTranslation();
@@ -77,7 +78,7 @@ export function Sidebar() {
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                fontFamily: active?.display_name ? "inherit" : "'JetBrains Mono', monospace",
+                fontFamily: active?.display_name ? "inherit" : MONO,
               }}
             >
               {active ? active.display_name || truncId(active.tenant_id, 8, 4) : "—"}
@@ -158,7 +159,7 @@ export function Sidebar() {
                     flex: 1,
                     fontSize: 12.5,
                     fontWeight: 600,
-                    fontFamily: tn.display_name ? "inherit" : "'JetBrains Mono', monospace",
+                    fontFamily: tn.display_name ? "inherit" : MONO,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -166,7 +167,7 @@ export function Sidebar() {
                 >
                   {tn.display_name || truncId(tn.tenant_id, 8, 4)}
                 </span>
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--txt3)" }}>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--txt3)" }}>
                   {tn.accounts}
                 </span>
                 {tn.tenant_id === activeId ? <Icon name="check" size={13} color="var(--accent)" /> : null}
@@ -281,7 +282,7 @@ export function Sidebar() {
                   {count != null ? (
                     <span
                       style={{
-                        fontFamily: "'JetBrains Mono', monospace",
+                        fontFamily: MONO,
                         fontSize: 11,
                         color: "var(--txt3)",
                         fontWeight: 600,

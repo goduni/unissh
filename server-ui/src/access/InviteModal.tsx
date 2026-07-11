@@ -7,6 +7,7 @@ import { fmtDate } from "../util/format";
 import { Icon } from "../ui/icons";
 import { Btn, Field, TextInput } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
+import { MONO } from "../theme/tokens";
 
 const ROLES = ["viewer", "editor", "admin"] as const;
 const TTLS: { label: string; seconds: number }[] = [
@@ -211,7 +212,7 @@ function CredField({
         <span
           style={{
             flex: 1,
-            fontFamily: "'JetBrains Mono', monospace",
+            fontFamily: MONO,
             fontSize: 12.5,
             color: "var(--accent)",
             wordBreak: "break-all",

@@ -10,6 +10,7 @@ import { DataTable, type Column } from "../ui/DataTable";
 import { KeysetGate } from "../ui/overlays";
 import { Card, StateBadge, TextInput, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 export function Relay() {
   const { t } = useTranslation();
@@ -39,7 +40,7 @@ function RelayBody() {
       label: "channel_id",
       width: "1fr",
       render: (r) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{truncId(r.channel_id)}</span>
+        <span style={{ fontFamily: MONO }}>{truncId(r.channel_id)}</span>
       ),
     },
     {
@@ -62,7 +63,7 @@ function RelayBody() {
       label: "generation",
       width: "1fr",
       render: (r) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{r.generation}</span>
+        <span style={{ fontFamily: MONO }}>{r.generation}</span>
       ),
     },
     {

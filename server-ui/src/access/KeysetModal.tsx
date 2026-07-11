@@ -12,6 +12,7 @@ import { fmtEpoch } from "../util/format";
 import { Icon } from "../ui/icons";
 import { Btn, Field, StateBadge, Tag, TextInput } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
+import { MONO } from "../theme/tokens";
 
 export function KeysetModal() {
   const { t } = useTranslation();
@@ -201,7 +202,7 @@ export function KeysetModal() {
                         marginLeft: "auto",
                         fontSize: 11,
                         color: "var(--txt3)",
-                        fontFamily: "'JetBrains Mono', monospace",
+                        fontFamily: MONO,
                       }}
                     >
                       tenant {truncId(m.tenant_id)}
@@ -211,7 +212,7 @@ export function KeysetModal() {
                     style={{
                       fontSize: 11,
                       color: "var(--txt3)",
-                      fontFamily: "'JetBrains Mono', monospace",
+                      fontFamily: MONO,
                       marginTop: 4,
                     }}
                   >
@@ -253,7 +254,7 @@ export function KeysetModal() {
                               style={{
                                 flex: 1,
                                 fontSize: 11.5,
-                                fontFamily: "'JetBrains Mono', monospace",
+                                fontFamily: MONO,
                                 color: on ? "var(--accent)" : "var(--txt2)",
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
@@ -299,7 +300,7 @@ export function KeysetModal() {
             }}
           >
             <Icon name="file" size={16} />
-            <span style={{ flex: 1, fontSize: 12.5, fontFamily: "'JetBrains Mono', monospace" }}>
+            <span style={{ flex: 1, fontSize: 12.5, fontFamily: MONO }}>
               {fileName || t("access.onb.ks_file_ph")}
             </span>
             {file ? <span style={{ fontSize: 11, color: "var(--green)" }}>✓</span> : null}

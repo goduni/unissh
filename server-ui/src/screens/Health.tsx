@@ -8,6 +8,7 @@ import { Btn, Card, Spinner, Tag } from "../ui/primitives";
 import { Icon } from "../ui/icons";
 import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 /** "Хд ЧЧ:ММ" from a duration in seconds. */
 function fmtUptime(sec: number): string {
@@ -77,7 +78,7 @@ export function Health() {
             <div style={{ minWidth: 0 }}>
               <div
                 style={{
-                  fontFamily: "'JetBrains Mono', monospace",
+                  fontFamily: MONO,
                   fontSize: 12.5,
                   color: "var(--txt3)",
                   fontWeight: 700,
@@ -93,7 +94,7 @@ export function Health() {
                 <>
                   <div
                     style={{
-                      fontFamily: "'JetBrains Mono', monospace",
+                      fontFamily: MONO,
                       fontSize: 18,
                       fontWeight: 700,
                       marginTop: 3,
@@ -107,7 +108,7 @@ export function Health() {
                   </div>
                   <div
                     style={{
-                      fontFamily: "'JetBrains Mono', monospace",
+                      fontFamily: MONO,
                       fontSize: 11.5,
                       color: "var(--txt3)",
                       marginTop: 2,
@@ -174,7 +175,7 @@ function LivenessCard({
         <div style={{ minWidth: 0 }}>
           <div
             style={{
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: MONO,
               fontSize: 12.5,
               color: "var(--txt3)",
               fontWeight: 700,
@@ -311,7 +312,7 @@ function HealthRow({
           fontSize: 13,
           color: "var(--txt)",
           fontWeight: 600,
-          fontFamily: mono ? "'JetBrains Mono', monospace" : "inherit",
+          fontFamily: mono ? MONO : "inherit",
         }}
       >
         {value}

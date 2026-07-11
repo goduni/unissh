@@ -5,6 +5,7 @@ import { useSession } from "../store/session";
 import { useUi } from "../store/ui";
 import { Icon } from "./icons";
 import { Btn } from "./primitives";
+import { MONO } from "../theme/tokens";
 
 // ── Modal (centered) ───────────────────────────────────────────
 export function Modal({
@@ -181,7 +182,7 @@ export function ConfirmDialog() {
               background: "var(--bg2)",
               border: "1px solid var(--line)",
               color: "var(--txt)",
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: MONO,
               fontSize: 13,
               outline: "none",
               marginBottom: 16,

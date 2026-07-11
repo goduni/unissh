@@ -10,6 +10,7 @@ import { DataTable, type Column } from "../ui/DataTable";
 import { Btn, PubkeyChip, StateBadge, TextInput, ZkBanner } from "../ui/primitives";
 import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 interface SessionRow {
   session_id: string;
@@ -54,7 +55,7 @@ function SessionsBody() {
       render: (row) => (
         <span
           style={{
-            fontFamily: "'JetBrains Mono', monospace",
+            fontFamily: MONO,
             fontSize: 12,
             color: "var(--txt2)",
             overflow: "hidden",
@@ -80,7 +81,7 @@ function SessionsBody() {
       label: "access",
       width: "110px",
       render: (row) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--txt2)" }}>
+        <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--txt2)" }}>
           {fmtRelative(row.access_expires)}
         </span>
       ),
@@ -90,7 +91,7 @@ function SessionsBody() {
       label: "refresh",
       width: "100px",
       render: (row) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--txt2)" }}>
+        <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--txt2)" }}>
           {fmtRelative(row.refresh_expires)}
         </span>
       ),

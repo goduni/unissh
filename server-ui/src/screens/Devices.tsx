@@ -11,6 +11,7 @@ import { Btn, StateBadge, TextInput } from "../ui/primitives";
 import { Icon } from "../ui/icons";
 import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 interface DeviceRow {
   device_id: string;
@@ -49,7 +50,7 @@ function DevicesBody() {
           <Icon name="fingerprint" size={15} color="var(--txt3)" />
           <span
             style={{
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: MONO,
               fontSize: 12,
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -72,7 +73,7 @@ function DevicesBody() {
       label: t("screen.devices.colRegistered"),
       width: "130px",
       render: (row) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--txt2)" }}>
+        <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--txt2)" }}>
           {fmtDate(row.registered_at)}
         </span>
       ),
@@ -82,7 +83,7 @@ function DevicesBody() {
       label: t("screen.devices.colSessions"),
       width: "90px",
       render: (row) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
+        <span style={{ fontFamily: MONO, fontSize: 12 }}>
           {row.active_sessions}
         </span>
       ),

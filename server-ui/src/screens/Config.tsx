@@ -8,6 +8,7 @@ import { Btn, Spinner, Tag, TextInput, Toggle } from "../ui/primitives";
 import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
 import type { ConfigResp } from "../api/types";
+import { MONO } from "../theme/tokens";
 
 const SECTION_ORDER: (keyof ConfigResp)[] = [
   "server",
@@ -97,7 +98,7 @@ function ConfigBody() {
               style={{
                 padding: "12px 18px",
                 borderBottom: "1px solid var(--line)",
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: MONO,
                 fontSize: 13,
                 fontWeight: 700,
                 color: "var(--accent)",
@@ -125,7 +126,7 @@ function ConfigBody() {
                 >
                   <span
                     style={{
-                      fontFamily: "'JetBrains Mono', monospace",
+                      fontFamily: MONO,
                       fontSize: 12.5,
                       color: "var(--txt2)",
                     }}
@@ -136,7 +137,7 @@ function ConfigBody() {
                     style={{
                       display: "flex",
                       justifyContent: "flex-end",
-                      fontFamily: "'JetBrains Mono', monospace",
+                      fontFamily: MONO,
                       fontSize: 12.5,
                       color: "var(--txt)",
                       fontWeight: 600,
@@ -237,7 +238,7 @@ function BootstrapPolicyCard({ section }: { section: Record<string, unknown> }) 
   const status = allowOpen ? "open" : tokenSet ? "token" : "disabled";
   const color = allowOpen ? "var(--amber)" : tokenSet ? "var(--green)" : "var(--txt3)";
   const envRow: React.CSSProperties = {
-    fontFamily: "'JetBrains Mono', monospace",
+    fontFamily: MONO,
     fontSize: 12,
     color: "var(--txt2)",
     background: "var(--bg2)",

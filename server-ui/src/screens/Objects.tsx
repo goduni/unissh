@@ -10,6 +10,7 @@ import { DataTable, type Column } from "../ui/DataTable";
 import { PubkeyChip, Tag, ZkBanner, type TagTone } from "../ui/primitives";
 import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 const TAG_FILTERS: { label: string; tag: number | undefined }[] = [
   { label: "common.all", tag: undefined },
@@ -87,7 +88,7 @@ function ObjectsBody() {
       label: "seq",
       width: "84px",
       render: (row) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
+        <span style={{ fontFamily: MONO, fontSize: 12 }}>
           {row.server_seq}
         </span>
       ),
@@ -110,7 +111,7 @@ function ObjectsBody() {
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0 }}>
           <span
             style={{
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: MONO,
               fontSize: 12,
               color: "var(--txt2)",
               overflow: "hidden",
@@ -129,7 +130,7 @@ function ObjectsBody() {
       label: "ver",
       width: "64px",
       render: (row) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--txt3)" }}>
+        <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--txt3)" }}>
           {row.obj_version ?? "—"}
         </span>
       ),
@@ -139,7 +140,7 @@ function ObjectsBody() {
       label: "epoch",
       width: "64px",
       render: (row) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--txt3)" }}>
+        <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--txt3)" }}>
           {row.key_epoch ?? "—"}
         </span>
       ),
@@ -163,7 +164,7 @@ function ObjectsBody() {
       label: t("screen.objects.colSize"),
       width: "78px",
       render: (row) => (
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
+        <span style={{ fontFamily: MONO, fontSize: 12 }}>
           {fmtBytes(row.blob_len)}
         </span>
       ),

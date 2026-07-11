@@ -8,6 +8,7 @@ import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
 import { Icon } from "../ui/icons";
 import { Btn, Field, TextInput } from "../ui/primitives";
+import { MONO } from "../theme/tokens";
 
 export function OpsLogin() {
   const { t } = useTranslation();
@@ -95,7 +96,7 @@ export function OpsLogin() {
                 alignItems: "center",
                 justifyContent: "center",
                 color: "#fff",
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: MONO,
                 fontWeight: 700,
                 fontSize: 15,
               }}

@@ -9,6 +9,7 @@ import { fmtNum } from "../util/format";
 import { Icon } from "../ui/icons";
 import { Btn, Card, Field, Segmented, Spinner, TextInput, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
+import { MONO } from "../theme/tokens";
 
 export function Maintenance() {
   const { t } = useTranslation();
@@ -81,7 +82,7 @@ function MigrationsCard() {
                   borderBottom: "1px solid var(--line)",
                 }}
               >
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: "var(--txt2)" }}>
+                <span style={{ fontFamily: MONO, fontSize: 12.5, color: "var(--txt2)" }}>
                   {`000${m.version}`}
                 </span>
                 <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--txt)" }}>
@@ -172,7 +173,7 @@ function SeqBumpCard() {
           }}
         >
           <span style={{ fontSize: 12, color: "var(--txt3)", fontWeight: 600 }}>{t("screen.maint.currentNextSeq")}</span>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 700 }}>
+          <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700 }}>
             {next === undefined ? "—" : fmtNum(next)}
           </span>
         </div>
