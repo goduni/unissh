@@ -206,6 +206,8 @@ export const en = {
 
   broadcast: {
     "noRoute": "no route",
+    "offline": "offline",
+    "awaitingOutput": "connected — awaiting output",
     "mirrored": "mirrored",
     "connectionRefused": "connection refused",
     "noStatus": "no status",
@@ -469,6 +471,8 @@ export const en = {
     }
   },
   mobile: {
+    "keyVerified": "Key verified",
+    "notConnectedTofu": "Not yet connected (TOFU)",
     "vault": "Vault",
     "vaultLower": "vault",
     "noVaults": "No vaults",
@@ -499,6 +503,8 @@ export const en = {
       "port": "Port",
       "user": "User",
       "session": "Session",
+      "auth": "Auth",
+      "proxyJump": "ProxyJump",
       "tags": "Tags"
     },
     "more": {
@@ -637,7 +643,8 @@ export const en = {
   onboarding: {
     "step": {
       "instance": "Instance",
-      "masterPassword": "Master password"
+      "masterPassword": "Master password",
+      "emergencyKit": "Emergency Kit"
     },
     "newInstanceTitle": "New local instance",
     "newInstanceDesc": "An isolated space for your hosts and secrets. Everything stays on the device — no server, no cloud sync.",
@@ -925,6 +932,7 @@ export const en = {
     "linkCopied": "Link copied"
   },
   sftp: {
+    "verified": "Verified",
     "pickHost": "pick a host",
     "noSavedHosts": "No saved hosts",
     "newFolder": "New folder",

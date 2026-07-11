@@ -238,6 +238,8 @@ export const ru = {
   // ── View namespaces (assembled from .i18n-slices by the migration pass) ───
   broadcast: {
     "noRoute": "нет маршрута",
+    "offline": "офлайн",
+    "awaitingOutput": "подключено — ждём вывод",
     "mirrored": "зеркалится",
     "connectionRefused": "соединение отклонено",
     "noStatus": "нет статуса",
@@ -503,6 +505,8 @@ export const ru = {
     }
   },
   mobile: {
+    "keyVerified": "Ключ подтверждён",
+    "notConnectedTofu": "Ещё не подключались (TOFU)",
     "vault": "Хранилище",
     "vaultLower": "хранилище",
     "noVaults": "Нет хранилищ",
@@ -533,6 +537,8 @@ export const ru = {
       "port": "Порт",
       "user": "Пользователь",
       "session": "Сессия",
+      "auth": "Авторизация",
+      "proxyJump": "ProxyJump",
       "tags": "Теги"
     },
     "more": {
@@ -671,7 +677,8 @@ export const ru = {
   onboarding: {
     "step": {
       "instance": "Инстанс",
-      "masterPassword": "Мастер-пароль"
+      "masterPassword": "Мастер-пароль",
+      "emergencyKit": "Emergency Kit"
     },
     "newInstanceTitle": "Новый локальный инстанс",
     "newInstanceDesc": "Изолированное пространство для хостов и секретов. Всё на устройстве — нет сервера, нет облачного синка.",
@@ -960,6 +967,7 @@ export const ru = {
     "linkCopied": "Ссылка скопирована"
   },
   sftp: {
+    "verified": "Проверен",
     "pickHost": "выбрать хост",
     "noSavedHosts": "Нет сохранённых хостов",
     "newFolder": "Новая папка",
