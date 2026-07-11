@@ -680,6 +680,114 @@ export function Toggle({
   );
 }
 
+// ── Form field + boxed input ───────────────────────────────────
+/** Label (+ optional hint) wrapper around a form control. Ported 1:1 from the
+ *  prototype's NHField and the entry-overlay Field label. `w` sets the label's
+ *  width; `labelGap` is the label→control spacing (6 by default; the entry
+ *  overlays use 7). */
+export function Field({
+  label,
+  hint,
+  w,
+  labelGap = 6,
+  children,
+}: {
+  label?: string;
+  hint?: string;
+  w?: string;
+  labelGap?: number;
+  children: React.ReactNode;
+}) {
+  const p = usePalette();
+  return (
+    <label style={{ display: "block", width: w || "auto" }}>
+      {label != null && (
+        <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: labelGap }}>
+          {label}
+          {hint && <span style={{ color: p.txt3, fontWeight: 500 }}> · {hint}</span>}
+        </div>
+      )}
+      {children}
+    </label>
+  );
+}
+
+/** The shared boxed text input: a rounded bg2 box with an accent-capable border +
+ *  focus-ring, an optional leading icon, and a bare inner <input>. Box metrics are
+ *  props (defaults match the modal fields; the entry overlays pass a taller/rounder
+ *  box) so every call site renders exactly as it did inline. The bare inner input is
+ *  kept as a separate element (not flattened onto the box) to preserve the exact
+ *  text metrics the prototype ships. */
+export function Input({
+  value,
+  onChange,
+  placeholder,
+  type,
+  mono,
+  accent,
+  icon,
+  height = 40,
+  radius = 9,
+  pad = "0 12px",
+  gap,
+  fontSize = 13.5,
+  autoFocus,
+  onKeyDown,
+}: {
+  value: string;
+  onChange?: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+  mono?: boolean;
+  accent?: boolean;
+  icon?: IconName;
+  height?: number;
+  radius?: number;
+  pad?: string;
+  gap?: number;
+  fontSize?: number;
+  autoFocus?: boolean;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
+}) {
+  const p = usePalette();
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        ...(gap != null ? { gap } : null),
+        height,
+        padding: pad,
+        borderRadius: radius,
+        background: p.bg2,
+        border: `1px solid ${accent ? p.accentLine : p.line2}`,
+        boxShadow: accent ? `0 0 0 3px ${p.accentSoft}` : "none",
+      }}
+    >
+      {icon && <Icon name={icon} size={17} color={accent ? p.accent : p.txt3} />}
+      <input
+        {...NO_AUTOCORRECT}
+        value={value}
+        placeholder={placeholder}
+        type={type || "text"}
+        autoFocus={autoFocus}
+        onKeyDown={onKeyDown}
+        onChange={(e) => onChange?.(e.target.value)}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          background: "none",
+          border: "none",
+          outline: "none",
+          fontFamily: mono ? MONO : UI,
+          fontSize,
+          color: p.txt,
+        }}
+      />
+    </div>
+  );
+}
+
 export function Spinner({ size = 16, color }: { size?: number; color?: string }) {
   const p = usePalette();
   return (

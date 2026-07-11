@@ -7,7 +7,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, UI, rgba } from "@/theme/tokens";
-import { Btn, Checkbox, Icon, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
+import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useIsMobile } from "@/store/responsive";
 import { toast } from "@/store/toast";
@@ -178,55 +178,9 @@ function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
   );
 }
 
-function Field({
-  label,
-  icon,
-  children,
-  accent,
-  isMobile,
-}: {
-  label?: string;
-  icon?: import("@/components/primitives").IconName;
-  children: React.ReactNode;
-  accent?: boolean;
-  isMobile?: boolean;
-}) {
-  const p = usePalette();
-  return (
-    <label style={{ display: "block" }}>
-      {label && (
-        <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 7 }}>{label}</div>
-      )}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          height: isMobile ? 50 : 46,
-          padding: "0 14px",
-          borderRadius: 11,
-          background: p.bg2,
-          border: `1px solid ${accent ? p.accentLine : p.line2}`,
-          boxShadow: accent ? `0 0 0 3px ${p.accentSoft}` : "none",
-        }}
-      >
-        {icon && <Icon name={icon} size={17} color={accent ? p.accent : p.txt3} />}
-        {children}
-      </div>
-    </label>
-  );
-}
-
-const inputStyle = (p: ReturnType<typeof usePalette>, mono?: boolean): React.CSSProperties => ({
-  flex: 1,
-  background: "transparent",
-  border: "none",
-  outline: "none",
-  color: p.txt,
-  fontFamily: mono ? MONO : UI,
-  fontSize: 14.5,
-  minWidth: 0,
-});
+// Shared box metrics for the entry-overlay fields (taller + rounder than the modal
+// default). Only the height varies with the viewport, passed per call site.
+const ENTRY_BOX = { radius: 11, pad: "0 14px", gap: 10, fontSize: 14.5 } as const;
 
 /** Coarse 0–4 master-password strength: length plus character-class variety.
  *  Drives the meter only — the hard gate is non-empty + matching confirmation. */
@@ -310,16 +264,18 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
           </div>
           {usePwd ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <Field icon="lock" accent isMobile={isMobile}>
-                <input
-                  {...NO_AUTOCORRECT}
+              <Field>
+                <Input
+                  icon="lock"
+                  accent
+                  {...ENTRY_BOX}
+                  height={isMobile ? 50 : 46}
                   type="password"
                   autoFocus
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={setPassword}
                   onKeyDown={onPwKeyDown}
                   placeholder={t("onboarding.masterPasswordPlaceholder")}
-                  style={inputStyle(p)}
                 />
               </Field>
               {password.length > 0 && (
@@ -352,15 +308,17 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
                   </span>
                 </div>
               )}
-              <Field icon="lock" accent={!mismatch} isMobile={isMobile}>
-                <input
-                  {...NO_AUTOCORRECT}
+              <Field>
+                <Input
+                  icon="lock"
+                  accent={!mismatch}
+                  {...ENTRY_BOX}
+                  height={isMobile ? 50 : 46}
                   type="password"
                   value={confirmPwd}
-                  onChange={(e) => setConfirmPwd(e.target.value)}
+                  onChange={setConfirmPwd}
                   onKeyDown={onPwKeyDown}
                   placeholder={t("onboarding.confirmPasswordPlaceholder")}
-                  style={inputStyle(p)}
                 />
               </Field>
               {mismatch && (
@@ -777,29 +735,33 @@ function Unlock() {
         style={{ display: "flex", flexDirection: "column", gap: 13 }}
       >
         {requiresPassword !== false && (
-          <Field icon="lock" label={t("onboarding.masterPassword")} accent isMobile={isMobile}>
-            <input
-              {...NO_AUTOCORRECT}
+          <Field label={t("onboarding.masterPassword")} labelGap={7}>
+            <Input
+              icon="lock"
+              accent
+              {...ENTRY_BOX}
+              height={isMobile ? 50 : 46}
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
               placeholder={t("onboarding.ifSetPlaceholder")}
-              style={inputStyle(p)}
             />
           </Field>
         )}
-        <Field icon="key" label={t("onboarding.secretKeyFromKit")} isMobile={isMobile}>
-          <input
-            {...NO_AUTOCORRECT}
+        <Field label={t("onboarding.secretKeyFromKit")} labelGap={7}>
+          <Input
+            icon="key"
+            mono
+            {...ENTRY_BOX}
+            height={isMobile ? 50 : 46}
             type="password"
             value={secretKey}
             autoFocus={!fromKeychain}
-            onChange={(e) => {
-              setSecretKey(e.target.value);
+            onChange={(v) => {
+              setSecretKey(v);
               setFromKeychain(false);
             }}
             placeholder="A3-7KQX2-…"
-            style={inputStyle(p, true)}
           />
         </Field>
         {fromKeychain && (
@@ -1158,14 +1120,16 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
           </button>
         </div>
         {usePwd ? (
-          <Field icon="lock" accent isMobile={isMobile}>
-            <input
-              {...NO_AUTOCORRECT}
+          <Field>
+            <Input
+              icon="lock"
+              accent
+              {...ENTRY_BOX}
+              height={isMobile ? 50 : 46}
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
               placeholder={t("onboarding.masterPasswordPlaceholder")}
-              style={inputStyle(p)}
             />
           </Field>
         ) : (

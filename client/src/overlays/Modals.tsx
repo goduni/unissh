@@ -1,5 +1,5 @@
 // Modals — the three "create / edit" overlays (host, key, tunnel). Pixel-faithful
-// port of view-newhost.jsx (MShell / MSeg / NHField / NHInput helpers + the three
+// port of view-newhost.jsx (MShell / MSeg / Field / Input helpers + the three
 // modal bodies). Mock data is replaced with real store data and api.* calls; the
 // component self-gates on store.modal and renders nothing when no modal is open.
 
@@ -18,7 +18,18 @@ import {
   validateTermThemeImport,
 } from "@/theme/tokens";
 import type { TermEditorField, TermTheme, TermThemePalette } from "@/theme/tokens";
-import { BTN_RESET, Btn, Icon, IconName, NO_AUTOCORRECT, Spinner, Tag, Toggle } from "@/components/primitives";
+import {
+  BTN_RESET,
+  Btn,
+  Field,
+  Icon,
+  IconName,
+  Input,
+  NO_AUTOCORRECT,
+  Spinner,
+  Tag,
+  Toggle,
+} from "@/components/primitives";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/store/toast";
@@ -41,80 +52,7 @@ import type {
 import type { ConnectArgs } from "@/bridge/api";
 import type { TunnelType } from "@/store/app";
 
-// ── Form atoms (ported 1:1 from the prototype) ─────────────────
-function NHField({
-  label,
-  children,
-  hint,
-  w,
-}: {
-  label: string;
-  children: React.ReactNode;
-  hint?: string;
-  w?: string;
-}) {
-  const p = usePalette();
-  return (
-    <label style={{ display: "block", width: w || "auto" }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
-        {label}
-        {hint && <span style={{ color: p.txt3, fontWeight: 500 }}> · {hint}</span>}
-      </div>
-      {children}
-    </label>
-  );
-}
-
-function NHInput({
-  value,
-  placeholder,
-  mono,
-  accent,
-  onChange,
-  type,
-}: {
-  value: string;
-  placeholder?: string;
-  mono?: boolean;
-  accent?: boolean;
-  onChange?: (v: string) => void;
-  type?: string;
-}) {
-  const p = usePalette();
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        height: 40,
-        padding: "0 12px",
-        borderRadius: 9,
-        background: p.bg2,
-        border: `1px solid ${accent ? p.accentLine : p.line2}`,
-        boxShadow: accent ? `0 0 0 3px ${p.accentSoft}` : "none",
-      }}
-    >
-      <input
-        {...NO_AUTOCORRECT}
-        value={value}
-        placeholder={placeholder}
-        type={type || "text"}
-        onChange={(e) => onChange?.(e.target.value)}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          background: "none",
-          border: "none",
-          outline: "none",
-          fontFamily: mono ? MONO : UI,
-          fontSize: 13.5,
-          color: p.txt,
-        }}
-      />
-    </div>
-  );
-}
-
+// ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
   id: T;
   label: string;
@@ -163,7 +101,7 @@ function MSeg<T extends string>({
   );
 }
 
-// Inline picker — re-uses NHInput's chrome to render a clickable <select> for
+// Inline picker — re-uses Input's chrome to render a clickable <select> for
 // choosing a stored key / password item.
 function NHSelect({
   value,
@@ -831,27 +769,27 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
             gap: 16,
           }}
         >
-          <NHField label={t("modals.host.label")}>
-            <NHInput value={label} placeholder="web-04" accent onChange={setLabel} />
-          </NHField>
+          <Field label={t("modals.host.label")}>
+            <Input value={label} placeholder="web-04" accent onChange={setLabel} />
+          </Field>
 
           <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 12 }}>
-            <NHField label={t("modals.host.hostAddress")} w="100%">
-              <NHInput value={host} placeholder="web-04.prod.example.net" mono onChange={setHost} />
-            </NHField>
-            <NHField label={t("modals.host.port")} w={isMobile ? "100%" : "96px"}>
-              <NHInput value={port} mono onChange={setPort} />
-            </NHField>
+            <Field label={t("modals.host.hostAddress")} w="100%">
+              <Input value={host} placeholder="web-04.prod.example.net" mono onChange={setHost} />
+            </Field>
+            <Field label={t("modals.host.port")} w={isMobile ? "100%" : "96px"}>
+              <Input value={port} mono onChange={setPort} />
+            </Field>
           </div>
           {/* Personal auth derives the login from the chosen identity (see the
               Personal section below), so no separate username field there. */}
           {auth !== "personal" && (
-            <NHField label={t("modals.host.user")}>
-              <NHInput value={user} placeholder="deploy" mono onChange={setUser} />
-            </NHField>
+            <Field label={t("modals.host.user")}>
+              <Input value={user} placeholder="deploy" mono onChange={setUser} />
+            </Field>
           )}
 
-          <NHField label={t("modals.host.auth")}>
+          <Field label={t("modals.host.auth")}>
             <div style={{ display: "flex", gap: 8 }}>
               {seg("key", t("modals.host.authKey"), "key")}
               {seg("password", t("modals.host.authPassword"), "lock")}
@@ -892,7 +830,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                         background: p.bg2,
                       }}
                     >
-                      <NHInput
+                      <Input
                         value={newKeyName}
                         placeholder="prod-deploy"
                         accent
@@ -975,7 +913,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               )}
               {auth === "password" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <NHInput
+                  <Input
                     value={newPw}
                     placeholder={t("modals.host.newPasswordPlaceholder")}
                     type="password"
@@ -1044,7 +982,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       {/* Which of your private vaults the identity lives in — e.g. a
                           work vault on the company server vs. your own personal server. */}
                       {privateVaults.length > 1 && (
-                        <NHField label={t("secrets.identityVault")}>
+                        <Field label={t("secrets.identityVault")}>
                           <NHSelect
                             value={bindVault ?? ""}
                             onChange={setBindVault}
@@ -1057,7 +995,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                             })}
                             empty=""
                           />
-                        </NHField>
+                        </Field>
                       )}
                       {pLoaded && bindVault && pIdentities.length === 0 && (
                         <div style={{ fontSize: 12, color: p.amber, padding: "2px 2px", lineHeight: 1.5 }}>
@@ -1065,7 +1003,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                         </div>
                       )}
                       {hasIds && (
-                        <NHField label={t("modals.host.personalIdentity")}>
+                        <Field label={t("modals.host.personalIdentity")}>
                           <NHSelect
                             value={boundIdentity}
                             onChange={setBoundIdentity}
@@ -1075,15 +1013,15 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                             }))}
                             empty={t("modals.host.personalNoIdentities")}
                           />
-                        </NHField>
+                        </Field>
                       )}
 
                       {/* One optional Login field = the username template. Placeholder
                           shows the identity's username (the default), so most hosts leave
                           it blank; a gateway types `%u:target`. */}
                       {hasIds && (
-                        <NHField label={t("modals.host.user")}>
-                          <NHInput
+                        <Field label={t("modals.host.user")}>
+                          <Input
                             value={usernameTemplate}
                             placeholder={idUser || t("modals.host.personalLoginPlaceholder")}
                             mono
@@ -1099,13 +1037,13 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                             )}
                             {t("modals.host.personalLoginHint")}
                           </div>
-                        </NHField>
+                        </Field>
                       )}
                     </div>
                   );
                 })()}
             </div>
-          </NHField>
+          </Field>
 
           {/* ProxyJump */}
           <div style={{ borderRadius: 11, border: `1px solid ${p.line}`, background: p.bg2, padding: 12 }}>
@@ -1171,7 +1109,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   </div>
                 )}
                 {jumpIsRef ? (
-                  <NHField label={t("modals.host.jumpRefProfile")} w="100%">
+                  <Field label={t("modals.host.jumpRefProfile")} w="100%">
                     <NHSelect
                       value={jRef}
                       onChange={setJRef}
@@ -1184,29 +1122,29 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     <div style={{ fontSize: 11.5, color: p.txt3, padding: "4px 2px 0" }}>
                       {t("modals.host.jumpRefHint")}
                     </div>
-                  </NHField>
+                  </Field>
                 ) : (
                   <>
                     <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 12 }}>
-                      <NHField label={t("modals.host.bastionHost")} w="100%">
-                        <NHInput value={jHost} placeholder="bastion.corp.net" mono onChange={setJHost} />
-                      </NHField>
-                      <NHField label={t("modals.host.port")} w={isMobile ? "100%" : "96px"}>
-                        <NHInput value={jPort} mono onChange={setJPort} />
-                      </NHField>
+                      <Field label={t("modals.host.bastionHost")} w="100%">
+                        <Input value={jHost} placeholder="bastion.corp.net" mono onChange={setJHost} />
+                      </Field>
+                      <Field label={t("modals.host.port")} w={isMobile ? "100%" : "96px"}>
+                        <Input value={jPort} mono onChange={setJPort} />
+                      </Field>
                     </div>
                     <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 12 }}>
-                      <NHField label={t("modals.host.user")} w="100%">
-                        <NHInput value={jUser} placeholder="ops" mono onChange={setJUser} />
-                      </NHField>
-                      <NHField label={t("modals.host.key")} w="100%">
+                      <Field label={t("modals.host.user")} w="100%">
+                        <Input value={jUser} placeholder="ops" mono onChange={setJUser} />
+                      </Field>
+                      <Field label={t("modals.host.key")} w="100%">
                         <NHSelect
                           value={jKeyId}
                           onChange={setJKeyId}
                           options={keyItems.map((k) => ({ value: k.itemId, label: k.itemId }))}
                           empty={t("modals.host.noKeys")}
                         />
-                      </NHField>
+                      </Field>
                     </div>
                   </>
                 )}
@@ -1216,7 +1154,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
 
           {/* group */}
           <div style={{ display: "flex", gap: 12 }}>
-            <NHField label={t("modals.host.group")} w="100%">
+            <Field label={t("modals.host.group")} w="100%">
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {groups.map((g) => {
                   const on = groupId === g.groupId;
@@ -1339,12 +1277,12 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   {t("modals.host.noGroup")}
                 </span>
               </div>
-            </NHField>
+            </Field>
           </div>
 
           {/* tags */}
           <div style={{ display: "flex", gap: 12 }}>
-            <NHField label={t("modals.host.tags")} w="100%">
+            <Field label={t("modals.host.tags")} w="100%">
               <div
                 style={{
                   display: "flex",
@@ -1393,7 +1331,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   }}
                 />
               </div>
-            </NHField>
+            </Field>
           </div>
         </div>
 
@@ -1568,10 +1506,10 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
         </React.Fragment>
       }
     >
-      <NHField label={t("modals.host.label")}>
-        <NHInput value={name} placeholder="prod-deploy" accent onChange={setName} />
-      </NHField>
-      <NHField label={t("modals.key.algorithm")}>
+      <Field label={t("modals.host.label")}>
+        <Input value={name} placeholder="prod-deploy" accent onChange={setName} />
+      </Field>
+      <Field label={t("modals.key.algorithm")}>
         <MSeg
           value={algo}
           set={setAlgo}
@@ -1581,7 +1519,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
             { id: "rsa", label: "RSA", icon: "lock", desc: t("modals.key.algoImportOnly") },
           ]}
         />
-      </NHField>
+      </Field>
       {/* Import an existing private key from a file (any key type → vault). */}
       <button
         onClick={loadFromFile}
@@ -1641,7 +1579,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
       )}
       {willImport ? (
         <React.Fragment>
-          <NHField label={t("modals.key.privateKeyLabel")} hint={t("modals.key.privateKeyHint")}>
+          <Field label={t("modals.key.privateKeyLabel")} hint={t("modals.key.privateKeyHint")}>
             <textarea
               {...NO_AUTOCORRECT}
               value={imported}
@@ -1666,17 +1604,17 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
                 boxSizing: "border-box",
               }}
             />
-          </NHField>
+          </Field>
           {/* Key passphrase: only needed for encrypted keys; for unencrypted
               ones the core simply ignores it. */}
-          <NHField label={t("modals.key.passphraseLabel")} hint={t("modals.key.passphraseHint")}>
-            <NHInput
+          <Field label={t("modals.key.passphraseLabel")} hint={t("modals.key.passphraseHint")}>
+            <Input
               value={passphrase}
               type="password"
               placeholder="••••••••"
               onChange={setPassphrase}
             />
-          </NHField>
+          </Field>
         </React.Fragment>
       ) : (
         <div
@@ -1851,10 +1789,10 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
         </React.Fragment>
       }
     >
-      <NHField label={t("modals.host.label")}>
-        <NHInput value={name} placeholder="Postgres prod" accent onChange={setName} />
-      </NHField>
-      <NHField label={t("modals.tunnel.forwardType")}>
+      <Field label={t("modals.host.label")}>
+        <Input value={name} placeholder="Postgres prod" accent onChange={setName} />
+      </Field>
+      <Field label={t("modals.tunnel.forwardType")}>
         <MSeg
           value={type}
           set={setKind}
@@ -1864,8 +1802,8 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
             { id: "D", label: "Dynamic -D", icon: "globe", desc: t("modals.tunnel.dynamicDesc") },
           ]}
         />
-      </NHField>
-      <NHField label={t("modals.tunnel.viaHost")}>
+      </Field>
+      <Field label={t("modals.tunnel.viaHost")}>
         {hosts.length ? (
           <NHSelect
             value={viaId}
@@ -1878,7 +1816,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
             {t("modals.tunnel.noSavedHosts")}
           </div>
         )}
-      </NHField>
+      </Field>
       <div
         style={{
           display: "flex",
@@ -1887,9 +1825,9 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
           gap: 12,
         }}
       >
-        <NHField label={tDyn(m.srcLKey)} w="100%">
-          <NHInput value={src} mono accent onChange={setSrc} />
-        </NHField>
+        <Field label={tDyn(m.srcLKey)} w="100%">
+          <Input value={src} mono accent onChange={setSrc} />
+        </Field>
         <span
           style={{
             height: isMobile ? "auto" : 40,
@@ -1902,7 +1840,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
         >
           <Icon name="ar" size={18} color={p[m.colorKey]} />
         </span>
-        <NHField label={tDyn(m.dstLKey)} w="100%">
+        <Field label={tDyn(m.dstLKey)} w="100%">
           {type === "D" ? (
             <div
               style={{
@@ -1921,9 +1859,9 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
               SOCKS5
             </div>
           ) : (
-            <NHInput value={dst} mono onChange={setDst} />
+            <Input value={dst} mono onChange={setDst} />
           )}
-        </NHField>
+        </Field>
       </div>
     </Modal>
   );
@@ -2021,11 +1959,11 @@ function NewVaultModal({
         </React.Fragment>
       }
     >
-      <NHField label={t("vault.nameLabel")}>
-        <NHInput value={name} placeholder={t("vault.namePlaceholder")} accent onChange={setName} />
-      </NHField>
+      <Field label={t("vault.nameLabel")}>
+        <Input value={name} placeholder={t("vault.namePlaceholder")} accent onChange={setName} />
+      </Field>
       {!edit && (
-        <NHField label={t("vault.target")}>
+        <Field label={t("vault.target")}>
           <MSeg
             value={target}
             set={(v) => {
@@ -2050,10 +1988,10 @@ function NewVaultModal({
               },
             ]}
           />
-        </NHField>
+        </Field>
       )}
       {!edit && target === "cloud" && cloudServers.length > 1 && (
-        <NHField label={t("vault.cloudServer")}>
+        <Field label={t("vault.cloudServer")}>
           <NHSelect
             value={cloudServer}
             onChange={setCloudServer}
@@ -2063,7 +2001,7 @@ function NewVaultModal({
             }))}
             empty=""
           />
-        </NHField>
+        </Field>
       )}
     </Modal>
   );
@@ -2177,15 +2115,15 @@ function IdentityVaultModal({
         </React.Fragment>
       }
     >
-      <NHField label={t("identityVault.nameLabel")}>
-        <NHInput
+      <Field label={t("identityVault.nameLabel")}>
+        <Input
           value={name}
           placeholder={t("identityVault.namePlaceholder")}
           accent
           onChange={setName}
         />
-      </NHField>
-      <NHField label={t("identityVault.location")}>
+      </Field>
+      <Field label={t("identityVault.location")}>
         <MSeg
           value={target}
           set={setTarget}
@@ -2204,9 +2142,9 @@ function IdentityVaultModal({
             },
           ]}
         />
-      </NHField>
+      </Field>
       {target === "cloud" && ownedSpaces.length > 0 && (
-        <NHField label={t("identityVault.space")}>
+        <Field label={t("identityVault.space")}>
           <NHSelect
             value={space}
             onChange={setSpace}
@@ -2216,26 +2154,26 @@ function IdentityVaultModal({
             ]}
             empty=""
           />
-        </NHField>
+        </Field>
       )}
       {newSpace && (
         <>
-          <NHField label={t("identityVault.serverUrl")}>
-            <NHInput
+          <Field label={t("identityVault.serverUrl")}>
+            <Input
               value={url}
               placeholder={t("serverCloud.baseUrlPlaceholder")}
               mono
               onChange={setUrl}
             />
-          </NHField>
-          <NHField label={t("serverCloud.bootstrapToken")}>
-            <NHInput
+          </Field>
+          <Field label={t("serverCloud.bootstrapToken")}>
+            <Input
               value={grant}
               placeholder={t("serverCloud.bootstrapTokenPlaceholder")}
               mono
               onChange={setGrant}
             />
-          </NHField>
+          </Field>
           <div style={{ fontSize: 11.5, color: p.txt3, lineHeight: 1.5, padding: "0 2px" }}>
             {t("identityVault.newSpaceHint")}
           </div>
@@ -2455,13 +2393,13 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
         </>
       }
     >
-      <NHField label={t("termtheme.nameLabel")}>
-        <NHInput
+      <Field label={t("termtheme.nameLabel")}>
+        <Input
           value={pal.name}
           placeholder={t("termtheme.defaultName")}
           onChange={(v) => setPal((c) => ({ ...c, name: v }))}
         />
-      </NHField>
+      </Field>
       <ThemePreview pal={pal} />
       <div
         style={{
@@ -2716,12 +2654,12 @@ function CopyKeyToServerModal({
 
       {anyNeedsPw && (
         <React.Fragment>
-          <NHField
+          <Field
             label={t("modals.copyKey.passwordLabel")}
             hint={t("modals.copyKey.passwordHint")}
           >
-            <NHInput value={pw} type="password" onChange={setPw} />
-          </NHField>
+            <Input value={pw} type="password" onChange={setPw} />
+          </Field>
           <label
             style={{
               display: "flex",
@@ -2967,7 +2905,7 @@ function BindHostModal({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {/* Which private vault the identity lives in (work vs. personal server). */}
           {privateVaults.length > 1 && (
-            <NHField label={t("secrets.identityVault")}>
+            <Field label={t("secrets.identityVault")}>
               <NHSelect
                 value={bindVault ?? ""}
                 onChange={setBindVault}
@@ -2980,7 +2918,7 @@ function BindHostModal({
                 })}
                 empty=""
               />
-            </NHField>
+            </Field>
           )}
           {identities.length === 0 ? (
             <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
@@ -2991,7 +2929,7 @@ function BindHostModal({
               <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
                 {t("bind.intro", { vault: pvName })}
               </div>
-              <NHField label={t("bind.identity")}>
+              <Field label={t("bind.identity")}>
                 <NHSelect
                   value={selected}
                   onChange={setSelected}
@@ -3001,7 +2939,7 @@ function BindHostModal({
                   }))}
                   empty={t("bind.noIdentities", { vault: pvName })}
                 />
-              </NHField>
+              </Field>
               {binding && (
                 <div style={{ fontSize: 11.5, color: p.txt3 }}>
                   {t("bind.currentPin", { pin: binding.destinationPin })}
