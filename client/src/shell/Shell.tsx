@@ -15,6 +15,11 @@ import { useCtx } from "@/store/ctx";
 import { ItemType } from "@/bridge/types";
 import { useTranslation, tDyn } from "@/i18n";
 
+// The four vault-item types share one screen (ViewSecrets, with in-screen tabs) and
+// now one nav destination. Active-state tests membership of this set, not route===,
+// so any of the preserved routes still highlights the merged item (spec A6).
+const VAULT_ROUTES: Route[] = ["keys", "passwords", "identities", "notes"];
+
 const groupIcon = (label: string): IconName => {
   const l = label.toLowerCase();
   if (l.includes("data") || l.includes("db")) return "database";
@@ -758,13 +763,14 @@ export function Sidebar({
           <NavItem icon="radio" label={t("nav.broadcast")} active={route === "broadcast"} onClick={() => ctx.go("broadcast")} />
           <NavItem icon="layers" label={t("nav.fleetExec")} active={route === "fleet"} onClick={() => ctx.go("fleet")} />
         </NavGroup>
-        <NavGroup label={t("shell.secretsHeader")}>
-          <NavItem icon="key" label={t("nav.keys")} count={keysN} active={route === "keys"} onClick={() => ctx.go("keys")} />
-          <NavItem icon="lock" label={t("nav.passwords")} count={passN} active={route === "passwords"} onClick={() => ctx.go("passwords")} />
-          <NavItem icon="fingerprint" label={t("nav.identities")} count={identN} active={route === "identities"} onClick={() => ctx.go("identities")} />
-          <NavItem icon="note" label={t("nav.notes")} count={notesN} active={route === "notes"} onClick={() => ctx.go("notes")} />
-        </NavGroup>
-        <NavGroup label={t("shell.networkHeader")}>
+        <NavGroup label={t("shell.vaultNetworkHeader")}>
+          <NavItem
+            icon="key"
+            label={t("nav.secrets")}
+            count={keysN + passN + identN + notesN}
+            active={VAULT_ROUTES.includes(route)}
+            onClick={() => ctx.go("keys")}
+          />
           <NavItem icon="branch" label={t("nav.tunnels")} active={route === "tunnels"} onClick={() => ctx.go("tunnels")} />
           <NavItem
             icon="shieldcheck"

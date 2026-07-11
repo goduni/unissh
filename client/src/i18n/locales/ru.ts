@@ -114,6 +114,7 @@ export const ru = {
     passwords: "Пароли",
     identities: "Идентичности",
     notes: "Заметки",
+    secrets: "Секреты",
     tunnels: "Туннели",
     known: "Известные хосты",
     settings: "Настройки",
@@ -1092,7 +1093,8 @@ export const ru = {
     "groupsHeader": "Хосты",
     "operationsHeader": "Операции",
     "secretsHeader": "Секреты",
-    "networkHeader": "Сеть"
+    "networkHeader": "Сеть",
+    "vaultNetworkHeader": "Хранилище и сеть"
   },
   terminal: {
     "search": {

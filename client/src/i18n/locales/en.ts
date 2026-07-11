@@ -85,6 +85,7 @@ export const en = {
     passwords: "Passwords",
     identities: "Identities",
     notes: "Notes",
+    secrets: "Secrets",
     tunnels: "Tunnels",
     known: "Known hosts",
     settings: "Settings",
@@ -1058,7 +1059,8 @@ export const en = {
     "groupsHeader": "Hosts",
     "operationsHeader": "Operations",
     "secretsHeader": "Secrets",
-    "networkHeader": "Network"
+    "networkHeader": "Network",
+    "vaultNetworkHeader": "Vault & network"
   },
   terminal: {
     "search": {
