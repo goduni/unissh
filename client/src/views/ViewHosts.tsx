@@ -7,7 +7,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
-import { BTN_RESET, Icon, Btn, Checkbox, Tag, AuthBadge, ResizeHandle } from "@/components/primitives";
+import { BTN_RESET, Icon, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot } from "@/components/primitives";
+import { Card, MetaChip } from "@/components/mono";
 import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -63,7 +64,9 @@ function HostCard({
   const [focusIn, setFocusIn] = useState(false);
   const show = hover || focusIn;
   return (
-    <div
+    <Card
+      active={active || selected}
+      onClick={onOpen}
       // not a <button>: the card nests interactive controls (checkbox, Connect)
       role="button"
       tabIndex={0}
@@ -74,22 +77,7 @@ function HostCard({
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={onOpen}
-      style={{
-        padding: 14,
-        borderRadius: 14,
-        cursor: "pointer",
-        position: "relative",
-        background: p.bg1,
-        transition: "transform .16s, box-shadow .16s, border-color .16s",
-        border: `1px solid ${active || selected ? p.accentLine : hover ? p.line2 : p.line}`,
-        transform: hover ? "translateY(-2px)" : "none",
-        boxShadow: active
-          ? `0 0 0 1px ${p.accentLine}, 0 12px 30px -16px ${p.glow}`
-          : selected
-            ? `0 0 0 1px ${p.accentLine}`
-            : "none",
-      }}
+      style={{ position: "relative", cursor: "pointer" }}
     >
       <Checkbox
         checked={selected}
@@ -122,22 +110,6 @@ function HostCard({
           }}
         >
           <Icon name="server" size={17} color={p.txt2} stroke={1.7} />
-          {session && (
-            <span
-              style={{
-                position: "absolute",
-                bottom: -2,
-                right: -2,
-                width: 11,
-                height: 11,
-                borderRadius: "50%",
-                background: p.green,
-                border: `2px solid ${p.bg1}`,
-                boxShadow: `0 0 6px ${p.green}`,
-                animation: "uhPulse 1.6s ease-in-out infinite",
-              }}
-            />
-          )}
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -153,7 +125,7 @@ function HostCard({
             >
               {h.label}
             </span>
-            {h.jumps.length > 0 && <Icon name="branch" size={12} color={p.purple} stroke={1.8} />}
+            {h.jumps.length > 0 && <Icon name="branch" size={12} color={p.txt3} stroke={1.8} />}
           </div>
           <div
             style={{
@@ -171,40 +143,16 @@ function HostCard({
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {session && (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              fontFamily: MONO,
-              fontSize: 12,
-              color: p.green,
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}
-          >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: p.green,
-                boxShadow: `0 0 6px ${p.green}`,
-              }}
-            />
-            {t("hosts.session")}
-          </span>
-        )}
-        {session && <span style={{ color: p.line2, flexShrink: 0 }}>·</span>}
+        {session && <StatusDot status="online" size={6} label={t("hosts.session")} />}
         <AuthBadge auth={profileAuthKind(h.auth)} jump={false} />
         <div style={{ flex: 1 }} />
-        <div style={{ display: "flex", gap: 5 }}>
-          {h.tags.map((t) => (
-            <Tag key={t} mono>
-              #{t}
+        <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+          {h.tags.slice(0, 2).map((tg) => (
+            <Tag key={tg} mono>
+              #{tg}
             </Tag>
           ))}
+          {h.tags.length > 2 && <MetaChip>{`+${h.tags.length - 2}`}</MetaChip>}
         </div>
       </div>
 
@@ -217,13 +165,12 @@ function HostCard({
               e.stopPropagation();
               onConnect();
             }}
-            style={{ boxShadow: `0 6px 16px -4px ${p.glow}, 0 0 0 4px ${p.bg1}` }}
           >
             {t("hosts.connect")}
           </Btn>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
