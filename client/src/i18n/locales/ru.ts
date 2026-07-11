@@ -412,7 +412,9 @@ export const ru = {
       "address": "Адрес",
       "user": "Юзер",
       "userPersonal": "Из личной идентичности",
-      "auth": "Аутентификация"
+      "auth": "Аутентификация",
+      "lastConnected": "Последнее подключение",
+      "groups": "Группы"
     },
     "hostKeyPinned": "Host key закреплён (TOFU)",
     "hostKeyUnpinned": "Host key не закреплён",

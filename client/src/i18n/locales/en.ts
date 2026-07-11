@@ -378,7 +378,9 @@ export const en = {
       "address": "Address",
       "user": "User",
       "userPersonal": "From personal identity",
-      "auth": "Auth"
+      "auth": "Auth",
+      "lastConnected": "Last connected",
+      "groups": "Groups"
     },
     "hostKeyPinned": "Host key pinned (TOFU)",
     "hostKeyUnpinned": "Host key not pinned",

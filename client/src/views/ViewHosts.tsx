@@ -8,7 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
 import { BTN_RESET, Icon, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot } from "@/components/primitives";
-import { Card, MetaChip } from "@/components/mono";
+import { Card, MetaChip, fmtRelative } from "@/components/mono";
 import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -345,13 +345,17 @@ function DetailRow({
 // ── Rail: host detail ──────────────────────────────────────────
 function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) {
   const p = usePalette();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ctx = useCtx();
   const vault = useApp((s) => s.vaultId);
   const knownHosts = useApp((s) => s.knownHosts);
+  const lastConnected = useApp((s) => s.lastConnected);
+  const groups = useApp((s) => s.groups);
   const authKind = profileAuthKind(h.auth);
   const known = knownHosts.find((k) => k.host === h.host && k.port === h.port);
   const firstJump = h.jumps[0];
+  const lc = lastConnected[h.profileId];
+  const memberOf = groups.filter((g) => g.memberIds.includes(h.profileId));
 
   const onDelete = () => {
     if (!vault) return;
@@ -509,9 +513,6 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         />
       </div>
 
-      <DetailRow label={t("hosts.detail.host")} mono>
-        {h.host}
-      </DetailRow>
       <DetailRow label={t("hosts.detail.address")} mono>
         {h.host}:{h.port}
       </DetailRow>
@@ -529,7 +530,31 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
           {firstJump.user}@{firstJump.host}:{firstJump.port}
         </DetailRow>
       )}
+      {lc != null && lc > 0 && (
+        <DetailRow label={t("hosts.detail.lastConnected")}>{fmtRelative(lc, i18n.language)}</DetailRow>
+      )}
 
+      {memberOf.length > 0 && (
+        <>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              color: p.txt3,
+              textTransform: "uppercase",
+              margin: "14px 0 7px",
+            }}
+          >
+            {t("hosts.detail.groups")}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {memberOf.map((g) => (
+              <Tag key={g.groupId}>{g.label}</Tag>
+            ))}
+          </div>
+        </>
+      )}
       <div
         style={{
           fontSize: 11,
@@ -546,9 +571,9 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         {h.tags.length === 0 && (
           <span style={{ fontSize: 12, color: p.txt3 }}>{t("hosts.noTags")}</span>
         )}
-        {h.tags.map((t) => (
-          <Tag key={t} mono>
-            #{t}
+        {h.tags.map((tg) => (
+          <Tag key={tg} mono>
+            #{tg}
           </Tag>
         ))}
       </div>
