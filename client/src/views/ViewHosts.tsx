@@ -8,7 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
 import { BTN_RESET, Icon, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot } from "@/components/primitives";
-import { Card, MetaChip, fmtRelative } from "@/components/mono";
+import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
 import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -1207,44 +1207,6 @@ export function ViewHosts() {
     </button>
   );
 
-  const railTab = (label: string, val: RailTab, count?: number) => (
-    <button
-      onClick={() => setRail(val)}
-      style={{
-        flex: 1,
-        height: 30,
-        borderRadius: 8,
-        cursor: "pointer",
-        fontFamily: UI,
-        fontSize: 12.5,
-        fontWeight: 600,
-        border: `1px solid ${rail === val ? p.accentLine : "transparent"}`,
-        background: rail === val ? p.accentSoft : "transparent",
-        color: rail === val ? p.accent : p.txt3,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 6,
-      }}
-    >
-      {label}
-      {count != null && (
-        <span
-          style={{
-            fontFamily: MONO,
-            fontSize: 10.5,
-            background: rail === val ? p.accent : p.bg4,
-            color: rail === val ? "#fff" : p.txt3,
-            borderRadius: 20,
-            padding: "0 6px",
-          }}
-        >
-          {count}
-        </span>
-      )}
-    </button>
-  );
-
   return (
     <div style={{ flex: 1, display: "flex", minWidth: 0 }}>
       {/* main */}
@@ -1754,22 +1716,29 @@ export function ViewHosts() {
           <div
             style={{
               display: "flex",
-              gap: 4,
-              padding: 3,
-              background: p.bg2,
-              border: `1px solid ${p.line}`,
-              borderRadius: 11,
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              borderBottom: `1px solid ${p.line}`,
               marginBottom: 14,
             }}
           >
-            {railTab(t("hosts.railHost"), "detail")}
-            {railTab(t("hosts.railSessions"), "sessions", liveSessions || undefined)}
+            <UnderlineTabs<RailTab>
+              ariaLabel={t("hosts.railHost")}
+              value={rail}
+              onChange={setRail}
+              tabs={[
+                { value: "detail", label: t("hosts.railHost") },
+                { value: "sessions", label: t("hosts.railSessions"), count: liveSessions || undefined },
+              ]}
+            />
             <button
               title={t("common.hide")}
               aria-label={t("common.hide")}
               onClick={() => toggleRail(false)}
               style={{
                 width: 30,
+                height: 30,
                 flexShrink: 0,
                 borderRadius: 8,
                 border: "none",
