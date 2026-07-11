@@ -20,6 +20,7 @@ import {
 import type { TermEditorField, TermTheme, TermThemePalette } from "@/theme/tokens";
 import { BTN_RESET, Btn, Icon, IconName, NO_AUTOCORRECT, Spinner, Tag, Toggle } from "@/components/primitives";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
+import { Modal } from "@/components/Modal";
 import { toast } from "@/store/toast";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -110,153 +111,6 @@ function NHInput({
           color: p.txt,
         }}
       />
-    </div>
-  );
-}
-
-// ── Shared modal shell ─────────────────────────────────────────
-function MShell({
-  icon,
-  iconColor,
-  title,
-  subtitle,
-  onClose,
-  footer,
-  children,
-  w = 540,
-}: {
-  icon: IconName;
-  iconColor?: string;
-  title: string;
-  subtitle?: React.ReactNode;
-  onClose: () => void;
-  footer: React.ReactNode;
-  children: React.ReactNode;
-  w?: number;
-}) {
-  const p = usePalette();
-  const { t } = useTranslation();
-  const isMobile = useIsMobile();
-  // Same keyboard contract as components/Modal.tsx: Escape closes, focus moves
-  // into the dialog on open and returns to the invoker on close.
-  useDialogKeys(onClose);
-  const cardRef = useDialogFocus<HTMLDivElement>();
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 150,
-        display: "flex",
-        alignItems: isMobile ? "flex-start" : "center",
-        justifyContent: "center",
-        ...(isMobile
-          ? {
-              padding: "calc(env(safe-area-inset-top) + 16px) 12px 16px",
-              boxSizing: "border-box",
-            }
-          : null),
-      }}
-    >
-      <div
-        onClick={onClose}
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "rgba(6,7,11,0.55)",
-          backdropFilter: "blur(3px)",
-        }}
-      />
-      <div
-        ref={cardRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        style={{
-          position: "relative",
-          width: isMobile ? "100%" : `min(${w}px, calc(100% - 24px))`,
-          maxWidth: isMobile ? "100%" : undefined,
-          maxHeight: isMobile ? "calc(100dvh - 80px)" : "90%",
-          overflow: "auto",
-          background: p.bg1,
-          border: `1px solid ${p.line2}`,
-          borderRadius: 18,
-          boxShadow: p.shadow,
-          outline: "none",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 11,
-            padding: "18px 22px",
-            borderBottom: `1px solid ${p.line}`,
-          }}
-        >
-          <span
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 10,
-              background: rgba(iconColor || p.accent, 0.13),
-              border: `1px solid ${rgba(iconColor || p.accent, 0.4)}`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Icon name={icon} size={18} color={iconColor || p.accent} />
-          </span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3 }}>{title}</div>
-            <div style={{ fontSize: 12, color: p.txt3 }}>{subtitle}</div>
-          </div>
-          <button
-            onClick={onClose}
-            title={t("common.close")}
-            aria-label={t("common.close")}
-            style={{
-              width: 30,
-              height: 30,
-              borderRadius: 8,
-              border: `1px solid ${p.line}`,
-              background: p.bg2,
-              color: p.txt3,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Icon name="x" size={15} />
-          </button>
-        </div>
-        <div
-          style={{
-            padding: isMobile ? 16 : 22,
-            display: "flex",
-            flexDirection: "column",
-            gap: 16,
-          }}
-        >
-          {children}
-        </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: isMobile ? "14px 16px" : "14px 22px",
-            borderTop: `1px solid ${p.line}`,
-            background: p.bg0,
-            ...(isMobile ? { flexWrap: "wrap" } : null),
-          }}
-        >
-          {footer}
-        </div>
-      </div>
     </div>
   );
 }
@@ -1681,7 +1535,10 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <MShell
+    <Modal
+      position="absolute"
+      zIndex={150}
+      w={540}
       icon="key"
       title={t("modals.key.title")}
       subtitle={t("modals.key.subtitle")}
@@ -1839,7 +1696,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
           {t("modals.key.generateInfo")}
         </div>
       )}
-    </MShell>
+    </Modal>
   );
 }
 
@@ -1965,7 +1822,10 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <MShell
+    <Modal
+      position="absolute"
+      zIndex={150}
+      w={540}
       icon="branch"
       iconColor={p.purple}
       title={t("modals.tunnel.title")}
@@ -2065,7 +1925,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
           )}
         </NHField>
       </div>
-    </MShell>
+    </Modal>
   );
 }
 
@@ -2131,7 +1991,10 @@ function NewVaultModal({
   };
 
   return (
-    <MShell
+    <Modal
+      position="absolute"
+      zIndex={150}
+      w={540}
       icon="layers"
       iconColor={p.accent}
       title={edit ? t("vault.renameTitle") : t("vault.newTitle")}
@@ -2202,7 +2065,7 @@ function NewVaultModal({
           />
         </NHField>
       )}
-    </MShell>
+    </Modal>
   );
 }
 
@@ -2283,7 +2146,10 @@ function IdentityVaultModal({
   };
 
   return (
-    <MShell
+    <Modal
+      position="absolute"
+      zIndex={150}
+      w={540}
       icon="fingerprint"
       iconColor={p.accent}
       title={t("identityVault.title")}
@@ -2375,7 +2241,7 @@ function IdentityVaultModal({
           </div>
         </>
       )}
-    </MShell>
+    </Modal>
   );
 }
 
@@ -2545,7 +2411,9 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
   };
 
   return (
-    <MShell
+    <Modal
+      position="absolute"
+      zIndex={150}
       icon="terminal"
       title={edit ? t("termtheme.editTitle") : t("termtheme.newTitle")}
       subtitle={t("termtheme.subtitle")}
@@ -2612,7 +2480,7 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
         ))}
         <ColorSwatch label={t("termtheme.fields.sel")} value={pal.sel} onChange={setSel} />
       </div>
-    </MShell>
+    </Modal>
   );
 }
 
@@ -2729,7 +2597,9 @@ function CopyKeyToServerModal({
   };
 
   return (
-    <MShell
+    <Modal
+      position="absolute"
+      zIndex={150}
       icon="upload"
       title={t("modals.copyKey.title")}
       subtitle={t("modals.copyKey.subtitle", { item: keyItemId })}
@@ -2889,7 +2759,7 @@ function CopyKeyToServerModal({
           ))}
         </div>
       )}
-    </MShell>
+    </Modal>
   );
 }
 
@@ -3042,7 +2912,10 @@ function BindHostModal({
   const pvName = vaults.find((v) => v.vaultId === bindVault)?.name ?? "";
 
   return (
-    <MShell
+    <Modal
+      position="absolute"
+      zIndex={150}
+      w={540}
       icon="fingerprint"
       iconColor={p.purple}
       title={t("bind.title")}
@@ -3138,7 +3011,7 @@ function BindHostModal({
           )}
         </div>
       )}
-    </MShell>
+    </Modal>
   );
 }
 

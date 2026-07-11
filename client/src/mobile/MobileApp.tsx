@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { Icon, AuthBadge, NO_AUTOCORRECT, Tag, Spinner, type IconName } from "@/components/primitives";
+import { BottomSheet } from "@/components/Modal";
 import { MONO, UI, vaultColor } from "@/theme/tokens";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { useKeyboardInset, useLandscape } from "@/store/responsive";
@@ -255,57 +256,6 @@ function MHostCard({
   );
 }
 
-// ── bottom sheet shell (grab handle) ───────────────────────────
-function MSheet({ children, onClose, zIndex = 40 }: { children: React.ReactNode; onClose: () => void; zIndex?: number }) {
-  const p = usePalette();
-  const [dy, setDy] = useState(0);
-  const startRef = useRef<number | null>(null);
-  const onStart = (e: React.TouchEvent) => {
-    startRef.current = e.touches[0].clientY;
-  };
-  const onMove = (e: React.TouchEvent) => {
-    if (startRef.current != null) setDy(Math.max(0, e.touches[0].clientY - startRef.current));
-  };
-  const onEnd = () => {
-    if (dy > 90) onClose();
-    startRef.current = null;
-    setDy(0);
-  };
-  const dragging = startRef.current != null;
-  return (
-    <div style={{ position: "absolute", inset: 0, zIndex, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-      <div
-        onClick={onClose}
-        style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.4)", opacity: dy ? Math.max(0.2, 1 - dy / 400) : 1 }}
-      />
-      <div
-        style={{
-          position: "relative",
-          background: p.bg1,
-          borderTopLeftRadius: 22,
-          borderTopRightRadius: 22,
-          border: `1px solid ${p.line2}`,
-          borderBottom: "none",
-          padding: "10px 16px calc(30px + env(safe-area-inset-bottom))",
-          transform: dy ? `translateY(${dy}px)` : "none",
-          transition: dragging ? "none" : "transform .2s",
-        }}
-      >
-        {/* grab handle is now a real drag-to-dismiss target */}
-        <div
-          onTouchStart={onStart}
-          onTouchMove={onMove}
-          onTouchEnd={onEnd}
-          style={{ touchAction: "none", margin: "-10px -16px 0", padding: "14px 16px 8px", cursor: "grab" }}
-        >
-          <div style={{ width: 38, height: 4, borderRadius: 2, background: p.line2, margin: "0 auto 12px" }} />
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
 // ── vault switcher sheet ───────────────────────────────────────
 function MVaultSheet({ onClose }: { onClose: () => void }) {
   const p = usePalette();
@@ -316,7 +266,7 @@ function MVaultSheet({ onClose }: { onClose: () => void }) {
   const hosts = useApp((s) => s.hosts);
   const ctx = useCtx();
   return (
-    <MSheet onClose={onClose}>
+    <BottomSheet position="absolute" zIndex={40} onClose={onClose}>
       <div style={{ fontSize: 13, fontWeight: 700, color: p.txt3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>
         {t("mobile.vault")}
       </div>
@@ -393,7 +343,7 @@ function MVaultSheet({ onClose }: { onClose: () => void }) {
         <Icon name="plus" size={18} />
         {t("vault.create")}
       </button>
-    </MSheet>
+    </BottomSheet>
   );
 }
 
@@ -786,7 +736,7 @@ function MHosts({
       </button>
 
       {sortSheet && (
-        <MSheet onClose={() => setSortSheet(false)}>
+        <BottomSheet position="absolute" zIndex={40} onClose={() => setSortSheet(false)}>
           <div style={{ fontSize: 13, fontWeight: 700, color: p.txt3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>
             {t("mobile.sortTitle")}
           </div>
@@ -820,7 +770,7 @@ function MHosts({
               );
             })}
           </div>
-        </MSheet>
+        </BottomSheet>
       )}
     </>
   );

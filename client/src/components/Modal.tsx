@@ -21,6 +21,8 @@ export function Modal({
   footer,
   children,
   w = 460,
+  zIndex = 200,
+  position = "fixed",
 }: {
   icon: IconName;
   iconColor?: string;
@@ -30,6 +32,11 @@ export function Modal({
   footer?: ReactNode;
   children: ReactNode;
   w?: number;
+  zIndex?: number;
+  // MShell (overlays/Modals.tsx) rendered its shell as position:absolute at
+  // zIndex 150; components' own dialogs use position:fixed at 200. Kept as props
+  // so the consolidated call sites render byte-identically to their originals.
+  position?: "fixed" | "absolute";
 }) {
   const p = usePalette();
   const { t } = useTranslation();
@@ -41,9 +48,9 @@ export function Modal({
   return (
     <div
       style={{
-        position: "fixed",
+        position,
         inset: 0,
-        zIndex: 200,
+        zIndex,
         display: "flex",
         alignItems: isMobile ? "flex-start" : "center",
         justifyContent: "center",
@@ -150,10 +157,14 @@ export function BottomSheet({
   children,
   onClose,
   zIndex = 200,
+  position = "fixed",
 }: {
   children: ReactNode;
   onClose: () => void;
   zIndex?: number;
+  // The mobile MSheet used position:absolute at zIndex 40; the SFTP sheet uses
+  // fixed at 200. Kept as a prop so both call sites render identically.
+  position?: "fixed" | "absolute";
 }) {
   const p = usePalette();
   const [dy, setDy] = useState(0);
@@ -173,7 +184,7 @@ export function BottomSheet({
   return (
     <div
       style={{
-        position: "fixed",
+        position,
         inset: 0,
         zIndex,
         display: "flex",

@@ -29,6 +29,18 @@ async function copy(text: string, ok: () => void, fail: (e: unknown) => void) {
   }
 }
 
+/** Transient "copied ✓" flag for copy-to-clipboard buttons: `flash()` turns
+ *  `copied` on, then auto-resets it after `resetMs`. Pass `flash` as the success
+ *  callback of `copy(...)`. */
+function useCopied(resetMs = 1200) {
+  const [copied, setCopied] = useState(false);
+  const flash = () => {
+    setCopied(true);
+    setTimeout(() => setCopied(false), resetMs);
+  };
+  return { copied, flash };
+}
+
 /** How many hosts in the active vault still depend on a given SSH key — as their
  *  own login or via a jump hop. Drives the "in use" caution before deleting it. */
 function countKeyRefs(keyItemId: string): number {
@@ -107,7 +119,7 @@ function RevealField({
   const p = usePalette();
   const { t } = useTranslation();
   const [shown, setShown] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { copied, flash } = useCopied();
   const [value, setValue] = useState<string | null>(null);
 
   const toggle = async () => {
@@ -140,14 +152,7 @@ function RevealField({
         return;
       }
     }
-    await copy(
-      v,
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      },
-      onError,
-    );
+    await copy(v, flash, onError);
   };
 
   return (
@@ -227,7 +232,7 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
   const vault = useApp((s) => s.vaultId);
   const [fp, setFp] = useState<string | null>(null);
   const [openssh, setOpenssh] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const { copied, flash } = useCopied();
 
   useEffect(() => {
     let alive = true;
@@ -250,14 +255,7 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
 
   const doCopy = () => {
     if (!openssh) return;
-    copy(
-      openssh,
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      },
-      (e) => ctx.toast(apiErrorMessage(e), "err"),
-    );
+    copy(openssh, flash, (e) => ctx.toast(apiErrorMessage(e), "err"));
   };
 
   // Export the private key to a user-chosen file (backup/migration). Gated by an
@@ -830,7 +828,7 @@ function NoteCard({ item }: { item: ItemInfo }) {
   const [body, setBody] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [copied, setCopied] = useState(false);
+  const { copied, flash } = useCopied();
 
   const reveal = async () => {
     if (!vault) return;
@@ -882,14 +880,7 @@ function NoteCard({ item }: { item: ItemInfo }) {
         return;
       }
     }
-    await copy(
-      text,
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      },
-      (e) => ctx.toast(apiErrorMessage(e), "err"),
-    );
+    await copy(text, flash, (e) => ctx.toast(apiErrorMessage(e), "err"));
   };
 
   const onDelete = () => {
