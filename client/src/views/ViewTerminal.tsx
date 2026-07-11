@@ -13,7 +13,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, rgba, termToXterm } from "@/theme/tokens";
-import { Btn, Icon, NO_AUTOCORRECT } from "@/components/primitives";
+import { Btn, Icon, NO_AUTOCORRECT, StatusDot } from "@/components/primitives";
 import { ReconnectBanner } from "@/components/ReconnectBanner";
 import { useTranslation, Trans } from "@/i18n";
 import { useApp, type PendingMismatch, type TerminalPaneState, type TermLayout } from "@/store/app";
@@ -1385,7 +1385,19 @@ export function ViewTerminal() {
             color: p.txt3,
           }}
         >
-          <Icon name="terminal" size={13} color={p.green} />
+          <StatusDot
+            status={
+              focusedPane?.status === "online"
+                ? "online"
+                : focusedPane?.status === "connecting"
+                  ? "connecting"
+                  : focusedPane?.status === "error"
+                    ? "error"
+                    : "unknown"
+            }
+            size={8}
+            srLabel={focusedPane?.status}
+          />
           {focusedPane?.profile && (
             <span style={{ color: p.txt2 }}>
               {focusedPane.profile.user
