@@ -57,12 +57,16 @@ function HostCard({
   onConnect: () => void;
 }) {
   const p = usePalette();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [hover, setHover] = useState(false);
   // Hover-only affordances (checkbox, Connect) also appear while the card or
   // anything inside it holds keyboard focus, so they stay reachable by Tab.
   const [focusIn, setFocusIn] = useState(false);
   const show = hover || focusIn;
+  const lc = useApp((s) => s.lastConnected[h.profileId]);
+  const authKind = profileAuthKind(h.auth);
+  const authWarn = authKind === "password" || authKind === "ask";
+  const authLabel = tDyn(AUTH_LABEL_KEY[authKind]);
   return (
     <Card
       active={active || selected}
@@ -94,66 +98,72 @@ function HostCard({
         }}
       />
 
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 11, marginBottom: 12 }}>
+      {/* L1 — 7px status dot + name (reference: dot keys off a live session) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         <span
           style={{
-            width: 36,
-            height: 36,
-            borderRadius: 10,
-            background: p.bg3,
-            border: `1px solid ${p.line}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            position: "relative",
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
             flexShrink: 0,
+            background: session ? p.green : p.line2,
+          }}
+        />
+        <span
+          style={{
+            fontSize: 16,
+            fontWeight: 700,
+            letterSpacing: "-0.2px",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
           }}
         >
-          <Icon name="server" size={17} color={p.txt2} stroke={1.7} />
+          {h.label}
         </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span
-              style={{
-                fontSize: 15,
-                fontWeight: 700,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                minWidth: 0,
-              }}
-            >
-              {h.label}
-            </span>
-            {h.jumps.length > 0 && <Icon name="branch" size={12} color={p.txt3} stroke={1.8} />}
-          </div>
-          <div
-            style={{
-              fontFamily: MONO,
-              fontSize: 11.5,
-              color: p.txt3,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {h.user ? `${h.user}@${h.host}` : h.host}
-          </div>
-        </div>
+        {h.jumps.length > 0 && <Icon name="branch" size={12} color={p.txt3} stroke={1.8} />}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {session && <StatusDot status="online" size={6} label={t("hosts.session")} />}
-        <AuthBadge auth={profileAuthKind(h.auth)} jump={false} />
-        <div style={{ flex: 1 }} />
-        <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          {h.tags.slice(0, 2).map((tg) => (
-            <Tag key={tg} mono>
-              #{tg}
-            </Tag>
-          ))}
-          {h.tags.length > 2 && <MetaChip>{`+${h.tags.length - 2}`}</MetaChip>}
-        </div>
+      {/* L2 — address (mono, txt2) */}
+      <div
+        style={{
+          fontFamily: MONO,
+          fontSize: 11.5,
+          color: p.txt2,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          marginTop: 6,
+        }}
+      >
+        {h.user ? `${h.user}@${h.host}` : h.host}
+      </div>
+
+      {/* L3 — status · auth (one mono line; colour only on meaning) */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          fontFamily: MONO,
+          fontSize: 11.5,
+          color: p.txt3,
+          marginTop: 16,
+        }}
+      >
+        {session ? (
+          <>
+            <span style={{ color: p.green }}>{t("hosts.session")}</span>
+            <span style={{ opacity: 0.4 }}>·</span>
+          </>
+        ) : lc ? (
+          <>
+            <span>{fmtRelative(lc, i18n.language)}</span>
+            <span style={{ opacity: 0.4 }}>·</span>
+          </>
+        ) : null}
+        <span style={{ color: authWarn ? p.amber : p.txt3 }}>{authLabel}</span>
       </div>
 
       {show && (

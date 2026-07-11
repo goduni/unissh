@@ -604,7 +604,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
       style={{
         width: 60,
         flexShrink: 0,
-        background: p.bg2,
+        background: p.bg0,
         borderRight: `1px solid ${p.line}`,
         display: "flex",
         flexDirection: "column",
@@ -730,7 +730,7 @@ export function Sidebar({
         width,
         flexShrink: 0,
         position: "relative",
-        background: p.bg2,
+        background: p.bg0,
         borderRight: `1px solid ${p.line}`,
         display: "flex",
         flexDirection: "column",
