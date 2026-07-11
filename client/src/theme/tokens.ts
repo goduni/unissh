@@ -9,7 +9,12 @@ export const MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace";
 export type Mode = "dark" | "light" | "auto";
 export type EffMode = "dark" | "light";
 export type AccentKey = "blue" | "green" | "violet" | "amber" | "rose";
-export type Density = "cards" | "list";
+/** Global SPACING axis (row height / padding / hairline-vs-shadow). Independent of
+ *  the Hosts card/list layout and of the mobile touch-shell platform flag. */
+export type Density = "comfortable" | "compact";
+/** Hosts list rendering: a card grid vs a flat row list. A per-view layout choice,
+ *  NOT the spacing density. */
+export type HostsLayout = "cards" | "list";
 export type AppThemeFamily = "mono" | "nebula" | "candy";
 
 export interface Palette {

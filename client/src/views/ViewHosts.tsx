@@ -1082,7 +1082,7 @@ function BulkActionsMenu({
 export function ViewHosts() {
   const p = usePalette();
   const { t } = useTranslation();
-  const { density, setDensity } = useTheme();
+  const { hostsLayout, setHostsLayout } = useTheme();
   const ctx = useCtx();
   const hosts = useApp((s) => s.hosts);
   const groups = useApp((s) => s.groups);
@@ -1219,17 +1219,17 @@ export function ViewHosts() {
 
   const segBtn = (icon: "grid" | "list", val: "cards" | "list") => (
     <button
-      onClick={() => setDensity(val)}
+      onClick={() => setHostsLayout(val)}
       title={t(val === "cards" ? "hosts.viewCards" : "hosts.viewList")}
       aria-label={t(val === "cards" ? "hosts.viewCards" : "hosts.viewList")}
-      aria-pressed={density === val}
+      aria-pressed={hostsLayout === val}
       style={{
         width: 30,
         height: 26,
         borderRadius: 6,
         border: "none",
-        background: density === val ? p.bg4 : "transparent",
-        color: density === val ? p.txt : p.txt3,
+        background: hostsLayout === val ? p.bg4 : "transparent",
+        color: hostsLayout === val ? p.txt : p.txt3,
         cursor: "pointer",
         display: "flex",
         alignItems: "center",
@@ -1613,7 +1613,7 @@ export function ViewHosts() {
                 {t("hosts.resetFilter")}
               </Btn>
             </div>
-          ) : density === "cards" ? (
+          ) : hostsLayout === "cards" ? (
             <div
               className="uh-stagger"
               style={{

@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { ACCENT_KEYS, ACCENTS, MONO, UI, rgba } from "@/theme/tokens";
-import type { AppThemeFamily, Density, Mode, Palette, TermTheme } from "@/theme/tokens";
+import type { AppThemeFamily, Density, HostsLayout, Mode, Palette, TermTheme } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, Segmented, Spinner, Toggle, VaultBadge } from "@/components/primitives";
 import type { IconName } from "@/components/primitives";
 import { useApp } from "@/store/app";
@@ -167,6 +167,8 @@ function SettingsAppearance() {
     setAccent,
     density,
     setDensity,
+    hostsLayout,
+    setHostsLayout,
     termThemeId,
     setTermThemeId,
     termThemes,
@@ -206,6 +208,7 @@ function SettingsAppearance() {
           value={family}
           onChange={setFamily}
           options={[
+            { value: "mono", label: t("settings.themeFamilyMono") },
             { value: "nebula", label: t("settings.themeFamilyNebula") },
             { value: "candy", label: t("settings.themeFamilyCandy") },
           ]}
@@ -282,8 +285,18 @@ function SettingsAppearance() {
           value={density}
           onChange={setDensity}
           options={[
-            { value: "cards", label: t("settings.densityCards"), icon: "grid" },
-            { value: "list", label: t("settings.densityList"), icon: "list" },
+            { value: "comfortable", label: t("settings.densityComfortable") },
+            { value: "compact", label: t("settings.densityCompact") },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow title={t("settings.hostsLayoutTitle")} desc={t("settings.hostsLayoutDesc")}>
+        <Segmented<HostsLayout>
+          value={hostsLayout}
+          onChange={setHostsLayout}
+          options={[
+            { value: "cards", label: t("settings.hostsLayoutCards"), icon: "grid" },
+            { value: "list", label: t("settings.hostsLayoutList"), icon: "list" },
           ]}
         />
       </SettingRow>
