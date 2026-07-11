@@ -328,7 +328,7 @@ function VaultSwitcher() {
   const v = vaults.find((x) => x.vaultId === vaultId) || vaults[0];
   if (!v) return null;
   return (
-    <div ref={menuRef} style={{ position: "relative", margin: "0 12px 8px" }}>
+    <div ref={menuRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
       <button
         onClick={() => setOpen(!open)}
         aria-haspopup="menu"
@@ -779,25 +779,26 @@ export function Sidebar({
           />
         </NavGroup>
       </div>
-      <div style={{ marginTop: 8, paddingTop: 10, borderTop: `1px solid ${p.line}` }}>
-        <VaultSwitcher />
-      </div>
       <div
         style={{
-          margin: "0 12px 0",
+          marginTop: 8,
+          borderTop: `1px solid ${p.line}`,
+          padding: "10px 12px 0",
           display: "flex",
-          alignItems: "center",
-          justifyContent: "flex-end",
+          alignItems: "stretch",
+          gap: 8,
         }}
       >
+        <VaultSwitcher />
         <button
           title={t("common.minimize")}
           aria-label={t("common.minimize")}
           onClick={onToggleCollapse}
           style={{
-            width: 28,
-            height: 28,
-            borderRadius: 8,
+            flexShrink: 0,
+            width: 34,
+            alignSelf: "stretch",
+            borderRadius: 10,
             border: `1px solid ${p.line}`,
             background: p.bg1,
             color: p.txt2,
