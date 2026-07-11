@@ -1,9 +1,6 @@
 //! axum router + tower layers. Assembling the router from modules (§2.2).
 
-pub mod auth;
 pub mod extract;
-pub mod idempotency;
-pub mod middleware;
 pub mod ratelimit;
 
 use crate::modules;
@@ -15,6 +12,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 /// Public service endpoints (§5.7), without tenant/auth/rate-limit.
@@ -57,7 +55,11 @@ pub fn build_router(state: AppState) -> Router {
     let router = Router::new()
         .merge(service_routes())
         .merge(v1)
-        .layer(axum::middleware::from_fn(api_version_header))
+        // The `UniSSH-API-Version: 1` response header (§5.0).
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("unissh-api-version"),
+            HeaderValue::from_static("1"),
+        ))
         .layer(RequestBodyLimitLayer::new(max_body))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -105,17 +107,6 @@ fn cors_layer(origins: &[String]) -> Option<CorsLayer> {
                 header::RETRY_AFTER,
             ]),
     )
-}
-
-/// The `UniSSH-API-Version: 1` response header (§5.0).
-async fn api_version_header(
-    req: axum::http::Request<axum::body::Body>,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let mut resp = next.run(req).await;
-    resp.headers_mut()
-        .insert("unissh-api-version", HeaderValue::from_static("1"));
-    resp
 }
 
 async fn healthz() -> impl IntoResponse {
