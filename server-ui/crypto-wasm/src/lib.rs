@@ -457,27 +457,10 @@ pub fn verify_manifest_authorized(
     let buf = unb64(&manifest_b64)?;
     let genesis = unb64(&genesis_owner_b64)?;
     let target_vault = unb64(&vault_id_b64)?;
-    let trunc = || JsError::new("manifest: truncated envelope");
-    let mut p = 0usize;
-    // tag
-    if buf.is_empty() || buf[0] != 3 {
-        return Err(JsError::new("not a manifest envelope (tag 3)"));
-    }
-    p += 1;
-    let take = |p: &mut usize| -> Result<Vec<u8>, JsError> {
-        if *p + 4 > buf.len() {
-            return Err(trunc());
-        }
-        let n = u32::from_be_bytes([buf[*p], buf[*p + 1], buf[*p + 2], buf[*p + 3]]) as usize;
-        *p += 4;
-        if *p + n > buf.len() {
-            return Err(trunc());
-        }
-        let b = buf[*p..*p + n].to_vec();
-        *p += n;
-        Ok(b)
-    };
-    let vault_id = take(&mut p)?;
+
+    // Parse the tag-3 envelope (shared with the chain verifier).
+    let (vault_id, epoch, blob, sig, author) = parse_manifest_envelope(&buf)?;
+
     // (0) the envelope MUST be for the vault we are rotating. Without this, an
     // untrusted server can return a valid, genesis-signed manifest from a DIFFERENT
     // vault of the same operator (cross-vault splice) and pass every check below.
@@ -487,68 +470,21 @@ pub fn verify_manifest_authorized(
             "manifest vault_id does not match the target vault — possible cross-vault splice",
         ));
     }
-    if p + 8 > buf.len() {
-        return Err(trunc());
-    }
-    let epoch = u64::from_be_bytes(buf[p..p + 8].try_into().unwrap());
-    p += 8;
-    let blob = take(&mut p)?;
-    let sig = take(&mut p)?;
-    let author = take(&mut p)?;
-
     // (1) author must be the pinned genesis owner.
     if author != genesis {
         return Err(JsError::new("manifest author is not the pinned genesis owner"));
     }
-    // (2) Ed25519 signature valid (verify_strict) under AAD (vault_id,"__manifest__",epoch).
-    let vk = Ed25519VerifyingKey::from_bytes(&author).map_err(|_| JsError::new("bad author key"))?;
-    let vo = VersionedObject::from_content(
-        AssociatedData::new(vault_id.clone(), b"__manifest__".to_vec(), epoch),
-        &blob,
-    );
-    verify_version(&vk, &vo, &sig).map_err(|_| JsError::new("manifest signature invalid"))?;
-
-    // (3) parse the (now-authenticated) member set: domain||epoch||count||[role||len||ed]*.
-    const DOM: &[u8] = b"unissh-manifest-v1";
-    if blob.len() < DOM.len() + 8 + 4 || &blob[..DOM.len()] != DOM {
-        return Err(JsError::new("manifest blob: bad format"));
-    }
-    let mut q = DOM.len();
-    let blob_epoch = u64::from_be_bytes(blob[q..q + 8].try_into().unwrap());
-    if blob_epoch != epoch {
-        return Err(JsError::new("manifest blob epoch mismatch"));
-    }
-    q += 8;
-    let count = u32::from_be_bytes(blob[q..q + 4].try_into().unwrap()) as usize;
-    q += 4;
-    let mut members = Vec::with_capacity(count.min(4096));
-    for _ in 0..count {
-        if q + 1 + 2 > blob.len() {
-            return Err(JsError::new("manifest blob: truncated member"));
-        }
-        let role = blob[q];
-        q += 1;
-        // Match native strictness (server codec.rs rejects role > 2): a manifest
-        // carrying an out-of-range role is malformed, not silently coerced.
-        if role > 2 {
-            return Err(JsError::new("manifest member role out of range (>2)"));
-        }
-        let edlen = u16::from_be_bytes([blob[q], blob[q + 1]]) as usize;
-        q += 2;
-        if q + edlen > blob.len() {
-            return Err(JsError::new("manifest blob: truncated member ed"));
-        }
-        let ed = &blob[q..q + edlen];
-        q += edlen;
-        members.push(format!("{{\"ed25519_pub\":\"{}\",\"role\":{}}}", b64(ed), role));
-    }
-    if q != blob.len() {
-        return Err(JsError::new("manifest blob: trailing bytes"));
-    }
+    // (2) verify the Ed25519 signature and (3) parse the authenticated member set
+    // (both shared with the chain verifier — same AAD, domain, and strictness).
+    let members = verify_and_parse_manifest(&vault_id, epoch, &blob, &sig, &author)?;
+    let members_json: Vec<String> = members
+        .iter()
+        .map(|(ed, role)| format!("{{\"ed25519_pub\":\"{}\",\"role\":{}}}", b64(ed), role))
+        .collect();
     Ok(format!(
         "{{\"epoch\":{},\"members\":[{}]}}",
         epoch,
-        members.join(",")
+        members_json.join(",")
     ))
 }
 
