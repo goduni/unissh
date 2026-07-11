@@ -770,48 +770,9 @@ export function Sidebar({
           borderTop: `1px solid ${p.line}`,
           display: "flex",
           alignItems: "center",
-          gap: 8,
+          justifyContent: "flex-end",
         }}
       >
-        <span
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 8,
-            background: p.bg3,
-            border: `1px solid ${p.line}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: p.green,
-            flexShrink: 0,
-          }}
-        >
-          <Icon name="unlock" size={14} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>{t("shell.localInstance")}</div>
-          <div style={{ fontSize: 10.5, color: p.txt3 }}>{t("shell.unlocked")}</div>
-        </div>
-        <button
-          title={t("shell.lockShort")}
-          aria-label={t("shell.lockShort")}
-          onClick={ctx.onLock}
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 8,
-            border: `1px solid ${p.line}`,
-            background: p.bg1,
-            color: p.txt2,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="lock" size={14} />
-        </button>
         <button
           title={t("common.minimize")}
           aria-label={t("common.minimize")}
