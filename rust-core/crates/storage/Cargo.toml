@@ -10,13 +10,26 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-# SQLite + SQLCipher, built from source, linked against the system OpenSSL.
-rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }
 thiserror = "2"
 zeroize = "1.8"
 hex = "0.4"
 
+# SQLite + SQLCipher, built from source. SQLCipher links OpenSSL (libcrypto):
+#   * non-Windows: link the system OpenSSL (libssl-dev / macOS system) — small & fast.
+#   * Windows: there is no system OpenSSL, and a distributed .exe must be
+#     self-contained, so vendor + statically link OpenSSL (built from source via
+#     openssl-src). Requires perl + nasm at build time (see client.yml windows leg).
+[target.'cfg(not(windows))'.dependencies]
+rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }
+[target.'cfg(windows)'.dependencies]
+rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
+
 [dev-dependencies]
 tempfile = "3"
+
 # Raw connection for the upgrade test (we build a v3 DB before Storage::open).
+# Mirror the per-OS SQLCipher/OpenSSL split above.
+[target.'cfg(not(windows))'.dev-dependencies]
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }
+[target.'cfg(windows)'.dev-dependencies]
+rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }

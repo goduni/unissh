@@ -111,6 +111,17 @@ jobs:
           npm install --no-audit --no-fund
         working-directory: client
 
+      # Windows-only: SQLCipher vendors + statically links OpenSSL there (no system
+      # OpenSSL on Windows, and the shipped .exe must be self-contained — see
+      # rust-core/crates/storage/Cargo.toml). Building OpenSSL from source
+      # (openssl-src) needs NASM to assemble its crypto; Perl ships on the runner.
+      - name: Install NASM (Windows OpenSSL vendored build)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install nasm -y --no-progress
+          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Build & bundle (Tauri)
         uses: tauri-apps/tauri-action@v0
         env:
