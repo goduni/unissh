@@ -77,7 +77,8 @@ export function FileRow({
   // desktop: hover send arrow on files; mobile: a visible ⋯ actions button.
   const showSend = !isMobile && hover && isFile && !!actionIcon && !!onActivate;
   const showRowMenu = isMobile && !isUp && !!onContextAt;
-  const icon: IconName = isUp ? "cl" : isDir ? "folder" : "file";
+  const isLink = !isDir && ((entry.mode ?? 0) & 0o170000) === 0o120000;
+  const icon: IconName = isUp ? "cl" : isDir ? "folder" : isLink ? "link" : "file";
   const color = isDir ? p.accent : p.txt3;
 
   return (
@@ -175,7 +176,10 @@ export function FileRow({
         {isUp ? ".." : entry.name}
       </span>
       {!isUp && showPerms && (
-        <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt2, width: 78, textAlign: "left" }}>
+        <span
+          title={entry.uid || entry.gid ? `uid ${entry.uid ?? 0} · gid ${entry.gid ?? 0}` : undefined}
+          style={{ fontFamily: MONO, fontSize: 11, color: p.txt2, width: 78, textAlign: "left" }}
+        >
           {modeString(entry.mode)}
         </span>
       )}

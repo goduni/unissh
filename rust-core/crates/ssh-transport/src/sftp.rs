@@ -117,6 +117,10 @@ pub struct DirEntry {
     pub mode: u32,
     /// Modification time, seconds since the epoch; 0 if the server did not report it.
     pub mtime: u64,
+    /// Owner uid (numeric), 0 if the server did not report it.
+    pub uid: u32,
+    /// Owner gid (numeric), 0 if the server did not report it.
+    pub gid: u32,
 }
 
 /// The result of stat.
@@ -430,7 +434,7 @@ where
         }
         let mut r = Reader::new(&body);
         r.u32()?; // id
-        let (size, perms, mtime) = parse_attrs(&mut r)?;
+        let (size, perms, mtime, _, _) = parse_attrs(&mut r)?;
         Ok(FileStat {
             size: size.unwrap_or(0),
             is_dir: perms.map(is_dir_perm).unwrap_or(false),
@@ -681,13 +685,15 @@ where
                 for _ in 0..count {
                     let filename = r.string_utf8()?;
                     r.skip_string()?; // longname (ls -l) — not needed, do not allocate
-                    let (size, perms, mtime) = parse_attrs(&mut r)?;
+                    let (size, perms, mtime, uid, gid) = parse_attrs(&mut r)?;
                     out.push(DirEntry {
                         filename,
                         is_dir: perms.map(is_dir_perm).unwrap_or(false),
                         size: size.unwrap_or(0),
                         mode: perms.unwrap_or(0),
                         mtime: mtime.map(u64::from).unwrap_or(0),
+                        uid: uid.unwrap_or(0),
+                        gid: gid.unwrap_or(0),
                     });
                 }
                 Ok(Some(out))
@@ -865,20 +871,28 @@ fn status_to_err(code: u32, r: &mut Reader<'_>) -> TransportError {
 }
 
 /// `(size, permissions, mtime)` from the ATTRS block; a field is `None` if the server did not send it.
-type ParsedAttrs = (Option<u64>, Option<u32>, Option<u32>);
+type ParsedAttrs = (
+    Option<u64>,
+    Option<u32>,
+    Option<u32>,
+    Option<u32>,
+    Option<u32>,
+);
 
-/// Parses the ATTRS block, advancing the cursor. Returns `(size, permissions, mtime)`.
+/// Parses the ATTRS block, advancing the cursor. Returns `(size, permissions, mtime, uid, gid)`.
 fn parse_attrs(r: &mut Reader<'_>) -> Result<ParsedAttrs, TransportError> {
     let flags = r.u32()?;
     let mut size = None;
     let mut perms = None;
     let mut mtime = None;
+    let mut uid = None;
+    let mut gid = None;
     if flags & ATTR_SIZE != 0 {
         size = Some(r.u64()?);
     }
     if flags & ATTR_UIDGID != 0 {
-        r.u32()?;
-        r.u32()?;
+        uid = Some(r.u32()?);
+        gid = Some(r.u32()?);
     }
     if flags & ATTR_PERMISSIONS != 0 {
         perms = Some(r.u32()?);
@@ -894,7 +908,7 @@ fn parse_attrs(r: &mut Reader<'_>) -> Result<ParsedAttrs, TransportError> {
             r.string()?;
         }
     }
-    Ok((size, perms, mtime))
+    Ok((size, perms, mtime, uid, gid))
 }
 
 /// A read cursor over the bytes of a reply (big-endian, SSH strings).
@@ -965,7 +979,7 @@ mod tests {
         buf.extend_from_slice(&111u32.to_be_bytes()); // atime — discarded
         buf.extend_from_slice(&1_700_000_000u32.to_be_bytes()); // mtime
         let mut r = Reader::new(&buf);
-        let (size, perms, mtime) = parse_attrs(&mut r).unwrap();
+        let (size, perms, mtime, _, _) = parse_attrs(&mut r).unwrap();
         assert_eq!(size, Some(1234));
         assert_eq!(perms, Some(0o100644));
         assert_eq!(mtime, Some(1_700_000_000));
@@ -978,7 +992,7 @@ mod tests {
         buf.extend_from_slice(&ATTR_SIZE.to_be_bytes()); // size only
         buf.extend_from_slice(&42u64.to_be_bytes());
         let mut r = Reader::new(&buf);
-        let (size, perms, mtime) = parse_attrs(&mut r).unwrap();
+        let (size, perms, mtime, _, _) = parse_attrs(&mut r).unwrap();
         assert_eq!(size, Some(42));
         assert_eq!(perms, None);
         assert_eq!(mtime, None);

@@ -235,6 +235,10 @@ pub struct SftpEntry {
     pub mode: u32,
     /// Modification time, seconds since the epoch; 0 if unknown.
     pub mtime: u64,
+    /// Owner uid (numeric), 0 if unknown.
+    pub uid: u32,
+    /// Owner gid (numeric), 0 if unknown.
+    pub gid: u32,
 }
 
 /// Result of an SFTP stat.
@@ -6551,6 +6555,8 @@ impl SftpFfi {
                     size: e.size,
                     mode: e.mode,
                     mtime: e.mtime,
+                    uid: e.uid,
+                    gid: e.gid,
                 })
                 .collect())
         })
