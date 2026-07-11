@@ -53,7 +53,6 @@ function statusColor(
 const HostTile = React.memo(function HostTile({
   h,
   st,
-  command,
   result,
   selectable,
   checked,
@@ -63,7 +62,6 @@ const HostTile = React.memo(function HostTile({
 }: {
   h: ConnectionProfile;
   st: HostStatus;
-  command: string;
   result?: MultiExecResult;
   /** Idle-phase picker: the tile shows a checkbox and is click-to-toggle. False
    *  during running/done (the selection is frozen into the run snapshot). */
@@ -199,15 +197,9 @@ const HostTile = React.memo(function HostTile({
         }}
       >
         {(st === "queued" || st === "cancelled") && <span style={{ color: p.txt3 }}>—</span>}
-        {st === "running" && (
-          <span style={{ color: p.txt3 }}>
-            $ {command}
-            <span style={{ color: p.accent }}>▋</span>
-          </span>
-        )}
+        {st === "running" && <span style={{ color: p.accent }}>▋</span>}
         {result && (
           <React.Fragment>
-            <div style={{ color: p.txt3 }}>$ {command}</div>
             {bodyLines.map((l, i) => (
               <div
                 key={i}
@@ -861,7 +853,6 @@ export function ViewFleet() {
                 key={h.profileId}
                 h={h}
                 st={statusOf(h)}
-                command={command}
                 result={results[h.profileId]}
                 selectable={phase === "idle"}
                 checked={sel.has(h.profileId)}
