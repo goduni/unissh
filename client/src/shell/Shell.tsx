@@ -5,8 +5,9 @@
 import React, { useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO, vaultColor } from "@/theme/tokens";
+import { MONO } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconName, Logo, ResizeHandle, VaultBadge } from "@/components/primitives";
+import { FlatAvatar } from "@/components/mono";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import type { Route } from "@/store/app";
@@ -170,7 +171,6 @@ export function WindowControls() {
 }
 
 export function TitleBar() {
-  const p = usePalette();
   const { t } = useTranslation();
   const { toggleTwin } = useTheme();
   const route = useApp((s) => s.route);
@@ -205,22 +205,8 @@ export function TitleBar() {
         {/* Account avatar — only for a linked cloud account with a handle. A
             local-only instance has no account, so no avatar is shown. */}
         {server?.connected && server.handle && (
-          <span
-            title={server.handle}
-            style={{
-              width: 30,
-              height: 30,
-              borderRadius: "50%",
-              background: `linear-gradient(140deg, ${p.accent}, ${p.purple})`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#fff",
-              fontWeight: 700,
-              fontSize: 12,
-            }}
-          >
-            {server.handle.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 2).toUpperCase() || "?"}
+          <span title={server.handle} style={{ display: "inline-flex" }}>
+            <FlatAvatar name={server.handle} size={30} shape="round" />
           </span>
         )}
       </div>
@@ -262,7 +248,7 @@ function NavItem({
         margin: sub ? "0 8px 0 22px" : "0 8px",
         borderRadius: 8,
         cursor: "pointer",
-        background: active ? p.bg4 : "transparent",
+        background: "transparent",
         color: active ? p.txt : p.txt2,
         boxShadow: active ? `inset 2px 0 0 ${p.accent}` : "none",
         fontSize: 13,
@@ -334,8 +320,6 @@ function VaultSwitcher() {
   useMenu(open, () => setOpen(false), menuRef);
   const v = vaults.find((x) => x.vaultId === vaultId) || vaults[0];
   if (!v) return null;
-  // Shared deterministic palette-driven avatar colour (same hue on mobile).
-  const colorFor = (id: string) => vaultColor(p, id);
   return (
     <div ref={menuRef} style={{ position: "relative", margin: "0 12px 8px" }}>
       <button
@@ -355,22 +339,7 @@ function VaultSwitcher() {
           cursor: "pointer",
         }}
       >
-        <span
-          style={{
-            width: 26,
-            height: 26,
-            borderRadius: 7,
-            background: `linear-gradient(140deg, ${colorFor(v.vaultId)}, ${p.purple})`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#fff",
-            fontWeight: 700,
-            fontSize: 13,
-          }}
-        >
-          {v.name[0]}
-        </span>
+        <FlatAvatar name={v.name} size={26} />
         {/* spans (not divs) — the trigger is a <button>, which only allows phrasing content */}
         <span style={{ flex: 1, minWidth: 0, display: "block" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
@@ -458,22 +427,7 @@ function VaultSwitcher() {
                 if (x.vaultId !== vaultId) e.currentTarget.style.background = "transparent";
               }}
             >
-              <span
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: 6,
-                  background: `linear-gradient(140deg, ${colorFor(x.vaultId)}, ${p.purple})`,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "#fff",
-                  fontWeight: 700,
-                  fontSize: 11,
-                }}
-              >
-                {x.name[0]}
-              </span>
+              <FlatAvatar name={x.name} size={22} />
               <span
                 style={{
                   flex: 1,
@@ -555,7 +509,6 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
   const setVault = useApp((s) => s.setVault);
   const ctx = useCtx();
   const v = vaults.find((x) => x.vaultId === vaultId) || vaults[0];
-  const colorFor = vaultColor(p, v?.vaultId ?? null);
   const item = (icon: IconName, r: Route, badge?: string) => (
     <button
       key={icon + r}
@@ -619,15 +572,14 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
           height: 40,
           borderRadius: 12,
           cursor: "pointer",
-          background: `linear-gradient(140deg, ${colorFor}, ${p.purple})`,
-          border: "none",
-          color: "#fff",
+          background: p.bg3,
+          border: `1px solid ${p.line}`,
+          color: p.txt2,
           fontWeight: 700,
           fontSize: 15,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          boxShadow: `0 6px 16px -6px ${colorFor}`,
         }}
       >
         {v?.name[0] ?? "?"}
