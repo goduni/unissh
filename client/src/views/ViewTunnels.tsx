@@ -5,8 +5,7 @@
 // drops it from the list (re-enabling means re-opening via the modal).
 
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rgba } from "@/theme/tokens";
-import type { Palette } from "@/theme/tokens";
+import { MONO } from "@/theme/tokens";
 import { Btn, Icon, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -28,7 +27,6 @@ const TYPE_META: Record<TunnelType, TypeMeta> = {
   remote: { letter: "R", nameKey: "tunnels.type.remote", colorKey: "purple" },
   dynamic: { letter: "D", nameKey: "tunnels.type.dynamic", colorKey: "green" },
 };
-const typeColor = (p: Palette, m: TypeMeta): string => p[m.colorKey];
 
 function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
   const { t } = useTranslation();
@@ -36,7 +34,6 @@ function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
   const ctx = useCtx();
   const isMobile = useIsMobile();
   const m = TYPE_META[tun.type];
-  const mColor = typeColor(p, m);
 
   const turnOff = async () => {
     try {
@@ -68,15 +65,15 @@ function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
           width: 44,
           height: 44,
           borderRadius: 12,
-          background: rgba(mColor, 0.14),
-          border: `1px solid ${rgba(mColor, 0.4)}`,
+          background: p.bg3,
+          border: `1px solid ${p.line}`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           fontFamily: MONO,
           fontWeight: 800,
           fontSize: 17,
-          color: mColor,
+          color: p.txt2,
           flexShrink: 0,
           ...(isMobile ? { order: 0 } : null),
         }}
@@ -108,19 +105,6 @@ function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
             borderRadius: 7,
             padding: "4px 9px",
             whiteSpace: "nowrap",
-          }}
-        >
-          {tun.bindAddress}
-        </span>
-        <Icon name="ar" size={15} color={mColor} />
-        <span
-          style={{
-            color: p.txt,
-            background: p.bg3,
-            border: `1px solid ${p.line}`,
-            borderRadius: 7,
-            padding: "4px 9px",
-            whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
@@ -138,7 +122,7 @@ function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
               whiteSpace: "nowrap",
             }}
           >
-            <Icon name="branch" size={12} color={p.purple} />
+            <Icon name="branch" size={12} color={p.txt3} />
             {t("tunnels.via", { via: tun.via })}
           </span>
         )}
