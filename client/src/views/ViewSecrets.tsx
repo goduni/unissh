@@ -8,9 +8,9 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, UI, rgba, vaultColor } from "@/theme/tokens";
+import { MONO, UI } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, VaultBadge } from "@/components/primitives";
-import { UnderlineTabs, fmtRelative } from "@/components/mono";
+import { UnderlineTabs, fmtRelative, FlatAvatar } from "@/components/mono";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
@@ -579,15 +579,15 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
             width: 34,
             height: 34,
             borderRadius: 9,
-            background: rgba(p.amber, 0.14),
-            border: `1px solid ${rgba(p.amber, 0.35)}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="lock" size={16} color={p.amber} />
+          <Icon name="lock" size={16} color={p.txt2} />
         </span>
         <input
           ref={nameRef}
@@ -697,15 +697,15 @@ function PasswordCard({ item }: { item: ItemInfo }) {
             width: 34,
             height: 34,
             borderRadius: 9,
-            background: rgba(p.amber, 0.14),
-            border: `1px solid ${rgba(p.amber, 0.35)}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="lock" size={16} color={p.amber} />
+          <Icon name="lock" size={16} color={p.txt2} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -897,7 +897,7 @@ function NoteCard({ item }: { item: ItemInfo }) {
   return (
     <div style={{ padding: 16, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
-        <Icon name="note" size={16} color={p.purple} />
+        <Icon name="note" size={16} color={p.txt2} />
         <span style={{ fontSize: 14.5, fontWeight: 700 }}>{item.itemId}</span>
         <div style={{ flex: 1 }} />
         <button
@@ -1080,7 +1080,7 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
   return (
     <div style={{ padding: 16, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
-        <Icon name="note" size={16} color={p.purple} />
+        <Icon name="note" size={16} color={p.txt2} />
         <input
           ref={nameRef}
           {...NO_AUTOCORRECT}
@@ -1290,15 +1290,15 @@ function NewIdentityCard({
             width: 34,
             height: 34,
             borderRadius: 9,
-            background: rgba(p.purple, 0.14),
-            border: `1px solid ${rgba(p.purple, 0.35)}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="fingerprint" size={16} color={p.purple} />
+          <Icon name="fingerprint" size={16} color={p.txt2} />
         </span>
         <input
           ref={nameRef}
@@ -1449,15 +1449,15 @@ function IdentityCard({
             width: 34,
             height: 34,
             borderRadius: 9,
-            background: rgba(p.purple, 0.14),
-            border: `1px solid ${rgba(p.purple, 0.35)}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="fingerprint" size={16} color={p.purple} />
+          <Icon name="fingerprint" size={16} color={p.txt2} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -1565,33 +1565,13 @@ function IdentityVaultSwitcher({
   const cur = vaults.find((v) => v.vaultId === selected) ?? vaults[0];
   if (!cur) return null;
 
-  // Shared deterministic palette-driven avatar colour (same hue in the shell/mobile).
-  const colorFor = (id: string) => vaultColor(p, id);
   const badgeLabel = (v: VaultInfo) => {
     const loc = vaultLoc(v, servers);
     return loc.local
       ? t("secrets.locLocal")
       : t("secrets.locCloud", { server: loc.server ?? t("vault.cloud") });
   };
-  const avatar = (v: VaultInfo, sz: number) => (
-    <span
-      style={{
-        width: sz,
-        height: sz,
-        borderRadius: sz * 0.27,
-        background: `linear-gradient(140deg, ${colorFor(v.vaultId)}, ${p.purple})`,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#fff",
-        fontWeight: 700,
-        fontSize: sz * 0.5,
-        flexShrink: 0,
-      }}
-    >
-      {v.name[0]?.toUpperCase()}
-    </span>
-  );
+  const avatar = (v: VaultInfo, sz: number) => <FlatAvatar name={v.name} size={sz} />;
   const row = (base: string): CSSProperties => ({
     display: "flex",
     alignItems: "center",
