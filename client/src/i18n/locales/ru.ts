@@ -787,6 +787,7 @@ export const ru = {
   },
   secrets: {
     "title": "Секреты",
+    "updatedAgo": "Обновлено {{ago}}",
     "newKey": "Новый ключ",
     "newPassword": "Новый пароль",
     "newIdentity": "Новая идентичность",

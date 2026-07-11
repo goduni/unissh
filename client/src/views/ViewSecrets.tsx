@@ -10,7 +10,7 @@ import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, UI, rgba, vaultColor } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, VaultBadge } from "@/components/primitives";
-import { UnderlineTabs } from "@/components/mono";
+import { UnderlineTabs, fmtRelative } from "@/components/mono";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
@@ -216,7 +216,7 @@ function RevealField({
 // ── Keys ───────────────────────────────────────────────────────
 function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
   const p = usePalette();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ctx = useCtx();
   const vault = useApp((s) => s.vaultId);
   const [fp, setFp] = useState<string | null>(null);
@@ -364,7 +364,7 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
             {item.itemId}
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
-            v{item.version}
+            {t("secrets.updatedAgo", { ago: fmtRelative(item.updatedAt, i18n.language) })}
             {item.hasCertificate ? " · cert" : ""}
           </div>
         </div>
@@ -641,7 +641,7 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
 
 function PasswordCard({ item }: { item: ItemInfo }) {
   const p = usePalette();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ctx = useCtx();
   const vault = useApp((s) => s.vaultId);
   const [editing, setEditing] = useState(false);
@@ -711,7 +711,9 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           <div style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {item.itemId}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>v{item.version}</div>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+            {t("secrets.updatedAgo", { ago: fmtRelative(item.updatedAt, i18n.language) })}
+          </div>
         </div>
         <button
           onClick={editing ? saveEdit : startEdit}

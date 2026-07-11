@@ -753,6 +753,7 @@ export const en = {
   },
   secrets: {
     "title": "Secrets",
+    "updatedAgo": "Updated {{ago}}",
     "newKey": "New key",
     "newPassword": "New password",
     "newIdentity": "New identity",
