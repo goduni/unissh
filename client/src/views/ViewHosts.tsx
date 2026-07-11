@@ -1056,6 +1056,10 @@ export function ViewHosts() {
   const terminals = useApp((s) => s.terminals);
   const hostFilter = useApp((s) => s.hostFilter);
   const setHostFilter = useApp((s) => s.setHostFilter);
+  // When the sidebar selects a GROUP, hostFilter holds a groupId (not a tag), so
+  // none of the tag chips highlight — surface the active group as its own visible,
+  // dismissable scope token so the filter is never invisible.
+  const activeGroup = groups.find((g) => g.groupId === hostFilter);
 
   const [sort, setSort] = useState<SortKey>(loadHostSort);
   const lastConnected = useApp((s) => s.lastConnected);
@@ -1416,6 +1420,40 @@ export function ViewHosts() {
           }}
         >
           <Icon name="tag" size={13} color={p.txt3} />
+          {activeGroup && (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: 12,
+                fontWeight: 600,
+                color: p.txt,
+                background: p.bg3,
+                border: `1px solid ${p.line2}`,
+                borderRadius: 20,
+                padding: "2px 4px 2px 10px",
+              }}
+            >
+              {activeGroup.label}
+              <button
+                onClick={() => setHostFilter(HOST_FILTER_ALL)}
+                title={t("hosts.resetFilter")}
+                aria-label={t("hosts.resetFilter")}
+                style={{
+                  ...BTN_RESET,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: 3,
+                  borderRadius: "50%",
+                  cursor: "pointer",
+                  color: p.txt3,
+                }}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </span>
+          )}
           {[HOST_FILTER_ALL, ...tagSet].map((tag) => {
             const isAll = tag === HOST_FILTER_ALL;
             return (
@@ -1429,9 +1467,9 @@ export function ViewHosts() {
                   cursor: "pointer",
                   padding: "3px 10px",
                   borderRadius: 20,
-                  border: `1px solid ${hostFilter === tag ? p.accentLine : p.line}`,
-                  background: hostFilter === tag ? p.accentSoft : "transparent",
-                  color: hostFilter === tag ? p.accent : p.txt2,
+                  border: `1px solid ${hostFilter === tag ? p.line2 : p.line}`,
+                  background: hostFilter === tag ? p.bg3 : "transparent",
+                  color: hostFilter === tag ? p.txt : p.txt2,
                 }}
               >
                 {isAll ? t("common.all") : "#" + tag}
@@ -1448,9 +1486,9 @@ export function ViewHosts() {
                 cursor: "pointer",
                 padding: "3px 10px",
                 borderRadius: 20,
-                border: `1px solid ${hostFilter === "__untagged" ? p.accentLine : p.line}`,
-                background: hostFilter === "__untagged" ? p.accentSoft : "transparent",
-                color: hostFilter === "__untagged" ? p.accent : p.txt3,
+                border: `1px solid ${hostFilter === "__untagged" ? p.line2 : p.line}`,
+                background: hostFilter === "__untagged" ? p.bg3 : "transparent",
+                color: hostFilter === "__untagged" ? p.txt : p.txt3,
               }}
             >
               {t("hosts.untagged")}
@@ -1466,9 +1504,9 @@ export function ViewHosts() {
                 cursor: "pointer",
                 padding: "3px 10px",
                 borderRadius: 20,
-                border: `1px dashed ${p.accentLine}`,
+                border: `1px dashed ${p.line2}`,
                 background: "transparent",
-                color: p.accent,
+                color: p.txt2,
               }}
             >
               {t("hosts.selectWholeGroup")}
