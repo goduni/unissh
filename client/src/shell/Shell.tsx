@@ -19,6 +19,8 @@ import { useTranslation, tDyn } from "@/i18n";
 // now one nav destination. Active-state tests membership of this set, not route===,
 // so any of the preserved routes still highlights the merged item (spec A6).
 const VAULT_ROUTES: Route[] = ["keys", "passwords", "identities", "notes"];
+// Broadcast + Fleet exec are two modes of one "Run a command across hosts" screen.
+const RUN_ROUTES: Route[] = ["run", "broadcast", "fleet"];
 
 const groupIcon = (label: string): IconName => {
   const l = label.toLowerCase();
@@ -508,8 +510,7 @@ function VaultSwitcher() {
 
 const RAIL_LABEL_KEY: Partial<Record<Route, string>> = {
   hosts: "nav.allHosts",
-  fleet: "nav.fleet",
-  broadcast: "nav.broadcast",
+  run: "nav.run",
   sftp: "nav.sftp",
   terminal: "nav.terminal",
   keys: "nav.keys",
@@ -605,8 +606,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
       {item("server", "hosts")}
       {item("terminal", "terminal", p.green)}
       {item("folders", "sftp")}
-      {item("radio", "broadcast")}
-      {item("layers", "fleet")}
+      {item("radio", "run")}
       {item("key", "keys")}
       {item("branch", "tunnels")}
       {item("shieldcheck", "known")}
@@ -760,8 +760,7 @@ export function Sidebar({
             }
           />
           <NavItem icon="folders" label={t("nav.sftp")} active={route === "sftp"} onClick={() => ctx.go("sftp")} />
-          <NavItem icon="radio" label={t("nav.broadcast")} active={route === "broadcast"} onClick={() => ctx.go("broadcast")} />
-          <NavItem icon="layers" label={t("nav.fleetExec")} active={route === "fleet"} onClick={() => ctx.go("fleet")} />
+          <NavItem icon="radio" label={t("nav.run")} active={RUN_ROUTES.includes(route)} onClick={() => ctx.go("run")} />
         </NavGroup>
         <NavGroup label={t("shell.vaultNetworkHeader")}>
           <NavItem

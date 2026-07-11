@@ -121,6 +121,7 @@ export const ru = {
     fleet: "Массово",
     fleetExec: "Массовое выполнение",
     broadcast: "Broadcast",
+    run: "Запуск",
     sftp: "SFTP",
     more: "Ещё",
   },

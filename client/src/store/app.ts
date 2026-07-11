@@ -29,6 +29,7 @@ import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
 export type Route =
   | "hosts"
   | "terminal"
+  | "run"
   | "fleet"
   | "broadcast"
   | "sftp"

@@ -92,6 +92,7 @@ export const en = {
     fleet: "Fleet",
     fleetExec: "Fleet exec",
     broadcast: "Broadcast",
+    run: "Run",
     sftp: "SFTP",
     more: "More",
   },
