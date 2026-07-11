@@ -853,6 +853,7 @@ export const ru = {
     "noteDeleted": "Заметка удалена",
     "deleteNoteTitle": "Удалить заметку?",
     "showNote": "Показать заметку",
+    "hideNote": "Скрыть",
     "namePlaceholder": "имя (item id)",
     "valuePlaceholder": "значение",
     "noteTextPlaceholder": "текст заметки…"

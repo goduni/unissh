@@ -818,6 +818,7 @@ export const en = {
     "noteDeleted": "Note deleted",
     "deleteNoteTitle": "Delete note?",
     "showNote": "Show note",
+    "hideNote": "Hide",
     "namePlaceholder": "name (item id)",
     "valuePlaceholder": "value",
     "noteTextPlaceholder": "note text…"

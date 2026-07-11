@@ -1001,18 +1001,64 @@ function NoteCard({ item }: { item: ItemInfo }) {
           {t("secrets.showNote")}
         </button>
       ) : (
-        <pre
-          style={{
-            margin: 0,
-            fontFamily: MONO,
-            fontSize: 12.5,
-            color: p.txt2,
-            lineHeight: 1.7,
-            whiteSpace: "pre-wrap",
-          }}
-        >
-          {body}
-        </pre>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <button
+              type="button"
+              onClick={() => setBody(null)}
+              title={t("secrets.hideNote")}
+              aria-label={t("secrets.hideNote")}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                border: "none",
+                background: "transparent",
+                padding: 0,
+                color: p.txt3,
+                fontFamily: UI,
+                fontSize: 12.5,
+                cursor: "pointer",
+              }}
+            >
+              <Icon name="eye" size={14} />
+              {t("secrets.hideNote")}
+            </button>
+            <div style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={async () => {
+                await writeSecretToClipboard(body);
+                flash();
+              }}
+              title={t("common.copy")}
+              aria-label={t("common.copy")}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                border: "none",
+                background: "transparent",
+                padding: 0,
+                color: copied ? p.green : p.txt3,
+                cursor: "pointer",
+              }}
+            >
+              <Icon name={copied ? "check" : "copy"} size={14} />
+            </button>
+          </div>
+          <pre
+            style={{
+              margin: 0,
+              fontFamily: MONO,
+              fontSize: 12.5,
+              color: p.txt2,
+              lineHeight: 1.7,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {body}
+          </pre>
+        </div>
       )}
     </div>
   );
