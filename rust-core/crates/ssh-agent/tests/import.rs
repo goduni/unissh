@@ -152,7 +152,11 @@ fn pub_of(normalized: &str) -> String {
     let key = PrivateKey::from_openssh(normalized).expect("normalized must be valid OpenSSH");
     assert!(!key.is_encrypted());
     let openssh = key.public_key().to_openssh().expect("public to_openssh");
-    openssh.split_whitespace().take(2).collect::<Vec<_>>().join(" ")
+    openssh
+        .split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[test]
@@ -202,7 +206,9 @@ fn normalized_key_is_usable_by_agent() {
     // The imported PKCS#1 key must work in the agent (load + sign).
     let out = normalize_private_key_to_openssh(RSA_PKCS1).unwrap();
     let mut agent = InMemoryAgent::new();
-    agent.add_from_openssh(b"k".to_vec(), out.as_bytes()).unwrap();
+    agent
+        .add_from_openssh(b"k".to_vec(), out.as_bytes())
+        .unwrap();
     let sig = agent.sign(b"k", b"challenge").expect("must sign");
     assert!(sig.algorithm.starts_with("rsa-sha2"));
 }

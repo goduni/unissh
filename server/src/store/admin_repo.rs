@@ -342,7 +342,10 @@ impl Store {
     /// Number of personal spaces (for the personal/org breakdown on Overview).
     pub async fn count_personal_tenants(&self) -> AppResult<i64> {
         Ok(self
-            .fetch_scalar_i64("SELECT COUNT(*) FROM tenants WHERE tier = 'personal'", vec![])
+            .fetch_scalar_i64(
+                "SELECT COUNT(*) FROM tenants WHERE tier = 'personal'",
+                vec![],
+            )
             .await?
             .unwrap_or(0))
     }

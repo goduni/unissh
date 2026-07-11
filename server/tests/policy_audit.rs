@@ -21,7 +21,13 @@ fn put(out: &mut Vec<u8>, b: &[u8]) {
 // A real record signature (parity with the core), to exercise the grants_publish path where
 // manifest/grant signatures are now verified UNCONDITIONALLY. The dummy-sig manifest_obj
 // below is only good for write_accept-direct tests (they don't parse the signature).
-fn sig_over(kp: &Ed25519Keypair, vault: &[u8], item: &[u8], version: u64, content: &[u8]) -> Vec<u8> {
+fn sig_over(
+    kp: &Ed25519Keypair,
+    vault: &[u8],
+    item: &[u8],
+    version: u64,
+    content: &[u8],
+) -> Vec<u8> {
     let vo = VersionedObject::from_content(
         AssociatedData::new(vault.to_vec(), item.to_vec(), version),
         content,
@@ -84,7 +90,6 @@ fn manifest_obj(vault: &[u8], epoch: u64, blob: &[u8], author: &[u8]) -> Vec<u8>
     put(&mut out, author);
     out
 }
-
 
 fn item_obj(vault: &[u8], item: &[u8], epoch: u64, author: &[u8]) -> Vec<u8> {
     let mut out = vec![2u8];
@@ -162,8 +167,9 @@ async fn write_accept_rbac_matrix() {
             &app.state,
             TID,
             &viewer,
-            &[pobj(item_obj(VAULT, b"i2", 1, &viewer))]
-        , false)
+            &[pobj(item_obj(VAULT, b"i2", 1, &viewer))],
+            false
+        )
         .await
         .is_err(),
         "viewer cannot write"
@@ -174,8 +180,9 @@ async fn write_accept_rbac_matrix() {
             &app.state,
             TID,
             &stranger,
-            &[pobj(item_obj(VAULT, b"i3", 1, &stranger))]
-        , false)
+            &[pobj(item_obj(VAULT, b"i3", 1, &stranger))],
+            false
+        )
         .await
         .is_err(),
         "non-member cannot write"
@@ -186,8 +193,9 @@ async fn write_accept_rbac_matrix() {
             &app.state,
             TID,
             &editor,
-            &[pobj(manifest_obj(VAULT, 2, &blob, &editor))]
-        , false)
+            &[pobj(manifest_obj(VAULT, 2, &blob, &editor))],
+            false
+        )
         .await
         .is_err(),
         "editor cannot publish membership records"
@@ -492,7 +500,9 @@ async fn grants_publish_rejects_forged_manifest_signature() {
     let owner = owner_kp.verifying.to_bytes().to_vec();
     let attacker = vec![0xEEu8; 32];
     // The attacker is an instance-admin (is_admin), but NOT the vault owner.
-    let (_a, _d, attacker_bearer) = app.seed_device(TID, &attacker, &[7u8; 32], "org", true).await;
+    let (_a, _d, attacker_bearer) = app
+        .seed_device(TID, &attacker, &[7u8; 32], "org", true)
+        .await;
     app.state
         .store
         .claim_vault(TID, VAULT, &owner, app.now())

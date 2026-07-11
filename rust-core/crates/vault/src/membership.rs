@@ -24,8 +24,9 @@
 
 use sha2::{Digest, Sha256};
 use unissh_crypto::{
-    aead_decrypt, aead_encrypt, open_key_with_secret, seal_key_to_public, sign_account_state as crypto_sign_account_state,
-    sign_version, verify_account_state as crypto_verify_account_state, verify_version, vk_wrap_info,
+    aead_decrypt, aead_encrypt, open_key_with_secret, seal_key_to_public,
+    sign_account_state as crypto_sign_account_state, sign_version,
+    verify_account_state as crypto_verify_account_state, verify_version, vk_wrap_info,
     AssociatedData, Ed25519VerifyingKey, SymmetricKey, VersionedObject, X25519PublicKey,
     X25519SecretKey,
 };
@@ -527,7 +528,10 @@ pub fn verify_account_state(
 /// Self-seals the per-account state payload under the ACCOUNT's X25519 key (A3.2, hybrid:
 /// HPKE wrapping of a random symkey to one's own pub + AEAD payload under it). Only
 /// one's own keyset can open it; the server does not read the payload. Format: `put(wrapped) || put(ct)`.
-pub fn seal_account_payload(keyset: &UnlockedKeyset, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+pub fn seal_account_payload(
+    keyset: &UnlockedKeyset,
+    plaintext: &[u8],
+) -> Result<Vec<u8>, VaultError> {
     let symkey = SymmetricKey::generate();
     let wrapped = seal_key_to_public(&keyset.encryption.public, &symkey, ACCOUNT_SEAL_INFO)
         .map_err(|_| VaultError::Format)?;

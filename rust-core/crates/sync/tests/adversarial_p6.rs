@@ -241,9 +241,13 @@ fn teammate_vault_applied_only_after_anchor_pin() {
     // (2) OOB pin of the teammate's genesis owner. Re-delivery of the same manifest at a new
     // seq (above the cursor) → now the anchor = owner_pub → the manifest applies.
     sb.set_vault_trust_anchor(&vid, &owner_pub).unwrap();
-    t.push_objects(&[SyncObject::MembershipManifest(m)]).unwrap();
+    t.push_objects(&[SyncObject::MembershipManifest(m)])
+        .unwrap();
     let r2 = sync_pull(&mut t, &sb, &ctx(&kb)).unwrap();
-    assert_eq!(r2.applied, 1, "после пина manifest должен примениться: {r2:?}");
+    assert_eq!(
+        r2.applied, 1,
+        "после пина manifest должен примениться: {r2:?}"
+    );
     assert!(sb.get_membership_manifest(&vid, 1).unwrap().is_some());
 }
 
@@ -727,7 +731,11 @@ fn account_state_equal_version_tiebreak_converges() {
         payload: pb.clone(),
         signature: sig_b.clone(),
     };
-    let winner_sig = if sig_a > sig_b { sig_a.clone() } else { sig_b.clone() };
+    let winner_sig = if sig_a > sig_b {
+        sig_a.clone()
+    } else {
+        sig_b.clone()
+    };
 
     // Apply both in the given order on FRESH storage (the same keyset kb).
     let apply_both = |first: &AccountStateObject, second: &AccountStateObject| -> Vec<u8> {

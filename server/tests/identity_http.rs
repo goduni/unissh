@@ -307,11 +307,17 @@ async fn reattach_adds_device_without_invite() {
     let resp = register(&id, "").await.unwrap();
     assert_eq!(resp.status(), 200, "re-attach without invite");
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["account_id"], account_id, "same account, not a new one");
+    assert_eq!(
+        body["account_id"], account_id,
+        "same account, not a new one"
+    );
     let new_device = body["device_id"].as_str().unwrap().to_string();
     assert_ne!(new_device, first_device, "a fresh device id");
     assert_eq!(body["role"], "admin", "keeps instance-admin");
-    assert_eq!(body["owned"], true, "bootstrapper owns the space → owned restored");
+    assert_eq!(
+        body["owned"], true,
+        "bootstrapper owns the space → owned restored"
+    );
 
     // the re-attached device can actually authenticate (challenge/verify).
     let _access = login(&app, &id, &account_id, &new_device).await;
@@ -536,7 +542,11 @@ async fn refresh_reuse_of_older_generation_revokes_session() {
 
     // The whole session is revoked: the current token (rt2) no longer rotates.
     let after = refresh(&app, &rt(&t2)).await;
-    assert_eq!(after.status(), 401, "old-generation reuse revokes the session");
+    assert_eq!(
+        after.status(),
+        401,
+        "old-generation reuse revokes the session"
+    );
 }
 
 #[tokio::test]

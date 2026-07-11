@@ -232,11 +232,7 @@ impl std::fmt::Debug for OpsConfig {
 
 /// `***` for a non-empty secret, `<unset>` for an empty one (presence is not a secret).
 fn redacted(s: &str) -> &'static str {
-    if s.is_empty() {
-        "<unset>"
-    } else {
-        "***"
-    }
+    if s.is_empty() { "<unset>" } else { "***" }
 }
 
 impl Config {

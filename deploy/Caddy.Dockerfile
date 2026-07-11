@@ -25,6 +25,11 @@ RUN cargo install --locked wasm-pack@0.13.1
 
 WORKDIR /build
 # crypto-wasm needs its own source + the rust-core crypto crate it path-depends on.
+# The crypto crate uses `edition.workspace = true` (etc.), so its workspace root —
+# the repo-root Cargo.toml (members = rust-core/crates/*, server) — MUST be present
+# or cargo fails to resolve it ("failed to find a workspace root"). Only the root
+# manifest is needed here: the `server` member is never built in this stage.
+COPY Cargo.toml /build/Cargo.toml
 COPY rust-core /build/rust-core
 COPY server-ui/crypto-wasm /build/server-ui/crypto-wasm
 WORKDIR /build/server-ui/crypto-wasm

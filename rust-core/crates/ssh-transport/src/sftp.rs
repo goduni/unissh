@@ -618,7 +618,12 @@ where
 
     /// Send a READ without awaiting its reply (returns the request id). Used by
     /// the pipelined `download_to`.
-    async fn send_read(&mut self, handle: &[u8], offset: u64, len: u32) -> Result<u32, TransportError> {
+    async fn send_read(
+        &mut self,
+        handle: &[u8],
+        offset: u64,
+        len: u32,
+    ) -> Result<u32, TransportError> {
         let id = self.alloc_id();
         let mut b = vec![FXP_READ];
         b.extend_from_slice(&id.to_be_bytes());
@@ -631,7 +636,12 @@ where
 
     /// Send a WRITE without awaiting its STATUS (returns the request id). Used by
     /// the pipelined `upload_from`.
-    async fn send_write(&mut self, handle: &[u8], offset: u64, data: &[u8]) -> Result<u32, TransportError> {
+    async fn send_write(
+        &mut self,
+        handle: &[u8],
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, TransportError> {
         let id = self.alloc_id();
         let mut b = vec![FXP_WRITE];
         b.extend_from_slice(&id.to_be_bytes());

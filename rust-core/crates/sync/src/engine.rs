@@ -271,7 +271,11 @@ where
 /// genesis owner (TOFU at share-accept — a vault created by a teammate) OR the local
 /// keyset (`ctx.genesis_owner`) for own vaults, where no anchor row exists.
 /// The pinned anchor is read from storage, NOT from the untrusted object.
-fn vault_anchor(storage: &Storage, vault_id: &[u8], ctx: &SyncContext) -> Result<Vec<u8>, SyncError> {
+fn vault_anchor(
+    storage: &Storage,
+    vault_id: &[u8],
+    ctx: &SyncContext,
+) -> Result<Vec<u8>, SyncError> {
     match storage.get_vault_trust_anchor(vault_id)? {
         Some(a) => Ok(a.genesis_owner_pubkey),
         None => Ok(ctx.genesis_owner.clone()),
@@ -319,14 +323,8 @@ fn process_vault(
         return Ok(());
     }
     // (3) authority (membership vs single-owner — vault decides itself).
-    if verify_record_authority(
-        storage,
-        &v.vault_id,
-        &v.author_pubkey,
-        v.key_epoch,
-        &anchor,
-    )
-    .is_err()
+    if verify_record_authority(storage, &v.vault_id, &v.author_pubkey, v.key_epoch, &anchor)
+        .is_err()
     {
         reject(
             report,
@@ -392,14 +390,8 @@ fn process_item(
         );
         return Ok(());
     }
-    if verify_record_authority(
-        storage,
-        &i.vault_id,
-        &i.author_pubkey,
-        i.key_epoch,
-        &anchor,
-    )
-    .is_err()
+    if verify_record_authority(storage, &i.vault_id, &i.author_pubkey, i.key_epoch, &anchor)
+        .is_err()
     {
         reject(
             report,
@@ -547,8 +539,7 @@ fn process_grant(
     }
     // The verified member-set of the grant's epoch (requires an already-applied manifest@epoch).
     let anchor = vault_anchor(storage, &g.vault_id, ctx)?;
-    let members = match verify_chain_to_epoch(storage, &g.vault_id, g.key_epoch, &anchor)
-    {
+    let members = match verify_chain_to_epoch(storage, &g.vault_id, g.key_epoch, &anchor) {
         Ok(v) => v,
         Err(_) => {
             reject(
@@ -792,12 +783,14 @@ pub fn sync_push(
     let mut max_acct = last_acct;
     for st in storage.list_account_states()? {
         if st.version > last_acct {
-            objects.push(SyncObject::AccountState(crate::object::AccountStateObject {
-                author_pubkey: st.author_pubkey,
-                version: st.version,
-                payload: st.payload,
-                signature: st.signature,
-            }));
+            objects.push(SyncObject::AccountState(
+                crate::object::AccountStateObject {
+                    author_pubkey: st.author_pubkey,
+                    version: st.version,
+                    payload: st.payload,
+                    signature: st.signature,
+                },
+            ));
             if st.version > max_acct {
                 max_acct = st.version;
             }
@@ -944,7 +937,10 @@ mod tests {
             Some(1)
         );
         // the push cursor for tenant B is untouched.
-        assert_eq!(s.get_sync_cursor(&push_cursor_key(b"tenant-B")).unwrap(), None);
+        assert_eq!(
+            s.get_sync_cursor(&push_cursor_key(b"tenant-B")).unwrap(),
+            None
+        );
     }
 
     #[test]

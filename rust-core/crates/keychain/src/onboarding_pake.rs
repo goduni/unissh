@@ -248,8 +248,7 @@ impl OnboardResponder {
         let mut plaintext = Zeroizing::new(aead_decrypt(&ckey, sealed, &transfer_aad())?);
         // payload v2: version(1) || keypairs(64) || secret_key(16). Length check is
         // first so the `[0]` version read can't index an empty buffer.
-        if plaintext.len() != TRANSFERRED_PAYLOAD_V2_LEN
-            || plaintext[0] != TRANSFER_PAYLOAD_VERSION
+        if plaintext.len() != TRANSFERRED_PAYLOAD_V2_LEN || plaintext[0] != TRANSFER_PAYLOAD_VERSION
         {
             return Err(KeychainError::Format);
         }

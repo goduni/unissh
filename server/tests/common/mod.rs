@@ -83,9 +83,20 @@ impl TestApp {
         let now = self.now();
         let s = &self.state.store;
         s.create_tenant(tenant_id, tier, now).await.unwrap();
-        s.create_account(tenant_id, &account_id, &ed, &x, None, None, false, &[], &[], now)
-            .await
-            .unwrap();
+        s.create_account(
+            tenant_id,
+            &account_id,
+            &ed,
+            &x,
+            None,
+            None,
+            false,
+            &[],
+            &[],
+            now,
+        )
+        .await
+        .unwrap();
         s.create_device(tenant_id, &account_id, &device_id, &ed, &x, now)
             .await
             .unwrap();
@@ -132,9 +143,20 @@ impl TestApp {
         s.create_tenant(tenant_id, tier, now).await.unwrap();
         let account_id = ids::random_id16().to_vec();
         let device_id = ids::random_id16().to_vec();
-        s.create_account(tenant_id, &account_id, ed, x, None, None, make_genesis, &[], &[], now)
-            .await
-            .unwrap();
+        s.create_account(
+            tenant_id,
+            &account_id,
+            ed,
+            x,
+            None,
+            None,
+            make_genesis,
+            &[],
+            &[],
+            now,
+        )
+        .await
+        .unwrap();
         s.create_device(tenant_id, &account_id, &device_id, ed, x, now)
             .await
             .unwrap();

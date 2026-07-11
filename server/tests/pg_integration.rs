@@ -76,7 +76,13 @@ async fn postgres_store_parity() {
     let tb = tid("seqB");
     store.create_tenant(&tb, "personal", 100).await.unwrap();
     assert_eq!(store.report_version(&tb).await.unwrap(), 0);
-    assert!(store.delta_since(&tb, 0, 100, &[0u8; 32], 1_000_000).await.unwrap().is_empty());
+    assert!(
+        store
+            .delta_since(&tb, 0, 100, &[0u8; 32], 1_000_000)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     // claim-rule conflict on PG
     let tc = tid("claim");

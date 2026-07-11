@@ -96,8 +96,15 @@ fn rotate_vk_reissues_to_remaining_members_only() {
     // bob (оставшийся) открывает свой грант@2 → получает VK'
     let gs2 = st.list_membership_grants(v.vault_id(), 2).unwrap();
     let bob_grant = gs2.iter().find(|g| g.member_pubkey == bob_ed).unwrap();
-    let vk_prime =
-        open_grant(bob_grant, v.vault_id(), &bob.encryption.secret, &bob_ed, 2, 0).unwrap();
+    let vk_prime = open_grant(
+        bob_grant,
+        v.vault_id(),
+        &bob.encryption.secret,
+        &bob_ed,
+        2,
+        0,
+    )
+    .unwrap();
     assert_eq!(vk_prime.expose_bytes().len(), 32);
 
     // carol (отозванная) НЕ имеет гранта@2
@@ -220,8 +227,15 @@ fn rotated_item_decrypts_under_new_vk_for_remaining_member() {
     // bob получает VK' из своего гранта@2
     let gs2 = st.list_membership_grants(v.vault_id(), 2).unwrap();
     let bob_grant = gs2.iter().find(|g| g.member_pubkey == bob_ed).unwrap();
-    let vk_prime =
-        open_grant(bob_grant, v.vault_id(), &bob.encryption.secret, &bob_ed, 2, 0).unwrap();
+    let vk_prime = open_grant(
+        bob_grant,
+        v.vault_id(),
+        &bob.encryption.secret,
+        &bob_ed,
+        2,
+        0,
+    )
+    .unwrap();
 
     // читает re-wrapped item: storage-запись несёт key_epoch=2, version=2
     let rec = st.get_item(v.vault_id(), b"secret").unwrap().unwrap();

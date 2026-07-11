@@ -5,8 +5,8 @@ use unissh_crypto::KdfParams;
 use unissh_keychain::{create_account, UnlockedKeyset};
 use unissh_storage::{Storage, SyncTarget};
 use unissh_sync::{
-    pull_cursor_key, sync_pull, sync_push, InMemoryTransport, RejectReason, SyncContext, SyncObject,
-    SyncTransport,
+    pull_cursor_key, sync_pull, sync_push, InMemoryTransport, RejectReason, SyncContext,
+    SyncObject, SyncTransport,
 };
 use unissh_vault::{sign_account_state, Vault};
 
@@ -49,9 +49,8 @@ fn ctx(unlocked: &UnlockedKeyset) -> SyncContext {
 /// Creates a cloud vault with one item on a device (storage+keyset), binds it
 /// to [`TENANT`] (1:1 binding, otherwise `sync_push` will not hand it off) and returns the vault_id.
 fn seed_vault(storage: &Storage, ks: &UnlockedKeyset) -> Vec<u8> {
-    let v =
-        Vault::create_with_target(storage, ks, b"vault-1".to_vec(), b"name", SyncTarget::Cloud)
-            .unwrap();
+    let v = Vault::create_with_target(storage, ks, b"vault-1".to_vec(), b"name", SyncTarget::Cloud)
+        .unwrap();
     v.put_item(b"item-1", 1, b"secret").unwrap(); // signature (v=1) under the owner
     storage.bind_unbound_cloud_vaults(TENANT).unwrap();
     b"vault-1".to_vec()
@@ -89,15 +88,27 @@ fn dirty_tracking_pushes_only_changes() {
     assert!(r1.pushed >= 2, "new vault + item pushed, got {}", r1.pushed);
 
     // Nothing changed → no round-trip.
-    assert_eq!(sync_push(&mut t, &sa, TENANT).unwrap().pushed, 0, "no changes → pushed 0");
+    assert_eq!(
+        sync_push(&mut t, &sa, TENANT).unwrap().pushed,
+        0,
+        "no changes → pushed 0"
+    );
 
     // Edit one item → only that item is dirty → only it is pushed.
     Vault::open(&sa, &ka, &vid)
         .unwrap()
         .put_item(b"item-1", 1, b"changed")
         .unwrap();
-    assert_eq!(sync_push(&mut t, &sa, TENANT).unwrap().pushed, 1, "only the edited item");
-    assert_eq!(sync_push(&mut t, &sa, TENANT).unwrap().pushed, 0, "clean again");
+    assert_eq!(
+        sync_push(&mut t, &sa, TENANT).unwrap().pushed,
+        1,
+        "only the edited item"
+    );
+    assert_eq!(
+        sync_push(&mut t, &sa, TENANT).unwrap().pushed,
+        0,
+        "clean again"
+    );
 }
 
 #[test]
@@ -143,14 +154,25 @@ fn repull_after_cursor_reset_recovers_owner_vault() {
 
     // Now the device is the OWNER. Incremental pull sees an empty delta (stale cursor).
     let r2 = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
-    assert_eq!(r2.applied, 0, "stale cursor hides the vault from its own owner");
+    assert_eq!(
+        r2.applied, 0,
+        "stale cursor hides the vault from its own owner"
+    );
     assert!(sb.get_vault(b"vault-1").unwrap().is_none());
 
     // Reset the pull cursor → full re-pull as owner → the vault is recovered.
     unissh_sync::reset_pull_cursor(&sb, b"oracle-tenant").unwrap();
     let r3 = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
-    assert!(r3.applied >= 2, "owner re-pull recovers vault+item, applied={}", r3.applied);
-    assert!(r3.rejected.is_empty(), "owner authority passes, rejected={:?}", r3.rejected);
+    assert!(
+        r3.applied >= 2,
+        "owner re-pull recovers vault+item, applied={}",
+        r3.applied
+    );
+    assert!(
+        r3.rejected.is_empty(),
+        "owner authority passes, rejected={:?}",
+        r3.rejected
+    );
     assert!(sb.get_vault(b"vault-1").unwrap().is_some());
     assert_eq!(sb.list_items(b"vault-1").unwrap().len(), 1);
 }
@@ -176,7 +198,11 @@ fn restore_recovers_a_locally_deleted_vault_still_live_on_server() {
     // delete it locally → tombstone (version++). Now hidden from list_vaults.
     Vault::open(&sb, &ka, b"vault-1").unwrap().delete().unwrap();
     assert!(sb.get_vault(b"vault-1").unwrap().unwrap().tombstone);
-    assert!(sb.list_vaults().unwrap().iter().all(|v| v.vault_id != b"vault-1"));
+    assert!(sb
+        .list_vaults()
+        .unwrap()
+        .iter()
+        .all(|v| v.vault_id != b"vault-1"));
 
     // a plain re-pull can't bring it back — the server copy is stale vs the tombstone.
     unissh_sync::reset_pull_cursor(&sb, b"oracle-tenant").unwrap();
@@ -189,12 +215,23 @@ fn restore_recovers_a_locally_deleted_vault_still_live_on_server() {
     sb.purge_vault_data(b"vault-1").unwrap();
     unissh_sync::reset_pull_cursor(&sb, b"oracle-tenant").unwrap();
     let r3 = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
-    assert!(r3.applied >= 2, "server copy re-materializes, applied={}", r3.applied);
     assert!(
-        sb.list_vaults().unwrap().iter().any(|v| v.vault_id == b"vault-1"),
+        r3.applied >= 2,
+        "server copy re-materializes, applied={}",
+        r3.applied
+    );
+    assert!(
+        sb.list_vaults()
+            .unwrap()
+            .iter()
+            .any(|v| v.vault_id == b"vault-1"),
         "vault visible again"
     );
-    assert_eq!(sb.list_items(b"vault-1").unwrap().len(), 1, "item recovered too");
+    assert_eq!(
+        sb.list_items(b"vault-1").unwrap().len(),
+        1,
+        "item recovered too"
+    );
 }
 
 #[test]
@@ -324,7 +361,10 @@ fn transport_below_cursor_rejected_and_rollback() {
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
     sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
-    let cur = sb.get_sync_cursor(&pull_cursor_key(b"oracle-tenant")).unwrap().unwrap();
+    let cur = sb
+        .get_sync_cursor(&pull_cursor_key(b"oracle-tenant"))
+        .unwrap()
+        .unwrap();
     assert!(cur > 0);
 
     // the transport understates report_version → TransportRollback
@@ -334,7 +374,11 @@ fn transport_below_cursor_rejected_and_rollback() {
         err,
         unissh_sync::SyncError::TransportRollback { .. }
     ));
-    assert_eq!(sb.get_sync_cursor(&pull_cursor_key(b"oracle-tenant")).unwrap(), Some(cur));
+    assert_eq!(
+        sb.get_sync_cursor(&pull_cursor_key(b"oracle-tenant"))
+            .unwrap(),
+        Some(cur)
+    );
 
     // the transport hands off objects with seq <= cursor → BelowCursor reject, not applied.
     t.force_report_version(cur); // report >= cursor → not TransportRollback
@@ -348,7 +392,11 @@ fn transport_below_cursor_rejected_and_rollback() {
         r.rejected
     );
     // the cursor is not lowered
-    assert_eq!(sb.get_sync_cursor(&pull_cursor_key(b"oracle-tenant")).unwrap(), Some(cur));
+    assert_eq!(
+        sb.get_sync_cursor(&pull_cursor_key(b"oracle-tenant"))
+            .unwrap(),
+        Some(cur)
+    );
 }
 
 #[test]
@@ -418,7 +466,10 @@ fn cloud_vault_pushed_only_to_its_bound_tenant() {
     let mut ta = InMemoryTransport::new();
     sync_push(&mut ta, &sa, TENANT_A).unwrap();
     let pushed_a = pushed_vault_ids(&ta);
-    assert!(pushed_a.contains(&b"vault-A".to_vec()), "A pushes its own vault");
+    assert!(
+        pushed_a.contains(&b"vault-A".to_vec()),
+        "A pushes its own vault"
+    );
     assert!(
         !pushed_a.contains(&b"vault-B".to_vec()),
         "A must NOT push a vault bound to B"
@@ -432,7 +483,11 @@ fn cloud_vault_pushed_only_to_its_bound_tenant() {
     let mut tb = InMemoryTransport::new();
     sync_push(&mut tb, &sa, TENANT_B).unwrap();
     let pushed_b = pushed_vault_ids(&tb);
-    assert_eq!(pushed_b, vec![b"vault-B".to_vec()], "B pushes only its own vault");
+    assert_eq!(
+        pushed_b,
+        vec![b"vault-B".to_vec()],
+        "B pushes only its own vault"
+    );
 }
 
 /// The vault_ids of all `SyncObject::Vault` actually handed off to the transport (we read the delta

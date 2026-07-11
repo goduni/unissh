@@ -237,7 +237,14 @@ async fn enroll_create(
     let token_hash = ids::sha256(&token);
     state
         .store
-        .create_enrollment_grant(&grant_id, &token_hash, label, req.tier.as_deref(), expires_at, now)
+        .create_enrollment_grant(
+            &grant_id,
+            &token_hash,
+            label,
+            req.tier.as_deref(),
+            expires_at,
+            now,
+        )
         .await?;
     Ok(Json(json!({
         "grant_id": ids::b64(&grant_id),

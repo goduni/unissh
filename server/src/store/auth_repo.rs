@@ -32,9 +32,7 @@ impl Store {
         session_id: &[u8],
     ) -> AppResult<Option<SessionRow>> {
         self.fetch_optional_as::<SessionRow>(
-            &format!(
-                "SELECT {SESSION_COLS} FROM sessions WHERE tenant_id = ? AND session_id = ?"
-            ),
+            &format!("SELECT {SESSION_COLS} FROM sessions WHERE tenant_id = ? AND session_id = ?"),
             vec![Val::b(tenant_id), Val::b(session_id)],
         )
         .await

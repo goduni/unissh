@@ -125,7 +125,9 @@ async fn push(
         // Cap the client-chosen key so it can't write oversize idempotency rows
         // (mirrors the tenant-id length guard); 128 bytes covers any UUID/hash.
         Some(v) if v.as_bytes().len() > 128 => {
-            return Err(AppError::malformed("idempotency-key too long (max 128 bytes)"));
+            return Err(AppError::malformed(
+                "idempotency-key too long (max 128 bytes)",
+            ));
         }
         Some(v) => Some(v.as_bytes().to_vec()),
         None => None,

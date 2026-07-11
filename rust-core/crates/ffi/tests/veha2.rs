@@ -24,7 +24,9 @@ fn create_cloud_vault_returns_uuid_hex_and_lists() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
 
-    let vid = core.create_cloud_vault("Shared".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("Shared".to_string(), TENANT.to_string())
+        .unwrap();
     // vault_id = UUIDv4 (16 байт) в hex = 32 hex-символа
     assert_eq!(vid.len(), 32);
     assert!(hex::decode(&vid).is_ok());
@@ -46,7 +48,9 @@ fn membership_add_list_fingerprint_pin() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    let vid = core.create_cloud_vault("Team".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("Team".to_string(), TENANT.to_string())
+        .unwrap();
 
     // фиксированные публичные ключи "члена" (32 байта каждый) — публичный материал
     let member_ed = "11".repeat(32);
@@ -92,13 +96,20 @@ fn set_personal_vault_rejects_shared_vault() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    let vid = core.create_cloud_vault("Team".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("Team".to_string(), TENANT.to_string())
+        .unwrap();
     // Solo волт (ещё нет members) → можно сделать личным.
     core.set_personal_vault(vid.clone()).unwrap();
     // Добавляем члена → волт становится shared (2 члена) → set_personal_vault
     // отказывает (иначе личные идентичности/привязки утекли бы команде, B5.3).
-    core.add_member(vid.clone(), "11".repeat(32), "22".repeat(32), FfiMemberRole::Editor)
-        .unwrap();
+    core.add_member(
+        vid.clone(),
+        "11".repeat(32),
+        "22".repeat(32),
+        FfiMemberRole::Editor,
+    )
+    .unwrap();
     assert_eq!(core.list_members(vid.clone()).unwrap().len(), 2);
     assert!(core.set_personal_vault(vid.clone()).is_err());
 }
@@ -114,7 +125,8 @@ fn local_vault_can_be_personal() {
     core.create_account(None).unwrap();
     core.create_vault("personal-local".to_string(), "Personal".to_string())
         .unwrap();
-    core.set_personal_vault("personal-local".to_string()).unwrap();
+    core.set_personal_vault("personal-local".to_string())
+        .unwrap();
     assert_eq!(
         core.get_personal_vault().unwrap().as_deref(),
         Some("personal-local"),
@@ -127,7 +139,9 @@ fn rotate_vk_and_purge_cloud_vault() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    let vid = core.create_cloud_vault("R".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("R".to_string(), TENANT.to_string())
+        .unwrap();
 
     // владелец (Admin) + bob (Editor)
     let bob_ed = "44".repeat(32);
@@ -206,7 +220,9 @@ fn cache_policy_get_set_and_audit() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    let vid = core.create_cloud_vault("C".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("C".to_string(), TENANT.to_string())
+        .unwrap();
 
     // дефолт — OfflineAllowed
     assert!(matches!(
@@ -418,7 +434,9 @@ fn onboarding_path_b_pake_device_to_device() {
     let msg2 = resp.msg();
 
     // initiator.confirm_and_seal(msg2, sk_a) на core_a → msg3 (sealed keyset + shared SK)
-    let msg3 = core_a.onboard_confirm_and_seal(init, msg2, sk_a.clone()).unwrap();
+    let msg3 = core_a
+        .onboard_confirm_and_seal(init, msg2, sk_a.clone())
+        .unwrap();
 
     // responder.finish_install(msg3, password) на НОВОМ устройстве B
     let dir_b = tempfile::tempdir().unwrap();
@@ -429,7 +447,10 @@ fn onboarding_path_b_pake_device_to_device() {
     assert!(core_b.is_unlocked());
 
     // Модель A: устройство B получило ТОТ ЖЕ аккаунтный Secret Key, что и A.
-    assert_eq!(sk_a, sk_b, "общий аккаунтный Secret Key на обоих устройствах");
+    assert_eq!(
+        sk_a, sk_b,
+        "общий аккаунтный Secret Key на обоих устройствах"
+    );
     // И записанный B на диск keyset реально открывается этим общим ключом после
     // «перезапуска» (свежий Core на тех же файлах) — иначе устройство залочилось бы.
     let core_b2 = new_core(dir_b.path());
@@ -450,7 +471,9 @@ fn onboarding_path_b_pake_device_to_device() {
     let resp3 = OnboardResponderHandle::respond(code, init3.msg()).unwrap();
     let m2b = resp3.msg();
     let _ = core_a.onboard_confirm_and_seal(init3.clone(), m2b.clone(), sk_a.clone());
-    assert!(core_a.onboard_confirm_and_seal(init3, m2b, sk_a.clone()).is_err());
+    assert!(core_a
+        .onboard_confirm_and_seal(init3, m2b, sk_a.clone())
+        .is_err());
 }
 
 mod sync_backend {
@@ -524,11 +547,15 @@ fn sync_round_trip_via_callback_transport() {
     });
 
     // A push
-    let rep_a = core_a.sync_now(backend.clone(), TENANT.to_string()).unwrap();
+    let rep_a = core_a
+        .sync_now(backend.clone(), TENANT.to_string())
+        .unwrap();
     assert!(rep_a.pushed >= 1, "A должен запушить хотя бы vault-запись");
 
     // B pull → видит волт A
-    let rep_b = core_b.sync_now(backend.clone(), TENANT.to_string()).unwrap();
+    let rep_b = core_b
+        .sync_now(backend.clone(), TENANT.to_string())
+        .unwrap();
     assert!(
         rep_b.applied >= 1,
         "B должен применить >=1 объект: {rep_b:?}"
@@ -563,7 +590,9 @@ fn new_ffi_methods_never_return_private_key_material() {
     // усиление поверх ASCII-маркера 'OPENSSH PRIVATE KEY'.
     assert_eq!(secret_raw.len(), 16, "Secret Key — 16 байт (128 бит)");
 
-    let vid = core.create_cloud_vault("Sec".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("Sec".to_string(), TENANT.to_string())
+        .unwrap();
     core.add_member(
         vid.clone(),
         "11".repeat(32),
@@ -595,7 +624,9 @@ fn new_ffi_methods_never_return_private_key_material() {
     let msg1 = init.msg();
     let resp = OnboardResponderHandle::respond(code, msg1).unwrap();
     let msg2 = resp.msg();
-    let msg3 = core.onboard_confirm_and_seal(init, msg2, secret_hex.clone()).unwrap();
+    let msg3 = core
+        .onboard_confirm_and_seal(init, msg2, secret_hex.clone())
+        .unwrap();
 
     // Маркер OpenSSH-приватника не встречается ни в одном возврате (вкл. msg3).
     let marker = b"OPENSSH PRIVATE KEY";
@@ -634,7 +665,9 @@ fn new_methods_require_unlock() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    let vid = core.create_cloud_vault("L".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("L".to_string(), TENANT.to_string())
+        .unwrap();
     core.lock();
 
     assert!(matches!(
@@ -703,7 +736,9 @@ fn new_methods_reject_bad_input_without_panic() {
         Err(FfiError::Other { .. })
     ));
     // битый hex/длина pubkey
-    let vid = core.create_cloud_vault("B".into(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("B".into(), TENANT.to_string())
+        .unwrap();
     assert!(matches!(
         core.add_member(
             vid.clone(),
@@ -731,7 +766,9 @@ fn e2e_cloud_membership_lifecycle() {
     core.create_account(Some("pw".to_string())).unwrap();
 
     // 1) cloud-волт
-    let vid = core.create_cloud_vault("Project X".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("Project X".to_string(), TENANT.to_string())
+        .unwrap();
 
     // 2) добавить двух членов
     let alice_ed = "a1".repeat(32);
@@ -873,7 +910,9 @@ fn vault_info_exposes_sync_target_and_tenant() {
 
     core.create_vault("local-1".to_string(), "Local".to_string())
         .unwrap();
-    let cloud_hex = core.create_cloud_vault("Cloud".to_string(), TENANT.to_string()).unwrap();
+    let cloud_hex = core
+        .create_cloud_vault("Cloud".to_string(), TENANT.to_string())
+        .unwrap();
 
     let vaults = core.list_vaults().unwrap();
     let local = vaults.iter().find(|v| v.name == "Local").unwrap();
@@ -911,8 +950,11 @@ fn bind_unbound_cloud_vaults_binds_legacy_and_is_idempotent() {
     core.create_cloud_vault("Legacy".to_string(), TENANT.to_string())
         .unwrap();
     let other = "b3RoZXItdGVuYW50"; // base64("other-tenant")
-    // Уже привязанный волт не перепривязывается → 0 затронуто.
-    assert_eq!(core.bind_unbound_cloud_vaults(other.to_string()).unwrap(), 0);
+                                    // Уже привязанный волт не перепривязывается → 0 затронуто.
+    assert_eq!(
+        core.bind_unbound_cloud_vaults(other.to_string()).unwrap(),
+        0
+    );
     let v = core
         .list_vaults()
         .unwrap()
@@ -944,7 +986,10 @@ fn sync_push_skips_vault_bound_to_other_tenant() {
     });
     let other = "b3RoZXItdGVuYW50"; // base64("other-tenant")
     let rep = core.sync_now(backend, other.to_string()).unwrap();
-    assert_eq!(rep.pushed, 0, "vault bound to TENANT must NOT push to other tenant");
+    assert_eq!(
+        rep.pushed, 0,
+        "vault bound to TENANT must NOT push to other tenant"
+    );
 }
 
 #[test]
@@ -952,7 +997,9 @@ fn cloud_vault_can_hold_items() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    let vid = core.create_cloud_vault("Cloud".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("Cloud".to_string(), TENANT.to_string())
+        .unwrap();
     // Put a secret in the CLOUD vault (id is hex) and read it back.
     core.save_password(vid.clone(), "p1".to_string(), "secret".to_string())
         .unwrap();
@@ -967,7 +1014,9 @@ fn cloud_vault_rename_reflects_in_list() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    let vid = core.create_cloud_vault("Old".to_string(), TENANT.to_string()).unwrap();
+    let vid = core
+        .create_cloud_vault("Old".to_string(), TENANT.to_string())
+        .unwrap();
     core.rename_vault(vid.clone(), "New".to_string()).unwrap();
     // list_vaults reads the name cache by the RAW id — the rename must show.
     let vaults = core.list_vaults().unwrap();

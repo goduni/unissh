@@ -102,6 +102,10 @@ jobs:
         # those runners (npm optional-deps bug npm/cli#4828) -> "Cannot find
         # module @tauri-apps/cli-<plat>". Removing the lock + node_modules first
         # forces npm to resolve THIS runner's optionals from scratch.
+        # `rm -rf` needs a POSIX shell: on windows-latest the default `run:` shell
+        # is PowerShell, where `rm -rf` errors out (`rm`->Remove-Item has no -rf).
+        # Git Bash ships on all three runners, so pin bash for this one step.
+        shell: bash
         run: |
           rm -rf node_modules package-lock.json
           npm install --no-audit --no-fund

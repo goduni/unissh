@@ -471,3 +471,7 @@ Dual-licensed at your option:
 - **Apache 2.0** ([`LICENSE-APACHE`](LICENSE-APACHE))
 
 `SPDX-License-Identifier: MIT OR Apache-2.0`
+
+---
+
+<sub>Built with Claude Code</sub>

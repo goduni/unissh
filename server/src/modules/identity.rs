@@ -326,7 +326,11 @@ async fn register(
     // Replay of a captured (public) registration blob only ever adds an inert
     // device row: authenticating it still needs the ed25519 private key to sign a
     // fresh login challenge, which a replayer does not hold.
-    if let Some(acct) = state.store.get_account_by_ed(tid, &payload.ed25519_pub).await? {
+    if let Some(acct) = state
+        .store
+        .get_account_by_ed(tid, &payload.ed25519_pub)
+        .await?
+    {
         if acct.status != "active" {
             return Err(AppError::forbidden(
                 "this identity's account is disabled in this space — ask an admin to re-enable it",
@@ -352,7 +356,10 @@ async fn register(
         // The account row only records instance-admin; the (cosmetic) role echo the
         // client ignores. Admin → admin, otherwise editor.
         let role = if acct.is_admin != 0 { 2 } else { 1 };
-        let owned = state.store.is_genesis_owner(tid, &payload.ed25519_pub).await?;
+        let owned = state
+            .store
+            .is_genesis_owner(tid, &payload.ed25519_pub)
+            .await?;
         return Ok((
             StatusCode::OK,
             Json(RegisterResp {
@@ -697,7 +704,11 @@ async fn session_refresh(
     // Do not extend access for a disabled account: AuthCtx blocks it on every
     // request, but without this check a disabled account could rotate tokens
     // indefinitely (needless persistence for a compromised device).
-    if !state.store.account_is_active(tid, &session.account_id).await? {
+    if !state
+        .store
+        .account_is_active(tid, &session.account_id)
+        .await?
+    {
         return Err(AppError::unauthenticated("account is not active"));
     }
     // Rotate access + refresh (new secret under the same session_id).

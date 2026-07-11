@@ -49,7 +49,9 @@ use unissh_ssh_transport::{
     SftpSession, ShellHandle, SshClient, SshConfig,
 };
 use unissh_storage::{CachePolicy, MemberRole, Storage, SyncTarget};
-use unissh_sync::{reset_pull_cursor, sync_pull, sync_push, SyncContext, SyncObject, SyncTransport};
+use unissh_sync::{
+    reset_pull_cursor, sync_pull, sync_push, SyncContext, SyncObject, SyncTransport,
+};
 use unissh_vault::{
     member_fingerprint, open_account_payload, pin_and_verify_member, pin_and_verify_vault_anchor,
     seal_account_payload, sign_account_state, verify_chain_to_epoch, Member, Vault,
@@ -1159,7 +1161,9 @@ impl Core {
         if attempted < floor {
             // Security event: an on-disk keyset older than the recorded floor — a
             // possible downgrade attack. Generations are counters, not secrets.
-            log::warn!("keyset generation rollback rejected (attempted={attempted}, floor={floor})");
+            log::warn!(
+                "keyset generation rollback rejected (attempted={attempted}, floor={floor})"
+            );
             return Err(map_keychain_err(
                 unissh_keychain::KeychainError::GenerationRollback { attempted, floor },
             ));
@@ -1184,7 +1188,8 @@ impl Core {
             attempted
         };
         // Принято: поднять пол до принятой generation (TOFU; понизить нельзя — идемпотентно).
-        unissh_keychain::raise_keyset_gen_floor(&storage, accepted_gen).map_err(map_keychain_err)?;
+        unissh_keychain::raise_keyset_gen_floor(&storage, accepted_gen)
+            .map_err(map_keychain_err)?;
 
         *self.locked_state() = Some(CoreState {
             storage,
@@ -1817,7 +1822,9 @@ impl Core {
         if attempted < floor {
             // Security event: an on-disk keyset older than the recorded floor — a
             // possible downgrade attack. Generations are counters, not secrets.
-            log::warn!("keyset generation rollback rejected (attempted={attempted}, floor={floor})");
+            log::warn!(
+                "keyset generation rollback rejected (attempted={attempted}, floor={floor})"
+            );
             return Err(map_keychain_err(
                 unissh_keychain::KeychainError::GenerationRollback { attempted, floor },
             ));
@@ -1845,7 +1852,8 @@ impl Core {
             );
         }
         // Принято: поднять пол до принятой generation (TOFU; понизить нельзя).
-        unissh_keychain::raise_keyset_gen_floor(&storage, accepted_gen).map_err(map_keychain_err)?;
+        unissh_keychain::raise_keyset_gen_floor(&storage, accepted_gen)
+            .map_err(map_keychain_err)?;
 
         *guard = Some(CoreState {
             storage,
@@ -2506,11 +2514,7 @@ impl Core {
         )
         .map_err(FfiError::other)?;
         vault
-            .put_item(
-                item_id.as_bytes(),
-                ITEM_TYPE_SSH_KEY,
-                normalized.as_bytes(),
-            )
+            .put_item(item_id.as_bytes(), ITEM_TYPE_SSH_KEY, normalized.as_bytes())
             .map_err(FfiError::other)?;
         // Заменили материал ключа под тем же id → выгружаем прежний приватник из
         // агента (namespaced), иначе коннекты в этой сессии продолжат подписывать
@@ -2604,11 +2608,7 @@ impl Core {
     /// пользователя, экспорт его собственных данных. Возвращаемая строка уходит
     /// за FFI-границу и не зануляется — UI отвечает за её судьбу (предупредить,
     /// не логировать, писать в файл, не в общий буфер по умолчанию).
-    pub fn export_ssh_key(
-        &self,
-        vault_id: String,
-        item_id: String,
-    ) -> Result<String, FfiError> {
+    pub fn export_ssh_key(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
         let mut guard = self.locked_state();
         let state = guard.as_mut().ok_or(FfiError::Locked)?;
         let vault = Vault::open(
@@ -2634,11 +2634,7 @@ impl Core {
     /// без «замены везде». Возвращает **новый публичный** ключ (его надо
     /// установить на серверы). Привязанный сертификат (если был) после ротации
     /// больше не соответствует ключу — UI должен предупредить о переустановке.
-    pub fn rotate_ssh_key(
-        &self,
-        vault_id: String,
-        item_id: String,
-    ) -> Result<String, FfiError> {
+    pub fn rotate_ssh_key(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
         let mut guard = self.locked_state();
         let state = guard.as_mut().ok_or(FfiError::Locked)?;
         let vault = Vault::open(
@@ -2657,7 +2653,11 @@ impl Core {
         }
         let (private_pem, public) = generate_ed25519_openssh().map_err(FfiError::ssh)?;
         vault
-            .put_item(item_id.as_bytes(), ITEM_TYPE_SSH_KEY, private_pem.as_bytes())
+            .put_item(
+                item_id.as_bytes(),
+                ITEM_TYPE_SSH_KEY,
+                private_pem.as_bytes(),
+            )
             .map_err(FfiError::other)?;
         // Привязанный сертификат больше не соответствует новой паре — удаляем его,
         // иначе `load_key_into_agent` переприкрепит несоответствующий cert при
@@ -2912,13 +2912,7 @@ impl Core {
         let mut connected: Vec<(String, SshClient)> = Vec::new();
         let mut results: Vec<MultiExecResult> = Vec::new();
         for t in &targets {
-            match self.connect_session(
-                &t.auth,
-                &t.jumps,
-                t.host.clone(),
-                t.port,
-                t.user.clone(),
-            ) {
+            match self.connect_session(&t.auth, &t.jumps, t.host.clone(), t.port, t.user.clone()) {
                 Ok(client) => connected.push((t.host.clone(), client)),
                 Err(e) => results.push(MultiExecResult {
                     host: t.host.clone(),
@@ -3040,7 +3034,8 @@ impl Core {
                         dest,
                         p.user.clone(),
                     ) {
-                        let user = self.apply_username_template(pa.user, p.username_template.clone());
+                        let user =
+                            self.apply_username_template(pa.user, p.username_template.clone());
                         out.push(MultiExecTarget {
                             host: p.host,
                             port: p.port,
@@ -3093,13 +3088,7 @@ impl Core {
         let mut connected: Vec<(String, SshClient)> = Vec::new();
         let mut results: Vec<SftpPutResult> = Vec::new();
         for t in &targets {
-            match self.connect_session(
-                &t.auth,
-                &t.jumps,
-                t.host.clone(),
-                t.port,
-                t.user.clone(),
-            ) {
+            match self.connect_session(&t.auth, &t.jumps, t.host.clone(), t.port, t.user.clone()) {
                 Ok(client) => connected.push((t.host.clone(), client)),
                 Err(e) => results.push(SftpPutResult {
                     host: t.host.clone(),
@@ -3178,13 +3167,7 @@ impl Core {
         let mut statuses: Vec<BroadcastHostStatus> = Vec::new();
         for (i, t) in targets.iter().enumerate() {
             let index = i as u32;
-            match self.connect_session(
-                &t.auth,
-                &t.jumps,
-                t.host.clone(),
-                t.port,
-                t.user.clone(),
-            ) {
+            match self.connect_session(&t.auth, &t.jumps, t.host.clone(), t.port, t.user.clone()) {
                 Ok(client) => {
                     let sink: Arc<dyn OutputSink> = Arc::new(TaggedSink {
                         observer: observer.clone(),
@@ -3548,8 +3531,7 @@ impl Core {
         jumps: Vec<JumpHost>,
         parallelism: u32,
     ) -> Result<Arc<SftpFfi>, FfiError> {
-        let client =
-            self.connect_session(&auth, &jumps, host.clone(), port, user.clone())?;
+        let client = self.connect_session(&auth, &jumps, host.clone(), port, user.clone())?;
         let sftp = self
             .rt
             .block_on(client.open_sftp())
@@ -3614,7 +3596,9 @@ impl Core {
         };
         let (key_item_id, password_item_id, personal) = match auth {
             ProfileAuth::Key { key_item_id } => (Some(key_item_id), None, false),
-            ProfileAuth::VaultPassword { password_item_id } => (None, Some(password_item_id), false),
+            ProfileAuth::VaultPassword { password_item_id } => {
+                (None, Some(password_item_id), false)
+            }
             ProfileAuth::PromptPassword => (None, None, false),
             ProfileAuth::Personal => (None, None, true),
         };
@@ -3841,9 +3825,7 @@ impl Core {
             }
             if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
                 if let Ok(stored) = serde_json::from_slice::<StoredIdentity>(&item.content) {
-                    out.push(stored.into_identity(
-                        String::from_utf8_lossy(&m.item_id).to_string(),
-                    ));
+                    out.push(stored.into_identity(String::from_utf8_lossy(&m.item_id).to_string()));
                 }
             }
         }
@@ -3935,12 +3917,10 @@ impl Core {
             extra: BTreeMap::new(),
         };
         // Forward-compat: перенести неизвестные поля существующей привязки.
-        stored.extra = preserved_extra::<StoredBinding>(
-            &vault,
-            item_id.as_bytes(),
-            ITEM_TYPE_BINDING,
-            |sb| sb.extra,
-        );
+        stored.extra =
+            preserved_extra::<StoredBinding>(&vault, item_id.as_bytes(), ITEM_TYPE_BINDING, |sb| {
+                sb.extra
+            });
         let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
         vault
             .put_item(item_id.as_bytes(), ITEM_TYPE_BINDING, &json)
@@ -4098,9 +4078,11 @@ impl Core {
         // check — no decryption), then read binding/identity/creds from that vault.
         // This is what lets different hosts use identities from different private vaults
         // (per-context) — there is no single "personal vault" anymore.
-        let vault = self.find_binding_vault(&team_vault_id, &profile_uid)?.ok_or_else(|| {
-            FfiError::other("host is not bound to a personal identity; bind one first")
-        })?;
+        let vault = self
+            .find_binding_vault(&team_vault_id, &profile_uid)?
+            .ok_or_else(|| {
+                FfiError::other("host is not bound to a personal identity; bind one first")
+            })?;
         let binding = self.get_binding(vault.clone(), team_vault_id, profile_uid)?;
         match resolve_binding(binding.as_ref(), &current_destination) {
             BindingResolution::Unbound => Err(FfiError::other(
@@ -4112,8 +4094,7 @@ impl Core {
             ))),
             BindingResolution::Matched { identity_item_id } => {
                 let identity = self.get_identity(vault.clone(), identity_item_id)?;
-                let auth = if let Some(key_item_id) =
-                    identity.key_item_id.filter(|s| !s.is_empty())
+                let auth = if let Some(key_item_id) = identity.key_item_id.filter(|s| !s.is_empty())
                 {
                     AuthMethod::Agent {
                         vault_id: vault,
@@ -4159,7 +4140,11 @@ impl Core {
     /// Финальный username коннекта по шаблону (`%u` → base_user), или
     /// просто `base_user` без шаблона. Клиент применяет к
     /// [`PersonalAuth::user`], используя тот же `username_template`, что и у пина.
-    pub fn apply_username_template(&self, base_user: String, username_template: Option<String>) -> String {
+    pub fn apply_username_template(
+        &self,
+        base_user: String,
+        username_template: Option<String>,
+    ) -> String {
         apply_username_template(&base_user, username_template.as_deref())
     }
 
@@ -4564,9 +4549,14 @@ impl Core {
         let guard = self.locked_state();
         let state = guard.as_ref().ok_or(FfiError::Locked)?;
         let author = state.keyset.signing.verifying.to_bytes().to_vec();
-        match state.storage.get_account_state(&author).map_err(FfiError::other)? {
+        match state
+            .storage
+            .get_account_state(&author)
+            .map_err(FfiError::other)?
+        {
             Some(row) => {
-                let plain = open_account_payload(&state.keyset, &row.payload).map_err(map_vault_err)?;
+                let plain =
+                    open_account_payload(&state.keyset, &row.payload).map_err(map_vault_err)?;
                 Ok(Some(AccountStatePayload::decode(&plain)?))
             }
             None => Ok(None),
@@ -4599,8 +4589,7 @@ impl Core {
         let sealed =
             seal_account_payload(&state.keyset, &payload.encode()).map_err(map_vault_err)?;
         let new_version = cur_version.saturating_add(1);
-        let sig =
-            sign_account_state(&state.keyset, new_version, &sealed).map_err(map_vault_err)?;
+        let sig = sign_account_state(&state.keyset, new_version, &sealed).map_err(map_vault_err)?;
         state
             .storage
             .set_account_state(&author, new_version, &sealed, &sig)
@@ -4714,7 +4703,8 @@ impl Core {
                         p.user.clone(),
                     ) {
                         Ok(pa) => {
-                            let user = self.apply_username_template(pa.user, p.username_template.clone());
+                            let user =
+                                self.apply_username_template(pa.user, p.username_template.clone());
                             plans.push(GroupTargetPlan {
                                 member_id: pid,
                                 host: p.host.clone(),
@@ -5282,7 +5272,10 @@ fn backup_keyset_sidecar(path: &std::path::Path) {
     bak.push(".pre-migration.bak");
     let bak = PathBuf::from(bak);
     match std::fs::copy(path, &bak) {
-        Ok(_) => log::info!("keyset sidecar backed up before migration: {}", bak.display()),
+        Ok(_) => log::info!(
+            "keyset sidecar backed up before migration: {}",
+            bak.display()
+        ),
         Err(e) => log::warn!(
             "keyset sidecar backup failed (migration still safe, proceeding): {} ({e})",
             bak.display()
@@ -5472,8 +5465,11 @@ fn resolve_profile_by_uid(
         }
         if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
             if let Ok(sp) = serde_json::from_slice::<StoredProfile>(&item.content) {
-                let prof =
-                    stored_to_profile(vault_id, String::from_utf8_lossy(&m.item_id).to_string(), sp);
+                let prof = stored_to_profile(
+                    vault_id,
+                    String::from_utf8_lossy(&m.item_id).to_string(),
+                    sp,
+                );
                 if prof.uid == profile_uid {
                     return Ok(prof);
                 }
@@ -6659,7 +6655,10 @@ impl SftpFfi {
     pub fn reopen(&self) -> Result<(), FfiError> {
         // Serialize concurrent reopens so two racing callers can't each rebuild the
         // connection (one would be orphaned). Held across the whole escalation.
-        let _g = self.reconnect_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = self
+            .reconnect_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Быстрый путь: открыть свежий канал на текущем соединении — это и проверка
         // живости транспорта, и «прогрев» пула. Успех кладём в пул как idle.
         match self.open_channel() {
@@ -7159,7 +7158,7 @@ mod tests {
         let a = legacy_profile_uid("vault1", "prod-web");
         assert_eq!(a, legacy_profile_uid("vault1", "prod-web"));
         assert_eq!(a.len(), 32); // 16 байт в hex
-        // Длина-префикс vault_id исключает склейку соседних полей.
+                                 // Длина-префикс vault_id исключает склейку соседних полей.
         assert_ne!(
             legacy_profile_uid("vault1", "prod-web"),
             legacy_profile_uid("vault", "1prod-web")
@@ -7258,14 +7257,18 @@ mod tests {
         let json = r#"{"uid":"u","label":"L","host":"h","port":22,"user":"x",
                        "jumps":[],"tags":[],"future_field":"keep","future_num":7}"#;
         let sp: StoredProfile = serde_json::from_str(json).unwrap();
-        assert_eq!(sp.extra.get("future_field").and_then(|v| v.as_str()), Some("keep"));
+        assert_eq!(
+            sp.extra.get("future_field").and_then(|v| v.as_str()),
+            Some("keep")
+        );
         assert_eq!(sp.extra.get("future_num").and_then(|v| v.as_i64()), Some(7));
         let out = serde_json::to_string(&sp).unwrap();
         assert!(out.contains("future_field") && out.contains("future_num"));
         // Пустой extra → никаких лишних ключей.
-        let sp0: StoredProfile =
-            serde_json::from_str(r#"{"label":"L","host":"h","port":22,"user":"x","jumps":[],"tags":[]}"#)
-                .unwrap();
+        let sp0: StoredProfile = serde_json::from_str(
+            r#"{"label":"L","host":"h","port":22,"user":"x","jumps":[],"tags":[]}"#,
+        )
+        .unwrap();
         assert!(sp0.extra.is_empty());
         assert!(!serde_json::to_string(&sp0).unwrap().contains("extra"));
     }
@@ -7318,8 +7321,7 @@ mod tests {
             let vault = Vault::open(&st.storage, &st.keyset, &vid).unwrap();
             let item = vault.get_item(b"p").unwrap().unwrap();
             let mut sp: StoredProfile = serde_json::from_slice(&item.content).unwrap();
-            sp.extra
-                .insert("future".into(), serde_json::json!("keep"));
+            sp.extra.insert("future".into(), serde_json::json!("keep"));
             let json = serde_json::to_vec(&sp).unwrap();
             vault.put_item(b"p", ITEM_TYPE_CONNECTION, &json).unwrap();
         }
@@ -7351,7 +7353,8 @@ mod tests {
             destination_pin: "prod-web:22".into(),
         };
         // Первая привязка — ок.
-        core.set_binding("personal".into(), b.clone(), false).unwrap();
+        core.set_binding("personal".into(), b.clone(), false)
+            .unwrap();
         let got = core
             .get_binding("personal".into(), "team".into(), "uid1".into())
             .unwrap()
@@ -7416,9 +7419,15 @@ mod tests {
             personal_destination("gw", 22, Some("%u:prod-db"), nj),
             "gw:22#%u:prod-db"
         );
-        assert_eq!(apply_username_template("alice", Some("%u:prod-db")), "alice:prod-db");
+        assert_eq!(
+            apply_username_template("alice", Some("%u:prod-db")),
+            "alice:prod-db"
+        );
         // Другой формат гейтвея — тоже работает (не только warpgate `:`).
-        assert_eq!(apply_username_template("alice", Some("%u@edge")), "alice@edge");
+        assert_eq!(
+            apply_username_template("alice", Some("%u@edge")),
+            "alice@edge"
+        );
         // Разные шаблоны → разные назначения (правка ловится анти-редиректом).
         assert_ne!(
             personal_destination("gw", 22, Some("%u:prod-db"), nj),
@@ -7446,8 +7455,10 @@ mod tests {
             personal_destination("h", 22, None, std::slice::from_ref(&jump)),
             "появление прыжка обязано менять пин (fail-safe анти-редирект)"
         );
-        assert!(personal_destination("h", 22, None, std::slice::from_ref(&jump))
-            .starts_with("h:22|via="));
+        assert!(
+            personal_destination("h", 22, None, std::slice::from_ref(&jump))
+                .starts_with("h:22|via=")
+        );
     }
 
     /// B4: username-цепочка. Первый непустой (trim) из
@@ -7502,8 +7513,14 @@ mod tests {
             .unwrap();
         assert_eq!(pa.user, "alice-work");
         match &pa.auth {
-            AuthMethod::Agent { vault_id, key_item_id } => {
-                assert_eq!(vault_id, work, "creds from the Work vault, not a 'personal' one");
+            AuthMethod::Agent {
+                vault_id,
+                key_item_id,
+            } => {
+                assert_eq!(
+                    vault_id, work,
+                    "creds from the Work vault, not a 'personal' one"
+                );
                 assert_eq!(key_item_id, "workkey");
             }
             _ => panic!("expected Agent auth"),
@@ -7701,9 +7718,15 @@ mod tests {
         )
         .unwrap();
         // Привязываем личную идентичность к Personal-хосту (пин = его назначение).
-        let ph = core.get_connection("v".into(), "personal-host".into()).unwrap();
-        let dest =
-            core.personal_destination(ph.host.clone(), ph.port, ph.username_template.clone(), ph.jumps.clone());
+        let ph = core
+            .get_connection("v".into(), "personal-host".into())
+            .unwrap();
+        let dest = core.personal_destination(
+            ph.host.clone(),
+            ph.port,
+            ph.username_template.clone(),
+            ph.jumps.clone(),
+        );
         core.set_binding(
             pv.into(),
             IdentityBinding {

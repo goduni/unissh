@@ -10,8 +10,8 @@ use common::spawn;
 use unissh_server::ids;
 use unissh_storage::{CachePolicy, ItemRecord, Storage, SyncTarget, VaultRecord};
 use unissh_sync::{
-    AuditObject, InMemoryTransport, RejectReason, SyncContext, SyncError, SyncObject, SyncTransport,
-    pull_cursor_key, sync_pull,
+    AuditObject, InMemoryTransport, RejectReason, SyncContext, SyncError, SyncObject,
+    SyncTransport, pull_cursor_key, sync_pull,
 };
 
 const TID: &[u8] = b"tenant-oracle-01";
@@ -242,13 +242,23 @@ async fn core_sync_pull_against_live_server() {
         assert_eq!(rejected_seqs, vec![3], "non-genesis audit author rejected");
 
         // The cursor is advanced to max seq; report_version is monotonic and >= the cursor.
-        assert_eq!(storage.get_sync_cursor(&pull_cursor_key(b"oracle-tenant")).unwrap(), Some(3));
+        assert_eq!(
+            storage
+                .get_sync_cursor(&pull_cursor_key(b"oracle-tenant"))
+                .unwrap(),
+            Some(3)
+        );
         assert!(http.report_version() >= 3);
 
         // A repeat pull: nothing new (everything <= the cursor), the cursor doesn't drop.
         let report2 = sync_pull(&mut http, &storage, &ctx).unwrap();
         assert_eq!(report2.applied, 0);
-        assert_eq!(storage.get_sync_cursor(&pull_cursor_key(b"oracle-tenant")).unwrap(), Some(3));
+        assert_eq!(
+            storage
+                .get_sync_cursor(&pull_cursor_key(b"oracle-tenant"))
+                .unwrap(),
+            Some(3)
+        );
     })
     .await
     .unwrap();

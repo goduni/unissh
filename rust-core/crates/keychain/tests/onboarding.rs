@@ -65,7 +65,9 @@ fn pake_wrong_code_confirmation_fails_no_key_agreement() {
     let (_responder, msg2) = OnboardResponder::respond(b"222222", &msg1).unwrap();
     // initiator verifies the responder-confirm-tag → must fail (different channel keys).
     assert_eq!(
-        initiator.confirm_and_seal(&msg2, &unlocked, &sk).unwrap_err(),
+        initiator
+            .confirm_and_seal(&msg2, &unlocked, &sk)
+            .unwrap_err(),
         KeychainError::ConfirmationFailed
     );
 }

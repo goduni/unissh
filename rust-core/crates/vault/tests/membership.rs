@@ -4,10 +4,9 @@ use unissh_crypto::{Ed25519Keypair, X25519Keypair};
 use unissh_keychain::{create_account, KdfParams, UnlockedKeyset};
 use unissh_storage::{MemberRole, Storage};
 use unissh_vault::{
-    add_member, build_grant, build_manifest, member_fingerprint, new_vault_id, open_grant,
-    open_account_payload, pin_and_verify_member, pin_and_verify_vault_anchor, seal_account_payload,
-    verify_grant, verify_manifest, Member,
-    Vault, VaultError,
+    add_member, build_grant, build_manifest, member_fingerprint, new_vault_id,
+    open_account_payload, open_grant, pin_and_verify_member, pin_and_verify_vault_anchor,
+    seal_account_payload, verify_grant, verify_manifest, Member, Vault, VaultError,
 };
 
 #[allow(dead_code)]
@@ -329,8 +328,16 @@ fn grant_open_expired_not_after_rejected_client_side() {
     let recip_x = recipient.public.to_bytes().to_vec();
     let member_ed = Ed25519Keypair::generate().verifying.to_bytes().to_vec();
     let vk = unissh_crypto::SymmetricKey::generate();
-    let mut grant = build_grant(&admin, &vid, &recip_x, &member_ed, MemberRole::Editor, 1, &vk)
-        .unwrap();
+    let mut grant = build_grant(
+        &admin,
+        &vid,
+        &recip_x,
+        &member_ed,
+        MemberRole::Editor,
+        1,
+        &vk,
+    )
+    .unwrap();
     // Stamp an expiry in the past (the signature isn't re-checked by open_grant; the
     // expiry gate runs BEFORE the unwrap).
     grant.not_after = 1_000;

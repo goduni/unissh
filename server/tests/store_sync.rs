@@ -85,12 +85,18 @@ async fn monotonic_seq_order_and_first_is_one() {
     );
 
     // delta returns all, seq>cursor ASC
-    let d = s.delta_since(TA, 0, 100, &[0u8; 32], 1_000_000).await.unwrap();
+    let d = s
+        .delta_since(TA, 0, 100, &[0u8; 32], 1_000_000)
+        .await
+        .unwrap();
     assert_eq!(
         d.iter().map(|x| x.server_seq).collect::<Vec<_>>(),
         vec![1, 2, 3, 4]
     );
-    let d2 = s.delta_since(TA, 2, 100, &[0u8; 32], 1_000_000).await.unwrap();
+    let d2 = s
+        .delta_since(TA, 2, 100, &[0u8; 32], 1_000_000)
+        .await
+        .unwrap();
     assert_eq!(
         d2.iter().map(|x| x.server_seq).collect::<Vec<_>>(),
         vec![3, 4]
@@ -163,7 +169,12 @@ async fn tenant_isolation_no_crosstalk() {
 
     // tenant B sees nothing; its seq namespace is independent.
     assert_eq!(s.report_version(TB).await.unwrap(), 0);
-    assert!(s.delta_since(TB, 0, 100, &[0u8; 32], 1_000_000).await.unwrap().is_empty());
+    assert!(
+        s.delta_since(TB, 0, 100, &[0u8; 32], 1_000_000)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(s.report_version(TA).await.unwrap(), 2);
 
     // B's own push starts at 1 (independent namespace).
@@ -247,12 +258,24 @@ async fn delta_filters_by_vault_membership() {
     let owner2 = [0x22u8; 32];
     let stranger = [0x99u8; 32];
 
-    s.push_objects(TA, None, b"r1", vec![push_obj(vault_owned(b"vault-1", &owner1))], 100)
-        .await
-        .unwrap();
-    s.push_objects(TA, None, b"r2", vec![push_obj(vault_owned(b"vault-2", &owner2))], 100)
-        .await
-        .unwrap();
+    s.push_objects(
+        TA,
+        None,
+        b"r1",
+        vec![push_obj(vault_owned(b"vault-1", &owner1))],
+        100,
+    )
+    .await
+    .unwrap();
+    s.push_objects(
+        TA,
+        None,
+        b"r2",
+        vec![push_obj(vault_owned(b"vault-2", &owner2))],
+        100,
+    )
+    .await
+    .unwrap();
     s.push_objects(TA, None, b"r3", vec![push_obj(audit(9))], 100)
         .await
         .unwrap();
@@ -270,7 +293,10 @@ async fn delta_filters_by_vault_membership() {
     );
     // stranger: only audit = 1.
     assert_eq!(
-        s.delta_since(TA, 0, 100, &stranger, 200).await.unwrap().len(),
+        s.delta_since(TA, 0, 100, &stranger, 200)
+            .await
+            .unwrap()
+            .len(),
         1,
         "посторонний видит только vault-less, ни одного волта"
     );
@@ -307,7 +333,10 @@ async fn delta_grant_grants_visibility() {
     );
     // a stranger without a grant — nothing (no vault-less objects).
     assert_eq!(
-        s.delta_since(TA, 0, 100, &[0x99u8; 32], 200).await.unwrap().len(),
+        s.delta_since(TA, 0, 100, &[0x99u8; 32], 200)
+            .await
+            .unwrap()
+            .len(),
         0
     );
 }
@@ -335,7 +364,9 @@ async fn replayed_grant_does_not_resurrect_revoked_access() {
     .await
     .unwrap();
     assert!(
-        s.member_has_active_grant(TA, b"vault-1", 1, &member, 200).await.unwrap(),
+        s.member_has_active_grant(TA, b"vault-1", 1, &member, 200)
+            .await
+            .unwrap(),
         "свежий грант активен"
     );
 
@@ -348,7 +379,9 @@ async fn replayed_grant_does_not_resurrect_revoked_access() {
     .await
     .unwrap();
     assert!(
-        !s.member_has_active_grant(TA, b"vault-1", 1, &member, 200).await.unwrap(),
+        !s.member_has_active_grant(TA, b"vault-1", 1, &member, 200)
+            .await
+            .unwrap(),
         "после отзыва — не активен"
     );
 
@@ -363,7 +396,9 @@ async fn replayed_grant_does_not_resurrect_revoked_access() {
     .await
     .unwrap();
     assert!(
-        !s.member_has_active_grant(TA, b"vault-1", 1, &member, 200).await.unwrap(),
+        !s.member_has_active_grant(TA, b"vault-1", 1, &member, 200)
+            .await
+            .unwrap(),
         "реплей гранта не воскрешает отозванный доступ (#10)"
     );
 }
@@ -397,9 +432,15 @@ async fn delta_stale_epoch_grant_loses_visibility() {
     );
 
     // Rotation: publish manifest@2 (the member is NOT re-issued for epoch 2).
-    s.push_objects(TA, None, b"e2", vec![push_obj(manifest(b"vault-1", 2, &owner))], 101)
-        .await
-        .unwrap();
+    s.push_objects(
+        TA,
+        None,
+        b"e2",
+        vec![push_obj(manifest(b"vault-1", 2, &owner))],
+        101,
+    )
+    .await
+    .unwrap();
     // MAX(manifest)=2, the member's grant is on epoch 1 → the filter cuts it off.
     assert_eq!(
         s.delta_since(TA, 0, 100, &member, 200).await.unwrap().len(),
@@ -586,9 +627,15 @@ async fn delta_account_state_visible_only_to_author() {
     let alice = [0xA1u8; 32];
     let bob = [0xB2u8; 32];
 
-    s.push_objects(TA, None, b"as1", vec![push_obj(account_state(&alice, 1))], 100)
-        .await
-        .unwrap();
+    s.push_objects(
+        TA,
+        None,
+        b"as1",
+        vec![push_obj(account_state(&alice, 1))],
+        100,
+    )
+    .await
+    .unwrap();
 
     // Alice (the author) sees her own account-state.
     assert_eq!(
@@ -674,9 +721,15 @@ async fn account_state_older_versions_compacted() {
 
     // A stale version of another author is not affected by our author's compaction.
     let other = [0xB2u8; 32];
-    s.push_objects(TA, None, b"ob1", vec![push_obj(account_state(&other, 1))], 100)
-        .await
-        .unwrap();
+    s.push_objects(
+        TA,
+        None,
+        b"ob1",
+        vec![push_obj(account_state(&other, 1))],
+        100,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         account_state_row_count(&s, &other).await,
         1,

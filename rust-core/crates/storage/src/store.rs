@@ -679,8 +679,10 @@ impl Storage {
 
     /// Marks a vault record as edited locally (needs to be pushed).
     pub fn mark_vault_dirty(&self, vault_id: &[u8]) -> Result<(), StorageError> {
-        self.conn
-            .execute("UPDATE vaults SET dirty = 1 WHERE vault_id = ?1", params![vault_id])?;
+        self.conn.execute(
+            "UPDATE vaults SET dirty = 1 WHERE vault_id = ?1",
+            params![vault_id],
+        )?;
         Ok(())
     }
 
@@ -694,7 +696,11 @@ impl Storage {
     }
 
     /// Marks the manifest AND grants of a vault at the given epoch as dirty (a membership edit).
-    pub fn mark_membership_dirty(&self, vault_id: &[u8], key_epoch: u64) -> Result<(), StorageError> {
+    pub fn mark_membership_dirty(
+        &self,
+        vault_id: &[u8],
+        key_epoch: u64,
+    ) -> Result<(), StorageError> {
         let e = checked_version(key_epoch)?;
         self.conn.execute(
             "UPDATE membership_manifests SET dirty = 1 WHERE vault_id = ?1 AND key_epoch = ?2",
@@ -768,8 +774,10 @@ impl Storage {
     /// a successful push. The bulk clear is safe: local edits and sync run under
     /// the same lock, and nothing mutates between list+push and clear.
     pub fn clear_dirty_for_tenant(&self, tenant: &[u8]) -> Result<(), StorageError> {
-        self.conn
-            .execute("UPDATE vaults SET dirty = 0 WHERE sync_tenant = ?1", params![tenant])?;
+        self.conn.execute(
+            "UPDATE vaults SET dirty = 0 WHERE sync_tenant = ?1",
+            params![tenant],
+        )?;
         for table in ["items", "membership_manifests", "membership_grants"] {
             self.conn.execute(
                 &format!(
@@ -1509,7 +1517,12 @@ mod purge_tests {
         // legacy cloud vault: sync_tenant empty (as after a schema migration of old data).
         let legacy = b"vault-legacy".to_vec();
         s.put_vault(&vrec(&legacy)).unwrap();
-        assert!(s.get_vault(&legacy).unwrap().unwrap().sync_tenant.is_empty());
+        assert!(s
+            .get_vault(&legacy)
+            .unwrap()
+            .unwrap()
+            .sync_tenant
+            .is_empty());
 
         // local vault: also an empty sync_tenant, but must NOT be bound.
         let mut local = vrec(b"vault-local");

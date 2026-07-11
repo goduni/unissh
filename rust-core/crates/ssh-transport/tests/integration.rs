@@ -492,7 +492,9 @@ async fn sftp_remove_tree_deletes_recursively() {
 
     // tree: base/{f1.txt, sub/{f2.txt, deep/f3.txt}}
     sftp.mkdir(&base).await.unwrap();
-    sftp.write_file(&format!("{base}/f1.txt"), b"a").await.unwrap();
+    sftp.write_file(&format!("{base}/f1.txt"), b"a")
+        .await
+        .unwrap();
     sftp.mkdir(&format!("{base}/sub")).await.unwrap();
     sftp.write_file(&format!("{base}/sub/f2.txt"), b"b")
         .await
@@ -517,10 +519,7 @@ async fn sftp_remove_tree_deletes_recursively() {
         sftp.list_dir(&base).await.is_err(),
         "base dir must be gone after remove_tree"
     );
-    assert!(sftp
-        .stat(&format!("{base}/sub/deep/f3.txt"))
-        .await
-        .is_err());
+    assert!(sftp.stat(&format!("{base}/sub/deep/f3.txt")).await.is_err());
 }
 
 #[tokio::test]

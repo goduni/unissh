@@ -74,6 +74,6 @@ pub use registration::{sign_registration, verify_registration, RegistrationPaylo
 pub use server_auth::{sign_server_auth, verify_server_auth, ServerAuthChallenge};
 pub use signature::{
     sign_account_state, sign_version, verify_account_state, verify_no_rollback, verify_version,
-    ACCOUNT_STATE_SIG_DOMAIN, VersionedObject,
+    VersionedObject, ACCOUNT_STATE_SIG_DOMAIN,
 };
 pub use version::{AlgId, FORMAT_VERSION};

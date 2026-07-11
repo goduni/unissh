@@ -112,14 +112,23 @@ fn set_vault_tenant_targets_one_and_clear_binding_targets_a_tenant() {
 
     // set_vault_tenant binds ONLY c1 (not c2, not the local vault).
     s.set_vault_tenant(b"c1", b"tenant-B").unwrap();
-    assert_eq!(s.get_vault(b"c1").unwrap().unwrap().sync_tenant, b"tenant-B".to_vec());
-    assert_eq!(s.get_vault(b"c2").unwrap().unwrap().sync_tenant, b"tenant-A".to_vec());
+    assert_eq!(
+        s.get_vault(b"c1").unwrap().unwrap().sync_tenant,
+        b"tenant-B".to_vec()
+    );
+    assert_eq!(
+        s.get_vault(b"c2").unwrap().unwrap().sync_tenant,
+        b"tenant-A".to_vec()
+    );
     assert!(s.get_vault(b"lo").unwrap().unwrap().sync_tenant.is_empty());
 
     // clear_binding_for_tenant clears only vaults bound to that tenant.
     let n = s.clear_binding_for_tenant(b"tenant-A").unwrap();
     assert_eq!(n, 1);
-    assert!(s.get_vault(b"c2").unwrap().unwrap().sync_tenant.is_empty(), "c2 now unbound");
+    assert!(
+        s.get_vault(b"c2").unwrap().unwrap().sync_tenant.is_empty(),
+        "c2 now unbound"
+    );
     assert_eq!(
         s.get_vault(b"c1").unwrap().unwrap().sync_tenant,
         b"tenant-B".to_vec(),

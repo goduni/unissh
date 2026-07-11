@@ -469,7 +469,8 @@ impl<'a> Vault<'a> {
             key_epoch: self.key_epoch.get(),
         };
         self.storage.archive_and_put(&record, HISTORY_RETAIN)?;
-        self.storage.mark_item_dirty(&self.vault_id, &record.item_id)?; // edit → push
+        self.storage
+            .mark_item_dirty(&self.vault_id, &record.item_id)?; // edit → push
         Ok(version)
     }
 
@@ -905,7 +906,8 @@ impl<'a> Vault<'a> {
                 .set_vault_epoch_floor(&self.vault_id, new_epoch)?;
             // Rotation re-wrapped everything under VK' → all of it must re-sync.
             self.storage.mark_vault_dirty(&self.vault_id)?;
-            self.storage.mark_membership_dirty(&self.vault_id, new_epoch)?;
+            self.storage
+                .mark_membership_dirty(&self.vault_id, new_epoch)?;
             Ok::<(), VaultError>(())
         })?;
 

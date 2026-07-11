@@ -215,10 +215,7 @@ fn seal_vk_to_recipient_extension_point() {
     assert!(!wrapped.is_empty());
 
     // некорректный публичный ключ — ошибка
-    assert!(
-        v.seal_vk_to_recipient(b"too-short", &recipient_ed)
-            .is_err()
-    );
+    assert!(v.seal_vk_to_recipient(b"too-short", &recipient_ed).is_err());
 }
 
 #[test]

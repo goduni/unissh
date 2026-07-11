@@ -82,7 +82,10 @@ fn negated_pattern_excludes_block() {
 fn negation_takes_precedence_regardless_of_order() {
     // Negation applies regardless of position in the pattern list.
     let cfg = SshConfig::parse("Host !secret.example.com *.example.com\n  User deploy\n").unwrap();
-    assert_eq!(cfg.resolve("web.example.com").user.as_deref(), Some("deploy"));
+    assert_eq!(
+        cfg.resolve("web.example.com").user.as_deref(),
+        Some("deploy")
+    );
     assert_eq!(cfg.resolve("secret.example.com").user, None);
 }
 

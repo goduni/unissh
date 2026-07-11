@@ -457,7 +457,10 @@ fn import_pkcs1_rsa_key_and_auth() {
             None,
         )
         .unwrap();
-    assert!(pubkey.starts_with("ssh-rsa "), "expected rsa pub, got {pubkey}");
+    assert!(
+        pubkey.starts_with("ssh-rsa "),
+        "expected rsa pub, got {pubkey}"
+    );
 
     // ключ сохранён в волте отдельным item-ом
     let items = core.list_items("v".to_string()).unwrap();
@@ -3009,7 +3012,9 @@ fn sftp_pool_parallel_downloads() {
     let n = 8usize;
     let remotes: Vec<(String, Vec<u8>)> = (0..n)
         .map(|i| {
-            let content: Vec<u8> = (0..50_000u32).map(|b| ((b as usize + i) % 251) as u8).collect();
+            let content: Vec<u8> = (0..50_000u32)
+                .map(|b| ((b as usize + i) % 251) as u8)
+                .collect();
             let src = dir.path().join(format!("src{i}.bin"));
             std::fs::write(&src, &content).unwrap();
             let remote = dir.path().join(format!("remote{i}.bin"));
@@ -3083,7 +3088,9 @@ fn sftp_pool_degrades_on_max_sessions() {
     let n = 6usize;
     let remotes: Vec<(String, Vec<u8>)> = (0..n)
         .map(|i| {
-            let content: Vec<u8> = (0..30_000u32).map(|b| ((b as usize + i) % 251) as u8).collect();
+            let content: Vec<u8> = (0..30_000u32)
+                .map(|b| ((b as usize + i) % 251) as u8)
+                .collect();
             let src = dir.path().join(format!("src{i}.bin"));
             std::fs::write(&src, &content).unwrap();
             let remote = dir.path().join(format!("remote{i}.bin"));
@@ -3270,7 +3277,11 @@ fn secret_returning_surface() {
         "export_ssh_key", // by-design: user owns & may export their private key
         "export_vault",   // passphrase-encrypted backup
     ];
-    assert_eq!(SECRET_RETURNING.len(), 4, "обнови тест при изменении surface");
+    assert_eq!(
+        SECRET_RETURNING.len(),
+        4,
+        "обнови тест при изменении surface"
+    );
 
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
@@ -3285,11 +3296,16 @@ fn secret_returning_surface() {
 
     // get_password: reveal только для password-item, иначе отказ (type-gate).
     assert_eq!(
-        core.get_password("v".to_string(), "pw".to_string()).unwrap(),
+        core.get_password("v".to_string(), "pw".to_string())
+            .unwrap(),
         "s3cret"
     );
-    assert!(core.get_password("v".to_string(), "nt".to_string()).is_err());
-    assert!(core.get_password("v".to_string(), "key".to_string()).is_err());
+    assert!(core
+        .get_password("v".to_string(), "nt".to_string())
+        .is_err());
+    assert!(core
+        .get_password("v".to_string(), "key".to_string())
+        .is_err());
 
     // get_note: reveal только для note-item.
     assert_eq!(
@@ -3302,8 +3318,13 @@ fn secret_returning_surface() {
     let priv_key = core
         .export_ssh_key("v".to_string(), "key".to_string())
         .unwrap();
-    assert!(priv_key.contains("PRIVATE KEY"), "ожидался OpenSSH-приватник");
-    assert!(core.export_ssh_key("v".to_string(), "pw".to_string()).is_err());
+    assert!(
+        priv_key.contains("PRIVATE KEY"),
+        "ожидался OpenSSH-приватник"
+    );
+    assert!(core
+        .export_ssh_key("v".to_string(), "pw".to_string())
+        .is_err());
 
     // export_vault: непустой зашифрованный бэкап.
     let backup = core

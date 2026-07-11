@@ -46,7 +46,11 @@ fn account_state_message(version: u64, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Signs per-account state (A3) with the dedicated domain. Returns a signature blob.
-pub fn sign_account_state(signing_key: &Ed25519SigningKey, version: u64, payload: &[u8]) -> Vec<u8> {
+pub fn sign_account_state(
+    signing_key: &Ed25519SigningKey,
+    version: u64,
+    payload: &[u8],
+) -> Vec<u8> {
     let signature: Signature = signing_key.0.sign(&account_state_message(version, payload));
     let mut out = Vec::with_capacity(HEADER_LEN + SIG_LEN);
     write_header(&mut out, AlgId::Ed25519);

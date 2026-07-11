@@ -20,7 +20,12 @@ async fn spawn_closed() -> TestApp {
     .await
 }
 
-async fn mint(app: &TestApp, label: &str, tier: Option<&str>, ttl: Option<i64>) -> (String, String) {
+async fn mint(
+    app: &TestApp,
+    label: &str,
+    tier: Option<&str>,
+    ttl: Option<i64>,
+) -> (String, String) {
     let mut body = json!({ "label": label });
     if let Some(t) = tier {
         body["tier"] = json!(t);
@@ -114,7 +119,10 @@ async fn closed_bootstrap_needs_a_grant_then_redeem_creates_tenant() {
     let g = find(&grants(&app).await, &gid).clone();
     assert_eq!(g["state"], json!("redeemed"));
     assert_eq!(g["label"], json!("alice@corp"), "attribution preserved");
-    assert!(g["redeemed_tenant"].is_string(), "bound to the minted tenant");
+    assert!(
+        g["redeemed_tenant"].is_string(),
+        "bound to the minted tenant"
+    );
 }
 
 #[tokio::test]
@@ -139,7 +147,11 @@ async fn revoke_before_use_blocks_and_double_revoke_conflicts() {
     assert_eq!(revoke(&app, &gid).await.status(), 204);
     let r = redeem(&app, b"tid-carol-0000000", &make_identity(), &token, None).await;
     assert_eq!(r.status(), 410, "revoked grant cannot be redeemed");
-    assert_eq!(revoke(&app, &gid).await.status(), 409, "already-revoked → 409");
+    assert_eq!(
+        revoke(&app, &gid).await.status(),
+        409,
+        "already-revoked → 409"
+    );
 }
 
 #[tokio::test]
@@ -152,7 +164,11 @@ async fn revoke_after_use_conflicts_and_unknown_is_404() {
             .status(),
         201
     );
-    assert_eq!(revoke(&app, &gid).await.status(), 409, "used grant can't be revoked");
+    assert_eq!(
+        revoke(&app, &gid).await.status(),
+        409,
+        "used grant can't be revoked"
+    );
     assert_eq!(revoke(&app, &b64(b"nope-nope-nope16")).await.status(), 404);
 }
 
@@ -163,7 +179,9 @@ async fn grant_tier_pins_over_request() {
     let tid = b"tid-eve-000000000";
     // Redeemer asks for org; the grant pins personal → personal wins.
     assert_eq!(
-        redeem(&app, tid, &make_identity(), &token, Some("org")).await.status(),
+        redeem(&app, tid, &make_identity(), &token, Some("org"))
+            .await
+            .status(),
         201
     );
     let v: Value = app
@@ -182,7 +200,11 @@ async fn grant_tier_pins_over_request() {
         .iter()
         .find(|t| t["tenant_id"] == json!(b64(tid)))
         .unwrap();
-    assert_eq!(t["tier"], json!("personal"), "grant-pinned tier wins over request");
+    assert_eq!(
+        t["tier"],
+        json!("personal"),
+        "grant-pinned tier wins over request"
+    );
 }
 
 #[tokio::test]
@@ -202,14 +224,18 @@ async fn lost_genesis_race_rolls_back_grant() {
     let (_g1, t1) = mint(&app, "first", None, None).await;
     let tid = b"tid-shared-0000000";
     assert_eq!(
-        redeem(&app, tid, &make_identity(), &t1, None).await.status(),
+        redeem(&app, tid, &make_identity(), &t1, None)
+            .await
+            .status(),
         201
     );
 
     let (g2, t2) = mint(&app, "second", None, None).await;
     // Redeem grant2 against the SAME, already-bootstrapped tenant → genesis CAS loses.
     assert_eq!(
-        redeem(&app, tid, &make_identity(), &t2, None).await.status(),
+        redeem(&app, tid, &make_identity(), &t2, None)
+            .await
+            .status(),
         409
     );
     assert_eq!(

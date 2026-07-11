@@ -3,51 +3,55 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
 use unissh_server::{Config, app, build_state, obs, time};
+
+/// UniSSH self-hosted server.
+#[derive(Parser)]
+#[command(name = "unissh-server", version, about)]
+struct Cli {
+    /// Path to the TOML config (default: config.toml).
+    #[arg(short, long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run migrations then serve the API (also the default when no subcommand is given).
+    Serve,
+    /// Apply pending database migrations and exit.
+    Migrate,
+    /// Raise next_seq after restoring an old backup (anti-rollback runbook §14.3); never lowers it.
+    SeqBump {
+        /// Base64 tenant id; omit to apply to every tenant.
+        #[arg(long, value_name = "B64")]
+        tenant: Option<String>,
+        /// Raise next_seq to at least this floor N.
+        #[arg(long, value_name = "N")]
+        to: Option<i64>,
+        /// Raise next_seq by this delta.
+        #[arg(long, value_name = "DELTA")]
+        by: Option<i64>,
+    },
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Minimal CLI: [serve|migrate] and --config <path>.
-    let args: Vec<String> = std::env::args().collect();
-    let mut config_path: Option<PathBuf> = None;
-    let mut subcommand: Option<String> = None;
-    let mut arg_by: Option<i64> = None;
-    let mut arg_to: Option<i64> = None;
-    let mut arg_tenant: Option<String> = None;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--config" | "-c" => {
-                i += 1;
-                if i < args.len() {
-                    config_path = Some(PathBuf::from(&args[i]));
-                }
-            }
-            "--by" => {
-                i += 1;
-                arg_by = args.get(i).and_then(|v| v.parse().ok());
-            }
-            "--to" => {
-                i += 1;
-                arg_to = args.get(i).and_then(|v| v.parse().ok());
-            }
-            "--tenant" => {
-                i += 1;
-                arg_tenant = args.get(i).cloned();
-            }
-            "migrate" | "serve" | "seq-bump" => subcommand = Some(args[i].clone()),
-            other => eprintln!("unknown argument: {other}"),
-        }
-        i += 1;
-    }
+    let Cli {
+        config: config_path,
+        command,
+    } = Cli::parse();
 
-    let cfg_path = config_path.or_else(|| Some(PathBuf::from("config.toml")));
+    let cfg_path = config_path.unwrap_or_else(|| PathBuf::from("config.toml"));
     let config =
-        Config::load(cfg_path.as_deref()).map_err(|e| anyhow::anyhow!("config load: {e}"))?;
+        Config::load(Some(cfg_path.as_path())).map_err(|e| anyhow::anyhow!("config load: {e}"))?;
 
     obs::init_tracing(&config.obs);
 
-    if subcommand.as_deref() == Some("migrate") {
+    if matches!(command, Some(Command::Migrate)) {
         let store = unissh_server::Store::connect(&config.db).await?;
         store.migrate().await?;
         tracing::info!("migrations applied");
@@ -60,11 +64,11 @@ async fn main() -> anyhow::Result<()> {
     //   seq-bump --by <delta>            (for ALL tenants: next_seq += delta)
     //   seq-bump --tenant <b64> --to <N> (raise a specific one to floor N)
     //   seq-bump --tenant <b64> --by <d> (raise a specific one by delta)
-    if subcommand.as_deref() == Some("seq-bump") {
+    if let Some(Command::SeqBump { tenant, to, by }) = command {
         use base64::Engine;
         let store = unissh_server::Store::connect(&config.db).await?;
         store.migrate().await?;
-        let tenants: Vec<Vec<u8>> = match &arg_tenant {
+        let tenants: Vec<Vec<u8>> = match &tenant {
             Some(t) => vec![
                 base64::engine::general_purpose::STANDARD
                     .decode(t)
@@ -77,9 +81,9 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         for tid in &tenants {
-            let (old, new) = if let Some(to) = arg_to {
+            let (old, new) = if let Some(to) = to {
                 store.bump_next_seq_to(tid, to).await?
-            } else if let Some(by) = arg_by {
+            } else if let Some(by) = by {
                 store.bump_next_seq_by(tid, by).await?
             } else {
                 return Err(anyhow::anyhow!(

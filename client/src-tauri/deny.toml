@@ -1,0 +1,63 @@
+# cargo-deny config for the SHIPPED desktop client (its own workspace, excluded
+# from the root). The root deny.toml governs the core crates + server; this file
+# governs the Tauri desktop tree, which drags in a GUI toolkit stack the core
+# never touches. cargo-deny auto-discovers this file next to Cargo.toml.
+#
+# CI gates this workspace with `check advisories sources` (see .github/workflows/
+# ci.yml) — the binary users install, so advisories still matter here.
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # RSA "Marvin" timing sidechannel — same as the root gate: no patched `rsa`
+    # release exists, and it is pulled transitively via ssh-key (SSH RSA host/user
+    # keys) which an SSH client cannot drop. Exposure bounded to the SSH device->host
+    # path; we recommend Ed25519/ECDSA keys. See root deny.toml for the full note.
+    "RUSTSEC-2023-0071",
+
+    # --- Tauri Linux GUI stack: gtk-rs GTK3 bindings, unmaintained upstream ------
+    # webkit2gtk-4.1 (the only privacy-preserving Linux webview) binds GTK3, and
+    # the gtk3-rs binding crates are no longer maintained. There is NO safe upgrade
+    # ("No safe upgrade is available!") until Tauri's Linux backend moves to GTK4 /
+    # a maintained webview. Desktop-only, not reachable from the crypto/sync core.
+    # Revisit when tauri ships a GTK4 (or non-gtk) Linux webview.
+    "RUSTSEC-2024-0411", # atk
+    "RUSTSEC-2024-0412", # atk-sys
+    "RUSTSEC-2024-0413", # gdk
+    "RUSTSEC-2024-0414", # gdk-sys
+    "RUSTSEC-2024-0415", # gdkwayland-sys / gdkx11
+    "RUSTSEC-2024-0416", # gtk
+    "RUSTSEC-2024-0417", # gtk-sys
+    "RUSTSEC-2024-0418", # gtk3-macros
+    "RUSTSEC-2024-0419", # gdkx11-sys
+    "RUSTSEC-2024-0420", # atk / gdk family (remaining gtk3-rs crate)
+
+    # --- Unmaintained transitive build/parse deps (no safe upgrade) --------------
+    # proc-macro-error: unmaintained proc-macro helper pulled transitively by the
+    # gtk3-macros / older derive crates in the desktop tree. Build-time only.
+    "RUSTSEC-2024-0370",
+    # unic-* : the `unic` Unicode crates are unmaintained; reached transitively
+    # (idna / IDN handling in the desktop stack). No maintained drop-in in range.
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
+
+    # --- quick-xml DoS advisories (fix is out of the pinned semver range) --------
+    # RUSTSEC-2026-0194/0195: quadratic / unbounded-allocation DoS parsing crafted
+    # XML. Fix is quick-xml >= 0.41, but the desktop toolkit (muda/wry menu + resource
+    # XML) pins ^0.39, so there is no in-range update — bumping needs an upstream
+    # Tauri release. Exposure is bounded to toolkit-internal XML (app menus /
+    # bundled resources), NOT attacker-controlled network input. Revisit when the
+    # Tauri stack moves to quick-xml 0.41.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
+
+# Match the root policy: only the public crates.io registry, no unknown git/registry.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -211,7 +211,8 @@ async fn grants_publish(
     // is already AUTHENTICATED by verify_record_sig above — the role check on it
     // cannot be bypassed by forging the field.
     let m_author = m_parsed.author_pubkey.as_deref().unwrap_or_default();
-    if author_role(&state, auth.tenant_id(), &vault_id, new_epoch, m_author).await? != Some(Role::Admin)
+    if author_role(&state, auth.tenant_id(), &vault_id, new_epoch, m_author).await?
+        != Some(Role::Admin)
     {
         return Err(AppError::forbidden("grant publisher must be a vault admin"));
     }
@@ -385,7 +386,7 @@ fn put(out: &mut Vec<u8>, b: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{parse_open, ObjectTag};
+    use crate::codec::{ObjectTag, parse_open};
     use crate::store::models::GrantRow;
 
     fn grant_row(not_after: Option<i64>) -> GrantRow {
