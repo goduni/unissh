@@ -6,8 +6,7 @@ import { usePrefs } from "../store/prefs";
 import { useSession } from "../store/session";
 import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
-import { Icon } from "../ui/icons";
-import { Btn, Field, TextInput } from "../ui/primitives";
+import { Btn, Field, InlineError, TextInput } from "../ui/primitives";
 import { MONO } from "../theme/tokens";
 
 export function OpsLogin() {
@@ -140,25 +139,7 @@ export function OpsLogin() {
             />
           </Field>
 
-          {error || opsNotice ? (
-            <div
-              style={{
-                display: "flex",
-                gap: 9,
-                alignItems: "center",
-                background: "color-mix(in srgb, var(--red) 9%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--red) 30%, transparent)",
-                borderRadius: 10,
-                padding: "10px 12px",
-                marginBottom: 14,
-                fontSize: 12.5,
-                color: "var(--txt2)",
-              }}
-            >
-              <Icon name="alert" size={15} color="var(--red)" />
-              {error || opsNotice}
-            </div>
-          ) : null}
+          {error || opsNotice ? <InlineError>{error || opsNotice}</InlineError> : null}
 
           <Btn variant="primary" full icon="enter" loading={busy} onClick={connect}>
             {t("access.onb.ops_connect_btn")}

@@ -5,9 +5,9 @@ import { useUi } from "../store/ui";
 import { useTenant } from "../store/tenant";
 import { fmtDate } from "../util/format";
 import { Icon } from "../ui/icons";
-import { Btn, Field, TextInput } from "../ui/primitives";
+import { Btn, Field, SecretRow, TextInput } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
-import { MONO } from "../theme/tokens";
+import { useCopy } from "../ui/useCopy";
 
 const ROLES = ["viewer", "editor", "admin"] as const;
 const TTLS: { label: string; seconds: number }[] = [
@@ -31,7 +31,7 @@ export function InviteModal() {
   const [scope, setScope] = useState("");
   const [token, setToken] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
-  const [copied, setCopied] = useState<"space" | "token" | "both" | null>(null);
+  const both = useCopy(1200);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,7 +43,6 @@ export function InviteModal() {
       setToken(null);
       setExpiresAt(null);
       setError(null);
-      setCopied(null);
     }
   }, [open]);
 
@@ -62,12 +61,6 @@ export function InviteModal() {
     } finally {
       setBusy(false);
     }
-  };
-
-  const copyVal = (text: string, mark: "space" | "token" | "both") => {
-    void navigator.clipboard?.writeText(text);
-    setCopied(mark);
-    setTimeout(() => setCopied(null), 1200);
   };
 
   return (
@@ -100,20 +93,9 @@ export function InviteModal() {
                 <div style={{ marginTop: 4, color: "var(--txt)" }}>{t("screen.invites.deliverHint")}</div>
               </div>
             </div>
-            <CredField
-              label={t("screen.invites.spaceIdLabel")}
-              value={spaceId}
-              copied={copied === "space"}
-              onCopy={() => copyVal(spaceId, "space")}
-
-            />
+            <SecretRow label={t("screen.invites.spaceIdLabel")} value={spaceId} />
             <div style={{ height: 10 }} />
-            <CredField
-              label={t("screen.invites.tokenLabel")}
-              value={token}
-              copied={copied === "token"}
-              onCopy={() => copyVal(token, "token")}
-            />
+            <SecretRow label={t("screen.invites.tokenLabel")} value={token} />
             {expiresAt ? (
               <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 8 }}>
                 {t("screen.invites.expiresIn", { when: fmtDate(expiresAt) })}
@@ -122,13 +104,13 @@ export function InviteModal() {
             <Btn
               full
               variant="primary"
-              icon={copied === "both" ? "check" : "copy"}
+              icon={both.copied ? "check" : "copy"}
               onClick={() =>
-                copyVal(`${t("screen.invites.spaceIdLabel")}: ${spaceId}\n${t("screen.invites.tokenLabel")}: ${token}`, "both")
+                both.copy(`${t("screen.invites.spaceIdLabel")}: ${spaceId}\n${t("screen.invites.tokenLabel")}: ${token}`)
               }
               style={{ marginTop: 14 }}
             >
-              {copied === "both" ? t("common.copied") : t("screen.invites.copyBoth")}
+              {both.copied ? t("common.copied") : t("screen.invites.copyBoth")}
             </Btn>
             <Btn full onClick={close} style={{ marginTop: 9 }}>
               {t("common.done")}
@@ -180,51 +162,6 @@ export function InviteModal() {
         )}
       </div>
     </Modal>
-  );
-}
-
-function CredField({
-  label,
-  value,
-  copied,
-  onCopy,
-}: {
-  label: string;
-  value: string;
-  copied: boolean;
-  onCopy: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div>
-      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--txt3)", marginBottom: 5 }}>{label}</div>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "11px 13px",
-          borderRadius: 11,
-          background: "var(--bg2)",
-          border: "1px solid var(--accentLine)",
-        }}
-      >
-        <span
-          style={{
-            flex: 1,
-            fontFamily: MONO,
-            fontSize: 12.5,
-            color: "var(--accent)",
-            wordBreak: "break-all",
-          }}
-        >
-          {value || "—"}
-        </span>
-        <Btn size="sm" variant="soft" icon={copied ? "check" : "copy"} onClick={onCopy}>
-          {copied ? t("common.copied") : t("common.copy")}
-        </Btn>
-      </div>
-    </div>
   );
 }
 

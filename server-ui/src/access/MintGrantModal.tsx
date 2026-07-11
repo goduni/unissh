@@ -4,9 +4,8 @@ import { api } from "../api";
 import { useUi } from "../store/ui";
 import { fmtDate } from "../util/format";
 import { Icon } from "../ui/icons";
-import { Btn, Field, TextInput } from "../ui/primitives";
+import { Btn, Field, SecretRow, TextInput } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
-import { MONO } from "../theme/tokens";
 
 const TIERS: { value: string; label: string }[] = [
   { value: "", label: "screen.enroll.tierDefault" },
@@ -31,7 +30,6 @@ export function MintGrantModal() {
   const [ttl, setTtl] = useState(0);
   const [token, setToken] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
-  const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,7 +41,6 @@ export function MintGrantModal() {
       setToken(null);
       setExpiresAt(null);
       setError(null);
-      setCopied(false);
     }
   }, [open]);
 
@@ -63,13 +60,6 @@ export function MintGrantModal() {
     } finally {
       setBusy(false);
     }
-  };
-
-  const copyToken = () => {
-    if (!token) return;
-    void navigator.clipboard?.writeText(token);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
   };
 
   return (
@@ -102,35 +92,7 @@ export function MintGrantModal() {
                 <div style={{ marginTop: 4, color: "var(--txt)" }}>{t("screen.enroll.deliverHint")}</div>
               </div>
             </div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--txt3)", marginBottom: 5 }}>
-              {t("screen.enroll.tokenLabel")}
-            </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "11px 13px",
-                borderRadius: 11,
-                background: "var(--bg2)",
-                border: "1px solid var(--accentLine)",
-              }}
-            >
-              <span
-                style={{
-                  flex: 1,
-                  fontFamily: MONO,
-                  fontSize: 12.5,
-                  color: "var(--accent)",
-                  wordBreak: "break-all",
-                }}
-              >
-                {token}
-              </span>
-              <Btn size="sm" variant="soft" icon={copied ? "check" : "copy"} onClick={copyToken}>
-                {copied ? t("common.copied") : t("common.copy")}
-              </Btn>
-            </div>
+            <SecretRow label={t("screen.enroll.tokenLabel")} value={token} />
             {expiresAt ? (
               <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 8 }}>
                 {t("screen.enroll.expiresIn", { when: fmtDate(expiresAt) })}

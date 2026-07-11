@@ -6,7 +6,7 @@ import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
 import { bytesToB64, bytesToHex } from "../util/bytes";
 import { Icon } from "../ui/icons";
-import { Btn, Field, TextInput } from "../ui/primitives";
+import { Btn, Field, InlineError, TextInput } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
 
 function randomBytes(n: number): Uint8Array {
@@ -314,25 +314,7 @@ export function BootstrapModal() {
               </Field>
             ) : null}
 
-            {error ? (
-              <div
-                style={{
-                  display: "flex",
-                  gap: 9,
-                  alignItems: "center",
-                  background: "color-mix(in srgb, var(--red) 9%, transparent)",
-                  border: "1px solid color-mix(in srgb, var(--red) 30%, transparent)",
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                  marginBottom: 14,
-                  fontSize: 12.5,
-                  color: "var(--txt2)",
-                }}
-              >
-                <Icon name="alert" size={15} color="var(--red)" />
-                {error}
-              </div>
-            ) : null}
+            {error ? <InlineError>{error}</InlineError> : null}
 
             <div style={{ display: "flex", gap: 9 }}>
               <Btn full onClick={close}>

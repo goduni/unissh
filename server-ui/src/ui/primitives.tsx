@@ -1,11 +1,9 @@
-import {
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import { type CSSProperties, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { usePrefs } from "../store/prefs";
 import { Icon, type IconName } from "./icons";
 import { MONO } from "../theme/tokens";
+import { useCopy } from "./useCopy";
 
 // ── Btn ────────────────────────────────────────────────────────
 type BtnVariant = "primary" | "outline" | "ghost" | "soft" | "danger";
@@ -399,18 +397,16 @@ export function PubkeyChip({
   tail?: number;
 }) {
   const fmt = usePrefs((s) => s.pubkeyFormat);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopy(1100);
   const v = value ?? "";
   const shown =
     fmt === "full" || v.length <= head + tail + 1
       ? v
       : `${v.slice(0, head)}…${v.slice(-tail)}`;
-  const copy = (e: React.MouseEvent) => {
+  const onCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!v) return;
-    void navigator.clipboard?.writeText(v);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1100);
+    copy(v);
   };
   return (
     <span
@@ -432,7 +428,7 @@ export function PubkeyChip({
       {v ? (
         <button
           type="button"
-          onClick={copy}
+          onClick={onCopy}
           title="Copy"
           style={{
             border: "none",
@@ -737,6 +733,86 @@ export function ErrorCard({ message, onRetry }: { message: string; onRetry?: () 
           Retry
         </Btn>
       ) : null}
+    </div>
+  );
+}
+
+// ── InlineError ────────────────────────────────────────────────
+/** Compact red inline error box (alert icon + message) used inside modals. */
+export function InlineError({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 9,
+        alignItems: "center",
+        background: "color-mix(in srgb, var(--red) 9%, transparent)",
+        border: "1px solid color-mix(in srgb, var(--red) 30%, transparent)",
+        borderRadius: 10,
+        padding: "10px 12px",
+        marginBottom: 14,
+        fontSize: 12.5,
+        color: "var(--txt2)",
+      }}
+    >
+      <Icon name="alert" size={15} color="var(--red)" />
+      {children}
+    </div>
+  );
+}
+
+// ── SecretRow ──────────────────────────────────────────────────
+/** Bordered mono value-box with a soft copy button + copied flash. */
+export function SecretRow({
+  label,
+  value,
+  onCopy,
+}: {
+  label: string;
+  value: string;
+  onCopy?: () => void;
+}) {
+  const { t } = useTranslation();
+  const { copied, copy } = useCopy(1200);
+  return (
+    <div>
+      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--txt3)", marginBottom: 5 }}>
+        {label}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "11px 13px",
+          borderRadius: 11,
+          background: "var(--bg2)",
+          border: "1px solid var(--accentLine)",
+        }}
+      >
+        <span
+          style={{
+            flex: 1,
+            fontFamily: MONO,
+            fontSize: 12.5,
+            color: "var(--accent)",
+            wordBreak: "break-all",
+          }}
+        >
+          {value || "—"}
+        </span>
+        <Btn
+          size="sm"
+          variant="soft"
+          icon={copied ? "check" : "copy"}
+          onClick={() => {
+            copy(value);
+            onCopy?.();
+          }}
+        >
+          {copied ? t("common.copied") : t("common.copy")}
+        </Btn>
+      </div>
     </div>
   );
 }

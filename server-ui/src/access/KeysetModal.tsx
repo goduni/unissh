@@ -10,7 +10,7 @@ import { useUi } from "../store/ui";
 import { hexToBytes, truncId } from "../util/bytes";
 import { fmtEpoch } from "../util/format";
 import { Icon } from "../ui/icons";
-import { Btn, Field, StateBadge, Tag, TextInput } from "../ui/primitives";
+import { Btn, Field, InlineError, StateBadge, Tag, TextInput } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
 import { MONO } from "../theme/tokens";
 
@@ -144,25 +144,7 @@ export function KeysetModal() {
           </div>
         </Field>
 
-        {searchError ? (
-          <div
-            style={{
-              display: "flex",
-              gap: 9,
-              alignItems: "center",
-              background: "color-mix(in srgb, var(--red) 9%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--red) 30%, transparent)",
-              borderRadius: 10,
-              padding: "10px 12px",
-              marginBottom: 14,
-              fontSize: 12.5,
-              color: "var(--txt2)",
-            }}
-          >
-            <Icon name="alert" size={15} color="var(--red)" />
-            {searchError}
-          </div>
-        ) : null}
+        {searchError ? <InlineError>{searchError}</InlineError> : null}
 
         {matches ? (
           matches.length === 0 ? (
@@ -350,25 +332,7 @@ export function KeysetModal() {
           </div>
         ) : null}
 
-        {error ? (
-          <div
-            style={{
-              display: "flex",
-              gap: 9,
-              alignItems: "center",
-              background: "color-mix(in srgb, var(--red) 9%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--red) 30%, transparent)",
-              borderRadius: 10,
-              padding: "10px 12px",
-              marginBottom: 14,
-              fontSize: 12.5,
-              color: "var(--txt2)",
-            }}
-          >
-            <Icon name="alert" size={15} color="var(--red)" />
-            {error}
-          </div>
-        ) : null}
+        {error ? <InlineError>{error}</InlineError> : null}
 
         <div style={{ display: "flex", gap: 9 }}>
           <Btn full onClick={close}>
