@@ -230,16 +230,10 @@ function HostRow({
         aria-label={t("hosts.selectHostLabel", { label: h.label })}
         style={{ opacity: show || selected ? 1 : 0.25 }}
       />
-      <span
-        style={{
-          width: 8,
-          height: 8,
-          flexShrink: 0,
-          borderRadius: "50%",
-          background: session ? p.green : p.line2,
-          boxShadow: session ? `0 0 6px ${p.green}` : "none",
-          animation: session ? "uhPulse 1.6s ease-in-out infinite" : "none",
-        }}
+      <StatusDot
+        status={session ? "online" : "unknown"}
+        size={8}
+        srLabel={session ? t("hosts.session") : undefined}
       />
       <span
         style={{
@@ -268,10 +262,11 @@ function HostRow({
       >
         {h.user}@{h.host}
       </span>
-      <div style={{ display: "flex", gap: 5, width: 130, flexShrink: 0, overflow: "hidden" }}>
-        {h.tags.map((t) => (
-          <Tag key={t}>{t}</Tag>
+      <div style={{ display: "flex", gap: 5, width: 130, flexShrink: 0, overflow: "hidden", alignItems: "center" }}>
+        {h.tags.slice(0, 2).map((tg) => (
+          <Tag key={tg}>{tg}</Tag>
         ))}
+        {h.tags.length > 2 && <MetaChip>{`+${h.tags.length - 2}`}</MetaChip>}
       </div>
       <span
         style={{
