@@ -395,6 +395,74 @@ impl Store {
 
 /// Transactional helper for register (Phase 5): atomic invite-CAS + account/device.
 impl Tx<'_> {
+    /// Transactional mirror of [`Store::create_account`] — same columns, same binds,
+    /// same order — for use inside the bootstrap/register transaction (atomic with the
+    /// genesis-CAS / invite-CAS). The `Store` version takes `&self` and cannot run
+    /// inside an open `Tx`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_account(
+        &mut self,
+        tid: &[u8],
+        account_id: &[u8],
+        ed25519_pub: &[u8],
+        x25519_pub: &[u8],
+        display_name: Option<&str>,
+        handle: Option<&str>,
+        is_admin: bool,
+        reg_payload: &[u8],
+        reg_signature: &[u8],
+        now: i64,
+    ) -> AppResult<()> {
+        self.exec(
+            "INSERT INTO accounts \
+             (tenant_id, account_id, created_at, status, ed25519_pub, x25519_pub, \
+              display_name, handle, is_admin, reg_payload, reg_signature) \
+             VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)",
+            vec![
+                Val::b(tid),
+                Val::b(account_id),
+                Val::I(now),
+                Val::b(ed25519_pub),
+                Val::b(x25519_pub),
+                Val::OptT(display_name.map(|s| s.to_string())),
+                Val::OptT(handle.map(|s| s.to_string())),
+                Val::I(is_admin as i64),
+                Val::b(reg_payload),
+                Val::b(reg_signature),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Transactional mirror of [`Store::create_device`] — same columns, same binds,
+    /// same order — for use inside the bootstrap/register transaction.
+    pub async fn create_device(
+        &mut self,
+        tid: &[u8],
+        account_id: &[u8],
+        device_id: &[u8],
+        ed25519_pub: &[u8],
+        x25519_pub: &[u8],
+        now: i64,
+    ) -> AppResult<()> {
+        self.exec(
+            "INSERT INTO device_pubkeys \
+             (tenant_id, account_id, device_id, ed25519_pub, x25519_pub, registered_at, status) \
+             VALUES (?, ?, ?, ?, ?, ?, 'active')",
+            vec![
+                Val::b(tid),
+                Val::b(account_id),
+                Val::b(device_id),
+                Val::b(ed25519_pub),
+                Val::b(x25519_pub),
+                Val::I(now),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// CAS redeem of an invite with invitee-pubkey binding (§6.2). Returns
     /// `(role, scope)` on success; otherwise classifies the reason.
     pub async fn redeem_invite_cas(

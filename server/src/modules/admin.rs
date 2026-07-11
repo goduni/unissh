@@ -348,8 +348,8 @@ async fn objects_list(
         .store
         .admin_list_objects(admin.tenant_id(), q.tag, vault.as_deref(), cursor, limit)
         .await?;
-    let has_more = rows.len() as i64 == limit;
-    let next_cursor = rows.last().map(|r| r.server_seq).unwrap_or(cursor);
+    let (has_more, next_cursor) =
+        crate::http::page(&rows, limit as usize, cursor, |r| r.server_seq);
     let out: Vec<Value> = rows
         .into_iter()
         .map(|o| {

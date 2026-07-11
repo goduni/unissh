@@ -15,6 +15,22 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
+/// Cursor-pagination tail shared by `sync::delta` and `admin::objects_list`: given
+/// the fetched page and the requested `limit`, decide `has_more` (the page came back
+/// full) and `next_cursor` (the last row's sequence, or the incoming `cursor` when the
+/// page is empty). The clamp bounds differ per call site (the two MAX limits differ)
+/// and stay at the call site — only this identical tail is shared.
+pub(crate) fn page<T>(
+    rows: &[T],
+    limit: usize,
+    cursor: i64,
+    key: impl Fn(&T) -> i64,
+) -> (bool, i64) {
+    let has_more = rows.len() == limit;
+    let next_cursor = rows.last().map(key).unwrap_or(cursor);
+    (has_more, next_cursor)
+}
+
 /// Public service endpoints (§5.7), without tenant/auth/rate-limit.
 /// `/metrics` is NOT included here — it lives on a separate internal listener (§5.7/§13:
 /// "protected by config/network"), see `build_metrics_router` + main.rs.

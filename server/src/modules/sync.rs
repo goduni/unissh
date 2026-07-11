@@ -200,8 +200,8 @@ async fn delta(
             state.now(),
         )
         .await?;
-    let has_more = rows.len() as i64 == limit;
-    let next_cursor = rows.last().map(|r| r.server_seq).unwrap_or(cursor);
+    let (has_more, next_cursor) =
+        crate::http::page(&rows, limit as usize, cursor, |r| r.server_seq);
     let items = rows
         .into_iter()
         .map(|r| DeltaItem {

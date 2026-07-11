@@ -245,36 +245,26 @@ async fn bootstrap(
     }
 
     // 3. genesis = the first instance-admin: account (is_admin=1) + device in the same tx.
-    tx.exec(
-        "INSERT INTO accounts \
-         (tenant_id, account_id, created_at, status, ed25519_pub, x25519_pub, \
-          display_name, handle, is_admin, reg_payload, reg_signature) \
-         VALUES (?, ?, ?, 'active', ?, ?, ?, ?, 1, ?, ?)",
-        vec![
-            crate::store::Val::b(&tid[..]),
-            crate::store::Val::b(&account_id[..]),
-            crate::store::Val::I(now),
-            crate::store::Val::B(payload.ed25519_pub.to_vec()),
-            crate::store::Val::B(payload.x25519_pub.to_vec()),
-            crate::store::Val::OptT(req.display_name.clone()),
-            crate::store::Val::OptT(req.handle.clone()),
-            crate::store::Val::b(&payload_bytes[..]),
-            crate::store::Val::b(&sig[..]),
-        ],
+    tx.create_account(
+        &tid,
+        &account_id,
+        &payload.ed25519_pub,
+        &payload.x25519_pub,
+        req.display_name.as_deref(),
+        req.handle.as_deref(),
+        true,
+        &payload_bytes,
+        &sig,
+        now,
     )
     .await?;
-    tx.exec(
-        "INSERT INTO device_pubkeys \
-         (tenant_id, account_id, device_id, ed25519_pub, x25519_pub, registered_at, status) \
-         VALUES (?, ?, ?, ?, ?, ?, 'active')",
-        vec![
-            crate::store::Val::b(&tid[..]),
-            crate::store::Val::b(&account_id[..]),
-            crate::store::Val::b(&device_id[..]),
-            crate::store::Val::B(payload.ed25519_pub.to_vec()),
-            crate::store::Val::B(payload.x25519_pub.to_vec()),
-            crate::store::Val::I(now),
-        ],
+    tx.create_device(
+        &tid,
+        &account_id,
+        &device_id,
+        &payload.ed25519_pub,
+        &payload.x25519_pub,
+        now,
     )
     .await?;
     tx.commit().await?;
@@ -339,17 +329,13 @@ async fn register(
         let device_id = ids::random_id16().to_vec();
         state
             .store
-            .exec(
-                "INSERT INTO device_pubkeys (tenant_id, account_id, device_id, ed25519_pub, x25519_pub, registered_at, status) \
-                 VALUES (?,?,?,?,?,?,'active')",
-                vec![
-                    crate::store::Val::b(tid),
-                    crate::store::Val::b(acct.account_id.clone()),
-                    crate::store::Val::b(device_id.clone()),
-                    crate::store::Val::B(payload.ed25519_pub.to_vec()),
-                    crate::store::Val::B(payload.x25519_pub.to_vec()),
-                    crate::store::Val::I(now),
-                ],
+            .create_device(
+                tid,
+                &acct.account_id,
+                &device_id,
+                &payload.ed25519_pub,
+                &payload.x25519_pub,
+                now,
             )
             .await?;
         audit_observed(&state, tid, "reattach_device", &acct.account_id, &device_id).await;
@@ -394,36 +380,27 @@ async fn register(
         .redeem_invite_cas(tid, &token_hash, &payload.ed25519_pub, now)
         .await?;
     let is_admin = role == 2;
-    tx.exec(
-        "INSERT INTO accounts \
-         (tenant_id, account_id, created_at, status, ed25519_pub, x25519_pub, display_name, handle, is_admin, reg_payload, reg_signature) \
-         VALUES (?,?,?,'active',?,?,?,?,?,?,?)",
-        vec![
-            crate::store::Val::b(tid),
-            crate::store::Val::b(account_id.clone()),
-            crate::store::Val::I(now),
-            crate::store::Val::B(payload.ed25519_pub.to_vec()),
-            crate::store::Val::B(payload.x25519_pub.to_vec()),
-            crate::store::Val::OptT(req.display_name.clone()),
-            crate::store::Val::OptT(req.handle.clone()),
-            crate::store::Val::I(is_admin as i64),
-            // M14: store the self-attested registration verbatim for panel binding check.
-            crate::store::Val::B(payload_bytes.clone()),
-            crate::store::Val::B(sig.clone()),
-        ],
+    // M14: store the self-attested registration verbatim for panel binding check.
+    tx.create_account(
+        tid,
+        &account_id,
+        &payload.ed25519_pub,
+        &payload.x25519_pub,
+        req.display_name.as_deref(),
+        req.handle.as_deref(),
+        is_admin,
+        &payload_bytes,
+        &sig,
+        now,
     )
     .await?;
-    tx.exec(
-        "INSERT INTO device_pubkeys (tenant_id, account_id, device_id, ed25519_pub, x25519_pub, registered_at, status) \
-         VALUES (?,?,?,?,?,?,'active')",
-        vec![
-            crate::store::Val::b(tid),
-            crate::store::Val::b(account_id.clone()),
-            crate::store::Val::b(device_id.clone()),
-            crate::store::Val::B(payload.ed25519_pub.to_vec()),
-            crate::store::Val::B(payload.x25519_pub.to_vec()),
-            crate::store::Val::I(now),
-        ],
+    tx.create_device(
+        tid,
+        &account_id,
+        &device_id,
+        &payload.ed25519_pub,
+        &payload.x25519_pub,
+        now,
     )
     .await?;
     tx.commit().await?;

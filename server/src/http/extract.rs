@@ -96,51 +96,66 @@ impl AuthCtx {
     }
 }
 
+/// Shared Bearer-token resolution for `AuthCtx` and `AdminCtx` (§5.0/§12): strip
+/// `Bearer ` → base64-decode → sha256 → `find_session_by_access_hash` →
+/// revoked/expiry → active device → active account. Returns the validated
+/// `(SessionRow, DeviceRow)`. The tenant is loaded by the caller — that is the ONLY
+/// difference between the two extractors: `AuthCtx` goes through `TenantCtx`
+/// (suspended-gated), `AdminCtx` loads the tenant WITHOUT the suspended-gate and
+/// then layers the extra instance-admin check on top of this shared resolution.
+async fn resolve_bearer(
+    parts: &mut Parts,
+    state: &AppState,
+    tenant_id: &[u8],
+) -> AppResult<(SessionRow, DeviceRow)> {
+    let auth = parts
+        .headers
+        .get(AUTHORIZATION)
+        .ok_or_else(|| AppError::unauthenticated("missing Authorization header"))?;
+    let s = auth
+        .to_str()
+        .map_err(|_| AppError::unauthenticated("bad Authorization header"))?;
+    let token = s
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| AppError::unauthenticated("expected Bearer token"))?
+        .trim();
+    // An unparseable token is an authentication error (401), not a generic 400.
+    let raw = ids::unb64(token).map_err(|_| AppError::unauthenticated("malformed access token"))?;
+    let access_hash = ids::sha256(&raw);
+    let session = state
+        .store
+        .find_session_by_access_hash(tenant_id, &access_hash)
+        .await?
+        .ok_or_else(|| AppError::unauthenticated("invalid access token"))?;
+    if session.revoked != 0 {
+        return Err(AppError::unauthenticated("session revoked"));
+    }
+    if session.access_expires <= state.now() {
+        return Err(AppError::unauthenticated("access token expired"));
+    }
+    let device = state
+        .store
+        .get_device(tenant_id, &session.device_id)
+        .await?
+        .ok_or_else(|| AppError::unauthenticated("device not found"))?;
+    if device.status != "active" {
+        return Err(AppError::unauthenticated("device not active"));
+    }
+    if !state
+        .store
+        .account_is_active(tenant_id, &session.account_id)
+        .await?
+    {
+        return Err(AppError::unauthenticated("account disabled"));
+    }
+    Ok((session, device))
+}
+
 impl FromRequestParts<AppState> for AuthCtx {
     type Rejection = AppError;
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> AppResult<Self> {
         let TenantCtx { tenant } = TenantCtx::from_request_parts(parts, state).await?;
-        let auth = parts
-            .headers
-            .get(AUTHORIZATION)
-            .ok_or_else(|| AppError::unauthenticated("missing Authorization header"))?;
-        let s = auth
-            .to_str()
-            .map_err(|_| AppError::unauthenticated("bad Authorization header"))?;
-        let token = s
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| AppError::unauthenticated("expected Bearer token"))?
-            .trim();
-        // An unparseable token is an authentication error (401), not a generic 400.
-        let raw =
-            ids::unb64(token).map_err(|_| AppError::unauthenticated("malformed access token"))?;
-        let access_hash = ids::sha256(&raw);
-        let session = state
-            .store
-            .find_session_by_access_hash(&tenant.tenant_id, &access_hash)
-            .await?
-            .ok_or_else(|| AppError::unauthenticated("invalid access token"))?;
-        if session.revoked != 0 {
-            return Err(AppError::unauthenticated("session revoked"));
-        }
-        if session.access_expires <= state.now() {
-            return Err(AppError::unauthenticated("access token expired"));
-        }
-        let device = state
-            .store
-            .get_device(&tenant.tenant_id, &session.device_id)
-            .await?
-            .ok_or_else(|| AppError::unauthenticated("device not found"))?;
-        if device.status != "active" {
-            return Err(AppError::unauthenticated("device not active"));
-        }
-        if !state
-            .store
-            .account_is_active(&tenant.tenant_id, &session.account_id)
-            .await?
-        {
-            return Err(AppError::unauthenticated("account disabled"));
-        }
+        let (session, device) = resolve_bearer(parts, state, &tenant.tenant_id).await?;
         Ok(AuthCtx {
             tenant,
             session,
@@ -218,46 +233,7 @@ impl FromRequestParts<AppState> for AdminCtx {
             .await?
             .ok_or_else(|| AppError::not_found("tenant"))?;
         // bearer → session → device → account (the same logic as in AuthCtx).
-        let auth = parts
-            .headers
-            .get(AUTHORIZATION)
-            .ok_or_else(|| AppError::unauthenticated("missing Authorization header"))?;
-        let s = auth
-            .to_str()
-            .map_err(|_| AppError::unauthenticated("bad Authorization header"))?;
-        let token = s
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| AppError::unauthenticated("expected Bearer token"))?
-            .trim();
-        let raw =
-            ids::unb64(token).map_err(|_| AppError::unauthenticated("malformed access token"))?;
-        let access_hash = ids::sha256(&raw);
-        let session = state
-            .store
-            .find_session_by_access_hash(&tenant.tenant_id, &access_hash)
-            .await?
-            .ok_or_else(|| AppError::unauthenticated("invalid access token"))?;
-        if session.revoked != 0 {
-            return Err(AppError::unauthenticated("session revoked"));
-        }
-        if session.access_expires <= state.now() {
-            return Err(AppError::unauthenticated("access token expired"));
-        }
-        let device = state
-            .store
-            .get_device(&tenant.tenant_id, &session.device_id)
-            .await?
-            .ok_or_else(|| AppError::unauthenticated("device not found"))?;
-        if device.status != "active" {
-            return Err(AppError::unauthenticated("device not active"));
-        }
-        if !state
-            .store
-            .account_is_active(&tenant.tenant_id, &session.account_id)
-            .await?
-        {
-            return Err(AppError::unauthenticated("account disabled"));
-        }
+        let (session, device) = resolve_bearer(parts, state, &tenant.tenant_id).await?;
         if !state
             .store
             .is_instance_admin(&tenant.tenant_id, &device.ed25519_pub)
