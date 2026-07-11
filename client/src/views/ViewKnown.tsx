@@ -221,11 +221,9 @@ export function ViewKnown() {
                       ...(isMobile ? { wordBreak: "break-all" } : null),
                     }}
                   >
-                    {parseHostKey(
-                      knownHosts.find(
-                        (k) => k.host === pendingMismatch.host && k.port === pendingMismatch.port,
-                      )?.key ?? "",
-                    ).fp || "—"}
+                    {knownHosts.find(
+                      (k) => k.host === pendingMismatch.host && k.port === pendingMismatch.port,
+                    )?.fingerprint || "—"}
                   </div>
                 </div>
                 <Icon
@@ -344,7 +342,7 @@ export function ViewKnown() {
                 </div>
               )}
               {knownHosts.map((k, i) => {
-                const { algo, fp } = parseHostKey(k.key);
+                const { algo } = parseHostKey(k.key);
                 const label = k.port && k.port !== 22 ? `${k.host}:${k.port}` : k.host;
                 const lastRow = i === knownHosts.length - 1;
                 if (isMobile) {
@@ -390,9 +388,9 @@ export function ViewKnown() {
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
                         }}
-                        title={fp}
+                        title={k.fingerprint}
                       >
-                        {fp}
+                        {k.fingerprint}
                       </div>
                       <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
                         {algo} · {fmtDate(k.addedAt)}
@@ -457,9 +455,9 @@ export function ViewKnown() {
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                       }}
-                      title={fp}
+                      title={k.fingerprint}
                     >
-                      {fp}
+                      {k.fingerprint}
                     </span>
                     <span style={{ fontSize: 11.5, color: p.txt3 }}>{fmtDate(k.addedAt)}</span>
                     <span style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>

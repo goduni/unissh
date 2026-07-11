@@ -176,6 +176,9 @@ export interface KnownHostInfo {
   host: string;
   port: number;
   key: string;
+  /** Core-computed SHA256 fingerprint ("SHA256:…") — the same format the
+   *  HostKeyMismatch error emits, so stored vs presented are directly comparable. */
+  fingerprint: string;
   addedAt: number;
 }
 
