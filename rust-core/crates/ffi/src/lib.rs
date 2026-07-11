@@ -646,6 +646,10 @@ pub struct KnownHostInfo {
     pub port: u16,
     /// Public host key (OpenSSH).
     pub key: String,
+    /// SHA256 fingerprint of the key (`SHA256:…`), computed core-side via the same
+    /// ssh-key path the HostKeyMismatch error uses — so "stored" and "presented now"
+    /// are the identical format and are directly comparable.
+    pub fingerprint: String,
     /// Pin time (unix seconds).
     pub added_at: i64,
 }
@@ -2267,6 +2271,7 @@ impl Core {
                     host: h.host,
                     port: h.port,
                     key: String::from_utf8_lossy(&h.host_key).to_string(),
+                    fingerprint: unissh_ssh_transport::fingerprint_openssh(&h.host_key),
                     added_at: h.added_at,
                 })
                 .collect())

@@ -724,7 +724,7 @@ pub fn canonical_host_key(key_openssh: &str) -> Result<Vec<u8>, TransportError> 
         .into_bytes())
 }
 
-pub(crate) fn fingerprint_openssh(openssh: &[u8]) -> String {
+pub fn fingerprint_openssh(openssh: &[u8]) -> String {
     let s = String::from_utf8_lossy(openssh);
     match PublicKey::from_openssh(s.trim()) {
         Ok(pk) => pk.fingerprint(HashAlg::Sha256).to_string(),
