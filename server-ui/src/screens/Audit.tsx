@@ -51,7 +51,7 @@ function eventDetail(ev: EventBlob): string | null {
     case "tenant_activate":
       return ev.by ? `by ${ev.by}` : null;
     case "tenant_rename":
-      return `${ev.display_name ? `«${ev.display_name}»` : "(сброс)"}${
+      return `${ev.display_name ? `«${ev.display_name}»` : "(reset)"}${
         ev.by ? ` · by ${ev.by}` : ""
       }`;
     case "access_grant":

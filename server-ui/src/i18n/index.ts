@@ -88,8 +88,14 @@ const ru = {
         suspendedDesc: "{{count}} тенант(а) в статусе suspended",
         suspendedTitle: "Приостановленные тенанты",
       },
-      health: { title: "Здоровье", sub: "liveness, readiness, версия, пул соединений, janitor" },
-      metrics: { title: "Метрики", sub: "Prometheus-ряды: push, delta, rate-limit, сессии" },
+      health: { title: "Здоровье", sub: "liveness, readiness, версия, пул соединений, janitor", uptimeDaysShort: "д" },
+      metrics: {
+        title: "Метрики",
+        sub: "Prometheus-ряды: push, delta, rate-limit, сессии",
+        disabled: "Метрики выключены",
+        rows: "Ряды метрик",
+        window: "окно {{n}}",
+      },
       config: {
         title: "Конфигурация",
         sub: "Эффективная конфигурация с маскировкой секретов",
@@ -280,6 +286,8 @@ const ru = {
       grants: {
         title: "Гранты и манифесты",
         sub: "Криптографическое членство, эпохи, ротация",
+        rotateHint:
+          "Генерируется <b>свежий VK</b>, заново wrap'ится под x25519 каждого члена (из <code>/v1/accounts</code>), подписывается keyset'ом и публикуется эпохой {{next}} с read-deny эпохи {{cur}}. Требует crypto-wasm.",
         accessColumn: "Доступ",
         allowed: "разрешён",
         cryptoUnavailable: "Крипто-модуль (wasm) не загружен — ротация недоступна.",
@@ -594,8 +602,14 @@ const en: typeof ru = {
         suspendedDesc: "{{count}} tenant(s) in suspended status",
         suspendedTitle: "Suspended tenants",
       },
-      health: { title: "Health", sub: "liveness, readiness, version, connection pool, janitor" },
-      metrics: { title: "Metrics", sub: "Prometheus series: push, delta, rate-limit, sessions" },
+      health: { title: "Health", sub: "liveness, readiness, version, connection pool, janitor", uptimeDaysShort: "d" },
+      metrics: {
+        title: "Metrics",
+        sub: "Prometheus series: push, delta, rate-limit, sessions",
+        disabled: "Metrics disabled",
+        rows: "Metric rows",
+        window: "window {{n}}",
+      },
       config: {
         title: "Configuration",
         sub: "Effective configuration with masked secrets",
@@ -786,6 +800,8 @@ const en: typeof ru = {
       grants: {
         title: "Grants & manifests",
         sub: "Cryptographic membership, epochs, rotation",
+        rotateHint:
+          "A <b>fresh VK</b> is generated, re-wrapped under each member's x25519 (from <code>/v1/accounts</code>), signed with the keyset and published as epoch {{next}} with read-deny of epoch {{cur}}. Requires crypto-wasm.",
         accessColumn: "Access",
         allowed: "allowed",
         cryptoUnavailable: "Crypto module (wasm) not loaded — rotation unavailable.",

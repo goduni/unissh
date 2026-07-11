@@ -78,7 +78,7 @@ function MetricsBody() {
             {t("common.refresh")}
           </Btn>
         </div>
-        <div style={{ fontSize: 13, color: "var(--txt3)" }}>Метрики выключены</div>
+        <div style={{ fontSize: 13, color: "var(--txt3)" }}>{t("screen.metrics.disabled")}</div>
       </>
     );
   }
@@ -146,7 +146,7 @@ function MetricsBody() {
             borderBottom: "1px solid var(--line)",
           }}
         >
-          <span style={{ fontWeight: 700, fontSize: 13.5 }}>Ряды метрик</span>
+          <span style={{ fontWeight: 700, fontSize: 13.5 }}>{t("screen.metrics.rows")}</span>
           <span style={{ fontFamily: MONO, fontSize: 11.5, color: "var(--txt3)" }}>
             /v1/admin/metrics/summary
           </span>
@@ -194,6 +194,7 @@ function DeltaChart({
   sampleInterval: number;
   retained: number;
 }) {
+  const { t } = useTranslation();
   const d = deltas(points);
   const W = 1000;
   const H = 120;
@@ -217,7 +218,7 @@ function DeltaChart({
           {name}
         </span>
         <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--txt3)" }}>
-          Δ/{sampleInterval}s · окно {retained}
+          Δ/{sampleInterval}s · {t("screen.metrics.window", { n: retained })}
         </span>
       </div>
       <svg

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ROLE_BY_CODE, type VaultRole } from "../api/types";
 import { CryptoUnavailableError, getCrypto } from "../crypto/provider";
@@ -379,9 +379,14 @@ function RotateModal({
         >
           <Icon name="alert" size={15} color="var(--amber)" style={{ marginTop: 1 }} />
           <div style={{ fontSize: 12, color: "var(--txt2)", lineHeight: 1.5 }}>
-            Генерируется <b style={{ color: "var(--txt)" }}>свежий VK</b>, заново wrap'ится под x25519 каждого
-            члена (из <code style={{ color: "var(--amber)", fontFamily: MONO }}>/v1/accounts</code>),
-            подписывается keyset'ом и публикуется эпохой {currentEpoch + 1} с read-deny эпохи {currentEpoch}. Требует crypto-wasm.
+            <Trans
+              i18nKey="screen.grants.rotateHint"
+              values={{ next: currentEpoch + 1, cur: currentEpoch }}
+              components={{
+                b: <b style={{ color: "var(--txt)" }} />,
+                code: <code style={{ color: "var(--amber)", fontFamily: MONO }} />,
+              }}
+            />
           </div>
         </div>
 

@@ -11,13 +11,13 @@ import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
 /** "Nd HH:MM"-style uptime label from a duration in seconds. */
-function fmtUptime(sec: number): string {
+function fmtUptime(sec: number, daysLabel: string): string {
   const total = Math.max(0, Math.floor(sec));
   const d = Math.floor(total / 86400);
   const h = Math.floor((total % 86400) / 3600);
   const m = Math.floor((total % 3600) / 60);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d}д ${pad(h)}:${pad(m)}`;
+  return `${d}${daysLabel} ${pad(h)}:${pad(m)}`;
 }
 
 export function Health() {
@@ -235,7 +235,7 @@ function HealthBody() {
         }
       />
       <HealthRow label="version" value={h ? h.version : "—"} mono />
-      <HealthRow label="uptime" value={h ? fmtUptime(h.uptime_seconds) : "—"} mono />
+      <HealthRow label="uptime" value={h ? fmtUptime(h.uptime_seconds, t("screen.health.uptimeDaysShort")) : "—"} mono />
       <HealthRow label="DB backend" value={h ? h.db.backend : "—"} mono />
       <HealthRow
         label="DB reachable"

@@ -277,22 +277,22 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       const k = e.key.toLowerCase();
-      if (k === "k" || k === "л") {
+      if (k === "k" || e.code === "KeyK") {
         e.preventDefault();
         useApp.getState().setPalette(!useApp.getState().palette);
-      } else if (k === "n" || k === "т") {
+      } else if (k === "n" || e.code === "KeyN") {
         e.preventDefault();
         ctx.onNewHost();
-      } else if (k === "t" || k === "е") {
+      } else if (k === "t" || e.code === "KeyT") {
         e.preventDefault();
         ctx.go("terminal");
-      } else if (k === "l" || k === "д") {
+      } else if (k === "l" || e.code === "KeyL") {
         e.preventDefault();
         ctx.onLock();
       } else if (k === "/" || k === ".") {
         e.preventDefault();
         useApp.getState().setShortcuts(!useApp.getState().shortcuts);
-      } else if (k === "m" || k === "ь") {
+      } else if (k === "m" || e.code === "KeyM") {
         // preview toggle: desktop <-> mobile shell
         e.preventDefault();
         const cur = useApp.getState().device;

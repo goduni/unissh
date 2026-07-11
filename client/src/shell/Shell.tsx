@@ -16,9 +16,9 @@ import { useTranslation, tDyn } from "@/i18n";
 
 const groupIcon = (label: string): IconName => {
   const l = label.toLowerCase();
-  if (l.includes("баз") || l.includes("data") || l.includes("дан")) return "database";
-  if (l.includes("edge") || l.includes("перим")) return "shield";
-  if (l.includes("дом") || l.includes("home")) return "home";
+  if (l.includes("data") || l.includes("db")) return "database";
+  if (l.includes("edge")) return "shield";
+  if (l.includes("home")) return "home";
   return "globe";
 };
 
