@@ -7,7 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
-import { BTN_RESET, Icon, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot } from "@/components/primitives";
+import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot } from "@/components/primitives";
 import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
 import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
@@ -465,67 +465,26 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         )}
         <div style={{ flex: 1, minWidth: 8 }} />
         {h.auth.type === "personal" && vault && (
-          <button
-            onClick={() => ctx.openModal({ kind: "bindHost", host: h, vaultId: vault })}
+          <IconBtn
+            icon="fingerprint"
+            size={28}
             title={t("hosts.linkIdentity")}
-            aria-label={t("hosts.linkIdentity")}
-            style={{
-              width: 26,
-              height: 26,
-              flexShrink: 0,
-              borderRadius: 7,
-              border: `1px solid ${p.line}`,
-              background: p.bg2,
-              color: p.txt3,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Icon name="fingerprint" size={13} />
-          </button>
+            onClick={() => ctx.openModal({ kind: "bindHost", host: h, vaultId: vault })}
+          />
         )}
-        <button
-          onClick={() => ctx.openModal({ kind: "host", edit: h })}
+        <IconBtn
+          icon="pencil"
+          size={28}
           title={t("common.edit")}
-          aria-label={t("common.edit")}
-          style={{
-            width: 26,
-            height: 26,
-            flexShrink: 0,
-            borderRadius: 7,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.txt3,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="pencil" size={13} />
-        </button>
-        <button
-          onClick={onDelete}
+          onClick={() => ctx.openModal({ kind: "host", edit: h })}
+        />
+        <IconBtn
+          icon="trash"
+          size={28}
+          color={p.red}
           title={t("common.delete")}
-          aria-label={t("common.delete")}
-          style={{
-            width: 26,
-            height: 26,
-            flexShrink: 0,
-            borderRadius: 7,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.red,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="trash" size={13} color={p.red} />
-        </button>
+          onClick={onDelete}
+        />
       </div>
       <div
         style={{
