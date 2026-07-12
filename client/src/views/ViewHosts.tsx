@@ -178,7 +178,7 @@ function HostCard({
         >
           <Btn
             size="sm"
-            variant="ghost"
+            variant="outline"
             icon="folders"
             title={t("hosts.openSftp")}
             onClick={(e) => {
@@ -548,7 +548,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         />
         {/* Quick SFTP: connect + jump straight to the SFTP view for this host. */}
         <Btn
-          variant="ghost"
+          variant="outline"
           icon="folders"
           title={t("hosts.openSftp")}
           style={{ padding: "8px 11px" }}
@@ -581,9 +581,9 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         <>
           <div
             style={{
-              fontSize: 11,
+              fontSize: 10.5,
               fontWeight: 700,
-              letterSpacing: 0.5,
+              letterSpacing: 0.6,
               color: p.txt3,
               textTransform: "uppercase",
               margin: "14px 0 7px",
@@ -600,9 +600,9 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       )}
       <div
         style={{
-          fontSize: 11,
+          fontSize: 10.5,
           fontWeight: 700,
-          letterSpacing: 0.5,
+          letterSpacing: 0.6,
           color: p.txt3,
           textTransform: "uppercase",
           margin: "14px 0 7px",
@@ -1285,6 +1285,7 @@ export function ViewHosts() {
             icon="download"
             size="sm"
             title={t("hosts.importSshConfig")}
+            style={{ height: 30 }}
             onClick={() => ctx.openImport()}
           >
             {!tight && t("hosts.importSshConfig")}
@@ -1396,6 +1397,7 @@ export function ViewHosts() {
             icon="plus"
             size="sm"
             title={t("hosts.newHost")}
+            style={{ height: 30 }}
             onClick={() => ctx.onNewHost()}
           >
             {!tight && t("hosts.newHost")}
@@ -1433,7 +1435,6 @@ export function ViewHosts() {
             flexWrap: "wrap",
           }}
         >
-          <Icon name="tag" size={13} color={p.txt3} />
           {activeGroup && (
             <span
               style={{

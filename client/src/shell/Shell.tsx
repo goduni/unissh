@@ -51,14 +51,24 @@ function TitleIconBtn({
         width: 30,
         height: 30,
         borderRadius: 8,
-        border: `1px solid ${active ? p.accentLine : p.line}`,
-        background: active ? p.accentSoft : p.bg2,
-        color: active ? p.accent : p.txt2,
+        // Neutral mono chrome (matches the IconBtn primitive): active = bg2 fill +
+        // hairline + txt; resting = transparent + txt2. Accent is reserved for the
+        // primary action and active nav tick, never for chrome icon buttons.
+        border: `1px solid ${active ? p.line : "transparent"}`,
+        background: active ? p.bg2 : "transparent",
+        color: active ? p.txt : p.txt2,
         cursor: "pointer",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
+        transition: "background .12s, color .12s",
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.background = p.bg2;
+      }}
+      onMouseLeave={(e) => {
+        if (!active) e.currentTarget.style.background = "transparent";
       }}
     >
       <Icon name={icon} size={15} stroke={1.8} />
