@@ -1280,16 +1280,26 @@ export function ViewHosts() {
             </span>
           </div>
           <div style={{ flex: 1 }} />
-          <Btn
-            variant="ghost"
-            icon="download"
-            size="sm"
+          {/* Header actions are quiet text, per the reference (.act / .new) — a
+              filled primary here becomes a glaring near-white block in dark mode. */}
+          <button
             title={t("hosts.importSshConfig")}
-            style={{ height: 30 }}
             onClick={() => ctx.openImport()}
+            style={{
+              ...BTN_RESET,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              height: 30,
+              fontSize: 13,
+              fontWeight: 600,
+              color: p.txt3,
+              cursor: "pointer",
+            }}
           >
+            <Icon name="download" size={14} />
             {!tight && t("hosts.importSshConfig")}
-          </Btn>
+          </button>
           <div
             style={{
               display: "flex",
@@ -1393,15 +1403,24 @@ export function ViewHosts() {
               </div>
             )}
           </div>
-          <Btn
-            icon="plus"
-            size="sm"
+          <button
             title={t("hosts.newHost")}
-            style={{ height: 30 }}
             onClick={() => ctx.onNewHost()}
+            style={{
+              ...BTN_RESET,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              height: 30,
+              fontSize: 13,
+              fontWeight: 700,
+              color: p.accent,
+              cursor: "pointer",
+            }}
           >
+            <Icon name="plus" size={15} />
             {!tight && t("hosts.newHost")}
-          </Btn>
+          </button>
           {!railOpen && (
             <button
               title={t("common.show")}
