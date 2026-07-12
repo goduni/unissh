@@ -22,6 +22,7 @@ pub mod audit_repo;
 pub mod auth_repo;
 pub mod enroll_repo;
 pub mod identity_repo;
+pub mod instance_repo;
 pub mod models;
 pub mod policy_repo;
 pub mod sync_repo;

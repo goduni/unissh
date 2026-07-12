@@ -295,3 +295,18 @@ pub struct AuditChainRow {
     pub server_seq: Option<i64>,
     pub prev_hash: Option<Vec<u8>>,
 }
+
+// ---- v2 (redesign/server-v2): singleton instance row ----
+
+/// The singleton `instance` row (v2 schema): this server's identity, claim
+/// state, setup code, and instance-wide `next_seq`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct InstanceRow {
+    pub instance_id: Vec<u8>,
+    pub name: Option<String>,
+    pub claimed: i64,
+    pub owner_account_id: Option<Vec<u8>>,
+    pub setup_code_hash: Option<Vec<u8>>,
+    pub next_seq: i64,
+    pub created_at: i64,
+}
