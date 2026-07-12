@@ -260,13 +260,13 @@ function NavItem({
         ...BTN_RESET,
         display: "flex",
         alignItems: "center",
-        gap: 9,
+        gap: 8,
         height: 32,
-        // buttons shrink-to-fit, so the div's margins become width math
-        width: sub ? "calc(100% - 30px)" : "calc(100% - 16px)",
-        padding: "0 10px",
-        margin: sub ? "0 8px 0 22px" : "0 8px",
-        borderRadius: 8,
+        // Reference nav: full-bleed row, no rounded pill / side margin. The accent
+        // tick sits flush at the sidebar's left edge; accent is reserved for it.
+        width: "100%",
+        padding: sub ? "0 18px 0 30px" : "0 18px",
+        borderRadius: 0,
         cursor: "pointer",
         background: !active && hover ? p.bg2 : "transparent",
         color: active ? p.txt : p.txt2,
@@ -275,7 +275,7 @@ function NavItem({
         fontWeight: active ? 600 : 500,
       }}
     >
-      {icon && <Icon name={icon} size={15} color={active ? p.accent : p.txt3} stroke={1.7} />}
+      {icon && <Icon name={icon} size={15} color={active ? p.txt : p.txt3} stroke={1.7} />}
       <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </span>
