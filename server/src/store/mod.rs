@@ -161,14 +161,18 @@ impl Store {
         })
     }
 
-    /// Apply the dialect's migrations (idempotent, forward-only). Reads
-    /// `migrations/<dialect>/` at runtime (the dir is shipped in the image).
+    /// Apply the dialect's migrations (idempotent, forward-only) from the default dir.
     pub async fn migrate(&self) -> AppResult<()> {
-        use sqlx::migrate::Migrator;
         let dir = match self.dialect() {
             Dialect::Sqlite => "./migrations/sqlite",
             Dialect::Postgres => "./migrations/postgres",
         };
+        self.migrate_from(dir).await
+    }
+
+    /// Apply migrations from an explicit directory (used by the v2 staging tests).
+    pub async fn migrate_from(&self, dir: &str) -> AppResult<()> {
+        use sqlx::migrate::Migrator;
         let m = Migrator::new(std::path::Path::new(dir))
             .await
             .map_err(|e| AppError::internal(format!("load migrations {dir}: {e}")))?;
