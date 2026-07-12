@@ -1270,7 +1270,7 @@ export function ViewHosts() {
           <div
             style={{
               display: "flex",
-              background: p.bg2,
+              background: "transparent",
               border: `1px solid ${p.line}`,
               borderRadius: 8,
               padding: 2,
@@ -1294,9 +1294,11 @@ export function ViewHosts() {
                 height: 30,
                 padding: "0 10px",
                 borderRadius: 8,
-                border: `1px solid ${p.line}`,
-                background: sortOpen ? p.bg3 : p.bg2,
-                color: p.txt2,
+                // No grey fill — just the frame. Open state reads via a stronger
+                // hairline + darker label instead of a bg tint.
+                border: `1px solid ${sortOpen ? p.line2 : p.line}`,
+                background: "transparent",
+                color: sortOpen ? p.txt : p.txt2,
                 cursor: "pointer",
                 fontSize: 12.5,
                 fontWeight: 600,
