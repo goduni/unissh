@@ -25,6 +25,7 @@ pub mod identity_repo;
 pub mod instance_repo;
 pub mod models;
 pub mod policy_repo;
+pub mod spaces_repo;
 pub mod sync_repo;
 pub mod tenants;
 

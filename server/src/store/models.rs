@@ -310,3 +310,36 @@ pub struct InstanceRow {
     pub next_seq: i64,
     pub created_at: i64,
 }
+
+// ---- v2 (redesign/server-v2): spaces, memberships, shared directory ----
+
+/// A space (server-trusted grouping of accounts; v2 schema).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SpaceRow {
+    pub space_id: Vec<u8>,
+    pub name: String,
+    pub status: String,
+    pub created_by: Option<Vec<u8>>,
+    pub created_at: i64,
+}
+
+/// A membership edge (`account_id` in `space_id`) with a server-trusted role.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SpaceMemberRow {
+    pub space_id: Vec<u8>,
+    pub account_id: Vec<u8>,
+    pub role: String,
+    pub added_by: Option<Vec<u8>>,
+    pub added_at: i64,
+}
+
+/// A shared people-directory entry (open metadata; any member may read).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct DirectoryRow {
+    pub account_id: Vec<u8>,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub ed25519_pub: Vec<u8>,
+    pub x25519_pub: Vec<u8>,
+    pub status: String,
+}
