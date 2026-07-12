@@ -1231,20 +1231,24 @@ export function ViewHosts() {
             padding: "24px 22px 14px",
           }}
         >
-          <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
-            {t("hosts.title")}
-          </h1>
-          <span
-            style={{
-              fontFamily: MONO,
-              fontSize: 12,
-              color: p.txt3,
-              whiteSpace: "nowrap",
-            }}
-          >
-            {t("count.hosts", { count: hosts.length })}
-            {sessions ? ` · ${t("count.sessions", { count: sessions })}` : ""}
-          </span>
+          {/* Title + count share one baseline (reference .head); the outer row stays
+              center-aligned so the toolbar buttons don't ride the text baseline. */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
+              {t("hosts.title")}
+            </h1>
+            <span
+              style={{
+                fontFamily: MONO,
+                fontSize: 12,
+                color: p.txt3,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {t("count.hosts", { count: hosts.length })}
+              {sessions ? ` · ${t("count.sessions", { count: sessions })}` : ""}
+            </span>
+          </div>
           <div style={{ flex: 1 }} />
           <Btn
             variant="ghost"
