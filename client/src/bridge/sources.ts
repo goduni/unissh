@@ -95,6 +95,8 @@ class RemoteSource implements FileSource {
         size: e.size,
         mtime: e.mtime || undefined,
         mode: e.mode || undefined,
+        uid: e.uid || undefined,
+        gid: e.gid || undefined,
       }));
   }
   async stat(path: string): Promise<Entry | null> {

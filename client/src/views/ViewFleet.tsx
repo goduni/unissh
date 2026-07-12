@@ -53,7 +53,6 @@ function statusColor(
 const HostTile = React.memo(function HostTile({
   h,
   st,
-  command,
   result,
   selectable,
   checked,
@@ -63,7 +62,6 @@ const HostTile = React.memo(function HostTile({
 }: {
   h: ConnectionProfile;
   st: HostStatus;
-  command: string;
   result?: MultiExecResult;
   /** Idle-phase picker: the tile shows a checkbox and is click-to-toggle. False
    *  during running/done (the selection is frozen into the run snapshot). */
@@ -85,7 +83,6 @@ const HostTile = React.memo(function HostTile({
   const { fmtDuration } = useFmt();
   const timedOut = result?.timedOut ?? false;
   const bar = statusColor(p, st, timedOut);
-  const failed = st === "fail";
   const mismatch = useMemo(() => mismatchFromError(result?.error), [result]);
   const toggle = (shift: boolean) => onToggle(h.profileId, index, shift);
 
@@ -114,11 +111,9 @@ const HostTile = React.memo(function HostTile({
       onKeyDown={selectable ? pressActivate(() => toggle(false)) : undefined}
       style={{
         borderRadius: 13,
-        background: p.bg1,
-        border: `1px solid ${
-          selectable && checked ? p.accent : failed ? rgba(p.red, 0.4) : p.line
-        }`,
-        boxShadow: selectable && checked ? `0 0 0 3px ${p.accentSoft}` : "none",
+        background: selectable && checked ? p.bg2 : p.bg1,
+        border: `1px solid ${p.line}`,
+        boxShadow: selectable && checked ? `inset 0 0 0 1px ${p.line2}` : "none",
         overflow: "hidden",
         cursor: selectable ? "pointer" : "default",
         transition: "border-color .12s, box-shadow .12s",
@@ -147,14 +142,35 @@ const HostTile = React.memo(function HostTile({
               height: 8,
               borderRadius: "50%",
               background: bar,
-              boxShadow: st === "running" ? `0 0 7px ${bar}` : "none",
               animation: st === "running" ? "uhPulse 1s ease-in-out infinite" : "none",
               flexShrink: 0,
             }}
           />
         )}
-        <span style={{ fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" }}>{h.label}</span>
-        <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+        <span
+          style={{
+            fontWeight: 700,
+            fontSize: 14,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
+            flexShrink: 1,
+          }}
+        >
+          {h.label}
+        </span>
+        <span
+          style={{
+            fontFamily: MONO,
+            fontSize: 11,
+            color: p.txt3,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
+          }}
+        >
           {h.user}@{h.host}
         </span>
         <div style={{ flex: 1 }} />
@@ -174,12 +190,17 @@ const HostTile = React.memo(function HostTile({
         {result && (
           <span
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
               fontFamily: MONO,
               fontSize: 11,
               color: timedOut ? p.amber : result.exitStatus === 0 ? p.green : p.red,
             }}
           >
-            {t("fleet.exit", { code: result.exitStatus })} · {fmtDuration(result.durationMs)}
+            <Icon name={!timedOut && result.exitStatus === 0 ? "check" : "x"} size={12} />
+            {timedOut ? t("fleet.timedOut") : t("fleet.exit", { code: result.exitStatus })} ·{" "}
+            {fmtDuration(result.durationMs)}
           </span>
         )}
       </div>
@@ -194,15 +215,9 @@ const HostTile = React.memo(function HostTile({
         }}
       >
         {(st === "queued" || st === "cancelled") && <span style={{ color: p.txt3 }}>—</span>}
-        {st === "running" && (
-          <span style={{ color: p.txt3 }}>
-            $ {command}
-            <span style={{ color: p.accent }}>▋</span>
-          </span>
-        )}
+        {st === "running" && <span style={{ color: p.accent }}>▋</span>}
         {result && (
           <React.Fragment>
-            <div style={{ color: p.txt3 }}>$ {command}</div>
             {bodyLines.map((l, i) => (
               <div
                 key={i}
@@ -550,9 +565,9 @@ export function ViewFleet() {
         <h1
           style={{
             margin: 0,
-            fontSize: 22,
+            fontSize: 28,
             fontWeight: 800,
-            letterSpacing: -0.5,
+            letterSpacing: -0.7,
             whiteSpace: "nowrap",
             flexShrink: 0,
           }}
@@ -567,6 +582,9 @@ export function ViewFleet() {
             fontSize: 12,
             color: p.txt3,
             whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
           }}
         >
           {filterLabel}
@@ -592,13 +610,7 @@ export function ViewFleet() {
               <span style={{ color: p.red }}>{t("fleet.failCount", { count: failCount })}</span>
             </span>
             {failCount > 0 && (
-              <Btn
-                variant="ghost"
-                size="sm"
-                icon="refresh"
-                onClick={rerunFailed}
-                style={{ color: p.amber, borderColor: rgba(p.amber, 0.45) }}
-              >
+              <Btn variant="ghost" size="sm" icon="refresh" onClick={rerunFailed}>
                 {t("fleet.rerunFailed", { count: failCount })}
               </Btn>
             )}
@@ -696,8 +708,8 @@ export function ViewFleet() {
             padding: "0 16px",
             borderRadius: 12,
             background: p.bg1,
-            border: `1px solid ${phase === "running" ? p.accentLine : p.line2}`,
-            boxShadow: phase === "running" ? `0 0 0 4px ${p.accentSoft}` : "none",
+            border: `1px solid ${p.line2}`,
+            boxShadow: "none",
           }}
         >
           <span style={{ fontFamily: MONO, fontSize: 18, color: p.accent, fontWeight: 700 }}>
@@ -856,7 +868,6 @@ export function ViewFleet() {
                 key={h.profileId}
                 h={h}
                 st={statusOf(h)}
-                command={command}
                 result={results[h.profileId]}
                 selectable={phase === "idle"}
                 checked={sel.has(h.profileId)}

@@ -185,14 +185,14 @@ function GroupsModalBody() {
               width: 36,
               height: 36,
               borderRadius: 10,
-              background: p.accentSoft,
-              border: `1px solid ${p.accentLine}`,
+              background: p.bg3,
+              border: `1px solid ${p.line}`,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <Icon name="folders" size={18} color={p.accent} />
+            <Icon name="folders" size={18} color={p.txt2} />
           </span>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3, color: p.txt }}>
@@ -226,7 +226,7 @@ function GroupsModalBody() {
           </button>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: 12 }} className="uh-stagger">
+        <div style={{ flex: 1, overflowY: "auto", padding: "10px 22px 16px" }} className="uh-stagger">
           {groups.map((g, i) => (
             <div
               key={g.groupId}
@@ -235,11 +235,9 @@ function GroupsModalBody() {
                 display: "flex",
                 alignItems: "center",
                 gap: 12,
-                padding: "11px 12px",
-                borderRadius: 12,
-                background: p.bg2,
-                border: `1px solid ${selHost ? p.accentLine : p.line}`,
-                marginBottom: 8,
+                padding: "12px 0",
+                borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
+                background: selHost ? p.bg2 : "transparent",
                 animationDelay: i * 40 + "ms",
                 cursor: selHost ? "copy" : "default",
               }}
@@ -344,6 +342,7 @@ function GroupsModalBody() {
               justifyContent: "center",
               gap: 9,
               width: "100%",
+              marginTop: 12,
               padding: 13,
               borderRadius: 12,
               border: `1px dashed ${p.line2}`,
@@ -368,7 +367,7 @@ function GroupsModalBody() {
                   letterSpacing: 0.6,
                   color: p.txt3,
                   textTransform: "uppercase",
-                  margin: "16px 4px 8px",
+                  margin: "16px 0 8px",
                 }}
               >
                 {t("groups.ungroupedHeading")}
@@ -386,16 +385,17 @@ function GroupsModalBody() {
                         gap: 6,
                         padding: isMobile ? "10px 14px" : "6px 11px",
                         borderRadius: 20,
-                        background: on ? p.accentSoft : p.bg2,
-                        border: `1px solid ${on ? p.accentLine : p.line}`,
+                        background: on ? p.bg3 : p.bg2,
+                        border: `1px solid ${on ? p.line2 : p.line}`,
                         fontSize: 12.5,
-                        color: on ? p.accent : p.txt,
+                        fontWeight: on ? 600 : 400,
+                        color: p.txt,
                         cursor: "grab",
                       }}
                     >
-                      <Icon name="server" size={13} color={on ? p.accent : p.txt3} />
+                      <Icon name="server" size={13} color={on ? p.txt2 : p.txt3} />
                       {h.label}
-                      <Icon name="cd" size={12} color={on ? p.accent : p.txt3} />
+                      <Icon name="cd" size={12} color={on ? p.txt2 : p.txt3} />
                     </span>
                   );
                 })}

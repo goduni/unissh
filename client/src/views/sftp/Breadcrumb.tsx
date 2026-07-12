@@ -91,13 +91,13 @@ export function Breadcrumb({
           padding: "7px 12px",
           fontFamily: MONO,
           fontSize: 11.5,
-          color: p.txt3,
+          color: p.txt2,
           whiteSpace: "nowrap",
           overflowX: "auto",
           cursor: "text",
         }}
       >
-        <Icon name="folderOpen" size={13} color={p.txt3} />
+        <Icon name="folderOpen" size={13} color={p.txt2} />
       {crumbs.map((c, i) => {
         const last = i === crumbs.length - 1;
         return (
@@ -120,7 +120,7 @@ export function Breadcrumb({
                 cursor: last ? "default" : "pointer",
                 fontFamily: MONO,
                 fontSize: 11.5,
-                color: last ? p.txt : p.txt3,
+                color: last ? p.txt : p.txt2,
                 fontWeight: last ? 700 : 400,
                 whiteSpace: "nowrap",
               }}
@@ -128,7 +128,7 @@ export function Breadcrumb({
                 if (!last) e.currentTarget.style.color = p.accent;
               }}
               onMouseLeave={(e) => {
-                if (!last) e.currentTarget.style.color = p.txt3;
+                if (!last) e.currentTarget.style.color = p.txt2;
               }}
             >
               {c.label}

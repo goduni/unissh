@@ -97,14 +97,17 @@ export function TabStrip({
               fontSize: 12.5,
               fontWeight: on ? 700 : 500,
               minHeight: isMobile ? 38 : undefined,
-              color: on ? p.accent : p.txt2,
-              background: drop ? p.accentSoft : on ? p.accentSoft : "transparent",
-              border: `1px solid ${drop ? p.accent : on ? p.accentLine : p.line}`,
-              boxShadow: drop ? `0 0 0 2px ${p.accent}` : "none",
-              transition: "background .12s, border-color .12s",
+              color: on ? p.txt : p.txt2,
+              background: drop ? p.bg3 : "transparent",
+              boxShadow: drop
+                ? `inset 0 0 0 1.5px ${p.accentLine}`
+                : on
+                  ? `inset 0 -2px 0 ${p.accent}`
+                  : "none",
+              transition: "background .12s, box-shadow .12s",
             }}
           >
-            <Icon name={tab.kind === "local" ? "drive" : "server"} size={13} color={on ? p.accent : p.txt3} />
+            <Icon name={tab.kind === "local" ? "drive" : "server"} size={13} color={on ? p.txt2 : p.txt3} />
             <span style={{ whiteSpace: "nowrap", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>
               {tab.label}
             </span>

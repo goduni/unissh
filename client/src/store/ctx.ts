@@ -3,6 +3,7 @@
 
 import { useTheme } from "@/theme/ThemeProvider";
 import type { ConnectionProfile } from "@/bridge/types";
+import { openSession } from "@/views/sftp/session";
 import { useApp, makePane, mkTabId, type ModalKind, type Route } from "./app";
 import { toast } from "./toast";
 
@@ -27,6 +28,17 @@ export function connectById(profileId: string) {
   if (profile) connectProfile(profile);
 }
 
+/** Quick SFTP: open an SFTP session to a host and jump to the SFTP view with the
+ *  new session focused. openSession surfaces its own failure toast / mismatch. */
+export async function connectSftp(profile: ConnectionProfile) {
+  const s = useApp.getState();
+  s.markConnected(profile.profileId);
+  const id = await openSession(profile);
+  if (!id) return;
+  s.setPendingSftpFocus(id);
+  s.go("sftp");
+}
+
 export interface Ctx {
   go: (r: Route) => void;
   goFiltered: (f: string) => void;
@@ -43,6 +55,7 @@ export interface Ctx {
   confirm: (c: import("./app").ConfirmData) => void;
   toast: typeof toast;
   connect: (profile: ConnectionProfile) => void;
+  connectSftp: (profile: ConnectionProfile) => Promise<void>;
   connectById: (id: string) => void;
   reloadVault: () => Promise<void>;
   termThemeId: string;
@@ -67,6 +80,7 @@ export function useCtx(): Ctx {
     confirm: (c) => s.setConfirm(c),
     toast,
     connect: connectProfile,
+    connectSftp,
     connectById,
     reloadVault: s.reloadVault,
     termThemeId: theme.termThemeId,

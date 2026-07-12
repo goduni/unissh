@@ -114,12 +114,14 @@ export const ru = {
     passwords: "Пароли",
     identities: "Идентичности",
     notes: "Заметки",
+    secrets: "Секреты",
     tunnels: "Туннели",
     known: "Известные хосты",
     settings: "Настройки",
     fleet: "Массово",
     fleetExec: "Массовое выполнение",
     broadcast: "Broadcast",
+    run: "Запуск",
     sftp: "SFTP",
     more: "Ещё",
   },
@@ -237,7 +239,14 @@ export const ru = {
   // ── View namespaces (assembled from .i18n-slices by the migration pass) ───
   broadcast: {
     "noRoute": "нет маршрута",
+    "offline": "офлайн",
+    "awaitingOutput": "подключено — ждём вывод",
     "mirrored": "зеркалится",
+    "sendConfirmTitle": "Отправить на все живые хосты?",
+    "sendConfirmBody": "Это вводится сразу в {{count}} живых сессий — отменить нельзя.",
+    "sendConfirm": "Отправить всем",
+    "dangerTitle": "Разрушающая команда — отправить всем?",
+    "dangerBody": "Выполнится сразу на {{count}} живых хостах и выглядит разрушающе. Перепроверьте.",
     "connectionRefused": "соединение отклонено",
     "noStatus": "нет статуса",
     "closedCode": "закрыто (код {{code}})",
@@ -272,6 +281,10 @@ export const ru = {
       "tunnels": "-L / -R / -D",
       "known": "TOFU",
       "keys": "секреты",
+      "terminal": "живые сессии",
+      "passwords": "сохранённые пароли",
+      "identities": "SSH-идентичности",
+      "notes": "защищённые заметки",
       "settings": "настройки"
     },
     "action": {
@@ -283,6 +296,10 @@ export const ru = {
       "newTunnelSub": "проброс портов",
       "import": "Импорт ~/.ssh/config",
       "importSub": "добавить хосты из файла",
+      "groups": "Управление группами",
+      "groupsSub": "организовать хосты",
+      "sync": "Синхронизировать хранилище",
+      "syncSub": "pull + push сейчас",
       "lock": "Заблокировать инстанс",
       "lockSub": "занулить секреты"
     },
@@ -321,6 +338,7 @@ export const ru = {
     "queued": "в очереди",
     "running": "выполняется…",
     "exit": "exit {{code}}",
+    "timedOut": "таймаут",
     "noOutput": "(нет вывода)",
     "commandPlaceholder": "команда для всех хостов…",
     "stopOnError": "остановить при ошибке",
@@ -385,8 +403,8 @@ export const ru = {
     "sortTitle": "Сортировка",
     "sort": {
       "name": "Имя",
-      "connected": "Недавно подключались",
-      "recent": "Недавно добавлены"
+      "connected": "Дата подключения",
+      "recent": "Дата добавления"
     },
     "viewCards": "Карточки",
     "viewList": "Список",
@@ -403,6 +421,7 @@ export const ru = {
     "sessionActive": "сессия активна",
     "noActiveSession": "нет активной сессии",
     "openSession": "Открыть сессию",
+    "openSftp": "Открыть SFTP",
     "terminal": "Терминал",
     "jump": "переход",
     "tags": "Теги",
@@ -412,7 +431,9 @@ export const ru = {
       "address": "Адрес",
       "user": "Юзер",
       "userPersonal": "Из личной идентичности",
-      "auth": "Аутентификация"
+      "auth": "Аутентификация",
+      "lastConnected": "Последнее подключение",
+      "groups": "Группы"
     },
     "hostKeyPinned": "Host key закреплён (TOFU)",
     "hostKeyUnpinned": "Host key не закреплён",
@@ -491,6 +512,8 @@ export const ru = {
     }
   },
   mobile: {
+    "keyVerified": "Ключ подтверждён",
+    "notConnectedTofu": "Ещё не подключались (TOFU)",
     "vault": "Хранилище",
     "vaultLower": "хранилище",
     "noVaults": "Нет хранилищ",
@@ -521,6 +544,8 @@ export const ru = {
       "port": "Порт",
       "user": "Пользователь",
       "session": "Сессия",
+      "auth": "Авторизация",
+      "proxyJump": "ProxyJump",
       "tags": "Теги"
     },
     "more": {
@@ -659,7 +684,8 @@ export const ru = {
   onboarding: {
     "step": {
       "instance": "Инстанс",
-      "masterPassword": "Мастер-пароль"
+      "masterPassword": "Мастер-пароль",
+      "emergencyKit": "Emergency Kit"
     },
     "newInstanceTitle": "Новый локальный инстанс",
     "newInstanceDesc": "Изолированное пространство для хостов и секретов. Всё на устройстве — нет сервера, нет облачного синка.",
@@ -776,6 +802,11 @@ export const ru = {
   },
   secrets: {
     "title": "Секреты",
+    "updatedAgo": "Обновлено {{ago}}",
+    "usedByHosts_one": "{{count}} хост",
+    "usedByHosts_few": "{{count}} хоста",
+    "usedByHosts_many": "{{count}} хостов",
+    "unused": "не используется",
     "newKey": "Новый ключ",
     "newPassword": "Новый пароль",
     "newIdentity": "Новая идентичность",
@@ -823,6 +854,8 @@ export const ru = {
     "noteDeleted": "Заметка удалена",
     "deleteNoteTitle": "Удалить заметку?",
     "showNote": "Показать заметку",
+    "hideNote": "Скрыть",
+    "keyActions": "Действия с ключом",
     "namePlaceholder": "имя (item id)",
     "valuePlaceholder": "значение",
     "noteTextPlaceholder": "текст заметки…"
@@ -839,6 +872,7 @@ export const ru = {
     "themePickerTitle": "Тема",
     "themePickerDesc": "Общий вид — палитра + привязанная тема терминала",
     "themeFamilyDesc": "Цветовая палитра",
+    "themeFamilyMono": "Моно",
     "themeFamilyNebula": "Nebula",
     "themeFamilyCandy": "Candy Holo",
     "themeAutoSystem": "Авто (по системе)",
@@ -856,9 +890,13 @@ export const ru = {
     "accentTitle": "Акцентный цвет",
     "accentDesc": "Основной интерактивный цвет интерфейса",
     "densityTitle": "Плотность интерфейса",
-    "densityDesc": "Карточки или компактный список хостов",
-    "densityCards": "Карточки",
-    "densityList": "Список",
+    "densityDesc": "Просторные отступы или компактно",
+    "densityComfortable": "Просторно",
+    "densityCompact": "Компактно",
+    "hostsLayoutTitle": "Вид хостов",
+    "hostsLayoutDesc": "Сетка карточек или список",
+    "hostsLayoutCards": "Карточки",
+    "hostsLayoutList": "Список",
     "sectionTerminal": "Терминал",
     "termFontTitle": "Размер шрифта терминала",
     "termFontDesc": "Масштаб текста терминала. Также ⌘/Ctrl +, −, 0 при открытом терминале.",
@@ -938,6 +976,7 @@ export const ru = {
     "linkCopied": "Ссылка скопирована"
   },
   sftp: {
+    "verified": "Проверен",
     "pickHost": "выбрать хост",
     "noSavedHosts": "Нет сохранённых хостов",
     "newFolder": "Новая папка",
@@ -1071,6 +1110,9 @@ export const ru = {
     "lock": "Заблокировать (⌘L)",
     "lockShort": "Заблокировать",
     "newVault": "Новое хранилище",
+    "synced": "Синхронизировано",
+    "syncing": "Синхронизация…",
+    "syncError": "Ошибка синхронизации",
     "vaultCreated": "Хранилище создано",
     "vaultCloudCreated": "Облачное хранилище создано",
     "vaultCreateFailed": "Не удалось создать хранилище",
@@ -1082,7 +1124,8 @@ export const ru = {
     "groupsHeader": "Хосты",
     "operationsHeader": "Операции",
     "secretsHeader": "Секреты",
-    "networkHeader": "Сеть"
+    "networkHeader": "Сеть",
+    "vaultNetworkHeader": "Хранилище и сеть"
   },
   terminal: {
     "search": {

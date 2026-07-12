@@ -22,17 +22,21 @@ interface ActionCmd {
   icon: IconName;
   labelKey: string;
   subKey: string;
-  action: "newhost" | "newkey" | "newtunnel" | "import" | "lock";
+  action: "newhost" | "newkey" | "newtunnel" | "import" | "groups" | "sync" | "lock";
 }
 
 const CMD_NAV: NavCmd[] = [
   { id: "n-hosts", icon: "server", labelKey: "nav.allHosts", subKey: "command.nav.hosts", route: "hosts" },
+  { id: "n-terminal", icon: "terminal", labelKey: "nav.terminals", subKey: "command.nav.terminal", route: "terminal" },
   { id: "n-sftp", icon: "folders", labelKey: "nav.sftp", subKey: "command.nav.sftp", route: "sftp" },
   { id: "n-broadcast", icon: "radio", labelKey: "nav.broadcast", subKey: "command.nav.broadcast", route: "broadcast" },
   { id: "n-fleet", icon: "layers", labelKey: "nav.fleetExec", subKey: "command.nav.fleet", route: "fleet" },
   { id: "n-tunnels", icon: "branch", labelKey: "nav.tunnels", subKey: "command.nav.tunnels", route: "tunnels" },
   { id: "n-known", icon: "shieldcheck", labelKey: "nav.known", subKey: "command.nav.known", route: "known" },
   { id: "n-keys", icon: "key", labelKey: "nav.keys", subKey: "command.nav.keys", route: "keys" },
+  { id: "n-passwords", icon: "lock", labelKey: "nav.passwords", subKey: "command.nav.passwords", route: "passwords" },
+  { id: "n-identities", icon: "fingerprint", labelKey: "nav.identities", subKey: "command.nav.identities", route: "identities" },
+  { id: "n-notes", icon: "note", labelKey: "nav.notes", subKey: "command.nav.notes", route: "notes" },
   { id: "n-settings", icon: "sliders", labelKey: "nav.settings", subKey: "command.nav.settings", route: "settings" },
 ];
 const CMD_ACTIONS: ActionCmd[] = [
@@ -40,6 +44,8 @@ const CMD_ACTIONS: ActionCmd[] = [
   { id: "a-newkey", icon: "key", labelKey: "command.action.newKey", subKey: "command.action.newKeySub", action: "newkey" },
   { id: "a-newtunnel", icon: "branch", labelKey: "command.action.newTunnel", subKey: "command.action.newTunnelSub", action: "newtunnel" },
   { id: "a-import", icon: "download", labelKey: "command.action.import", subKey: "command.action.importSub", action: "import" },
+  { id: "a-groups", icon: "layers", labelKey: "command.action.groups", subKey: "command.action.groupsSub", action: "groups" },
+  { id: "a-sync", icon: "refresh", labelKey: "command.action.sync", subKey: "command.action.syncSub", action: "sync" },
   { id: "a-lock", icon: "lock", labelKey: "command.action.lock", subKey: "command.action.lockSub", action: "lock" },
 ];
 
@@ -132,6 +138,8 @@ export function CommandPalette() {
       else if (it.action === "newkey") ctx.openModal({ kind: "key" });
       else if (it.action === "newtunnel") ctx.openModal({ kind: "tunnel" });
       else if (it.action === "import") ctx.openImport();
+      else if (it.action === "groups") ctx.openGroups();
+      else if (it.action === "sync") void ctx.reloadVault();
       else if (it.action === "lock") ctx.onLock();
     }
   };
@@ -244,7 +252,7 @@ export function CommandPalette() {
                 >
                   {g.title}
                 </div>
-                {g.items.map((it) => {
+                {g.items.map((it, i) => {
                   idx++;
                   const active = idx === sel;
                   const myIdx = idx;
@@ -258,9 +266,9 @@ export function CommandPalette() {
                         alignItems: "center",
                         gap: 11,
                         padding: "9px 10px",
-                        borderRadius: 9,
                         cursor: "pointer",
-                        background: active ? p.accentSoft : "transparent",
+                        borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
+                        boxShadow: active ? `inset 2px 0 0 ${p.accent}` : undefined,
                       }}
                     >
                       <span
@@ -268,22 +276,22 @@ export function CommandPalette() {
                           width: 30,
                           height: 30,
                           borderRadius: 8,
-                          background: active ? p.accent : p.bg3,
-                          border: `1px solid ${active ? p.accent : p.line}`,
+                          background: p.bg2,
+                          border: `1px solid ${p.line}`,
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
                           flexShrink: 0,
                         }}
                       >
-                        <Icon name={it.icon} size={15} color={active ? "#fff" : p.txt2} />
+                        <Icon name={it.icon} size={15} color={p.txt2} />
                       </span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div
                           style={{
                             fontSize: 14,
                             fontWeight: 600,
-                            color: active ? p.accent : p.txt,
+                            color: p.txt,
                             whiteSpace: "nowrap",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
@@ -321,7 +329,6 @@ export function CommandPalette() {
             gap: 14,
             padding: "9px 14px",
             borderTop: `1px solid ${p.line}`,
-            background: p.bg0,
             fontSize: 11.5,
             color: p.txt3,
           }}

@@ -36,6 +36,15 @@ function QueueRow({ t }: { t: Transfer }) {
   const isMobile = useIsMobile();
   const { t: tr } = useTranslation();
   const { fmtSize } = useFmt();
+  const sessions = useApp((s) => s.sftpSessions);
+  // Where each leg is rooted, for the muted route line. A remote leg resolves to
+  // its live session label; a closed session falls back to the generic word.
+  const legLabel = (loc: Transfer["from"]): string =>
+    loc.kind === "local"
+      ? tr("sftp.paneLocal")
+      : loc.kind === "remote"
+        ? (sessions.find((s) => s.id === loc.sessionId)?.label ?? tr("sftp.paneRemote"))
+        : "";
   const ratio = t.bytesTotal > 0 ? Math.min(1, t.bytesDone / t.bytesTotal) : t.state === "done" ? 1 : 0;
   const pct = Math.round(ratio * 100);
   const terminal = t.state === "done" || t.state === "cancelled" || t.state === "error";
@@ -97,6 +106,25 @@ function QueueRow({ t }: { t: Transfer }) {
             <Icon name={c.icon} size={isMobile ? 17 : 13} />
           </button>
         ))}
+      </div>
+      <div
+        title={t.toDir}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 5,
+          fontFamily: UI,
+          fontSize: 10.5,
+          color: p.txt3,
+          marginBottom: 7,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{legLabel(t.from)}</span>
+        <span aria-hidden style={{ flexShrink: 0, color: p.txt3 }}>→</span>
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{legLabel(t.to)}</span>
       </div>
       <div style={{ height: 5, borderRadius: 3, background: p.bg4, overflow: "hidden" }}>
         {/* scaleX, not width: transform animates off the layout path */}

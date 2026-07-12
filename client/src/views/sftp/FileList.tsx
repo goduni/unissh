@@ -94,6 +94,14 @@ export function FileList({
       e.preventDefault();
       const ent = showUp && focusIdx === 0 ? null : display[focusIdx - base];
       if (ent) onSelect(ent.name, true, false);
+    } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+      // Keyboard access to the row actions (Send to…, open, rename, delete) — so a
+      // keyboard-only operator can transfer folders / to a specific tab / a
+      // multi-selection, not just Enter-send the focused file.
+      e.preventDefault();
+      const ent = showUp && focusIdx === 0 ? null : display[focusIdx - base];
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      onContext(ent, r.left + 80, Math.min(r.bottom - 40, r.top + 60));
     }
   };
 

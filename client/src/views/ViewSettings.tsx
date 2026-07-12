@@ -7,8 +7,8 @@
 import { useEffect, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { ACCENT_KEYS, ACCENTS, MONO, UI, rgba } from "@/theme/tokens";
-import type { AppThemeFamily, Density, Mode, Palette, TermTheme } from "@/theme/tokens";
-import { Btn, Icon, NO_AUTOCORRECT, Segmented, Spinner, Toggle, VaultBadge } from "@/components/primitives";
+import type { AppThemeFamily, Density, HostsLayout, Mode, Palette, TermTheme } from "@/theme/tokens";
+import { Btn, Icon, NO_AUTOCORRECT, Segmented, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
 import type { IconName } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -111,7 +111,7 @@ function inputStyle(p: Palette, mono?: boolean): React.CSSProperties {
     fontFamily: mono ? MONO : UI,
     fontSize: 13.5,
     color: p.txt,
-    background: p.bg2,
+    background: p.bg0,
     border: `1px solid ${p.line2}`,
     borderRadius: 9,
     outline: "none",
@@ -167,6 +167,8 @@ function SettingsAppearance() {
     setAccent,
     density,
     setDensity,
+    hostsLayout,
+    setHostsLayout,
     termThemeId,
     setTermThemeId,
     termThemes,
@@ -206,6 +208,7 @@ function SettingsAppearance() {
           value={family}
           onChange={setFamily}
           options={[
+            { value: "mono", label: t("settings.themeFamilyMono") },
             { value: "nebula", label: t("settings.themeFamilyNebula") },
             { value: "candy", label: t("settings.themeFamilyCandy") },
           ]}
@@ -282,8 +285,18 @@ function SettingsAppearance() {
           value={density}
           onChange={setDensity}
           options={[
-            { value: "cards", label: t("settings.densityCards"), icon: "grid" },
-            { value: "list", label: t("settings.densityList"), icon: "list" },
+            { value: "comfortable", label: t("settings.densityComfortable") },
+            { value: "compact", label: t("settings.densityCompact") },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow title={t("settings.hostsLayoutTitle")} desc={t("settings.hostsLayoutDesc")}>
+        <Segmented<HostsLayout>
+          value={hostsLayout}
+          onChange={setHostsLayout}
+          options={[
+            { value: "cards", label: t("settings.hostsLayoutCards"), icon: "grid" },
+            { value: "list", label: t("settings.hostsLayoutList"), icon: "list" },
           ]}
         />
       </SettingRow>
@@ -452,7 +465,7 @@ function SettingsAppearance() {
               gap: 6,
               borderRadius: 11,
               cursor: "pointer",
-              border: `1px dashed ${p.line2}`,
+              border: `1px solid ${p.line}`,
               background: "transparent",
               color: p.txt3,
               minHeight: 86,
@@ -741,10 +754,8 @@ function SettingsSecurity() {
       <div
         style={{
           marginTop: 26,
-          padding: 16,
-          borderRadius: 13,
-          border: `1px solid ${rgba(p.red, 0.4)}`,
-          background: rgba(p.red, 0.06),
+          paddingTop: 20,
+          borderTop: `1px solid ${p.line}`,
         }}
       >
         <div style={{ fontSize: 13.5, fontWeight: 700, color: p.red, marginBottom: 4 }}>
@@ -922,14 +933,13 @@ function SettingsAbout() {
             width: 56,
             height: 56,
             borderRadius: 16,
-            background: `linear-gradient(140deg, ${p.accent}, ${p.purple})`,
+            background: p.accent,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            boxShadow: `0 10px 26px -10px ${p.accent}`,
           }}
         >
-          <Icon name="terminal" size={26} color="#fff" stroke={2} />
+          <Icon name="terminal" size={26} color={p.accentInk} stroke={2} />
         </span>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.4 }}>UniSSH</div>
@@ -1084,20 +1094,7 @@ function SettingsVaults() {
                   )}
                 </span>
               ))}
-            {v.vaultId === vaultId && (
-              <span
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 600,
-                  color: p.accent,
-                  background: p.accentSoft,
-                  padding: "1px 7px",
-                  borderRadius: 6,
-                }}
-              >
-                {t("vault.current")}
-              </span>
-            )}
+            {v.vaultId === vaultId && <Tag>{t("vault.current")}</Tag>}
           </div>
           {/* Identities now live in any of your private vaults, picked in Secrets ›
               Identities (auto-provisioned) — no per-vault "make personal" designation. */}
@@ -1131,6 +1128,7 @@ function SettingsVaults() {
             icon="trash"
             disabled={vaults.length <= 1}
             onClick={() => remove(v)}
+            style={{ color: p.red, borderColor: rgba(p.red, 0.4) }}
           >
             {t("common.delete")}
           </Btn>
@@ -1293,34 +1291,15 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
 
         {/* Join someone's Space (invite) · reconnect an account you already have
             (keyset, no invite) · create your OWN Space (bootstrap). */}
-        <div style={{ display: "flex", gap: 8 }}>
-          {(["join", "reconnect", "create"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMode(m)}
-              style={{
-                flex: 1,
-                padding: "9px 10px",
-                borderRadius: 9,
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: mode === m ? 700 : 600,
-                background: mode === m ? p.accentSoft : p.bg2,
-                color: mode === m ? p.accent : p.txt2,
-                border: `1px solid ${mode === m ? p.accentLine : p.line}`,
-              }}
-            >
-              {t(
-                m === "join"
-                  ? "serverCloud.modeJoin"
-                  : m === "reconnect"
-                    ? "serverCloud.modeReconnect"
-                    : "serverCloud.modeCreate",
-              )}
-            </button>
-          ))}
-        </div>
+        <Segmented<"join" | "reconnect" | "create">
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: "join", label: t("serverCloud.modeJoin") },
+            { value: "reconnect", label: t("serverCloud.modeReconnect") },
+            { value: "create", label: t("serverCloud.modeCreate") },
+          ]}
+        />
 
         {mode === "join" ? (
           <>
@@ -1526,21 +1505,7 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
                 >
                   {d.deviceId.slice(0, 16)}…
                 </span>
-                {isCurrent && (
-                  <span
-                    style={{
-                      fontSize: 10.5,
-                      fontWeight: 600,
-                      color: p.accent,
-                      background: p.accentSoft,
-                      border: `1px solid ${p.accentLine}`,
-                      padding: "1px 7px",
-                      borderRadius: 6,
-                    }}
-                  >
-                    {t("serverCloud.thisDevice")}
-                  </span>
-                )}
+                {isCurrent && <Tag>{t("serverCloud.thisDevice")}</Tag>}
               </div>
               <div style={{ fontSize: 11, color: p.txt3 }}>
                 {t("serverCloud.deviceRegistered", { date: fmtDate(d.registeredAt) })}
@@ -1652,7 +1617,7 @@ function PairingCard({ onClose }: { onClose: () => void }) {
           resize: "vertical",
           padding: 12,
           borderRadius: 9,
-          background: p.bg2,
+          background: p.bg0,
           border: `1px solid ${p.line2}`,
           outline: "none",
           fontFamily: MONO,
@@ -2059,19 +2024,7 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
               </div>
               <div style={{ fontSize: 11, color: p.txt3, fontFamily: MONO }}>{m.fingerprint}</div>
             </div>
-            <span
-              style={{
-                fontSize: 10.5,
-                fontWeight: 600,
-                color: p.txt2,
-                background: p.bg3,
-                border: `1px solid ${p.line}`,
-                padding: "1px 7px",
-                borderRadius: 6,
-              }}
-            >
-              {roleLabel(m.role)}
-            </span>
+            <Tag>{roleLabel(m.role)}</Tag>
             <Btn
               variant="ghost"
               size="sm"
@@ -2210,7 +2163,7 @@ function CloudServersList({
   return (
     <>
       <SectionLabel first>{t("serverCloud.sectionServers")}</SectionLabel>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 0" }}>
+      <div style={{ display: "flex", flexDirection: "column", padding: "12px 0" }}>
         {servers.map((s) => {
           const isActive = s.serverId === activeServerId;
           return (
@@ -2224,11 +2177,10 @@ function CloudServersList({
                 display: "flex",
                 alignItems: "center",
                 gap: 12,
-                padding: "12px 14px",
-                borderRadius: 12,
+                padding: "12px 0",
                 cursor: isActive ? "default" : "pointer",
-                border: `1px solid ${isActive ? rgba(p.accent, 0.55) : p.line2}`,
-                background: isActive ? rgba(p.accent, 0.08) : p.bg1,
+                borderBottom: `1px solid ${p.line}`,
+                background: isActive ? p.bg2 : "transparent",
               }}
               title={isActive ? undefined : t("serverCloud.switchTo")}
             >
@@ -2258,38 +2210,29 @@ function CloudServersList({
                     {serverLabel(s)}
                   </span>
                   {isActive && (
-                    <span
-                      style={{
-                        fontSize: 10.5,
-                        fontWeight: 700,
-                        letterSpacing: 0.4,
-                        textTransform: "uppercase",
-                        color: p.accent,
-                        border: `1px solid ${rgba(p.accent, 0.5)}`,
-                        borderRadius: 6,
-                        padding: "1px 6px",
-                      }}
-                    >
-                      {t("serverCloud.activeBadge")}
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: "50%",
+                          background: p.accent,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span
+                        style={{ fontSize: 11, fontWeight: 600, fontFamily: MONO, color: p.txt2 }}
+                      >
+                        {t("serverCloud.activeBadge")}
+                      </span>
                     </span>
                   )}
                   {/* Owner vs member — distinguishes your own space from a joined one
                       (e.g. two spaces on the same host, which would otherwise look
-                      like two identical "servers"). */}
-                  <span
-                    style={{
-                      fontSize: 10.5,
-                      fontWeight: 700,
-                      letterSpacing: 0.4,
-                      textTransform: "uppercase",
-                      color: s.owned ? p.green : p.txt3,
-                      border: `1px solid ${s.owned ? rgba(p.green, 0.5) : p.line2}`,
-                      borderRadius: 6,
-                      padding: "1px 6px",
-                    }}
-                  >
-                    {t(s.owned ? "serverCloud.roleOwner" : "serverCloud.roleMember")}
-                  </span>
+                      like two identical "servers"). Role is not a status → neutral
+                      greyscale word, never a coloured pill. */}
+                  <Tag>{t(s.owned ? "serverCloud.roleOwner" : "serverCloud.roleMember")}</Tag>
                   <Icon
                     name={s.hasSession ? "shieldcheck" : "alert"}
                     size={13}
@@ -2491,10 +2434,7 @@ function SettingsCloud() {
       )}
 
       <SectionLabel>{t("serverCloud.sectionSession")}</SectionLabel>
-      <SettingRow
-        title={serverLabel(s)}
-        desc={s.hasSession ? t("serverCloud.hasSession") : t("serverCloud.noSession")}
-      >
+      <SettingRow title={serverLabel(s)}>
         <span
           style={{
             display: "inline-flex",
@@ -2687,9 +2627,14 @@ export function ViewSettings() {
                 borderRadius: 9,
                 cursor: "pointer",
                 textAlign: "left",
-                border: "none",
-                background: on ? p.accentSoft : "transparent",
-                color: on ? p.accent : p.txt2,
+                border: "1px solid transparent",
+                background: "transparent",
+                color: on ? p.txt : p.txt2,
+                boxShadow: on
+                  ? isMobile
+                    ? `inset 0 -2px 0 ${p.accent}`
+                    : `inset 2px 0 0 ${p.accent}`
+                  : "none",
                 fontFamily: UI,
                 fontSize: 13.5,
                 fontWeight: on ? 700 : 500,
@@ -2697,7 +2642,7 @@ export function ViewSettings() {
                 flexShrink: isMobile ? 0 : undefined,
               }}
             >
-              <Icon name={tb.icon} size={16} color={on ? p.accent : p.txt3} />
+              <Icon name={tb.icon} size={16} color={on ? p.txt : p.txt3} />
               {tDyn(tb.labelKey)}
             </button>
           );

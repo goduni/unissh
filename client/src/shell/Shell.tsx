@@ -5,14 +5,22 @@
 import React, { useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO, vaultColor } from "@/theme/tokens";
+import { MONO } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconName, Logo, ResizeHandle, VaultBadge } from "@/components/primitives";
+import { FlatAvatar, SyncBadge } from "@/components/mono";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import type { Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { ItemType } from "@/bridge/types";
 import { useTranslation, tDyn } from "@/i18n";
+
+// The four vault-item types share one screen (ViewSecrets, with in-screen tabs) and
+// now one nav destination. Active-state tests membership of this set, not route===,
+// so any of the preserved routes still highlights the merged item (spec A6).
+const VAULT_ROUTES: Route[] = ["keys", "passwords", "identities", "notes"];
+// Broadcast + Fleet exec are two modes of one "Run a command across hosts" screen.
+const RUN_ROUTES: Route[] = ["run", "broadcast", "fleet"];
 
 const groupIcon = (label: string): IconName => {
   const l = label.toLowerCase();
@@ -43,14 +51,24 @@ function TitleIconBtn({
         width: 30,
         height: 30,
         borderRadius: 8,
-        border: `1px solid ${active ? p.accentLine : p.line}`,
-        background: active ? p.accentSoft : p.bg2,
-        color: active ? p.accent : p.txt2,
+        // Neutral mono chrome (matches the IconBtn primitive): active = bg2 fill +
+        // hairline + txt; resting = transparent + txt2. Accent is reserved for the
+        // primary action and active nav tick, never for chrome icon buttons.
+        border: `1px solid ${active ? p.line : "transparent"}`,
+        background: active ? p.bg2 : "transparent",
+        color: active ? p.txt : p.txt2,
         cursor: "pointer",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
+        transition: "background .12s, color .12s",
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.background = p.bg2;
+      }}
+      onMouseLeave={(e) => {
+        if (!active) e.currentTarget.style.background = "transparent";
       }}
     >
       <Icon name={icon} size={15} stroke={1.8} />
@@ -138,12 +156,18 @@ export function WindowControls() {
         transition: "background .12s, color .12s",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = danger ? "#e0556a" : p.bg3;
-        e.currentTarget.style.color = danger ? "#fff" : p.txt;
+        if (danger) {
+          e.currentTarget.style.color = p.red;
+          e.currentTarget.style.boxShadow = `inset 0 0 0 1px ${p.red}`;
+        } else {
+          e.currentTarget.style.background = p.bg3;
+          e.currentTarget.style.color = p.txt;
+        }
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.background = "transparent";
         e.currentTarget.style.color = p.txt2;
+        e.currentTarget.style.boxShadow = "none";
       }}
     >
       {children}
@@ -170,7 +194,6 @@ export function WindowControls() {
 }
 
 export function TitleBar() {
-  const p = usePalette();
   const { t } = useTranslation();
   const { toggleTwin } = useTheme();
   const route = useApp((s) => s.route);
@@ -205,22 +228,8 @@ export function TitleBar() {
         {/* Account avatar — only for a linked cloud account with a handle. A
             local-only instance has no account, so no avatar is shown. */}
         {server?.connected && server.handle && (
-          <span
-            title={server.handle}
-            style={{
-              width: 30,
-              height: 30,
-              borderRadius: "50%",
-              background: `linear-gradient(140deg, ${p.accent}, ${p.purple})`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#fff",
-              fontWeight: 700,
-              fontSize: 12,
-            }}
-          >
-            {server.handle.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 2).toUpperCase() || "?"}
+          <span title={server.handle} style={{ display: "inline-flex" }}>
+            <FlatAvatar name={server.handle} size={30} shape="round" />
           </span>
         )}
       </div>
@@ -246,36 +255,39 @@ function NavItem({
   badge?: string;
 }) {
   const p = usePalette();
+  // Hover fill is React state, not an imperative e.currentTarget.style mutation:
+  // a direct DOM write desyncs from React's style model, so on a theme switch the
+  // reconciler sees background unchanged ("transparent" both renders) and leaves a
+  // stale old-theme fill until the next mouse event. Declaring it keeps it in sync.
+  const [hover, setHover] = useState(false);
   return (
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
         ...BTN_RESET,
         display: "flex",
         alignItems: "center",
-        gap: 9,
+        gap: 8,
         height: 32,
-        // buttons shrink-to-fit, so the div's margins become width math
-        width: sub ? "calc(100% - 30px)" : "calc(100% - 16px)",
-        padding: "0 10px",
-        margin: sub ? "0 8px 0 22px" : "0 8px",
-        borderRadius: 8,
+        // Reference nav: full-bleed row, no rounded pill / side margin. The accent
+        // tick sits flush at the sidebar's left edge; accent is reserved for it.
+        width: "100%",
+        padding: sub ? "0 18px 0 30px" : "0 18px",
+        borderRadius: 0,
         cursor: "pointer",
-        background: active ? p.bg4 : "transparent",
+        // Active = neutral fill + a 2.5px accent edge tick (the reference tick alone
+        // read as almost invisible); hover = the same faint fill, no tick.
+        background: active || hover ? p.bg2 : "transparent",
         color: active ? p.txt : p.txt2,
-        boxShadow: active ? `inset 2px 0 0 ${p.accent}` : "none",
+        boxShadow: active ? `inset 2.5px 0 0 ${p.accent}` : "none",
         fontSize: 13,
         fontWeight: active ? 600 : 500,
       }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = p.bg2;
-      }}
-      onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.background = "transparent";
-      }}
     >
-      {icon && <Icon name={icon} size={15} color={active ? p.accent : p.txt3} stroke={1.7} />}
+      {icon && <Icon name={icon} size={15} color={active ? p.txt : p.txt3} stroke={1.7} />}
       <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </span>
@@ -321,23 +333,55 @@ function NavGroup({
   );
 }
 
+/** Ghost chevron that folds the sidebar to the icon rail. Borderless and quiet so
+ *  it sits beside the vault card without competing; a subtle fill appears on hover. */
+function CollapseToggle({ onClick }: { onClick: () => void }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      title={t("common.minimize")}
+      aria-label={t("common.minimize")}
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        ...BTN_RESET,
+        flexShrink: 0,
+        width: 32,
+        height: 32,
+        borderRadius: 8,
+        border: "1px solid transparent",
+        background: hover ? p.bg1 : "transparent",
+        color: hover ? p.txt2 : p.txt3,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        transition: "background .12s ease, color .12s ease",
+      }}
+    >
+      <Icon name="cl" size={15} />
+    </button>
+  );
+}
+
 function VaultSwitcher() {
   const p = usePalette();
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const vaults = useApp((s) => s.vaults);
   const vaultId = useApp((s) => s.vaultId);
-  const hosts = useApp((s) => s.hosts);
+  const syncStatus = useApp((s) => s.syncStatus);
   const setVault = useApp((s) => s.setVault);
   const menuRef = useRef<HTMLDivElement>(null);
   // outside click / Escape close + ArrowUp/Down over the vault rows
   useMenu(open, () => setOpen(false), menuRef);
   const v = vaults.find((x) => x.vaultId === vaultId) || vaults[0];
   if (!v) return null;
-  // Shared deterministic palette-driven avatar colour (same hue on mobile).
-  const colorFor = (id: string) => vaultColor(p, id);
   return (
-    <div ref={menuRef} style={{ position: "relative", margin: "0 12px 8px" }}>
+    <div ref={menuRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
       <button
         onClick={() => setOpen(!open)}
         aria-haspopup="menu"
@@ -355,22 +399,7 @@ function VaultSwitcher() {
           cursor: "pointer",
         }}
       >
-        <span
-          style={{
-            width: 26,
-            height: 26,
-            borderRadius: 7,
-            background: `linear-gradient(140deg, ${colorFor(v.vaultId)}, ${p.purple})`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#fff",
-            fontWeight: 700,
-            fontSize: 13,
-          }}
-        >
-          {v.name[0]}
-        </span>
+        <FlatAvatar name={v.name} size={26} />
         {/* spans (not divs) — the trigger is a <button>, which only allows phrasing content */}
         <span style={{ flex: 1, minWidth: 0, display: "block" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
@@ -402,7 +431,19 @@ function VaultSwitcher() {
               label={v.syncTarget === "cloud" ? t("vault.cloud") : t("vault.local")}
               size={11}
             />
-            <span>{vaultId === v.vaultId ? t("count.hosts", { count: hosts.length }) : "—"}</span>
+            {v.syncTarget === "cloud" && (
+              <SyncBadge
+                state={syncStatus.syncing ? "syncing" : syncStatus.lastError ? "error" : "synced"}
+                label={
+                  syncStatus.syncing
+                    ? t("shell.syncing")
+                    : syncStatus.lastError
+                      ? t("shell.syncError")
+                      : t("shell.synced")
+                }
+                title={syncStatus.lastError ?? undefined}
+              />
+            )}
           </span>
         </span>
         <Icon
@@ -418,12 +459,12 @@ function VaultSwitcher() {
           aria-label={t("shell.vaults")}
           style={{
             position: "absolute",
-            top: "100%",
+            bottom: "100%",
             left: 0,
             right: 0,
-            marginTop: 6,
+            marginBottom: 6,
             zIndex: 30,
-            background: p.bg3,
+            background: p.bg0,
             border: `1px solid ${p.line2}`,
             borderRadius: 12,
             padding: 6,
@@ -458,22 +499,7 @@ function VaultSwitcher() {
                 if (x.vaultId !== vaultId) e.currentTarget.style.background = "transparent";
               }}
             >
-              <span
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: 6,
-                  background: `linear-gradient(140deg, ${colorFor(x.vaultId)}, ${p.purple})`,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "#fff",
-                  fontWeight: 700,
-                  fontSize: 11,
-                }}
-              >
-                {x.name[0]}
-              </span>
+              <FlatAvatar name={x.name} size={22} />
               <span
                 style={{
                   flex: 1,
@@ -537,8 +563,7 @@ function VaultSwitcher() {
 
 const RAIL_LABEL_KEY: Partial<Record<Route, string>> = {
   hosts: "nav.allHosts",
-  fleet: "nav.fleet",
-  broadcast: "nav.broadcast",
+  run: "nav.run",
   sftp: "nav.sftp",
   terminal: "nav.terminal",
   keys: "nav.keys",
@@ -555,7 +580,6 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
   const setVault = useApp((s) => s.setVault);
   const ctx = useCtx();
   const v = vaults.find((x) => x.vaultId === vaultId) || vaults[0];
-  const colorFor = vaultColor(p, v?.vaultId ?? null);
   const item = (icon: IconName, r: Route, badge?: string) => (
     <button
       key={icon + r}
@@ -569,9 +593,10 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
         borderRadius: 11,
         cursor: "pointer",
         position: "relative",
-        border: `1px solid ${route === r ? p.accentLine : "transparent"}`,
-        background: route === r ? p.accentSoft : "transparent",
+        border: "1px solid transparent",
+        background: "transparent",
         color: route === r ? p.accent : p.txt3,
+        boxShadow: route === r ? `inset 2px 0 0 ${p.accent}` : "none",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -598,7 +623,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
       style={{
         width: 60,
         flexShrink: 0,
-        background: p.bg2,
+        background: p.bg0,
         borderRight: `1px solid ${p.line}`,
         display: "flex",
         flexDirection: "column",
@@ -619,15 +644,14 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
           height: 40,
           borderRadius: 12,
           cursor: "pointer",
-          background: `linear-gradient(140deg, ${colorFor}, ${p.purple})`,
-          border: "none",
-          color: "#fff",
+          background: p.bg3,
+          border: `1px solid ${p.line}`,
+          color: p.txt2,
           fontWeight: 700,
           fontSize: 15,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          boxShadow: `0 6px 16px -6px ${colorFor}`,
         }}
       >
         {v?.name[0] ?? "?"}
@@ -636,8 +660,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
       {item("server", "hosts")}
       {item("terminal", "terminal", p.green)}
       {item("folders", "sftp")}
-      {item("radio", "broadcast")}
-      {item("layers", "fleet")}
+      {item("radio", "run")}
       {item("key", "keys")}
       {item("branch", "tunnels")}
       {item("shieldcheck", "known")}
@@ -726,7 +749,7 @@ export function Sidebar({
         width,
         flexShrink: 0,
         position: "relative",
-        background: p.bg2,
+        background: p.bg0,
         borderRight: `1px solid ${p.line}`,
         display: "flex",
         flexDirection: "column",
@@ -734,7 +757,6 @@ export function Sidebar({
       }}
     >
       <ResizeHandle side="right" onDrag={onResize} />
-      <VaultSwitcher />
       <div style={{ overflow: "hidden", flex: 1, display: "flex", flexDirection: "column" }}>
         <NavGroup
           label={t("shell.groupsHeader")}
@@ -791,16 +813,16 @@ export function Sidebar({
             }
           />
           <NavItem icon="folders" label={t("nav.sftp")} active={route === "sftp"} onClick={() => ctx.go("sftp")} />
-          <NavItem icon="radio" label={t("nav.broadcast")} active={route === "broadcast"} onClick={() => ctx.go("broadcast")} />
-          <NavItem icon="layers" label={t("nav.fleetExec")} active={route === "fleet"} onClick={() => ctx.go("fleet")} />
+          <NavItem icon="radio" label={t("nav.run")} active={RUN_ROUTES.includes(route)} onClick={() => ctx.go("run")} />
         </NavGroup>
-        <NavGroup label={t("shell.secretsHeader")}>
-          <NavItem icon="key" label={t("nav.keys")} count={keysN} active={route === "keys"} onClick={() => ctx.go("keys")} />
-          <NavItem icon="lock" label={t("nav.passwords")} count={passN} active={route === "passwords"} onClick={() => ctx.go("passwords")} />
-          <NavItem icon="fingerprint" label={t("nav.identities")} count={identN} active={route === "identities"} onClick={() => ctx.go("identities")} />
-          <NavItem icon="note" label={t("nav.notes")} count={notesN} active={route === "notes"} onClick={() => ctx.go("notes")} />
-        </NavGroup>
-        <NavGroup label={t("shell.networkHeader")}>
+        <NavGroup label={t("shell.vaultNetworkHeader")}>
+          <NavItem
+            icon="key"
+            label={t("nav.secrets")}
+            count={keysN + passN + identN + notesN}
+            active={VAULT_ROUTES.includes(route)}
+            onClick={() => ctx.go("keys")}
+          />
           <NavItem icon="branch" label={t("nav.tunnels")} active={route === "tunnels"} onClick={() => ctx.go("tunnels")} />
           <NavItem
             icon="shieldcheck"
@@ -813,72 +835,16 @@ export function Sidebar({
       </div>
       <div
         style={{
-          margin: "8px 12px 0",
-          paddingTop: 10,
+          marginTop: 8,
           borderTop: `1px solid ${p.line}`,
+          padding: "10px 12px 0",
           display: "flex",
           alignItems: "center",
-          gap: 8,
+          gap: 6,
         }}
       >
-        <span
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 8,
-            background: p.bg3,
-            border: `1px solid ${p.line}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: p.green,
-            flexShrink: 0,
-          }}
-        >
-          <Icon name="unlock" size={14} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600 }}>{t("shell.localInstance")}</div>
-          <div style={{ fontSize: 10.5, color: p.txt3 }}>{t("shell.unlocked")}</div>
-        </div>
-        <button
-          title={t("shell.lockShort")}
-          aria-label={t("shell.lockShort")}
-          onClick={ctx.onLock}
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 8,
-            border: `1px solid ${p.line}`,
-            background: p.bg1,
-            color: p.txt2,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="lock" size={14} />
-        </button>
-        <button
-          title={t("common.minimize")}
-          aria-label={t("common.minimize")}
-          onClick={onToggleCollapse}
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 8,
-            border: `1px solid ${p.line}`,
-            background: p.bg1,
-            color: p.txt2,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="cl" size={14} />
-        </button>
+        <VaultSwitcher />
+        <CollapseToggle onClick={onToggleCollapse} />
       </div>
     </div>
   );

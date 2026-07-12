@@ -35,8 +35,9 @@ mod error;
 mod sftp;
 
 pub use client::{
-    canonical_host_key, set_keepalive_secs, trust_host_key, Auth, CommandOutput, ConnectOptions,
-    ExecHandle, ExecSink, ForwardGuard, OutputSink, SftpSession, ShellHandle, SshClient,
+    canonical_host_key, fingerprint_openssh, set_keepalive_secs, trust_host_key, Auth,
+    CommandOutput, ConnectOptions, ExecHandle, ExecSink, ForwardGuard, OutputSink, SftpSession,
+    ShellHandle, SshClient,
 };
 pub use config::{HostSettings, SshConfig};
 pub use error::TransportError;

@@ -5,9 +5,10 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { Icon, AuthBadge, NO_AUTOCORRECT, Tag, Spinner, type IconName } from "@/components/primitives";
+import { Icon, NO_AUTOCORRECT, Spinner, StatusDot, Btn, type IconName } from "@/components/primitives";
+import { FlatAvatar, MetaChip } from "@/components/mono";
 import { BottomSheet } from "@/components/Modal";
-import { MONO, UI, vaultColor } from "@/theme/tokens";
+import { MONO, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { useKeyboardInset, useLandscape } from "@/store/responsive";
 import { useTranslation, tDyn } from "@/i18n";
@@ -69,7 +70,6 @@ function MTopBar({
   const p = usePalette();
   const { t } = useTranslation();
   const name = vault?.name ?? t("mobile.vault");
-  const color = vaultColor(p, vault?.vaultId ?? null);
   return (
     <div style={{ flexShrink: 0, padding: "4px 16px 12px", display: "flex", alignItems: "center", gap: 10 }}>
       <button
@@ -86,23 +86,7 @@ function MTopBar({
           cursor: "pointer",
         }}
       >
-        <span
-          style={{
-            width: 26,
-            height: 26,
-            borderRadius: 8,
-            background: `linear-gradient(140deg, ${color}, ${p.purple})`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#fff",
-            fontWeight: 700,
-            fontSize: 13,
-            flexShrink: 0,
-          }}
-        >
-          {name[0]}
-        </span>
+        <FlatAvatar name={name} size={26} shape="square" />
         <span style={{ fontSize: 15, fontWeight: 700, color: p.txt, lineHeight: 1 }}>{name}</span>
         <Icon name="cd" size={15} color={p.txt3} />
       </button>
@@ -142,6 +126,8 @@ function MHostCard({
   const p = usePalette();
   const { t } = useTranslation();
   const authKind = profileAuthKind(h.auth);
+  const authWarn = authKind === "password" || authKind === "ask";
+  const authLabel = tDyn(AUTH_LABEL_KEY[authKind]);
   const jump = h.jumps.length > 0;
   return (
     <button
@@ -152,103 +138,76 @@ function MHostCard({
         display: "flex",
         alignItems: "center",
         gap: 13,
-        padding: 14,
-        borderRadius: 16,
-        background: p.bg1,
-        border: `1px solid ${p.line}`,
+        padding: 22,
+        borderRadius: 18,
+        background: p.bg0,
+        border: "1px solid transparent",
+        boxShadow: p.shadow,
         cursor: "pointer",
       }}
     >
-      <span
-        style={{
-          width: 44,
-          height: 44,
-          borderRadius: 12,
-          background: p.bg3,
-          border: `1px solid ${p.line}`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          position: "relative",
-          flexShrink: 0,
-        }}
-      >
-        <Icon name="server" size={20} color={p.txt2} stroke={1.7} />
-        {active && (
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* L1 — 7px status dot + name (dot keys off a live session; the paired
+            word on L3 carries the meaning so colour is never the sole carrier) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <span
             style={{
-              position: "absolute",
-              bottom: -2,
-              right: -2,
-              width: 13,
-              height: 13,
+              width: 7,
+              height: 7,
               borderRadius: "50%",
-              background: p.green,
-              border: `2.5px solid ${p.bg1}`,
-              boxShadow: `0 0 6px ${p.green}`,
-              animation: "uhPulse 1.6s ease-in-out infinite",
+              flexShrink: 0,
+              background: active ? p.green : p.line2,
             }}
           />
-        )}
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>{h.label}</span>
-          {jump && <Icon name="branch" size={13} color={p.purple} stroke={1.8} />}
+          <span
+            style={{
+              fontSize: 16,
+              fontWeight: 700,
+              letterSpacing: "-0.2px",
+              color: p.txt,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              minWidth: 0,
+            }}
+          >
+            {h.label}
+          </span>
+          {jump && <Icon name="branch" size={13} color={p.txt3} stroke={1.8} />}
         </div>
+        {/* L2 — address (mono, txt2) */}
         <div
           style={{
             fontFamily: MONO,
-            fontSize: 12,
-            color: p.txt3,
+            fontSize: 11.5,
+            color: p.txt2,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
+            marginTop: 6,
           }}
         >
           {h.user}@{h.host}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6 }}>
-          {active ? (
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                fontFamily: MONO,
-                fontSize: 11.5,
-                color: p.green,
-                whiteSpace: "nowrap",
-                flexShrink: 0,
-              }}
-            >
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: p.green, boxShadow: `0 0 6px ${p.green}` }} />
-              {t("mobile.session")}
-            </span>
-          ) : (
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                fontFamily: MONO,
-                fontSize: 11.5,
-                color: p.txt3,
-                whiteSpace: "nowrap",
-                flexShrink: 0,
-              }}
-            >
-              <Icon name="clock" size={11} color={p.txt3} />
-              {`:${h.port}`}
-            </span>
+        {/* L3 — status · auth (one mono line; colour only on meaning) */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            fontFamily: MONO,
+            fontSize: 11.5,
+            color: p.txt3,
+            marginTop: 14,
+          }}
+        >
+          {active && (
+            <>
+              <span style={{ color: p.green }}>{t("hosts.session")}</span>
+              <span style={{ opacity: 0.4 }}>·</span>
+            </>
           )}
-          <AuthBadge auth={authKind} jump={false} />
-          <div style={{ flex: 1 }} />
-          {h.tags.slice(0, 1).map((t) => (
-            <Tag key={t} mono>
-              #{t}
-            </Tag>
-          ))}
+          <span style={{ color: authWarn ? p.amber : p.txt3 }}>{authLabel}</span>
         </div>
       </div>
       <Icon name="cd" size={17} color={p.txt3} />
@@ -273,7 +232,6 @@ function MVaultSheet({ onClose }: { onClose: () => void }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {vaults.map((x) => {
           const on = x.vaultId === vaultId;
-          const color = vaultColor(p, x.vaultId);
           return (
             <button
               key={x.vaultId}
@@ -292,22 +250,7 @@ function MVaultSheet({ onClose }: { onClose: () => void }) {
                 cursor: "pointer",
               }}
             >
-              <span
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  background: `linear-gradient(140deg, ${color}, ${p.purple})`,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "#fff",
-                  fontWeight: 700,
-                  fontSize: 15,
-                }}
-              >
-                {x.name[0]}
-              </span>
+              <FlatAvatar name={x.name} size={36} shape="square" />
               <div style={{ flex: 1, textAlign: "left" }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>{x.name}</div>
                 <div style={{ fontSize: 12.5, color: p.txt3 }}>{on ? t("count.hosts", { count: hosts.length }) : t("mobile.vaultLower")}</div>
@@ -318,31 +261,19 @@ function MVaultSheet({ onClose }: { onClose: () => void }) {
         })}
         {vaults.length === 0 && <div style={{ fontSize: 13, color: p.txt3, padding: 8 }}>{t("mobile.noVaults")}</div>}
       </div>
-      <button
+      <Btn
+        variant="outline"
+        size="lg"
+        full
+        icon="plus"
         onClick={() => {
           ctx.openModal({ kind: "vault" });
           onClose();
         }}
-        style={{
-          marginTop: 10,
-          width: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-          height: 48,
-          borderRadius: 14,
-          background: "transparent",
-          border: `1px dashed ${p.line2}`,
-          color: p.accent,
-          cursor: "pointer",
-          fontSize: 15,
-          fontWeight: 700,
-        }}
+        style={{ marginTop: 10 }}
       >
-        <Icon name="plus" size={18} />
         {t("vault.create")}
-      </button>
+      </Btn>
     </BottomSheet>
   );
 }
@@ -515,7 +446,7 @@ function MHosts({
           {query && (
             <button
               onClick={() => setQuery("")}
-              aria-label="Clear"
+              aria-label={t("common.clear")}
               style={{
                 width: 28,
                 height: 28,
@@ -567,9 +498,9 @@ function MHosts({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            width: 38,
-            height: 38,
-            borderRadius: 20,
+            width: 44,
+            height: 44,
+            borderRadius: 12,
             cursor: "pointer",
             border: `1px solid ${p.line}`,
             background: p.bg2,
@@ -589,18 +520,20 @@ function MHosts({
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 6,
+                minHeight: 44,
                 fontFamily: UI,
                 fontSize: 13,
-                fontWeight: 600,
+                fontWeight: on ? 700 : 600,
                 cursor: "pointer",
-                padding: "8px 13px",
-                borderRadius: 20,
-                border: `1px solid ${on ? p.accentLine : p.line}`,
-                background: on ? p.accentSoft : "transparent",
-                color: on ? p.accent : p.txt2,
+                padding: "0 4px",
+                border: "none",
+                borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
+                borderRadius: 0,
+                background: "transparent",
+                color: on ? p.txt : p.txt3,
               }}
             >
-              <Icon name="folder" size={13} color={on ? p.accent : p.txt3} />
+              <Icon name="folder" size={13} color={on ? p.txt2 : p.txt3} />
               {g.label}
             </button>
           );
@@ -617,15 +550,19 @@ function MHosts({
               onClick={() => setHostFilter(tag)}
               style={{
                 flexShrink: 0,
+                display: "inline-flex",
+                alignItems: "center",
+                minHeight: 44,
                 fontFamily: isAll ? UI : MONO,
                 fontSize: 13,
-                fontWeight: 600,
+                fontWeight: on ? 700 : 600,
                 cursor: "pointer",
-                padding: "8px 14px",
-                borderRadius: 20,
-                border: `1px solid ${on ? p.accentLine : p.line}`,
-                background: on ? p.accentSoft : "transparent",
-                color: on ? p.accent : p.txt2,
+                padding: "0 4px",
+                border: "none",
+                borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
+                borderRadius: 0,
+                background: "transparent",
+                color: on ? p.txt : p.txt3,
               }}
             >
               {isAll ? t("common.all") : "#" + tag}
@@ -637,15 +574,19 @@ function MHosts({
             onClick={() => setHostFilter("__untagged")}
             style={{
               flexShrink: 0,
+              display: "inline-flex",
+              alignItems: "center",
+              minHeight: 44,
               fontFamily: UI,
               fontSize: 13,
-              fontWeight: 600,
+              fontWeight: hostFilter === "__untagged" ? 700 : 600,
               cursor: "pointer",
-              padding: "8px 14px",
-              borderRadius: 20,
-              border: `1px solid ${hostFilter === "__untagged" ? p.accentLine : p.line}`,
-              background: hostFilter === "__untagged" ? p.accentSoft : "transparent",
-              color: hostFilter === "__untagged" ? p.accent : p.txt3,
+              padding: "0 4px",
+              border: "none",
+              borderBottom: `2px solid ${hostFilter === "__untagged" ? p.accent : "transparent"}`,
+              borderRadius: 0,
+              background: "transparent",
+              color: hostFilter === "__untagged" ? p.txt : p.txt3,
             }}
           >
             {t("mobile.untagged")}
@@ -720,15 +661,15 @@ function MHosts({
           bottom: 20,
           width: 56,
           height: 56,
-          borderRadius: 18,
-          background: `linear-gradient(140deg, ${p.accent}, ${p.accent2})`,
+          borderRadius: 12,
+          background: p.accent,
           border: "none",
-          color: "#fff",
+          color: p.accentInk ?? "#fff",
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          boxShadow: `0 10px 26px -8px ${p.accent}`,
+          boxShadow: "0 8px 22px -12px rgba(0,0,0,0.6)",
           zIndex: 5,
         }}
       >
@@ -795,6 +736,17 @@ function MHostDetail({
   const ctx = useCtx();
   const authKind = profileAuthKind(profile.auth);
   const jump = profile.jumps[0];
+  // Real known-host state for this host — quiet "Key verified" + short fingerprint
+  // when a key is pinned, honest "not yet connected (TOFU)" otherwise. No fabrication.
+  const knownHosts = useApp((s) => s.knownHosts);
+  const known = knownHosts.find((k) => k.host === profile.host && k.port === profile.port);
+  const knownFp = useMemo(() => {
+    if (!known) return "";
+    const parts = known.key.trim().split(/\s+/);
+    const algo = parts[0] ?? "";
+    const blob = parts.slice(1).join("");
+    return blob ? `${algo} …${blob.slice(-16)}` : algo;
+  }, [known]);
 
   const Row = ({ label, mono, children }: { label: string; mono?: boolean; children: React.ReactNode }) => (
     <div style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "13px 0", borderBottom: `1px solid ${p.line}` }}>
@@ -873,9 +825,6 @@ function MHostDetail({
             style={{
               width: 72,
               height: 72,
-              borderRadius: 20,
-              background: p.bg2,
-              border: `1px solid ${p.line}`,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -890,15 +839,14 @@ function MHostDetail({
                   position: "absolute",
                   bottom: 0,
                   right: 0,
-                  width: 18,
-                  height: 18,
+                  background: p.bg0,
                   borderRadius: "50%",
-                  background: p.green,
-                  border: `3px solid ${p.bg0}`,
-                  boxShadow: `0 0 8px ${p.green}`,
-                  animation: "uhPulse 1.6s ease-in-out infinite",
+                  padding: 3,
+                  display: "flex",
                 }}
-              />
+              >
+                <StatusDot status="online" size={12} srLabel={t("mobile.sessionNow")} />
+              </span>
             )}
           </span>
           <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5, color: p.txt, textAlign: "center", wordBreak: "break-word" }}>{profile.label}</div>
@@ -913,10 +861,10 @@ function MHostDetail({
             style={{
               flex: 1,
               height: 50,
-              borderRadius: 14,
-              background: `linear-gradient(140deg, ${p.accent}, ${p.accent2})`,
+              borderRadius: 12,
+              background: p.accent,
               border: "none",
-              color: "#fff",
+              color: p.accentInk ?? "#fff",
               cursor: "pointer",
               fontSize: 16,
               fontWeight: 700,
@@ -924,7 +872,6 @@ function MHostDetail({
               alignItems: "center",
               justifyContent: "center",
               gap: 8,
-              boxShadow: `0 8px 20px -8px ${p.accent}`,
             }}
           >
             <Icon name="terminal" size={19} />
@@ -936,7 +883,7 @@ function MHostDetail({
             style={{
               width: 50,
               height: 50,
-              borderRadius: 14,
+              borderRadius: 12,
               background: p.bg2,
               border: `1px solid ${p.line2}`,
               color: p.txt2,
@@ -950,7 +897,7 @@ function MHostDetail({
           </button>
         </div>
 
-        <div style={{ borderRadius: 16, background: p.bg1, border: `1px solid ${p.line}`, padding: "2px 16px" }}>
+        <div>
           <Row label={t("mobile.detail.host")} mono>
             {profile.host}
           </Row>
@@ -960,20 +907,14 @@ function MHostDetail({
           <Row label={t("mobile.detail.user")} mono>
             {profile.user}
           </Row>
-          <Row label="Auth">
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              {authLabel}
-              <AuthBadge auth={authKind} />
-            </span>
+          <Row label={t("mobile.detail.auth")}>
+            <span style={{ color: authKind === "password" || authKind === "ask" ? p.amber : p.txt }}>{authLabel}</span>
           </Row>
           {jump && (
-            <Row label="ProxyJump" mono>
+            <Row label={t("mobile.detail.proxyJump")} mono>
               {jump.user}@{jump.host}
             </Row>
           )}
-          <Row label={t("mobile.detail.session")}>
-            {active ? <span style={{ color: p.green }}>{t("mobile.sessionNow")}</span> : <span style={{ color: p.txt3 }}>{t("mobile.sessionNone")}</span>}
-          </Row>
           {profile.tags.length > 0 && (
             <Row label={t("mobile.detail.tags")} mono>
               {profile.tags.map((t) => `#${t}`).join(" ")}
@@ -981,11 +922,33 @@ function MHostDetail({
           )}
         </div>
 
-        <div style={{ marginTop: 14, padding: 14, borderRadius: 14, background: p.bg1, border: `1px solid ${p.line}` }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: p.txt3 }}>
-            <Icon name="shieldcheck" size={14} color={p.green} />
-            {t("mobile.tofuNote")}
-          </div>
+        <div style={{ padding: "13px 0" }}>
+          {known ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+              <MetaChip icon="shieldcheck" tone="good">
+                {t("mobile.keyVerified")}
+              </MetaChip>
+              <span
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontFamily: MONO,
+                  fontSize: 12,
+                  color: p.txt3,
+                  textAlign: "right",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {knownFp}
+              </span>
+            </div>
+          ) : (
+            <MetaChip icon="shield" tone="neutral">
+              {t("mobile.notConnectedTofu")}
+            </MetaChip>
+          )}
         </div>
       </div>
     </>
@@ -1071,10 +1034,10 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
             gap: 8,
             height: 46,
             padding: "0 20px",
-            borderRadius: 14,
-            background: `linear-gradient(140deg, ${p.accent}, ${p.accent2})`,
+            borderRadius: 12,
+            background: p.accent,
             border: "none",
-            color: "#fff",
+            color: p.accentInk ?? "#fff",
             fontSize: 15,
             fontWeight: 700,
             cursor: "pointer",
@@ -1113,10 +1076,11 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
                   gap: 7,
                   padding: "6px 10px",
                   minHeight: 36,
-                  borderRadius: 10,
-                  border: `1px solid ${on ? p.accentLine : p.line}`,
-                  background: on ? p.accentSoft : p.bg2,
-                  color: on ? p.accent : p.txt2,
+                  border: "none",
+                  borderBottom: `2px solid ${on ? p.txt2 : "transparent"}`,
+                  borderRadius: 0,
+                  background: "transparent",
+                  color: on ? p.txt : p.txt3,
                   cursor: "pointer",
                   fontSize: 12.5,
                   fontFamily: MONO,
@@ -1203,8 +1167,8 @@ function MMore({ go }: { go: (t: Exclude<Frame["type"], "host">) => void }) {
       <div style={{ flexShrink: 0, padding: "4px 16px 14px" }}>
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7, color: p.txt }}>{t("nav.more")}</h1>
       </div>
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 16px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
-        {MORE_ITEMS.map((it) => (
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 16px 16px", display: "flex", flexDirection: "column" }}>
+        {MORE_ITEMS.map((it, i) => (
           <button
             key={it.type}
             onClick={() => go(it.type)}
@@ -1214,10 +1178,10 @@ function MMore({ go }: { go: (t: Exclude<Frame["type"], "host">) => void }) {
               display: "flex",
               alignItems: "center",
               gap: 13,
-              padding: 15,
-              borderRadius: 15,
-              background: p.bg1,
-              border: `1px solid ${p.line}`,
+              padding: "15px 4px",
+              background: "transparent",
+              border: "none",
+              borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
               cursor: "pointer",
             }}
           >
@@ -1226,15 +1190,15 @@ function MMore({ go }: { go: (t: Exclude<Frame["type"], "host">) => void }) {
                 width: 42,
                 height: 42,
                 borderRadius: 12,
-                background: p.accentSoft,
-                border: `1px solid ${p.accentLine}`,
+                background: p.bg3,
+                border: `1px solid ${p.line}`,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 flexShrink: 0,
               }}
             >
-              <Icon name={it.icon} size={20} color={p.accent} />
+              <Icon name={it.icon} size={20} color={p.txt2} />
             </span>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>{tDyn(it.labelKey)}</div>
@@ -1252,10 +1216,10 @@ function MMore({ go }: { go: (t: Exclude<Frame["type"], "host">) => void }) {
             display: "flex",
             alignItems: "center",
             gap: 13,
-            padding: 15,
-            borderRadius: 15,
-            background: p.bg1,
-            border: `1px solid ${p.line}`,
+            padding: "15px 4px",
+            background: "transparent",
+            border: "none",
+            borderTop: `1px solid ${p.line}`,
             cursor: "pointer",
           }}
         >
@@ -1264,15 +1228,15 @@ function MMore({ go }: { go: (t: Exclude<Frame["type"], "host">) => void }) {
               width: 42,
               height: 42,
               borderRadius: 12,
-              background: p.accentSoft,
-              border: `1px solid ${p.accentLine}`,
+              background: p.bg3,
+              border: `1px solid ${p.line}`,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               flexShrink: 0,
             }}
           >
-            <Icon name="download" size={20} color={p.accent} />
+            <Icon name="download" size={20} color={p.txt2} />
           </span>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>{t("hosts.importSshConfig")}</div>

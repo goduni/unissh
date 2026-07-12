@@ -18,50 +18,6 @@ import { logWarn } from "@/bridge/log";
 import { apiErrorMessage, type PairingPayload } from "@/bridge/types";
 import { useTranslation, Trans } from "@/i18n";
 
-function DeskBg() {
-  const p = usePalette();
-  return (
-    <>
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          backgroundImage: `linear-gradient(${p.line} 1px, transparent 1px), linear-gradient(90deg, ${p.line} 1px, transparent 1px)`,
-          backgroundSize: "34px 34px",
-          opacity: 0.5,
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          top: -160,
-          left: "50%",
-          transform: "translateX(-50%)",
-          width: 640,
-          height: 380,
-          borderRadius: "50%",
-          background: p.accent,
-          opacity: 0.14,
-          filter: "blur(110px)",
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          bottom: -180,
-          right: -60,
-          width: 420,
-          height: 320,
-          borderRadius: "50%",
-          background: p.purple,
-          opacity: 0.1,
-          filter: "blur(100px)",
-        }}
-      />
-    </>
-  );
-}
-
 function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number }) {
   const p = usePalette();
   const isMobile = useIsMobile();
@@ -97,7 +53,6 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
           background: p.name === "dark" ? "rgba(6,7,11,0.6)" : "rgba(255,255,255,0.5)",
         }}
       />
-      {!isMobile && <DeskBg />}
       <div
         className="uh-view"
         style={{
@@ -113,7 +68,7 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
           overflow: "auto",
           background: p.bg1,
           border: `1px solid ${p.line2}`,
-          borderRadius: 20,
+          borderRadius: 18,
           padding: isMobile ? 20 : 30,
           boxShadow: p.shadow,
         }}
@@ -127,7 +82,11 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
 function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
   const p = usePalette();
   const { t } = useTranslation();
-  const steps = [t("onboarding.step.instance"), t("onboarding.step.masterPassword"), "Emergency Kit"];
+  const steps = [
+    t("onboarding.step.instance"),
+    t("onboarding.step.masterPassword"),
+    t("onboarding.step.emergencyKit"),
+  ];
   return (
     <div
       style={{
@@ -153,9 +112,9 @@ function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                background: i < step ? p.accent : i === step ? p.accentSoft : p.bg3,
-                color: i < step ? "#fff" : i === step ? p.accent : p.txt3,
-                border: `1px solid ${i <= step ? p.accentLine : p.line}`,
+                background: i === step ? p.bg4 : p.bg3,
+                color: i < step ? p.txt2 : i === step ? p.txt : p.txt3,
+                border: `1px solid ${i === step ? p.line2 : p.line}`,
               }}
             >
               {i < step ? "✓" : i + 1}
@@ -164,7 +123,7 @@ function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
               style={{
                 fontSize: isMobile ? 12 : 13,
                 fontWeight: i === step ? 700 : 500,
-                color: i === step ? p.txt : p.txt3,
+                color: i === step ? p.txt : p.txt2,
               }}
             >
               {s}
@@ -329,7 +288,7 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
               )}
             </div>
           ) : (
-            <div style={{ fontSize: 12.5, color: p.txt3, padding: "6px 2px" }}>
+            <div style={{ fontSize: 12.5, color: p.txt2, padding: "6px 2px" }}>
               {t("onboarding.noPasswordHint")}
             </div>
           )}
@@ -341,19 +300,18 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
           alignItems: "flex-start",
           gap: 9,
           margin: "20px 0",
-          padding: 12,
-          borderRadius: 11,
-          background: p.accentSoft,
-          border: `1px solid ${p.accentLine}`,
+          padding: "14px 0",
+          borderTop: `1px solid ${p.line}`,
+          borderBottom: `1px solid ${p.line}`,
         }}
       >
-        <Icon name="shieldcheck" size={17} color={p.accent} style={{ marginTop: 1 }} />
+        <Icon name="shieldcheck" size={17} color={p.txt3} style={{ marginTop: 1 }} />
         <span style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5 }}>
           <Trans
             i18nKey="onboarding.secretKeyNotice"
             components={{
               b: <b style={{ color: p.txt }} />,
-              once: <b style={{ color: p.accent }} />,
+              once: <b style={{ color: p.txt }} />,
             }}
           />
         </span>
@@ -366,7 +324,7 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
         disabled={!canCreate}
         style={isMobile ? { minHeight: 48 } : undefined}
       >
-        {busy ? <Spinner size={16} color="#fff" /> : t("onboarding.generateSecretKey")}
+        {busy ? <Spinner size={16} color={p.accentInk} /> : t("onboarding.generateSecretKey")}
       </Btn>
       <button
         onClick={() => useApp.getState().setOverlay("join")}
@@ -491,8 +449,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
               padding: "16px 18px 18px",
               borderRadius: 14,
               background: p.bg0,
-              border: `1px solid ${p.accentLine}`,
-              boxShadow: `0 0 0 4px ${p.accentSoft}`,
+              border: `1px solid ${p.line2}`,
               marginBottom: 14,
             }}
           >
@@ -500,7 +457,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
               style={{
                 fontFamily: MONO,
                 fontSize: 10.5,
-                color: p.txt3,
+                color: p.txt2,
                 letterSpacing: 1,
                 marginBottom: 12,
               }}
@@ -708,14 +665,14 @@ function Unlock() {
             height: 60,
             margin: "0 auto 18px",
             borderRadius: 18,
-            background: `linear-gradient(140deg, ${p.accent}, ${p.purple})`,
+            background: p.bg3,
+            border: `1px solid ${p.line2}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            boxShadow: `0 12px 32px -10px ${p.accent}`,
           }}
         >
-          <Icon name="lock" size={26} color="#fff" stroke={2} />
+          <Icon name="lock" size={26} color={p.txt2} stroke={2} />
         </div>
         <h1 style={{ margin: "0 0 4px", fontSize: 21, fontWeight: 800, letterSpacing: -0.4 }}>
           {t("onboarding.locked")}
@@ -778,7 +735,7 @@ function Unlock() {
             disabled={busy}
             style={isMobile ? { minHeight: 48 } : undefined}
           >
-            {busy ? <Spinner size={16} color="#fff" /> : t("onboarding.unlock")}
+            {busy ? <Spinner size={16} color={p.accentInk} /> : t("onboarding.unlock")}
           </Btn>
         </div>
       </form>
@@ -969,7 +926,7 @@ function Retry() {
         disabled={busy}
         style={isMobile ? { minHeight: 48 } : undefined}
       >
-        {busy ? <Spinner size={16} color="#fff" /> : t("entry.retry.retry")}
+        {busy ? <Spinner size={16} color={p.accentInk} /> : t("entry.retry.retry")}
       </Btn>
     </Modal>
   );
@@ -1087,34 +1044,11 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
             {t("onboarding.masterPassword")}{" "}
             <span style={{ color: p.txt3, fontWeight: 500 }}>· {t("onboarding.optional")}</span>
           </span>
-          <button
-            onClick={() => setUsePwd(!usePwd)}
-            style={{ cursor: "pointer", background: "none", border: "none", padding: 0 }}
-          >
-            <span
-              style={{
-                width: 34,
-                height: 20,
-                borderRadius: 11,
-                background: usePwd ? p.accent : p.bg4,
-                position: "relative",
-                display: "block",
-              }}
-            >
-              <span
-                style={{
-                  position: "absolute",
-                  top: 2,
-                  left: usePwd ? 16 : 2,
-                  width: 16,
-                  height: 16,
-                  borderRadius: "50%",
-                  background: "#fff",
-                  transition: "left .15s",
-                }}
-              />
-            </span>
-          </button>
+          <Toggle
+            checked={usePwd}
+            onChange={setUsePwd}
+            aria-label={t("onboarding.masterPassword")}
+          />
         </div>
         {usePwd ? (
           <Field>
@@ -1130,7 +1064,7 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
             />
           </Field>
         ) : (
-          <div style={{ fontSize: 12.5, color: p.txt3, padding: "6px 2px" }}>
+          <div style={{ fontSize: 12.5, color: p.txt2, padding: "6px 2px" }}>
             {t("onboarding.noPasswordHint")}
           </div>
         )}
@@ -1141,13 +1075,12 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
           alignItems: "flex-start",
           gap: 9,
           margin: "18px 0",
-          padding: 12,
-          borderRadius: 11,
-          background: p.accentSoft,
-          border: `1px solid ${p.accentLine}`,
+          padding: "14px 0",
+          borderTop: `1px solid ${p.line}`,
+          borderBottom: `1px solid ${p.line}`,
         }}
       >
-        <Icon name="link" size={17} color={p.accent} style={{ marginTop: 1 }} />
+        <Icon name="link" size={17} color={p.txt3} style={{ marginTop: 1 }} />
         <span style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5 }}>
           {busy ? t("entry.join.waiting") : t("entry.join.hint")}
         </span>
@@ -1160,7 +1093,7 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
         disabled={busy}
         style={isMobile ? { minHeight: 48 } : undefined}
       >
-        {busy ? <Spinner size={16} color="#fff" /> : t("entry.join.connect")}
+        {busy ? <Spinner size={16} color={p.accentInk} /> : t("entry.join.connect")}
       </Btn>
       <button
         onClick={onBack}
