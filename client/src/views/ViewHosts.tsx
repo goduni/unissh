@@ -188,7 +188,9 @@ function HostCard({
           />
           <Btn
             size="sm"
+            variant="outline"
             icon="terminal"
+            style={{ border: `1px solid ${p.accent}`, color: p.accent, fontWeight: 700 }}
             onClick={(e) => {
               e.stopPropagation();
               onConnect();
@@ -319,8 +321,9 @@ function HostRow({
         {show ? (
           <Btn
             size="sm"
-            variant="soft"
+            variant="outline"
             icon="terminal"
+            style={{ border: `1px solid ${p.accent}`, color: p.accent, fontWeight: 700 }}
             onClick={(e) => {
               e.stopPropagation();
               onConnect();
@@ -536,7 +539,12 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <Btn icon="terminal" style={{ flex: 1 }} onClick={() => ctx.connect(h)}>
+        <Btn
+          variant="outline"
+          icon="terminal"
+          style={{ flex: 1, border: `1px solid ${p.accent}`, color: p.accent, fontWeight: 700 }}
+          onClick={() => ctx.connect(h)}
+        >
           {t("hosts.connect")}
         </Btn>
         <Btn
