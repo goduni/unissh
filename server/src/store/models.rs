@@ -343,3 +343,45 @@ pub struct DirectoryRow {
     pub x25519_pub: Vec<u8>,
     pub status: String,
 }
+
+// ---- v2 (redesign/server-v2): invites (intents inside) + pending_actions ----
+
+/// A v2 invite: one join mechanism with space + selective-vault intents stored as
+/// JSON text; only `sha256(token)` is stored (never the token itself).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct InviteV2Row {
+    pub invite_id: Vec<u8>,
+    pub token_hash: Vec<u8>,
+    pub space_intents: String,
+    pub vault_intents: String,
+    pub expires_at: i64,
+    pub state: String,
+    pub redeemed_by: Option<Vec<u8>>,
+    pub redeemed_at: Option<i64>,
+    pub created_by: Option<Vec<u8>>,
+    pub created_at: i64,
+}
+
+/// A pending crypto action (vault-admin to-do): grant/revoke fulfilment the server
+/// marks done itself by observing published manifests/grants.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PendingActionRow {
+    pub action_id: Vec<u8>,
+    pub kind: String,
+    pub vault_id: Vec<u8>,
+    pub account_id: Vec<u8>,
+    pub crypto_role: Option<i64>,
+    pub source: String,
+    pub proof: Option<Vec<u8>>,
+    pub state: String,
+    pub created_at: i64,
+    pub done_at: Option<i64>,
+    pub done_epoch: Option<i64>,
+}
+
+/// Tiny helper row: an account's ed25519 pubkey (for ed → account_id resolution
+/// during done-marking).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct EdOnly {
+    pub ed25519_pub: Vec<u8>,
+}
