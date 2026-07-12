@@ -28,19 +28,19 @@ export function Card({
 } & React.HTMLAttributes<HTMLDivElement>) {
   const p = usePalette();
   const compact = useTheme().density === "compact";
-  // Reference values: comfortable = borderless + soft shadow, radius 18, pad 22;
-  // compact = 1px hairline, radius 11, pad 13. Selected keeps the base chrome and
-  // adds an inset 1px line2 ring (no border swap → no layout shift on select).
-  const ring = `inset 0 0 0 1px ${p.line2}`;
+  // Flat card: a 1px hairline, NO drop shadow. A soft shadow reads muddy/grey and
+  // turns into visual noise across a grid of dozens of cards. Density changes size
+  // only (comfortable 16/18, compact 11/13). Selected = faint fill + a slightly
+  // stronger border (no shadow ring, no layout shift).
   return (
     <div
       onClick={onClick}
       style={{
         background: active ? p.bg2 : p.bg0,
-        border: `1px solid ${compact ? p.line : "transparent"}`,
-        borderRadius: compact ? 11 : 18,
-        padding: compact ? 13 : 22,
-        boxShadow: compact ? (active ? ring : "none") : active ? `${p.shadow}, ${ring}` : p.shadow,
+        border: `1px solid ${active ? p.line2 : p.line}`,
+        borderRadius: compact ? 11 : 16,
+        padding: compact ? 13 : 18,
+        boxShadow: "none",
         cursor: onClick ? "pointer" : undefined,
         ...style,
       }}

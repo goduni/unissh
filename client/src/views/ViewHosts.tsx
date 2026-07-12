@@ -226,6 +226,7 @@ function HostRow({
 }) {
   const p = usePalette();
   const { t } = useTranslation();
+  const compact = useTheme().density === "compact";
   const [hover, setHover] = useState(false);
   // Same focus-follows-hover trick as HostCard so the row's affordances are Tabbable.
   const [focusIn, setFocusIn] = useState(false);
@@ -248,7 +249,8 @@ function HostRow({
         alignItems: "center",
         gap: 12,
         padding: "0 4px",
-        height: 46,
+        // Density is the spacing axis: compact packs the rows tighter.
+        height: compact ? 38 : 46,
         cursor: "pointer",
         // Hairline row: no per-row box/radius/side-stripe. Selection = faint neutral
         // fill; rows share one 1px line between them (all but the first).
@@ -1592,7 +1594,7 @@ export function ViewHosts() {
               style={{
                 display: "grid",
                 gridTemplateColumns: "repeat(auto-fill, minmax(248px, 1fr))",
-                gap: 16,
+                gap: 12,
               }}
             >
               {shown.map((h) => (
