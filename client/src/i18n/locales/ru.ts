@@ -403,8 +403,8 @@ export const ru = {
     "sortTitle": "Сортировка",
     "sort": {
       "name": "Имя",
-      "connected": "Недавно подключались",
-      "recent": "Недавно добавлены"
+      "connected": "Дата подключения",
+      "recent": "Дата добавления"
     },
     "viewCards": "Карточки",
     "viewList": "Список",

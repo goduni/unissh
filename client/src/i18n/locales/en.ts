@@ -369,8 +369,8 @@ export const en = {
     "sortTitle": "Sort",
     "sort": {
       "name": "Name",
-      "connected": "Recently connected",
-      "recent": "Recently added"
+      "connected": "Date connected",
+      "recent": "Date added"
     },
     "viewCards": "Card view",
     "viewList": "List view",

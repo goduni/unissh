@@ -1294,7 +1294,10 @@ export function ViewHosts() {
                 fontWeight: 600,
               }}
             >
-              <Icon name="arrows" size={14} />
+              <Icon
+                name={sort === "name" ? "list" : sort === "connected" ? "clock" : "plus"}
+                size={14}
+              />
               {!tight && tDyn(`hosts.sort.${SORT_KEYS[sort]}`)}
               <Icon name="cd" size={12} color={p.txt3} />
             </button>
