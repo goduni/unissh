@@ -83,7 +83,6 @@ const HostTile = React.memo(function HostTile({
   const { fmtDuration } = useFmt();
   const timedOut = result?.timedOut ?? false;
   const bar = statusColor(p, st, timedOut);
-  const failed = st === "fail";
   const mismatch = useMemo(() => mismatchFromError(result?.error), [result]);
   const toggle = (shift: boolean) => onToggle(h.profileId, index, shift);
 
@@ -112,11 +111,9 @@ const HostTile = React.memo(function HostTile({
       onKeyDown={selectable ? pressActivate(() => toggle(false)) : undefined}
       style={{
         borderRadius: 13,
-        background: p.bg1,
-        border: `1px solid ${
-          selectable && checked ? p.accent : failed ? rgba(p.red, 0.4) : p.line
-        }`,
-        boxShadow: selectable && checked ? `0 0 0 3px ${p.accentSoft}` : "none",
+        background: selectable && checked ? p.bg2 : p.bg1,
+        border: `1px solid ${p.line}`,
+        boxShadow: selectable && checked ? `inset 0 0 0 1px ${p.line2}` : "none",
         overflow: "hidden",
         cursor: selectable ? "pointer" : "default",
         transition: "border-color .12s, box-shadow .12s",
@@ -145,7 +142,6 @@ const HostTile = React.memo(function HostTile({
               height: 8,
               borderRadius: "50%",
               background: bar,
-              boxShadow: st === "running" ? `0 0 7px ${bar}` : "none",
               animation: st === "running" ? "uhPulse 1s ease-in-out infinite" : "none",
               flexShrink: 0,
             }}
@@ -547,9 +543,9 @@ export function ViewFleet() {
         <h1
           style={{
             margin: 0,
-            fontSize: 22,
+            fontSize: 28,
             fontWeight: 800,
-            letterSpacing: -0.5,
+            letterSpacing: -0.7,
             whiteSpace: "nowrap",
             flexShrink: 0,
           }}
@@ -589,13 +585,7 @@ export function ViewFleet() {
               <span style={{ color: p.red }}>{t("fleet.failCount", { count: failCount })}</span>
             </span>
             {failCount > 0 && (
-              <Btn
-                variant="ghost"
-                size="sm"
-                icon="refresh"
-                onClick={rerunFailed}
-                style={{ color: p.amber, borderColor: rgba(p.amber, 0.45) }}
-              >
+              <Btn variant="ghost" size="sm" icon="refresh" onClick={rerunFailed}>
                 {t("fleet.rerunFailed", { count: failCount })}
               </Btn>
             )}
@@ -693,8 +683,8 @@ export function ViewFleet() {
             padding: "0 16px",
             borderRadius: 12,
             background: p.bg1,
-            border: `1px solid ${phase === "running" ? p.accentLine : p.line2}`,
-            boxShadow: phase === "running" ? `0 0 0 4px ${p.accentSoft}` : "none",
+            border: `1px solid ${p.line2}`,
+            boxShadow: "none",
           }}
         >
           <span style={{ fontFamily: MONO, fontSize: 18, color: p.accent, fontWeight: 700 }}>

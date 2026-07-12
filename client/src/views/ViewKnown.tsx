@@ -122,18 +122,14 @@ export function ViewKnown() {
         }}
       >
         <Icon name="shieldcheck" size={20} color={p.accent} />
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
           {t("nav.known")}
         </h1>
         <span
           style={{
             fontFamily: MONO,
             fontSize: 12,
-            color: p.txt2,
-            background: p.bg2,
-            border: `1px solid ${p.line}`,
-            borderRadius: 20,
-            padding: "2px 9px",
+            color: p.txt3,
           }}
         >
           TOFU · {knownHosts.length}
@@ -331,7 +327,7 @@ export function ViewKnown() {
                     color: p.txt3,
                     textTransform: "uppercase",
                     borderBottom: `1px solid ${p.line}`,
-                    background: p.bg2,
+                    background: "transparent",
                   }}
                 >
                   <span>{t("known.col.host")}</span>

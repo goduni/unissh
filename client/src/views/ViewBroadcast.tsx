@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rgba } from "@/theme/tokens";
+import { MONO } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, StatusDot } from "@/components/primitives";
 import { useApp, type PendingMismatch } from "@/store/app";
 import { useIsMobile } from "@/store/responsive";
@@ -73,7 +73,7 @@ function HostTile({
         flexDirection: "column",
         borderRadius: 12,
         overflow: "hidden",
-        border: `1px solid ${off ? rgba(p.red, 0.35) : p.line}`,
+        border: `1px solid ${p.line}`,
         background: p.bg0,
         opacity: off ? 0.85 : 1,
       }}
@@ -84,7 +84,6 @@ function HostTile({
           alignItems: "center",
           gap: 8,
           padding: "8px 12px",
-          background: p.bg2,
           borderBottom: `1px solid ${p.line}`,
         }}
       >
@@ -417,9 +416,9 @@ export function ViewBroadcast() {
         <h1
           style={{
             margin: 0,
-            fontSize: 22,
+            fontSize: 28,
             fontWeight: 800,
-            letterSpacing: -0.5,
+            letterSpacing: -0.7,
             whiteSpace: "nowrap",
             flexShrink: 0,
           }}
@@ -431,10 +430,7 @@ export function ViewBroadcast() {
             fontFamily: MONO,
             fontSize: 12,
             color: p.txt2,
-            background: p.bg2,
-            border: `1px solid ${p.line}`,
-            borderRadius: 20,
-            padding: "2px 9px",
+            whiteSpace: "nowrap",
           }}
         >
           {bcId
@@ -451,8 +447,8 @@ export function ViewBroadcast() {
               fontFamily: MONO,
               fontSize: 12,
               color: p.txt,
-              background: p.accentSoft,
-              border: `1px solid ${p.accentLine}`,
+              background: "transparent",
+              border: `1px solid ${p.line}`,
               borderRadius: 20,
               padding: "2px 6px 2px 9px",
               whiteSpace: "nowrap",
@@ -571,8 +567,8 @@ export function ViewBroadcast() {
             padding: isMobile ? "12px 14px" : "0 16px",
             borderRadius: 12,
             background: p.bg0,
-            border: `1px solid ${p.accentLine}`,
-            boxShadow: `0 0 0 4px ${p.accentSoft}`,
+            border: `1px solid ${p.line2}`,
+            boxShadow: "none",
           }}
         >
           <div

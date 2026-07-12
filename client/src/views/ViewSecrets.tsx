@@ -10,7 +10,7 @@ import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, UI } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, VaultBadge } from "@/components/primitives";
-import { UnderlineTabs, fmtRelative, FlatAvatar, MetaChip, RowOverflowMenu } from "@/components/mono";
+import { UnderlineTabs, fmtRelative, FlatAvatar, MetaChip, RowOverflowMenu, Card, HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
@@ -214,7 +214,7 @@ function RevealField({
 }
 
 // ── Keys ───────────────────────────────────────────────────────
-function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
+function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; first?: boolean }) {
   const p = usePalette();
   const { t, i18n } = useTranslation();
   const ctx = useCtx();
@@ -331,16 +331,12 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
     justifyContent: "center",
   } as const;
   return (
-    <div
+    <HairlineRow
+      first={first}
       style={{
-        display: "flex",
         alignItems: isMobile ? "stretch" : "center",
         flexDirection: isMobile ? "column" : "row",
         gap: isMobile ? 10 : 14,
-        padding: "13px 16px",
-        borderRadius: 13,
-        background: p.bg1,
-        border: `1px solid ${p.line}`,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 12 : 14, minWidth: 0 }}>
@@ -349,15 +345,15 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
             width: 40,
             height: 40,
             borderRadius: 11,
-            background: p.accentSoft,
-            border: `1px solid ${p.accentLine}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="key" size={18} color={p.accent} />
+          <Icon name="key" size={18} color={p.txt2} />
         </span>
         <div style={{ width: isMobile ? "auto" : 150, flexShrink: 0, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -441,7 +437,7 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
           <Icon name="trash" size={14} />
         </button>
       </div>
-    </div>
+    </HairlineRow>
   );
 }
 
@@ -450,10 +446,12 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const { t } = useTranslation();
   const ctx = useCtx();
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-      {keys.map((k) => (
-        <KeyRow key={k.itemId} item={k} isMobile={isMobile} />
-      ))}
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div>
+        {keys.map((k, i) => (
+          <KeyRow key={k.itemId} item={k} isMobile={isMobile} first={i === 0} />
+        ))}
+      </div>
       <button
         onClick={() => ctx.openModal({ kind: "key" })}
         style={{
@@ -662,7 +660,7 @@ function PasswordCard({ item }: { item: ItemInfo }) {
   };
 
   return (
-    <div style={{ padding: 15, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
+    <Card>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <span
           style={{
@@ -753,7 +751,7 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           onError={(e) => ctx.toast(apiErrorMessage(e), "err")}
         />
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -783,7 +781,7 @@ function PasswordsTab({
 }
 
 // ── Notes ──────────────────────────────────────────────────────
-function NoteCard({ item }: { item: ItemInfo }) {
+function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
@@ -867,7 +865,7 @@ function NoteCard({ item }: { item: ItemInfo }) {
   };
 
   return (
-    <div style={{ padding: 16, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
+    <HairlineRow first={first} style={{ flexDirection: "column", alignItems: "stretch", gap: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
         <Icon name="note" size={16} color={p.txt2} />
         <span style={{ fontSize: 14.5, fontWeight: 700 }}>{item.itemId}</span>
@@ -1029,7 +1027,7 @@ function NoteCard({ item }: { item: ItemInfo }) {
           </pre>
         </div>
       )}
-    </div>
+    </HairlineRow>
   );
 }
 
@@ -1154,9 +1152,11 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
 function NotesTab({ notes, openSignal }: { notes: ItemInfo[]; openSignal: number }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {notes.map((n) => (
-        <NoteCard key={n.itemId} item={n} />
-      ))}
+      <div>
+        {notes.map((n, i) => (
+          <NoteCard key={n.itemId} item={n} first={i === 0} />
+        ))}
+      </div>
       <NewNoteCard openSignal={openSignal} />
     </div>
   );
@@ -1460,7 +1460,7 @@ function IdentityCard({
       : t("secrets.identityNoCred");
 
   return (
-    <div style={{ padding: 15, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
+    <Card>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: editing ? 12 : 0 }}>
         <span
           style={{
@@ -1557,7 +1557,7 @@ function IdentityCard({
           <CredSelect keys={keys} passwords={passwords} value={cred} onChange={setCred} />
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -1799,7 +1799,7 @@ function IdentitiesTab({
         style={{
           border: `1px dashed ${p.line}`,
           borderRadius: 12,
-          background: p.bg2,
+          background: "transparent",
           padding: "20px 18px",
           display: "flex",
           flexDirection: "column",
@@ -1808,7 +1808,7 @@ function IdentitiesTab({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Icon name="fingerprint" size={16} color={p.accent} />
+          <Icon name="fingerprint" size={16} color={p.txt2} />
           <span style={{ fontSize: 13.5, fontWeight: 700 }}>{t("secrets.noIdentityVaultTitle")}</span>
         </div>
         <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.55, maxWidth: 470 }}>
@@ -1949,7 +1949,7 @@ export function ViewSecrets() {
           padding: isMobile ? "14px 14px 10px" : "16px 22px 12px",
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>{t("secrets.title")}</h1>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: -0.7 }}>{t("secrets.title")}</h1>
         <TabBar tab={tab} setTab={setTab} counts={counts} isMobile={isMobile} />
         <div style={{ flex: 1 }} />
         <Btn icon="plus" size="sm" onClick={onPrimary}>

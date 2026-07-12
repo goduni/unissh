@@ -146,12 +146,18 @@ export function WindowControls() {
         transition: "background .12s, color .12s",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = danger ? "#e0556a" : p.bg3;
-        e.currentTarget.style.color = danger ? "#fff" : p.txt;
+        if (danger) {
+          e.currentTarget.style.color = p.red;
+          e.currentTarget.style.boxShadow = `inset 0 0 0 1px ${p.red}`;
+        } else {
+          e.currentTarget.style.background = p.bg3;
+          e.currentTarget.style.color = p.txt;
+        }
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.background = "transparent";
         e.currentTarget.style.color = p.txt2;
+        e.currentTarget.style.boxShadow = "none";
       }}
     >
       {children}
@@ -446,7 +452,7 @@ function VaultSwitcher() {
             right: 0,
             marginBottom: 6,
             zIndex: 30,
-            background: p.bg3,
+            background: p.bg0,
             border: `1px solid ${p.line2}`,
             borderRadius: 12,
             padding: 6,
@@ -575,9 +581,10 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
         borderRadius: 11,
         cursor: "pointer",
         position: "relative",
-        border: `1px solid ${route === r ? p.accentLine : "transparent"}`,
-        background: route === r ? p.accentSoft : "transparent",
+        border: "1px solid transparent",
+        background: "transparent",
         color: route === r ? p.accent : p.txt3,
+        boxShadow: route === r ? `inset 2px 0 0 ${p.accent}` : "none",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

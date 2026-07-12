@@ -726,14 +726,14 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               width: 36,
               height: 36,
               borderRadius: 10,
-              background: p.accentSoft,
-              border: `1px solid ${p.accentLine}`,
+              background: p.bg2,
+              border: `1px solid ${p.line}`,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <Icon name="server" size={18} color={p.accent} />
+            <Icon name="server" size={18} color={p.txt2} />
           </span>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3 }}>
@@ -830,10 +830,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                         display: "flex",
                         flexDirection: "column",
                         gap: 8,
-                        padding: 10,
-                        borderRadius: 9,
-                        border: `1px solid ${p.line}`,
-                        background: p.bg2,
+                        paddingTop: 10,
+                        borderTop: `1px solid ${p.line}`,
                       }}
                     >
                       <Input
@@ -1052,7 +1050,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           </Field>
 
           {/* ProxyJump */}
-          <div style={{ borderRadius: 11, border: `1px solid ${p.line}`, background: p.bg2, padding: 12 }}>
+          <div style={{ borderTop: `1px solid ${p.line}`, paddingTop: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <Toggle
                 checked={useJump}
@@ -1246,7 +1244,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       fontWeight: 600,
                       background: "transparent",
                       color: p.txt3,
-                      border: `1px dashed ${p.line2}`,
+                      border: `1px solid ${p.line}`,
                     }}
                   >
                     <Icon name="plus" size={13} />
@@ -1532,7 +1530,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
           gap: 8,
           padding: "11px 12px",
           borderRadius: 10,
-          border: `1px dashed ${p.line2}`,
+          border: `1px solid ${p.line}`,
           background: "transparent",
           color: p.txt2,
           cursor: "pointer",
@@ -1551,12 +1549,12 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
             gap: 8,
             padding: "8px 12px",
             borderRadius: 9,
-            background: p.accentSoft,
-            border: `1px solid ${p.accentLine}`,
+            background: p.bg2,
+            border: `1px solid ${p.line}`,
             fontSize: 12.5,
           }}
         >
-          <Icon name="key" size={13} color={p.accent} />
+          <Icon name="key" size={13} color={p.txt2} />
           <span
             style={{
               flex: 1,
@@ -1621,10 +1619,8 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
       ) : (
         <div
           style={{
-            borderRadius: 11,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            padding: 12,
+            paddingTop: 12,
+            borderTop: `1px solid ${p.line}`,
             fontSize: 12.5,
             color: p.txt3,
             display: "flex",
@@ -1632,7 +1628,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
             gap: 8,
           }}
         >
-          <Icon name="zap" size={15} color={p.accent} />
+          <Icon name="zap" size={15} color={p.txt3} />
           {t("modals.key.generateInfo")}
         </div>
       )}
@@ -1645,8 +1641,6 @@ type TLetter = "L" | "R" | "D";
 
 interface TMeta {
   type: TunnelType;
-  /** Palette token, not a raw hex — Candy/light themes get their own hues. */
-  colorKey: "accent" | "purple" | "green";
   src: string;
   dst: string;
   srcLKey: string;
@@ -1655,7 +1649,6 @@ interface TMeta {
 const T_META: Record<TLetter, TMeta> = {
   L: {
     type: "local",
-    colorKey: "accent",
     src: "127.0.0.1:5432",
     dst: "db-primary:5432",
     srcLKey: "modals.tunnel.localBind",
@@ -1663,7 +1656,6 @@ const T_META: Record<TLetter, TMeta> = {
   },
   R: {
     type: "remote",
-    colorKey: "purple",
     src: "0.0.0.0:9000",
     dst: "127.0.0.1:3000",
     srcLKey: "modals.tunnel.remoteBind",
@@ -1671,7 +1663,6 @@ const T_META: Record<TLetter, TMeta> = {
   },
   D: {
     type: "dynamic",
-    colorKey: "green",
     src: "127.0.0.1:1080",
     dst: "SOCKS5",
     srcLKey: "modals.tunnel.localBind",
@@ -1833,11 +1824,11 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: p[m.colorKey],
+            color: p.txt3,
             transform: isMobile ? "rotate(90deg)" : undefined,
           }}
         >
-          <Icon name="ar" size={18} color={p[m.colorKey]} />
+          <Icon name="ar" size={18} color={p.txt3} />
         </span>
         <Field label={tDyn(m.dstLKey)} w="100%">
           {type === "D" ? (
@@ -2592,13 +2583,12 @@ function CopyKeyToServerModal({
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: 6,
             maxHeight: 260,
             overflowY: "auto",
             paddingRight: 2,
           }}
         >
-          {hosts.map((h) => {
+          {hosts.map((h, i) => {
             const on = selected.has(h.profileId);
             return (
               <div
@@ -2609,10 +2599,9 @@ function CopyKeyToServerModal({
                   alignItems: "center",
                   gap: 10,
                   padding: "9px 11px",
-                  borderRadius: 9,
                   cursor: "pointer",
-                  background: on ? p.accentSoft : p.bg2,
-                  border: `1px solid ${on ? p.accentLine : p.line}`,
+                  background: on ? p.bg2 : "transparent",
+                  borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
                 }}
               >
                 <span

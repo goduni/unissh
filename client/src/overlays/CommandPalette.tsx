@@ -252,7 +252,7 @@ export function CommandPalette() {
                 >
                   {g.title}
                 </div>
-                {g.items.map((it) => {
+                {g.items.map((it, i) => {
                   idx++;
                   const active = idx === sel;
                   const myIdx = idx;
@@ -266,9 +266,9 @@ export function CommandPalette() {
                         alignItems: "center",
                         gap: 11,
                         padding: "9px 10px",
-                        borderRadius: 9,
                         cursor: "pointer",
-                        background: active ? p.accentSoft : "transparent",
+                        borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
+                        boxShadow: active ? `inset 2px 0 0 ${p.accent}` : undefined,
                       }}
                     >
                       <span
@@ -276,22 +276,22 @@ export function CommandPalette() {
                           width: 30,
                           height: 30,
                           borderRadius: 8,
-                          background: active ? p.accent : p.bg3,
-                          border: `1px solid ${active ? p.accent : p.line}`,
+                          background: p.bg2,
+                          border: `1px solid ${p.line}`,
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
                           flexShrink: 0,
                         }}
                       >
-                        <Icon name={it.icon} size={15} color={active ? "#fff" : p.txt2} />
+                        <Icon name={it.icon} size={15} color={p.txt2} />
                       </span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div
                           style={{
                             fontSize: 14,
                             fontWeight: 600,
-                            color: active ? p.accent : p.txt,
+                            color: p.txt,
                             whiteSpace: "nowrap",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
@@ -329,7 +329,6 @@ export function CommandPalette() {
             gap: 14,
             padding: "9px 14px",
             borderTop: `1px solid ${p.line}`,
-            background: p.bg0,
             fontSize: 11.5,
             color: p.txt3,
           }}

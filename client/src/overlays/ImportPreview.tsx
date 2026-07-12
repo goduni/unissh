@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation, Trans } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rgba } from "@/theme/tokens";
+import { MONO } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useIsMobile } from "@/store/responsive";
@@ -461,14 +461,14 @@ function ImportPreviewBody() {
               width: 36,
               height: 36,
               borderRadius: 10,
-              background: p.accentSoft,
-              border: `1px solid ${p.accentLine}`,
+              background: p.bg2,
+              border: `1px solid ${p.line}`,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <Icon name="download" size={18} color={p.accent} />
+            <Icon name="download" size={18} color={p.txt2} />
           </span>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3 }}>
@@ -507,7 +507,6 @@ function ImportPreviewBody() {
             gap: 10,
             padding: "10px 22px",
             borderBottom: `1px solid ${p.line}`,
-            background: p.bg2,
           }}
         >
           <Icon name="file" size={14} color={p.txt3} />
@@ -579,7 +578,7 @@ function ImportPreviewBody() {
               {t("import.empty")}
             </div>
           ) : (
-            rows.map((h) => {
+            rows.map((h, i) => {
               const on = sel.includes(h.host);
               return (
                 <div
@@ -590,9 +589,9 @@ function ImportPreviewBody() {
                     alignItems: "center",
                     gap: 12,
                     padding: "11px 12px",
-                    borderRadius: 11,
                     cursor: "pointer",
-                    background: on ? p.accentSoft : "transparent",
+                    background: on ? p.bg2 : "transparent",
+                    borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
                     opacity: h.dup && !on ? 0.6 : 1,
                     ...(isMobile ? { minHeight: 44 } : null),
                   }}
@@ -610,7 +609,14 @@ function ImportPreviewBody() {
                       justifyContent: "center",
                     }}
                   >
-                    {on && <Icon name="check" size={isMobile ? 16 : 13} color="#fff" stroke={3} />}
+                    {on && (
+                      <Icon
+                        name="check"
+                        size={isMobile ? 16 : 13}
+                        color={p.accentInk ?? "#fff"}
+                        stroke={3}
+                      />
+                    )}
                   </span>
                   <span
                     style={{
@@ -651,15 +657,24 @@ function ImportPreviewBody() {
                       {h.dup && (
                         <span
                           style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5,
                             fontSize: 10.5,
                             fontWeight: 600,
                             color: p.amber,
-                            background: rgba(p.amber, 0.14),
-                            borderRadius: 5,
-                            padding: "1px 7px",
                             ...(isMobile ? { flexShrink: 0 } : null),
                           }}
                         >
+                          <span
+                            style={{
+                              width: 5,
+                              height: 5,
+                              borderRadius: "50%",
+                              background: p.amber,
+                              flexShrink: 0,
+                            }}
+                          />
                           {t("import.alreadyExists")}
                         </span>
                       )}

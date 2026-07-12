@@ -105,11 +105,11 @@ function PasswordGate({ onSubmit }: { onSubmit: (pw: string) => void }) {
             marginTop: 12,
             width: "100%",
             padding: "10px",
-            borderRadius: 9,
+            borderRadius: 10,
             border: "none",
             background: p.accent,
-            color: "#fff",
-            fontWeight: 600,
+            color: p.accentInk,
+            fontWeight: 700,
             cursor: "pointer",
           }}
         >
@@ -1247,6 +1247,19 @@ export function ViewTerminal() {
   const activeSplits: SplitRect[] = [];
   if (active) collectLayout(active.layout, { left: 0, top: 0, width: 100, height: 100 }, [], activeSplits);
 
+  // Visible connection word paired with the status dot, so the colour is never the
+  // sole carrier of the connection state (the dot alone would be).
+  const statusWord =
+    focusedPane?.status === "online"
+      ? t("terminal.status.online")
+      : focusedPane?.status === "connecting"
+        ? t("terminal.status.connecting")
+        : focusedPane?.status === "error"
+          ? t("terminal.status.error")
+          : focusedPane?.status === "closed"
+            ? t("terminal.status.closed")
+            : null;
+
   const statusBtn = {
     display: "inline-flex",
     alignItems: "center",
@@ -1373,9 +1386,11 @@ export function ViewTerminal() {
           style={{
             height: 30,
             flexShrink: 0,
-            // Same colour as the terminal so the status strip blends in instead of
-            // reading as a framing band below the terminal.
-            background: termTheme.bg,
+            // App chrome stays neutral mono (bg0); a single hairline separates it
+            // from the PTY body, which keeps its own terminal theme. Only the
+            // terminal itself is tinted by the active colour scheme.
+            background: p.bg0,
+            borderTop: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             gap: 10,
@@ -1396,6 +1411,7 @@ export function ViewTerminal() {
                     : "unknown"
             }
             size={8}
+            label={statusWord}
             srLabel={focusedPane?.status}
           />
           {focusedPane?.profile && (

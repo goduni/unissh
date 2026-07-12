@@ -6,7 +6,8 @@
 
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO } from "@/theme/tokens";
-import { Btn, Icon, Toggle } from "@/components/primitives";
+import { Btn, Icon, Toggle, StatusDot } from "@/components/primitives";
+import { HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
@@ -28,7 +29,7 @@ const TYPE_META: Record<TunnelType, TypeMeta> = {
   dynamic: { letter: "D", nameKey: "tunnels.type.dynamic", colorKey: "green" },
 };
 
-function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
+function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
   const { t } = useTranslation();
   const p = usePalette();
   const ctx = useCtx();
@@ -46,33 +47,29 @@ function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
   };
 
   return (
-    <div
+    // Rows share the single bg0 surface: no per-row box/fill/radius — a 1px hairline
+    // (HairlineRow's first-aware border-top) is the only separator.
+    <HairlineRow
+      first={first}
       style={{
-        display: "flex",
-        alignItems: "center",
-        flexDirection: "row",
         flexWrap: isMobile ? "wrap" : "nowrap",
         gap: isMobile ? "10px 12px" : 16,
         padding: "14px 16px",
-        borderRadius: 13,
-        background: p.bg1,
-        border: `1px solid ${tun.on ? p.line2 : p.line}`,
         opacity: tun.on ? 1 : 0.7,
       }}
     >
       <span
         style={{
-          width: 44,
-          height: 44,
-          borderRadius: 12,
-          background: p.bg3,
-          border: `1px solid ${p.line}`,
+          width: 36,
+          height: 36,
+          borderRadius: 10,
+          background: p.bg2,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           fontFamily: MONO,
-          fontWeight: 800,
-          fontSize: 17,
+          fontWeight: 700,
+          fontSize: 15,
           color: p.txt2,
           flexShrink: 0,
           ...(isMobile ? { order: 0 } : null),
@@ -100,10 +97,7 @@ function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
         <span
           style={{
             color: p.txt,
-            background: p.bg3,
-            border: `1px solid ${p.line}`,
-            borderRadius: 7,
-            padding: "4px 9px",
+            minWidth: 0,
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -129,14 +123,18 @@ function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
       </div>
       <span
         style={{
-          fontFamily: MONO,
+          display: "inline-flex",
+          justifyContent: "flex-end",
           fontSize: 11.5,
-          color: p.txt3,
-          textAlign: "right",
-          ...(isMobile ? { width: "auto", order: 2, flexShrink: 0 } : { width: 64 }),
+          whiteSpace: "nowrap",
+          ...(isMobile ? { width: "auto", order: 2, flexShrink: 0 } : { width: 80 }),
         }}
       >
-        {tun.on ? t("tunnels.active") : t("tunnels.off")}
+        <StatusDot
+          status={tun.on ? "online" : "offline"}
+          size={7}
+          label={tun.on ? t("tunnels.active") : t("tunnels.off")}
+        />
       </span>
       {/* OFF means destroyed: the core closed the tunnel and re-enabling means
           re-opening via the modal, so the off switch is inert (aria-disabled). */}
@@ -152,7 +150,7 @@ function TunnelRow({ t: tun }: { t: ActiveTunnel }) {
           aria-label={tun.on ? t("tunnels.closeTooltip") : t("tunnels.off")}
         />
       </span>
-    </div>
+    </HairlineRow>
   );
 }
 
@@ -186,16 +184,12 @@ export function ViewTunnels() {
         }}
       >
         <Icon name="branch" size={20} color={p.accent} />
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>{t("nav.tunnels")}</h1>
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>{t("nav.tunnels")}</h1>
         <span
           style={{
             fontFamily: MONO,
             fontSize: 12,
             color: p.txt2,
-            background: p.bg2,
-            border: `1px solid ${p.line}`,
-            borderRadius: 20,
-            padding: "2px 9px",
           }}
         >
           {t("count.tunnelsActive", { count: activeCount })}
@@ -253,9 +247,9 @@ export function ViewTunnels() {
             </Btn>
           </div>
         ) : (
-          <div className="uh-stagger" style={{ display: "flex", flexDirection: "column", gap: 11 }}>
-            {tunnels.map((tun) => (
-              <TunnelRow key={tun.id} t={tun} />
+          <div className="uh-stagger" style={{ display: "flex", flexDirection: "column" }}>
+            {tunnels.map((tun, i) => (
+              <TunnelRow key={tun.id} t={tun} first={i === 0} />
             ))}
           </div>
         )}
@@ -267,7 +261,7 @@ export function ViewTunnels() {
             marginTop: 4,
             padding: 14,
             borderRadius: 13,
-            border: `1px dashed ${p.line2}`,
+            border: `1px solid ${p.line}`,
             color: p.txt3,
             fontSize: 12.5,
           }}
