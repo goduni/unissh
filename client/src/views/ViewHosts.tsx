@@ -178,7 +178,7 @@ function HostCard({
         >
           <Btn
             size="sm"
-            variant="outline"
+            variant="ghost"
             icon="folders"
             title={t("hosts.openSftp")}
             onClick={(e) => {
@@ -515,7 +515,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         />
         {/* Quick SFTP: connect + jump straight to the SFTP view for this host. */}
         <Btn
-          variant="outline"
+          variant="ghost"
           icon="folders"
           title={t("hosts.openSftp")}
           style={{ padding: "8px 11px" }}
@@ -1270,10 +1270,12 @@ export function ViewHosts() {
           <div
             style={{
               display: "flex",
+              alignItems: "center",
+              height: 30,
               background: "transparent",
               border: `1px solid ${p.line}`,
               borderRadius: 8,
-              padding: 2,
+              padding: 1,
               gap: 2,
             }}
           >
@@ -1400,7 +1402,7 @@ export function ViewHosts() {
                 height: 30,
                 borderRadius: 8,
                 border: `1px solid ${p.line}`,
-                background: p.bg2,
+                background: "transparent",
                 color: p.txt2,
                 cursor: "pointer",
                 display: "flex",
