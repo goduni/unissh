@@ -694,25 +694,198 @@ pub async fn server_rotate_vk(
     .await
 }
 
+// ---------- spaces / directory / pending / invites (server-v2) ----------
+//
+// These are server-trusted grouping/authority surfaces (a space role is an
+// authority label, NOT a decryption capability — vault crypto grants remain a
+// core+sync concern). Every command resolves its Bearer from the server link
+// (defaults to the active server), like the sibling identity commands.
+
+/// Mint a one-link invite for a SINGLE space intent (`space_id` at `role`) on a
+/// server (defaults to active). Caller must be an admin of that space. The returned
+/// token is shown once (the server stores only its hash).
+#[tauri::command]
+pub async fn server_invite(
+    space_id: String,
+    role: String,
+    ttl_seconds: Option<i64>,
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::InviteInfo> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let http = client::http();
+        identity::invite(http, &cfg.base_url, &access, &space_id, &role, ttl_seconds)
+    })
+    .await
+}
+
+/// List the caller's own spaces (with roles) on a server (defaults to active).
+#[tauri::command]
+pub async fn server_list_spaces(
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::SpaceInfo>> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let http = client::http();
+        identity::list_spaces(http, &cfg.base_url, &access)
+    })
+    .await
+}
+
+/// Create a space (instance owner) on a server (defaults to active). The creator
+/// becomes its admin. Returns the new space id (base64).
+#[tauri::command]
+pub async fn server_create_space(
+    name: String,
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<String> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let http = client::http();
+        identity::create_space(http, &cfg.base_url, &access, &name)
+    })
+    .await
+}
+
+/// Add (idempotent) an account to a space at a role (space-admin) on a server
+/// (defaults to active).
+#[tauri::command]
+pub async fn server_add_space_member(
+    space_id: String,
+    account_id: String,
+    role: String,
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let http = client::http();
+        identity::add_space_member(http, &cfg.base_url, &access, &space_id, &account_id, &role)
+    })
+    .await
+}
+
+/// The shared people directory on a server (defaults to active): handles + hex
+/// canonical keys, ready to feed `server_add_member` / `server_add_space_member`.
+#[tauri::command]
+pub async fn server_directory(
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::DirectoryEntry>> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let http = client::http();
+        identity::directory(http, &cfg.base_url, &access)
+    })
+    .await
+}
+
+/// The caller's outstanding vault-admin crypto actions (`grant`/`revoke`) on a
+/// server (defaults to active). Fulfil each via `server_add_member` / `server_rotate_vk`
+/// (which publish the manifest+grant through the existing core+sync path — the server
+/// marks rows done by observing them; clients never self-report).
+#[tauri::command]
+pub async fn server_pending(
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::PendingAction>> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let http = client::http();
+        identity::pending(http, &cfg.base_url, &access)
+    })
+    .await
+}
+
+/// Publish an OPAQUE key-binding attestation about an account (space-admin) on a
+/// server (defaults to active). `blob`/`signature` are base64, produced+verified by
+/// clients (the server stores them verbatim, never interpreting them).
+#[tauri::command]
+pub async fn server_attestations_put(
+    account_id: String,
+    blob: String,
+    signature: String,
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let blob = client::unb64(&blob)?;
+        let signature = client::unb64(&signature)?;
+        let http = client::http();
+        identity::attestation_put(http, &cfg.base_url, &access, &account_id, &blob, &signature)
+    })
+    .await
+}
+
+/// Every attestation about an account on a server (defaults to active). Opaque
+/// blob+signature (base64); the caller verifies signatures.
+#[tauri::command]
+pub async fn server_attestations_list(
+    account_id: String,
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::AttestationInfo>> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let http = client::http();
+        identity::attestations_list(http, &cfg.base_url, &access, &account_id)
+    })
+    .await
+}
+
 // ---------- keyset escrow (Path A) ----------
 
 /// Escrow this device's (already-encrypted) keyset blob to a server (defaults to
-/// active), so another device can restore it. Returns the stored generation.
+/// active) AND arm keyless-escrow sign-in for it: a fresh device holding only the
+/// password + Secret Key can then recover the keyset by handle (Path A). The escrow
+/// block (`sha256(K_auth)` + Argon2id params) is derived ONCE, from the SAME
+/// `password` + `secret_key_hex` that wraps the uploaded blob, so a later
+/// `server_escrow_fetch_and_unlock` re-derives an identical `K_auth`. `password` is
+/// `None` for passwordless/SSO accounts. Returns the stored generation.
 #[tauri::command]
 pub async fn server_keyset_push(
+    password: Option<String>,
+    secret_key_hex: String,
     server_id: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<i64> {
     let cfg = require_config(&state, server_id.as_deref())?;
     let access = require_access(&state, server_id.as_deref())?;
     let keyset_path = state.keyset_path.clone();
+    let core = state.core.clone();
     blocking_api(move || {
         let blob = std::fs::read(&keyset_path).map_err(|e| ApiError::Server {
             code: "keyset".into(),
             message: format!("read keyset sidecar: {e}"),
         })?;
+        // Derive the escrow credentials ONCE (fresh Argon2id params + salt) from the
+        // same password+SecretKey that wraps this blob, and upload EXACTLY those params
+        // so a fetch reproduces the same K_auth. The blob is uploaded as-is (its own KDF
+        // header is separate; the escrow argon_* serve ONLY K_auth re-derivation).
+        let creds = core
+            .derive_escrow_credentials(password, secret_key_hex)
+            .map_err(ApiError::from)?;
+        let escrow = identity::EscrowEnroll {
+            k_auth: creds.k_auth,
+            argon_salt: creds.argon_salt,
+            argon_mem_kib: creds.argon_mem_kib,
+            argon_iterations: creds.argon_iterations,
+            argon_parallelism: creds.argon_parallelism,
+        };
         let http = client::http();
-        identity::keyset_put(http, &cfg.base_url, &access, &blob)
+        identity::keyset_put(http, &cfg.base_url, &access, &blob, Some(&escrow))
     })
     .await
 }
@@ -732,6 +905,68 @@ pub async fn server_keyset_pull_and_unlock(
     blocking_api(move || {
         let http = client::http();
         let (blob, _generation) = identity::keyset_get(http, &cfg.base_url, &access)?;
+        core.unlock_from_server_blob(blob, password, secret_key_hex)
+            .map_err(ApiError::from)
+    })
+    .await
+}
+
+/// Fetch the escrow Argon2id params for a `handle` from a server (PUBLIC — no session).
+/// A fresh device uses these to re-derive `K_auth`. NOTE: a 200 is NOT proof the handle
+/// exists — the server returns a shaped decoy for unknown/unenrolled handles, so callers
+/// must not treat this as an existence oracle.
+#[tauri::command]
+pub async fn server_escrow_params(
+    base_url: String,
+    handle: String,
+) -> ApiResult<dto::EscrowParamsInfo> {
+    client::validate_base_url(&base_url)?;
+    blocking_api(move || {
+        let http = client::http();
+        let p = identity::escrow_params(http, &base_url, &handle)?;
+        Ok(dto::EscrowParamsInfo {
+            argon_salt: client::b64(&p.argon_salt),
+            argon_mem_kib: p.argon_mem_kib,
+            argon_iterations: p.argon_iterations,
+            argon_parallelism: p.argon_parallelism,
+        })
+    })
+    .await
+}
+
+/// Recover this device's keyset from a server's ESCROW by handle and unlock it (PUBLIC —
+/// no session; the escrow endpoints are unauthenticated). Reads the enrolled Argon2id
+/// params (`GET /v1/escrow/params`), re-derives `K_auth` with THOSE params so it matches
+/// what enrollment uploaded (the server gates the fetch on `sha256(K_auth)`), fetches the
+/// encrypted keyset blob (`POST /v1/escrow/fetch`), then unlocks the local instance from
+/// it. `password` is `None` for passwordless/SSO accounts; `secret_key_hex` is the
+/// account Secret Key (from the Emergency Kit). A wrong password/key → the server's 403.
+#[tauri::command]
+pub async fn server_escrow_fetch_and_unlock(
+    base_url: String,
+    handle: String,
+    password: Option<String>,
+    secret_key_hex: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    client::validate_base_url(&base_url)?;
+    let core = state.core.clone();
+    blocking_api(move || {
+        let http = client::http();
+        let params = identity::escrow_params(http, &base_url, &handle)?;
+        // Re-derive K_auth with the SERVER-STORED params (not fresh ones) so it
+        // reproduces the K_auth enrollment uploaded — enroll/fetch symmetry.
+        let k_auth = core
+            .derive_escrow_auth_with_params(
+                password.clone(),
+                secret_key_hex.clone(),
+                params.argon_salt,
+                params.argon_mem_kib,
+                params.argon_iterations,
+                params.argon_parallelism,
+            )
+            .map_err(ApiError::from)?;
+        let blob = identity::escrow_fetch(http, &base_url, &handle, &k_auth)?;
         core.unlock_from_server_blob(blob, password, secret_key_hex)
             .map_err(ApiError::from)
     })

@@ -417,15 +417,42 @@ pub fn list_accounts(
 
 // ---- keyset escrow (Path A) ----
 
+/// Optional keyless-escrow enrollment attached to a keyset upload. Derived ONCE on
+/// the device by `Core::derive_escrow_credentials` (fresh Argon2id params + salt).
+/// The server persists only `sha256(k_auth)` and the params — never the raw `k_auth`
+/// — so a fresh device holding just the password + Secret Key can re-derive `K_auth`
+/// (via `escrow_params` + `Core::derive_escrow_auth_with_params`) and fetch the blob.
+pub struct EscrowEnroll {
+    pub k_auth: Vec<u8>,
+    pub argon_salt: Vec<u8>,
+    pub argon_mem_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
+}
+
 /// `PUT /v1/keyset` (Bearer) — escrow this device's already-encrypted keyset blob
-/// (no-downgrade on generation). Returns the stored generation.
+/// (no-downgrade on generation). When `escrow` is `Some`, the SAME upload also arms
+/// password+SecretKey escrow sign-in for this generation (the block carries only
+/// `sha256(k_auth)` server-side). The blob is uploaded AS-IS: its own KDF header is
+/// independent of the escrow `argon_*`, which serve ONLY `K_auth` re-derivation.
+/// Returns the stored generation.
 pub fn keyset_put(
     http: &Client,
     base_url: &str,
     access: &str,
     keyset_blob: &[u8],
+    escrow: Option<&EscrowEnroll>,
 ) -> ApiResult<i64> {
-    let body = json!({ "keyset_blob": client::b64(keyset_blob) });
+    let mut body = json!({ "keyset_blob": client::b64(keyset_blob) });
+    if let Some(e) = escrow {
+        body["escrow"] = json!({
+            "k_auth": client::b64(&e.k_auth),
+            "argon_salt": client::b64(&e.argon_salt),
+            "argon_mem_kib": e.argon_mem_kib,
+            "argon_iterations": e.argon_iterations,
+            "argon_parallelism": e.argon_parallelism,
+        });
+    }
     let v = client::send_json(
         client::headers(http.put(client::url(base_url, "/v1/keyset")), Some(access)).json(&body),
     )?;
@@ -543,4 +570,268 @@ pub fn audit_query(
         });
     }
     Ok(out)
+}
+
+// ---- spaces / directory / pending / attestations (server-v2) ----
+
+/// Extract a named array from a response, mapping a missing key to a 'malformed'
+/// server error (the fixed contract guarantees the field on 2xx).
+fn arr<'a>(v: &'a Value, key: &str) -> ApiResult<&'a Vec<Value>> {
+    v.get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::Server {
+            code: "malformed".into(),
+            message: format!("server response missing '{key}'"),
+        })
+}
+
+/// `POST /v1/invite` (Bearer, space-admin) — mint a one-link invite for a SINGLE
+/// space intent (`space_id` at `role`). Returns the invite id, the one-shot token
+/// (only its hash is stored server-side), the shareable url (present only when the
+/// server has a `public_url`), and the expiry. `ttl_seconds = None` → server default.
+pub fn invite(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+    space_id: &str,
+    role: &str,
+    ttl_seconds: Option<i64>,
+) -> ApiResult<dto::InviteInfo> {
+    let body = json!({
+        "space_intents": [{ "space_id": space_id, "role": role }],
+        "ttl_seconds": ttl_seconds,
+    });
+    let v = client::send_json(
+        client::headers(http.post(client::url(base_url, "/v1/invite")), Some(access)).json(&body),
+    )?;
+    Ok(dto::InviteInfo {
+        invite_id: client::jstr(&v, "invite_id")?,
+        token: client::jstr(&v, "token")?,
+        url: v.get("url").and_then(Value::as_str).map(str::to_string),
+        expires_at: client::ji64(&v, "expires_at")?,
+    })
+}
+
+/// `GET /v1/spaces` (Bearer) — the caller's own space memberships, each tagged with
+/// the caller's server-trusted role.
+pub fn list_spaces(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec<dto::SpaceInfo>> {
+    let v = client::send_json(client::headers(
+        http.get(client::url(base_url, "/v1/spaces")),
+        Some(access),
+    ))?;
+    let rows = arr(&v, "spaces")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for s in rows {
+        out.push(dto::SpaceInfo {
+            space_id: client::jstr(s, "space_id")?,
+            name: s
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            role: client::jstr(s, "role")?,
+        });
+    }
+    Ok(out)
+}
+
+/// `POST /v1/spaces` (Bearer, owner) — create a space; the creator becomes its admin.
+/// Returns the new space id (base64).
+pub fn create_space(http: &Client, base_url: &str, access: &str, name: &str) -> ApiResult<String> {
+    let body = json!({ "name": name });
+    let v = client::send_json(
+        client::headers(http.post(client::url(base_url, "/v1/spaces")), Some(access)).json(&body),
+    )?;
+    client::jstr(&v, "space_id")
+}
+
+/// `POST /v1/spaces/members` (Bearer, space-admin) — add (idempotent) `account_id`
+/// to `space_id` at `role` (`admin`|`member`). 204.
+pub fn add_space_member(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+    space_id: &str,
+    account_id: &str,
+    role: &str,
+) -> ApiResult<()> {
+    let body = json!({ "space_id": space_id, "account_id": account_id, "role": role });
+    client::send_json(
+        client::headers(
+            http.post(client::url(base_url, "/v1/spaces/members")),
+            Some(access),
+        )
+        .json(&body),
+    )?;
+    Ok(())
+}
+
+/// `GET /v1/directory` (Bearer) — the shared people directory (handles + canonical
+/// keys). Pubkeys are converted from the server's base64 to hex so they feed
+/// `add_member` / `add_space_member` directly (mirrors `list_accounts`).
+pub fn directory(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+) -> ApiResult<Vec<dto::DirectoryEntry>> {
+    let v = client::send_json(client::headers(
+        http.get(client::url(base_url, "/v1/directory")),
+        Some(access),
+    ))?;
+    let rows = arr(&v, "accounts")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for a in rows {
+        out.push(dto::DirectoryEntry {
+            account_id: client::jstr(a, "account_id")?,
+            handle: a.get("handle").and_then(Value::as_str).map(str::to_string),
+            display_name: a
+                .get("display_name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            ed25519_pub_hex: client::to_hex(&client::unb64(&client::jstr(a, "member_pubkey")?)?),
+            x25519_pub_hex: client::to_hex(&client::unb64(&client::jstr(a, "x25519_pub")?)?),
+            status: a
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// `GET /v1/pending` (Bearer) — the caller's outstanding vault-admin crypto actions
+/// (`grant`/`revoke`). `vault_id` and the target pubkeys are converted to hex to feed
+/// `add_member` / `rotate_vk`; the server ids and the opaque `proof` stay base64.
+pub fn pending(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec<dto::PendingAction>> {
+    let v = client::send_json(client::headers(
+        http.get(client::url(base_url, "/v1/pending")),
+        Some(access),
+    ))?;
+    let rows = arr(&v, "actions")?;
+    let hex_opt = |a: &Value, key: &str| -> Option<String> {
+        a.get(key)
+            .and_then(Value::as_str)
+            .and_then(|s| client::unb64(s).ok())
+            .map(|b| client::to_hex(&b))
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for a in rows {
+        out.push(dto::PendingAction {
+            action_id: client::jstr(a, "action_id")?,
+            kind: client::jstr(a, "kind")?,
+            vault_id_hex: client::to_hex(&client::unb64(&client::jstr(a, "vault_id")?)?),
+            account_id: client::jstr(a, "account_id")?,
+            ed25519_pub_hex: hex_opt(a, "member_pubkey"),
+            x25519_pub_hex: hex_opt(a, "x25519_pub"),
+            crypto_role: a.get("crypto_role").and_then(Value::as_i64),
+            source: a
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            proof: a.get("proof").and_then(Value::as_str).map(str::to_string),
+            created_at: a.get("created_at").and_then(Value::as_i64).unwrap_or(0),
+        });
+    }
+    Ok(out)
+}
+
+/// `POST /v1/attestations` (Bearer, space-admin sharing a space with the target) —
+/// publish an OPAQUE key-binding attestation (`blob` + `signature`) about `account_id`.
+/// The server stores both verbatim and never verifies them (clients verify). 204.
+pub fn attestation_put(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+    account_id: &str,
+    blob: &[u8],
+    signature: &[u8],
+) -> ApiResult<()> {
+    let body = json!({
+        "account_id": account_id,
+        "blob": client::b64(blob),
+        "signature": client::b64(signature),
+    });
+    client::send_json(
+        client::headers(
+            http.post(client::url(base_url, "/v1/attestations")),
+            Some(access),
+        )
+        .json(&body),
+    )?;
+    Ok(())
+}
+
+/// `GET /v1/attestations?account_id=` (Bearer) — every attestation about the target
+/// account (opaque blob + signature, base64). The caller verifies signatures.
+pub fn attestations_list(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+    account_id: &str,
+) -> ApiResult<Vec<dto::AttestationInfo>> {
+    let path = format!(
+        "/v1/attestations?account_id={}",
+        client::enc_query(account_id)
+    );
+    let v = client::send_json(client::headers(
+        http.get(client::url(base_url, &path)),
+        Some(access),
+    ))?;
+    let rows = arr(&v, "attestations")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for a in rows {
+        out.push(dto::AttestationInfo {
+            attestor_pubkey: client::jstr(a, "attestor_pubkey")?,
+            blob: client::jstr(a, "blob")?,
+            signature: client::jstr(a, "signature")?,
+            created_at: a.get("created_at").and_then(Value::as_i64).unwrap_or(0),
+        });
+    }
+    Ok(out)
+}
+
+// ---- keyset escrow sign-in (PUBLIC; no session) ----
+
+/// The Argon2id params a fresh device needs to re-derive `K_auth` for an escrow fetch,
+/// from `GET /v1/escrow/params`. (An unknown/unenrolled handle returns a shaped decoy,
+/// so a probe cannot tell an enrolled handle from an unenrolled one.)
+pub struct EscrowParams {
+    pub argon_salt: Vec<u8>,
+    pub argon_mem_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
+}
+
+/// `GET /v1/escrow/params?handle=` (PUBLIC) — the salt/params to re-derive `K_auth`.
+pub fn escrow_params(http: &Client, base_url: &str, handle: &str) -> ApiResult<EscrowParams> {
+    let path = format!("/v1/escrow/params?handle={}", client::enc_query(handle));
+    let v = client::send_json(client::headers(
+        http.get(client::url(base_url, &path)),
+        None,
+    ))?;
+    Ok(EscrowParams {
+        argon_salt: client::unb64(&client::jstr(&v, "argon_salt")?)?,
+        argon_mem_kib: client::ju64(&v, "argon_mem_kib")? as u32,
+        argon_iterations: client::ju64(&v, "argon_iterations")? as u32,
+        argon_parallelism: client::ju64(&v, "argon_parallelism")? as u32,
+    })
+}
+
+/// `POST /v1/escrow/fetch { handle, k_auth }` (PUBLIC) — the encrypted keyset blob for
+/// a handle, gated on `sha256(k_auth) == stored sha256(K_auth)`. Returns the blob
+/// bytes (the server answers 403 on unknown-handle / not-enrolled / wrong-credential,
+/// indistinguishably).
+pub fn escrow_fetch(
+    http: &Client,
+    base_url: &str,
+    handle: &str,
+    k_auth: &[u8],
+) -> ApiResult<Vec<u8>> {
+    let body = json!({ "handle": handle, "k_auth": client::b64(k_auth) });
+    let v = client::send_json(
+        client::headers(http.post(client::url(base_url, "/v1/escrow/fetch")), None).json(&body),
+    )?;
+    client::unb64(&client::jstr(&v, "keyset_blob")?)
 }

@@ -1937,6 +1937,55 @@ impl Core {
         })
     }
 
+    /// Derives ONLY the escrow retrieval credential `K_auth` from EXPLICIT Argon2id
+    /// parameters (salt + cost), instead of minting fresh ones. This is the fetch-side
+    /// counterpart to [`Core::derive_escrow_credentials`]: a fresh device recovers the
+    /// enrolled `argon_salt`/params via `GET /v1/escrow/params` and re-derives the SAME
+    /// `K_auth` that enrollment uploaded. The server gates the fetch on
+    /// `sha256(K_auth)`, so the enroll-time and fetch-time derivations MUST agree
+    /// bit-for-bit. Both funnel through the identical `derive_key` + `derive_escrow_auth_key`
+    /// primitives, so enroll (fresh params) and fetch (these params) are symmetric by
+    /// construction — feed this the params `derive_escrow_credentials` returned and it
+    /// reproduces that call's `k_auth` (see the `escrow_*_symmetry` tests).
+    ///
+    /// `password = None` selects a passwordless (SecretKeyOnly / SSO) account: the
+    /// Argon2id stage is skipped and `K_auth` derives from the Secret Key alone (the
+    /// `argon_*` inputs are then irrelevant), exactly as `derive_escrow_credentials`.
+    ///
+    /// A **pure derivation** — nothing is persisted and no unlocked state is required.
+    pub fn derive_escrow_auth_with_params(
+        &self,
+        password: Option<String>,
+        secret_key_hex: String,
+        argon_salt: Vec<u8>,
+        argon_mem_kib: u32,
+        argon_iterations: u32,
+        argon_parallelism: u32,
+    ) -> Result<Vec<u8>, FfiError> {
+        let password = password.map(Zeroizing::new);
+        let secret_key_hex = Zeroizing::new(secret_key_hex);
+        let sk_bytes = Zeroizing::new(
+            hex::decode(secret_key_hex.trim()).map_err(|_| FfiError::InvalidCredentials)?,
+        );
+        let secret_key =
+            SecretKey::from_slice(&sk_bytes).map_err(|_| FfiError::InvalidCredentials)?;
+
+        let params = KdfParams {
+            mem_kib: argon_mem_kib,
+            iterations: argon_iterations,
+            parallelism: argon_parallelism,
+            salt: argon_salt,
+        };
+        // None → SecretKeyOnly account: K_auth is derived from the Secret Key alone
+        // and the Argon2id params are unused (mirrors derive_escrow_credentials).
+        let argon_key = match password.as_deref() {
+            Some(p) => Some(derive_key(p.as_bytes(), &params).map_err(FfiError::other)?),
+            None => None,
+        };
+        let k_auth = derive_escrow_auth_key(argon_key.as_ref(), &secret_key);
+        Ok(k_auth.expose_bytes().to_vec())
+    }
+
     /// **Onboarding Path B (initiator):** completes PAKE using the responder's `msg2`,
     /// verifies the confirmation and E2E-encrypts the keyset secrets + the **shared account
     /// Secret Key** (`secret_key_hex`) under the channel key. Returns `msg3`
@@ -6906,6 +6955,85 @@ mod tests {
         assert_eq!(creds.k_auth.len(), 32);
         assert_eq!(creds.argon_salt.len(), 16);
         assert_eq!(creds.argon_mem_kib, 65536);
+    }
+
+    /// Enroll/fetch symmetry: the `K_auth` minted by `derive_escrow_credentials`
+    /// (fresh params) is reproduced BIT-FOR-BIT by `derive_escrow_auth_with_params`
+    /// fed those SAME params — exactly what a fresh device does on escrow fetch after
+    /// reading the stored params from `GET /v1/escrow/params`. This is the invariant
+    /// the server relies on (it gates the fetch on `sha256(K_auth)`).
+    #[test]
+    fn escrow_enroll_fetch_kauth_symmetry() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        let sk_hex = core.create_account(Some("hunter2".into())).unwrap();
+
+        // ENROLL: mint fresh params + K_auth (what server_keyset_push uploads).
+        let creds = core
+            .derive_escrow_credentials(Some("hunter2".into()), sk_hex.clone())
+            .unwrap();
+
+        // FETCH: re-derive K_auth from the SAME params (what the server echoes back).
+        let refetched = core
+            .derive_escrow_auth_with_params(
+                Some("hunter2".into()),
+                sk_hex.clone(),
+                creds.argon_salt.clone(),
+                creds.argon_mem_kib,
+                creds.argon_iterations,
+                creds.argon_parallelism,
+            )
+            .unwrap();
+        assert_eq!(
+            refetched, creds.k_auth,
+            "enroll and fetch must derive the same K_auth"
+        );
+
+        // A wrong password must NOT reproduce K_auth (the server fetch would 403).
+        let wrong = core
+            .derive_escrow_auth_with_params(
+                Some("wrong".into()),
+                sk_hex,
+                creds.argon_salt.clone(),
+                creds.argon_mem_kib,
+                creds.argon_iterations,
+                creds.argon_parallelism,
+            )
+            .unwrap();
+        assert_ne!(
+            wrong, creds.k_auth,
+            "a wrong password must not reproduce K_auth"
+        );
+    }
+
+    /// Passwordless (SSO) symmetry: with `password = None`, `K_auth` derives from the
+    /// Secret Key alone and the params-taking variant reproduces it regardless of the
+    /// (ignored) Argon2id params.
+    #[test]
+    fn escrow_passwordless_kauth_symmetry() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        let sk_hex = core.create_account(None).unwrap();
+        let creds = core
+            .derive_escrow_credentials(None, sk_hex.clone())
+            .unwrap();
+        let refetched = core
+            .derive_escrow_auth_with_params(
+                None,
+                sk_hex,
+                creds.argon_salt.clone(),
+                creds.argon_mem_kib,
+                creds.argon_iterations,
+                creds.argon_parallelism,
+            )
+            .unwrap();
+        assert_eq!(refetched, creds.k_auth);
     }
 
     #[test]
