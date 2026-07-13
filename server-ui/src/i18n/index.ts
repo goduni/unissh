@@ -480,6 +480,46 @@ const ru = {
         lockgate_desc:
           "Этот раздел работает с зашифрованными данными. Войдите ключом администратора, чтобы продолжить.",
         unlock_cta: "Войти ключом",
+        disc_intro:
+          "Укажите адрес сервера или продолжите, если панель открыта самим инстансом.",
+        disc_continue: "Продолжить",
+        disc_change: "Сменить",
+        disc_untitled: "Инстанс без имени",
+        disc_unclaimed:
+          "Инстанс ещё не настроен. Займите его кодом настройки из первого запуска сервера — станете владельцем.",
+        claim_title: "Настроить инстанс",
+        claim_step1: "Код настройки → аккаунт-владелец + genesis-ключ",
+        claim_intro:
+          "Занимаем инстанс и создаём владельца. Ключ генерируется прямо в браузере и на сервер не уходит.",
+        claim_create_btn: "Занять инстанс",
+        claim_created_toast: "Инстанс занят — владелец создан",
+        claim_enter_btn: "Войти в панель",
+        claim_err_no_code: "Введите код настройки",
+        claim_err_code: "Неверный или уже использованный код настройки.",
+        claim_err_claimed: "Этот инстанс уже настроен.",
+        claim_arm_warn:
+          "Вход выполнен, но escrow-вход не удалось включить — сохраните файл ключа, чтобы войти снова.",
+        setup_label: "Код настройки",
+        setup_tag: "setup-code",
+        setup_hint: "Из вывода первого запуска сервера (одноразовый).",
+        setup_ph: "вставьте код настройки",
+        space_label: "Первое пространство",
+        space_tag: "space",
+        space_hint: "Название первого пространства инстанса.",
+        space_ph: "Main",
+        login_intro:
+          "Войдите логином, паролем и Секретным ключом. Keyset загружается и расшифровывается в этой вкладке; секреты браузер не покидают.",
+        login_handle_label: "Логин",
+        login_handle_tag: "handle",
+        login_handle_hint: "Логин, заданный при настройке инстанса.",
+        login_handle_ph: "admin",
+        login_btn: "Войти",
+        login_err_no_handle: "Введите логин",
+        login_err_no_secret: "Введите Секретный ключ",
+        login_err_bad: "Неверный логин, пароль или Секретный ключ.",
+        login_err_nodevice:
+          "Этот браузер ещё не связан с аккаунтом. Войдите с устройства, где настраивали инстанс, или подключите новое устройство.",
+        login_err_generic: "Не удалось войти.",
       },
     },
     zk: {
@@ -993,6 +1033,46 @@ const en: typeof ru = {
         lockgate_desc:
           "This section works with encrypted data. Sign in with your admin key to continue.",
         unlock_cta: "Sign in with key",
+        disc_intro:
+          "Enter your server's address, or continue if the panel is served by the instance itself.",
+        disc_continue: "Continue",
+        disc_change: "Change",
+        disc_untitled: "Untitled instance",
+        disc_unclaimed:
+          "This instance hasn't been set up yet. Claim it with the setup code from the server's first-run output to become its owner.",
+        claim_title: "Set up this instance",
+        claim_step1: "Setup code → owner account + genesis key",
+        claim_intro:
+          "Claims this instance and creates its owner. The key is generated right here in your browser and is never sent to the server.",
+        claim_create_btn: "Claim instance",
+        claim_created_toast: "Instance claimed — owner created",
+        claim_enter_btn: "Enter the panel",
+        claim_err_no_code: "Enter the setup code",
+        claim_err_code: "Invalid or already-used setup code.",
+        claim_err_claimed: "This instance has already been set up.",
+        claim_arm_warn:
+          "Signed in, but escrow sign-in couldn't be armed — keep your key file to sign in again.",
+        setup_label: "Setup code",
+        setup_tag: "setup-code",
+        setup_hint: "From the server's first-run output (single-use).",
+        setup_ph: "paste the setup code",
+        space_label: "First space",
+        space_tag: "space",
+        space_hint: "Name for the instance's first space.",
+        space_ph: "Main",
+        login_intro:
+          "Sign in with your account handle, password and Secret Key. The keyset is fetched and unlocked in this tab; nothing secret leaves the browser.",
+        login_handle_label: "Login",
+        login_handle_tag: "handle",
+        login_handle_hint: "The handle you set when this instance was claimed.",
+        login_handle_ph: "admin",
+        login_btn: "Sign in",
+        login_err_no_handle: "Enter your handle",
+        login_err_no_secret: "Enter your Secret Key",
+        login_err_bad: "Wrong handle, password or Secret Key.",
+        login_err_nodevice:
+          "This browser isn't linked to your account yet. Sign in from the device you set the instance up on, or pair a new device.",
+        login_err_generic: "Could not sign in.",
       },
     },
     zk: {

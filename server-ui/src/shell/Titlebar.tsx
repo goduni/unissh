@@ -11,7 +11,7 @@ export function Titlebar() {
   const { effMode } = useTheme();
   const toggleMode = usePrefs((s) => s.toggleMode);
 
-  const opsToken = useSession((s) => s.opsToken);
+  const serverTrusted = useSession((s) => s.bearer != null);
   const keysetUnlocked = useSession((s) => s.keysetUnlocked);
   const adminLabel = useSession((s) => s.adminLabel);
 
@@ -99,8 +99,8 @@ export function Titlebar() {
               width: 7,
               height: 7,
               borderRadius: "50%",
-              background: opsToken ? "var(--green)" : "var(--txt3)",
-              boxShadow: opsToken
+              background: serverTrusted ? "var(--green)" : "var(--txt3)",
+              boxShadow: serverTrusted
                 ? "0 0 0 3px color-mix(in srgb, var(--green) 20%, transparent), 0 0 7px var(--green)"
                 : undefined,
             }}

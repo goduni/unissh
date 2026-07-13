@@ -46,9 +46,7 @@ interface UiState {
   tenantSwitcherOpen: boolean;
   panelOpen: boolean;
   keysetModalOpen: boolean;
-  opsLoginOpen: boolean;
   inviteOpen: boolean;
-  enrollOpen: boolean;
   bootstrapOpen: boolean;
   rotateOpen: boolean;
   drawer: DrawerRef | null;
@@ -64,12 +62,8 @@ interface UiState {
   togglePanel: () => void;
   openKeyset: () => void;
   closeKeyset: () => void;
-  openOpsLogin: () => void;
-  closeOpsLogin: () => void;
   openInvite: () => void;
   closeInvite: () => void;
-  openEnroll: () => void;
-  closeEnroll: () => void;
   openBootstrap: () => void;
   closeBootstrap: () => void;
   openRotate: () => void;
@@ -89,9 +83,7 @@ export const useUi = create<UiState>()((set) => ({
   tenantSwitcherOpen: false,
   panelOpen: false,
   keysetModalOpen: false,
-  opsLoginOpen: false,
   inviteOpen: false,
-  enrollOpen: false,
   bootstrapOpen: false,
   rotateOpen: false,
   drawer: null,
@@ -113,12 +105,8 @@ export const useUi = create<UiState>()((set) => ({
   togglePanel: () => set((s) => ({ panelOpen: !s.panelOpen })),
   openKeyset: () => set({ keysetModalOpen: true }),
   closeKeyset: () => set({ keysetModalOpen: false }),
-  openOpsLogin: () => set({ opsLoginOpen: true }),
-  closeOpsLogin: () => set({ opsLoginOpen: false }),
   openInvite: () => set({ inviteOpen: true }),
   closeInvite: () => set({ inviteOpen: false }),
-  openEnroll: () => set({ enrollOpen: true }),
-  closeEnroll: () => set({ enrollOpen: false }),
   openBootstrap: () => set({ bootstrapOpen: true }),
   closeBootstrap: () => set({ bootstrapOpen: false }),
   openRotate: () => set({ rotateOpen: true }),
