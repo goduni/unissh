@@ -108,6 +108,19 @@ struct CloudDoc {
     active: Option<ServerId>,
 }
 
+/// One space the caller belongs to on a server link (name + server-trusted role),
+/// as surfaced inside [`ServerStatus`] for the frontend. Mirrors the wire
+/// `GET /v1/spaces` row; serialized camelCase (`spaceId`, `name`, `role`) to match
+/// the frontend `SpaceInfo`. Lets the UI name a cloud vault's bound space (a vault's
+/// `sync_tenant` is a space id) without a separate round-trip.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceEntry {
+    pub space_id: String,
+    pub name: String,
+    pub role: String,
+}
+
 /// Read-only snapshot of ONE server's state for the frontend (camelCase JSON).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -127,6 +140,10 @@ pub struct ServerStatus {
     pub handle: Option<String>,
     /// This account owns (claimed) the Space — eligible to hold the personal vault.
     pub owned: bool,
+    /// The caller's spaces on this link (server-v2), cached in memory from the last
+    /// `GET /v1/spaces` (populated on claim/join/login/refresh; needs a session).
+    /// Empty when no session has fetched them yet.
+    pub spaces: Vec<SpaceEntry>,
 }
 
 impl ServerStatus {
@@ -142,6 +159,7 @@ impl ServerStatus {
             device_id: None,
             handle: None,
             owned: false,
+            spaces: Vec::new(),
         }
     }
 }
@@ -163,6 +181,10 @@ pub struct CloudState {
     servers: Mutex<HashMap<ServerId, ServerConfig>>,
     /// In-memory base64(access_token) per server; never written to disk.
     access_tokens: Mutex<HashMap<ServerId, String>>,
+    /// In-memory space list per server (server-v2), refreshed from `GET /v1/spaces`
+    /// whenever a session is (re)established. Never persisted; a fresh boot re-fetches
+    /// it on `server_login`. Feeds `ServerStatus.spaces`.
+    spaces: Mutex<HashMap<ServerId, Vec<SpaceEntry>>>,
     /// The active server (argument-less commands resolve here).
     active: Mutex<Option<ServerId>>,
 }
@@ -215,6 +237,7 @@ impl CloudState {
             config_path,
             servers: Mutex::new(servers),
             access_tokens: Mutex::new(HashMap::new()),
+            spaces: Mutex::new(HashMap::new()),
             active: Mutex::new(active),
         };
         // A legacy/partial sidecar minted fresh ids on load. Persist immediately
@@ -332,6 +355,7 @@ impl CloudState {
             ids
         };
         self.access_tokens.lock().unwrap().clear();
+        self.spaces.lock().unwrap().clear();
         *self.active.lock().unwrap() = None;
         let _ = std::fs::remove_file(&self.config_path);
         for id in &ids {
@@ -391,6 +415,28 @@ impl CloudState {
         }
     }
 
+    /// Set/replace a server's cached space list (defaults to the active server).
+    /// `None` clears it. Populated by the session-establishing commands from
+    /// `GET /v1/spaces`; read back into `ServerStatus.spaces`.
+    pub fn set_spaces_for(&self, id: Option<&str>, spaces: Option<Vec<SpaceEntry>>) {
+        let key = match id {
+            Some(id) => id.to_string(),
+            None => match self.active.lock().unwrap().clone() {
+                Some(k) => k,
+                None => return,
+            },
+        };
+        let mut map = self.spaces.lock().unwrap();
+        match spaces {
+            Some(s) => {
+                map.insert(key, s);
+            }
+            None => {
+                map.remove(&key);
+            }
+        }
+    }
+
     /// Forget ONE server link entirely: its entry + in-memory access + keychain
     /// refresh. If it was active, the active selection moves to another linked
     /// server (or `None`). Other servers' configs/tokens are untouched.
@@ -404,6 +450,7 @@ impl CloudState {
             servers.keys().next().cloned()
         };
         self.access_tokens.lock().unwrap().remove(id);
+        self.spaces.lock().unwrap().remove(id);
         {
             let mut active = self.active.lock().unwrap();
             if active.as_deref() == Some(id) {
@@ -426,6 +473,8 @@ impl CloudState {
             },
         };
         self.access_tokens.lock().unwrap().remove(&key);
+        // The cached spaces were session-scoped; a re-login refetches them.
+        self.spaces.lock().unwrap().remove(&key);
         if let Err(e) = tokens::delete_refresh(&key) {
             log::warn!("cloud: failed to delete refresh token from keychain (server {key}): {e}");
         }
@@ -469,13 +518,21 @@ impl CloudState {
         }
     }
 
-    /// Build a `ServerStatus` for a config, marking active + session presence.
+    /// Build a `ServerStatus` for a config, marking active + session presence and
+    /// attaching the last-fetched space list (empty until a session fetched it).
     fn status_of(&self, c: &ServerConfig, active_id: Option<&str>) -> ServerStatus {
         let has_session = self
             .access_tokens
             .lock()
             .unwrap()
             .contains_key(&c.server_id);
+        let spaces = self
+            .spaces
+            .lock()
+            .unwrap()
+            .get(&c.server_id)
+            .cloned()
+            .unwrap_or_default();
         ServerStatus {
             server_id: Some(c.server_id.clone()),
             connected: true,
@@ -487,6 +544,7 @@ impl CloudState {
             device_id: Some(c.device_id.clone()),
             handle: c.handle.clone(),
             owned: c.owned,
+            spaces,
         }
     }
 

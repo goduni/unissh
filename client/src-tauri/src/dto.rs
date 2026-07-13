@@ -634,6 +634,20 @@ pub struct DeviceInfo {
     pub active_sessions: i64,
 }
 
+/// Public, session-less probe of a server instance (`GET /v1/instance`). Drives the
+/// Add-server flow's branch: `!claimed` → setup-code (claim); claimed → invite/sign-in.
+/// `name` is flattened to `""` when the instance is unclaimed/unnamed (the frontend
+/// `InstanceInfo.name` is a plain string), unlike the server-facing `Option` form.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceInfoDto {
+    pub claimed: bool,
+    pub name: String,
+    pub version: String,
+    pub instance_id: String,
+    pub auth: Vec<String>,
+}
+
 // ---------- spaces / directory / pending / invites (server-v2) ----------
 
 /// One space the caller is a member of, from `GET /v1/spaces`. `role` is the

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tauri::State;
 use uuid::Uuid;
 
-use crate::cloud::config::{new_server_id, ServerConfig};
+use crate::cloud::config::{new_server_id, ServerConfig, SpaceEntry};
 use crate::cloud::transport::HttpSyncTransport;
 use crate::cloud::{client, identity, onboard, tokens, ServerList, ServerStatus};
 use crate::dto;
@@ -61,6 +61,38 @@ fn require_access(state: &AppState, server_id: Option<&str>) -> ApiResult<String
         })
 }
 
+/// Best-effort refresh of a server's cached space list (`ServerStatus.spaces`) from
+/// `GET /v1/spaces` (needs a live session). Called after a session is (re)established
+/// — claim/join/login/refresh/onboard — so the subsequent status snapshot names the
+/// caller's spaces without a separate round-trip. A failure (or no session) is
+/// swallowed: the snapshot just keeps the prior/empty list rather than failing the
+/// otherwise-successful login.
+async fn refresh_spaces_cache(state: &AppState, server_id: &str) {
+    let (base_url, access) = match (
+        state.cloud.config_for(Some(server_id)),
+        state.cloud.access_token_for(Some(server_id)),
+    ) {
+        (Some(cfg), Some(access)) => (cfg.base_url, access),
+        _ => return,
+    };
+    let fetched = blocking_api(move || {
+        let http = client::http();
+        identity::list_spaces(http, &base_url, &access)
+    })
+    .await;
+    if let Ok(spaces) = fetched {
+        let entries = spaces
+            .into_iter()
+            .map(|s| SpaceEntry {
+                space_id: s.space_id,
+                name: s.name,
+                role: s.role,
+            })
+            .collect();
+        state.cloud.set_spaces_for(Some(server_id), Some(entries));
+    }
+}
+
 /// Status of one server (defaults to the active server).
 #[tauri::command]
 pub async fn server_status(
@@ -68,6 +100,28 @@ pub async fn server_status(
     state: State<'_, AppState>,
 ) -> ApiResult<ServerStatus> {
     Ok(state.cloud.status_for(server_id.as_deref()))
+}
+
+/// Public, session-less probe of a server instance (`GET /v1/instance`): its name,
+/// whether it has been claimed, its opaque instance id, version, and advertised
+/// sign-in methods. Drives the Add-server flow's setup-code-vs-join branch. Needs no
+/// session — just a base URL (mirrors `server_join_preview`).
+#[tauri::command]
+pub async fn server_instance_info(base_url: String) -> ApiResult<dto::InstanceInfoDto> {
+    client::validate_base_url(&base_url)?;
+    blocking_api(move || {
+        let http = client::http();
+        let info = identity::instance_info(http, &base_url)?;
+        Ok(dto::InstanceInfoDto {
+            claimed: info.claimed,
+            // Server-facing `name` is optional; the frontend field is a plain string.
+            name: info.name.unwrap_or_default(),
+            version: info.version,
+            instance_id: info.instance_id,
+            auth: info.auth,
+        })
+    })
+    .await
 }
 
 /// The full list of linked servers + the active id.
@@ -171,6 +225,7 @@ pub async fn server_join(
         .cloud
         .set_access_token_for(Some(&server_id), Some(session.access_token));
     persist_refresh(&server_id, &session.refresh_token);
+    refresh_spaces_cache(&state, &server_id).await;
     Ok(state.cloud.status_for(Some(&server_id)))
 }
 
@@ -222,6 +277,7 @@ pub async fn server_claim(
         .cloud
         .set_access_token_for(Some(&server_id), Some(session.access_token));
     persist_refresh(&server_id, &session.refresh_token);
+    refresh_spaces_cache(&state, &server_id).await;
     Ok(state.cloud.status_for(Some(&server_id)))
 }
 
@@ -244,6 +300,7 @@ pub async fn server_login(
         .cloud
         .set_access_token_for(Some(&sid), Some(session.access_token));
     persist_refresh(&sid, &session.refresh_token);
+    refresh_spaces_cache(&state, &sid).await;
     Ok(state.cloud.status_for(Some(&sid)))
 }
 
@@ -268,6 +325,7 @@ pub async fn server_refresh_session(
         .cloud
         .set_access_token_for(Some(&sid), Some(session.access_token));
     persist_refresh(&sid, &session.refresh_token);
+    refresh_spaces_cache(&state, &sid).await;
     Ok(state.cloud.status_for(Some(&sid)))
 }
 
@@ -1094,6 +1152,7 @@ pub async fn server_onboard_join(
         .cloud
         .set_access_token_for(Some(&server_id), Some(session.access_token));
     persist_refresh(&server_id, &session.refresh_token);
+    refresh_spaces_cache(&state, &server_id).await;
     Ok(state.cloud.status_for(Some(&server_id)))
 }
 

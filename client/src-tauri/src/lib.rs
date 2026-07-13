@@ -262,6 +262,7 @@ pub fn run() {
             keychain::keychain_delete_secret_key,
             // cloud server — identity / session / devices
             cloud::commands::server_status,
+            cloud::commands::server_instance_info,
             cloud::commands::server_list,
             cloud::commands::server_set_active,
             cloud::commands::server_remove,
