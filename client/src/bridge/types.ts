@@ -426,6 +426,26 @@ export interface ServerStatus {
   /** This account owns (claimed) the instance's first Space — eligible to hold the
    *  personal vault. */
   owned: boolean;
+  /** The caller's spaces on this server link (name + role), so the UI can name a
+   *  vault's bound space (vault.syncTenant = space id) and show spaces in the vault
+   *  list/sidebar without a separate round-trip.
+   *  TODO(gate): the Rust ServerStatus must serialize this `spaces` array (server-v2
+   *  snapshot). Until then it may arrive undefined — callers use `?.`/`?? []`. */
+  spaces: SpaceInfo[];
+}
+
+/** Public, session-less probe of a server instance (`instanceInfo`): its display
+ *  name, whether it has been claimed yet, its opaque instance id, and the sign-in
+ *  auth methods it advertises. Drives the Add-server flow's branch: `!claimed` →
+ *  setup-code (claim); claimed → invite-link (join) or sign-in.
+ *  TODO(gate): backed by the Rust `server_instance_info` command (added at the gate). */
+export interface InstanceInfo {
+  claimed: boolean;
+  name: string;
+  version: string;
+  instanceId: string;
+  /** Advertised sign-in methods, e.g. `["password", "sso"]`. */
+  auth: string[];
 }
 
 /** The full set of linked cloud servers plus the active selection. */

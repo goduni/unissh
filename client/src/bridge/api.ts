@@ -18,6 +18,7 @@ import type {
   ExecEvent,
   GroupTargetPlan,
   HostImportReport,
+  InstanceInfo,
   InstanceStatus,
   InviteInfo,
   JoinPreview,
@@ -512,6 +513,11 @@ export const keychainDeleteSecretKey = () => invoke<void>("keychain_delete_secre
 // optional `serverId` and default to the active server when it's omitted.
 export const serverStatus = (serverId?: string) =>
   invoke<ServerStatus>("server_status", { serverId: serverId ?? null });
+/** Session-less probe of a server instance at `baseUrl`: its name, whether it has
+ *  been claimed, its instance id, and advertised sign-in methods. Drives the
+ *  Add-server flow's branch (setup-code vs invite/sign-in). PUBLIC — no session. */
+export const instanceInfo = (baseUrl: string) =>
+  invoke<InstanceInfo>("server_instance_info", { baseUrl });
 export const serverList = () => invoke<ServerList>("server_list");
 export const serverSetActive = (serverId: string) =>
   invoke<ServerList>("server_set_active", { serverId });

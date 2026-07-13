@@ -39,7 +39,7 @@ import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType, profileToAuth } from "@/bridge/types";
-import { serverShortLabel, vaultLoc } from "@/bridge/vaults";
+import { isOwnedCloud, serverShortLabel, vaultLoc } from "@/bridge/vaults";
 import type {
   ConnectionProfile,
   Identity,
@@ -47,6 +47,7 @@ import type {
   JumpHost,
   ProfileAuth,
   ServerGroup,
+  SpaceInfo,
   SyncTarget,
   VaultInfo,
 } from "@/bridge/types";
@@ -192,9 +193,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   // Personal identities must live in a PRIVATE vault: a local one, or a cloud vault
   // in a space you own. These are the vaults a host can bind an identity from.
   const privateVaults = allVaults.filter(
-    (v) =>
-      v.syncTarget !== "cloud" ||
-      servers.some((s) => s.tenantId && s.tenantId === v.syncTenant && s.owned),
+    (v) => v.syncTarget !== "cloud" || isOwnedCloud(v, servers),
   );
   const pvKey = privateVaults.map((v) => v.vaultId).join("|");
 
@@ -2008,10 +2007,11 @@ function NewVaultModal({
   );
 }
 
-/** Purpose-built "create a vault to hold identities" flow. Unlike the generic vault
- *  modal it can BOOTSTRAP a new Space on a server (URL + enrollment grant) and put the
- *  vault in it — the path that was missing, so a company identity vault could not be
- *  created from here. Never touches the global active vault. */
+/** Purpose-built "create a vault to hold identities" flow. Under the one-account /
+ *  many-spaces model, an identity vault lives either on this device (local) or in
+ *  one of YOUR Spaces on the linked account — picked from the real Space list, or a
+ *  new Space created inline (no server URL / enrollment grant any more). Never
+ *  touches the global active vault. */
 function IdentityVaultModal({
   onCreated,
   onClose,
@@ -2026,29 +2026,56 @@ function IdentityVaultModal({
   const servers = useApp((s) => s.servers);
   const activeServerId = useApp((s) => s.activeServerId);
 
-  // Spaces you OWN with a live session — where a cloud identity vault can live.
-  const ownedSpaces = servers.filter((s) => s.connected && s.hasSession && s.owned && s.serverId);
+  // The linked account (server) a cloud identity vault can live on — prefer the
+  // active one, else any connected+authenticated link. Spaces are scoped to it.
+  const account =
+    servers.find((s) => s.serverId === activeServerId && s.connected && s.hasSession) ??
+    servers.find((s) => s.connected && s.hasSession && s.serverId) ??
+    null;
+  const cloudReady = !!account;
   const NEW_SPACE = "__new__";
 
+  // The caller's Spaces on the account where they're an admin — an identity vault
+  // must live in a Space you control (never a shared team Space, which would leak).
+  const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
+  const seeded = useRef(false);
+
   const [name, setName] = useState<string>(t("identityVault.nameDefault"));
-  const [target, setTarget] = useState<SyncTarget>(ownedSpaces.length ? "cloud" : "local");
-  const [space, setSpace] = useState<string>(
-    () =>
-      (activeServerId && ownedSpaces.some((s) => s.serverId === activeServerId)
-        ? activeServerId
-        : ownedSpaces[0]?.serverId) ?? NEW_SPACE,
-  );
-  const [url, setUrl] = useState("");
-  const [grant, setGrant] = useState("");
+  const [target, setTarget] = useState<SyncTarget>(cloudReady ? "cloud" : "local");
+  const [space, setSpace] = useState<string>(NEW_SPACE);
   const [busy, setBusy] = useState(false);
 
-  const newSpace = target === "cloud" && (ownedSpaces.length === 0 || space === NEW_SPACE);
+  useEffect(() => {
+    if (!account) return;
+    let alive = true;
+    api
+      .serverListSpaces(account.serverId ?? undefined)
+      .then((list) => {
+        if (!alive) return;
+        const mine = list.filter((sp) => sp.role === "admin");
+        setSpaces(mine);
+        // Seed the picker to the first existing Space once (don't clobber a user pick).
+        if (!seeded.current && mine.length) {
+          seeded.current = true;
+          setSpace(mine[0].spaceId);
+        }
+      })
+      .catch(() => {
+        if (alive) setSpaces([]);
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account?.serverId]);
+
+  const newSpace = target === "cloud" && (spaces.length === 0 || space === NEW_SPACE);
 
   const save = async () => {
     const nm = name.trim();
     if (!nm || busy) return;
-    if (newSpace && !url.trim()) {
-      ctx.toast(t("identityVault.needUrl"), "warn");
+    if (target === "cloud" && !account) {
+      ctx.toast(t("identityVault.needAccount"), "warn");
       return;
     }
     setBusy(true);
@@ -2059,19 +2086,17 @@ function IdentityVaultModal({
         await api.createVault(vid, nm);
         await useApp.getState().reloadVaults();
       } else {
-        let serverId: string | undefined;
+        const serverId = account?.serverId ?? undefined;
         if (newSpace) {
-          // Bootstrap a NEW Space on this server with the enrollment grant, then put the
-          // vault in it — creating your (company) Space right from the identity flow.
-          const status = await api.serverBootstrap(url.trim(), {
-            spaceName: nm,
-            bootstrapToken: grant.trim() || undefined,
-          });
+          // Create a NEW Space on this account, then put the vault in it — the
+          // in-flow "make my own Space" path (no separate server link needed).
+          await api.serverCreateSpace(nm, serverId);
           await useApp.getState().reloadServerStatus();
-          serverId = status.serverId ?? undefined;
-        } else {
-          serverId = space;
         }
+        // TODO(gate): serverCreateCloudVault binds to the link's primary Space;
+        // binding into a specific chosen Space needs a spaceId arg on the Rust
+        // command. Until then, an existing-Space pick other than the primary falls
+        // back to the primary Space.
         vid = await api.serverCreateCloudVault(nm, serverId);
         await useApp.getState().reloadVaults();
       }
@@ -2144,41 +2169,25 @@ function IdentityVaultModal({
           ]}
         />
       </Field>
-      {target === "cloud" && ownedSpaces.length > 0 && (
+      {target === "cloud" && account && spaces.length > 0 && (
         <Field label={t("identityVault.space")}>
           <NHSelect
             value={space}
             onChange={setSpace}
             options={[
-              ...ownedSpaces.map((s) => ({ value: s.serverId as string, label: serverShortLabel(s) })),
+              ...spaces.map((sp) => ({ value: sp.spaceId, label: sp.name || sp.spaceId })),
               { value: NEW_SPACE, label: t("identityVault.newSpace") },
             ]}
             empty=""
           />
         </Field>
       )}
-      {newSpace && (
-        <>
-          <Field label={t("identityVault.serverUrl")}>
-            <Input
-              value={url}
-              placeholder={t("serverCloud.baseUrlPlaceholder")}
-              mono
-              onChange={setUrl}
-            />
-          </Field>
-          <Field label={t("serverCloud.bootstrapToken")}>
-            <Input
-              value={grant}
-              placeholder={t("serverCloud.bootstrapTokenPlaceholder")}
-              mono
-              onChange={setGrant}
-            />
-          </Field>
-          <div style={{ fontSize: 11.5, color: p.txt3, lineHeight: 1.5, padding: "0 2px" }}>
-            {t("identityVault.newSpaceHint")}
-          </div>
-        </>
+      {target === "cloud" && newSpace && (
+        <div style={{ fontSize: 11.5, color: p.txt3, lineHeight: 1.5, padding: "0 2px" }}>
+          {account
+            ? t("identityVault.newSpaceHint", { server: serverShortLabel(account) })
+            : t("identityVault.needAccount")}
+        </div>
       )}
     </Modal>
   );
@@ -2716,9 +2725,7 @@ function BindHostModal({
   const servers = useApp((s) => s.servers);
   // Private vaults an identity may live in: local, or a cloud vault in a space you own.
   const privateVaults = vaults.filter(
-    (v) =>
-      v.syncTarget !== "cloud" ||
-      servers.some((s) => s.tenantId && s.tenantId === v.syncTenant && s.owned),
+    (v) => v.syncTarget !== "cloud" || isOwnedCloud(v, servers),
   );
   const pvKey = privateVaults.map((v) => v.vaultId).join("|");
   const [bindVault, setBindVault] = useState<string | null>(null);

@@ -1893,9 +1893,7 @@ export function ViewSecrets() {
   // you own) — never a shared team vault (would leak to members). The Identities tab
   // manages them across those vaults; the core enforces single-member on write.
   const privateVaults = vaults.filter(
-    (v) =>
-      v.syncTarget !== "cloud" ||
-      servers.some((s) => s.tenantId && s.tenantId === v.syncTenant && s.owned),
+    (v) => v.syncTarget !== "cloud" || isOwnedCloud(v, servers),
   );
 
   const tab: SecretTab =

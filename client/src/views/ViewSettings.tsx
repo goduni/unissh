@@ -15,6 +15,7 @@ import { useCtx } from "@/store/ctx";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
+import { serverShortLabel, vaultSpace } from "@/bridge/vaults";
 import {
   apiErrorMessage,
   isServerErrorCode,
@@ -22,6 +23,8 @@ import {
   type AccountInfo,
   type AuditEntry,
   type DeviceInfo,
+  type InstanceInfo,
+  type JoinPreview,
   type MemberInfo,
   type MemberRole,
   type PairingPayload,
@@ -959,13 +962,13 @@ function SettingsVaults() {
   const servers = useApp((s) => s.servers);
   const activeServerId = useApp((s) => s.activeServerId);
 
-  // Resolve a cloud vault's bound server (by its base64 tenantId) to a friendly
-  // label for the UI. Unknown tenant (server not linked on this device) → null.
-  const boundServerLabel = (tenant: string | null): string | null => {
-    if (!tenant) return null;
-    const s = servers.find((sv) => sv.tenantId === tenant);
-    if (!s) return null;
-    return s.handle || s.baseUrl || tenant;
+  // Resolve a cloud vault's bound Space (by its base64 space id `syncTenant`) to a
+  // friendly label — the Space name so the Space surfaces in the vault list; falls
+  // back to the server handle/host. null when the Space isn't visible on any link.
+  const boundSpaceLabel = (v: VaultInfo): string | null => {
+    const found = vaultSpace(v, servers);
+    if (!found) return null;
+    return found.space.name || serverShortLabel(found.server);
   };
 
   // Manually bind an unbound cloud vault to the active (or first) linked server —
@@ -1068,7 +1071,7 @@ function SettingsVaults() {
               (v.syncTenant ? (
                 <span style={{ fontSize: 11, color: p.txt3, whiteSpace: "nowrap" }}>
                   {(() => {
-                    const label = boundServerLabel(v.syncTenant);
+                    const label = boundSpaceLabel(v);
                     return label ? t("vault.boundTo", { server: label }) : t("vault.boundOther");
                   })()}
                 </span>
@@ -1180,93 +1183,116 @@ function CloudInfoRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) 
   );
 }
 
-// Connect form (shown when no server is linked). Requires an unlocked instance.
+// Small labelled text field used throughout the connect form.
+function ConnectField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  mono,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  mono?: boolean;
+}) {
+  const p = usePalette();
+  return (
+    <label style={{ display: "block" }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>{label}</div>
+      <input
+        {...NO_AUTOCORRECT}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={inputStyle(p, mono)}
+      />
+    </label>
+  );
+}
+
+// Add-server flow (shown when no server is linked, and to link another). Requires
+// an unlocked instance. One flow: enter the server address → probe it with
+// instanceInfo → an UNCLAIMED instance is set up with a setup code (you become its
+// owner); a CLAIMED instance is joined with an invite link, or signed in to with
+// your existing account keyset.
 function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => void }) {
   const p = usePalette();
   const { t } = useTranslation();
   const [baseUrl, setBaseUrl] = useState("");
+  const [info, setInfo] = useState<InstanceInfo | null>(null);
+  const [probing, setProbing] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // account profile — applies to claim (owner) and join (new member).
   const [displayName, setDisplayName] = useState("");
   const [handle, setHandle] = useState("");
 
-  // "join" = redeem an invite into someone's Space (e.g. the company);
-  // "reconnect" = re-attach THIS device to an account you already have in a Space
-  //   (link was removed / all sessions lost) — proven by your keyset, no invite;
-  // "create" = bootstrap your OWN Space (tenant you own) on this server.
-  const [mode, setMode] = useState<"join" | "reconnect" | "create">("join");
-  // invite fields
-  const [tenantId, setTenantId] = useState("");
-  const [inviteToken, setInviteToken] = useState("");
-  const [preview, setPreview] = useState<string | null>(null);
-  // create-your-own-Space: optional bootstrap token (some servers require one).
-  const [bootstrapToken, setBootstrapToken] = useState("");
+  // claim (unclaimed instance): the one-time setup code + a name for the first Space.
+  const [setupCode, setSetupCode] = useState("");
+  const [spaceName, setSpaceName] = useState("");
 
+  // join a claimed instance: redeem an invite link, or sign in with the local keyset.
+  const [branch, setBranch] = useState<"invite" | "signin">("invite");
+  const [inviteToken, setInviteToken] = useState("");
+  const [preview, setPreview] = useState<JoinPreview | null>(null);
+
+  const optProfile = () => ({
+    displayName: displayName.trim() || undefined,
+    handle: handle.trim() || undefined,
+  });
+
+  // Step 1 → 2: probe the instance so we can branch on claimed/auth.
+  const probe = async () => {
+    const url = baseUrl.trim();
+    if (!url) {
+      toast(t("serverCloud.fillBaseUrl"), "warn");
+      return;
+    }
+    setProbing(true);
+    try {
+      const nfo = await api.instanceInfo(url);
+      setInfo(nfo);
+      setBranch("invite");
+      setPreview(null);
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  const back = () => {
+    setInfo(null);
+    setPreview(null);
+  };
+
+  // Read-only invite preview: the spaces (with roles) the token grants. Stateless.
   const doPreview = async () => {
-    if (!baseUrl.trim() || !tenantId.trim() || !inviteToken.trim()) {
+    if (!inviteToken.trim()) {
       toast(t("serverCloud.fillInvite"), "warn");
       return;
     }
     await guard(async () => {
-      const pv = await api.serverInviteRedeemPreview(
-        baseUrl.trim(),
-        tenantId.trim(),
-        inviteToken.trim(),
-      );
-      setPreview(
-        t("serverCloud.previewResult", {
-          role: pv.role,
-          scope: pv.scope ?? t("serverCloud.previewScopeAll"),
-        }),
-      );
+      setPreview(await api.serverJoinPreview(baseUrl.trim(), inviteToken.trim()));
     });
   };
 
-  const submit = async () => {
+  const doClaim = async () => {
     if (busy) return;
-    if (!baseUrl.trim()) {
-      toast(t("serverCloud.fillBaseUrl"), "warn");
-      return;
-    }
-    if (mode === "join" && (!tenantId.trim() || !inviteToken.trim())) {
-      toast(t("serverCloud.fillInvite"), "warn");
-      return;
-    }
-    if (mode === "reconnect" && !tenantId.trim()) {
-      toast(t("serverCloud.fillTenant"), "warn");
+    if (!setupCode.trim()) {
+      toast(t("serverCloud.fillSetupCode"), "warn");
       return;
     }
     setBusy(true);
     try {
-      const opts = {
-        displayName: displayName.trim() || undefined,
-        handle: handle.trim() || undefined,
-      };
-      const status =
-        mode === "create"
-          ? await api.serverBootstrap(baseUrl.trim(), {
-              spaceName: opts.displayName,
-              handle: opts.handle,
-              bootstrapToken: bootstrapToken.trim() || undefined,
-            })
-          : // reconnect re-attaches an existing account with your keyset (no invite);
-            // join redeems an invite as a new member.
-            await api.serverRegister(
-              baseUrl.trim(),
-              tenantId.trim(),
-              mode === "reconnect" ? "" : inviteToken.trim(),
-              opts,
-            );
-      toast(
-        t(
-          mode === "create"
-            ? "serverCloud.spaceCreated"
-            : mode === "reconnect"
-              ? "serverCloud.reconnected"
-              : "serverCloud.registered",
-        ),
-        "ok",
-      );
+      const status = await api.serverClaim(baseUrl.trim(), {
+        setupCode: setupCode.trim(),
+        spaceName: spaceName.trim() || undefined,
+        ...optProfile(),
+      });
+      toast(t("serverCloud.claimed"), "ok");
       onConnected(status);
     } catch (e) {
       toast(apiErrorMessage(e), "err");
@@ -1274,175 +1300,270 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
     }
   };
 
+  const doJoin = async () => {
+    if (busy) return;
+    if (!inviteToken.trim()) {
+      toast(t("serverCloud.fillInvite"), "warn");
+      return;
+    }
+    setBusy(true);
+    try {
+      const status = await api.serverJoin(baseUrl.trim(), inviteToken.trim(), optProfile());
+      toast(t("serverCloud.registered"), "ok");
+      onConnected(status);
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+      setBusy(false);
+    }
+  };
+
+  // Sign in with the local account keyset (no invite, no tenant). server_login
+  // proves the keyset and re-establishes the session for an account this device
+  // already belongs to. TODO(gate): a first-time sign-in to a brand-new server
+  // (never linked here) needs a session-less keyset link, escrow, or QR pairing —
+  // tracked as a follow-up; serverLogin reconnects an already-linked account.
+  const doSignIn = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const status = await api.serverLogin();
+      toast(t("serverCloud.signedIn"), "ok");
+      onConnected(status);
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+      setBusy(false);
+    }
+  };
+
+  // ── Step 1: enter the server address ──────────────────────────
+  if (!info) {
+    return (
+      <>
+        <SectionLabel first>{t("serverCloud.sectionConnect")}</SectionLabel>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "16px 0" }}>
+          <ConnectField
+            label={t("serverCloud.baseUrl")}
+            value={baseUrl}
+            onChange={setBaseUrl}
+            placeholder={t("serverCloud.baseUrlPlaceholder")}
+            mono
+          />
+          <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+            {t("serverCloud.baseUrlHint")}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Btn icon={probing ? undefined : "enter"} onClick={probe} disabled={probing}>
+              {probing ? t("serverCloud.probing") : t("serverCloud.continue")}
+            </Btn>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ── Step 2: instance found — claim / join / sign in ───────────
   return (
     <>
       <SectionLabel first>{t("serverCloud.sectionConnect")}</SectionLabel>
       <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "16px 0" }}>
-        <label style={{ display: "block" }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
-            {t("serverCloud.baseUrl")}
-          </div>
-          <input
-            {...NO_AUTOCORRECT}
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder={t("serverCloud.baseUrlPlaceholder")}
-            style={inputStyle(p, true)}
-          />
-        </label>
-
-        {/* Join someone's Space (invite) · reconnect an account you already have
-            (keyset, no invite) · create your OWN Space (bootstrap). */}
-        <div style={{ display: "flex", gap: 8 }}>
-          {(["join", "reconnect", "create"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMode(m)}
+        {/* Probed instance summary: name, claimed state, advertised sign-in methods. */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "12px 14px",
+            borderRadius: 12,
+            border: `1px solid ${p.line2}`,
+            background: p.bg1,
+          }}
+        >
+          <Icon name="server" size={18} style={{ color: p.accent, flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: p.txt }}>
+              {info.name || baseUrl.trim()}
+            </div>
+            <div
               style={{
-                flex: 1,
-                padding: "9px 10px",
-                borderRadius: 9,
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: mode === m ? 700 : 600,
-                background: mode === m ? p.accentSoft : p.bg2,
-                color: mode === m ? p.accent : p.txt2,
-                border: `1px solid ${mode === m ? p.accentLine : p.line}`,
+                fontSize: 12,
+                color: p.txt3,
+                fontFamily: MONO,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
               }}
             >
-              {t(
-                m === "join"
-                  ? "serverCloud.modeJoin"
-                  : m === "reconnect"
-                    ? "serverCloud.modeReconnect"
-                    : "serverCloud.modeCreate",
-              )}
-            </button>
-          ))}
-        </div>
-
-        {mode === "join" ? (
-          <>
-            <label style={{ display: "block" }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
-                {t("serverCloud.tenantId")}
-              </div>
-              <input
-                {...NO_AUTOCORRECT}
-                value={tenantId}
-                onChange={(e) => {
-                  setTenantId(e.target.value);
-                  setPreview(null);
-                }}
-                placeholder={t("serverCloud.tenantIdPlaceholder")}
-                style={inputStyle(p, true)}
-              />
-            </label>
-            <label style={{ display: "block" }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
-                {t("serverCloud.inviteToken")}
-              </div>
-              <input
-                {...NO_AUTOCORRECT}
-                value={inviteToken}
-                onChange={(e) => {
-                  setInviteToken(e.target.value);
-                  setPreview(null);
-                }}
-                placeholder={t("serverCloud.inviteTokenPlaceholder")}
-                style={inputStyle(p, true)}
-              />
-            </label>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <Btn variant="ghost" size="sm" icon="eye" onClick={doPreview} disabled={busy}>
-                {t("serverCloud.preview")}
-              </Btn>
-              {preview && <span style={{ fontSize: 12.5, color: p.txt2 }}>{preview}</span>}
+              {baseUrl.trim()}
+              {info.auth.length ? ` · ${info.auth.join(", ")}` : ""}
             </div>
-          </>
-        ) : mode === "reconnect" ? (
-          <>
-            <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
-              {t("serverCloud.reconnectHint")}
-            </div>
-            <label style={{ display: "block" }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
-                {t("serverCloud.tenantId")}
-              </div>
-              <input
-                {...NO_AUTOCORRECT}
-                value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
-                placeholder={t("serverCloud.tenantIdPlaceholder")}
-                style={inputStyle(p, true)}
-              />
-            </label>
-          </>
-        ) : (
-          <>
-            <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
-              {t("serverCloud.createSpaceHint")}
-            </div>
-            <label style={{ display: "block" }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
-                {t("serverCloud.bootstrapToken")}
-              </div>
-              <input
-                {...NO_AUTOCORRECT}
-                value={bootstrapToken}
-                onChange={(e) => setBootstrapToken(e.target.value)}
-                placeholder={t("serverCloud.bootstrapTokenPlaceholder")}
-                style={inputStyle(p, true)}
-              />
-            </label>
-          </>
-        )}
-
-        {/* display name / handle label the account — meaningless when reconnecting
-            to one that already exists (the server keeps the existing profile). */}
-        {mode !== "reconnect" && (
-          <>
-            <label style={{ display: "block" }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
-                {t("serverCloud.displayName")}
-              </div>
-              <input
-                {...NO_AUTOCORRECT}
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder={t("serverCloud.displayNamePlaceholder")}
-                style={inputStyle(p)}
-              />
-            </label>
-            <label style={{ display: "block" }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
-                {t("serverCloud.handle")}
-              </div>
-              <input
-                {...NO_AUTOCORRECT}
-                value={handle}
-                onChange={(e) => setHandle(e.target.value)}
-                placeholder={t("serverCloud.handlePlaceholder")}
-                style={inputStyle(p, true)}
-              />
-            </label>
-          </>
-        )}
-
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <Btn icon={busy ? undefined : "enter"} onClick={submit} disabled={busy}>
-            {busy
-              ? t("serverCloud.connecting")
-              : t(
-                  mode === "create"
-                    ? "serverCloud.createSpaceCta"
-                    : mode === "reconnect"
-                      ? "serverCloud.reconnectCta"
-                      : "serverCloud.register",
-                )}
+          </div>
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+              textTransform: "uppercase",
+              color: info.claimed ? p.txt3 : p.green,
+              border: `1px solid ${info.claimed ? p.line2 : rgba(p.green, 0.5)}`,
+              borderRadius: 6,
+              padding: "1px 6px",
+              flexShrink: 0,
+            }}
+          >
+            {info.claimed ? t("serverCloud.instanceClaimed") : t("serverCloud.instanceUnclaimed")}
+          </span>
+          <Btn variant="ghost" size="sm" onClick={back} disabled={busy}>
+            {t("serverCloud.changeServer")}
           </Btn>
         </div>
+
+        {!info.claimed ? (
+          // Unclaimed → set up as owner with the printed setup code.
+          <>
+            <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+              {t("serverCloud.setupCodeHint")}
+            </div>
+            <ConnectField
+              label={t("serverCloud.setupCode")}
+              value={setupCode}
+              onChange={setSetupCode}
+              placeholder={t("serverCloud.setupCodePlaceholder")}
+              mono
+            />
+            <ConnectField
+              label={t("serverCloud.spaceName")}
+              value={spaceName}
+              onChange={setSpaceName}
+              placeholder={t("serverCloud.spaceNamePlaceholder")}
+            />
+            <ConnectField
+              label={t("serverCloud.displayName")}
+              value={displayName}
+              onChange={setDisplayName}
+              placeholder={t("serverCloud.displayNamePlaceholder")}
+            />
+            <ConnectField
+              label={t("serverCloud.handle")}
+              value={handle}
+              onChange={setHandle}
+              placeholder={t("serverCloud.handlePlaceholder")}
+              mono
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <Btn icon={busy ? undefined : "enter"} onClick={doClaim} disabled={busy}>
+                {busy ? t("serverCloud.connecting") : t("serverCloud.claimCta")}
+              </Btn>
+            </div>
+          </>
+        ) : (
+          // Claimed → join with an invite link, or sign in with the local keyset.
+          <>
+            <Segmented<"invite" | "signin">
+              value={branch}
+              onChange={(v) => {
+                setBranch(v);
+                setPreview(null);
+              }}
+              options={[
+                { value: "invite", label: t("serverCloud.branchInvite") },
+                { value: "signin", label: t("serverCloud.branchSignIn") },
+              ]}
+            />
+
+            {branch === "invite" ? (
+              <>
+                <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                  {t("serverCloud.inviteLinkHint")}
+                </div>
+                <ConnectField
+                  label={t("serverCloud.inviteLink")}
+                  value={inviteToken}
+                  onChange={(v) => {
+                    setInviteToken(v);
+                    setPreview(null);
+                  }}
+                  placeholder={t("serverCloud.inviteLinkPlaceholder")}
+                  mono
+                />
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <Btn variant="ghost" size="sm" icon="eye" onClick={doPreview} disabled={busy}>
+                    {t("serverCloud.preview")}
+                  </Btn>
+                </div>
+                {preview && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      border: `1px solid ${p.line2}`,
+                      background: p.bg2,
+                    }}
+                  >
+                    {preview.instanceName && (
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: p.txt }}>
+                        {preview.instanceName}
+                      </div>
+                    )}
+                    {preview.spaces.length === 0 ? (
+                      <div style={{ fontSize: 12, color: p.txt3 }}>
+                        {t("serverCloud.previewNoSpaces")}
+                      </div>
+                    ) : (
+                      preview.spaces.map((sp) => (
+                        <div
+                          key={sp.spaceId}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            fontSize: 12.5,
+                            color: p.txt2,
+                          }}
+                        >
+                          <Icon name="cloud" size={13} style={{ color: p.txt3 }} />
+                          <span style={{ flex: 1, minWidth: 0 }}>{sp.name || sp.spaceId}</span>
+                          <span style={{ fontSize: 11, color: p.txt3 }}>{sp.role}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+                <ConnectField
+                  label={t("serverCloud.displayName")}
+                  value={displayName}
+                  onChange={setDisplayName}
+                  placeholder={t("serverCloud.displayNamePlaceholder")}
+                />
+                <ConnectField
+                  label={t("serverCloud.handle")}
+                  value={handle}
+                  onChange={setHandle}
+                  placeholder={t("serverCloud.handlePlaceholder")}
+                  mono
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <Btn icon={busy ? undefined : "enter"} onClick={doJoin} disabled={busy}>
+                    {busy ? t("serverCloud.connecting") : t("serverCloud.joinCta")}
+                  </Btn>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                  {t("serverCloud.signInHint")}
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <Btn icon={busy ? undefined : "unlock"} onClick={doSignIn} disabled={busy}>
+                    {busy ? t("serverCloud.connecting") : t("serverCloud.signInCta")}
+                  </Btn>
+                </div>
+              </>
+            )}
+          </>
+        )}
       </div>
     </>
   );
@@ -1610,7 +1731,8 @@ function PairingCard({ onClose }: { onClose: () => void }) {
   const payloadText = payload
     ? [
         `baseUrl: ${payload.baseUrl}`,
-        `tenantId: ${payload.tenantId}`,
+        `instanceId: ${payload.instanceId}`,
+        `spaceId: ${payload.spaceId}`,
         `accountId: ${payload.accountId}`,
         `deviceId: ${payload.deviceId}`,
         `channelId: ${payload.channelId}`,
@@ -2510,7 +2632,15 @@ function SettingsCloud() {
         </span>
       </SettingRow>
       <CloudInfoRow k={t("serverCloud.baseUrlRow")} v={s.baseUrl ?? "—"} />
-      <CloudInfoRow k={t("serverCloud.tenantRow")} v={s.tenantId ?? "—"} mono />
+      <CloudInfoRow k={t("serverCloud.instanceRow")} v={s.instanceId ?? "—"} mono />
+      <CloudInfoRow
+        k={t("serverCloud.spacesRow")}
+        v={
+          s.spaces && s.spaces.length
+            ? s.spaces.map((sp) => `${sp.name || sp.spaceId} (${sp.role})`).join(", ")
+            : "—"
+        }
+      />
       <CloudInfoRow k={t("serverCloud.accountIdRow")} v={s.accountId ?? "—"} mono />
       <CloudInfoRow k={t("serverCloud.deviceIdRow")} v={s.deviceId ?? "—"} mono />
       <CloudInfoRow k={t("serverCloud.handleRow")} v={s.handle ?? "—"} />
