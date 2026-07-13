@@ -214,3 +214,102 @@ async fn escrow_params_and_fetch_resist_enumeration() {
         .unwrap();
     assert_eq!(fetch.status(), 403, "fetch on an unknown handle is denied");
 }
+
+#[tokio::test]
+async fn escrow_unenrolled_account_is_indistinguishable() {
+    let app = spawn().await;
+
+    // Claim the owner (handle "owner") and upload a REAL keyset — but WITHOUT the
+    // `escrow` field, so escrow sign-in is never armed for this generation. This is
+    // the sharp case: a genuine, keyset-holding account that simply didn't opt into
+    // escrow must be INDISTINGUISHABLE from a handle that doesn't exist at all.
+    let id = make_identity();
+    let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let account_id = c["account_id"].as_str().unwrap().to_string();
+    let device_id = c["device_id"].as_str().unwrap().to_string();
+    let access = login_v2(&app, &id, &account_id, &device_id).await;
+
+    let password: &[u8] = b"pw";
+    let params = KdfParams::recommended();
+    let (_secret_key, keyset, _unlocked) = create_account(Some(password), params).unwrap();
+    let keyset_bytes = keyset.to_bytes().unwrap();
+    let put = app
+        .client
+        .put(format!("{}/v1/keyset", app.base))
+        .header("Authorization", format!("Bearer {access}"))
+        .json(&json!({ "keyset_blob": b64(&keyset_bytes) })) // NO "escrow" key → unenrolled
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(put.status(), 200, "a keyset PUT without escrow still 200s");
+
+    // GET params?handle=owner → 200 with a DECOY (recommended params + a 16-byte salt),
+    // NOT a real salt (none exists), NOT an error. Stable per handle across calls.
+    let resp1 = app
+        .client
+        .get(format!("{}/v1/escrow/params?handle=owner", app.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp1.status(),
+        200,
+        "params for an unenrolled account is still 200"
+    );
+    let owner1: Value = resp1.json().await.unwrap();
+    let owner2: Value = app
+        .client
+        .get(format!("{}/v1/escrow/params?handle=owner", app.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(owner1["argon_mem_kib"], 65536);
+    assert_eq!(owner1["argon_iterations"], 3);
+    assert_eq!(owner1["argon_parallelism"], 1);
+    assert_eq!(
+        unb64(owner1["argon_salt"].as_str().unwrap()).unwrap().len(),
+        16,
+        "the unenrolled decoy salt is 16 bytes, matching a real salt"
+    );
+    assert_eq!(
+        owner1["argon_salt"], owner2["argon_salt"],
+        "the unenrolled decoy salt is stable per handle across calls"
+    );
+
+    // Indistinguishable from a handle that does not exist: same-shape decoy, and the
+    // salt is per-handle (differs from an unknown handle's decoy — no existence signal).
+    let unknown: Value = app
+        .client
+        .get(format!("{}/v1/escrow/params?handle=nobody", app.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(unknown["argon_mem_kib"], owner1["argon_mem_kib"]);
+    assert_eq!(unknown["argon_iterations"], owner1["argon_iterations"]);
+    assert_eq!(unknown["argon_parallelism"], owner1["argon_parallelism"]);
+    assert_ne!(
+        unknown["argon_salt"], owner1["argon_salt"],
+        "decoys are per-handle: an unenrolled account and an unknown handle differ"
+    );
+
+    // POST fetch?handle=owner with ANY k_auth → 403 (not 500, not a distinguishable
+    // error): escrow was never armed, so it is denied exactly like a wrong credential.
+    let fetch = app
+        .client
+        .post(format!("{}/v1/escrow/fetch", app.base))
+        .json(&json!({ "handle": "owner", "k_auth": b64(&[0u8; 32]) }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        fetch.status(),
+        403,
+        "fetch on an unenrolled account is denied, indistinguishable from a wrong credential"
+    );
+}

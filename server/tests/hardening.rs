@@ -154,6 +154,35 @@ async fn claim_is_rate_limited() {
     );
 }
 
+/// Escrow-security: the PUBLIC `POST /v1/escrow/fetch` lives under the same per-IP
+/// rate limiter as the rest of `/v1`, so an attacker cannot grind `K_auth` guesses
+/// against a handle unthrottled. With a tiny burst and the clock frozen (no refill),
+/// repeated fetches must eventually get a `429`. Rate limiting runs before handler
+/// logic, so a well-formed-but-doomed body (bogus handle + all-zero credential) is fine.
+#[tokio::test]
+async fn escrow_fetch_is_rate_limited() {
+    let app = spawn_with(|c| {
+        c.limits.rate_limit_per_ip_rps = 1;
+        c.limits.rate_limit_burst = 2;
+    })
+    .await;
+    let body = json!({ "handle": "ghost", "k_auth": b64(&[0u8; 32]) });
+    let hit = || {
+        app.client
+            .post(format!("{}/v1/escrow/fetch", app.base))
+            .json(&body)
+            .send()
+    };
+    let mut statuses = Vec::new();
+    for _ in 0..4 {
+        statuses.push(hit().await.unwrap().status());
+    }
+    assert!(
+        statuses.iter().any(|s| *s == 429),
+        "burst=2 + frozen clock → repeated POST /v1/escrow/fetch must be rate-limited (got {statuses:?})"
+    );
+}
+
 /// Setup-security: on an UNCLAIMED instance a claim with a valid registration
 /// payload+signature but the WRONG setup code is rejected `403` (the constant-time
 /// setup-code compare fails before any state change), and the instance stays unclaimed.
