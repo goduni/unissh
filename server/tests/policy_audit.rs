@@ -160,7 +160,7 @@ async fn write_accept_acl_only_enforces_membership_authorship() {
     let admin = vec![0xA1u8; 32];
     let editor = vec![0xB2u8; 32];
     let stranger = vec![0xE5u8; 32];
-    // genesis owner = admin (creates the tenant); then admin claims the vault — otherwise
+    // genesis owner = admin (claims the instance); then admin claims the vault — otherwise
     // author_role grants Admin to anyone ("the first push establishes ownership").
     app.seed_device(&admin, &[1u8; 32], "org", true).await;
     app.state

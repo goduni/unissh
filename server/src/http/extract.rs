@@ -69,7 +69,7 @@ impl FromRequestParts<AppState> for OwnerCtx {
 
 /// Shared Bearer-token resolution (§5.0/§12): strip `Bearer ` → base64-decode →
 /// sha256 → `find_session_by_access_hash` → revoked/expiry → active (non-expired)
-/// device → active account. Instance-scoped: no tenant load. Returns the validated
+/// device → active account. Instance-scoped: no per-space load. Returns the validated
 /// `(SessionRow, DeviceRow)`.
 async fn resolve_bearer(parts: &mut Parts, state: &AppState) -> AppResult<(SessionRow, DeviceRow)> {
     let auth = parts

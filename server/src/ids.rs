@@ -13,7 +13,7 @@ pub fn fill_random(buf: &mut [u8]) {
     getrandom::fill(buf).expect("OS RNG failure");
 }
 
-/// 16 random bytes (account-id, tenant-id, device-id, invite-id, channel-id …).
+/// 16 random bytes (account-id, space-id, device-id, invite-id, channel-id …).
 pub fn random_id16() -> [u8; 16] {
     let mut b = [0u8; 16];
     fill_random(&mut b);

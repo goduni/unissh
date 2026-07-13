@@ -70,7 +70,7 @@ pub struct SyncConfig {
     /// Defense-in-depth server-side signature validation (§2.4).
     pub validate_signatures: bool,
     /// Anti-rollback floor for the whole-DB snapshot (§16): the instance-generation
-    /// (= Σ next_seq across tenants) MUST be ≥ this value at startup, otherwise
+    /// (= the instance-wide next_seq) MUST be ≥ this value at startup, otherwise
     /// the server refuses to come up (a stale snapshot was restored). The operator
     /// anchors this number outside the DB (like MAX(next_seq) in the backup runbook). 0 = off.
     pub min_instance_generation: i64,
@@ -102,9 +102,9 @@ pub struct ObsConfig {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpsConfig {
-    /// Operator token (server-trusted) for cross-tenant `/v1/ops/*` (the
+    /// Operator token (server-trusted) for the infrastructure `/v1/ops/*` surface (the
     /// `X-UniSSH-Ops-Token` header). Empty → ops surface is DISABLED. This is NOT a keyset and does NOT
-    /// grant decryption — only infrastructure operations (tenants/suspend/seq-bump).
+    /// grant decryption — only infrastructure operations (account suspend/seq-bump).
     pub token: String,
 }
 

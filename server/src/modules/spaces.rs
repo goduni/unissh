@@ -3,7 +3,7 @@
 //! authority label, NOT a decryption capability (vault crypto grants live in
 //! `sync`/`grants`). Owner creates spaces; a space admin manages that space's
 //! membership; any authenticated caller may read the directory (company model).
-//! Instance-scoped: no tenant. All SQL goes through the Task-3 repo.
+//! Instance-scoped: every row belongs to this one instance. All SQL goes through the Task-3 repo.
 
 use crate::error::{AppError, AppResult};
 use crate::http::extract::AuthCtx;

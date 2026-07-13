@@ -148,7 +148,7 @@ mod metrics_history_tests {
     const SAMPLE: &str = "# HELP unissh_admin_requests_total reqs\n\
         # TYPE unissh_admin_requests_total counter\n\
         unissh_admin_requests_total 5\n\
-        unissh_push_objects_total{tenant=\"x\"} 3\n\
+        unissh_push_objects_total{space=\"x\"} 3\n\
         other_metric 99\n";
 
     #[test]

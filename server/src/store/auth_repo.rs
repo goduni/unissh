@@ -1,5 +1,5 @@
 //! Auth/session/device lookups (§4.2/§4.10) used by the bearer extractor.
-//! Instance-scoped (v2): no tenant predicate.
+//! Instance-scoped (v2): sessions/devices are global to this instance.
 
 use super::models::{DeviceRow, SessionRow};
 use super::{Store, Val};

@@ -128,7 +128,7 @@ pub async fn write_accept(
             Some(ObjectTag::AccountState) => {
                 // A3: the state MUST be self-authored by the authoring account —
                 // author == the pushing device (an account's devices share a keyset).
-                // Otherwise one tenant member could write someone else's account-state.
+                // Otherwise one account could write someone else's account-state.
                 let obj_author = p.author_pubkey.as_deref().unwrap_or_default();
                 if obj_author != author_ed25519 {
                     return Err(AppError::forbidden("account state must be self-authored"));

@@ -32,7 +32,7 @@ struct PushResp {
 }
 
 /// `POST /v1/sync/push` → push_objects (§5.1). Atomically assigns a monotonic
-/// per-tenant server_seq; idempotent by `Idempotency-Key`.
+/// instance-wide server_seq; idempotent by `Idempotency-Key`.
 async fn push(
     auth: AuthCtx,
     headers: HeaderMap,
@@ -98,7 +98,7 @@ async fn push(
     // validate_signatures, BUT ACL objects (manifest/grant, tag 3/4) are ALWAYS
     // verified (S5): their integrity is not a client read concern but a server
     // authorization decision (the delta visibility filter trusts materialized
-    // manifests/grants); otherwise, with validate_signatures=off, a tenant member
+    // manifests/grants); otherwise, with validate_signatures=off, a space member
     // could push a forged grant and gain delta visibility of someone else's vault.
     let validate = state.validate_signatures();
     for it in &items {
@@ -120,7 +120,7 @@ async fn push(
 
     let idem = match headers.get("idempotency-key") {
         // Cap the client-chosen key so it can't write oversize idempotency rows
-        // (mirrors the tenant-id length guard); 128 bytes covers any UUID/hash.
+        // (bounds the client-chosen key like the other id guards); 128 bytes covers any UUID/hash.
         Some(v) if v.as_bytes().len() > 128 => {
             return Err(AppError::malformed(
                 "idempotency-key too long (max 128 bytes)",
