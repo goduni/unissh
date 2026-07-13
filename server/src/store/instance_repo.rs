@@ -2,9 +2,9 @@
 //! instance-wide next_seq.
 
 use super::{Store, Tx, Val};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::ids;
-use crate::store::models::InstanceRow;
+use crate::store::models::{DecoySecretRow, InstanceRow};
 
 const SEL: &str = "SELECT instance_id, name, claimed, owner_account_id, setup_code_hash, \
                    next_seq, created_at FROM instance WHERE id = 1";
@@ -19,7 +19,34 @@ impl Store {
             vec![Val::B(iid), Val::I(now)],
         )
         .await?;
+        // Set the server-PRIVATE escrow-decoy secret exactly once (idempotent: the
+        // `IS NULL` guard makes this a no-op on every boot after the first, and
+        // backfills pre-existing instances on their next boot). Keyed decoy salts
+        // must derive from THIS secret, never from the PUBLIC `instance_id`.
+        self.exec(
+            "UPDATE instance SET escrow_decoy_secret = ? \
+             WHERE id = 1 AND escrow_decoy_secret IS NULL",
+            vec![Val::B(ids::random_bytes32().to_vec())],
+        )
+        .await?;
         self.instance().await
+    }
+
+    /// The server-PRIVATE escrow-decoy secret (32 random bytes), set once by
+    /// `ensure_instance`. It keys the deterministic per-handle decoy salt that
+    /// `GET /v1/escrow/params` returns for unknown/unenrolled handles, so that
+    /// decoy can never be forged from the PUBLIC `instance_id`. Never surfaced by
+    /// any endpoint. A NULL here would be a boot-order bug (`ensure_instance` must
+    /// have run first) — surfaced as an internal error rather than silently keying
+    /// the decoy off a predictable value.
+    pub async fn escrow_decoy_secret(&self) -> AppResult<Vec<u8>> {
+        self.fetch_optional_as::<DecoySecretRow>(
+            "SELECT escrow_decoy_secret FROM instance WHERE id = 1",
+            vec![],
+        )
+        .await?
+        .and_then(|r| r.escrow_decoy_secret)
+        .ok_or_else(|| AppError::internal("escrow decoy secret not initialised"))
     }
 
     pub async fn instance(&self) -> AppResult<InstanceRow> {

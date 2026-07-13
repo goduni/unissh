@@ -37,6 +37,11 @@ pub async fn build_state(
     // exist before anything reads it — `Store::instance()` panics otherwise.
     let now = clock.now_unix();
     let instance_row = store.ensure_instance(now).await?;
+    // Load the server-PRIVATE escrow-decoy secret (set once by `ensure_instance`,
+    // just above). Kept off `InstanceRow` so it never rides along on the widely
+    // read instance row — the decoy in `GET /v1/escrow/params` is keyed from THIS,
+    // never from the PUBLIC `instance_id`.
+    let escrow_decoy_secret = store.escrow_decoy_secret().await?;
     // Unclaimed: publish a setup code so a client can claim this instance. The code
     // is the config-fixed one (IaC/tests) if set, else a fresh random one. We store
     // only sha256(code); the human code is printed to logs (never persisted).
@@ -67,6 +72,7 @@ pub async fn build_state(
         store,
         config,
         instance_row.instance_id,
+        escrow_decoy_secret,
         clock,
         metrics,
     ))

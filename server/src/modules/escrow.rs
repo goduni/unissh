@@ -75,14 +75,20 @@ fn stored_params(row: &EscrowRow) -> Option<(Vec<u8>, i64, i64, i64)> {
     }
 }
 
-/// A stable, per-handle 16-byte decoy salt: `HMAC-SHA256(key = sha256(instance_id ‖
-/// DECOY_LABEL), msg = handle)[..16]`. Keyed by a secret derived from `instance_id`
-/// so it is unforgeable and unpredictable off-server, yet deterministic (the same
-/// handle yields the same salt across calls) and per-handle distinct — a probe learns
-/// nothing about whether the handle exists.
-fn decoy_salt(instance_id: &[u8], handle: &str) -> Vec<u8> {
-    let mut key_material = Vec::with_capacity(instance_id.len() + DECOY_LABEL.len());
-    key_material.extend_from_slice(instance_id);
+/// A stable, per-handle 16-byte decoy salt: `HMAC-SHA256(key = sha256(decoy_secret ‖
+/// DECOY_LABEL), msg = handle)[..16]`. The key material is the SERVER-PRIVATE
+/// `escrow_decoy_secret` — a value NO endpoint ever returns — so the decoy is
+/// genuinely unforgeable off-server, yet deterministic (the same handle yields the
+/// same salt across calls) and per-handle distinct — a probe learns nothing about
+/// whether the handle exists.
+///
+/// It must NOT be keyed from `instance_id`: that is PUBLIC (`GET /v1/instance`
+/// returns it), so an attacker could recompute the decoy and tell an enrolled
+/// account (real random salt) apart from an unenrolled one (salt == recomputed
+/// decoy), defeating enumeration resistance. The private secret closes that leak.
+fn decoy_salt(decoy_secret: &[u8], handle: &str) -> Vec<u8> {
+    let mut key_material = Vec::with_capacity(decoy_secret.len() + DECOY_LABEL.len());
+    key_material.extend_from_slice(decoy_secret);
     key_material.extend_from_slice(DECOY_LABEL);
     let key = ids::sha256(&key_material);
     let mut mac = <Hmac<Sha256>>::new_from_slice(&key).expect("HMAC-SHA256 accepts a 32-byte key");
@@ -107,7 +113,7 @@ async fn escrow_params(
             argon_parallelism: par,
         },
         None => {
-            let salt = decoy_salt(&state.instance_id, &q.handle);
+            let salt = decoy_salt(&state.escrow_decoy_secret, &q.handle);
             ParamsResp {
                 argon_salt: ids::b64(&salt),
                 argon_mem_kib: DECOY_MEM_KIB,

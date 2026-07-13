@@ -161,6 +161,36 @@ async fn escrow_params_and_fetch_resist_enumeration() {
         "the decoy salt is 16 bytes, matching a real salt"
     );
 
+    // The decoy is keyed from a SERVER-PRIVATE secret, NOT from the PUBLIC
+    // instance_id. Prove it is unforgeable from public data: recompute what the
+    // decoy WOULD be if it were keyed off instance_id (the old, leaky scheme) and
+    // assert the real decoy differs. instance_id is served openly by /v1/instance.
+    let inst: Value = app
+        .client
+        .get(format!("{}/v1/instance", app.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let instance_id = unb64(inst["instance_id"].as_str().unwrap()).unwrap();
+    let forgeable = {
+        use hmac::{Hmac, KeyInit, Mac};
+        use sha2::{Digest, Sha256};
+        let mut key_material = instance_id.clone();
+        key_material.extend_from_slice(b"escrow-params-decoy");
+        let key: [u8; 32] = Sha256::digest(&key_material).into();
+        let mut mac = <Hmac<Sha256>>::new_from_slice(&key).unwrap();
+        mac.update(b"ghost");
+        b64(&mac.finalize().into_bytes()[..16])
+    };
+    assert_ne!(
+        p1["argon_salt"].as_str().unwrap(),
+        forgeable,
+        "the decoy must NOT be forgeable from the public instance_id"
+    );
+
     // A different handle → a different decoy (bound to the handle, not a constant).
     let resp3 = app
         .client

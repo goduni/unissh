@@ -6,3 +6,9 @@ ALTER TABLE keyset_blobs ADD COLUMN argon_salt        BLOB;
 ALTER TABLE keyset_blobs ADD COLUMN argon_mem_kib     INTEGER;
 ALTER TABLE keyset_blobs ADD COLUMN argon_iterations  INTEGER;
 ALTER TABLE keyset_blobs ADD COLUMN argon_parallelism INTEGER;
+
+-- Server-PRIVATE secret (32 random bytes) that keys the enumeration-resistant
+-- decoy salt returned by GET /v1/escrow/params for unknown/unenrolled handles.
+-- MUST never be returned by any endpoint (unlike the PUBLIC instance_id). Set
+-- once by ensure_instance on first boot; NULL only transiently before backfill.
+ALTER TABLE instance ADD COLUMN escrow_decoy_secret BLOB;

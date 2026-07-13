@@ -325,6 +325,15 @@ pub struct EdOnly {
     pub ed25519_pub: Vec<u8>,
 }
 
+/// Tiny helper row: the instance's server-PRIVATE escrow-decoy secret. Kept OUT
+/// of `InstanceRow` on purpose — it must never ride along on the widely-used
+/// instance read, and no endpoint ever returns it. Option because the column is
+/// NULL only transiently before `ensure_instance` backfills it on first boot.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct DecoySecretRow {
+    pub escrow_decoy_secret: Option<Vec<u8>>,
+}
+
 // ---- v2 (redesign/server-v2): key-binding attestations ----
 
 /// A key-binding attestation (Task 10): a space admin's signed statement about a

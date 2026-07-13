@@ -26,6 +26,12 @@ pub struct AppStateInner {
     /// This server's instance identity (random 16B), stashed at boot from the
     /// singleton `instance` row. Used as the auth-challenge host binding.
     pub instance_id: Vec<u8>,
+    /// Server-PRIVATE secret (32B) keying the enumeration-resistant decoy salt in
+    /// `GET /v1/escrow/params`. Loaded at boot from the singleton `instance` row.
+    /// Unlike `instance_id` this is NEVER returned by any endpoint — that is the
+    /// whole point: a public value (like `instance_id`) would let an attacker
+    /// recompute the decoy and distinguish enrolled from unenrolled handles.
+    pub escrow_decoy_secret: Vec<u8>,
     pub runtime: RuntimeConfig,
     pub clock: SharedClock,
     pub metrics: Option<PrometheusHandle>,
@@ -47,6 +53,7 @@ impl AppStateInner {
         store: Store,
         config: Config,
         instance_id: Vec<u8>,
+        escrow_decoy_secret: Vec<u8>,
         clock: SharedClock,
         metrics: Option<PrometheusHandle>,
     ) -> AppState {
@@ -72,6 +79,7 @@ impl AppStateInner {
             store,
             config,
             instance_id,
+            escrow_decoy_secret,
             runtime,
             clock,
             metrics,

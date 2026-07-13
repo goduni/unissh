@@ -45,6 +45,8 @@ uuid = { version = "1.23.3", features = ["v4"] }
 [dev-dependencies]
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "blocking"] }
 tempfile = "3.27.0"
+hmac = "0.13.0"
+sha2 = "0.11.0"
 unissh-crypto = { path = "../rust-core/crates/crypto" }
 unissh-keychain = { path = "../rust-core/crates/keychain" }
 unissh-storage = { path = "../rust-core/crates/storage" }
