@@ -4,7 +4,7 @@
 //! The server verifies self-attested registration + server-auth signatures, and
 //! enforces single-use nonce + expiry itself; it does not decrypt the payload.
 
-use crate::crypto::{self, ServerAuthChallenge};
+use crate::crypto::{self, RegistrationPayload, ServerAuthChallenge};
 use crate::error::{AppError, AppResult};
 use crate::http::extract::AuthCtx;
 use crate::ids;
@@ -33,6 +33,9 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/owner/set", post(owner_set))
         .route("/v1/devices/add", post(device_add))
         .route("/v1/devices", get(devices_list_self))
+        .route("/v1/invite", post(invite_issue_v2))
+        .route("/v1/join/preview", post(join_preview))
+        .route("/v1/join", post(join))
 }
 
 // ---- helpers ----
@@ -646,6 +649,385 @@ async fn device_add(
         StatusCode::CREATED,
         Json(DeviceAddResp {
             device_id: ids::b64(&device_id),
+        }),
+    ))
+}
+
+// ---- v2 invites + join (Task 8) ----
+//
+// One join mechanism: an invite carries *intents* (spaces + selective vaults). The
+// creator must admin every space it invites into. A joiner redeems the token
+// UNAUTHENTICATED — the self-attested registration signature IS the credential; the
+// server assigns a fresh account_id (the payload's is advisory, mirroring `claim`).
+// The whole redemption is ONE transaction so a lost single-use CAS race rolls the
+// account/device/memberships/pending-grants all back.
+
+/// A space intent: join `space_id` at server-trusted `role` (`member`|`admin`).
+/// Serialize is used to persist the intent list into the invite's JSON column;
+/// Deserialize both parses the request and re-reads the stored column on join.
+#[derive(Serialize, Deserialize)]
+struct SpaceIntent {
+    space_id: String,
+    role: String,
+}
+
+/// A selective-vault intent: enqueue a `grant` for `vault_id` at crypto `role`
+/// (0|1|2). Stored verbatim in the invite; consumed on join.
+#[derive(Serialize, Deserialize)]
+struct VaultIntent {
+    vault_id: String,
+    role: i64,
+}
+
+#[derive(Deserialize)]
+struct InviteReq {
+    space_intents: Vec<SpaceIntent>,
+    #[serde(default)]
+    vault_intents: Vec<VaultIntent>,
+    #[serde(default)]
+    ttl_seconds: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct InviteResp {
+    invite_id: String,
+    token: String,
+    /// `{public_url}/join#<token>` when `public_url` is configured, else null.
+    url: Option<String>,
+    expires_at: i64,
+}
+
+/// `POST /v1/invite` (Bearer): mint a one-link invite. The caller must be an
+/// `admin` of EVERY space in `space_intents`. Only `sha256(token)` is persisted;
+/// the token is returned to the caller exactly once.
+async fn invite_issue_v2(
+    auth: AuthCtx,
+    State(state): State<AppState>,
+    Json(req): Json<InviteReq>,
+) -> AppResult<(StatusCode, Json<InviteResp>)> {
+    if req.space_intents.is_empty() {
+        return Err(AppError::malformed("at least one space intent is required"));
+    }
+    // Validate + authorize: the caller must admin every space it invites into (an
+    // unknown space or a non-admin caller both fail identically with 403).
+    for si in &req.space_intents {
+        if si.role != "member" && si.role != "admin" {
+            return Err(AppError::malformed(
+                "space role must be 'member' or 'admin'",
+            ));
+        }
+        let space_id = ids::unb64(&si.space_id)?;
+        if !state
+            .store
+            .is_space_admin(&space_id, auth.account_id())
+            .await?
+        {
+            return Err(AppError::forbidden("space admin required to invite"));
+        }
+    }
+    for vi in &req.vault_intents {
+        if !(0..=2).contains(&vi.role) {
+            return Err(AppError::malformed("vault role must be 0, 1, or 2"));
+        }
+        ids::unb64(&vi.vault_id)?; // reject malformed vault ids up front
+    }
+
+    let space_json = serde_json::to_string(&req.space_intents)
+        .map_err(|_| AppError::internal("serialize space intents"))?;
+    let vault_json = serde_json::to_string(&req.vault_intents)
+        .map_err(|_| AppError::internal("serialize vault intents"))?;
+
+    let ttl = req
+        .ttl_seconds
+        .unwrap_or(state.config.session.invite_default_ttl_seconds);
+    if ttl <= 0 {
+        return Err(AppError::malformed("ttl_seconds must be positive"));
+    }
+    let now = state.now();
+    let expires_at = now + ttl;
+
+    // Store sha256 of the RAW token bytes (not the base64), so lookup on join hashes
+    // the same representation and base64 canonicalization can never matter.
+    let raw = ids::random_bytes32();
+    let token = ids::b64(&raw);
+    let token_hash = ids::sha256(&raw);
+    let invite_id = ids::random_id16().to_vec();
+
+    state
+        .store
+        .create_invite_v2(
+            &invite_id,
+            &token_hash,
+            &space_json,
+            &vault_json,
+            expires_at,
+            Some(auth.account_id()),
+            now,
+        )
+        .await?;
+
+    let url = if state.config.server.public_url.is_empty() {
+        None
+    } else {
+        Some(format!("{}/join#{}", state.config.server.public_url, token))
+    };
+
+    let ev = serde_json::json!({
+        "event": "invite_create",
+        "invite_id": ids::b64(&invite_id),
+        "account_id": ids::b64(auth.account_id()),
+        "ts": now,
+    });
+    state.audit_event(&ev, None).await;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(InviteResp {
+            invite_id: ids::b64(&invite_id),
+            token,
+            url,
+            expires_at,
+        }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct PreviewReq {
+    token: String,
+}
+
+#[derive(Serialize)]
+struct PreviewSpace {
+    space_id: String,
+    name: String,
+    role: String,
+}
+
+#[derive(Serialize)]
+struct PreviewResp {
+    instance_name: Option<String>,
+    spaces: Vec<PreviewSpace>,
+    expires_at: i64,
+}
+
+/// `POST /v1/join/preview` (no auth): resolve an invite's spaces (with names) WITHOUT
+/// consuming it. POST — not GET — so the secret token never lands in a URL/query log
+/// (a deliberate deviation from the spec's `GET /v1/join/preview`).
+async fn join_preview(
+    State(state): State<AppState>,
+    Json(req): Json<PreviewReq>,
+) -> AppResult<Json<PreviewResp>> {
+    let raw = ids::unb64(&req.token)?;
+    let token_hash = ids::sha256(&raw);
+    let invite = state
+        .store
+        .get_invite_v2_by_hash(&token_hash)
+        .await?
+        .ok_or_else(|| AppError::not_found("invite"))?;
+    if invite.state != "pending" || invite.expires_at <= state.now() {
+        return Err(AppError::gone("invite already redeemed or expired"));
+    }
+
+    let intents: Vec<SpaceIntent> = serde_json::from_str(&invite.space_intents)
+        .map_err(|_| AppError::internal("corrupt space intents"))?;
+    let mut spaces = Vec::with_capacity(intents.len());
+    for si in intents {
+        let space_id = ids::unb64(&si.space_id)?;
+        let name = state
+            .store
+            .get_space(&space_id)
+            .await?
+            .map(|s| s.name)
+            .unwrap_or_default();
+        spaces.push(PreviewSpace {
+            space_id: si.space_id,
+            name,
+            role: si.role,
+        });
+    }
+    let instance = state.store.instance().await?;
+    Ok(Json(PreviewResp {
+        instance_name: instance.name,
+        spaces,
+        expires_at: invite.expires_at,
+    }))
+}
+
+#[derive(Deserialize)]
+struct JoinReq {
+    invite_token: String,
+    registration_payload: String,
+    registration_signature: String,
+    #[serde(default)]
+    binding_mac: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    handle: Option<String>,
+}
+
+#[derive(Serialize)]
+struct JoinResp {
+    account_id: String,
+    device_id: String,
+    spaces: Vec<String>,
+}
+
+/// `POST /v1/join` (no auth): redeem an invite. New keyset → create account+device
+/// (201); already-registered keyset → reuse the account, mint a fresh device (200).
+/// Single transaction: redeem CAS + account/device + memberships + pending grants.
+async fn join(
+    State(state): State<AppState>,
+    Json(req): Json<JoinReq>,
+) -> AppResult<(StatusCode, Json<JoinResp>)> {
+    // 1. Verify the self-attested registration signature (the credential).
+    let payload_bytes = ids::unb64(&req.registration_payload)?;
+    let payload = RegistrationPayload::parse_canonical(&payload_bytes)?;
+    let sig = ids::unb64(&req.registration_signature)?;
+    crypto::verify_registration(&payload, &sig)?;
+
+    let raw = ids::unb64(&req.invite_token)?;
+    let token_hash = ids::sha256(&raw);
+    let binding_mac = match req.binding_mac.as_deref() {
+        Some(s) => Some(ids::unb64(s)?),
+        None => None,
+    };
+    let now = state.now();
+
+    // Find-or-create decision (before the tx). A disabled account is refused without
+    // burning the invite; a brand-new handle must be unique.
+    let existing = state.store.get_account_by_ed(&payload.ed25519_pub).await?;
+    let (account_id, is_new) = match &existing {
+        Some(acct) => {
+            if acct.status != "active" {
+                return Err(AppError::forbidden("account is not active"));
+            }
+            (acct.account_id.clone(), false)
+        }
+        None => {
+            if let Some(h) = req.handle.as_deref() {
+                if state.store.handle_taken(h).await? {
+                    return Err(AppError::conflict("handle already taken"));
+                }
+            }
+            (ids::random_id16().to_vec(), true)
+        }
+    };
+    // A fresh device on every join, including the reused-account path (reattach).
+    let device_id = ids::random_id16().to_vec();
+
+    // 2. ONE transaction. If the single-use CAS is lost, `?` drops the tx and the
+    //    whole join (account/device/memberships/pending) rolls back.
+    let mut tx = state.store.begin().await?;
+    let invite = match state
+        .store
+        .redeem_invite_v2_cas(&mut tx, &token_hash, &account_id, now)
+        .await?
+    {
+        Some(inv) => inv,
+        None => return Err(AppError::gone("invite already redeemed or expired")),
+    };
+
+    // 3. Account (new only) + device (always).
+    if is_new {
+        tx.create_account(
+            &account_id,
+            &payload.ed25519_pub,
+            &payload.x25519_pub,
+            req.display_name.as_deref(),
+            req.handle.as_deref(),
+            false, // joiners are never owners
+            &payload_bytes,
+            &sig,
+            now,
+        )
+        .await?;
+    }
+    tx.create_device(
+        &account_id,
+        &device_id,
+        &payload.ed25519_pub,
+        &payload.x25519_pub,
+        now,
+    )
+    .await?;
+
+    let added_by = invite.created_by.as_deref();
+    let space_intents: Vec<SpaceIntent> = serde_json::from_str(&invite.space_intents)
+        .map_err(|_| AppError::internal("corrupt space intents"))?;
+    let vault_intents: Vec<VaultIntent> = serde_json::from_str(&invite.vault_intents)
+        .map_err(|_| AppError::internal("corrupt vault intents"))?;
+
+    // 4. Memberships per space intent.
+    let mut joined_bytes: Vec<Vec<u8>> = Vec::with_capacity(space_intents.len());
+    let mut joined_b64: Vec<String> = Vec::with_capacity(space_intents.len());
+    for si in &space_intents {
+        let space_id = ids::unb64(&si.space_id)?;
+        state
+            .store
+            .space_member_add(&mut tx, &space_id, &account_id, &si.role, added_by, now)
+            .await?;
+        joined_b64.push(si.space_id.clone());
+        joined_bytes.push(space_id);
+    }
+
+    // 5. Selective-vault grants (source "invite", proof = the opaque binding MAC).
+    for vi in &vault_intents {
+        let vault_id = ids::unb64(&vi.vault_id)?;
+        let action_id = ids::random_id16().to_vec();
+        state
+            .store
+            .pending_enqueue(
+                &mut tx,
+                &action_id,
+                "grant",
+                &vault_id,
+                &account_id,
+                Some(vi.role),
+                "invite",
+                binding_mac.as_deref(),
+                now,
+            )
+            .await?;
+    }
+
+    // 6. Policy grants for every space-wide vault of each joined space (source "policy").
+    for space_id in &joined_bytes {
+        for v in tx.space_wide_vaults(space_id).await? {
+            let action_id = ids::random_id16().to_vec();
+            state
+                .store
+                .pending_enqueue(
+                    &mut tx,
+                    &action_id,
+                    "grant",
+                    &v.vault_id,
+                    &account_id,
+                    v.space_wide_role,
+                    "policy",
+                    None,
+                    now,
+                )
+                .await?;
+        }
+    }
+
+    tx.commit().await?;
+
+    audit_observed(&state, "join", &account_id, &device_id).await;
+    metrics::counter!("unissh_join_total").increment(1);
+
+    let status = if is_new {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(JoinResp {
+            account_id: ids::b64(&account_id),
+            device_id: ids::b64(&device_id),
+            spaces: joined_b64,
         }),
     ))
 }

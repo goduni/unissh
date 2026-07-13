@@ -283,8 +283,31 @@ impl Store {
     }
 }
 
+/// A space-wide vault + its policy role: every new member of the space gets a
+/// `grant` pending-action at this role (source `"policy"`) when they join.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SpaceWideVaultRow {
+    pub vault_id: Vec<u8>,
+    pub space_wide_role: Option<i64>,
+}
+
 /// Transactional helpers for claim (atomic with the instance CAS + space creation).
 impl Tx<'_> {
+    /// Live space-wide vaults of a space (join tx helper). Cross-dialect: the `?`
+    /// placeholder is rewritten to `$n` for Postgres by the bind layer, and the
+    /// `'space_wide'` / `tombstone = 0` predicates are plain SQL valid on both.
+    pub async fn space_wide_vaults(
+        &mut self,
+        space_id: &[u8],
+    ) -> AppResult<Vec<SpaceWideVaultRow>> {
+        self.fetch_all_as::<SpaceWideVaultRow>(
+            "SELECT vault_id, space_wide_role FROM vaults \
+             WHERE space_id = ? AND access_policy = 'space_wide' AND tombstone = 0",
+            vec![Val::b(space_id)],
+        )
+        .await
+    }
+
     /// Transactional mirror of [`Store::create_account`] — same columns, same binds,
     /// same order — for use inside the claim transaction.
     #[allow(clippy::too_many_arguments)]
