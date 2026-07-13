@@ -7,5 +7,6 @@ pub mod identity;
 pub mod instance;
 pub mod ops;
 pub mod policy;
+pub mod spaces;
 pub mod sync;
 pub mod vault_meta;

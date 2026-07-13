@@ -58,6 +58,7 @@ pub fn build_router(state: AppState) -> Router {
     let v1 = Router::new()
         .merge(modules::instance::routes())
         .merge(modules::identity::routes())
+        .merge(modules::spaces::routes())
         .merge(modules::sync::routes())
         .merge(modules::vault_meta::routes())
         .merge(modules::policy::routes())
