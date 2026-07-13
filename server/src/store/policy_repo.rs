@@ -27,6 +27,12 @@ struct VaultScope {
     owner_pubkey: Vec<u8>,
 }
 
+#[derive(sqlx::FromRow)]
+struct VaultAdminScope {
+    space_id: Option<Vec<u8>>,
+    owner_account_id: Option<Vec<u8>>,
+}
+
 impl Store {
     /// Explicit claim of vault_id (§5.4/§8.2): reject-if-exists-different-owner.
     /// Returns true if the namespace was created, false if it already belongs to the
@@ -106,6 +112,27 @@ impl Store {
                     let ed = self.account_ed(account_id).await?;
                     Ok(ed.as_deref() == Some(v.owner_pubkey.as_slice()))
                 }
+            },
+        }
+    }
+
+    /// Whether `account_id` holds ADMIN authority over `vault_id`. A space vault is
+    /// admin-able by an admin of its space; a personal vault only by its owning account.
+    /// A NONEXISTENT vault is NOT admin-able (false) — an invite `vault_intent` must
+    /// reference a real vault, so this deliberately rejects unknown vaults (unlike the
+    /// looser `can_touch_vault`, whose first-publish path treats an unknown vault as OK).
+    pub async fn can_admin_vault(&self, account_id: &[u8], vault_id: &[u8]) -> AppResult<bool> {
+        let row = self
+            .fetch_optional_as::<VaultAdminScope>(
+                "SELECT space_id, owner_account_id FROM vaults WHERE vault_id = ?",
+                vec![Val::b(vault_id)],
+            )
+            .await?;
+        match row {
+            None => Ok(false),
+            Some(v) => match v.space_id {
+                Some(sid) => self.is_space_admin(&sid, account_id).await,
+                None => Ok(v.owner_account_id.as_deref() == Some(account_id)),
             },
         }
     }

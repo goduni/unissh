@@ -154,7 +154,12 @@ async fn members_add(
     let space_id = ids::unb64(&req.space_id)?;
     let account_id = ids::unb64(&req.account_id)?;
     validate_role(&req.role)?;
+    // Admin gate first (an outsider probing an unknown account still gets 403, not 404),
+    // then reject an unknown target account with 404 instead of a raw FK-violation 500.
     require_space_admin(&state, &space_id, auth.account_id()).await?;
+    if state.store.get_account_by_id(&account_id).await?.is_none() {
+        return Err(AppError::not_found("account"));
+    }
 
     let mut tx = state.store.begin().await?;
     state
@@ -191,6 +196,19 @@ async fn members_remove(
     let space_id = ids::unb64(&req.space_id)?;
     let account_id = ids::unb64(&req.account_id)?;
     require_space_admin(&state, &space_id, auth.account_id()).await?;
+    // Anti-orphan: refuse to remove the LAST admin of a space (no recovery path).
+    if state
+        .store
+        .space_member_role(&space_id, &account_id)
+        .await?
+        .as_deref()
+        == Some("admin")
+        && state.store.space_admin_count(&space_id).await? <= 1
+    {
+        return Err(AppError::forbidden(
+            "cannot remove the last admin of a space",
+        ));
+    }
     state
         .store
         .space_member_remove(&space_id, &account_id)
@@ -247,6 +265,20 @@ async fn members_set_role(
     let account_id = ids::unb64(&req.account_id)?;
     validate_role(&req.role)?;
     require_space_admin(&state, &space_id, auth.account_id()).await?;
+    // Anti-orphan: refuse to demote the LAST admin of a space (no recovery path).
+    if req.role != "admin"
+        && state
+            .store
+            .space_member_role(&space_id, &account_id)
+            .await?
+            .as_deref()
+            == Some("admin")
+        && state.store.space_admin_count(&space_id).await? <= 1
+    {
+        return Err(AppError::forbidden(
+            "cannot demote the last admin of a space",
+        ));
+    }
     state
         .store
         .space_member_set_role(&space_id, &account_id, &req.role)

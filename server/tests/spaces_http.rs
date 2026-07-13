@@ -247,3 +247,89 @@ async fn spaces_members_directory_lifecycle() {
     let dir2: Value = r.json().await.unwrap();
     assert_eq!(dir2["accounts"].as_array().unwrap().len(), 2);
 }
+
+/// Whole-branch review FIXes: (2) member-add on an unknown account 404s instead of
+/// 500-ing on the FK violation; (3) a space's LAST admin cannot be removed or demoted
+/// (anti-orphan — the instance owner is NOT auto-admin of spaces they didn't create,
+/// so an orphaned space has no recovery path).
+#[tokio::test]
+async fn member_add_unknown_404_and_last_admin_protected() {
+    let app = spawn().await;
+    let id = common::make_identity();
+    let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let tok = common::login_v2(
+        &app,
+        &id,
+        &owner_acct,
+        claimed["device_id"].as_str().unwrap(),
+    )
+    .await;
+
+    let post = |path: &str, body: Value| {
+        app.client
+            .post(format!("{}/v1/{}", app.base, path))
+            .bearer_auth(&tok)
+            .json(&body)
+            .send()
+    };
+
+    // Owner creates "Solo" → owner is its SOLE admin.
+    let solo_id = post("spaces", json!({ "name": "Solo" }))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // FIX 2: adding a member with a random NONEXISTENT account_id → 404 (not 500). The
+    // admin guard runs first, so this is reached only because the caller IS an admin.
+    let ghost = b64(&[7u8; 16]);
+    let r = post(
+        "spaces/members",
+        json!({ "space_id": solo_id, "account_id": ghost, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 404, "unknown account → 404, not 500");
+
+    // FIX 3a: removing the last admin (the owner) of Solo → 403.
+    let r = post(
+        "spaces/members/remove",
+        json!({ "space_id": solo_id, "account_id": owner_acct }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 403, "cannot remove the last admin of a space");
+
+    // FIX 3b: demoting the last admin (the owner) of Solo → 403.
+    let r = post(
+        "spaces/members/role",
+        json!({ "space_id": solo_id, "account_id": owner_acct, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 403, "cannot demote the last admin of a space");
+
+    // The guards did not mutate: the owner is still an admin of Solo.
+    let spaces: Value = app
+        .client
+        .get(format!("{}/v1/spaces", app.base))
+        .bearer_auth(&tok)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let solo = spaces["spaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["space_id"] == solo_id)
+        .unwrap();
+    assert_eq!(solo["role"], "admin", "owner remains Solo's admin");
+}

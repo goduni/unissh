@@ -729,11 +729,22 @@ async fn invite_issue_v2(
             return Err(AppError::forbidden("space admin required to invite"));
         }
     }
+    // A vault_intent pre-authorizes a `grant` that lands in the vault-admin's `/v1/pending`
+    // queue. The caller must therefore have ADMIN authority over EACH vault it grants —
+    // else a space-admin could mint an invite escalating access to a vault they have no
+    // authority over (confused-deputy). A nonexistent vault is rejected (403) too.
     for vi in &req.vault_intents {
         if !(0..=2).contains(&vi.role) {
             return Err(AppError::malformed("vault role must be 0, 1, or 2"));
         }
-        ids::unb64(&vi.vault_id)?; // reject malformed vault ids up front
+        let vault_id = ids::unb64(&vi.vault_id)?; // reject malformed vault ids up front
+        if !state
+            .store
+            .can_admin_vault(auth.account_id(), &vault_id)
+            .await?
+        {
+            return Err(AppError::forbidden("not authorized to grant this vault"));
+        }
     }
 
     let space_json = serde_json::to_string(&req.space_intents)

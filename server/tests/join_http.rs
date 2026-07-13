@@ -208,6 +208,126 @@ async fn join_new_then_existing_keyset_and_admin_gate() {
     assert_eq!(r.status(), 403, "non-space-admin cannot mint an invite");
 }
 
+/// Whole-branch review FIX: `vault_intents` must be admin-authorized just like
+/// `space_intents`. Otherwise a space-admin could mint an invite pre-authorizing a
+/// `grant` to a vault they have NO authority over — the row would land in the real
+/// vault-admin's `/v1/pending` queue (confused-deputy). The caller here (owner) ALWAYS
+/// passes the space-intent gate for "Backend", so every 403 below is unambiguously the
+/// vault-intent gate firing.
+#[tokio::test]
+async fn invite_vault_intent_admin_gate() {
+    let app = spawn().await;
+
+    // Owner claims + logs in, creates "Backend" (creator is auto-admin).
+    let owner = make_identity();
+    let claimed = claim_owner(&app, &owner.payload_b64, &owner.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_dev = claimed["device_id"].as_str().unwrap().to_string();
+    let owner_tok = common::login_v2(&app, &owner, &owner_acct, &owner_dev).await;
+
+    let backend_id = app
+        .client
+        .post(format!("{}/v1/spaces", app.base))
+        .bearer_auth(&owner_tok)
+        .json(&json!({ "name": "Backend" }))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Owner claims a SPACE vault in Backend → owner admins it (admin of its space).
+    let vault_ok = b64(&[1u8; 16]);
+    let r = app
+        .client
+        .post(format!("{}/v1/vaults/claim", app.base))
+        .bearer_auth(&owner_tok)
+        .json(&json!({
+            "vault_id": vault_ok,
+            "space_id": backend_id,
+            "access_policy": "space_wide",
+            "space_wide_role": 1,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "owner claims a Backend space vault");
+
+    // POSITIVE: a vault_intent for a vault the caller DOES admin → 201.
+    let r = app
+        .client
+        .post(format!("{}/v1/invite", app.base))
+        .bearer_auth(&owner_tok)
+        .json(&json!({
+            "space_intents": [{ "space_id": backend_id, "role": "member" }],
+            "vault_intents": [{ "vault_id": vault_ok, "role": 1 }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        201,
+        "vault_intent for an admined vault is accepted"
+    );
+
+    // A DISTINCT (seeded) account owns a PERSONAL vault — the owner has no authority
+    // over it. (seed_session is the store seam the other spaces tests use for a second
+    // principal; a personal claim needs only an authenticated session.)
+    let other = app.seed_session("").await;
+    let personal = b64(&[2u8; 16]);
+    let r = app
+        .client
+        .post(format!("{}/v1/vaults/claim", app.base))
+        .bearer_auth(&other.access_token_b64)
+        .json(&json!({ "vault_id": personal }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "other account claims its own personal vault"
+    );
+
+    // NEGATIVE: owner (space gate passes for Backend) references another account's
+    // personal vault in a vault_intent → 403 from the vault gate.
+    let r = app
+        .client
+        .post(format!("{}/v1/invite", app.base))
+        .bearer_auth(&owner_tok)
+        .json(&json!({
+            "space_intents": [{ "space_id": backend_id, "role": "member" }],
+            "vault_intents": [{ "vault_id": personal, "role": 2 }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        403,
+        "cannot grant a personal vault owned by another account"
+    );
+
+    // NEGATIVE: a vault_intent for a NONEXISTENT vault is rejected too (403).
+    let r = app
+        .client
+        .post(format!("{}/v1/invite", app.base))
+        .bearer_auth(&owner_tok)
+        .json(&json!({
+            "space_intents": [{ "space_id": backend_id, "role": "member" }],
+            "vault_intents": [{ "vault_id": b64(&[9u8; 16]), "role": 0 }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403, "cannot grant a nonexistent vault");
+}
+
 #[tokio::test]
 async fn invite_url_rendered_when_public_url_set() {
     let app = spawn_with(|c| c.server.public_url = "https://ssh.example.com".into()).await;
