@@ -873,7 +873,8 @@ export const useApp = create<AppStore>((set, get) => ({
 
   maybeBindLegacyCloudVaults: async () => {
     // One-time 1:1 migration: cloud vaults created before binding existed have no
-    // syncTenant. They were all made under the single pre-multi-server server, so
+    // syncTenant (now the bound SPACE id — see VaultInfo.syncTenant). They were all
+    // made under the single pre-multi-server server, so
     // bind them to THAT one — but ONLY when exactly one server is linked, so the
     // binding can't go to the wrong one. Idempotent; safe on every boot/unlock.
     // With 0 or 2+ servers it no-ops (the user binds such vaults manually).

@@ -19,7 +19,11 @@ export function vaultLoc(
   servers: ServerStatus[],
 ): { local: boolean; server: string | null } {
   if (v.syncTarget !== "cloud") return { local: true, server: null };
-  const s = servers.find((x) => x.tenantId && x.tenantId === v.syncTenant) ?? null;
+  // NOTE: `syncTenant` now holds the vault's bound SPACE id, but ServerStatus only
+  // exposes `instanceId` (space id is not surfaced by the Rust snapshot) — so this
+  // resolves a server only for links whose instance id happens to equal the space id
+  // (legacy single-space links). See report: ServerStatus should also carry spaceId.
+  const s = servers.find((x) => x.instanceId && x.instanceId === v.syncTenant) ?? null;
   return { local: false, server: s ? serverShortLabel(s) : null };
 }
 
@@ -28,6 +32,6 @@ export function vaultLoc(
 export function isOwnedCloud(v: VaultInfo, servers: ServerStatus[]): boolean {
   return (
     v.syncTarget === "cloud" &&
-    servers.some((s) => s.tenantId && s.tenantId === v.syncTenant && s.owned)
+    servers.some((s) => s.instanceId && s.instanceId === v.syncTenant && s.owned)
   );
 }

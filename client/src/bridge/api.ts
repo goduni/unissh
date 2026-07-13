@@ -19,7 +19,13 @@ import type {
   GroupTargetPlan,
   HostImportReport,
   InstanceStatus,
-  InvitePreview,
+  InviteInfo,
+  JoinPreview,
+  SpaceInfo,
+  DirectoryEntry,
+  PendingAction,
+  AttestationInfo,
+  EscrowParamsInfo,
   ItemInfo,
   JumpHost,
   KnownHostInfo,
@@ -511,31 +517,34 @@ export const serverSetActive = (serverId: string) =>
   invoke<ServerList>("server_set_active", { serverId });
 export const serverRemove = (serverId: string) =>
   invoke<ServerList>("server_remove", { serverId });
-export const serverRegister = (
+/** Join an instance via a single-link invite `inviteToken`. The instance is
+ *  addressed by `baseUrl` (no tenant id on the wire any more); the granted spaces
+ *  come back inside the resulting ServerStatus' link. Joiners are never owners. */
+export const serverJoin = (
   baseUrl: string,
-  tenantId: string,
   inviteToken: string,
   opts: { displayName?: string; handle?: string } = {},
 ) =>
-  invoke<ServerStatus>("server_register", {
+  invoke<ServerStatus>("server_join", {
     baseUrl,
-    tenantId,
     inviteToken,
     displayName: opts.displayName ?? null,
     handle: opts.handle ?? null,
   });
-/** Create your OWN Space (tenant) on a server and become its owner — mints a fresh
- *  tenant id client-side. Use for a personal Space (no second server needed if the
- *  host is multi-tenant). Rejects (403) if the server disallows self-serve bootstrap. */
-export const serverBootstrap = (
+/** Claim an UNCLAIMED instance and become its owner. The `setupCode` (printed by
+ *  the server on first boot) authorizes the single-winner claim; the server creates
+ *  the owner account + device + a first Space and returns their ids. A claimed
+ *  instance returns 409. */
+export const serverClaim = (
   baseUrl: string,
-  opts: { spaceName?: string; handle?: string; bootstrapToken?: string } = {},
+  opts: { setupCode: string; displayName?: string; handle?: string; spaceName?: string },
 ) =>
-  invoke<ServerStatus>("server_bootstrap", {
+  invoke<ServerStatus>("server_claim", {
     baseUrl,
+    setupCode: opts.setupCode,
     spaceName: opts.spaceName ?? null,
     handle: opts.handle ?? null,
-    bootstrapToken: opts.bootstrapToken ?? null,
+    displayName: opts.displayName ?? null,
   });
 export const serverLogin = (serverId?: string) =>
   invoke<ServerStatus>("server_login", { serverId: serverId ?? null });
@@ -545,11 +554,10 @@ export const serverLogout = (serverId?: string) =>
   invoke<ServerStatus>("server_logout", { serverId: serverId ?? null });
 export const serverDisconnect = (serverId?: string) =>
   invoke<ServerList>("server_disconnect", { serverId: serverId ?? null });
-export const serverInviteRedeemPreview = (
-  baseUrl: string,
-  tenantId: string,
-  inviteToken: string,
-) => invoke<InvitePreview>("server_invite_redeem_preview", { baseUrl, tenantId, inviteToken });
+/** Preview an invite before joining (does not consume it): the instance name and
+ *  the spaces (with roles) it grants. Stateless — no session. */
+export const serverJoinPreview = (baseUrl: string, token: string) =>
+  invoke<JoinPreview>("server_join_preview", { baseUrl, token });
 export const serverDeviceAdd = (serverId?: string) =>
   invoke<string>("server_device_add", { serverId: serverId ?? null });
 export const serverListDevices = (serverId?: string) =>
@@ -568,7 +576,7 @@ export const serverAccountProfile = (
   });
 
 // ── cloud vaults + sync ────────────────────────────────────────
-// Bound 1:1 to a server (defaults to the active one) by its tenantId.
+// Bound 1:1 to a server (defaults to the active one) by that link's space id.
 export const serverCreateCloudVault = (name: string, serverId?: string) =>
   invoke<string>("server_create_cloud_vault", { serverId: serverId ?? null, name });
 // One-time migration: bind legacy unbound cloud vaults to a server (default active).
@@ -616,9 +624,93 @@ export const getAccountDefaultUsername = () =>
 export const serverRotateVk = (vaultId: string, remaining: RemainingMember[]) =>
   invoke<number>("server_rotate_vk", { vaultId, remaining });
 
+// ── cloud spaces / directory / pending / attestations (server-v2) ──
+// Each command resolves its Bearer from the server link (defaults to the active
+// server), like the sibling identity commands — so they take an optional serverId.
+/** Mint a one-link invite for a SINGLE space intent (`spaceId` at `role`) on a
+ *  server (defaults to active). Caller must be an admin of that space. `ttlSeconds`
+ *  optionally bounds the invite lifetime. The token is shown once (only its hash is
+ *  stored server-side). */
+export const serverInvite = (
+  spaceId: string,
+  role: string,
+  ttlSeconds?: number,
+  serverId?: string,
+) =>
+  invoke<InviteInfo>("server_invite", {
+    spaceId,
+    role,
+    ttlSeconds: ttlSeconds ?? null,
+    serverId: serverId ?? null,
+  });
+/** The caller's own spaces (with roles) on a server (defaults to active). */
+export const serverListSpaces = (serverId?: string) =>
+  invoke<SpaceInfo[]>("server_list_spaces", { serverId: serverId ?? null });
+/** Create a Space (instance owner) on a server (defaults to active); the creator
+ *  becomes its admin. Returns the new space id (base64). */
+export const serverCreateSpace = (name: string, serverId?: string) =>
+  invoke<string>("server_create_space", { name, serverId: serverId ?? null });
+/** Add (idempotent) an account to a space at a role (space-admin) on a server
+ *  (defaults to active). */
+export const serverAddSpaceMember = (
+  spaceId: string,
+  accountId: string,
+  role: string,
+  serverId?: string,
+) =>
+  invoke<void>("server_add_space_member", {
+    spaceId,
+    accountId,
+    role,
+    serverId: serverId ?? null,
+  });
+/** The shared people directory on a server (defaults to active): handles + hex
+ *  canonical keys, ready to feed serverAddMember / serverAddSpaceMember. */
+export const serverDirectory = (serverId?: string) =>
+  invoke<DirectoryEntry[]>("server_directory", { serverId: serverId ?? null });
+/** The caller's outstanding vault-admin crypto actions (grant/revoke) on a server
+ *  (defaults to active). Fulfil each via serverAddMember / serverRotateVk. */
+export const serverPending = (serverId?: string) =>
+  invoke<PendingAction[]>("server_pending", { serverId: serverId ?? null });
+/** Publish an OPAQUE key-binding attestation about an account (space-admin) on a
+ *  server (defaults to active). `blob`/`signature` are base64, produced+verified by
+ *  clients (the server stores them verbatim). */
+export const serverAttestationsPut = (
+  accountId: string,
+  blob: string,
+  signature: string,
+  serverId?: string,
+) =>
+  invoke<void>("server_attestations_put", {
+    accountId,
+    blob,
+    signature,
+    serverId: serverId ?? null,
+  });
+/** Every attestation about an account on a server (defaults to active). Opaque
+ *  blob+signature (base64); the caller verifies signatures. */
+export const serverAttestationsList = (accountId: string, serverId?: string) =>
+  invoke<AttestationInfo[]>("server_attestations_list", {
+    accountId,
+    serverId: serverId ?? null,
+  });
+
 // ── cloud devices / onboarding ─────────────────────────────────
-export const serverKeysetPush = (serverId?: string) =>
-  invoke<number>("server_keyset_push", { serverId: serverId ?? null });
+/** Escrow this device's (already-encrypted) keyset to a server (defaults to active)
+ *  AND arm keyless-escrow sign-in: the escrow K_auth is derived ONCE from the SAME
+ *  `password` + `secretKeyHex` that wraps the uploaded blob, so a later
+ *  serverEscrowFetchAndUnlock re-derives an identical K_auth. `password` is null for
+ *  passwordless/SSO accounts. Returns the stored generation. */
+export const serverKeysetPush = (
+  password: string | null,
+  secretKeyHex: string,
+  serverId?: string,
+) =>
+  invoke<number>("server_keyset_push", {
+    password,
+    secretKeyHex,
+    serverId: serverId ?? null,
+  });
 export const serverKeysetPullAndUnlock = (
   password: string | null,
   secretKeyHex: string,
@@ -629,6 +721,27 @@ export const serverKeysetPullAndUnlock = (
     secretKeyHex,
     serverId: serverId ?? null,
   });
+/** Fetch the escrow Argon2id params for a `handle` from a server (PUBLIC — no
+ *  session). NOTE: a 200 is NOT proof the handle exists (shaped decoy for unknown
+ *  handles), so callers must not treat this as an existence oracle. */
+export const serverEscrowParams = (baseUrl: string, handle: string) =>
+  invoke<EscrowParamsInfo>("server_escrow_params", { baseUrl, handle });
+/** Recover this device's keyset from a server's ESCROW by handle and unlock it
+ *  (PUBLIC — no session). `password` is null for passwordless/SSO accounts;
+ *  `secretKeyHex` is the account Secret Key (Emergency Kit). A wrong password/key
+ *  surfaces as the server's 403. */
+export const serverEscrowFetchAndUnlock = (
+  baseUrl: string,
+  handle: string,
+  password: string | null,
+  secretKeyHex: string,
+) =>
+  invoke<void>("server_escrow_fetch_and_unlock", {
+    baseUrl,
+    handle,
+    password,
+    secretKeyHex,
+  });
 export const serverOnboardInitiate = (serverId?: string) =>
   invoke<PairingPayload>("server_onboard_initiate", { serverId: serverId ?? null });
 export const serverOnboardComplete = (channelId: string, oobCode: string, serverId?: string) =>
@@ -636,7 +749,8 @@ export const serverOnboardComplete = (channelId: string, oobCode: string, server
 export const serverOnboardJoin = (payload: PairingPayload, password: string | null) =>
   invoke<ServerStatus>("server_onboard_join", {
     baseUrl: payload.baseUrl,
-    tenantId: payload.tenantId,
+    instanceId: payload.instanceId,
+    spaceId: payload.spaceId,
     accountId: payload.accountId,
     deviceId: payload.deviceId,
     channelId: payload.channelId,

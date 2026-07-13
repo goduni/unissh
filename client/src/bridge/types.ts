@@ -105,8 +105,12 @@ export interface VaultInfo {
   name: string;
   /** Local vault (offline only) or Cloud vault (syncs with a server). */
   syncTarget: SyncTarget;
-  /** For a cloud vault, the base64 tenantId of the server it is bound 1:1 to.
-   *  null for local vaults and not-yet-bound legacy cloud vaults. */
+  /** For a cloud vault, the base64 SPACE id it is bound 1:1 to (the server link's
+   *  primary Space — see ServerConfig.space_id in Rust; sync scopes to it). null for
+   *  local vaults and not-yet-bound legacy cloud vaults.
+   *  NOTE: the Rust FFI + client DTO field is still literally `sync_tenant`
+   *  (serialized camelCase → `syncTenant`), so this TS name is UNCHANGED under the
+   *  instance+space model — only its meaning moved from tenant → space. */
   syncTenant: string | null;
 }
 
@@ -414,11 +418,13 @@ export interface ServerStatus {
   /** A live access token is held (this process can make authenticated calls). */
   hasSession: boolean;
   baseUrl: string | null;
-  tenantId: string | null;
+  /** base64 opaque server-instance id (from claim/join) — the link identity. */
+  instanceId: string | null;
   accountId: string | null;
   deviceId: string | null;
   handle: string | null;
-  /** This account owns (bootstrapped) the space — eligible to hold the personal vault. */
+  /** This account owns (claimed) the instance's first Space — eligible to hold the
+   *  personal vault. */
   owned: boolean;
 }
 
@@ -472,16 +478,95 @@ export interface DeviceInfo {
  *  side channel (QR / read-aloud). `oobCode` is the PAKE secret. */
 export interface PairingPayload {
   baseUrl: string;
-  tenantId: string;
+  /** Opaque server-instance id (base64) — keys the new device's link. */
+  instanceId: string;
+  /** Cloud-vault binding label (space id, base64) the new device inherits. */
+  spaceId: string;
   accountId: string;
   deviceId: string;
   channelId: string;
   oobCode: string;
 }
 
-export interface InvitePreview {
+/** One space an invite grants, in a `serverJoinPreview` (read-only; does not
+ *  consume the invite). */
+export interface JoinPreviewSpace {
+  spaceId: string;
+  name: string;
   role: string;
-  scope: string | null;
+}
+
+/** Read-only preview of an invite: the instance name + the spaces it grants. */
+export interface JoinPreview {
+  instanceName: string | null;
+  spaces: JoinPreviewSpace[];
+}
+
+// ── cloud spaces / directory / pending / attestations (server-v2) ──
+
+/** One space the caller is a member of (`serverListSpaces`). `role` is the
+ *  caller's server-trusted role in that space (`admin` | `member`). */
+export interface SpaceInfo {
+  spaceId: string;
+  name: string;
+  role: string;
+}
+
+/** A freshly-minted invite (`serverInvite`). `token` is returned exactly once
+ *  (only its hash is stored server-side); `url` is the shareable join link when
+ *  the server has a public URL configured, else null. */
+export interface InviteInfo {
+  inviteId: string;
+  token: string;
+  url: string | null;
+  expiresAt: number;
+}
+
+/** One person in the shared directory (`serverDirectory`). Pubkeys are hex, ready
+ *  to feed serverAddMember / serverAddSpaceMember directly. */
+export interface DirectoryEntry {
+  accountId: string;
+  handle: string | null;
+  displayName: string | null;
+  ed25519PubHex: string;
+  x25519PubHex: string;
+  status: string;
+}
+
+/** One outstanding vault-admin crypto action (`serverPending`): a `grant` or
+ *  `revoke` for `accountId` on the vault. Hex ids/pubkeys feed serverAddMember /
+ *  serverRotateVk; opaque server ids + binding `proof` stay base64. */
+export interface PendingAction {
+  actionId: string;
+  kind: string;
+  vaultIdHex: string;
+  accountId: string;
+  ed25519PubHex: string | null;
+  x25519PubHex: string | null;
+  cryptoRole: number | null;
+  source: string;
+  proof: string | null;
+  createdAt: number;
+}
+
+/** One opaque key-binding attestation about an account (`serverAttestationsList`).
+ *  `blob` + `signature` are base64 the CLIENT verifies (the server never interprets
+ *  them); `attestorPubkey` is the attesting device's Ed25519 (base64). */
+export interface AttestationInfo {
+  attestorPubkey: string;
+  blob: string;
+  signature: string;
+  createdAt: number;
+}
+
+/** Argon2id params for keyless-escrow K_auth re-derivation (`serverEscrowParams`).
+ *  `argonSalt` is base64. NOT an existence oracle (the server returns a shaped
+ *  decoy of the same form for unknown/unenrolled handles). */
+export interface EscrowParamsInfo {
+  argonSalt: string;
+  argonMemKib: number;
+  argonIterations: number;
+  argonParallelism: number;
 }
 
 export interface AuditEntry {
