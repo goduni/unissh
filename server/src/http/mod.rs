@@ -62,6 +62,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(modules::sync::routes())
         .merge(modules::vault_meta::routes())
         .merge(modules::policy::routes())
+        .merge(modules::pending::routes())
         .merge(modules::audit::routes())
         .merge(modules::admin::routes())
         .merge(modules::ops::routes())

@@ -292,3 +292,108 @@ impl TestApp {
         login_v2(self, id, account_id, device_id).await
     }
 }
+
+// ---- signed crypto-object builders (shared by policy_audit + pending_http) ----
+//
+// These construct real, core-signed membership manifests/grants (tags 3/4) and a
+// Cloud Vault object (tag 1). `grants_publish`/`/v1/sync/push` verify ACL-object
+// signatures UNCONDITIONALLY, so the manifest/grant helpers sign for real.
+
+use unissh_crypto::{AssociatedData, VersionedObject, sign_version};
+use unissh_storage::{CachePolicy, SyncTarget, VaultRecord};
+use unissh_sync::SyncObject;
+
+/// Length-prefixed (u32 BE) blob append, the codec's `put` framing.
+pub fn put(out: &mut Vec<u8>, b: &[u8]) {
+    out.extend_from_slice(&(b.len() as u32).to_be_bytes());
+    out.extend_from_slice(b);
+}
+
+/// A real record signature over `(vault,item,version,content)` (parity with the core).
+pub fn sig_over(
+    kp: &Ed25519Keypair,
+    vault: &[u8],
+    item: &[u8],
+    version: u64,
+    content: &[u8],
+) -> Vec<u8> {
+    let vo = VersionedObject::from_content(
+        AssociatedData::new(vault.to_vec(), item.to_vec(), version),
+        content,
+    );
+    sign_version(&kp.signing, &vo).unwrap()
+}
+
+/// The signed manifest body (member-set@epoch). Sorted by member-id.
+pub fn manifest_blob(epoch: u64, members: &[(Vec<u8>, u8)]) -> Vec<u8> {
+    let mut ms = members.to_vec();
+    ms.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = b"unissh-manifest-v1".to_vec();
+    out.extend_from_slice(&epoch.to_be_bytes());
+    out.extend_from_slice(&(ms.len() as u32).to_be_bytes());
+    for (ed, role) in &ms {
+        out.push(*role);
+        out.extend_from_slice(&(ed.len() as u16).to_be_bytes());
+        out.extend_from_slice(ed);
+    }
+    out
+}
+
+/// A genuinely signed manifest object (tag 3), author = `kp`.
+pub fn manifest_signed(kp: &Ed25519Keypair, vault: &[u8], epoch: u64, blob: &[u8]) -> Vec<u8> {
+    let sig = sig_over(kp, vault, b"__manifest__", epoch, blob);
+    let mut out = vec![3u8];
+    put(&mut out, vault);
+    out.extend_from_slice(&epoch.to_be_bytes());
+    put(&mut out, blob);
+    put(&mut out, &sig);
+    put(&mut out, &kp.verifying.to_bytes());
+    out
+}
+
+/// A genuinely signed grant object (tag 4), author = `kp`.
+pub fn grant_signed(
+    kp: &Ed25519Keypair,
+    vault: &[u8],
+    member: &[u8],
+    epoch: u64,
+    role: u8,
+) -> Vec<u8> {
+    let wrapped_vk = vec![9u8; 48];
+    let mut content = b"unissh-grant-v1".to_vec();
+    content.push(role);
+    content.extend_from_slice(&0i64.to_be_bytes()); // not_after = 0 (no expiry)
+    content.extend_from_slice(&wrapped_vk);
+    let sig = sig_over(kp, vault, member, epoch, &content);
+    let mut out = vec![4u8];
+    put(&mut out, vault);
+    put(&mut out, member);
+    out.extend_from_slice(&epoch.to_be_bytes());
+    out.push(role);
+    out.extend_from_slice(&0i64.to_be_bytes());
+    put(&mut out, &wrapped_vk);
+    put(&mut out, &sig);
+    put(&mut out, &kp.verifying.to_bytes());
+    out
+}
+
+/// A Cloud Vault object (tag 1) at a given epoch/version. Pushing it via
+/// `/v1/sync/push` bumps `vaults.latest_epoch` — a manifest publish alone does not,
+/// and `pending_for_admin` keys the admin's live grant on `latest_epoch`.
+pub fn vault_object(author: &[u8], vault: &[u8], epoch: u64, version: u64) -> Vec<u8> {
+    SyncObject::Vault(VaultRecord {
+        vault_id: vault.to_vec(),
+        sync_target: SyncTarget::Cloud,
+        name_blob: vec![0xEE; 12],
+        wrapped_vk: vec![0xDD; 16],
+        version,
+        tombstone: false,
+        signature: vec![9u8; 67],
+        author_pubkey: author.to_vec(),
+        key_epoch: epoch,
+        cache_policy: CachePolicy::OfflineAllowed,
+        sync_tenant: Vec::new(),
+    })
+    .to_bytes()
+    .unwrap()
+}

@@ -16,6 +16,11 @@ struct OwnerOnly {
 }
 
 #[derive(sqlx::FromRow)]
+struct VaultIdRow {
+    vault_id: Vec<u8>,
+}
+
+#[derive(sqlx::FromRow)]
 struct VaultScope {
     space_id: Option<Vec<u8>>,
     owner_account_id: Option<Vec<u8>>,
@@ -103,6 +108,43 @@ impl Store {
                 }
             },
         }
+    }
+
+    /// Vaults of `space_id` where `member_ed` still holds a live (non-revoked) grant at
+    /// the vault's latest epoch — the `revoke` enqueue set when a member is dropped from
+    /// a space (Task 9). Cross-dialect: plain equi-joins + `?` placeholders (rewritten to
+    /// `$n` for Postgres by the bind layer). `vault_id` is aliased so the row column name
+    /// is unambiguous on both dialects.
+    pub async fn vaults_with_live_grant_in_space(
+        &self,
+        member_ed: &[u8],
+        space_id: &[u8],
+    ) -> AppResult<Vec<Vec<u8>>> {
+        let rows = self
+            .fetch_all_as::<VaultIdRow>(
+                "SELECT g.vault_id AS vault_id FROM membership_grants g \
+                 JOIN vaults v ON v.vault_id = g.vault_id \
+                 WHERE g.member_pubkey = ? AND g.revoked = 0 \
+                   AND g.key_epoch = v.latest_epoch AND v.space_id = ?",
+                vec![Val::b(member_ed), Val::b(space_id)],
+            )
+            .await?;
+        Ok(rows.into_iter().map(|r| r.vault_id).collect())
+    }
+
+    /// Same as [`Self::vaults_with_live_grant_in_space`] but across ALL vaults (no space
+    /// filter) — the `revoke` enqueue set when an account is disabled instance-wide.
+    pub async fn vaults_with_live_grant(&self, member_ed: &[u8]) -> AppResult<Vec<Vec<u8>>> {
+        let rows = self
+            .fetch_all_as::<VaultIdRow>(
+                "SELECT g.vault_id AS vault_id FROM membership_grants g \
+                 JOIN vaults v ON v.vault_id = g.vault_id \
+                 WHERE g.member_pubkey = ? AND g.revoked = 0 \
+                   AND g.key_epoch = v.latest_epoch",
+                vec![Val::b(member_ed)],
+            )
+            .await?;
+        Ok(rows.into_iter().map(|r| r.vault_id).collect())
     }
 
     pub async fn get_vault_owner(&self, vault_id: &[u8]) -> AppResult<Option<Vec<u8>>> {

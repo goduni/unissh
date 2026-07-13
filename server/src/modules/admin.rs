@@ -106,6 +106,39 @@ async fn account_status(
     }
     let status = if req.disabled { "disabled" } else { "active" };
     state.store.set_account_status(&target, status).await?;
+
+    // On disable, enqueue a crypto `revoke` (Task 9) across ALL vaults where the
+    // account still holds a live grant at the latest epoch — a vault-admin fulfils
+    // each by rotating that vault's key. Mirrors the space member-remove path, minus
+    // the space filter (a disable is instance-wide).
+    if req.disabled {
+        if let Some(member_ed) = state.store.account_ed(&target).await? {
+            let vaults = state.store.vaults_with_live_grant(&member_ed).await?;
+            if !vaults.is_empty() {
+                let now = state.now();
+                let mut tx = state.store.begin().await?;
+                for vault_id in &vaults {
+                    let action_id = ids::random_id16().to_vec();
+                    state
+                        .store
+                        .pending_enqueue(
+                            &mut tx,
+                            &action_id,
+                            "revoke",
+                            vault_id,
+                            &target,
+                            None,
+                            "directory",
+                            None,
+                            now,
+                        )
+                        .await?;
+                }
+                tx.commit().await?;
+            }
+        }
+    }
+
     let ev = json!({
         "event": if req.disabled { "account_disable" } else { "account_enable" },
         "account_id": ids::b64(&target), "ts": state.now(),

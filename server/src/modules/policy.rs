@@ -241,6 +241,30 @@ async fn grants_publish(
         .grants_publish(&vault_id, &manifest, &grants, req.revoke_epoch, state.now())
         .await?;
 
+    // Auto-done (Task 9): the server marks pending crypto-actions done by OBSERVING
+    // this publish — clients never self-report. Members present in the new grant set
+    // have had their `grant` action fulfilled; on a rotation (revoke_epoch set), any
+    // account ABSENT from the new grant set has had its `revoke` action fulfilled.
+    // A follow-up tx (the publish above already committed atomically); a no-op when
+    // nothing is queued, so pre-Task-9 callers are unaffected.
+    let grant_member_eds: Vec<Vec<u8>> = grants
+        .iter()
+        .filter_map(|g| g.parsed.member_pubkey.clone())
+        .collect();
+    let now = state.now();
+    let mut tx = state.store.begin().await?;
+    state
+        .store
+        .pending_mark_grants_done(&mut tx, &vault_id, &grant_member_eds, new_epoch, now)
+        .await?;
+    if req.revoke_epoch.is_some() {
+        state
+            .store
+            .pending_mark_revokes_done(&mut tx, &vault_id, &grant_member_eds, new_epoch, now)
+            .await?;
+    }
+    tx.commit().await?;
+
     // Audit (server-observed): publish/rotate/revoke.
     let ev = serde_json::json!({
         "event": "access_grant", "vault_id": ids::b64(&vault_id),

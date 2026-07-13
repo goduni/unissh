@@ -180,7 +180,9 @@ struct MemberRemoveReq {
     account_id: String,
 }
 
-/// `POST /v1/spaces/members/remove` (space admin): drop a membership edge.
+/// `POST /v1/spaces/members/remove` (space admin): drop a membership edge, and enqueue
+/// a crypto `revoke` (Task 9) for every space vault where the removed account still
+/// holds a live grant at the latest epoch — the vault-admin fulfils it by rotating.
 async fn members_remove(
     auth: AuthCtx,
     State(state): State<AppState>,
@@ -193,6 +195,37 @@ async fn members_remove(
         .store
         .space_member_remove(&space_id, &account_id)
         .await?;
+
+    // Enqueue a `revoke` per space vault the removed account can still decrypt.
+    if let Some(member_ed) = state.store.account_ed(&account_id).await? {
+        let vaults = state
+            .store
+            .vaults_with_live_grant_in_space(&member_ed, &space_id)
+            .await?;
+        if !vaults.is_empty() {
+            let now = state.now();
+            let mut tx = state.store.begin().await?;
+            for vault_id in &vaults {
+                let action_id = ids::random_id16().to_vec();
+                state
+                    .store
+                    .pending_enqueue(
+                        &mut tx,
+                        &action_id,
+                        "revoke",
+                        vault_id,
+                        &account_id,
+                        None,
+                        "directory",
+                        None,
+                        now,
+                    )
+                    .await?;
+            }
+            tx.commit().await?;
+        }
+    }
+
     audit_space(&state, "space_member_remove", &space_id, &account_id).await;
     Ok(StatusCode::NO_CONTENT)
 }

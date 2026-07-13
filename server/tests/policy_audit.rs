@@ -3,81 +3,16 @@
 
 mod common;
 
-use common::{spawn, spawn_with};
+// Real, core-signed manifest/grant builders are shared via `tests/common` (also used
+// by pending_http). The dummy-sig `manifest_obj`/`item_obj`/`audit_obj` below stay
+// local — they exercise write_accept directly (no signature parse).
+use common::{grant_signed, manifest_blob, manifest_signed, put, spawn, spawn_with};
 use serde_json::{Value, json};
-use unissh_crypto::{AssociatedData, Ed25519Keypair, VersionedObject, sign_version};
+use unissh_crypto::Ed25519Keypair;
 use unissh_server::codec::parse_open;
 use unissh_server::ids::b64;
 use unissh_server::modules::policy::write_accept;
 use unissh_server::store::sync_repo::PushObj;
-
-fn put(out: &mut Vec<u8>, b: &[u8]) {
-    out.extend_from_slice(&(b.len() as u32).to_be_bytes());
-    out.extend_from_slice(b);
-}
-
-// A real record signature (parity with the core), to exercise the grants_publish path where
-// manifest/grant signatures are now verified UNCONDITIONALLY. The dummy-sig manifest_obj
-// below is only good for write_accept-direct tests (they don't parse the signature).
-fn sig_over(
-    kp: &Ed25519Keypair,
-    vault: &[u8],
-    item: &[u8],
-    version: u64,
-    content: &[u8],
-) -> Vec<u8> {
-    let vo = VersionedObject::from_content(
-        AssociatedData::new(vault.to_vec(), item.to_vec(), version),
-        content,
-    );
-    sign_version(&kp.signing, &vo).unwrap()
-}
-
-/// A genuinely signed manifest object (tag 3), author = `kp`.
-fn manifest_signed(kp: &Ed25519Keypair, vault: &[u8], epoch: u64, blob: &[u8]) -> Vec<u8> {
-    let sig = sig_over(kp, vault, b"__manifest__", epoch, blob);
-    let mut out = vec![3u8];
-    put(&mut out, vault);
-    out.extend_from_slice(&epoch.to_be_bytes());
-    put(&mut out, blob);
-    put(&mut out, &sig);
-    put(&mut out, &kp.verifying.to_bytes());
-    out
-}
-
-/// A genuinely signed grant object (tag 4), author = `kp`.
-fn grant_signed(kp: &Ed25519Keypair, vault: &[u8], member: &[u8], epoch: u64, role: u8) -> Vec<u8> {
-    let wrapped_vk = vec![9u8; 48];
-    let mut content = b"unissh-grant-v1".to_vec();
-    content.push(role);
-    content.extend_from_slice(&0i64.to_be_bytes()); // not_after = 0 (no expiry)
-    content.extend_from_slice(&wrapped_vk);
-    let sig = sig_over(kp, vault, member, epoch, &content);
-    let mut out = vec![4u8];
-    put(&mut out, vault);
-    put(&mut out, member);
-    out.extend_from_slice(&epoch.to_be_bytes());
-    out.push(role);
-    out.extend_from_slice(&0i64.to_be_bytes());
-    put(&mut out, &wrapped_vk);
-    put(&mut out, &sig);
-    put(&mut out, &kp.verifying.to_bytes());
-    out
-}
-
-fn manifest_blob(epoch: u64, members: &[(Vec<u8>, u8)]) -> Vec<u8> {
-    let mut ms = members.to_vec();
-    ms.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut out = b"unissh-manifest-v1".to_vec();
-    out.extend_from_slice(&epoch.to_be_bytes());
-    out.extend_from_slice(&(ms.len() as u32).to_be_bytes());
-    for (ed, role) in &ms {
-        out.push(*role);
-        out.extend_from_slice(&(ed.len() as u16).to_be_bytes());
-        out.extend_from_slice(ed);
-    }
-    out
-}
 
 fn manifest_obj(vault: &[u8], epoch: u64, blob: &[u8], author: &[u8]) -> Vec<u8> {
     let mut out = vec![3u8];

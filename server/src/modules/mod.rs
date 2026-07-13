@@ -6,6 +6,7 @@ pub mod audit;
 pub mod identity;
 pub mod instance;
 pub mod ops;
+pub mod pending;
 pub mod policy;
 pub mod spaces;
 pub mod sync;
