@@ -26,7 +26,7 @@ const TABLES: &[&str] = &[
 #[tokio::test]
 async fn v2_baseline_creates_all_tables() {
     let store = Store::connect_sqlite(":memory:", 1).await.unwrap();
-    store.migrate_from("./migrations_v2/sqlite").await.unwrap();
+    store.migrate().await.unwrap();
     for t in TABLES {
         let n = store
             .fetch_scalar_i64(

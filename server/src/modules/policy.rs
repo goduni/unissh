@@ -28,7 +28,6 @@ pub fn routes() -> Router<AppState> {
 /// latest-manifest (the role must resolve at the epoch of the record itself, §9.4).
 async fn author_role(
     state: &AppState,
-    tid: &[u8],
     vault_id: &[u8],
     epoch: i64,
     author: &[u8],
@@ -36,7 +35,7 @@ async fn author_role(
     // Strictly at manifest@(record.key_epoch) — we do NOT fall back to latest
     // (otherwise the role resolves at a different epoch than the one the record
     // carries; the §9.4 predicate is author∈members@epoch of THIS EXACT record).
-    if let Some(m) = state.store.get_manifest(tid, vault_id, epoch).await? {
+    if let Some(m) = state.store.get_manifest(vault_id, epoch).await? {
         let ms = parse_member_set(&m.manifest_blob)?;
         // Bind the signed blob's embedded epoch to the row/record epoch the RBAC
         // predicate reasons under — otherwise a manifest could be indexed at one
@@ -50,27 +49,26 @@ async fn author_role(
         }
         // Not in member-set@epoch, but the namespace owner → implicit admin (creator).
     }
-    match state.store.get_vault_owner(tid, vault_id).await? {
+    match state.store.get_vault_owner(vault_id).await? {
         Some(owner) if owner == author => Ok(Some(Role::Admin)),
         Some(_) => Ok(None),
         None => Ok(Some(Role::Admin)), // vault does not exist yet → the first push establishes ownership
     }
 }
 
-/// Write-accept on push (org-tier + validate_signatures). Defense-in-depth on top
-/// of client verification (§8.5): the client re-verifies on read anyway.
+/// Write-accept on push (validate_signatures). Defense-in-depth on top of client
+/// verification (§8.5): the client re-verifies on read anyway.
 pub async fn write_accept(
     state: &AppState,
-    tid: &[u8],
     author_ed25519: &[u8],
     items: &[PushObj],
     acl_only: bool,
 ) -> AppResult<()> {
-    let genesis = state
-        .store
-        .get_tenant(tid)
-        .await?
-        .and_then(|t| t.genesis_owner_pubkey);
+    // Instance owner keyset (for the audit-author gate, §11.3): None until claimed.
+    let genesis = match state.store.instance().await?.owner_account_id {
+        Some(aid) => state.store.account_ed(&aid).await?,
+        None => None,
+    };
 
     for it in items {
         let p = &it.parsed;
@@ -89,7 +87,7 @@ pub async fn write_accept(
                 // The record's author is taken from the object itself (also the
                 // signer); it must match the authenticated device (anti-spoofing).
                 let obj_author = p.author_pubkey.as_deref().unwrap_or(author_ed25519);
-                match author_role(state, tid, vault_id, epoch, obj_author).await? {
+                match author_role(state, vault_id, epoch, obj_author).await? {
                     Some(r) if r >= Role::Editor => {}
                     Some(_) => {
                         return Err(AppError::forbidden("viewer cannot write objects"));
@@ -108,8 +106,7 @@ pub async fn write_accept(
                     .ok_or_else(|| AppError::malformed("missing vault_id"))?;
                 let epoch = p.key_epoch.map(|e| e as i64).unwrap_or(0);
                 let obj_author = p.author_pubkey.as_deref().unwrap_or(author_ed25519);
-                if author_role(state, tid, vault_id, epoch, obj_author).await? != Some(Role::Admin)
-                {
+                if author_role(state, vault_id, epoch, obj_author).await? != Some(Role::Admin) {
                     return Err(AppError::forbidden(
                         "only admins can publish membership records",
                     ));
@@ -167,8 +164,6 @@ async fn grants_publish(
     State(state): State<AppState>,
     Json(req): Json<PublishReq>,
 ) -> AppResult<Json<PublishResp>> {
-    auth.require_admin(&state.store).await?;
-
     let m_bytes = ids::unb64(&req.manifest)?;
     let m_parsed = parse_open(&m_bytes)?;
     if m_parsed.tag() != Some(ObjectTag::MembershipManifest) {
@@ -201,19 +196,25 @@ async fn grants_publish(
             "revoke_epoch must differ from new_epoch",
         ));
     }
-    // S4: the grant publisher must be a vault-admin (not merely an instance-admin).
-    // `require_admin` above lets through ANY instance-admin (the genesis owner OR a
-    // delegated is_admin account); without this check a delegated org-admin who is
-    // not a member of the vault could self-grant themselves into someone else's
-    // vault and see its delta metadata. Mirrors author_role==Admin from write_accept
-    // (§9.4): the role resolves at the manifest's epoch; for a new epoch (the
-    // manifest is not yet in the store) it reduces to an owner check. author_pubkey
-    // is already AUTHENTICATED by verify_record_sig above — the role check on it
-    // cannot be bypassed by forging the field.
-    let m_author = m_parsed.author_pubkey.as_deref().unwrap_or_default();
-    if author_role(&state, auth.tenant_id(), &vault_id, new_epoch, m_author).await?
-        != Some(Role::Admin)
+    // Coarse precheck (replaces the old instance-admin gate): the caller must be able
+    // to touch the vault — its personal owner OR a member of its space. Defense-in-depth
+    // in front of the real S4 gate below.
+    if !state
+        .store
+        .can_touch_vault(auth.account_id(), &vault_id)
+        .await?
     {
+        return Err(AppError::forbidden(
+            "not authorized to publish grants for this vault",
+        ));
+    }
+    // S4: the grant publisher must be a vault-admin. Mirrors author_role==Admin from
+    // write_accept (§9.4): the role resolves at the manifest's epoch; for a new epoch
+    // (the manifest is not yet in the store) it reduces to an owner check. author_pubkey
+    // is already AUTHENTICATED by verify_record_sig above — the role check on it cannot
+    // be bypassed by forging the field.
+    let m_author = m_parsed.author_pubkey.as_deref().unwrap_or_default();
+    if author_role(&state, &vault_id, new_epoch, m_author).await? != Some(Role::Admin) {
         return Err(AppError::forbidden("grant publisher must be a vault admin"));
     }
     let manifest = PushObj {
@@ -237,14 +238,7 @@ async fn grants_publish(
 
     let seqs = state
         .store
-        .grants_publish(
-            auth.tenant_id(),
-            &vault_id,
-            &manifest,
-            &grants,
-            req.revoke_epoch,
-            state.now(),
-        )
+        .grants_publish(&vault_id, &manifest, &grants, req.revoke_epoch, state.now())
         .await?;
 
     // Audit (server-observed): publish/rotate/revoke.
@@ -252,9 +246,7 @@ async fn grants_publish(
         "event": "access_grant", "vault_id": ids::b64(&vault_id),
         "new_epoch": new_epoch, "revoke_epoch": req.revoke_epoch, "ts": state.now(),
     });
-    state
-        .audit_event(auth.tenant_id(), &ev, Some(&vault_id))
-        .await;
+    state.audit_event(&ev, Some(&vault_id)).await;
 
     Ok(Json(PublishResp {
         new_epoch,
@@ -282,7 +274,6 @@ async fn grants_get(
     State(state): State<AppState>,
     Query(q): Query<GrantsQuery>,
 ) -> AppResult<Json<GrantsResp>> {
-    let tid = auth.tenant_id();
     let vault_id = ids::unb64(&q.vault_id)?;
 
     // We resolve the epoch WITHOUT an early 404: a nonexistent vault/manifest must
@@ -292,15 +283,15 @@ async fn grants_get(
     // and collapses both cases into a single 403.
     let epoch_opt = match q.key_epoch {
         Some(e) => Some(e),
-        None => state.store.latest_manifest_epoch(tid, &vault_id).await?,
+        None => state.store.latest_manifest_epoch(&vault_id).await?,
     };
 
-    // RBAC read-deny (§5.5/invariant 2): the requester must be admin OR hold an
-    // active (non-revoked) grant at this epoch. For a non-admin, an absent
+    // RBAC read-deny (§5.5/invariant 2): the requester must be the instance owner OR
+    // hold an active (non-revoked) grant at this epoch. For a non-owner, an absent
     // vault/epoch == an absent grant → the same 403 (no existence leak).
     let is_admin = state
         .store
-        .is_instance_admin(tid, auth.device_ed25519())
+        .account_is_owner_by_ed(auth.device_ed25519())
         .await?;
     // We ALWAYS run the grant query, even when there is no epoch (epoch_opt=None →
     // a dummy epoch 0, which never has grants — epochs start at 1): otherwise an
@@ -312,7 +303,6 @@ async fn grants_get(
         || state
             .store
             .member_has_active_grant(
-                tid,
                 &vault_id,
                 epoch_opt.unwrap_or(0),
                 auth.device_ed25519(),
@@ -323,18 +313,18 @@ async fn grants_get(
         return Err(AppError::forbidden("not a member of this vault epoch"));
     }
 
-    // Authorized. From here informative 404s are safe: the member/admin has already
+    // Authorized. From here informative 404s are safe: the member/owner has already
     // passed RBAC, so disclosing "no manifest" gives them no oracle advantage.
     let epoch = epoch_opt.ok_or_else(|| AppError::not_found("no manifest for vault"))?;
     let manifest = state
         .store
-        .get_manifest(tid, &vault_id, epoch)
+        .get_manifest(&vault_id, epoch)
         .await?
         .ok_or_else(|| AppError::not_found("manifest@epoch"))?;
 
     // Reconstruct the manifest object's bytes for the response (as SyncObject::Manifest).
     let manifest_b64 = ids::b64(&manifest_object_bytes(&manifest));
-    let grants = state.store.list_grants(tid, &vault_id, epoch, true).await?;
+    let grants = state.store.list_grants(&vault_id, epoch, true).await?;
     let grant_b64 = grants
         .iter()
         .map(|g| ids::b64(&grant_object_bytes(g)))

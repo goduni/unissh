@@ -10,8 +10,6 @@ use unissh_server::ids::b64;
 use unissh_storage::{CachePolicy, SyncTarget, VaultRecord};
 use unissh_sync::SyncObject;
 
-const TID: &[u8] = b"tenant-harden-01";
-
 fn vault(target: SyncTarget) -> String {
     b64(&SyncObject::Vault(VaultRecord {
         vault_id: b"v-harden".to_vec(),
@@ -33,14 +31,13 @@ fn vault(target: SyncTarget) -> String {
 #[tokio::test]
 async fn local_vault_rejected_on_push() {
     let app = spawn().await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let bearer = format!("Bearer {}", s.access_token_b64);
 
     // Cloud → accepted
     let ok = app
         .client
         .post(format!("{}/v1/sync/push", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", &bearer)
         .json(&json!({ "objects": [vault(SyncTarget::Cloud)] }))
         .send()
@@ -52,7 +49,6 @@ async fn local_vault_rejected_on_push() {
     let bad = app
         .client
         .post(format!("{}/v1/sync/push", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", &bearer)
         .json(&json!({ "objects": [vault(SyncTarget::Local)] }))
         .send()
@@ -68,10 +64,19 @@ async fn grants_publish_self_revoke_rejected() {
     // so the test must pass the signature check to reach the self-revoke 409.
     let admin_kp = Ed25519Keypair::generate();
     let admin = admin_kp.verifying.to_bytes().to_vec();
-    let (_a, _d, bearer) = app.seed_device(TID, &admin, &[1u8; 32], "org", true).await;
+    let (_a, _d, bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
     app.state
         .store
-        .claim_vault(TID, b"v-harden", &admin, app.now())
+        .claim_vault(
+            b"v-harden",
+            &admin,
+            None,
+            None,
+            "selective",
+            None,
+            false,
+            app.now(),
+        )
         .await
         .unwrap();
 
@@ -104,7 +109,6 @@ async fn grants_publish_self_revoke_rejected() {
     let r = app
         .client
         .post(format!("{}/v1/grants/publish", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {bearer}"))
         .json(&json!({ "manifest": b64(&mobj), "grants": [], "revoke_epoch": 5, "new_epoch": 5 }))
         .send()

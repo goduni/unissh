@@ -85,4 +85,76 @@ impl Store {
         .await?;
         Ok((old, self.instance().await?.next_seq))
     }
+
+    /// Instance-wide monotonic generation for whole-DB anti-rollback (§16):
+    /// `instance.next_seq` (next_seq only grows; seq-bump only raises). A decrease
+    /// = an old snapshot was restored.
+    pub async fn instance_generation(&self) -> AppResult<i64> {
+        Ok(self.instance().await?.next_seq)
+    }
+
+    /// An account's canonical ed25519 keyset (for owner_account_id → ed resolution,
+    /// e.g. the audit-author gate). Nonexistent → None.
+    pub async fn account_ed(&self, account_id: &[u8]) -> AppResult<Option<Vec<u8>>> {
+        use super::models::EdOnly;
+        Ok(self
+            .fetch_optional_as::<EdOnly>(
+                "SELECT ed25519_pub FROM accounts WHERE account_id = ?",
+                vec![Val::b(account_id)],
+            )
+            .await?
+            .map(|r| r.ed25519_pub))
+    }
+
+    /// Background TTL cleanup (§13): stale nonce/relay/sessions are deleted, pending
+    /// invites are marked expired, old idempotency keys (older than `idem_cutoff`)
+    /// are deleted. Expiry is also enforced at use-time — this is hygiene.
+    pub async fn cleanup_expired(&self, now: i64, idem_cutoff: i64) -> AppResult<()> {
+        self.exec(
+            "DELETE FROM auth_nonces WHERE expires_at < ?",
+            vec![Val::I(now)],
+        )
+        .await?;
+        self.exec(
+            "DELETE FROM pake_relay WHERE expires_at < ?",
+            vec![Val::I(now)],
+        )
+        .await?;
+        self.exec(
+            "UPDATE invites SET state = 'expired' WHERE state = 'pending' AND expires_at < ?",
+            vec![Val::I(now)],
+        )
+        .await?;
+        self.exec(
+            "DELETE FROM sessions WHERE refresh_expires < ?",
+            vec![Val::I(now)],
+        )
+        .await?;
+        self.exec(
+            "DELETE FROM idempotency_keys WHERE created_at < ?",
+            vec![Val::I(idem_cutoff)],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// ZK diagnostics (§15.3): concatenation of all opaque blobs. The test verifies
+    /// that plaintext markers are absent (the server stores only ciphertext + open
+    /// metadata).
+    pub async fn dump_blobs(&self) -> AppResult<Vec<u8>> {
+        use super::models::BlobRow;
+        let mut out = Vec::new();
+        for sql in [
+            "SELECT object_bytes AS b FROM objects",
+            "SELECT keyset_bytes AS b FROM keyset_blobs",
+            "SELECT manifest_blob AS b FROM membership_manifests",
+            "SELECT wrapped_vk AS b FROM membership_grants",
+            "SELECT entry_blob AS b FROM audit_log",
+        ] {
+            for r in self.fetch_all_as::<BlobRow>(sql, vec![]).await? {
+                out.extend_from_slice(&r.b);
+            }
+        }
+        Ok(out)
+    }
 }

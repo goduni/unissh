@@ -1,10 +1,10 @@
-//! Admin/ops surface (`/v1/admin/*`): read-projections + lifecycle controls for
-//! the self-host administration panel. Everything under `AdminCtx` (instance-admin,
-//! per-tenant, WITHOUT suspended-gate). The server stays zero-knowledge: we return
-//! only open metadata — NEVER object_bytes / keyset_bytes / relay messages.
+//! Admin surface (`/v1/admin/*`): read-projections + lifecycle controls for the
+//! self-host administration panel. Everything under `OwnerCtx` (instance owner).
+//! The server stays zero-knowledge: we return only open metadata — NEVER
+//! object_bytes / keyset_bytes / relay messages.
 
 use crate::error::{AppError, AppResult};
-use crate::http::extract::AdminCtx;
+use crate::http::extract::OwnerCtx;
 use crate::ids;
 use crate::state::AppState;
 use crate::store::models::VaultRow;
@@ -18,13 +18,11 @@ use serde_json::{Value, json};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/admin/overview", get(overview))
-        .route("/v1/admin/tenant/status", post(tenant_status))
         .route("/v1/admin/account/status", post(account_status))
         .route("/v1/admin/devices", get(devices_list))
         .route("/v1/admin/sessions", get(sessions_list))
         .route("/v1/admin/session/revoke", post(session_revoke))
         .route("/v1/admin/invites", get(invites_list))
-        .route("/v1/admin/invite/revoke", post(invite_revoke))
         .route("/v1/admin/vaults", get(vaults_list))
         .route("/v1/admin/vault", get(vault_get))
         .route("/v1/admin/objects", get(objects_list))
@@ -42,14 +40,6 @@ pub fn routes() -> Router<AppState> {
 
 // ---- helpers ----
 
-fn role_label(role: i64) -> &'static str {
-    match role {
-        2 => "admin",
-        1 => "editor",
-        _ => "viewer",
-    }
-}
-
 #[derive(Deserialize)]
 struct AccountQuery {
     account_id: Option<String>,
@@ -57,58 +47,32 @@ struct AccountQuery {
 
 // ---- overview ----
 
-async fn overview(admin: AdminCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let c = state.store.admin_overview(admin.tenant_id()).await?;
-    let instance_generation = state.store.instance_generation().await?;
+async fn overview(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let c = state.store.admin_overview().await?;
+    let inst = state.store.instance().await?;
     Ok(Json(json!({
-        "tenant_id": ids::b64(admin.tenant_id()),
-        "tier": admin.tenant.tier,
-        "status": admin.tenant.status,
-        "next_seq": admin.tenant.next_seq,
+        "instance_id": ids::b64(&inst.instance_id),
+        "name": inst.name,
+        "claimed": inst.claimed != 0,
+        "next_seq": inst.next_seq,
         "accounts": c.accounts,
-        "admins": c.admins,
+        "owners": c.owners,
         "devices": c.devices,
         "active_sessions": c.active_sessions,
         "vaults": c.vaults,
         "objects": c.objects,
         "pending_invites": c.pending_invites,
-        "instance_generation": instance_generation,
+        "instance_generation": inst.next_seq,
     })))
 }
 
 /// Instance-wide anti-rollback generation (§16) + current floor from config.
-async fn instance_info(admin: AdminCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let _ = &admin;
+async fn instance_info(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
     let generation = state.store.instance_generation().await?;
     Ok(Json(json!({
         "generation": generation,
         "min_floor": state.config.sync.min_instance_generation,
     })))
-}
-
-// ---- tenant lifecycle ----
-
-#[derive(Deserialize)]
-struct TenantStatusReq {
-    suspended: bool,
-}
-
-async fn tenant_status(
-    admin: AdminCtx,
-    State(state): State<AppState>,
-    Json(req): Json<TenantStatusReq>,
-) -> AppResult<StatusCode> {
-    let status = if req.suspended { "suspended" } else { "active" };
-    state
-        .store
-        .set_tenant_status(admin.tenant_id(), status)
-        .await?;
-    let ev = json!({
-        "event": if req.suspended { "tenant_suspend" } else { "tenant_activate" },
-        "ts": state.now(),
-    });
-    state.audit_event(admin.tenant_id(), &ev, None).await;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---- account lifecycle ----
@@ -120,60 +84,48 @@ struct AccountStatusReq {
 }
 
 async fn account_status(
-    admin: AdminCtx,
+    _owner: OwnerCtx,
     State(state): State<AppState>,
     Json(req): Json<AccountStatusReq>,
 ) -> AppResult<StatusCode> {
     let target = ids::unb64(&req.account_id)?;
     let acct = state
         .store
-        .get_account_by_id(admin.tenant_id(), &target)
+        .get_account_by_id(&target)
         .await?
         .ok_or_else(|| AppError::not_found("account"))?;
     if req.disabled {
-        // anti-lockout: cannot disable the genesis owner or the last admin.
-        let t = state
-            .store
-            .get_tenant(admin.tenant_id())
-            .await?
-            .ok_or_else(|| AppError::not_found("tenant"))?;
-        if t.genesis_owner_pubkey.is_some()
-            && t.genesis_owner_pubkey.as_deref() == acct.ed25519_pub.as_deref()
-        {
-            return Err(AppError::forbidden("cannot disable the genesis owner"));
+        // anti-lockout: cannot disable the claim owner or the last owner.
+        let inst = state.store.instance().await?;
+        if inst.owner_account_id.as_deref() == Some(target.as_slice()) {
+            return Err(AppError::forbidden("cannot disable the claim owner"));
         }
-        if acct.is_admin == 1 && state.store.admin_count(admin.tenant_id()).await? <= 1 {
-            return Err(AppError::forbidden("cannot disable the last admin"));
+        if acct.is_owner == 1 && state.store.owner_count().await? <= 1 {
+            return Err(AppError::forbidden("cannot disable the last owner"));
         }
     }
     let status = if req.disabled { "disabled" } else { "active" };
-    state
-        .store
-        .set_account_status(admin.tenant_id(), &target, status)
-        .await?;
+    state.store.set_account_status(&target, status).await?;
     let ev = json!({
         "event": if req.disabled { "account_disable" } else { "account_enable" },
         "account_id": ids::b64(&target), "ts": state.now(),
     });
-    state.audit_event(admin.tenant_id(), &ev, None).await;
+    state.audit_event(&ev, None).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
 // ---- devices / sessions ----
 
 async fn devices_list(
-    admin: AdminCtx,
+    owner: OwnerCtx,
     State(state): State<AppState>,
     Query(q): Query<AccountQuery>,
 ) -> AppResult<Json<Value>> {
     let acc = match q.account_id {
         Some(a) => ids::unb64(&a)?,
-        None => admin.account_id().to_vec(),
+        None => owner.account_id().to_vec(),
     };
-    let rows = state
-        .store
-        .admin_list_devices(admin.tenant_id(), &acc)
-        .await?;
+    let rows = state.store.admin_list_devices(&acc).await?;
     let out: Vec<Value> = rows
         .into_iter()
         .map(|d| {
@@ -189,7 +141,7 @@ async fn devices_list(
 }
 
 async fn sessions_list(
-    admin: AdminCtx,
+    _owner: OwnerCtx,
     State(state): State<AppState>,
     Query(q): Query<AccountQuery>,
 ) -> AppResult<Json<Value>> {
@@ -197,10 +149,7 @@ async fn sessions_list(
         Some(a) => Some(ids::unb64(a)?),
         None => None,
     };
-    let rows = state
-        .store
-        .admin_list_sessions(admin.tenant_id(), acc.as_deref())
-        .await?;
+    let rows = state.store.admin_list_sessions(acc.as_deref()).await?;
     let out: Vec<Value> = rows
         .into_iter()
         .map(|s| {
@@ -223,29 +172,24 @@ struct SessionRevokeReq {
 }
 
 async fn session_revoke(
-    admin: AdminCtx,
+    _owner: OwnerCtx,
     State(state): State<AppState>,
     Json(req): Json<SessionRevokeReq>,
 ) -> AppResult<StatusCode> {
     let sid = ids::unb64(&req.session_id)?;
-    state
-        .store
-        .admin_revoke_session(admin.tenant_id(), &sid)
-        .await?;
+    state.store.admin_revoke_session(&sid).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ---- invites ----
+// ---- invites (read-only listing; v2 create/revoke arrive in Task 8) ----
 
-async fn invites_list(admin: AdminCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let rows = state.store.admin_list_invites(admin.tenant_id()).await?;
+async fn invites_list(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let rows = state.store.admin_list_invites().await?;
     let out: Vec<Value> = rows
         .into_iter()
         .map(|i| {
             json!({
                 "invite_id": ids::b64(&i.invite_id),
-                "role": role_label(i.role),
-                "scope": i.scope,
                 "state": i.state,
                 "expires_at": i.expires_at,
                 "created_at": i.created_at,
@@ -254,24 +198,6 @@ async fn invites_list(admin: AdminCtx, State(state): State<AppState>) -> AppResu
         })
         .collect();
     Ok(Json(json!({ "invites": out })))
-}
-
-#[derive(Deserialize)]
-struct InviteRevokeReq {
-    invite_id: String,
-}
-
-async fn invite_revoke(
-    admin: AdminCtx,
-    State(state): State<AppState>,
-    Json(req): Json<InviteRevokeReq>,
-) -> AppResult<StatusCode> {
-    let id = ids::unb64(&req.invite_id)?;
-    state
-        .store
-        .admin_revoke_invite(admin.tenant_id(), &id)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---- vaults ----
@@ -288,8 +214,8 @@ fn vault_json(v: &VaultRow) -> Value {
     })
 }
 
-async fn vaults_list(admin: AdminCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let rows = state.store.admin_list_vaults(admin.tenant_id()).await?;
+async fn vaults_list(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let rows = state.store.admin_list_vaults().await?;
     let out: Vec<Value> = rows.iter().map(vault_json).collect();
     Ok(Json(json!({ "vaults": out })))
 }
@@ -300,14 +226,14 @@ struct VaultQuery {
 }
 
 async fn vault_get(
-    admin: AdminCtx,
+    _owner: OwnerCtx,
     State(state): State<AppState>,
     Query(q): Query<VaultQuery>,
 ) -> AppResult<Json<Value>> {
     let id = ids::unb64(&q.vault_id)?;
     let v = state
         .store
-        .admin_get_vault(admin.tenant_id(), &id)
+        .admin_get_vault(&id)
         .await?
         .ok_or_else(|| AppError::not_found("vault"))?;
     Ok(Json(vault_json(&v)))
@@ -324,7 +250,7 @@ struct ObjectsQuery {
 }
 
 async fn objects_list(
-    admin: AdminCtx,
+    _owner: OwnerCtx,
     State(state): State<AppState>,
     Query(q): Query<ObjectsQuery>,
 ) -> AppResult<Json<Value>> {
@@ -340,7 +266,7 @@ async fn objects_list(
     };
     let rows = state
         .store
-        .admin_list_objects(admin.tenant_id(), q.tag, vault.as_deref(), cursor, limit)
+        .admin_list_objects(q.tag, vault.as_deref(), cursor, limit)
         .await?;
     let (has_more, next_cursor) =
         crate::http::page(&rows, limit as usize, cursor, |r| r.server_seq);
@@ -368,8 +294,8 @@ async fn objects_list(
 
 // ---- relay / keysets observation ----
 
-async fn relay_list(admin: AdminCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let rows = state.store.admin_list_relay(admin.tenant_id()).await?;
+async fn relay_list(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let rows = state.store.admin_list_relay().await?;
     let out: Vec<Value> = rows
         .into_iter()
         .map(|r| {
@@ -385,18 +311,15 @@ async fn relay_list(admin: AdminCtx, State(state): State<AppState>) -> AppResult
 }
 
 async fn keysets_list(
-    admin: AdminCtx,
+    owner: OwnerCtx,
     State(state): State<AppState>,
     Query(q): Query<AccountQuery>,
 ) -> AppResult<Json<Value>> {
     let acc = match q.account_id {
         Some(a) => ids::unb64(&a)?,
-        None => admin.account_id().to_vec(),
+        None => owner.account_id().to_vec(),
     };
-    let rows = state
-        .store
-        .admin_list_keysets(admin.tenant_id(), &acc)
-        .await?;
+    let rows = state.store.admin_list_keysets(&acc).await?;
     let out: Vec<Value> = rows
         .into_iter()
         .map(|k| json!({ "generation": k.generation, "uploaded_at": k.uploaded_at }))
@@ -414,7 +337,7 @@ fn mask(s: &str) -> Value {
     }
 }
 
-async fn config_get(_admin: AdminCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
+async fn config_get(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
     let c = &state.config;
     Ok(Json(json!({
         "server": {
@@ -424,6 +347,7 @@ async fn config_get(_admin: AdminCtx, State(state): State<AppState>) -> AppResul
             "trust_proxy": c.server.trust_proxy,
             "acme": c.server.acme,
             "cors_allowed_origins": c.server.cors_allowed_origins,
+            "public_url": c.server.public_url,
         },
         "db": {
             "backend": c.db.backend,
@@ -458,20 +382,13 @@ async fn config_get(_admin: AdminCtx, State(state): State<AppState>) -> AppResul
             "otel_endpoint": c.obs.otel_endpoint,
             "metrics_bind": c.obs.metrics_bind,
         },
-        "bootstrap": {
-            "token": mask(&c.bootstrap.token),
-            "allow_open": c.bootstrap.allow_open,
-            "default_tier": c.bootstrap.default_tier,
-        },
+        "setup": { "code": mask(&c.setup.code) },
+        "oidc": { "enabled": c.oidc.enabled, "issuer": c.oidc.issuer },
         "ops": { "token": mask(&c.ops.token) },
     })))
 }
 
-/// `PUT /v1/admin/config` — hot-reload of a safe subset of runtime settings
-/// (without a restart). Allowlist: `validate_signatures`, `max_object_bytes`,
-/// `max_objects_per_push` — all atomically-swappable and enforced on the hot path.
-/// The remaining keys are edited in the file/env + restart (figment load-only).
-/// Returns live runtime values.
+/// `PUT /v1/admin/config` — hot-reload of a safe subset of runtime settings.
 #[derive(Deserialize)]
 struct ConfigPutReq {
     validate_signatures: Option<bool>,
@@ -480,7 +397,7 @@ struct ConfigPutReq {
 }
 
 async fn config_put(
-    _admin: AdminCtx,
+    _owner: OwnerCtx,
     State(state): State<AppState>,
     Json(req): Json<ConfigPutReq>,
 ) -> AppResult<Json<Value>> {
@@ -509,20 +426,15 @@ async fn config_put(
 
 // ---- metrics ----
 
-/// `GET /v1/admin/metrics` — raw Prometheus render (instant snapshot).
-async fn metrics_raw(_admin: AdminCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
+async fn metrics_raw(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
     match &state.metrics {
         Some(h) => Ok(Json(json!({ "enabled": true, "prometheus": h.render() }))),
         None => Ok(Json(json!({ "enabled": false, "prometheus": Value::Null }))),
     }
 }
 
-/// `GET /v1/admin/metrics/summary` — ready-made series with a **time axis** for
-/// charts. Each poll takes a sample of the `unissh_*` counters into an in-memory ring
-/// (see `obs::MetricsHistory`); the UI draws the curves without parsing raw text.
-/// History is per-process (a live chart for the viewing session), reset on restart.
 async fn metrics_summary(
-    _admin: AdminCtx,
+    _owner: OwnerCtx,
     State(state): State<AppState>,
 ) -> AppResult<Json<Value>> {
     match (&state.metrics, &state.metrics_history) {
@@ -541,9 +453,7 @@ async fn metrics_summary(
 
 // ---- health ----
 
-/// `GET /v1/admin/health` — operational health of the instance: uptime, reachability
-/// and DB pool, the last janitor run, TLS mode. Open metadata (not ZK).
-async fn health(_admin: AdminCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
+async fn health(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
     let db_ok = state.store.ping().await.is_ok();
     let (size, idle) = state.store.pool_stats();
     let in_use = (size as i64 - idle as i64).max(0);
@@ -559,8 +469,6 @@ async fn health(_admin: AdminCtx, State(state): State<AppState>) -> AppResult<Js
         (Value::Null, Value::Null)
     };
 
-    // acme=true is rejected at startup; at runtime TLS is either in-process rustls,
-    // or terminated upstream (reverse-proxy) — in which case in-process plain HTTP.
     let tls = if !state.config.server.tls_cert.is_empty() && !state.config.server.tls_key.is_empty()
     {
         "rustls"
@@ -592,7 +500,7 @@ async fn health(_admin: AdminCtx, State(state): State<AppState>) -> AppResult<Js
     })))
 }
 
-// ---- seq-bump over HTTP (caller tenant; only raises) ----
+// ---- seq-bump over HTTP (instance-wide; only raises) ----
 
 #[derive(Deserialize)]
 struct SeqBumpReq {
@@ -601,15 +509,14 @@ struct SeqBumpReq {
 }
 
 async fn seq_bump(
-    admin: AdminCtx,
+    _owner: OwnerCtx,
     State(state): State<AppState>,
     Json(req): Json<SeqBumpReq>,
 ) -> AppResult<Json<Value>> {
-    let tid = admin.tenant_id();
     let (old, new) = if let Some(to) = req.to {
-        state.store.bump_next_seq_to(tid, to).await?
+        state.store.bump_instance_seq_to(to).await?
     } else if let Some(by) = req.by {
-        state.store.bump_next_seq_by(tid, by).await?
+        state.store.bump_instance_seq_by(by).await?
     } else {
         return Err(AppError::malformed("seq-bump requires `by` or `to`"));
     };
@@ -619,7 +526,7 @@ async fn seq_bump(
 // ---- migrations status ----
 
 async fn migrations_list(
-    _admin: AdminCtx,
+    _owner: OwnerCtx,
     State(state): State<AppState>,
 ) -> AppResult<Json<Value>> {
     let rows = state.store.admin_list_migrations().await?;
@@ -632,8 +539,8 @@ async fn migrations_list(
 
 // ---- audit tamper-evidence (§11.2 hash-chain) ----
 
-async fn audit_verify(admin: AdminCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let (ok, count, broken_at, head) = state.store.verify_audit_chain(admin.tenant_id()).await?;
+async fn audit_verify(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let (ok, count, broken_at, head) = state.store.verify_audit_chain().await?;
     Ok(Json(json!({
         "ok": ok,
         "count": count,

@@ -11,8 +11,6 @@ use unissh_server::ids::b64;
 use unissh_server::modules::policy::write_accept;
 use unissh_server::store::sync_repo::PushObj;
 
-const TID: &[u8] = b"tenant-policy-01";
-
 fn put(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(&(b.len() as u32).to_be_bytes());
     out.extend_from_slice(b);
@@ -131,11 +129,20 @@ async fn write_accept_rbac_matrix() {
     let stranger = vec![0x5Au8; 32];
 
     // genesis owner = admin; org tier.
-    app.seed_device(TID, &admin, &[1u8; 32], "org", true).await;
+    app.seed_device(&admin, &[1u8; 32], "org", true).await;
     // owner claims the vault namespace (admin == owner).
     app.state
         .store
-        .claim_vault(TID, VAULT, &admin, app.now())
+        .claim_vault(
+            VAULT,
+            &admin,
+            None,
+            None,
+            "selective",
+            None,
+            false,
+            app.now(),
+        )
         .await
         .unwrap();
 
@@ -147,14 +154,13 @@ async fn write_accept_rbac_matrix() {
     let m = pobj(manifest_obj(VAULT, 1, &blob, &admin));
     app.state
         .store
-        .grants_publish(TID, VAULT, &m, &[], None, app.now())
+        .grants_publish(VAULT, &m, &[], None, app.now())
         .await
         .unwrap();
 
     // editor Item → accepted
     write_accept(
         &app.state,
-        TID,
         &editor,
         &[pobj(item_obj(VAULT, b"i1", 1, &editor))],
         false,
@@ -165,7 +171,6 @@ async fn write_accept_rbac_matrix() {
     assert!(
         write_accept(
             &app.state,
-            TID,
             &viewer,
             &[pobj(item_obj(VAULT, b"i2", 1, &viewer))],
             false
@@ -178,7 +183,6 @@ async fn write_accept_rbac_matrix() {
     assert!(
         write_accept(
             &app.state,
-            TID,
             &stranger,
             &[pobj(item_obj(VAULT, b"i3", 1, &stranger))],
             false
@@ -191,7 +195,6 @@ async fn write_accept_rbac_matrix() {
     assert!(
         write_accept(
             &app.state,
-            TID,
             &editor,
             &[pobj(manifest_obj(VAULT, 2, &blob, &editor))],
             false
@@ -202,13 +205,13 @@ async fn write_accept_rbac_matrix() {
     );
     // audit authored by non-genesis → forbidden
     assert!(
-        write_accept(&app.state, TID, &editor, &[pobj(audit_obj(&editor))], false)
+        write_accept(&app.state, &editor, &[pobj(audit_obj(&editor))], false)
             .await
             .is_err(),
         "audit author must be genesis"
     );
     // audit authored by genesis(admin) → ok
-    write_accept(&app.state, TID, &admin, &[pobj(audit_obj(&admin))], false)
+    write_accept(&app.state, &admin, &[pobj(audit_obj(&admin))], false)
         .await
         .expect("genesis audit ok");
 }
@@ -224,10 +227,19 @@ async fn write_accept_acl_only_enforces_membership_authorship() {
     let stranger = vec![0xE5u8; 32];
     // genesis owner = admin (creates the tenant); then admin claims the vault — otherwise
     // author_role grants Admin to anyone ("the first push establishes ownership").
-    app.seed_device(TID, &admin, &[1u8; 32], "org", true).await;
+    app.seed_device(&admin, &[1u8; 32], "org", true).await;
     app.state
         .store
-        .claim_vault(TID, VAULT, &admin, app.now())
+        .claim_vault(
+            VAULT,
+            &admin,
+            None,
+            None,
+            "selective",
+            None,
+            false,
+            app.now(),
+        )
         .await
         .unwrap();
     // manifest@1 {admin:admin, editor:editor}.
@@ -235,14 +247,13 @@ async fn write_accept_acl_only_enforces_membership_authorship() {
     let m = pobj(manifest_obj(VAULT, 1, &blob, &admin));
     app.state
         .store
-        .grants_publish(TID, VAULT, &m, &[], None, app.now())
+        .grants_publish(VAULT, &m, &[], None, app.now())
         .await
         .unwrap();
     // acl_only=true: a non-admin (editor) manifest is STILL rejected.
     assert!(
         write_accept(
             &app.state,
-            TID,
             &editor,
             &[pobj(manifest_obj(VAULT, 2, &blob, &editor))],
             true
@@ -254,7 +265,6 @@ async fn write_accept_acl_only_enforces_membership_authorship() {
     // acl_only=true: a non-member writes an Item → ACCEPTED (skipped, the client re-verifies).
     write_accept(
         &app.state,
-        TID,
         &stranger,
         &[pobj(item_obj(VAULT, b"i1", 1, &stranger))],
         true,
@@ -270,13 +280,20 @@ async fn grants_publish_get_and_revoke() {
     let admin = admin_kp.verifying.to_bytes().to_vec();
     let member = vec![0xB2u8; 32];
 
-    let (_acc, _dev, admin_bearer) = app.seed_device(TID, &admin, &[1u8; 32], "org", true).await;
-    let (_acc2, _dev2, member_bearer) = app
-        .seed_device(TID, &member, &[2u8; 32], "org", false)
-        .await;
+    let (_acc, _dev, admin_bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
+    let (_acc2, _dev2, member_bearer) = app.seed_device(&member, &[2u8; 32], "org", false).await;
     app.state
         .store
-        .claim_vault(TID, VAULT, &admin, app.now())
+        .claim_vault(
+            VAULT,
+            &admin,
+            None,
+            None,
+            "selective",
+            None,
+            false,
+            app.now(),
+        )
         .await
         .unwrap();
 
@@ -290,7 +307,6 @@ async fn grants_publish_get_and_revoke() {
     let r = app
         .client
         .post(format!("{}/v1/grants/publish", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {admin_bearer}"))
         .json(&publish)
         .send()
@@ -306,7 +322,6 @@ async fn grants_publish_get_and_revoke() {
             app.base,
             urlencode(&b64(VAULT))
         ))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {member_bearer}"))
         .send()
         .await
@@ -328,7 +343,6 @@ async fn grants_publish_get_and_revoke() {
     let r2 = app
         .client
         .post(format!("{}/v1/grants/publish", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {admin_bearer}"))
         .json(&publish2)
         .send()
@@ -344,7 +358,6 @@ async fn grants_publish_get_and_revoke() {
             app.base,
             urlencode(&b64(VAULT))
         ))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {member_bearer}"))
         .send()
         .await
@@ -359,7 +372,6 @@ async fn grants_publish_get_and_revoke() {
             app.base,
             urlencode(&b64(VAULT))
         ))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {admin_bearer}"))
         .send()
         .await
@@ -380,13 +392,20 @@ async fn grants_get_hides_existence_from_non_member() {
     let admin_kp = Ed25519Keypair::generate();
     let admin = admin_kp.verifying.to_bytes().to_vec();
     let stranger = vec![0xC3u8; 32];
-    let (_a, _d, admin_bearer) = app.seed_device(TID, &admin, &[1u8; 32], "org", true).await;
-    let (_s, _sd, stranger_bearer) = app
-        .seed_device(TID, &stranger, &[2u8; 32], "org", false)
-        .await;
+    let (_a, _d, admin_bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
+    let (_s, _sd, stranger_bearer) = app.seed_device(&stranger, &[2u8; 32], "org", false).await;
     app.state
         .store
-        .claim_vault(TID, VAULT, &admin, app.now())
+        .claim_vault(
+            VAULT,
+            &admin,
+            None,
+            None,
+            "selective",
+            None,
+            false,
+            app.now(),
+        )
         .await
         .unwrap();
 
@@ -400,7 +419,6 @@ async fn grants_get_hides_existence_from_non_member() {
     let r = app
         .client
         .post(format!("{}/v1/grants/publish", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {admin_bearer}"))
         .json(&publish)
         .send()
@@ -416,7 +434,6 @@ async fn grants_get_hides_existence_from_non_member() {
             app.base,
             urlencode(&b64(VAULT))
         ))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {stranger_bearer}"))
         .send()
         .await
@@ -430,7 +447,6 @@ async fn grants_get_hides_existence_from_non_member() {
             app.base,
             urlencode(&b64(&ghost_id))
         ))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {stranger_bearer}"))
         .send()
         .await
@@ -460,14 +476,21 @@ async fn grants_publish_rejects_non_vault_admin() {
     let delegated_kp = Ed25519Keypair::generate();
     let delegated = delegated_kp.verifying.to_bytes().to_vec();
     // The vault owner (also an instance-admin) + claim.
-    let (_a, _d, _owner_bearer) = app.seed_device(TID, &owner, &[1u8; 32], "org", true).await;
+    let (_a, _d, _owner_bearer) = app.seed_device(&owner, &[1u8; 32], "org", true).await;
     // A delegated instance-admin (is_admin=true), but NOT a member/owner of the vault.
-    let (_a2, _d2, delegated_bearer) = app
-        .seed_device(TID, &delegated, &[4u8; 32], "org", true)
-        .await;
+    let (_a2, _d2, delegated_bearer) = app.seed_device(&delegated, &[4u8; 32], "org", true).await;
     app.state
         .store
-        .claim_vault(TID, VAULT, &owner, app.now())
+        .claim_vault(
+            VAULT,
+            &owner,
+            None,
+            None,
+            "selective",
+            None,
+            false,
+            app.now(),
+        )
         .await
         .unwrap();
     // The delegated one publishes a manifest authored by itself → 403.
@@ -480,7 +503,6 @@ async fn grants_publish_rejects_non_vault_admin() {
     let r = app
         .client
         .post(format!("{}/v1/grants/publish", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {delegated_bearer}"))
         .json(&publish)
         .send()
@@ -504,12 +526,19 @@ async fn grants_publish_rejects_forged_manifest_signature() {
     let owner = owner_kp.verifying.to_bytes().to_vec();
     let attacker = vec![0xEEu8; 32];
     // The attacker is an instance-admin (is_admin), but NOT the vault owner.
-    let (_a, _d, attacker_bearer) = app
-        .seed_device(TID, &attacker, &[7u8; 32], "org", true)
-        .await;
+    let (_a, _d, attacker_bearer) = app.seed_device(&attacker, &[7u8; 32], "org", true).await;
     app.state
         .store
-        .claim_vault(TID, VAULT, &owner, app.now())
+        .claim_vault(
+            VAULT,
+            &owner,
+            None,
+            None,
+            "selective",
+            None,
+            false,
+            app.now(),
+        )
         .await
         .unwrap();
 
@@ -523,7 +552,6 @@ async fn grants_publish_rejects_forged_manifest_signature() {
     let r = app
         .client
         .post(format!("{}/v1/grants/publish", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {attacker_bearer}"))
         .json(&publish)
         .send()
@@ -541,13 +569,12 @@ async fn grants_publish_rejects_forged_manifest_signature() {
 async fn audit_append_genesis_and_admin_query() {
     let app = spawn().await;
     let admin = vec![0xC3u8; 32];
-    let (_a, _d, admin_bearer) = app.seed_device(TID, &admin, &[1u8; 32], "org", true).await;
+    let (_a, _d, admin_bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
 
     // genesis-authored audit append → ok
     let ok = app
         .client
         .post(format!("{}/v1/audit", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {admin_bearer}"))
         .json(&json!({ "audit_object": b64(&audit_obj(&admin)) }))
         .send()
@@ -559,7 +586,6 @@ async fn audit_append_genesis_and_admin_query() {
     let bad = app
         .client
         .post(format!("{}/v1/audit", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {admin_bearer}"))
         .json(&json!({ "audit_object": b64(&audit_obj(&[0xFFu8; 32])) }))
         .send()
@@ -571,7 +597,6 @@ async fn audit_append_genesis_and_admin_query() {
     let q: Value = app
         .client
         .get(format!("{}/v1/audit?since_seq=0", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {admin_bearer}"))
         .send()
         .await
@@ -592,13 +617,10 @@ async fn audit_append_genesis_and_admin_query() {
 async fn audit_query_admin_only() {
     let app = spawn_with(|_| {}).await;
     let member = vec![0xD4u8; 32];
-    let (_a, _d, member_bearer) = app
-        .seed_device(TID, &member, &[2u8; 32], "org", false)
-        .await;
+    let (_a, _d, member_bearer) = app.seed_device(&member, &[2u8; 32], "org", false).await;
     let r = app
         .client
         .get(format!("{}/v1/audit?since_seq=0", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {member_bearer}"))
         .send()
         .await

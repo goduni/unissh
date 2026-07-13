@@ -5,7 +5,7 @@ use unissh_server::ids;
 
 async fn store_v2() -> Store {
     let s = Store::connect_sqlite(":memory:", 1).await.unwrap();
-    s.migrate_from("./migrations_v2/sqlite").await.unwrap();
+    s.migrate().await.unwrap();
     s
 }
 

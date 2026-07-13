@@ -4,22 +4,11 @@
 use sqlx::FromRow;
 
 #[derive(Debug, Clone, FromRow)]
-pub struct TenantRow {
-    pub tenant_id: Vec<u8>,
-    pub tier: String,
-    pub display_name: Option<String>,
-    pub next_seq: i64,
-    pub genesis_owner_pubkey: Option<Vec<u8>>,
-    pub created_at: i64,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, FromRow)]
 pub struct AccountRow {
     pub account_id: Vec<u8>,
     pub display_name: Option<String>,
     pub handle: Option<String>,
-    pub is_admin: i64,
+    pub is_owner: i64,
     pub ed25519_pub: Option<Vec<u8>>,
     pub x25519_pub: Option<Vec<u8>>,
     pub status: String,
@@ -31,7 +20,7 @@ pub struct AccountListRow {
     pub account_id: Vec<u8>,
     pub display_name: Option<String>,
     pub handle: Option<String>,
-    pub is_admin: i64,
+    pub is_owner: i64,
     pub ed25519_pub: Option<Vec<u8>>,
     pub x25519_pub: Option<Vec<u8>>,
     pub status: String,
@@ -44,13 +33,14 @@ pub struct AccountListRow {
 
 #[derive(Debug, Clone, FromRow)]
 pub struct DeviceRow {
-    pub tenant_id: Vec<u8>,
     pub account_id: Vec<u8>,
     pub device_id: Vec<u8>,
     pub ed25519_pub: Vec<u8>,
     pub x25519_pub: Vec<u8>,
     pub registered_at: i64,
     pub status: String,
+    /// Web/panel devices auto-expire; NULL for app devices (never expire).
+    pub expires_at: Option<i64>,
 }
 
 /// One delta element: `(server_seq, object_bytes)` (§5.1).
@@ -110,36 +100,6 @@ pub struct KeysetRow {
 }
 
 #[derive(Debug, Clone, FromRow)]
-pub struct InviteRow {
-    pub invite_id: Vec<u8>,
-    pub role: i64,
-    pub scope: Option<String>,
-    pub expires_at: i64,
-    pub state: String,
-}
-
-/// Enrollment grant for listing to the operator (token_hash is NOT exported).
-#[derive(Debug, Clone, FromRow)]
-pub struct EnrollGrantRow {
-    pub grant_id: Vec<u8>,
-    pub label: String,
-    pub tier: Option<String>,
-    pub state: String,
-    pub expires_at: Option<i64>,
-    pub redeemed_tenant: Option<Vec<u8>>,
-    pub redeemed_at: Option<i64>,
-    pub created_at: i64,
-}
-
-/// Internal read of a grant for classification during CAS-redeem.
-#[derive(Debug, Clone, FromRow)]
-pub struct EnrollGrantState {
-    pub tier: Option<String>,
-    pub state: String,
-    pub expires_at: Option<i64>,
-}
-
-#[derive(Debug, Clone, FromRow)]
 pub struct SessionRow {
     pub session_id: Vec<u8>,
     pub account_id: Vec<u8>,
@@ -196,12 +156,10 @@ pub struct AdminSessionRow {
     pub created_at: i64,
 }
 
-/// An invite (admin listing). token_hash is NOT exported.
+/// An invite (admin listing, v2 shape). token_hash is NOT exported.
 #[derive(Debug, Clone, FromRow)]
 pub struct AdminInviteRow {
     pub invite_id: Vec<u8>,
-    pub role: i64,
-    pub scope: Option<String>,
     pub state: String,
     pub expires_at: i64,
     pub created_at: i64,
@@ -245,41 +203,6 @@ pub struct AdminKeysetRow {
 pub struct MigrationRow {
     pub version: i64,
     pub description: String,
-}
-
-/// A tenant for cross-tenant ops listing (`/v1/ops/tenants`).
-#[derive(Debug, Clone, FromRow)]
-pub struct OpsTenantRow {
-    pub tenant_id: Vec<u8>,
-    pub tier: String,
-    pub display_name: Option<String>,
-    pub status: String,
-    pub next_seq: i64,
-    pub created_at: i64,
-    pub account_count: i64,
-    /// Genesis-owner (Ed25519) — open metadata for the ops list (personal/org +
-    /// who the owner is). NULL before bootstrap.
-    pub genesis_owner_pubkey: Option<Vec<u8>>,
-}
-
-/// An account for cross-tenant ops discoverability (`/v1/ops/account?handle=`).
-/// Open metadata — helps the operator find the account_id before Bearer (§ chicken/egg).
-#[derive(Debug, Clone, FromRow)]
-pub struct OpsAccountRow {
-    pub tenant_id: Vec<u8>,
-    pub account_id: Vec<u8>,
-    pub display_name: Option<String>,
-    pub handle: Option<String>,
-    pub is_admin: i64,
-    pub status: String,
-}
-
-/// A device for ops discoverability (no pubkey — only identifier/state).
-#[derive(Debug, Clone, FromRow)]
-pub struct OpsDeviceRow {
-    pub device_id: Vec<u8>,
-    pub status: String,
-    pub registered_at: i64,
 }
 
 /// A full audit record for verifying the hash chain (§11.2 tamper-evidence).

@@ -15,7 +15,6 @@ pub struct Config {
     pub sync: SyncConfig,
     pub session: SessionConfig,
     pub obs: ObsConfig,
-    pub bootstrap: BootstrapConfig,
     pub ops: OpsConfig,
     pub setup: SetupConfig,
     pub oidc: OidcConfig,
@@ -98,17 +97,6 @@ pub struct ObsConfig {
     pub log_format: String,
     pub otel_endpoint: String,
     pub metrics_bind: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct BootstrapConfig {
-    /// Global bootstrap token (base64). Empty + `allow_open=false` → bootstrap is closed.
-    pub token: String,
-    /// Allow bootstrap without a token (for dev/local only).
-    pub allow_open: bool,
-    /// Default tier for an auto-created tenant: "personal" | "org".
-    pub default_tier: String,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -202,15 +190,6 @@ impl Default for ObsConfig {
         }
     }
 }
-impl Default for BootstrapConfig {
-    fn default() -> Self {
-        Self {
-            token: String::new(),
-            allow_open: false,
-            default_tier: "personal".into(),
-        }
-    }
-}
 // Manual `Debug` for secret-bearing sub-structs: even an accidental
 // `tracing::debug!(?config)`, a panic message, or an error wrapper must NOT
 // emit tokens / the TLS key / the db-URL (with pg creds) to the logs (obs rule §13).
@@ -233,15 +212,6 @@ impl std::fmt::Debug for DbConfig {
             .field("backend", &self.backend)
             .field("url", &redacted(&self.url))
             .field("max_connections", &self.max_connections)
-            .finish()
-    }
-}
-impl std::fmt::Debug for BootstrapConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BootstrapConfig")
-            .field("token", &redacted(&self.token))
-            .field("allow_open", &self.allow_open)
-            .field("default_tier", &self.default_tier)
             .finish()
     }
 }

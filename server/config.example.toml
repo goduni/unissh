@@ -1,6 +1,6 @@
 # UniSSH Server — example configuration (spec §14.2).
 # Hierarchy: defaults → this TOML → env (UNISSH__SECTION__KEY=...).
-# Secrets (tls_key, postgres url, bootstrap token) — via env/Docker secret.
+# Secrets (tls_key, postgres url, ops token) — via env/Docker secret.
 
 [server]
 bind = "0.0.0.0:8443"
@@ -12,6 +12,8 @@ trust_proxy = false
 acme = false                      # in-process ACME is NOT built in: acme=true → startup
                                   # refusal. Use a reverse-proxy (Caddy/nginx)
                                   # or tls_cert+tls_key.
+# Public base URL for rendering invite links (empty → clients compose their own).
+public_url = ""
 
 [db]
 backend = "sqlite"                # "sqlite" | "postgres"
@@ -48,15 +50,20 @@ otel_endpoint = ""                # OTLP export is NOT compiled in: if set — w
                                   # at startup. Metrics: /metrics; tracing: logs/sidecar.
 metrics_bind = "127.0.0.1:9090"
 
-[bootstrap]
-# Global bootstrap token (base64). Empty + allow_open=false → bootstrap is closed.
-# Set via env: UNISSH__BOOTSTRAP__TOKEN=...
-token = ""
-allow_open = false
-default_tier = "personal"         # "personal" | "org"
+[setup]
+# Fixed setup code for claiming the instance (IaC/tests). Empty → a code is
+# generated at boot while unclaimed and printed to the logs.
+# Set via env: UNISSH__SETUP__CODE=...
+code = ""
+
+[oidc]
+# SSO seam (Phase 5): disabled by default.
+enabled = false
+issuer = ""
+client_id = ""
 
 [ops]
-# Operator token for cross-tenant /v1/ops/* (X-UniSSH-Ops-Token header).
+# Operator token for break-glass /v1/ops/* (X-UniSSH-Ops-Token header).
 # Empty → ops surface is DISABLED. Set via env: UNISSH__OPS__TOKEN=...
-# This is server-trusted infrastructure access (tenants/suspend/seq-bump), NOT a keyset.
+# This is server-trusted infrastructure access (overview/seq-bump), NOT a keyset.
 token = ""

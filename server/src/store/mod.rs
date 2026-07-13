@@ -1,7 +1,7 @@
 //! Repository layer (sqlx). Dual-dialect: SQLite (self-host default, WAL) and
-//! Postgres (scale). A single `Store` facade with `enum Db`; every method is
-//! tenant-scoped (spec §12). Opaque blobs — verbatim; open columns mirror the
-//! core's record contract.
+//! Postgres (scale). A single `Store` facade with `enum Db`; v2 is
+//! instance-scoped (one instance per server, spec §5.1). Opaque blobs — verbatim;
+//! open columns mirror the core's record contract.
 //!
 //! Decision: we use the **runtime** query API of sqlx (`sqlx::query(...).bind(...)`),
 //! not the compile-time macros — they are incompatible with dual-dialect + DB-free
@@ -20,7 +20,6 @@ pub mod accounts_repo;
 pub mod admin_repo;
 pub mod audit_repo;
 pub mod auth_repo;
-pub mod enroll_repo;
 pub mod identity_repo;
 pub mod instance_repo;
 pub mod invites_repo;
@@ -29,7 +28,6 @@ pub mod pending_repo;
 pub mod policy_repo;
 pub mod spaces_repo;
 pub mod sync_repo;
-pub mod tenants;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {

@@ -33,16 +33,43 @@ pub async fn build_state(
 ) -> AppResult<AppState> {
     let store = Store::connect(&config.db).await?;
     store.migrate().await?;
+    // v2 boot order (Task-2 review finding): the singleton `instance` row MUST
+    // exist before anything reads it — `Store::instance()` panics otherwise.
+    let now = clock.now_unix();
+    let instance_row = store.ensure_instance(now).await?;
+    // Unclaimed: publish a setup code so a client can claim this instance. The code
+    // is the config-fixed one (IaC/tests) if set, else a fresh random one. We store
+    // only sha256(code); the human code is printed to logs (never persisted).
+    if instance_row.claimed == 0 {
+        let code = if config.setup.code.is_empty() {
+            let mut rnd = [0u8; 6];
+            ids::fill_random(&mut rnd);
+            ids::generate_setup_code(&rnd)
+        } else {
+            config.setup.code.clone()
+        };
+        store
+            .set_setup_code_hash(&ids::sha256(code.as_bytes()))
+            .await?;
+        tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
+        println!("SETUP CODE: {code}");
+    }
     // Whole-DB-snapshot anti-rollback (§16): refuse to come up if
-    // the instance-generation (Σ next_seq) has fallen below the operator-anchored floor.
-    // Checked HERE (not only in `main`) so that in-process/embedded
-    // deployments also get a fatal refusal when a stale
+    // the instance-generation (instance.next_seq) has fallen below the
+    // operator-anchored floor. Checked HERE (not only in `main`) so that
+    // in-process/embedded deployments also get a fatal refusal when a stale
     // snapshot is restored — otherwise anti-rollback degrades to "not checked".
     let generation = store.instance_generation().await?;
     let floor = config.sync.min_instance_generation;
     rollback_guard(generation, floor)?;
     tracing::info!(generation, floor, "anti-rollback check passed");
-    Ok(AppStateInner::new(store, config, clock, metrics))
+    Ok(AppStateInner::new(
+        store,
+        config,
+        instance_row.instance_id,
+        clock,
+        metrics,
+    ))
 }
 
 /// Build the router from a ready state.

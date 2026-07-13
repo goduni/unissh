@@ -1,5 +1,5 @@
-//! Store level §15.1: per-tenant isolation, monotonic/append-only server_seq,
-//! push idempotency. SQLite in-memory.
+//! Store level §15.1: instance-wide monotonic/append-only server_seq, push
+//! idempotency, membership-filtered delta. SQLite in-memory.
 
 use unissh_server::codec::parse_open;
 use unissh_server::store::sync_repo::PushObj;
@@ -44,20 +44,16 @@ fn vault(owner: u8, version: u64) -> SyncObject {
 async fn fresh_store() -> Store {
     let s = Store::connect_sqlite(":memory:", 1).await.unwrap();
     s.migrate().await.unwrap();
+    s.ensure_instance(1).await.unwrap();
     s
 }
-
-const TA: &[u8] = b"tenant-aaaaaaaaa";
-const TB: &[u8] = b"tenant-bbbbbbbbb";
 
 #[tokio::test]
 async fn monotonic_seq_order_and_first_is_one() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
 
     let r = s
         .push_objects(
-            TA,
             None,
             b"h1",
             vec![push_obj(audit(1)), push_obj(audit(2)), push_obj(audit(3))],
@@ -74,29 +70,23 @@ async fn monotonic_seq_order_and_first_is_one() {
 
     // second push continues monotonically
     let r2 = s
-        .push_objects(TA, None, b"h2", vec![push_obj(audit(4))], 101)
+        .push_objects(None, b"h2", vec![push_obj(audit(4))], 101)
         .await
         .unwrap();
     assert_eq!(r2.server_seq, vec![4]);
     assert_eq!(
-        s.report_version(TA).await.unwrap(),
+        s.report_version().await.unwrap(),
         4,
         "report_version == max seq"
     );
 
     // delta returns all, seq>cursor ASC
-    let d = s
-        .delta_since(TA, 0, 100, &[0u8; 32], 1_000_000)
-        .await
-        .unwrap();
+    let d = s.delta_since(0, 100, &[0u8; 32], 1_000_000).await.unwrap();
     assert_eq!(
         d.iter().map(|x| x.server_seq).collect::<Vec<_>>(),
         vec![1, 2, 3, 4]
     );
-    let d2 = s
-        .delta_since(TA, 2, 100, &[0u8; 32], 1_000_000)
-        .await
-        .unwrap();
+    let d2 = s.delta_since(2, 100, &[0u8; 32], 1_000_000).await.unwrap();
     assert_eq!(
         d2.iter().map(|x| x.server_seq).collect::<Vec<_>>(),
         vec![3, 4]
@@ -106,11 +96,10 @@ async fn monotonic_seq_order_and_first_is_one() {
 #[tokio::test]
 async fn idempotent_replay_returns_same_seqs_no_dups() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
 
     let mk = || vec![push_obj(audit(1)), push_obj(audit(2))];
     let first = s
-        .push_objects(TA, Some(b"idem-1"), b"body-hash", mk(), 100)
+        .push_objects(Some(b"idem-1"), b"body-hash", mk(), 100)
         .await
         .unwrap();
     assert_eq!(first.server_seq, vec![1, 2]);
@@ -118,7 +107,7 @@ async fn idempotent_replay_returns_same_seqs_no_dups() {
 
     // replay same key + same body → same seqs, no new rows, next_seq unchanged
     let replay = s
-        .push_objects(TA, Some(b"idem-1"), b"body-hash", mk(), 100)
+        .push_objects(Some(b"idem-1"), b"body-hash", mk(), 100)
         .await
         .unwrap();
     assert_eq!(
@@ -128,16 +117,13 @@ async fn idempotent_replay_returns_same_seqs_no_dups() {
     );
     assert!(replay.replayed);
     assert_eq!(
-        s.report_version(TA).await.unwrap(),
+        s.report_version().await.unwrap(),
         2,
         "next_seq did not advance on replay"
     );
 
     let count = s
-        .fetch_scalar_i64(
-            "SELECT COUNT(*) FROM objects WHERE tenant_id = ?",
-            vec![Val::b(TA)],
-        )
+        .fetch_scalar_i64("SELECT COUNT(*) FROM objects", vec![])
         .await
         .unwrap()
         .unwrap();
@@ -145,62 +131,27 @@ async fn idempotent_replay_returns_same_seqs_no_dups() {
 
     // same key, different body → 409 conflict
     let err = s
-        .push_objects(TA, Some(b"idem-1"), b"different-hash", mk(), 100)
+        .push_objects(Some(b"idem-1"), b"different-hash", mk(), 100)
         .await
         .unwrap_err();
     assert_eq!(err.code, unissh_server::ErrorCode::Conflict);
 }
 
 #[tokio::test]
-async fn tenant_isolation_no_crosstalk() {
-    let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
-    s.create_tenant(TB, "personal", 100).await.unwrap();
-
-    s.push_objects(
-        TA,
-        None,
-        b"h",
-        vec![push_obj(audit(1)), push_obj(audit(2))],
-        100,
-    )
-    .await
-    .unwrap();
-
-    // tenant B sees nothing; its seq namespace is independent.
-    assert_eq!(s.report_version(TB).await.unwrap(), 0);
-    assert!(
-        s.delta_since(TB, 0, 100, &[0u8; 32], 1_000_000)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(s.report_version(TA).await.unwrap(), 2);
-
-    // B's own push starts at 1 (independent namespace).
-    let rb = s
-        .push_objects(TB, None, b"h", vec![push_obj(audit(9))], 100)
-        .await
-        .unwrap();
-    assert_eq!(rb.server_seq, vec![1]);
-}
-
-#[tokio::test]
 async fn vault_claim_rule_owner_immutable() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
 
     // First Vault fixes owner = 0xAA.
-    s.push_objects(TA, None, b"h1", vec![push_obj(vault(0xAA, 1))], 100)
+    s.push_objects(None, b"h1", vec![push_obj(vault(0xAA, 1))], 100)
         .await
         .unwrap();
     // Same owner, higher version → ok.
-    s.push_objects(TA, None, b"h2", vec![push_obj(vault(0xAA, 2))], 101)
+    s.push_objects(None, b"h2", vec![push_obj(vault(0xAA, 2))], 101)
         .await
         .unwrap();
     // Different owner → claim-rule conflict.
     let err = s
-        .push_objects(TA, None, b"h3", vec![push_obj(vault(0xBB, 3))], 102)
+        .push_objects(None, b"h3", vec![push_obj(vault(0xBB, 3))], 102)
         .await
         .unwrap_err();
     assert_eq!(err.code, unissh_server::ErrorCode::Conflict);
@@ -252,14 +203,12 @@ fn grant(vault_id: &[u8], member: &[u8], epoch: u64, author: &[u8]) -> SyncObjec
 #[tokio::test]
 async fn delta_filters_by_vault_membership() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
 
     let owner1 = [0x11u8; 32];
     let owner2 = [0x22u8; 32];
     let stranger = [0x99u8; 32];
 
     s.push_objects(
-        TA,
         None,
         b"r1",
         vec![push_obj(vault_owned(b"vault-1", &owner1))],
@@ -268,7 +217,6 @@ async fn delta_filters_by_vault_membership() {
     .await
     .unwrap();
     s.push_objects(
-        TA,
         None,
         b"r2",
         vec![push_obj(vault_owned(b"vault-2", &owner2))],
@@ -276,27 +224,21 @@ async fn delta_filters_by_vault_membership() {
     )
     .await
     .unwrap();
-    s.push_objects(TA, None, b"r3", vec![push_obj(audit(9))], 100)
+    s.push_objects(None, b"r3", vec![push_obj(audit(9))], 100)
         .await
         .unwrap();
 
     // owner1: vault-1 + audit = 2; NOT vault-2.
     assert_eq!(
-        s.delta_since(TA, 0, 100, &owner1, 200).await.unwrap().len(),
+        s.delta_since(0, 100, &owner1, 200).await.unwrap().len(),
         2,
         "owner1 sees its own vault + vault-less audit, not another's vault"
     );
     // owner2: vault-2 + audit = 2.
-    assert_eq!(
-        s.delta_since(TA, 0, 100, &owner2, 200).await.unwrap().len(),
-        2
-    );
+    assert_eq!(s.delta_since(0, 100, &owner2, 200).await.unwrap().len(), 2);
     // stranger: only audit = 1.
     assert_eq!(
-        s.delta_since(TA, 0, 100, &stranger, 200)
-            .await
-            .unwrap()
-            .len(),
+        s.delta_since(0, 100, &stranger, 200).await.unwrap().len(),
         1,
         "a stranger sees only vault-less objects, not a single vault"
     );
@@ -306,13 +248,11 @@ async fn delta_filters_by_vault_membership() {
 #[tokio::test]
 async fn delta_grant_grants_visibility() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
 
     let owner = [0x11u8; 32];
     let member = [0x33u8; 32];
 
     s.push_objects(
-        TA,
         None,
         b"g1",
         vec![
@@ -327,13 +267,13 @@ async fn delta_grant_grants_visibility() {
 
     // a member (not the owner) with an active grant@epoch=latest sees the vault's objects.
     assert_eq!(
-        s.delta_since(TA, 0, 100, &member, 200).await.unwrap().len(),
+        s.delta_since(0, 100, &member, 200).await.unwrap().len(),
         3,
         "a member with an active grant sees vault+manifest+grant"
     );
     // a stranger without a grant — nothing (no vault-less objects).
     assert_eq!(
-        s.delta_since(TA, 0, 100, &[0x99u8; 32], 200)
+        s.delta_since(0, 100, &[0x99u8; 32], 200)
             .await
             .unwrap()
             .len(),
@@ -341,17 +281,14 @@ async fn delta_grant_grants_visibility() {
     );
 }
 
-/// #10: republishing a grant does NOT resurrect revoked access. Epoch revocation
-/// is permanent; ON CONFLICT preserves revoked rather than resetting it to 0 from excluded.
+/// #10: republishing a grant does NOT resurrect revoked access.
 #[tokio::test]
 async fn replayed_grant_does_not_resurrect_revoked_access() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
     let owner = [0x11u8; 32];
     let member = [0x33u8; 32];
 
     s.push_objects(
-        TA,
         None,
         b"g1",
         vec![
@@ -364,7 +301,7 @@ async fn replayed_grant_does_not_resurrect_revoked_access() {
     .await
     .unwrap();
     assert!(
-        s.member_has_active_grant(TA, b"vault-1", 1, &member, 200)
+        s.member_has_active_grant(b"vault-1", 1, &member, 200)
             .await
             .unwrap(),
         "a fresh grant is active"
@@ -372,14 +309,13 @@ async fn replayed_grant_does_not_resurrect_revoked_access() {
 
     // Offboarding: revoke epoch 1 (like revoke_epoch in grants_publish).
     s.exec(
-        "UPDATE membership_grants SET revoked = 1 \
-         WHERE tenant_id = ? AND vault_id = ? AND key_epoch = ?",
-        vec![Val::b(TA), Val::b(b"vault-1".to_vec()), Val::I(1)],
+        "UPDATE membership_grants SET revoked = 1 WHERE vault_id = ? AND key_epoch = ?",
+        vec![Val::b(b"vault-1".to_vec()), Val::I(1)],
     )
     .await
     .unwrap();
     assert!(
-        !s.member_has_active_grant(TA, b"vault-1", 1, &member, 200)
+        !s.member_has_active_grant(b"vault-1", 1, &member, 200)
             .await
             .unwrap(),
         "after revocation — not active"
@@ -387,7 +323,6 @@ async fn replayed_grant_does_not_resurrect_revoked_access() {
 
     // Replaying the same grant@1 publication (retry/malicious) does NOT resurrect access.
     s.push_objects(
-        TA,
         None,
         b"g1-replay",
         vec![push_obj(grant(b"vault-1", &member, 1, &owner))],
@@ -396,24 +331,21 @@ async fn replayed_grant_does_not_resurrect_revoked_access() {
     .await
     .unwrap();
     assert!(
-        !s.member_has_active_grant(TA, b"vault-1", 1, &member, 200)
+        !s.member_has_active_grant(b"vault-1", 1, &member, 200)
             .await
             .unwrap(),
         "replaying the grant does not resurrect revoked access (#10)"
     );
 }
 
-/// #7: delta stale-epoch — a member with a grant on an OLD epoch loses visibility after
-/// rotation (manifest@2 without them), because the filter requires g.key_epoch = MAX(manifest).
+/// #7: delta stale-epoch — a member with a grant on an OLD epoch loses visibility after rotation.
 #[tokio::test]
 async fn delta_stale_epoch_grant_loses_visibility() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
     let owner = [0x11u8; 32];
     let member = [0x33u8; 32];
 
     s.push_objects(
-        TA,
         None,
         b"e1",
         vec![
@@ -426,14 +358,13 @@ async fn delta_stale_epoch_grant_loses_visibility() {
     .await
     .unwrap();
     assert_eq!(
-        s.delta_since(TA, 0, 100, &member, 200).await.unwrap().len(),
+        s.delta_since(0, 100, &member, 200).await.unwrap().len(),
         3,
         "member@1 sees objects while epoch 1 is active"
     );
 
     // Rotation: publish manifest@2 (the member is NOT re-issued for epoch 2).
     s.push_objects(
-        TA,
         None,
         b"e2",
         vec![push_obj(manifest(b"vault-1", 2, &owner))],
@@ -443,18 +374,16 @@ async fn delta_stale_epoch_grant_loses_visibility() {
     .unwrap();
     // MAX(manifest)=2, the member's grant is on epoch 1 → the filter cuts it off.
     assert_eq!(
-        s.delta_since(TA, 0, 100, &member, 200).await.unwrap().len(),
+        s.delta_since(0, 100, &member, 200).await.unwrap().len(),
         0,
         "a member with a stale grant@1 loses visibility after rotation to @2 (#7)"
     );
 }
 
-/// #11: delta grant-expiry — a grant with an expired not_after stops delivering
-/// objects (filter: not_after IS NULL OR not_after > now).
+/// #11: delta grant-expiry — a grant with an expired not_after stops delivering objects.
 #[tokio::test]
 async fn delta_expired_grant_stops_delivering() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
     let owner = [0x11u8; 32];
     let member = [0x33u8; 32];
 
@@ -463,7 +392,6 @@ async fn delta_expired_grant_stops_delivering() {
         mg.not_after = 150; // expires at t=150
     }
     s.push_objects(
-        TA,
         None,
         b"x1",
         vec![
@@ -477,13 +405,13 @@ async fn delta_expired_grant_stops_delivering() {
     .unwrap();
     // now=140 < 150 → the grant is still active.
     assert_eq!(
-        s.delta_since(TA, 0, 100, &member, 140).await.unwrap().len(),
+        s.delta_since(0, 100, &member, 140).await.unwrap().len(),
         3,
         "before not_after expires the member sees objects"
     );
     // now=200 > 150 → the grant expired → no visibility.
     assert_eq!(
-        s.delta_since(TA, 0, 100, &member, 200).await.unwrap().len(),
+        s.delta_since(0, 100, &member, 200).await.unwrap().len(),
         0,
         "after not_after the grant expired, no visibility (#11)"
     );
@@ -510,15 +438,12 @@ fn item_no_vault() -> SyncObject {
     })
 }
 
-/// A vault-scoped object (Item, tag=2) with an EMPTY vault_id is NOT treated as "vault-less" and
-/// is NOT broadcast; only Audit(5)/Keyset(6) are vault-less.
+/// A vault-scoped object (Item, tag=2) with an EMPTY vault_id is NOT treated as "vault-less".
 #[tokio::test]
 async fn empty_vault_id_vault_scoped_object_not_broadcast() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
 
     s.push_objects(
-        TA,
         None,
         b"e1",
         vec![push_obj(item_no_vault()), push_obj(keyset())],
@@ -528,7 +453,7 @@ async fn empty_vault_id_vault_scoped_object_not_broadcast() {
     .unwrap();
 
     // the stranger sees ONLY the keyset (genuinely vault-less), not the Item with an empty vault_id.
-    let rows = s.delta_since(TA, 0, 100, &[0x99u8; 32], 200).await.unwrap();
+    let rows = s.delta_since(0, 100, &[0x99u8; 32], 200).await.unwrap();
     assert_eq!(
         rows.len(),
         1,
@@ -553,18 +478,15 @@ fn item_in_vault(vault_id: &[u8], item_id: &[u8]) -> SyncObject {
     })
 }
 
-/// A1b: grant activation re-emits the vault's current set (vault+item) on fresh seqs,
-/// so that a member whose cursor already passed these objects receives them.
+/// A1b: grant activation re-emits the vault's current set (vault+item) on fresh seqs.
 #[tokio::test]
 async fn grant_activation_reemits_vault_objects_above_cursor() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
     let owner = [0x11u8; 32];
     let member = [0x33u8; 32];
 
     // The owner creates vault v + item (seqs 1,2) BEFORE membership.
     s.push_objects(
-        TA,
         None,
         b"p1",
         vec![
@@ -577,12 +499,11 @@ async fn grant_activation_reemits_vault_objects_above_cursor() {
     .unwrap();
 
     // The member's cursor is already here (it passed the v-objects at seq 1,2).
-    let cursor = s.report_version(TA).await.unwrap();
+    let cursor = s.report_version().await.unwrap();
     assert_eq!(cursor, 2);
 
     // Publish manifest@1 + a grant for the member → grants_publish re-emits the v-objects.
     s.grants_publish(
-        TA,
         b"v",
         &push_obj(manifest(b"v", 1, &owner)),
         &[push_obj(grant(b"v", &member, 1, &owner))],
@@ -592,9 +513,8 @@ async fn grant_activation_reemits_vault_objects_above_cursor() {
     .await
     .unwrap();
 
-    // The member with cursor=2 does a delta: should receive the vault record + item that appeared
-    // on fresh seq > 2 (re-emit), not just manifest/grant.
-    let rows = s.delta_since(TA, cursor, 100, &member, 200).await.unwrap();
+    // The member with cursor=2 does a delta: should receive the vault record + item on fresh seq > 2.
+    let rows = s.delta_since(cursor, 100, &member, 200).await.unwrap();
     let tags: Vec<u8> = rows
         .iter()
         .map(|r| parse_open(&r.object_bytes).unwrap().tag_u8)
@@ -618,34 +538,26 @@ fn account_state(author: &[u8], version: u64) -> SyncObject {
     })
 }
 
-/// A3: account-state (tag 7) is visible in the delta ONLY to the devices of its own account
-/// (author_pubkey == member); not broadcast, not vault-scoped.
+/// A3: account-state (tag 7) is visible in the delta ONLY to the devices of its own account.
 #[tokio::test]
 async fn delta_account_state_visible_only_to_author() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
     let alice = [0xA1u8; 32];
     let bob = [0xB2u8; 32];
 
-    s.push_objects(
-        TA,
-        None,
-        b"as1",
-        vec![push_obj(account_state(&alice, 1))],
-        100,
-    )
-    .await
-    .unwrap();
+    s.push_objects(None, b"as1", vec![push_obj(account_state(&alice, 1))], 100)
+        .await
+        .unwrap();
 
     // Alice (the author) sees her own account-state.
     assert_eq!(
-        s.delta_since(TA, 0, 100, &alice, 200).await.unwrap().len(),
+        s.delta_since(0, 100, &alice, 200).await.unwrap().len(),
         1,
         "the author sees their own account-state"
     );
-    // Bob (a different account) does NOT see another's account-state (no vault-less objects).
+    // Bob (a different account) does NOT see another's account-state.
     assert_eq!(
-        s.delta_since(TA, 0, 100, &bob, 200).await.unwrap().len(),
+        s.delta_since(0, 100, &bob, 200).await.unwrap().len(),
         0,
         "a stranger does not see another account's account-state"
     );
@@ -653,29 +565,24 @@ async fn delta_account_state_visible_only_to_author() {
 
 async fn account_state_row_count(s: &Store, author: &[u8]) -> i64 {
     s.fetch_scalar_i64(
-        "SELECT COUNT(*) FROM objects WHERE tenant_id = ? AND object_tag = 7 \
-         AND author_pubkey = ?",
-        vec![Val::b(TA), Val::b(author.to_vec())],
+        "SELECT COUNT(*) FROM objects WHERE object_tag = 7 AND author_pubkey = ?",
+        vec![Val::b(author.to_vec())],
     )
     .await
     .unwrap()
     .unwrap()
 }
 
-/// S3: account-state compaction — strictly older versions of the same author
-/// are pruned from the append-only log; equal versions (multi-device tiebreak) are both
-/// retained (the server must not lose the LWW winner).
+/// S3: account-state compaction — strictly older versions of the same author are pruned.
 #[tokio::test]
 async fn account_state_older_versions_compacted() {
     let s = fresh_store().await;
-    s.create_tenant(TA, "personal", 100).await.unwrap();
     let author = [0xA1u8; 32];
 
-    // Three consecutive bumps of {personal_vault_id, default_username}: v1→v2→v3.
+    // Three consecutive bumps: v1→v2→v3.
     for v in 1..=3u64 {
         let idem = format!("as{v}");
         s.push_objects(
-            TA,
             None,
             idem.as_bytes(),
             vec![push_obj(account_state(&author, v))],
@@ -693,24 +600,22 @@ async fn account_state_older_versions_compacted() {
     );
     let ver = s
         .fetch_scalar_i64(
-            "SELECT MAX(obj_version) FROM objects WHERE tenant_id = ? AND object_tag = 7 \
-             AND author_pubkey = ?",
-            vec![Val::b(TA), Val::b(author.to_vec())],
+            "SELECT MAX(obj_version) FROM objects WHERE object_tag = 7 AND author_pubkey = ?",
+            vec![Val::b(author.to_vec())],
         )
         .await
         .unwrap()
         .unwrap();
     assert_eq!(ver, 3, "the latest version remains");
 
-    // An equal version from a second device (different payload/signature) is NOT pruned:
-    // the client resolves equal versions by signature (S2), the server keeps both.
+    // An equal version from a second device is NOT pruned.
     let sibling = SyncObject::AccountState(AccountStateObject {
         author_pubkey: author.to_vec(),
         version: 3,
         payload: vec![7, 7, 7],
         signature: vec![1u8; 67],
     });
-    s.push_objects(TA, None, b"as3b", vec![push_obj(sibling)], 100)
+    s.push_objects(None, b"as3b", vec![push_obj(sibling)], 100)
         .await
         .unwrap();
     assert_eq!(
@@ -721,15 +626,9 @@ async fn account_state_older_versions_compacted() {
 
     // A stale version of another author is not affected by our author's compaction.
     let other = [0xB2u8; 32];
-    s.push_objects(
-        TA,
-        None,
-        b"ob1",
-        vec![push_obj(account_state(&other, 1))],
-        100,
-    )
-    .await
-    .unwrap();
+    s.push_objects(None, b"ob1", vec![push_obj(account_state(&other, 1))], 100)
+        .await
+        .unwrap();
     assert_eq!(
         account_state_row_count(&s, &other).await,
         1,

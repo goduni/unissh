@@ -15,8 +15,6 @@ use unissh_server::store::sync_repo::PushObj;
 use unissh_storage::{CachePolicy, ItemRecord, SyncTarget, VaultRecord};
 use unissh_sync::SyncObject;
 
-const TID: &[u8] = b"tenant-zke2e-001";
-const TIDB: &[u8] = b"tenant-zke2e-002";
 const VAULT: &[u8] = b"vault-zke2e-aaaa";
 
 // ---- object builders (open metadata + opaque blobs) ----
@@ -105,7 +103,7 @@ fn vault_obj(author: &[u8]) -> String {
 #[tokio::test]
 async fn zk_dump_contains_only_ciphertext() {
     let app = spawn().await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
 
     const MARKER: &[u8] = b"SUPERSECRET-PLAINTEXT-MUST-NOT-LEAK";
     // The client encrypts the content BEFORE sending; the server sees only ciphertext.
@@ -132,11 +130,11 @@ async fn zk_dump_contains_only_ciphertext() {
     let parsed = parse_open(&bytes).unwrap();
     app.state
         .store
-        .push_objects(TID, None, b"h", vec![PushObj { bytes, parsed }], app.now())
+        .push_objects(None, b"h", vec![PushObj { bytes, parsed }], app.now())
         .await
         .unwrap();
 
-    let dump = app.state.store.dump_blobs(TID).await.unwrap();
+    let dump = app.state.store.dump_blobs().await.unwrap();
     assert!(
         !dump.windows(MARKER.len()).any(|w| w == MARKER),
         "DB dump must NOT contain plaintext marker (zero-knowledge)"
@@ -148,26 +146,6 @@ async fn zk_dump_contains_only_ciphertext() {
     );
 }
 
-// ---- tenant isolation over HTTP ----
-
-#[tokio::test]
-async fn tenant_isolation_cross_token_denied() {
-    let app = spawn().await;
-    let a = app.seed_session(TID, "personal").await;
-    app.seed_session(TIDB, "personal").await;
-
-    // A's bearer presented under tenant B → session not found in B → 401.
-    let r = app
-        .client
-        .get(format!("{}/v1/sync/version", app.base))
-        .header("UniSSH-Tenant", b64(TIDB))
-        .header("Authorization", format!("Bearer {}", a.access_token_b64))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 401, "cross-tenant token must be rejected");
-}
-
 // ---- end-to-end member lifecycle ----
 
 #[tokio::test]
@@ -176,25 +154,30 @@ async fn e2e_member_lifecycle_add_sync_revoke_rotate() {
     let admin_kp = Ed25519Keypair::generate();
     let admin = admin_kp.verifying.to_bytes().to_vec();
     let member = vec![0xB8u8; 32];
-    let (_a, _d, admin_bearer) = app.seed_device(TID, &admin, &[1u8; 32], "org", true).await;
-    let (_a2, _d2, member_bearer) = app
-        .seed_device(TID, &member, &[2u8; 32], "org", false)
-        .await;
+    let (_a, _d, admin_bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
+    let (_a2, _d2, member_bearer) = app.seed_device(&member, &[2u8; 32], "org", false).await;
 
-    let th = b64(TID);
     let admin_auth = format!("Bearer {admin_bearer}");
     let member_auth = format!("Bearer {member_bearer}");
 
     // admin claims vault + pushes the Vault record
     app.state
         .store
-        .claim_vault(TID, VAULT, &admin, app.now())
+        .claim_vault(
+            VAULT,
+            &admin,
+            None,
+            None,
+            "selective",
+            None,
+            false,
+            app.now(),
+        )
         .await
         .unwrap();
     let pr = app
         .client
         .post(format!("{}/v1/sync/push", app.base))
-        .header("UniSSH-Tenant", &th)
         .header("Authorization", &admin_auth)
         .json(&json!({ "objects": [vault_obj(&admin)] }))
         .send()
@@ -207,7 +190,6 @@ async fn e2e_member_lifecycle_add_sync_revoke_rotate() {
     let pubresp = app
         .client
         .post(format!("{}/v1/grants/publish", app.base))
-        .header("UniSSH-Tenant", &th)
         .header("Authorization", &admin_auth)
         .json(&json!({
             "manifest": manifest_obj(&admin_kp, VAULT, 1, &blob1),
@@ -227,7 +209,6 @@ async fn e2e_member_lifecycle_add_sync_revoke_rotate() {
             app.base,
             urlencode(&b64(VAULT))
         ))
-        .header("UniSSH-Tenant", &th)
         .header("Authorization", &member_auth)
         .send()
         .await
@@ -245,7 +226,6 @@ async fn e2e_member_lifecycle_add_sync_revoke_rotate() {
     let d: Value = app
         .client
         .get(format!("{}/v1/sync/delta?cursor=0", app.base))
-        .header("UniSSH-Tenant", &th)
         .header("Authorization", &member_auth)
         .send()
         .await
@@ -263,7 +243,6 @@ async fn e2e_member_lifecycle_add_sync_revoke_rotate() {
     let rot = app
         .client
         .post(format!("{}/v1/grants/publish", app.base))
-        .header("UniSSH-Tenant", &th)
         .header("Authorization", &admin_auth)
         .json(&json!({
             "manifest": manifest_obj(&admin_kp, VAULT, 2, &blob2),
@@ -284,7 +263,6 @@ async fn e2e_member_lifecycle_add_sync_revoke_rotate() {
             app.base,
             urlencode(&b64(VAULT))
         ))
-        .header("UniSSH-Tenant", &th)
         .header("Authorization", &member_auth)
         .send()
         .await
@@ -303,7 +281,6 @@ async fn e2e_member_lifecycle_add_sync_revoke_rotate() {
             app.base,
             urlencode(&b64(VAULT))
         ))
-        .header("UniSSH-Tenant", &th)
         .header("Authorization", &admin_auth)
         .send()
         .await

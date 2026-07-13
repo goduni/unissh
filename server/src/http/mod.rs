@@ -56,6 +56,7 @@ pub fn build_router(state: AppState) -> Router {
 
     // /v1 API routes: rate-limited + tenant/authn extractors inside the handlers.
     let v1 = Router::new()
+        .merge(modules::instance::routes())
         .merge(modules::identity::routes())
         .merge(modules::sync::routes())
         .merge(modules::vault_meta::routes())
@@ -114,7 +115,6 @@ fn cors_layer(origins: &[String]) -> Option<CorsLayer> {
             .allow_headers([
                 header::AUTHORIZATION,
                 header::CONTENT_TYPE,
-                HeaderName::from_static("unissh-tenant"),
                 HeaderName::from_static("x-unissh-ops-token"),
                 HeaderName::from_static("idempotency-key"),
             ])

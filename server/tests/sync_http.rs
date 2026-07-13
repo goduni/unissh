@@ -1,5 +1,5 @@
-//! HTTP level §5.0/§5.1: middleware (tenant/auth/suspended/rate-limit) +
-//! sync endpoints (push/delta/version) via a real server.
+//! HTTP level §5.0/§5.1: middleware (auth/rate-limit) + sync endpoints
+//! (push/delta/version) via a real server. Instance-scoped (v2).
 
 mod common;
 
@@ -42,28 +42,13 @@ fn vault_b64(owner: u8, version: u64) -> String {
     )
 }
 
-const TID: &[u8] = b"tenant-http-0001";
-
-#[tokio::test]
-async fn requires_tenant_header() {
-    let app = spawn().await;
-    let r = app
-        .client
-        .get(format!("{}/v1/sync/version", app.base))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 400, "missing UniSSH-Tenant → 400 malformed");
-}
-
 #[tokio::test]
 async fn rejects_bad_bearer() {
     let app = spawn().await;
-    app.seed_session(TID, "personal").await;
+    app.seed_session("personal").await;
     let r = app
         .client
         .get(format!("{}/v1/sync/version", app.base))
-        .header("UniSSH-Tenant", app.tenant_hdr(TID))
         .header("Authorization", "Bearer not-a-real-token")
         .send()
         .await
@@ -73,36 +58,15 @@ async fn rejects_bad_bearer() {
 }
 
 #[tokio::test]
-async fn suspended_tenant_forbidden() {
-    let app = spawn().await;
-    let s = app.seed_session(TID, "personal").await;
-    app.state
-        .store
-        .set_tenant_status(TID, "suspended")
-        .await
-        .unwrap();
-    let r = app
-        .client
-        .get(format!("{}/v1/sync/version", app.base))
-        .header("UniSSH-Tenant", app.tenant_hdr(TID))
-        .header("Authorization", format!("Bearer {}", s.access_token_b64))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 403);
-}
-
-#[tokio::test]
 async fn push_delta_version_roundtrip() {
     let app = spawn().await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let bearer = format!("Bearer {}", s.access_token_b64);
 
     // push 3 objects
     let r = app
         .client
         .post(format!("{}/v1/sync/push", app.base))
-        .header("UniSSH-Tenant", app.tenant_hdr(TID))
         .header("Authorization", &bearer)
         .json(&json!({ "objects": [audit_b64(1), audit_b64(2), audit_b64(3)] }))
         .send()
@@ -116,7 +80,6 @@ async fn push_delta_version_roundtrip() {
     let v: serde_json::Value = app
         .client
         .get(format!("{}/v1/sync/version", app.base))
-        .header("UniSSH-Tenant", app.tenant_hdr(TID))
         .header("Authorization", &bearer)
         .send()
         .await
@@ -130,7 +93,6 @@ async fn push_delta_version_roundtrip() {
     let d: serde_json::Value = app
         .client
         .get(format!("{}/v1/sync/delta?cursor=0&limit=2", app.base))
-        .header("UniSSH-Tenant", app.tenant_hdr(TID))
         .header("Authorization", &bearer)
         .send()
         .await
@@ -146,14 +108,13 @@ async fn push_delta_version_roundtrip() {
 #[tokio::test]
 async fn idempotent_push_over_http() {
     let app = spawn().await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let bearer = format!("Bearer {}", s.access_token_b64);
     let payload = json!({ "objects": [audit_b64(1), audit_b64(2)] });
 
     let send = |idem: &str| {
         app.client
             .post(format!("{}/v1/sync/push", app.base))
-            .header("UniSSH-Tenant", app.tenant_hdr(TID))
             .header("Authorization", &bearer)
             .header("Idempotency-Key", idem)
             .json(&payload)
@@ -168,7 +129,6 @@ async fn idempotent_push_over_http() {
     let v: serde_json::Value = app
         .client
         .get(format!("{}/v1/sync/version", app.base))
-        .header("UniSSH-Tenant", app.tenant_hdr(TID))
         .header("Authorization", &bearer)
         .send()
         .await
@@ -185,12 +145,11 @@ async fn idempotent_push_over_http() {
 #[tokio::test]
 async fn claim_rule_conflict_over_http() {
     let app = spawn().await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let bearer = format!("Bearer {}", s.access_token_b64);
     let post = |objs: serde_json::Value| {
         app.client
             .post(format!("{}/v1/sync/push", app.base))
-            .header("UniSSH-Tenant", app.tenant_hdr(TID))
             .header("Authorization", &bearer)
             .json(&objs)
             .send()
@@ -210,12 +169,7 @@ async fn rate_limit_429() {
     .await;
     // No auth needed: rate-limit runs before auth on /v1. Clock frozen → no refill.
     let url = format!("{}/v1/sync/version", app.base);
-    let hit = || {
-        app.client
-            .get(&url)
-            .header("UniSSH-Tenant", app.tenant_hdr(TID))
-            .send()
-    };
+    let hit = || app.client.get(&url).send();
     let s1 = hit().await.unwrap().status();
     let s2 = hit().await.unwrap().status();
     let s3 = hit().await.unwrap().status();
