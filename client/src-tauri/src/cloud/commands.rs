@@ -11,7 +11,6 @@
 
 use std::sync::Arc;
 
-use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
 
@@ -62,14 +61,6 @@ fn require_access(state: &AppState, server_id: Option<&str>) -> ApiResult<String
         })
 }
 
-/// Preview of an invite (role + optional scope), without consuming it.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InvitePreview {
-    pub role: String,
-    pub scope: Option<String>,
-}
-
 /// Status of one server (defaults to the active server).
 #[tauri::command]
 pub async fn server_status(
@@ -99,28 +90,25 @@ pub async fn server_set_active(
 /// Other servers are untouched. Returns the updated list.
 #[tauri::command]
 pub async fn server_remove(server_id: String, state: State<'_, AppState>) -> ApiResult<ServerList> {
-    // Tenant of the server being removed — to unbind its cloud vaults so they
+    // Space of the server being removed — to unbind its cloud vaults so they
     // aren't left orphaned pointing at a now-gone server (they become reclaimable
     // via re-link or manual bind).
-    let removed_tenant = state
-        .cloud
-        .config_for(Some(&server_id))
-        .map(|c| c.tenant_id);
+    let removed_space = state.cloud.config_for(Some(&server_id)).map(|c| c.space_id);
     if let (Some(cfg), Some(access)) = (
         state.cloud.config_for(Some(&server_id)),
         state.cloud.access_token_for(Some(&server_id)),
     ) {
         let _ = blocking_api(move || {
             let http = client::http();
-            identity::logout(http, &cfg.base_url, &cfg.tenant_id, &access)
+            identity::logout(http, &cfg.base_url, &access)
         })
         .await;
     }
     state.cloud.remove(&server_id)?;
-    if let Some(tenant) = removed_tenant {
+    if let Some(space) = removed_space {
         let core = state.core.clone();
         let _ = blocking_api(move || {
-            core.clear_cloud_vault_binding(tenant)
+            core.clear_cloud_vault_binding(space)
                 .map_err(ApiError::from)
         })
         .await;
@@ -128,12 +116,13 @@ pub async fn server_remove(server_id: String, state: State<'_, AppState>) -> Api
     Ok(state.cloud.list())
 }
 
-/// Join an existing tenant with an invite token (tenant id supplied by the inviter).
-/// Appends a new server link, makes it active, and returns its status.
+/// Join an instance with an invite token. Learns the instance id (`GET /v1/instance`),
+/// redeems the invite (`POST /v1/join`), logs in, then appends a new server link,
+/// makes it active, and returns its status. The primary granted space is stored as
+/// the cloud-vault binding label (a full multi-space model lands in a later task).
 #[tauri::command]
-pub async fn server_register(
+pub async fn server_join(
     base_url: String,
-    tenant_id: String,
     invite_token: String,
     display_name: Option<String>,
     handle: Option<String>,
@@ -142,42 +131,41 @@ pub async fn server_register(
     client::validate_base_url(&base_url)?;
     let core = state.core.clone();
     let base = base_url.clone();
-    let tenant = tenant_id.clone();
     let dn = display_name;
     let hd = handle.clone();
 
-    let (outcome, session) = blocking_api(move || {
+    let (outcome, instance, session) = blocking_api(move || {
         let http = client::http();
+        // The join response carries only account/device/spaces; the opaque
+        // instance id (link identity) comes from the public instance descriptor.
+        let instance = identity::instance_info(http, &base)?;
         let reg = core.build_registration_request().map_err(ApiError::from)?;
-        let outcome = identity::register(http, &base, &tenant, &invite_token, reg, dn, hd)?;
-        let session = identity::login(
-            http,
-            &base,
-            &tenant,
-            &core,
-            &outcome.account_id,
-            &outcome.device_id,
-        )?;
-        Ok((outcome, session))
+        // `binding_mac` is None for now — the server accepts a join without the
+        // optional invite-binding proof; wiring the MAC is a later concern.
+        let outcome = identity::join(http, &base, &invite_token, reg, None, dn, hd)?;
+        let session = identity::login(http, &base, &core, &outcome.account_id, &outcome.device_id)?;
+        Ok((outcome, instance, session))
     })
     .await?;
 
-    // Idempotent: re-registering the same server (same base_url + tenant + account)
+    // Bind cloud vaults on this link to the primary granted space (first entry).
+    let space_id = outcome.spaces.first().cloned().unwrap_or_default();
+    // Idempotent: re-joining the same server (same base_url + instance + account)
     // reuses its existing link id instead of minting a duplicate.
     let server_id = state
         .cloud
-        .find_by_identity(&base_url, &tenant_id, &outcome.account_id)
+        .find_by_identity(&base_url, &instance.instance_id, &outcome.account_id)
         .unwrap_or_else(new_server_id);
     state.cloud.upsert_config(ServerConfig {
         server_id: server_id.clone(),
         base_url,
-        tenant_id,
+        instance_id: instance.instance_id,
+        space_id,
         account_id: outcome.account_id,
         device_id: outcome.device_id,
         handle,
-        // Usually false (joined via invite). On `reconnect` re-attach the server
-        // reports whether this keyset owns the space, restoring the right flag.
-        owned: outcome.owned,
+        // Joiners are never instance owners.
+        owned: false,
     })?;
     state
         .cloud
@@ -186,68 +174,49 @@ pub async fn server_register(
     Ok(state.cloud.status_for(Some(&server_id)))
 }
 
-/// Create your OWN Space (tenant) on a server and become its genesis-owner. Mints
-/// a fresh tenant id client-side, bootstraps it, logs in, and links it. This is how
-/// a user gets a Space they own (e.g. for a personal identity) WITHOUT a second
-/// server — the same multi-tenant host can hold the company Space and yours. If the
-/// server disallows self-serve bootstrap it returns 403 (invalid/missing token or
-/// "bootstrap disabled"); the UI then guides the user to another server.
+/// Claim an unclaimed instance and become its owner. The `setup_code` (printed by
+/// the server on first boot) authorizes the single-winner claim; the server creates
+/// the owner account + device + a first space and returns their ids. Logs in and
+/// links the server (active). A claimed instance returns 409.
 #[tauri::command]
-pub async fn server_bootstrap(
+pub async fn server_claim(
     base_url: String,
+    setup_code: String,
     space_name: Option<String>,
     handle: Option<String>,
-    bootstrap_token: Option<String>,
+    display_name: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<ServerStatus> {
     client::validate_base_url(&base_url)?;
-    // The client generates the tenant id itself (bootstrap creates it on the server); a random
-    // UUID rules out a collision with existing Spaces on this host.
-    let tenant_id = client::b64(Uuid::new_v4().as_bytes());
     let core = state.core.clone();
     let base = base_url.clone();
-    let tenant = tenant_id.clone();
-    let dn = space_name;
+    let code = setup_code;
+    let dn = display_name;
     let hd = handle.clone();
-    let token = bootstrap_token;
+    let sn = space_name;
 
     let (outcome, session) = blocking_api(move || {
         let http = client::http();
         let reg = core.build_registration_request().map_err(ApiError::from)?;
-        let outcome = identity::bootstrap(
-            http,
-            &base,
-            &tenant,
-            reg,
-            Some("personal".into()),
-            dn,
-            hd,
-            token,
-        )?;
-        let session = identity::login(
-            http,
-            &base,
-            &tenant,
-            &core,
-            &outcome.account_id,
-            &outcome.device_id,
-        )?;
+        let outcome = identity::claim(http, &base, &code, reg, dn, hd, sn)?;
+        let session = identity::login(http, &base, &core, &outcome.account_id, &outcome.device_id)?;
         Ok((outcome, session))
     })
     .await?;
 
     let server_id = state
         .cloud
-        .find_by_identity(&base_url, &tenant_id, &outcome.account_id)
+        .find_by_identity(&base_url, &outcome.instance_id, &outcome.account_id)
         .unwrap_or_else(new_server_id);
     state.cloud.upsert_config(ServerConfig {
         server_id: server_id.clone(),
         base_url,
-        tenant_id,
+        instance_id: outcome.instance_id,
+        space_id: outcome.space_id,
         account_id: outcome.account_id,
         device_id: outcome.device_id,
         handle,
-        owned: true, // you bootstrapped it → your Space (genesis-owner)
+        owned: true, // you claimed it → your instance + first Space (owner)
     })?;
     state
         .cloud
@@ -268,14 +237,7 @@ pub async fn server_login(
     let core = state.core.clone();
     let session = blocking_api(move || {
         let http = client::http();
-        identity::login(
-            http,
-            &cfg.base_url,
-            &cfg.tenant_id,
-            &core,
-            &cfg.account_id,
-            &cfg.device_id,
-        )
+        identity::login(http, &cfg.base_url, &core, &cfg.account_id, &cfg.device_id)
     })
     .await?;
     state
@@ -299,7 +261,7 @@ pub async fn server_refresh_session(
     })?;
     let session = blocking_api(move || {
         let http = client::http();
-        identity::refresh(http, &cfg.base_url, &cfg.tenant_id, &refresh_token)
+        identity::refresh(http, &cfg.base_url, &refresh_token)
     })
     .await?;
     state
@@ -323,7 +285,7 @@ pub async fn server_logout(
     ) {
         let _ = blocking_api(move || {
             let http = client::http();
-            identity::logout(http, &cfg.base_url, &cfg.tenant_id, &access)
+            identity::logout(http, &cfg.base_url, &access)
         })
         .await;
     }
@@ -345,7 +307,7 @@ pub async fn server_disconnect(
     ) {
         let _ = blocking_api(move || {
             let http = client::http();
-            identity::logout(http, &cfg.base_url, &cfg.tenant_id, &access)
+            identity::logout(http, &cfg.base_url, &access)
         })
         .await;
     }
@@ -353,20 +315,19 @@ pub async fn server_disconnect(
     Ok(state.cloud.list())
 }
 
-/// Preview an invite before registering (does not consume it). Stateless.
+/// Preview an invite before joining (does not consume it): the instance name and
+/// the spaces (with roles) the invite grants. Stateless.
 #[tauri::command]
-pub async fn server_invite_redeem_preview(
+pub async fn server_join_preview(
     base_url: String,
-    tenant_id: String,
-    invite_token: String,
-) -> ApiResult<InvitePreview> {
+    token: String,
+) -> ApiResult<identity::JoinPreview> {
     client::validate_base_url(&base_url)?;
-    let (role, scope) = blocking_api(move || {
+    blocking_api(move || {
         let http = client::http();
-        identity::invite_redeem_preview(http, &base_url, &tenant_id, &invite_token)
+        identity::join_preview(http, &base_url, &token)
     })
-    .await?;
-    Ok(InvitePreview { role, scope })
+    .await
 }
 
 /// Add a sibling device under this account (shared keyset). Returns its device id (b64).
@@ -379,7 +340,7 @@ pub async fn server_device_add(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::device_add(http, &cfg.base_url, &cfg.tenant_id, &access)
+        identity::device_add(http, &cfg.base_url, &access)
     })
     .await
 }
@@ -394,7 +355,7 @@ pub async fn server_list_devices(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::device_list(http, &cfg.base_url, &cfg.tenant_id, &access)
+        identity::device_list(http, &cfg.base_url, &access)
     })
     .await
 }
@@ -410,7 +371,7 @@ pub async fn server_device_revoke(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::device_revoke(http, &cfg.base_url, &cfg.tenant_id, &access, &device_id)
+        identity::device_revoke(http, &cfg.base_url, &access, &device_id)
     })
     .await
 }
@@ -427,12 +388,11 @@ pub async fn server_account_profile(
     let access = require_access(&state, server_id.as_deref())?;
     let sid = cfg.server_id.clone();
     let base = cfg.base_url.clone();
-    let tenant = cfg.tenant_id.clone();
     let dn = display_name;
     let hd = handle.clone();
     blocking_api(move || {
         let http = client::http();
-        identity::account_profile(http, &base, &tenant, &access, dn, hd)
+        identity::account_profile(http, &base, &access, dn, hd)
     })
     .await?;
     if handle.is_some() {
@@ -445,8 +405,8 @@ pub async fn server_account_profile(
 // ---------- cloud vaults + sync ----------
 
 /// Create a cloud (server-synced) vault, BOUND 1:1 to a server (defaults to the
-/// active server) by its `tenant_id`. This is a LOCAL operation — the vault is
-/// marked Cloud in local storage, bound to the server's tenant, and propagates to
+/// active server) by its `space_id`. This is a LOCAL operation — the vault is
+/// marked Cloud in local storage, bound to the server's space, and propagates to
 /// THAT server on the next `server_sync_now`. Requires a linked server: with none,
 /// `require_config` errors (the UI also gates the Cloud option behind a session).
 /// Returns the vault id (hex).
@@ -459,13 +419,13 @@ pub async fn server_create_cloud_vault(
     let cfg = require_config(&state, server_id.as_deref())?;
     let core = state.core.clone();
     blocking_api(move || {
-        core.create_cloud_vault(name, cfg.tenant_id)
+        core.create_cloud_vault(name, cfg.space_id)
             .map_err(ApiError::from)
     })
     .await
 }
 
-/// Bind every still-unbound (legacy) cloud vault to a server's `tenant_id`
+/// Bind every still-unbound (legacy) cloud vault to a server's `space_id`
 /// (defaults to the active server). One-time migration for vaults created before
 /// the 1:1 cloud-vault↔server binding existed. Safe to call repeatedly (already-
 /// bound vaults are untouched); the client invokes it only when exactly one server
@@ -478,14 +438,14 @@ pub async fn server_bind_unbound_cloud_vaults(
     let cfg = require_config(&state, server_id.as_deref())?;
     let core = state.core.clone();
     blocking_api(move || {
-        core.bind_unbound_cloud_vaults(cfg.tenant_id)
+        core.bind_unbound_cloud_vaults(cfg.space_id)
             .map_err(ApiError::from)
     })
     .await
 }
 
 /// Bind ONE currently-unbound cloud vault (by hex vault id) to a server's
-/// `tenant_id` (defaults to the active server). Reclaims a vault orphaned by a
+/// `space_id` (defaults to the active server). Reclaims a vault orphaned by a
 /// server removal, or one that couldn't be auto-bound (e.g. 2+ servers linked).
 #[tauri::command]
 pub async fn server_bind_cloud_vault(
@@ -496,7 +456,7 @@ pub async fn server_bind_cloud_vault(
     let cfg = require_config(&state, server_id.as_deref())?;
     let core = state.core.clone();
     blocking_api(move || {
-        core.bind_cloud_vault(vault_id, cfg.tenant_id)
+        core.bind_cloud_vault(vault_id, cfg.space_id)
             .map_err(ApiError::from)
     })
     .await
@@ -515,17 +475,18 @@ pub async fn server_sync_now(
     let core = state.core.clone();
     let report = blocking_api(move || {
         // 1:1-binding: sync_now pushes ONLY cloud vaults bound to this server's
-        // tenant. The transport is keyed by the same tenant, so both sides agree.
-        let tenant = cfg.tenant_id.clone();
+        // space. Sync scopes to base_url + Bearer on the wire; the space is the
+        // local binding label selecting which vaults participate.
+        let space = cfg.space_id.clone();
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
-            Arc::new(HttpSyncTransport::new(cfg.base_url, cfg.tenant_id, access));
-        core.sync_now(transport, tenant).map_err(ApiError::from)
+            Arc::new(HttpSyncTransport::new(cfg.base_url, access));
+        core.sync_now(transport, space).map_err(ApiError::from)
     })
     .await?;
     Ok(report.into())
 }
 
-/// Full re-pull (defaults to active): reset this tenant's pull cursor, then sync.
+/// Full re-pull (defaults to active): reset this space's pull cursor, then sync.
 /// Re-fetches the WHOLE server history instead of the delta since the last seq, so
 /// vaults that were rejected under a prior identity (e.g. objects pulled before this
 /// device re-attached to the account that owns them) are reconsidered and recovered.
@@ -540,11 +501,12 @@ pub async fn server_repull(
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
     let report = blocking_api(move || {
-        let tenant = cfg.tenant_id.clone();
-        core.reset_pull_cursor(tenant.clone()).map_err(ApiError::from)?;
+        let space = cfg.space_id.clone();
+        core.reset_pull_cursor(space.clone())
+            .map_err(ApiError::from)?;
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
-            Arc::new(HttpSyncTransport::new(cfg.base_url, cfg.tenant_id, access));
-        core.sync_now(transport, tenant).map_err(ApiError::from)
+            Arc::new(HttpSyncTransport::new(cfg.base_url, access));
+        core.sync_now(transport, space).map_err(ApiError::from)
     })
     .await?;
     Ok(report.into())
@@ -567,13 +529,13 @@ pub async fn server_restore_deleted_vaults(
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
     let restored = blocking_api(move || {
-        let tenant = cfg.tenant_id.clone();
+        let space = cfg.space_id.clone();
         let restored = core
-            .restore_deleted_cloud_vaults(tenant.clone())
+            .restore_deleted_cloud_vaults(space.clone())
             .map_err(ApiError::from)?;
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
-            Arc::new(HttpSyncTransport::new(cfg.base_url, cfg.tenant_id, access));
-        core.sync_now(transport, tenant).map_err(ApiError::from)?;
+            Arc::new(HttpSyncTransport::new(cfg.base_url, access));
+        core.sync_now(transport, space).map_err(ApiError::from)?;
         Ok(restored)
     })
     .await?;
@@ -598,7 +560,7 @@ pub async fn server_list_accounts(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::list_accounts(http, &cfg.base_url, &cfg.tenant_id, &access)
+        identity::list_accounts(http, &cfg.base_url, &access)
     })
     .await
 }
@@ -709,15 +671,9 @@ pub async fn get_personal_vault(state: State<'_, AppState>) -> ApiResult<Option<
 
 /// The account-default SSH username, if set (A3.2).
 #[tauri::command]
-pub async fn get_account_default_username(
-    state: State<'_, AppState>,
-) -> ApiResult<Option<String>> {
+pub async fn get_account_default_username(state: State<'_, AppState>) -> ApiResult<Option<String>> {
     let core = state.core.clone();
-    blocking_api(move || {
-        core.get_account_default_username()
-            .map_err(ApiError::from)
-    })
-    .await
+    blocking_api(move || core.get_account_default_username().map_err(ApiError::from)).await
 }
 
 /// Eager VK rotation (revocation): new key epoch over the remaining members.
@@ -756,7 +712,7 @@ pub async fn server_keyset_push(
             message: format!("read keyset sidecar: {e}"),
         })?;
         let http = client::http();
-        identity::keyset_put(http, &cfg.base_url, &cfg.tenant_id, &access, &blob)
+        identity::keyset_put(http, &cfg.base_url, &access, &blob)
     })
     .await
 }
@@ -775,8 +731,7 @@ pub async fn server_keyset_pull_and_unlock(
     let core = state.core.clone();
     blocking_api(move || {
         let http = client::http();
-        let (blob, _generation) =
-            identity::keyset_get(http, &cfg.base_url, &cfg.tenant_id, &access)?;
+        let (blob, _generation) = identity::keyset_get(http, &cfg.base_url, &access)?;
         core.unlock_from_server_blob(blob, password, secret_key_hex)
             .map_err(ApiError::from)
     })
@@ -795,18 +750,18 @@ pub async fn server_onboard_initiate(
     let cfg = require_config(&state, server_id.as_deref())?;
     let access = require_access(&state, server_id.as_deref())?;
     let base = cfg.base_url.clone();
-    let tenant = cfg.tenant_id.clone();
     let (device_id, channel_id) = blocking_api(move || {
         let http = client::http();
-        let device_id = identity::device_add(http, &base, &tenant, &access)?;
-        let channel_id = identity::relay_open(http, &base, &tenant, &access)?;
+        let device_id = identity::device_add(http, &base, &access)?;
+        let channel_id = identity::relay_open(http, &base, &access)?;
         Ok((device_id, channel_id))
     })
     .await?;
     let oob_code = client::b64(Uuid::new_v4().as_bytes());
     Ok(dto::PairingPayload {
         base_url: cfg.base_url,
-        tenant_id: cfg.tenant_id,
+        instance_id: cfg.instance_id,
+        space_id: cfg.space_id,
         account_id: cfg.account_id,
         device_id,
         channel_id,
@@ -836,11 +791,10 @@ pub async fn server_onboard_complete(
     })?;
     let core = state.core.clone();
     let base = cfg.base_url;
-    let tenant = cfg.tenant_id;
     blocking_api(move || {
         let http = client::http();
         let code = client::unb64(&oob_code)?;
-        onboard::initiator_complete(&core, http, &base, &tenant, &channel_id, code, secret_key_hex)
+        onboard::initiator_complete(&core, http, &base, &channel_id, code, secret_key_hex)
     })
     .await
 }
@@ -851,7 +805,8 @@ pub async fn server_onboard_complete(
 #[allow(clippy::too_many_arguments)]
 pub async fn server_onboard_join(
     base_url: String,
-    tenant_id: String,
+    instance_id: String,
+    space_id: String,
     account_id: String,
     device_id: String,
     channel_id: String,
@@ -865,25 +820,26 @@ pub async fn server_onboard_join(
     // 1) Run the PAKE responder — installs the keyset and opens the local instance.
     let core_pake = core.clone();
     let base = base_url.clone();
-    let tenant = tenant_id.clone();
     let channel = channel_id.clone();
     blocking_api(move || {
         let http = client::http();
         let code = client::unb64(&oob_code)?;
-        onboard::responder_join(&core_pake, http, &base, &tenant, &channel, code, password)
+        onboard::responder_join(&core_pake, http, &base, &channel, code, password)
     })
     .await?;
 
     // 2) Persist a cloud link for the new device and make it active. Idempotent:
-    // re-joining the same server reuses its existing link id (no duplicate).
+    // re-joining the same server reuses its existing link id (no duplicate). The
+    // instance id + primary space are inherited from the initiator's pairing payload.
     let server_id = state
         .cloud
-        .find_by_identity(&base_url, &tenant_id, &account_id)
+        .find_by_identity(&base_url, &instance_id, &account_id)
         .unwrap_or_else(new_server_id);
     state.cloud.upsert_config(ServerConfig {
         server_id: server_id.clone(),
         base_url: base_url.clone(),
-        tenant_id: tenant_id.clone(),
+        instance_id: instance_id.clone(),
+        space_id: space_id.clone(),
         account_id: account_id.clone(),
         device_id: device_id.clone(),
         handle: None,
@@ -896,7 +852,7 @@ pub async fn server_onboard_join(
     // 3) Sign in (the shared keyset, now installed, signs the challenge).
     let session = blocking_api(move || {
         let http = client::http();
-        identity::login(http, &base_url, &tenant_id, &core, &account_id, &device_id)
+        identity::login(http, &base_url, &core, &account_id, &device_id)
     })
     .await?;
     state
@@ -920,7 +876,7 @@ pub async fn server_audit_query(
     let access = require_access(&state, server_id.as_deref())?;
     blocking_api(move || {
         let http = client::http();
-        identity::audit_query(http, &cfg.base_url, &cfg.tenant_id, &access, since_seq)
+        identity::audit_query(http, &cfg.base_url, &access, since_seq)
     })
     .await
 }

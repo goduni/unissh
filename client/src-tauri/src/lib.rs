@@ -23,7 +23,11 @@ fn log_filter_from_env() -> (log::LevelFilter, Vec<(String, log::LevelFilter)>) 
         .unwrap_or_default();
     let mut global = log::LevelFilter::Info;
     let mut overrides = Vec::new();
-    for part in directive.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+    for part in directive
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if let Some((module, level)) = part.split_once('=') {
             let module = module.trim();
             if let (false, Ok(lf)) = (module.is_empty(), level.trim().parse::<log::LevelFilter>()) {
@@ -261,13 +265,13 @@ pub fn run() {
             cloud::commands::server_list,
             cloud::commands::server_set_active,
             cloud::commands::server_remove,
-            cloud::commands::server_register,
-            cloud::commands::server_bootstrap,
+            cloud::commands::server_join,
+            cloud::commands::server_claim,
             cloud::commands::server_login,
             cloud::commands::server_refresh_session,
             cloud::commands::server_logout,
             cloud::commands::server_disconnect,
-            cloud::commands::server_invite_redeem_preview,
+            cloud::commands::server_join_preview,
             cloud::commands::server_device_add,
             cloud::commands::server_list_devices,
             cloud::commands::server_device_revoke,

@@ -52,12 +52,12 @@ fn canonical_base_url(base_url: &str) -> String {
 }
 
 /// Stable identity of a server link: the canonical base URL plus the wire
-/// tenant/account ids (both base64, server-assigned → compared verbatim). Two
+/// instance/account ids (both base64, server-assigned → compared verbatim). Two
 /// links with the same identity ARE the same server and must collapse to one.
-fn identity_key(base_url: &str, tenant_id: &str, account_id: &str) -> (String, String, String) {
+fn identity_key(base_url: &str, instance_id: &str, account_id: &str) -> (String, String, String) {
     (
         canonical_base_url(base_url),
-        tenant_id.to_string(),
+        instance_id.to_string(),
         account_id.to_string(),
     )
 }
@@ -76,18 +76,25 @@ pub struct ServerConfig {
     pub server_id: ServerId,
     /// Base URL of the server, e.g. `https://cloud.example.com` (no `/v1` suffix).
     pub base_url: String,
-    /// base64(tenant_id) — sent in the `UniSSH-Tenant` header on every request.
-    pub tenant_id: String,
-    /// base64(account_id) — server-assigned at bootstrap/register.
+    /// base64(instance_id) — the opaque server-instance id (from claim/join). It
+    /// keys the link identity for dedup; the instance is addressed by `base_url`
+    /// on the wire (there is no tenant header any more).
+    pub instance_id: String,
+    /// base64(space_id) — the cloud-vault binding label. The claim owner's first
+    /// space, or (for a join) the primary granted space. Cloud vaults created/bound
+    /// on this link carry this label; sync scopes to it. `#[serde(default)]` = "".
+    #[serde(default)]
+    pub space_id: String,
+    /// base64(account_id) — server-assigned at claim/join.
     pub account_id: String,
     /// base64(device_id) — server-assigned; this device's id for auth/revocation.
     pub device_id: String,
     /// Optional human handle on the server (server-visible open metadata).
     #[serde(default)]
     pub handle: Option<String>,
-    /// True when THIS account created (bootstrapped) the Space and is its
-    /// genesis-owner — vs joined via invite (`false`). Used to guard the personal
-    /// vault to a Space you own. `#[serde(default)]` = false for legacy links.
+    /// True when THIS account claimed the instance and owns its first Space — vs
+    /// joined via invite (`false`). Used to guard the personal vault to a Space you
+    /// own. `#[serde(default)]` = false for legacy links.
     #[serde(default)]
     pub owned: bool,
 }
@@ -114,11 +121,11 @@ pub struct ServerStatus {
     /// A live access token is held (this process can make authenticated calls).
     pub has_session: bool,
     pub base_url: Option<String>,
-    pub tenant_id: Option<String>,
+    pub instance_id: Option<String>,
     pub account_id: Option<String>,
     pub device_id: Option<String>,
     pub handle: Option<String>,
-    /// This account owns (bootstrapped) the Space — eligible to hold the personal vault.
+    /// This account owns (claimed) the Space — eligible to hold the personal vault.
     pub owned: bool,
 }
 
@@ -130,7 +137,7 @@ impl ServerStatus {
             active: false,
             has_session: false,
             base_url: None,
-            tenant_id: None,
+            instance_id: None,
             account_id: None,
             device_id: None,
             handle: None,
@@ -166,14 +173,14 @@ impl CloudState {
         let (doc, migrated) = load_doc(&config_path);
 
         // Collapse duplicate links that share the same server identity
-        // (base_url + tenant_id + account_id). Re-registering a server used to
+        // (base_url + instance_id + account_id). Re-registering a server used to
         // mint a fresh `server_id` each time (before idempotent registration),
         // leaving phantom duplicate entries that the UI renders N times. Keep one
         // survivor per identity, preferring the persisted-active entry.
         let active_hint = doc.active.clone();
         let mut survivor: HashMap<(String, String, String), ServerId> = HashMap::new();
         for cfg in &doc.servers {
-            let ident = identity_key(&cfg.base_url, &cfg.tenant_id, &cfg.account_id);
+            let ident = identity_key(&cfg.base_url, &cfg.instance_id, &cfg.account_id);
             let is_active = active_hint.as_deref() == Some(cfg.server_id.as_str());
             match survivor.get(&ident) {
                 Some(_) if is_active => {
@@ -250,21 +257,21 @@ impl CloudState {
     }
 
     /// Find an already-linked server with the same canonical identity (normalized
-    /// base URL plus tenant/account). Registration reuses this id instead of
+    /// base URL plus instance/account). Registration reuses this id instead of
     /// minting a fresh one, so re-connecting the same server replaces its link
     /// rather than duplicating it (the `cloud.json` map is keyed by `server_id`).
     pub fn find_by_identity(
         &self,
         base_url: &str,
-        tenant_id: &str,
+        instance_id: &str,
         account_id: &str,
     ) -> Option<ServerId> {
-        let want = identity_key(base_url, tenant_id, account_id);
+        let want = identity_key(base_url, instance_id, account_id);
         self.servers
             .lock()
             .unwrap()
             .values()
-            .find(|c| identity_key(&c.base_url, &c.tenant_id, &c.account_id) == want)
+            .find(|c| identity_key(&c.base_url, &c.instance_id, &c.account_id) == want)
             .map(|c| c.server_id.clone())
     }
 
@@ -272,7 +279,7 @@ impl CloudState {
     /// Returns the server id.
     pub fn upsert_config(&self, cfg: ServerConfig) -> ApiResult<ServerId> {
         let id = cfg.server_id.clone();
-        let want = identity_key(&cfg.base_url, &cfg.tenant_id, &cfg.account_id);
+        let want = identity_key(&cfg.base_url, &cfg.instance_id, &cfg.account_id);
         let mut dropped: Vec<ServerId> = Vec::new();
         {
             let mut servers = self.servers.lock().unwrap();
@@ -285,7 +292,7 @@ impl CloudState {
                 .values()
                 .filter(|c| {
                     c.server_id != id
-                        && identity_key(&c.base_url, &c.tenant_id, &c.account_id) == want
+                        && identity_key(&c.base_url, &c.instance_id, &c.account_id) == want
                 })
                 .map(|c| c.server_id.clone())
                 .collect();
@@ -475,7 +482,7 @@ impl CloudState {
             active: active_id == Some(c.server_id.as_str()),
             has_session,
             base_url: Some(c.base_url.clone()),
-            tenant_id: Some(c.tenant_id.clone()),
+            instance_id: Some(c.instance_id.clone()),
             account_id: Some(c.account_id.clone()),
             device_id: Some(c.device_id.clone()),
             handle: c.handle.clone(),
@@ -575,7 +582,8 @@ mod config_tests {
         ServerConfig {
             server_id: id.to_string(),
             base_url: base.to_string(),
-            tenant_id: "dGVuYW50".to_string(),
+            instance_id: "dGVuYW50".to_string(),
+            space_id: "c3BhY2U=".to_string(),
             account_id: "YWNjb3VudA==".to_string(),
             device_id: "ZGV2aWNl".to_string(),
             handle: Some("jane".to_string()),
@@ -588,7 +596,7 @@ mod config_tests {
         // The exact legacy on-disk shape: a single ServerConfig object, no id.
         let legacy = br#"{
             "base_url": "https://cloud.example.com",
-            "tenant_id": "dGVuYW50",
+            "instance_id": "dGVuYW50",
             "account_id": "YWNjb3VudA==",
             "device_id": "ZGV2aWNl",
             "handle": "jane"
@@ -613,8 +621,8 @@ mod config_tests {
     fn parses_new_multi_server_shape() {
         let new = br#"{
             "servers": [
-                {"server_id":"AAAA","base_url":"https://a.example","tenant_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null},
-                {"server_id":"BBBB","base_url":"https://b.example","tenant_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null}
+                {"server_id":"AAAA","base_url":"https://a.example","instance_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null},
+                {"server_id":"BBBB","base_url":"https://b.example","instance_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null}
             ],
             "active": "BBBB"
         }"#;
@@ -675,7 +683,7 @@ mod config_tests {
         state
             .upsert_config(cfg("AAAA", "https://a.example"))
             .unwrap();
-        // `cfg` uses tenant_id "dGVuYW50" / account_id "YWNjb3VudA==".
+        // `cfg` uses instance_id "dGVuYW50" / account_id "YWNjb3VudA==".
         assert_eq!(
             state
                 .find_by_identity("https://a.example", "dGVuYW50", "YWNjb3VudA==")
@@ -699,9 +707,9 @@ mod config_tests {
         // that re-registering the same server produced before idempotent register.
         let doc = br#"{
             "servers": [
-                {"server_id":"AAAA","base_url":"https://a.example","tenant_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null},
-                {"server_id":"BBBB","base_url":"https://a.example","tenant_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null},
-                {"server_id":"CCCC","base_url":"https://a.example","tenant_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null}
+                {"server_id":"AAAA","base_url":"https://a.example","instance_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null},
+                {"server_id":"BBBB","base_url":"https://a.example","instance_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null},
+                {"server_id":"CCCC","base_url":"https://a.example","instance_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null}
             ],
             "active": "BBBB"
         }"#;
@@ -726,8 +734,8 @@ mod config_tests {
         let path = dir.path().join("cloud.json");
         let doc = br#"{
             "servers": [
-                {"server_id":"AAAA","base_url":"https://a.example","tenant_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null},
-                {"server_id":"BBBB","base_url":"https://b.example","tenant_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null}
+                {"server_id":"AAAA","base_url":"https://a.example","instance_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null},
+                {"server_id":"BBBB","base_url":"https://b.example","instance_id":"dA==","account_id":"YQ==","device_id":"ZA==","handle":null}
             ],
             "active": "AAAA"
         }"#;
@@ -744,9 +752,18 @@ mod config_tests {
     fn canonical_base_url_normalizes_slash_and_case() {
         // Same origin, differently typed → one canonical identity.
         assert_eq!(canonical_base_url("https://x.example"), "https://x.example");
-        assert_eq!(canonical_base_url("https://x.example/"), "https://x.example");
-        assert_eq!(canonical_base_url("HTTPS://X.Example/"), "https://x.example");
-        assert_eq!(canonical_base_url("  https://x.example  "), "https://x.example");
+        assert_eq!(
+            canonical_base_url("https://x.example/"),
+            "https://x.example"
+        );
+        assert_eq!(
+            canonical_base_url("HTTPS://X.Example/"),
+            "https://x.example"
+        );
+        assert_eq!(
+            canonical_base_url("  https://x.example  "),
+            "https://x.example"
+        );
         // Distinct origins stay distinct.
         assert_ne!(
             canonical_base_url("https://x.example"),
@@ -806,8 +823,12 @@ mod config_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cloud.json");
         let state = CloudState::new(path.clone());
-        state.upsert_config(cfg("AAAA", "https://a.example")).unwrap();
-        state.upsert_config(cfg("BBBB", "https://b.example")).unwrap();
+        state
+            .upsert_config(cfg("AAAA", "https://a.example"))
+            .unwrap();
+        state
+            .upsert_config(cfg("BBBB", "https://b.example"))
+            .unwrap();
         assert_eq!(state.list().servers.len(), 2);
         state.clear_all();
         assert_eq!(state.list().servers.len(), 0, "all links forgotten");

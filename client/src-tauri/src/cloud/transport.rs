@@ -31,17 +31,12 @@ fn idempotency_key(objects: &[Vec<u8>]) -> String {
 
 pub struct HttpSyncTransport {
     base_url: String,
-    tenant_b64: String,
     bearer: String,
 }
 
 impl HttpSyncTransport {
-    pub fn new(base_url: String, tenant_b64: String, bearer: String) -> Self {
-        HttpSyncTransport {
-            base_url,
-            tenant_b64,
-            bearer,
-        }
+    pub fn new(base_url: String, bearer: String) -> Self {
+        HttpSyncTransport { base_url, bearer }
     }
 }
 
@@ -56,7 +51,6 @@ impl FfiSyncTransport for HttpSyncTransport {
         let idem = idempotency_key(&objects);
         let resp = client::headers(
             http.post(client::url(&self.base_url, "/v1/sync/push")),
-            &self.tenant_b64,
             Some(&self.bearer),
         )
         .header("Idempotency-Key", idem)
@@ -97,7 +91,6 @@ impl FfiSyncTransport for HttpSyncTransport {
             let path = format!("/v1/sync/delta?cursor={cur}&limit={DELTA_LIMIT}");
             let resp = match client::headers(
                 http.get(client::url(&self.base_url, &path)),
-                &self.tenant_b64,
                 Some(&self.bearer),
             )
             .send()
@@ -143,7 +136,6 @@ impl FfiSyncTransport for HttpSyncTransport {
         for attempt in 0..3 {
             let resp = client::headers(
                 http.get(client::url(&self.base_url, "/v1/sync/version")),
-                &self.tenant_b64,
                 Some(&self.bearer),
             )
             .send();

@@ -5,6 +5,7 @@
 //! `sign_server_challenge_raw`) — the private keyset never leaves the core.
 
 use reqwest::blocking::Client;
+use serde::Serialize;
 use serde_json::{json, Value};
 use unissh_ffi as ffi;
 
@@ -17,13 +18,57 @@ use crate::error::{ApiError, ApiResult};
 /// echoed value, so any stable value works.
 const KEY_ID: &[u8] = b"unissh-keyset-v1";
 
-/// Result of `bootstrap`/`register` — the server-assigned identity.
-pub struct RegisterOutcome {
+/// Result of `claim` — the server-assigned identity for a freshly claimed instance.
+/// The claimer becomes the instance owner and gets a first space.
+pub struct ClaimOutcome {
     pub account_id: String,
     pub device_id: String,
-    /// Server-reported: this keyset owns the space (genesis-owner). Absent on older
-    /// servers → `false`. Lets `reconnect` restore the right `owned` flag.
-    pub owned: bool,
+    /// The first space created for the owner (cloud-vault binding label).
+    pub space_id: String,
+    /// Opaque server-instance id (echoed back on the auth challenge `host`).
+    pub instance_id: String,
+}
+
+/// Result of `join` — the server-assigned identity plus the spaces the invite
+/// granted (space ids, base64). May reuse an existing account (reattach).
+pub struct JoinOutcome {
+    pub account_id: String,
+    pub device_id: String,
+    /// Space ids (base64) this join was granted membership in.
+    pub spaces: Vec<String>,
+}
+
+/// One space in a `join_preview` (read-only; does not consume the invite).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinPreviewSpace {
+    pub space_id: String,
+    pub name: String,
+    pub role: String,
+}
+
+/// Read-only preview of an invite: the instance name + the spaces it grants.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinPreview {
+    pub instance_name: Option<String>,
+    pub spaces: Vec<JoinPreviewSpace>,
+}
+
+/// `GET /v1/instance` — public instance descriptor (before/after claim).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceInfo {
+    /// True once the single-winner claim has happened.
+    pub claimed: bool,
+    /// Human name of the instance (set at claim), if any.
+    pub name: Option<String>,
+    /// Server version string.
+    pub version: String,
+    /// Opaque server-instance id (base64).
+    pub instance_id: String,
+    /// Supported auth methods (e.g. `["password", "oidc"]`).
+    pub auth: Vec<String>,
 }
 
 /// Session tokens minted by `auth/verify` / `session/refresh`. (Token expiries are
@@ -42,106 +87,155 @@ impl SessionTokens {
     }
 }
 
-fn outcome_from_value(v: &Value) -> ApiResult<RegisterOutcome> {
-    Ok(RegisterOutcome {
+fn claim_outcome(v: &Value) -> ApiResult<ClaimOutcome> {
+    Ok(ClaimOutcome {
         account_id: client::jstr(v, "account_id")?,
         device_id: client::jstr(v, "device_id")?,
-        owned: v.get("owned").and_then(Value::as_bool).unwrap_or(false),
+        space_id: client::jstr(v, "space_id")?,
+        instance_id: client::jstr(v, "instance_id")?,
     })
 }
 
-/// `POST /v1/bootstrap` — genesis device of a NEW tenant (becomes its genesis-owner
-/// = instance-admin of that tenant). Used to create a Space you OWN (e.g. a personal
-/// space for your identity), possibly on the same server as a company you joined.
-/// The server gates this by config (`bootstrap.token` must match, or `allow_open`);
-/// a closed server returns 403 and the caller falls back to "use another server".
-#[allow(clippy::too_many_arguments)]
-pub fn bootstrap(
-    http: &Client,
-    base_url: &str,
-    tenant_b64: &str,
-    reg: ffi::RegistrationRequest,
-    tier: Option<String>,
-    display_name: Option<String>,
-    handle: Option<String>,
-    bootstrap_token: Option<String>,
-) -> ApiResult<RegisterOutcome> {
-    let body = json!({
-        "tenant_bootstrap_token": bootstrap_token,
-        "registration_payload": client::b64(&reg.payload),
-        "registration_signature": client::b64(&reg.signature),
-        "tier": tier,
-        "display_name": display_name,
-        "handle": handle,
-    });
-    let v = client::send_json(
-        client::headers(
-            http.post(client::url(base_url, "/v1/bootstrap")),
-            tenant_b64,
-            None,
-        )
-        .json(&body),
-    )?;
-    outcome_from_value(&v)
+fn join_outcome(v: &Value) -> ApiResult<JoinOutcome> {
+    let spaces = v
+        .get("spaces")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(JoinOutcome {
+        account_id: client::jstr(v, "account_id")?,
+        device_id: client::jstr(v, "device_id")?,
+        spaces,
+    })
 }
 
-/// `POST /v1/register` — join an existing tenant with an invite token.
-pub fn register(
+/// `POST /v1/claim` — single-winner claim of an unclaimed instance. The `setup_code`
+/// (printed by the server on first boot) authorizes it; the claimer becomes the
+/// instance owner and is given a first space. A claimed instance returns 409.
+#[allow(clippy::too_many_arguments)]
+pub fn claim(
     http: &Client,
     base_url: &str,
-    tenant_b64: &str,
-    invite_token: &str,
+    setup_code: &str,
     reg: ffi::RegistrationRequest,
     display_name: Option<String>,
     handle: Option<String>,
-) -> ApiResult<RegisterOutcome> {
+    space_name: Option<String>,
+) -> ApiResult<ClaimOutcome> {
+    let body = json!({
+        "setup_code": setup_code,
+        "registration_payload": client::b64(&reg.payload),
+        "registration_signature": client::b64(&reg.signature),
+        "display_name": display_name,
+        "handle": handle,
+        "space_name": space_name,
+    });
+    let v = client::send_json(
+        client::headers(http.post(client::url(base_url, "/v1/claim")), None).json(&body),
+    )?;
+    claim_outcome(&v)
+}
+
+/// `POST /v1/join` — redeem an invite. A new keyset creates a fresh account+device;
+/// an already-registered keyset reuses the account and mints a new device (reattach).
+/// `binding_mac` is an optional invite-binding proof (pass `None` — the server
+/// accepts a join without it; wiring the MAC is a later concern).
+#[allow(clippy::too_many_arguments)]
+pub fn join(
+    http: &Client,
+    base_url: &str,
+    invite_token: &str,
+    reg: ffi::RegistrationRequest,
+    binding_mac: Option<&[u8]>,
+    display_name: Option<String>,
+    handle: Option<String>,
+) -> ApiResult<JoinOutcome> {
     let body = json!({
         "invite_token": invite_token,
         "registration_payload": client::b64(&reg.payload),
         "registration_signature": client::b64(&reg.signature),
+        "binding_mac": binding_mac.map(client::b64),
         "display_name": display_name,
         "handle": handle,
     });
     let v = client::send_json(
-        client::headers(
-            http.post(client::url(base_url, "/v1/register")),
-            tenant_b64,
-            None,
-        )
-        .json(&body),
+        client::headers(http.post(client::url(base_url, "/v1/join")), None).json(&body),
     )?;
-    outcome_from_value(&v)
+    join_outcome(&v)
 }
 
-/// `POST /v1/invite/redeem` — read-only preview of an invite (does NOT consume it).
-/// Returns `(role, scope)`.
-pub fn invite_redeem_preview(
-    http: &Client,
-    base_url: &str,
-    tenant_b64: &str,
-    invite_token: &str,
-) -> ApiResult<(String, Option<String>)> {
-    let body = json!({ "invite_token": invite_token });
+/// `POST /v1/join/preview` — resolve an invite's spaces (with names) WITHOUT
+/// consuming it. POST (not GET) so the secret token never lands in a URL/query log.
+pub fn join_preview(http: &Client, base_url: &str, token: &str) -> ApiResult<JoinPreview> {
+    let body = json!({ "token": token });
     let v = client::send_json(
-        client::headers(
-            http.post(client::url(base_url, "/v1/invite/redeem")),
-            tenant_b64,
-            None,
-        )
-        .json(&body),
+        client::headers(http.post(client::url(base_url, "/v1/join/preview")), None).json(&body),
     )?;
-    let role = client::jstr(&v, "role")?;
-    let scope = v.get("scope").and_then(|s| s.as_str()).map(str::to_string);
-    Ok((role, scope))
+    let instance_name = v
+        .get("instance_name")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let mut spaces = Vec::new();
+    if let Some(arr) = v.get("spaces").and_then(Value::as_array) {
+        for s in arr {
+            spaces.push(JoinPreviewSpace {
+                space_id: client::jstr(s, "space_id")?,
+                name: s
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                role: client::jstr(s, "role")?,
+            });
+        }
+    }
+    Ok(JoinPreview {
+        instance_name,
+        spaces,
+    })
+}
+
+/// `GET /v1/instance` — public instance descriptor (claimed?, name, version,
+/// instance_id, auth methods). No auth. Used to learn the opaque `instance_id`
+/// on a join (the join response carries only account/device/spaces).
+pub fn instance_info(http: &Client, base_url: &str) -> ApiResult<InstanceInfo> {
+    let v = client::send_json(client::headers(
+        http.get(client::url(base_url, "/v1/instance")),
+        None,
+    ))?;
+    let auth = v
+        .get("auth")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(InstanceInfo {
+        claimed: v.get("claimed").and_then(Value::as_bool).unwrap_or(false),
+        name: v.get("name").and_then(Value::as_str).map(str::to_string),
+        version: v
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        instance_id: client::jstr(&v, "instance_id")?,
+        auth,
+    })
 }
 
 /// Full auth handshake: `auth/challenge` → core `sign_server_challenge_raw` →
 /// `auth/verify`. Returns the session tokens. `account_id_b64`/`device_id_b64` are
-/// the server-assigned ids (base64).
+/// the server-assigned ids (base64). The challenge `host` (the opaque instance id)
+/// is echoed by the server and signed verbatim — the client never supplies it.
 pub fn login(
     http: &Client,
     base_url: &str,
-    tenant_b64: &str,
     core: &ffi::Core,
     account_id_b64: &str,
     device_id_b64: &str,
@@ -152,12 +246,8 @@ pub fn login(
         "key_id": client::b64(KEY_ID),
     });
     let chal = client::send_json(
-        client::headers(
-            http.post(client::url(base_url, "/v1/auth/challenge")),
-            tenant_b64,
-            None,
-        )
-        .json(&chal_body),
+        client::headers(http.post(client::url(base_url, "/v1/auth/challenge")), None)
+            .json(&chal_body),
     )?;
 
     // Sign over the RAW bytes of every field (the server reconstructs the
@@ -176,28 +266,18 @@ pub fn login(
     // the server issued, byte-for-byte, or verification fails.
     let verify_body = json!({ "challenge": chal, "signature": client::b64(&sig) });
     let tokens = client::send_json(
-        client::headers(
-            http.post(client::url(base_url, "/v1/auth/verify")),
-            tenant_b64,
-            None,
-        )
-        .json(&verify_body),
+        client::headers(http.post(client::url(base_url, "/v1/auth/verify")), None)
+            .json(&verify_body),
     )?;
     SessionTokens::from_value(&tokens)
 }
 
 /// `POST /v1/session/refresh` — rotate access+refresh (same session). No Bearer.
-pub fn refresh(
-    http: &Client,
-    base_url: &str,
-    tenant_b64: &str,
-    refresh_token: &str,
-) -> ApiResult<SessionTokens> {
+pub fn refresh(http: &Client, base_url: &str, refresh_token: &str) -> ApiResult<SessionTokens> {
     let body = json!({ "refresh_token": refresh_token });
     let v = client::send_json(
         client::headers(
             http.post(client::url(base_url, "/v1/session/refresh")),
-            tenant_b64,
             None,
         )
         .json(&body),
@@ -206,10 +286,9 @@ pub fn refresh(
 }
 
 /// `POST /v1/session/logout` (Bearer) — revoke the calling session. 204.
-pub fn logout(http: &Client, base_url: &str, tenant_b64: &str, access: &str) -> ApiResult<()> {
+pub fn logout(http: &Client, base_url: &str, access: &str) -> ApiResult<()> {
     client::send_json(client::headers(
         http.post(client::url(base_url, "/v1/session/logout")),
-        tenant_b64,
         Some(access),
     ))?;
     Ok(())
@@ -219,7 +298,6 @@ pub fn logout(http: &Client, base_url: &str, tenant_b64: &str, access: &str) -> 
 pub fn device_revoke(
     http: &Client,
     base_url: &str,
-    tenant_b64: &str,
     access: &str,
     device_id_b64: &str,
 ) -> ApiResult<()> {
@@ -227,7 +305,6 @@ pub fn device_revoke(
     client::send_json(
         client::headers(
             http.post(client::url(base_url, "/v1/session/device-revoke")),
-            tenant_b64,
             Some(access),
         )
         .json(&body),
@@ -237,30 +314,18 @@ pub fn device_revoke(
 
 /// `POST /v1/devices/add` (Bearer) — add a sibling device under the caller's
 /// account (shared keyset). Returns the new `device_id` (base64).
-pub fn device_add(
-    http: &Client,
-    base_url: &str,
-    tenant_b64: &str,
-    access: &str,
-) -> ApiResult<String> {
+pub fn device_add(http: &Client, base_url: &str, access: &str) -> ApiResult<String> {
     let v = client::send_json(client::headers(
         http.post(client::url(base_url, "/v1/devices/add")),
-        tenant_b64,
         Some(access),
     ))?;
     client::jstr(&v, "device_id")
 }
 
 /// `GET /v1/devices` (Bearer) — list the caller's own account devices.
-pub fn device_list(
-    http: &Client,
-    base_url: &str,
-    tenant_b64: &str,
-    access: &str,
-) -> ApiResult<Vec<dto::DeviceInfo>> {
+pub fn device_list(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec<dto::DeviceInfo>> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/devices")),
-        tenant_b64,
         Some(access),
     ))?;
     let devices = v["devices"].as_array().ok_or_else(|| ApiError::Server {
@@ -277,7 +342,10 @@ pub fn device_list(
                 .unwrap_or("")
                 .to_string(),
             registered_at: d.get("registered_at").and_then(|x| x.as_i64()).unwrap_or(0),
-            active_sessions: d.get("active_sessions").and_then(|x| x.as_i64()).unwrap_or(0),
+            active_sessions: d
+                .get("active_sessions")
+                .and_then(|x| x.as_i64())
+                .unwrap_or(0),
         });
     }
     Ok(out)
@@ -287,7 +355,6 @@ pub fn device_list(
 pub fn account_profile(
     http: &Client,
     base_url: &str,
-    tenant_b64: &str,
     access: &str,
     display_name: Option<String>,
     handle: Option<String>,
@@ -296,7 +363,6 @@ pub fn account_profile(
     client::send_json(
         client::headers(
             http.post(client::url(base_url, "/v1/account/profile")),
-            tenant_b64,
             Some(access),
         )
         .json(&body),
@@ -310,12 +376,10 @@ pub fn account_profile(
 pub fn list_accounts(
     http: &Client,
     base_url: &str,
-    tenant_b64: &str,
     access: &str,
 ) -> ApiResult<Vec<dto::AccountInfo>> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/accounts")),
-        tenant_b64,
         Some(access),
     ))?;
     let accounts = v["accounts"].as_array().ok_or_else(|| ApiError::Server {
@@ -358,32 +422,20 @@ pub fn list_accounts(
 pub fn keyset_put(
     http: &Client,
     base_url: &str,
-    tenant_b64: &str,
     access: &str,
     keyset_blob: &[u8],
 ) -> ApiResult<i64> {
     let body = json!({ "keyset_blob": client::b64(keyset_blob) });
     let v = client::send_json(
-        client::headers(
-            http.put(client::url(base_url, "/v1/keyset")),
-            tenant_b64,
-            Some(access),
-        )
-        .json(&body),
+        client::headers(http.put(client::url(base_url, "/v1/keyset")), Some(access)).json(&body),
     )?;
     client::ji64(&v, "generation")
 }
 
 /// `GET /v1/keyset` (Bearer) — pull the escrowed keyset blob. Returns `(blob, generation)`.
-pub fn keyset_get(
-    http: &Client,
-    base_url: &str,
-    tenant_b64: &str,
-    access: &str,
-) -> ApiResult<(Vec<u8>, i64)> {
+pub fn keyset_get(http: &Client, base_url: &str, access: &str) -> ApiResult<(Vec<u8>, i64)> {
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, "/v1/keyset")),
-        tenant_b64,
         Some(access),
     ))?;
     let blob = client::unb64(&client::jstr(&v, "keyset_blob")?)?;
@@ -395,26 +447,19 @@ pub fn keyset_get(
 
 /// `POST /v1/relay/open` (Bearer) — open a device-to-device PAKE relay channel.
 /// Returns the channel id (base64).
-pub fn relay_open(
-    http: &Client,
-    base_url: &str,
-    tenant_b64: &str,
-    access: &str,
-) -> ApiResult<String> {
+pub fn relay_open(http: &Client, base_url: &str, access: &str) -> ApiResult<String> {
     let v = client::send_json(client::headers(
         http.post(client::url(base_url, "/v1/relay/open")),
-        tenant_b64,
         Some(access),
     ))?;
     client::jstr(&v, "channel_id")
 }
 
-/// `POST /v1/relay/{slot}` (tenant only, NO bearer) — put a PAKE message into a
-/// slot (`msg1`/`msg2`/`msg3`). The slot name is also the body field name.
+/// `POST /v1/relay/{slot}` (NO bearer) — put a PAKE message into a slot
+/// (`msg1`/`msg2`/`msg3`). The slot name is also the body field name.
 pub fn relay_post(
     http: &Client,
     base_url: &str,
-    tenant_b64: &str,
     channel_id_b64: &str,
     slot: &str,
     msg: &[u8],
@@ -428,7 +473,6 @@ pub fn relay_post(
     client::send_json(
         client::headers(
             http.post(client::url(base_url, &format!("/v1/relay/{slot}"))),
-            tenant_b64,
             None,
         )
         .json(&Value::Object(body)),
@@ -436,12 +480,11 @@ pub fn relay_post(
     Ok(())
 }
 
-/// `GET /v1/relay/poll` (tenant only) — fetch a slot. `Some(bytes)` if present,
-/// `None` on 204 (not posted yet).
+/// `GET /v1/relay/poll` — fetch a slot. `Some(bytes)` if present, `None` on 204
+/// (not posted yet).
 pub fn relay_poll(
     http: &Client,
     base_url: &str,
-    tenant_b64: &str,
     channel_id_b64: &str,
     want: &str,
 ) -> ApiResult<Option<Vec<u8>>> {
@@ -450,7 +493,7 @@ pub fn relay_poll(
         client::enc_query(channel_id_b64),
         client::enc_query(want)
     );
-    let rb = client::headers(http.get(client::url(base_url, &path)), tenant_b64, None);
+    let rb = client::headers(http.get(client::url(base_url, &path)), None);
     let v = client::send_json(rb)?;
     if v.is_null() {
         return Ok(None);
@@ -468,7 +511,6 @@ pub fn relay_poll(
 pub fn audit_query(
     http: &Client,
     base_url: &str,
-    tenant_b64: &str,
     access: &str,
     since_seq: Option<i64>,
 ) -> ApiResult<Vec<dto::AuditEntry>> {
@@ -478,7 +520,6 @@ pub fn audit_query(
     };
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, &path)),
-        tenant_b64,
         Some(access),
     ))?;
     let entries = v["entries"].as_array().ok_or_else(|| ApiError::Server {

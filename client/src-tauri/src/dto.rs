@@ -419,9 +419,14 @@ impl From<ffi::IdentityBinding> for IdentityBinding {
 pub enum BindingResolution {
     Unbound,
     #[serde(rename_all = "camelCase")]
-    Matched { identity_item_id: String },
+    Matched {
+        identity_item_id: String,
+    },
     #[serde(rename_all = "camelCase")]
-    Redirected { pinned: String, current: String },
+    Redirected {
+        pinned: String,
+        current: String,
+    },
 }
 impl From<ffi::BindingResolution> for BindingResolution {
     fn from(r: ffi::BindingResolution) -> Self {
@@ -638,7 +643,10 @@ pub struct DeviceInfo {
 #[serde(rename_all = "camelCase")]
 pub struct PairingPayload {
     pub base_url: String,
-    pub tenant_id: String,
+    /// Opaque server-instance id (base64) — used to key the new device's link.
+    pub instance_id: String,
+    /// Cloud-vault binding label (space id, base64) the new device inherits.
+    pub space_id: String,
     pub account_id: String,
     /// The new device's id, pre-created on the server by the existing device.
     pub device_id: String,

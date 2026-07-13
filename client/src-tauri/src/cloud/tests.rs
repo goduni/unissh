@@ -20,7 +20,7 @@ use unissh_ffi::{Core, FfiMemberRole};
 use crate::cloud::transport::HttpSyncTransport;
 use crate::cloud::{client, identity};
 
-const BOOTSTRAP_TOKEN: &str = "integration-test-bootstrap-token";
+const SETUP_CODE: &str = "integration-test-setup-code";
 
 struct ServerProc {
     child: Child,
@@ -87,7 +87,7 @@ fn spawn_server() -> Option<ServerProc> {
          log_format = \"text\"\n",
         port = port,
         db = db_path.to_string_lossy(),
-        token = BOOTSTRAP_TOKEN,
+        token = SETUP_CODE,
         metrics_port = metrics_port,
     );
     {
@@ -139,10 +139,6 @@ fn new_core(dir: &std::path::Path, name: &str) -> Arc<Core> {
     )
 }
 
-fn random_tenant() -> String {
-    client::b64(uuid::Uuid::new_v4().as_bytes())
-}
-
 #[test]
 #[ignore = "needs `cargo build -p unissh-server` + free TCP ports"]
 fn live_e2e_bootstrap_auth_cloud_vault_membership_and_two_device_sync() {
@@ -151,43 +147,36 @@ fn live_e2e_bootstrap_auth_cloud_vault_membership_and_two_device_sync() {
         None => return, // skipped (binary absent)
     };
     let base = &srv.base_url;
-    let tenant = random_tenant();
     let http = client::http();
 
-    // ── Device A: genesis bootstrap + login ────────────────────────────────
+    // ── Device A: claim the instance + login ───────────────────────────────
     let dir_a = tempfile::tempdir().unwrap();
     let core_a = new_core(dir_a.path(), "a");
     let secret = core_a.create_account(None).unwrap();
 
     let reg = core_a.build_registration_request().unwrap();
-    let out_a = identity::bootstrap(
+    let out_a = identity::claim(
         http,
         base,
-        &tenant,
+        SETUP_CODE,
         reg,
-        Some("personal".into()),
         Some("Alice".into()),
         Some("alice".into()),
-        Some(BOOTSTRAP_TOKEN.into()),
+        Some("personal".into()),
     )
-    .expect("bootstrap should succeed");
+    .expect("claim should succeed");
     assert!(!out_a.account_id.is_empty());
     assert!(!out_a.device_id.is_empty());
+    // The claim's first space is the cloud-vault binding label.
+    let space = out_a.space_id.clone();
 
-    let session_a = identity::login(
-        http,
-        base,
-        &tenant,
-        &core_a,
-        &out_a.account_id,
-        &out_a.device_id,
-    )
-    .expect("login should succeed");
+    let session_a = identity::login(http, base, &core_a, &out_a.account_id, &out_a.device_id)
+        .expect("login should succeed");
     assert!(!session_a.access_token.is_empty());
 
     // ── Cloud vault + a member (real signed manifest+grant objects) ────────
     let vid = core_a
-        .create_cloud_vault("Shared".into(), tenant.clone())
+        .create_cloud_vault("Shared".into(), space.clone())
         .unwrap();
     // Synthetic member public keys (public material; same shape the unit tests use).
     core_a
@@ -206,11 +195,10 @@ fn live_e2e_bootstrap_auth_cloud_vault_membership_and_two_device_sync() {
     // ── A pushes (vault + membership + item objects) ───────────────────────
     let transport_a: Arc<dyn unissh_ffi::FfiSyncTransport> = Arc::new(HttpSyncTransport::new(
         base.clone(),
-        tenant.clone(),
         session_a.access_token.clone(),
     ));
     let report_a = core_a
-        .sync_now(transport_a, tenant.clone())
+        .sync_now(transport_a, space.clone())
         .expect("A sync_now should succeed");
     assert!(
         report_a.pushed >= 1,
@@ -218,7 +206,7 @@ fn live_e2e_bootstrap_auth_cloud_vault_membership_and_two_device_sync() {
     );
 
     // ── Device B: add a sibling device, share the keyset (Path A), log in ──
-    let device_b = identity::device_add(http, base, &tenant, &session_a.access_token)
+    let device_b = identity::device_add(http, base, &session_a.access_token)
         .expect("devices/add should succeed");
 
     let keyset_blob = std::fs::read(dir_a.path().join("a.keyset.bin")).unwrap();
@@ -228,18 +216,17 @@ fn live_e2e_bootstrap_auth_cloud_vault_membership_and_two_device_sync() {
         .unlock_from_server_blob(keyset_blob, None, secret)
         .expect("B unlocks from A's keyset blob");
 
-    let session_b = identity::login(http, base, &tenant, &core_b, &out_a.account_id, &device_b)
+    let session_b = identity::login(http, base, &core_b, &out_a.account_id, &device_b)
         .expect("B login with shared keyset should succeed");
     assert!(!session_b.access_token.is_empty());
 
     // ── B pulls and sees A's cloud vault ───────────────────────────────────
     let transport_b: Arc<dyn unissh_ffi::FfiSyncTransport> = Arc::new(HttpSyncTransport::new(
         base.clone(),
-        tenant.clone(),
         session_b.access_token.clone(),
     ));
     let report_b = core_b
-        .sync_now(transport_b, tenant.clone())
+        .sync_now(transport_b, space.clone())
         .expect("B sync_now should succeed");
     assert!(
         report_b.applied >= 1,
@@ -257,10 +244,10 @@ fn live_e2e_bootstrap_auth_cloud_vault_membership_and_two_device_sync() {
     assert_eq!(pw, "s3cr3t", "the synced secret must match byte-for-byte");
 
     // Session lifecycle: refresh + logout round-trip.
-    let refreshed = identity::refresh(http, base, &tenant, &session_b.refresh_token)
-        .expect("refresh should succeed");
+    let refreshed =
+        identity::refresh(http, base, &session_b.refresh_token).expect("refresh should succeed");
     assert!(!refreshed.access_token.is_empty());
-    identity::logout(http, base, &tenant, &refreshed.access_token).expect("logout should succeed");
+    identity::logout(http, base, &refreshed.access_token).expect("logout should succeed");
 }
 
 /// Path B (device-to-device PAKE onboarding) end-to-end through the real server
@@ -276,47 +263,36 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
         None => return, // skipped (binary absent)
     };
     let base = srv.base_url.clone();
-    let tenant = random_tenant();
     let http = client::http();
 
-    // ── Device A: genesis bootstrap + login (existing, authenticated device) ──
+    // ── Device A: claim the instance + login (existing, authenticated device) ──
     let dir_a = tempfile::tempdir().unwrap();
     let core_a = new_core(dir_a.path(), "a");
     let secret_a = core_a.create_account(Some("pw-a".into())).unwrap();
     let reg = core_a.build_registration_request().unwrap();
-    let out_a = identity::bootstrap(
+    let out_a = identity::claim(
         http,
         &base,
-        &tenant,
+        SETUP_CODE,
         reg,
-        Some("personal".into()),
         Some("Alice".into()),
         Some("alice".into()),
-        Some(BOOTSTRAP_TOKEN.into()),
+        Some("personal".into()),
     )
-    .expect("bootstrap should succeed");
-    let session_a = identity::login(
-        http,
-        &base,
-        &tenant,
-        &core_a,
-        &out_a.account_id,
-        &out_a.device_id,
-    )
-    .expect("A login should succeed");
+    .expect("claim should succeed");
+    let session_a = identity::login(http, &base, &core_a, &out_a.account_id, &out_a.device_id)
+        .expect("A login should succeed");
 
     // ── A initiates pairing: pre-create device B + open a relay channel ───────
-    let device_b =
-        identity::device_add(http, &base, &tenant, &session_a.access_token).expect("device_add");
+    let device_b = identity::device_add(http, &base, &session_a.access_token).expect("device_add");
     let channel_id =
-        identity::relay_open(http, &base, &tenant, &session_a.access_token).expect("relay_open");
+        identity::relay_open(http, &base, &session_a.access_token).expect("relay_open");
     // Shared OOB code (raw bytes — both sides key the PAKE off the same value).
     let oob = uuid::Uuid::new_v4().as_bytes().to_vec();
 
     // Initiator runs concurrently (it blocks polling the relay for msg2).
     let initiator = {
         let base = base.clone();
-        let tenant = tenant.clone();
         let channel_id = channel_id.clone();
         let oob = oob.clone();
         let core_a = core_a.clone();
@@ -326,7 +302,6 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
                 &core_a,
                 client::http(),
                 &base,
-                &tenant,
                 &channel_id,
                 oob,
                 secret_a,
@@ -341,7 +316,6 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
         &core_b,
         http,
         &base,
-        &tenant,
         &channel_id,
         oob,
         Some("pw-b".into()),
@@ -365,7 +339,7 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
 
     // And B is a real device on the server: it authenticates with the keyset it
     // received over the PAKE channel.
-    let session_b = identity::login(http, &base, &tenant, &core_b, &out_a.account_id, &device_b)
+    let session_b = identity::login(http, &base, &core_b, &out_a.account_id, &device_b)
         .expect("B login with the transferred keyset should succeed");
     assert!(!session_b.access_token.is_empty());
 }
