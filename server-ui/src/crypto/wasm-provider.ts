@@ -38,6 +38,14 @@ interface WasmModule {
     reg_sig_b64: string,
     expected_ed25519_b64: string,
   ) => string;
+  derive_escrow_auth: (
+    password: string | null | undefined,
+    secret_key_b64: string,
+    argon_salt_b64: string,
+    argon_mem_kib: number,
+    argon_iterations: number,
+    argon_parallelism: number,
+  ) => string;
   lock: () => void;
 }
 
@@ -134,6 +142,13 @@ function makeProvider(m: WasmModule): CryptoProvider {
       // Throws if the registration signature does not attest the claimed keys.
       // Returns the ATTESTED x25519 (base64) — caller wraps the VK to this.
       return m.verify_member_binding(regPayloadB64, regSigB64, expectedEd25519B64);
+    },
+
+    deriveEscrowAuth(password, secretKeyB64, saltB64, mem, iter, par): string {
+      // Reproduces the server's K_auth (base64) from the account password
+      // (null → SecretKeyOnly / SSO) + Secret Key + the server's stored Argon2id
+      // params. Synchronous — no keyset state is touched.
+      return m.derive_escrow_auth(password ?? undefined, secretKeyB64, saltB64, mem, iter, par);
     },
 
     lock() {

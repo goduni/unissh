@@ -130,6 +130,22 @@ export interface CryptoProvider {
     regSigB64: string,
     expectedEd25519B64: string,
   ): Promise<string>;
+  /**
+   * Derive the escrow retrieval credential K_auth (base64) for escrow login.
+   * Reproduces the server's K_auth from the account password (null for
+   * SecretKeyOnly / SSO accounts), the 16-byte Secret Key, and the account's
+   * SERVER-STORED Argon2id params (mem/iter/parallelism + salt). The params must
+   * be the server's stored values — not freshly minted — or the derived K_auth
+   * will not match `sha256(K_auth)` and login fails. Synchronous.
+   */
+  deriveEscrowAuth(
+    password: string | null,
+    secretKeyB64: string,
+    saltB64: string,
+    mem: number,
+    iter: number,
+    par: number,
+  ): string;
   /** Wipe the UnlockedKeyset from memory. */
   lock(): void;
 }
@@ -198,6 +214,9 @@ const unavailable: CryptoProvider = {
     throw new CryptoUnavailableError();
   },
   async verifyMemberBinding() {
+    throw new CryptoUnavailableError();
+  },
+  deriveEscrowAuth(): string {
     throw new CryptoUnavailableError();
   },
   lock() {},
