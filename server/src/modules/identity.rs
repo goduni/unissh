@@ -36,6 +36,10 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/invite", post(invite_issue_v2))
         .route("/v1/join/preview", post(join_preview))
         .route("/v1/join", post(join))
+        .route(
+            "/v1/attestations",
+            post(attestation_put).get(attestations_list),
+        )
 }
 
 // ---- helpers ----
@@ -1030,6 +1034,93 @@ async fn join(
             spaces: joined_b64,
         }),
     ))
+}
+
+// ---- key-binding attestations (Task 10) ----
+//
+// A space admin publishes a signed statement about a target account's key binding.
+// The server is opaque: it stores the `blob` + `signature` VERBATIM and never
+// verifies them (clients verify signatures — ZK discipline). The only server-trusted
+// check is the authority guard: the attestor must be an admin of ≥1 space that the
+// target is also a member of. `attestor_pubkey` is the caller's device ed25519.
+
+#[derive(Deserialize)]
+struct AttestPutReq {
+    account_id: String,
+    blob: String,
+    signature: String,
+}
+
+/// `POST /v1/attestations` (Bearer): attest a target account's key binding. GUARD:
+/// the caller must be a space admin sharing ≥1 space with the target (else 403).
+/// UPSERT on `(target_account_id, caller_device_ed25519)`.
+async fn attestation_put(
+    auth: AuthCtx,
+    State(state): State<AppState>,
+    Json(req): Json<AttestPutReq>,
+) -> AppResult<StatusCode> {
+    let target = ids::unb64(&req.account_id)?;
+    let blob = ids::unb64(&req.blob)?;
+    let signature = ids::unb64(&req.signature)?;
+
+    if !state
+        .store
+        .shares_admin_space(auth.account_id(), &target)
+        .await?
+    {
+        return Err(AppError::forbidden(
+            "space admin sharing a space with the target required",
+        ));
+    }
+
+    let attestor = auth.device_ed25519();
+    state
+        .store
+        .attest_put(&target, attestor, &blob, &signature, state.now())
+        .await?;
+
+    let ev = serde_json::json!({
+        "event": "key_attest",
+        "account_id": ids::b64(&target),
+        "attestor_pubkey": ids::b64(attestor),
+        "ts": state.now(),
+    });
+    state.audit_event(&ev, None).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct AttestListQuery {
+    account_id: String,
+}
+
+#[derive(Serialize)]
+struct AttestationInfo {
+    attestor_pubkey: String,
+    blob: String,
+    signature: String,
+    created_at: i64,
+}
+
+/// `GET /v1/attestations?account_id=` (Bearer): every attestation about the target
+/// account (opaque blob + signature, base64). The caller verifies signatures.
+async fn attestations_list(
+    _auth: AuthCtx,
+    State(state): State<AppState>,
+    Query(q): Query<AttestListQuery>,
+) -> AppResult<Json<serde_json::Value>> {
+    let target = ids::unb64(&q.account_id)?;
+    let rows = state.store.attest_list(&target).await?;
+    let attestations: Vec<AttestationInfo> = rows
+        .into_iter()
+        .map(|r| AttestationInfo {
+            attestor_pubkey: ids::b64(&r.attestor_pubkey),
+            blob: ids::b64(&r.blob),
+            signature: ids::b64(&r.signature),
+            created_at: r.created_at,
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "attestations": attestations })))
 }
 
 /// `GET /v1/devices` (Bearer): list the CALLER'S OWN account devices.

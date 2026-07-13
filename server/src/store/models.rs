@@ -308,3 +308,17 @@ pub struct PendingActionRow {
 pub struct EdOnly {
     pub ed25519_pub: Vec<u8>,
 }
+
+// ---- v2 (redesign/server-v2): key-binding attestations ----
+
+/// A key-binding attestation (Task 10): a space admin's signed statement about a
+/// target account's key binding. `blob` + `signature` are opaque — the server
+/// stores them VERBATIM and never verifies them (clients do; ZK discipline).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AttestationRow {
+    pub account_id: Vec<u8>,
+    pub attestor_pubkey: Vec<u8>,
+    pub blob: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub created_at: i64,
+}

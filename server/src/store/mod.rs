@@ -18,6 +18,7 @@ use std::str::FromStr;
 
 pub mod accounts_repo;
 pub mod admin_repo;
+pub mod attest_repo;
 pub mod audit_repo;
 pub mod auth_repo;
 pub mod identity_repo;
