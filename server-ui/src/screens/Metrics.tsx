@@ -1,6 +1,5 @@
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { useTenant } from "../store/tenant";
 import { useAsync } from "../util/useAsync";
 import { fmtNum } from "../util/format";
 import { type IconName } from "../ui/icons";
@@ -46,8 +45,7 @@ function deltas(points: MetricsPoint[]): number[] {
 
 function MetricsBody() {
   const { t } = useTranslation();
-  const activeTenantId = useTenant((s) => s.activeTenantId);
-  const m = useAsync(() => api.admin.metricsSummary(), [activeTenantId]);
+  const m = useAsync(() => api.admin.metricsSummary(), []);
 
   if (m.loading) {
     return (

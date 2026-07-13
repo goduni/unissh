@@ -32,9 +32,9 @@ export const NAV: NavGroupDef[] = [
   {
     key: "identity",
     items: [
-      { route: "tenants", icon: "database", key: "tenants" },
-      { route: "enroll", icon: "key", key: "enroll" },
+      { route: "spaces", icon: "box", key: "spaces", keyset: true },
       { route: "accounts", icon: "server", key: "accounts", count: "accounts", keyset: true },
+      { route: "directory", icon: "user", key: "directory", keyset: true },
       { route: "devices", icon: "fingerprint", key: "devices", keyset: true },
       { route: "sessions", icon: "clock", key: "sessions", keyset: true },
       { route: "invites", icon: "tag", key: "invites", count: "pending_invites", keyset: true },

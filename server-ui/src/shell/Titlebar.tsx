@@ -11,7 +11,6 @@ export function Titlebar() {
   const { effMode } = useTheme();
   const toggleMode = usePrefs((s) => s.toggleMode);
 
-  const serverTrusted = useSession((s) => s.bearer != null);
   const keysetUnlocked = useSession((s) => s.keysetUnlocked);
   const adminLabel = useSession((s) => s.adminLabel);
 
@@ -81,33 +80,6 @@ export function Titlebar() {
       <div style={{ flex: 1 }} />
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {/* Ops badge */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 7,
-            height: 30,
-            padding: "0 11px",
-            borderRadius: 8,
-            background: "var(--bg2)",
-            border: "1px solid var(--line)",
-          }}
-        >
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: serverTrusted ? "var(--green)" : "var(--txt3)",
-              boxShadow: serverTrusted
-                ? "0 0 0 3px color-mix(in srgb, var(--green) 20%, transparent), 0 0 7px var(--green)"
-                : undefined,
-            }}
-          />
-          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--txt2)" }}>{t("access.ops")}</span>
-        </div>
-
         {/* Keyset badge */}
         <div
           onClick={keysetUnlocked ? undefined : openKeyset}

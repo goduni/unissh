@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
@@ -34,11 +33,10 @@ export function Devices() {
 function DevicesBody() {
   const { t } = useTranslation();
   const [acc, setAcc] = useState("");
-  const activeTenantId = useTenant((s) => s.activeTenantId);
   const askConfirm = useUi((s) => s.askConfirm);
   const toast = useUi((s) => s.toast);
 
-  const x = useAsync(() => api.admin.devices(acc || undefined), [acc, activeTenantId]);
+  const x = useAsync(() => api.admin.devices(acc || undefined), [acc]);
 
   const columns: Column<DeviceRow>[] = [
     {

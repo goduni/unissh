@@ -2,14 +2,14 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useUi } from "../store/ui";
-import { useTenant } from "../store/tenant";
+import { useAsync } from "../util/useAsync";
 import { fmtDate } from "../util/format";
 import { Icon } from "../ui/icons";
-import { Btn, Field, SecretRow, TextInput } from "../ui/primitives";
+import { Btn, Field, SecretRow } from "../ui/primitives";
 import { Modal } from "../ui/overlays";
 import { useCopy } from "../ui/useCopy";
 
-const ROLES = ["viewer", "editor", "admin"] as const;
+const ROLES = ["member", "admin"] as const;
 const TTLS: { label: string; seconds: number }[] = [
   { label: "common.ttl1h", seconds: 3600 },
   { label: "common.ttl24h", seconds: 86400 },
@@ -21,40 +21,55 @@ export function InviteModal() {
   const open = useUi((s) => s.inviteOpen);
   const close = useUi((s) => s.closeInvite);
   const bumpReload = useUi((s) => s.bumpReload);
-  // The invite is minted for the ACTIVE space — the invitee needs its id too, not
-  // just the token (both /v1/register and /v1/invite/redeem resolve the space from
-  // the tenant header). Surfacing only the token was a dead-end handoff.
-  const spaceId = useTenant((s) => s.activeTenantId) ?? "";
 
-  const [role, setRole] = useState<(typeof ROLES)[number]>("editor");
+  // The invite is scoped to a SPACE the caller admins (v2). The invitee joins that
+  // space with the token; the server resolves the space from the token's intents.
+  const spaces = useAsync(() => api.spaces.list(), [open]);
+  const spaceList = spaces.data?.spaces ?? [];
+
+  const [spaceId, setSpaceId] = useState("");
+  const [role, setRole] = useState<(typeof ROLES)[number]>("member");
   const [ttl, setTtl] = useState(86400);
-  const [scope, setScope] = useState("");
   const [token, setToken] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const [url, setUrl] = useState<string | null>(null);
   const both = useCopy(1200);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
-      setRole("editor");
+      setRole("member");
       setTtl(86400);
-      setScope("");
       setToken(null);
       setExpiresAt(null);
+      setUrl(null);
       setError(null);
     }
   }, [open]);
 
+  // Default the space to the first one the caller admins, once the list loads.
+  useEffect(() => {
+    if (open && !spaceId && spaceList.length) setSpaceId(spaceList[0].space_id);
+  }, [open, spaceId, spaceList]);
+
   if (!open) return null;
 
   const issue = async () => {
+    if (!spaceId) {
+      setError(t("screen.invites.noSpaces"));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const r = await api.identity.issueInvite(role, scope || undefined, ttl);
+      const r = await api.identity.issueInvite({
+        space_intents: [{ space_id: spaceId, role }],
+        ttl_seconds: ttl,
+      });
       setToken(r.token);
       setExpiresAt(r.expires_at);
+      setUrl(r.url);
       bumpReload();
     } catch (e) {
       setError(e instanceof Error ? e.message : t("screen.invites.issueError"));
@@ -96,6 +111,12 @@ export function InviteModal() {
             <SecretRow label={t("screen.invites.spaceIdLabel")} value={spaceId} />
             <div style={{ height: 10 }} />
             <SecretRow label={t("screen.invites.tokenLabel")} value={token} />
+            {url ? (
+              <>
+                <div style={{ height: 10 }} />
+                <SecretRow label={t("screen.invites.urlLabel")} value={url} />
+              </>
+            ) : null}
             {expiresAt ? (
               <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 8 }}>
                 {t("screen.invites.expiresIn", { when: fmtDate(expiresAt) })}
@@ -118,6 +139,35 @@ export function InviteModal() {
           </>
         ) : (
           <>
+            <Field label={t("screen.invites.spaceLabel")}>
+              {spaceList.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: "var(--txt3)" }}>
+                  {spaces.loading ? t("common.loading") : t("screen.invites.noSpaces")}
+                </div>
+              ) : (
+                <select
+                  value={spaceId}
+                  onChange={(e) => setSpaceId(e.target.value)}
+                  style={{
+                    width: "100%",
+                    height: 34,
+                    borderRadius: 8,
+                    background: "var(--bg2)",
+                    border: "1px solid var(--line)",
+                    color: "var(--txt)",
+                    fontFamily: "inherit",
+                    fontSize: 13,
+                    padding: "0 10px",
+                  }}
+                >
+                  {spaceList.map((s) => (
+                    <option key={s.space_id} value={s.space_id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
             <Field label={t("screen.invites.roleLabel")}>
               <div style={{ display: "flex", gap: 8 }}>
                 {ROLES.map((r) => (
@@ -136,9 +186,6 @@ export function InviteModal() {
                 ))}
               </div>
             </Field>
-            <Field label={t("screen.invites.scopeLabel")}>
-              <TextInput value={scope} onChange={setScope} placeholder={t("screen.invites.scopePlaceholder")} />
-            </Field>
             <div style={{ fontSize: 11.5, color: "var(--txt3)", lineHeight: 1.5, marginTop: -4, marginBottom: 12 }}>
               {t("screen.invites.advisoryNote")}
             </div>
@@ -154,7 +201,7 @@ export function InviteModal() {
               <Btn full onClick={close}>
                 {t("common.cancel")}
               </Btn>
-              <Btn full variant="primary" loading={busy} onClick={issue}>
+              <Btn full variant="primary" loading={busy} disabled={spaceList.length === 0} onClick={issue}>
                 {t("screen.invites.issueButton")}
               </Btn>
             </div>

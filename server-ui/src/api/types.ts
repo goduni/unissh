@@ -127,10 +127,10 @@ export interface SessionsResp {
   sessions: SessionRow[];
 }
 
+// v2 invites carry per-space intents, not a single role/scope. The admin listing
+// (GET /v1/admin/invites) is read-only metadata: id, lifecycle state, timestamps.
 export interface InviteRow {
   invite_id: string;
-  role: VaultRole;
-  scope: string | null;
   state: InviteState;
   expires_at: number;
   created_at: number;
@@ -269,7 +269,8 @@ export interface ConfigResp {
   sync: Record<string, unknown>;
   session: Record<string, unknown>;
   obs: Record<string, unknown>;
-  bootstrap: Record<string, unknown>;
+  setup: Record<string, unknown>;
+  oidc: Record<string, unknown>;
   ops: Record<string, unknown>;
 }
 
@@ -309,9 +310,27 @@ export interface VerifyResp {
   refresh_expires: number;
   session_id: string;
 }
+// v2 invite intents (POST /v1/invite). A space intent joins `space_id` at server-
+// trusted `role` ("member" | "admin"); a vault intent enqueues a `grant` for
+// `vault_id` at crypto role (0|1|2). See server identity.rs invite_issue_v2.
+export interface SpaceIntent {
+  space_id: string;
+  role: string;
+}
+export interface VaultIntent {
+  vault_id: string;
+  role: number;
+}
+export interface InviteIssueReq {
+  space_intents: SpaceIntent[];
+  vault_intents?: VaultIntent[];
+  ttl_seconds?: number;
+}
 export interface InviteIssueResp {
   invite_id: string;
   token: string;
+  /** `{public_url}/join#<token>` when the server has a public_url configured, else null. */
+  url: string | null;
   expires_at: number;
 }
 

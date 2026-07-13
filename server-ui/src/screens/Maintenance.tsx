@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { useTenant } from "../store/tenant";
 import { useSession } from "../store/session";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
@@ -100,12 +99,10 @@ function MigrationsCard() {
 
 function SeqBumpCard() {
   const { t } = useTranslation();
-  // Reactive: after a bump we reload the tenant list, and the displayed next_seq
-  // must update — a non-reactive activeTenant() read would look like it did nothing.
-  const tenants = useTenant((s) => s.tenants);
-  const activeId = useTenant((s) => s.activeTenantId);
-  const setTenants = useTenant((s) => s.setTenants);
-  const next = tenants.find((tn) => tn.tenant_id === activeId)?.next_seq;
+  // Owner-gated, instance-wide anti-rollback floor. The current next_seq comes from
+  // the owner overview; reload it after a bump so the shown value isn't stale.
+  const overview = useAsync(() => api.admin.overview(), []);
+  const next = overview.data?.next_seq;
   const [mode, setMode] = useState<"by" | "to">("by");
   const [amount, setAmount] = useState("");
   const askConfirm = useUi((s) => s.askConfirm);
@@ -113,7 +110,7 @@ function SeqBumpCard() {
 
   const doBump = () => {
     // Validate before the confirm: empty → 0 and "abc" → NaN must not reach the
-    // server on this irreversible ops action.
+    // server on this irreversible action.
     const n = Number(amount);
     if (!amount.trim() || !Number.isInteger(n) || n <= 0) {
       toast("error", t("screen.maint.seqBumpInvalid"));
@@ -121,25 +118,14 @@ function SeqBumpCard() {
     }
     askConfirm({
       title: "seq-bump",
-      desc:
-        mode === "by"
-          ? t("screen.maint.seqBumpConfirmDescAll")
-          : t("screen.maint.seqBumpConfirmDescActive"),
+      desc: t("screen.maint.seqBumpConfirmDesc"),
       danger: true,
       confirmLabel: t("screen.maint.seqBumpConfirmLabel"),
-      requireText: mode === "to" ? (activeId ?? "") : "BUMP",
+      requireText: "BUMP",
       onConfirm: async () => {
-        const r = await api.ops.seqBump(
-          mode === "by" ? { by: n } : { tenant_id: activeId ?? undefined, to: n },
-        );
-        toast("success", t("screen.maint.seqBumpToast", { count: r.bumped.length }));
-        // Reload tenants so the shown next_seq reflects the bump (else it looks stale).
-        try {
-          const tn = await api.ops.tenants();
-          setTenants(tn.tenants);
-        } catch {
-          /* non-fatal: the bump succeeded; the list refreshes on next load */
-        }
+        const r = await api.admin.seqBump(mode === "by" ? { by: n } : { to: n });
+        toast("success", t("screen.maint.seqBumpDone", { seq: r.new }));
+        overview.reload();
       },
     });
   };

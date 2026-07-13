@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import type { KeysetGen, RelayChannel } from "../api/types";
-import { useTenant } from "../store/tenant";
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { fmtRelative } from "../util/format";
@@ -25,14 +24,10 @@ export function Relay() {
 
 function RelayBody() {
   const { t } = useTranslation();
-  const activeTenantId = useTenant((s) => s.activeTenantId);
   const [acc, setAcc] = useState("");
 
-  const relay = useAsync(() => api.admin.relay(), [activeTenantId]);
-  const keysets = useAsync(
-    () => api.admin.keysets(acc || undefined),
-    [activeTenantId, acc],
-  );
+  const relay = useAsync(() => api.admin.relay(), []);
+  const keysets = useAsync(() => api.admin.keysets(acc || undefined), [acc]);
 
   const channelColumns: Column<RelayChannel>[] = [
     {

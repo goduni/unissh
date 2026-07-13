@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import type { AccountRow } from "../api/types";
 import { usePrefs } from "../store/prefs";
-import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { DataTable, type Column } from "../ui/DataTable";
@@ -38,16 +37,13 @@ function AccountsBody() {
   const { t } = useTranslation();
   const density = usePrefs((s) => s.density);
   const setDensity = usePrefs((s) => s.setDensity);
-  const activeTenantId = useTenant((s) => s.activeTenantId);
   const reloadTick = useUi((s) => s.reloadTick);
 
-  const data = useAsync(() => api.identity.accounts(), [activeTenantId, reloadTick]);
+  const data = useAsync(() => api.identity.accounts(), [reloadTick]);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(null);
 
   const accounts = data.data?.accounts ?? [];
-  // The space owner (genesis) — its member/ed25519 pubkey == genesis_owner.
-  const genesisOwner = data.data?.genesis_owner ?? null;
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return accounts;
@@ -76,11 +72,7 @@ function AccountsBody() {
               <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {nameOf(a)}
               </span>
-              {genesisOwner && a.member_pubkey === genesisOwner ? (
-                <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag>
-              ) : a.is_admin ? (
-                <Tag tone="amber">ADMIN</Tag>
-              ) : null}
+              {a.is_owner ? <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag> : null}
             </span>
             <span style={{ fontSize: 11, color: "var(--txt3)", fontFamily: MONO }}>
               {a.handle ?? "—"}
@@ -162,7 +154,7 @@ function AccountsBody() {
                     <span style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {nameOf(a)}
                     </span>
-                    {a.is_admin ? <Tag tone="amber">ADMIN</Tag> : null}
+                    {a.is_owner ? <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag> : null}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: MONO }}>{a.handle ?? "—"}</div>
                 </div>
@@ -231,16 +223,16 @@ function AccountDrawer({
   const name = account.display_name || account.handle || "—";
   const disabled = account.status === "disabled";
 
-  const toggleAdmin = () => {
+  const toggleOwner = () => {
     askConfirm({
-      title: account.is_admin ? t("screen.accounts.adminRevokeTitle") : t("screen.accounts.adminGrantTitle"),
-      desc: account.is_admin
-        ? t("screen.accounts.adminRevokeDesc")
-        : t("screen.accounts.adminGrantDesc"),
-      danger: account.is_admin,
-      confirmLabel: account.is_admin ? t("screen.accounts.adminRevokeConfirm") : t("screen.accounts.adminGrantConfirm"),
+      title: account.is_owner ? t("screen.accounts.ownerRevokeTitle") : t("screen.accounts.ownerGrantTitle"),
+      desc: account.is_owner
+        ? t("screen.accounts.ownerRevokeDesc")
+        : t("screen.accounts.ownerGrantDesc"),
+      danger: account.is_owner,
+      confirmLabel: account.is_owner ? t("screen.accounts.ownerRevokeConfirm") : t("screen.accounts.ownerGrantConfirm"),
       onConfirm: async () => {
-        await api.identity.adminSet(account.account_id, !account.is_admin);
+        await api.owner.set(account.account_id, !account.is_owner);
         toast("success", t("common.done"));
         onChanged();
         onClose();
@@ -272,7 +264,7 @@ function AccountDrawer({
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <span style={{ fontSize: 16, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
-            {account.is_admin ? <Tag tone="amber">ADMIN</Tag> : null}
+            {account.is_owner ? <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag> : null}
           </div>
           <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: MONO }}>{account.handle ?? "—"}</div>
         </div>
@@ -314,8 +306,8 @@ function AccountDrawer({
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-          <Btn full variant={account.is_admin ? "outline" : "soft"} icon="shield" onClick={toggleAdmin}>
-            {account.is_admin ? t("screen.accounts.adminRevokeTitle") : t("screen.accounts.adminGrantTitle")}
+          <Btn full variant={account.is_owner ? "outline" : "soft"} icon="shield" onClick={toggleOwner}>
+            {account.is_owner ? t("screen.accounts.ownerRevokeTitle") : t("screen.accounts.ownerGrantTitle")}
           </Btn>
           <Btn full icon="shieldcheck" onClick={() => go("grants")}>
             {t("screen.accounts.issueGrant")}

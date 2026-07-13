@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { SYNC_TARGET_LABEL, CACHE_POLICY_LABEL, type VaultRow } from "../api/types";
-import { useTenant } from "../store/tenant";
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
@@ -23,8 +22,7 @@ export function Vaults() {
 
 function VaultsBody() {
   const { t } = useTranslation();
-  const activeTenantId = useTenant((s) => s.activeTenantId);
-  const vaults = useAsync(() => api.admin.vaults(), [activeTenantId]);
+  const vaults = useAsync(() => api.admin.vaults(), []);
 
   const columns: Column<VaultRow>[] = [
     {

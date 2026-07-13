@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useSession } from "../store/session";
-import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
 import { fmtRelative } from "../util/format";
 import type { AuditEntry } from "../api/types";
@@ -87,18 +86,11 @@ type VerifyResult = { kind: "ok" | "tamper" | "broken" | "error"; msg: string };
 
 export function Audit() {
   const { t } = useTranslation();
-  const tenant = useTenant((s) => s.activeTenantId);
   const keysetUnlocked = useSession((s) => s.keysetUnlocked);
   const openKeyset = useUi((s) => s.openKeyset);
   // The tamper finding is the panel's headline security result — it must NOT be a
   // 4.5s toast that vanishes. Hold it as a persistent, dismissible card.
   const [result, setResult] = useState<VerifyResult | null>(null);
-
-  // Each tenant has its own audit chain, so a result from the previous tenant must
-  // not linger after a switch — it would read as this tenant's status.
-  useEffect(() => {
-    setResult(null);
-  }, [tenant]);
 
   const verify = async () => {
     try {
@@ -108,10 +100,9 @@ export function Audit() {
       // server reports ok=true. Anchor the (count, head) client-side — an
       // anti-rollback cursor like the sync server_seq — and flag a DROP in count, or
       // a changed head at the same count, as tamper the server hid.
-      // Anchor key is per-tenant: each instance/tenant has its own audit log, so a
-      // global key would cross-contaminate (false alarm AND missed truncation across
-      // tenants).
-      const ANCHOR_KEY = `unissh.auditAnchor:${tenant ?? ""}`;
+      // Instance-wide audit log → a single anchor. (The panel connects to one
+      // instance per origin; a different instance URL gets its own localStorage.)
+      const ANCHOR_KEY = "unissh.auditAnchor";
       let tamper: string | null = null;
       if (r.ok) {
         try {
@@ -218,7 +209,6 @@ function VerifyResultCard({
 
 function AuditBody() {
   const { t } = useTranslation();
-  const tenant = useTenant((s) => s.activeTenantId);
   const [rows, setRows] = useState<AuditEntry[]>([]);
   const [sinceSeq, setSinceSeq] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -243,7 +233,7 @@ function AuditBody() {
     setRows([]);
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenant]);
+  }, []);
 
   const columns: Column<AuditEntry>[] = [
     {

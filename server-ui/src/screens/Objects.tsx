@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { useTenant } from "../store/tenant";
 import { truncId } from "../util/bytes";
 import { fmtBytes, fmtRelative } from "../util/format";
 import { OBJECT_TAG_LABEL } from "../api/types";
@@ -54,7 +53,6 @@ export function Objects() {
 
 function ObjectsBody() {
   const { t } = useTranslation();
-  const tenant = useTenant((s) => s.activeTenantId);
   const [tag, setTag] = useState<number | undefined>(undefined);
   const [rows, setRows] = useState<ObjectMeta[]>([]);
   const [cursor, setCursor] = useState(0);
@@ -80,7 +78,7 @@ function ObjectsBody() {
     setRows([]);
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tag, tenant]);
+  }, [tag]);
 
   const columns: Column<ObjectMeta>[] = [
     {

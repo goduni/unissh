@@ -20,6 +20,7 @@ import type {
   HealthInfo,
   InstanceGeneration,
   InstanceInfo,
+  InviteIssueReq,
   InviteIssueResp,
   InvitesResp,
   KeysetPutReq,
@@ -268,12 +269,15 @@ export function createClient(
           idem: true,
           body: { device_id },
         }),
-      issueInvite: (role: string, scope: string | undefined, ttl_seconds: number | undefined) =>
+      // v2: an invite carries per-space intents (join `space_id` at server-trusted
+      // role member|admin) + optional selective vault intents. The caller must admin
+      // every space it invites into (server enforces).
+      issueInvite: (req: InviteIssueReq) =>
         call<InviteIssueResp>("/v1/invite", {
           method: "POST",
           bearer: true,
           idem: true,
-          body: { role, scope, ttl_seconds },
+          body: req,
         }),
       audit: (since_seq?: number, limit?: number) =>
         call<AuditResp>("/v1/audit", {

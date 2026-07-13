@@ -1,14 +1,12 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { lockKeyset } from "../api/auth-service";
-import { switchTenant } from "../api/tenant-switch";
+import { api } from "../api";
 import { useMeta } from "../store/meta";
 import { useSession } from "../store/session";
-import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
+import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { Icon } from "../ui/icons";
-import { gradientFor } from "../ui/primitives";
 import { NAV } from "./nav";
 import { MONO } from "../theme/tokens";
 
@@ -16,29 +14,20 @@ export function Sidebar() {
   const { t } = useTranslation();
   const route = useUi((s) => s.route);
   const go = useUi((s) => s.go);
-  const switcherOpen = useUi((s) => s.tenantSwitcherOpen);
-  const toggleSwitcher = useUi((s) => s.toggleTenantSwitcher);
-  const openBootstrap = useUi((s) => s.openBootstrap);
-
-  const tenants = useTenant((s) => s.tenants);
-  const activeId = useTenant((s) => s.activeTenantId);
 
   const keysetUnlocked = useSession((s) => s.keysetUnlocked);
+  const adminLabel = useSession((s) => s.adminLabel);
   const counts = useMeta((s) => s.counts);
 
-  const active = tenants.find((x) => x.tenant_id === activeId);
-  const activeIdx = tenants.findIndex((x) => x.tenant_id === activeId);
-
-  // Switcher search — scales when there are many (personal) spaces.
-  const [q, setQ] = useState("");
-  const qq = q.trim().toLowerCase();
-  const shown = qq
-    ? tenants.filter(
-        (tn) =>
-          (tn.display_name ?? "").toLowerCase().includes(qq) ||
-          tn.tenant_id.toLowerCase().includes(qq),
-      )
-    : tenants;
+  // Instance identity replaces the old tenant switcher: this panel administers ONE
+  // instance (no per-tenant context to switch between anymore).
+  const inst = useAsync(() => api.instance(), []);
+  const instName = inst.data?.name || t("access.selfHosted");
+  const instSub = adminLabel
+    ? adminLabel
+    : inst.data
+      ? truncId(inst.data.instance_id, 8, 4)
+      : t("common.loading");
 
   return (
     <div
@@ -52,10 +41,9 @@ export function Sidebar() {
         padding: "12px 0",
       }}
     >
-      {/* Tenant switcher */}
-      <div style={{ position: "relative", margin: "0 12px 4px" }}>
+      {/* Instance identity */}
+      <div style={{ margin: "0 12px 4px" }}>
         <div
-          onClick={toggleSwitcher}
           style={{
             display: "flex",
             alignItems: "center",
@@ -64,11 +52,24 @@ export function Sidebar() {
             borderRadius: 10,
             background: "var(--bg3)",
             border: "1px solid var(--line)",
-            cursor: "pointer",
           }}
         >
-          <span style={tileStyle(Math.max(0, activeIdx))}>
-            {((active?.display_name || truncId(active?.tenant_id, 1, 0))[0] || "·").toUpperCase()}
+          <span
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: 6,
+              background: "linear-gradient(140deg, var(--accent), var(--purple))",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: 11,
+              flexShrink: 0,
+            }}
+          >
+            {(instName[0] || "·").toUpperCase()}
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div
@@ -78,134 +79,23 @@ export function Sidebar() {
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                fontFamily: active?.display_name ? "inherit" : MONO,
               }}
             >
-              {active ? active.display_name || truncId(active.tenant_id, 8, 4) : "—"}
+              {instName}
             </div>
-            <div style={{ fontSize: 11, color: "var(--txt3)" }}>
-              {active
-                ? `${active.tier} · ${active.accounts} ${t("screen.tenants.colAccounts")}`
-                : t("common.na")}
-            </div>
-          </div>
-          <Icon
-            name="chevronDown"
-            size={13}
-            color="var(--txt3)"
-            style={{ transform: switcherOpen ? "rotate(180deg)" : "none" }}
-          />
-        </div>
-
-        {switcherOpen ? (
-          <div
-            style={{
-              position: "absolute",
-              top: "100%",
-              left: 0,
-              right: 0,
-              marginTop: 6,
-              zIndex: 40,
-              background: "var(--bg3)",
-              border: "1px solid var(--line2)",
-              borderRadius: 12,
-              padding: 6,
-              boxShadow: "var(--shadow)",
-            }}
-          >
-            {tenants.length > 8 ? (
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder={t("screen.tenants.searchPlaceholder")}
-                autoFocus
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  marginBottom: 6,
-                  padding: "7px 10px",
-                  borderRadius: 8,
-                  border: "1px solid var(--line2)",
-                  background: "var(--bg2)",
-                  color: "var(--txt)",
-                  fontSize: 12.5,
-                  fontFamily: "inherit",
-                  outline: "none",
-                }}
-              />
-            ) : null}
-            {shown.map((tn, i) => (
-              <div
-                key={tn.tenant_id}
-                onClick={() => {
-                  switchTenant(tn.tenant_id);
-                  toggleSwitcher();
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 9,
-                  padding: 8,
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  background: tn.tenant_id === activeId ? "var(--bg4)" : "transparent",
-                }}
-              >
-                <span style={tileStyle(i)}>
-                  {((tn.display_name || truncId(tn.tenant_id, 1, 0))[0] || "·").toUpperCase()}
-                </span>
-                <span
-                  style={{
-                    flex: 1,
-                    fontSize: 12.5,
-                    fontWeight: 600,
-                    fontFamily: tn.display_name ? "inherit" : MONO,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {tn.display_name || truncId(tn.tenant_id, 8, 4)}
-                </span>
-                <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--txt3)" }}>
-                  {tn.accounts}
-                </span>
-                {tn.tenant_id === activeId ? <Icon name="check" size={13} color="var(--accent)" /> : null}
-              </div>
-            ))}
-            <div style={{ height: 1, background: "var(--line)", margin: "6px 4px" }} />
             <div
-              onClick={() => {
-                toggleSwitcher();
-                openBootstrap();
-              }}
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 9,
-                padding: 8,
-                borderRadius: 8,
-                cursor: "pointer",
-                color: "var(--txt2)",
+                fontSize: 11,
+                color: "var(--txt3)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
               }}
             >
-              <span
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: 6,
-                  border: "1px dashed var(--line2)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <Icon name="plus" size={12} />
-              </span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{t("screen.tenants.createSpace")}</span>
+              {instSub}
             </div>
           </div>
-        ) : null}
+        </div>
       </div>
 
       {/* Nav */}
@@ -354,20 +244,4 @@ export function Sidebar() {
       </div>
     </div>
   );
-}
-
-function tileStyle(i: number): React.CSSProperties {
-  return {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    background: gradientFor(i),
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "#fff",
-    fontWeight: 700,
-    fontSize: 11,
-    flexShrink: 0,
-  };
 }

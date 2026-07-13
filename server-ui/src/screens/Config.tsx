@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { Btn, Spinner, Tag, TextInput, Toggle } from "../ui/primitives";
@@ -17,7 +16,8 @@ const SECTION_ORDER: (keyof ConfigResp)[] = [
   "sync",
   "session",
   "obs",
-  "bootstrap",
+  "setup",
+  "oidc",
   "ops",
 ];
 
@@ -37,11 +37,10 @@ export function Config() {
 
 function ConfigBody() {
   const { t } = useTranslation();
-  const activeTenantId = useTenant((s) => s.activeTenantId);
   const toast = useUi((s) => s.toast);
   const askConfirm = useUi((s) => s.askConfirm);
 
-  const cfg = useAsync(() => api.admin.config(), [activeTenantId]);
+  const cfg = useAsync(() => api.admin.config(), []);
 
   if (cfg.loading && !cfg.data) {
     return (
@@ -106,9 +105,6 @@ function ConfigBody() {
             >
               [{name}]
             </div>
-            {name === "bootstrap" && (
-              <BootstrapPolicyCard section={section as Record<string, unknown>} />
-            )}
             {entries.map(([key, value]) => {
               const isValidate = name === "sync" && key === "validate_signatures";
               const isHotLimit =
@@ -225,65 +221,5 @@ function HotLimitEditor({
         {t("common.apply")}
       </Btn>
     </span>
-  );
-}
-
-// Plain-language card for the [bootstrap] section: this policy is exactly what
-// gates the client's "Create your own space" flow, so an operator needs to SEE
-// its posture and know the env knob to change it (it's env-driven, set at boot).
-function BootstrapPolicyCard({ section }: { section: Record<string, unknown> }) {
-  const { t } = useTranslation();
-  const allowOpen = section.allow_open === true;
-  const tokenSet = section.token === "***"; // masked to *** when set; "" when unset
-  const status = allowOpen ? "open" : tokenSet ? "token" : "disabled";
-  const color = allowOpen ? "var(--amber)" : tokenSet ? "var(--green)" : "var(--txt3)";
-  const envRow: React.CSSProperties = {
-    fontFamily: MONO,
-    fontSize: 12,
-    color: "var(--txt2)",
-    background: "var(--bg2)",
-    border: "1px solid var(--line)",
-    borderRadius: 8,
-    padding: "7px 10px",
-  };
-  return (
-    <div
-      style={{
-        padding: "14px 18px",
-        borderBottom: "1px solid var(--line)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 10,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>{t("screen.config.bs_policy_title")}</span>
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 700,
-            textTransform: "uppercase",
-            letterSpacing: 0.4,
-            color,
-            border: `1px solid ${color}`,
-            borderRadius: 6,
-            padding: "1px 7px",
-          }}
-        >
-          {t(`screen.config.bs_status_${status}`)}
-        </span>
-      </div>
-      <div style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.5 }}>
-        {t(`screen.config.bs_desc_${status}`)}
-      </div>
-      <div style={{ fontSize: 12, color: "var(--txt3)", lineHeight: 1.5 }}>
-        {t("screen.config.bs_policy_note")}
-      </div>
-      <div style={{ fontSize: 11.5, color: "var(--txt3)" }}>{t("screen.config.bs_policy_howto")}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <span style={envRow}>UNISSH__BOOTSTRAP__ALLOW_OPEN=true</span>
-        <span style={envRow}>{"UNISSH__BOOTSTRAP__TOKEN=<secret>"}</span>
-      </div>
-    </div>
   );
 }
