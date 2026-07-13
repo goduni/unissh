@@ -8,7 +8,7 @@ mod common;
 use common::{Identity, claim_owner, login_tokens_v2, login_v2, make_identity, spawn};
 use serde_json::{Value, json};
 use unissh_crypto::{ServerAuthChallenge as CoreChal, sign_server_auth};
-use unissh_server::ids::{b64, unb64};
+use unissh_server::ids::{self, b64, unb64};
 
 async fn claim(app: &common::TestApp, id: &Identity) -> Value {
     claim_owner(app, &id.payload_b64, &id.sig_b64).await
@@ -137,6 +137,112 @@ async fn keyset_no_downgrade() {
         .await
         .unwrap();
     assert_eq!(got["generation"], 2, "GET returns max generation");
+}
+
+#[tokio::test]
+async fn keyset_put_stores_optional_escrow() {
+    let app = spawn().await;
+    let id = make_identity();
+    // claim → the owner account is created with handle "owner" (get_escrow_by_handle key)
+    let c = claim(&app, &id).await;
+    let access = login_v2(
+        &app,
+        &id,
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    )
+    .await;
+
+    // real EncryptedKeyset (gen 1) from the core; gen 2 by bumping the header bytes.
+    let (_sk, ks, _u) =
+        unissh_keychain::create_account(None, unissh_keychain::KdfParams::recommended()).unwrap();
+    let gen1 = ks.to_bytes().unwrap();
+    let mut gen2 = gen1.clone();
+    gen2[2..6].copy_from_slice(&2u32.to_be_bytes());
+
+    let put_keyset = |body: Value| {
+        app.client
+            .put(format!("{}/v1/keyset", app.base))
+            .header("Authorization", format!("Bearer {access}"))
+            .json(&body)
+            .send()
+    };
+
+    // --- A plain PUT (no escrow) still 200s and leaves the escrow columns NULL. ---
+    let r = put_keyset(json!({ "keyset_blob": b64(&gen1) }))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "plain keyset PUT (no escrow) still 200s");
+
+    let row = app
+        .state
+        .store
+        .get_escrow_by_handle("owner")
+        .await
+        .unwrap()
+        .expect("owner has an uploaded keyset");
+    assert_eq!(row.generation, 1);
+    assert!(
+        row.k_auth_hash.is_none(),
+        "a plain PUT leaves the K_auth hash NULL"
+    );
+    assert!(
+        row.argon_salt.is_none(),
+        "a plain PUT leaves the Argon salt NULL"
+    );
+
+    // --- An escrow-enrolling PUT (gen 2) stores sha256(K_auth) + the Argon params. ---
+    let k_auth_raw = vec![9u8; 40];
+    let salt = vec![3u8; 16];
+    let r = put_keyset(json!({
+        "keyset_blob": b64(&gen2),
+        "escrow": {
+            "k_auth": b64(&k_auth_raw),
+            "argon_salt": b64(&salt),
+            "argon_mem_kib": 19456,
+            "argon_iterations": 2,
+            "argon_parallelism": 1,
+        }
+    }))
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 200, "escrow-enrolling keyset PUT 200s");
+    let body: Value = r.json().await.unwrap();
+    assert_eq!(
+        body["generation"], 2,
+        "response shape unchanged (still just generation)"
+    );
+
+    // The server stores ONLY sha256(K_auth) — never the raw credential — plus params.
+    let row = app
+        .state
+        .store
+        .get_escrow_by_handle("owner")
+        .await
+        .unwrap()
+        .expect("owner has an escrow-enabled keyset");
+    assert_eq!(
+        row.generation, 2,
+        "escrow is attached to the latest generation"
+    );
+    assert_eq!(
+        row.k_auth_hash.as_deref(),
+        Some(&ids::sha256(&k_auth_raw)[..]),
+        "stored hash is sha256 of the raw K_auth, not the raw bytes"
+    );
+    assert_ne!(
+        row.k_auth_hash.as_deref(),
+        Some(&k_auth_raw[..]),
+        "the raw K_auth is never persisted"
+    );
+    assert_eq!(
+        row.argon_salt.as_deref(),
+        Some(&salt[..]),
+        "salt round-trips"
+    );
+    assert_eq!(row.argon_mem_kib, Some(19456));
+    assert_eq!(row.argon_iterations, Some(2));
+    assert_eq!(row.argon_parallelism, Some(1));
 }
 
 #[tokio::test]

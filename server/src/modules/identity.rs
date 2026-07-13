@@ -352,6 +352,24 @@ async fn keyset_get(
 #[derive(Deserialize)]
 struct KeysetPutReq {
     keyset_blob: String,
+    /// Optional escrow enrollment (Phase 2): when present, the same upload also
+    /// arms password+SecretKey escrow sign-in for this generation. Absent → the
+    /// escrow columns stay NULL (exactly the pre-escrow behaviour).
+    #[serde(default)]
+    escrow: Option<EscrowIn>,
+}
+
+/// Escrow credentials attached to a keyset upload. `k_auth` + `argon_salt` are
+/// base64. The client sends the RAW `K_auth`; the server persists only
+/// `sha256(K_auth)`, never the raw credential. The Argon2id params must match the
+/// keyset blob's own KDF header so a fresh device re-derives the same key.
+#[derive(Deserialize)]
+struct EscrowIn {
+    k_auth: String,
+    argon_salt: String,
+    argon_mem_kib: i64,
+    argon_iterations: i64,
+    argon_parallelism: i64,
 }
 
 #[derive(Serialize)]
@@ -387,6 +405,24 @@ async fn keyset_put(
             state.now(),
         )
         .await?;
+    // Optional escrow enrollment: arm password+SecretKey sign-in for this generation.
+    // Store only sha256(K_auth) — never the raw credential the client sent.
+    if let Some(e) = req.escrow {
+        let k_auth_hash = ids::sha256(&ids::unb64(&e.k_auth)?);
+        let salt = ids::unb64(&e.argon_salt)?;
+        state
+            .store
+            .set_escrow(
+                acc,
+                generation,
+                &k_auth_hash,
+                &salt,
+                e.argon_mem_kib,
+                e.argon_iterations,
+                e.argon_parallelism,
+            )
+            .await?;
+    }
     audit_observed(&state, "keyset_publish", acc, &auth.device.device_id).await;
     Ok(Json(KeysetPutResp { generation }))
 }
