@@ -2,7 +2,7 @@
 //! sessions, nonces, keysets, PAKE relay. Instance-scoped (v2). Creation/CAS used
 //! by identity endpoints (claim/auth) and the test harness.
 
-use super::models::{KeysetRow, RelayRow};
+use super::models::{EscrowRow, KeysetRow, RelayRow};
 use super::{Store, Tx, Val};
 use crate::error::{AppError, AppResult};
 
@@ -237,6 +237,58 @@ impl Store {
             "SELECT generation, keyset_bytes FROM keyset_blobs \
              WHERE account_id = ? ORDER BY generation DESC LIMIT 1",
             vec![Val::b(account_id)],
+        )
+        .await
+    }
+
+    // ---- escrow sign-in (Phase 2) ----
+
+    /// Attach escrow credentials to an existing `keyset_blobs` row (the one just
+    /// uploaded): `sha256(K_auth)` + the Argon2id salt/params a fresh device needs
+    /// to re-derive `K_auth`. Enables password+SecretKey escrow sign-in for this
+    /// generation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn set_escrow(
+        &self,
+        account_id: &[u8],
+        generation: i64,
+        k_auth_hash: &[u8],
+        argon_salt: &[u8],
+        argon_mem_kib: i64,
+        argon_iterations: i64,
+        argon_parallelism: i64,
+    ) -> AppResult<()> {
+        self.exec(
+            "UPDATE keyset_blobs SET k_auth_hash = ?, argon_salt = ?, \
+             argon_mem_kib = ?, argon_iterations = ?, argon_parallelism = ? \
+             WHERE account_id = ? AND generation = ?",
+            vec![
+                Val::b(k_auth_hash),
+                Val::b(argon_salt),
+                Val::I(argon_mem_kib),
+                Val::I(argon_iterations),
+                Val::I(argon_parallelism),
+                Val::b(account_id),
+                Val::I(generation),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Resolve a handle → its latest (`MAX(generation)`) keyset blob + escrow
+    /// fields, for escrow sign-in (a fresh device with no session). `None` if the
+    /// handle is unknown or the account has never uploaded a keyset.
+    pub async fn get_escrow_by_handle(&self, handle: &str) -> AppResult<Option<EscrowRow>> {
+        self.fetch_optional_as::<EscrowRow>(
+            "SELECT k.keyset_bytes, k.generation, k.account_id, k.k_auth_hash, k.argon_salt, \
+             k.argon_mem_kib, k.argon_iterations, k.argon_parallelism \
+             FROM accounts a \
+             JOIN keyset_blobs k ON k.account_id = a.account_id \
+             WHERE a.handle = ? \
+               AND k.generation = (SELECT MAX(g.generation) FROM keyset_blobs g \
+                                   WHERE g.account_id = a.account_id)",
+            vec![Val::t(handle)],
         )
         .await
     }

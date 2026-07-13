@@ -99,6 +99,22 @@ pub struct KeysetRow {
     pub keyset_bytes: Vec<u8>,
 }
 
+/// A keyset blob + its escrow credentials (Phase 2 escrow sign-in): the encrypted
+/// keyset a fresh device downloads, plus `sha256(K_auth)` and the Argon2id
+/// salt/params it needs to re-derive `K_auth` from password+SecretKey. The escrow
+/// fields are NULL until a client enables escrow via `set_escrow`.
+#[derive(Debug, Clone, FromRow)]
+pub struct EscrowRow {
+    pub keyset_bytes: Vec<u8>,
+    pub generation: i64,
+    pub account_id: Vec<u8>,
+    pub k_auth_hash: Option<Vec<u8>>,
+    pub argon_salt: Option<Vec<u8>>,
+    pub argon_mem_kib: Option<i64>,
+    pub argon_iterations: Option<i64>,
+    pub argon_parallelism: Option<i64>,
+}
+
 #[derive(Debug, Clone, FromRow)]
 pub struct SessionRow {
     pub session_id: Vec<u8>,
