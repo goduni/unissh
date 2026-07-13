@@ -17,6 +17,8 @@ pub struct Config {
     pub obs: ObsConfig,
     pub bootstrap: BootstrapConfig,
     pub ops: OpsConfig,
+    pub setup: SetupConfig,
+    pub oidc: OidcConfig,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -34,6 +36,9 @@ pub struct ServerConfig {
     /// `https://admin.example.com`). Empty → the CORS layer is not attached (the panel
     /// is served from the same origin / behind the same proxy — headers not needed).
     pub cors_allowed_origins: Vec<String>,
+    /// Public base URL used to render invite URLs (`{public_url}/join#<token>`).
+    /// Empty → the server returns `url: null` and clients compose it themselves.
+    pub public_url: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -115,6 +120,22 @@ pub struct OpsConfig {
     pub token: String,
 }
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SetupConfig {
+    /// Optional fixed setup code (IaC/tests). Empty → generated at boot while unclaimed.
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OidcConfig {
+    /// SSO seam (Phase 5): disabled by default; issuer/client_id only for now.
+    pub enabled: bool,
+    pub issuer: String,
+    pub client_id: String,
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -124,6 +145,7 @@ impl Default for ServerConfig {
             trust_proxy: false,
             acme: false,
             cors_allowed_origins: Vec::new(),
+            public_url: String::new(),
         }
     }
 }
@@ -201,6 +223,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("trust_proxy", &self.trust_proxy)
             .field("acme", &self.acme)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
+            .field("public_url", &self.public_url)
             .finish()
     }
 }
@@ -226,6 +249,13 @@ impl std::fmt::Debug for OpsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpsConfig")
             .field("token", &redacted(&self.token))
+            .finish()
+    }
+}
+impl std::fmt::Debug for SetupConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetupConfig")
+            .field("code", &redacted(&self.code))
             .finish()
     }
 }
