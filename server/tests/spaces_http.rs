@@ -124,8 +124,15 @@ async fn spaces_members_directory_lifecycle() {
     assert_eq!(ml[0]["name"], "Backend");
     assert_eq!(ml[0]["role"], "member");
 
-    // GET /v1/spaces/members?space_id= (admin) → both members, with handles/pubkeys
-    let ms: Value = get(format!("/v1/spaces/members?space_id={backend_id}"), &tok)
+    // GET /v1/spaces/members?space_id= (admin) → both members, with handles/pubkeys.
+    // `space_id` is standard base64 (may contain '+' '/' '='), which MUST be percent-
+    // encoded in the query string — a raw '+' decodes to a space server-side and is
+    // then rejected as invalid base64 (a flaky ~1-in-3 failure otherwise).
+    let backend_q = backend_id
+        .replace('+', "%2B")
+        .replace('/', "%2F")
+        .replace('=', "%3D");
+    let ms: Value = get(format!("/v1/spaces/members?space_id={backend_q}"), &tok)
         .await
         .unwrap()
         .json()
@@ -151,7 +158,7 @@ async fn spaces_members_directory_lifecycle() {
 
     // a plain member MAY read the member list (space member gate)
     let r = get(
-        format!("/v1/spaces/members?space_id={backend_id}"),
+        format!("/v1/spaces/members?space_id={backend_q}"),
         &member_tok,
     )
     .await
