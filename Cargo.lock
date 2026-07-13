@@ -4963,6 +4963,7 @@ dependencies = [
  "figment",
  "getrandom 0.4.3",
  "hex",
+ "hmac 0.13.0",
  "http",
  "metrics",
  "metrics-exporter-prometheus",

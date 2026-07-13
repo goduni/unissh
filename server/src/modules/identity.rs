@@ -394,6 +394,21 @@ async fn keyset_put(
             ));
         }
     }
+    // Pre-decode any escrow credentials BEFORE writing the keyset, so a malformed
+    // escrow field fails with 400 and leaves NO keyset row behind. (Decoding after
+    // put_keyset would persist the keyset and only then 400; because a same-generation
+    // re-PUT is a 409, the escrow could never be attached to that generation.) The
+    // server stores only sha256(K_auth) — never the raw credential the client sent.
+    let escrow = match &req.escrow {
+        Some(e) => Some((
+            ids::sha256(&ids::unb64(&e.k_auth)?),
+            ids::unb64(&e.argon_salt)?,
+            e.argon_mem_kib,
+            e.argon_iterations,
+            e.argon_parallelism,
+        )),
+        None => None,
+    };
     state
         .store
         .put_keyset(
@@ -406,10 +421,7 @@ async fn keyset_put(
         )
         .await?;
     // Optional escrow enrollment: arm password+SecretKey sign-in for this generation.
-    // Store only sha256(K_auth) — never the raw credential the client sent.
-    if let Some(e) = req.escrow {
-        let k_auth_hash = ids::sha256(&ids::unb64(&e.k_auth)?);
-        let salt = ids::unb64(&e.argon_salt)?;
+    if let Some((k_auth_hash, salt, mem_kib, iterations, parallelism)) = escrow {
         state
             .store
             .set_escrow(
@@ -417,9 +429,9 @@ async fn keyset_put(
                 generation,
                 &k_auth_hash,
                 &salt,
-                e.argon_mem_kib,
-                e.argon_iterations,
-                e.argon_parallelism,
+                mem_kib,
+                iterations,
+                parallelism,
             )
             .await?;
     }

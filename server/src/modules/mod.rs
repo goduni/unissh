@@ -3,6 +3,7 @@
 
 pub mod admin;
 pub mod audit;
+pub mod escrow;
 pub mod identity;
 pub mod instance;
 pub mod ops;

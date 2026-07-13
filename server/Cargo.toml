@@ -25,6 +25,7 @@ ed25519-dalek = "2.2.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 getrandom = "0.4.2"
 hex = "0.4.3"
+hmac = "0.13.0"
 http = "1.4.2"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
