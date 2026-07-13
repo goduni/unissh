@@ -1970,6 +1970,24 @@ impl Core {
         let secret_key =
             SecretKey::from_slice(&sk_bytes).map_err(|_| FfiError::InvalidCredentials)?;
 
+        // Bound the SERVER-PROVIDED Argon2id cost before running the KDF: the escrow
+        // params come from an untrusted `GET /v1/escrow/params`, so a malicious server
+        // could otherwise pin absurd mem/time/lanes and force a huge Argon2 allocation
+        // (memory-exhaustion / DoS) on a recovering device. These ceilings sit far above
+        // the recommended enroll params (64 MiB, t=3, p=1), so a genuine fetch is
+        // unaffected; anything past them is a hostile response → reject.
+        const MAX_ESCROW_MEM_KIB: u32 = 1024 * 1024; // 1 GiB
+        const MAX_ESCROW_ITERATIONS: u32 = 10;
+        const MAX_ESCROW_PARALLELISM: u32 = 4;
+        if argon_mem_kib > MAX_ESCROW_MEM_KIB
+            || argon_iterations > MAX_ESCROW_ITERATIONS
+            || argon_parallelism > MAX_ESCROW_PARALLELISM
+        {
+            return Err(FfiError::other(
+                "escrow Argon2id parameters exceed the allowed maximum",
+            ));
+        }
+
         let params = KdfParams {
             mem_kib: argon_mem_kib,
             iterations: argon_iterations,
