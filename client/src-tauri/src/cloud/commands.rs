@@ -313,9 +313,7 @@ pub async fn server_oidc_login(
         // 1. Probe: SSO must be enabled, and the instance must advertise its IdP.
         let instance = identity::instance_info(http, &base)?;
         if !instance.auth.iter().any(|a| a == "oidc") {
-            return Err(ApiError::other(
-                "this server does not offer SSO sign-in",
-            ));
+            return Err(ApiError::other("this server does not offer SSO sign-in"));
         }
         let oidc_info = instance.oidc.clone().ok_or_else(|| {
             ApiError::other(

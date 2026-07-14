@@ -238,8 +238,10 @@ pub fn instance_info(http: &Client, base_url: &str) -> ApiResult<InstanceInfo> {
                 .collect()
         })
         .unwrap_or_default();
-    let oidc = v.get("oidc").and_then(Value::as_object).map(|o| {
-        OidcInstanceInfo {
+    let oidc = v
+        .get("oidc")
+        .and_then(Value::as_object)
+        .map(|o| OidcInstanceInfo {
             issuer: o
                 .get("issuer")
                 .and_then(Value::as_str)
@@ -250,8 +252,7 @@ pub fn instance_info(http: &Client, base_url: &str) -> ApiResult<InstanceInfo> {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
-        }
-    });
+        });
     Ok(InstanceInfo {
         claimed: v.get("claimed").and_then(Value::as_bool).unwrap_or(false),
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
