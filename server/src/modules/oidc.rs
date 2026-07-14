@@ -22,7 +22,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use jsonwebtoken::jwk::{Jwk, JwkSet};
+use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -282,6 +282,43 @@ fn select_key<'a>(set: &'a JwkSet, kid: Option<&str>) -> Option<&'a Jwk> {
     }
 }
 
+/// The verify-time algorithm allowlist for `jwk`, pinned to the key's own family.
+///
+/// `jsonwebtoken`'s `decode` requires every algorithm in `Validation::algorithms` to
+/// share the key's family (`decoding.rs`: `key.family != alg.family()` → `InvalidAlgorithm`),
+/// so this is derived per key, never a fixed cross-family list. Only asymmetric families
+/// are allowed; a symmetric (`OctetKey` / HMAC) JWK is refused — an id_token must be
+/// verified against the IdP's *public* key, and permitting HMAC here would reopen the
+/// RS256→HS256 key-confusion hole.
+fn key_algorithms(jwk: &Jwk) -> AppResult<Vec<Algorithm>> {
+    match &jwk.algorithm {
+        // RSA: PKCS#1 v1.5 (RS*) and PSS (PS*) — all one family.
+        AlgorithmParameters::RSA(_) => Ok(vec![
+            Algorithm::RS256,
+            Algorithm::RS384,
+            Algorithm::RS512,
+            Algorithm::PS256,
+            Algorithm::PS384,
+            Algorithm::PS512,
+        ]),
+        // EC (ECDSA): pin to the curve's algorithm. `jsonwebtoken` has no ES512, so a
+        // P-521 JWK cannot be verified and is refused rather than silently mis-mapped.
+        AlgorithmParameters::EllipticCurve(ec) => match ec.curve {
+            EllipticCurve::P256 => Ok(vec![Algorithm::ES256]),
+            EllipticCurve::P384 => Ok(vec![Algorithm::ES384]),
+            // `jsonwebtoken` has no ES512, and Ed25519 is not an ECDSA curve, so neither
+            // is verifiable via an `EC`-typed JWK; refuse rather than silently mis-map.
+            EllipticCurve::P521 | EllipticCurve::Ed25519 => {
+                Err(AppError::unauthenticated("invalid id_token"))
+            }
+        },
+        // OKP (Ed25519/Ed448) → EdDSA.
+        AlgorithmParameters::OctetKeyPair(_) => Ok(vec![Algorithm::EdDSA]),
+        // Symmetric key: never valid for JWKS-backed id_token verification.
+        AlgorithmParameters::OctetKey(_) => Err(AppError::unauthenticated("invalid id_token")),
+    }
+}
+
 /// Resolve the signing `Jwk` for `kid`: serve a fresh cache entry, else fetch the JWKS
 /// (over TLS, no redirects), repopulate the cache, and select the key. Never holds the
 /// cache mutex across the network await.
@@ -358,21 +395,17 @@ async fn verify_id_token(
         &config.audience
     };
 
-    // Restrict to asymmetric algorithms only. This — combined with a public-key
-    // DecodingKey — defeats the classic RS256→HS256 key-confusion attack (an HMAC alg
-    // is neither in this allowlist nor constructible from the JWK) and rejects `alg:none`.
-    let mut validation = Validation::new(Algorithm::RS256);
-    validation.algorithms = vec![
-        Algorithm::RS256,
-        Algorithm::RS384,
-        Algorithm::RS512,
-        Algorithm::PS256,
-        Algorithm::PS384,
-        Algorithm::PS512,
-        Algorithm::ES256,
-        Algorithm::ES384,
-        Algorithm::EdDSA,
-    ];
+    // Restrict to the asymmetric algorithms of the *resolved key's own family*. This —
+    // combined with a public-key DecodingKey — defeats the classic RS256→HS256
+    // key-confusion attack (an HMAC alg is neither derivable here nor constructible from
+    // an asymmetric JWK) and rejects `alg:none`. It must be a single-family set:
+    // `jsonwebtoken` rejects the whole verify with `InvalidAlgorithm` if *any* allowed
+    // algorithm's family differs from the key's (decoding.rs: `key.family != alg.family()`),
+    // so a cross-family list (RSA+EC+EdDSA) would reject *every* token. A symmetric JWK is
+    // never valid for id_token verification and is refused outright.
+    let algorithms = key_algorithms(&jwk)?;
+    let mut validation = Validation::new(algorithms[0]);
+    validation.algorithms = algorithms;
     validation.validate_exp = true;
     validation.set_required_spec_claims(&["exp", "iss", "aud"]);
     validation.set_issuer(&[config.issuer.as_str()]);

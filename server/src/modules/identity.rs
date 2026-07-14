@@ -274,7 +274,9 @@ async fn session_refresh(
     // window. Keyset sessions (auth_source != "oidc", reassert_expires None) are
     // unaffected — they refresh as before.
     if session.auth_source == "oidc"
-        && session.reassert_expires.is_some_and(|deadline| now > deadline)
+        && session
+            .reassert_expires
+            .is_some_and(|deadline| now > deadline)
     {
         return Err(AppError::unauthenticated("oidc reassertion required"));
     }
