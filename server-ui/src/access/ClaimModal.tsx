@@ -31,9 +31,12 @@ export function ClaimModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ClaimOutcome | null>(null);
-  // Gate "Done" until the genesis keyset is downloaded — losing it (with the
-  // password) makes the owner unrecoverable, so it can't be the easy skip.
+  // Gate "Continue" on the whole Emergency Kit: the recovery file is downloaded AND
+  // the operator has explicitly acknowledged saving the Secret Key. The Secret Key is
+  // the one irreplaceable part (zero-knowledge — the server never holds it), so the
+  // acknowledgement, not just the file, is the real gate.
   const [downloaded, setDownloaded] = useState(false);
+  const [secretAck, setSecretAck] = useState(false);
   // Session-mint runs behind the save-gate and is retryable: a transient failure
   // must keep the (already-revealed) Secret Key on screen, never a null result.
   const [finishing, setFinishing] = useState(false);
@@ -80,7 +83,7 @@ export function ClaimModal({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "genesis.keyset";
+    a.download = "identity.kit";
     a.click();
     URL.revokeObjectURL(url);
     setDownloaded(true);
@@ -117,9 +120,11 @@ export function ClaimModal({
     }
   };
 
-  // Once the genesis Secret Key exists but isn't saved yet, Escape / backdrop must
-  // NOT dismiss — losing it makes the owner permanently unrecoverable.
-  const locked = result !== null && !downloaded;
+  // Once the Secret Key exists but the Emergency Kit isn't secured yet, Escape /
+  // backdrop must NOT dismiss. Both halves are required: the recovery file is
+  // downloaded AND the Secret Key is acknowledged as stored.
+  const kitSecured = downloaded && secretAck;
+  const locked = result !== null && !kitSecured;
 
   return (
     <Modal onClose={onClose} width={460} dismissable={!locked}>
@@ -150,33 +155,61 @@ export function ClaimModal({
                 {t("access.onb.bs_done_intro")}
               </div>
             </div>
-            <Field
-              label={t("access.onb.bs_secretkey_label")}
-              tag={t("access.onb.bs_secretkey_tag")}
-              hint={t("access.onb.bs_secretkey_hint")}
+
+            {/* Emergency Kit — the Secret Key and its offline recovery file, grouped
+                as one labelled block; "Continue" gates on both being secured. */}
+            <div
+              style={{
+                border: "1px solid var(--line2)",
+                borderRadius: 12,
+                background: "var(--bg1)",
+                padding: "14px 15px 15px",
+                marginBottom: 14,
+              }}
             >
-              <div style={{ display: "flex", gap: 8 }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <TextInput value={result.secretKeyHex} mono />
-                </div>
-                <Btn icon="copy" onClick={copySecret}>
-                  {t("access.onb.bs_copy_btn")}
-                </Btn>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                <Icon name="shieldcheck" size={15} color="var(--accent)" />
+                <span style={{ fontSize: 12.5, fontWeight: 700, letterSpacing: 0.2 }}>
+                  {t("access.onb.bs_kit_label")}
+                </span>
               </div>
-            </Field>
+
+              <Field
+                label={t("access.onb.bs_secretkey_label")}
+                tag={t("access.onb.bs_secretkey_tag")}
+                hint={t("access.onb.bs_secretkey_hint")}
+              >
+                <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <TextInput value={result.secretKeyHex} mono />
+                  </div>
+                  <Btn icon="copy" onClick={copySecret}>
+                    {t("access.onb.bs_copy_btn")}
+                  </Btn>
+                </div>
+              </Field>
+
+              <Btn
+                full
+                icon={downloaded ? "check" : "download"}
+                variant="soft"
+                onClick={downloadKeyset}
+                style={{ marginBottom: 13 }}
+              >
+                {t("access.onb.bs_download_btn")}
+              </Btn>
+
+              <CheckRow
+                checked={secretAck}
+                onChange={setSecretAck}
+                label={t("access.onb.bs_secretack_label")}
+              />
+            </div>
+
             <Btn
               full
-              icon={downloaded ? "check" : "download"}
               variant="primary"
-              onClick={downloadKeyset}
-              style={{ marginBottom: 9 }}
-            >
-              {t("access.onb.bs_download_btn")}
-            </Btn>
-            <Btn
-              full
-              variant="soft"
-              disabled={!downloaded || finishing}
+              disabled={!kitSecured || finishing}
               loading={finishing}
               onClick={finish}
             >
@@ -187,7 +220,7 @@ export function ClaimModal({
                 <InlineError>{finishError}</InlineError>
               </div>
             ) : null}
-            {!downloaded ? (
+            {!kitSecured ? (
               <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 8, textAlign: "center" }}>
                 {t("access.onb.bs_done_gate")}
               </div>
@@ -300,5 +333,56 @@ export function ClaimModal({
         )}
       </div>
     </Modal>
+  );
+}
+
+/** Inline acknowledgement checkbox (accessible button + check glyph). Local to the
+ *  claim reveal — the Secret-Key "I've stored it" gate. */
+function CheckRow({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 9,
+        width: "100%",
+        background: "transparent",
+        border: "none",
+        padding: 0,
+        cursor: "pointer",
+        textAlign: "left",
+        fontFamily: "inherit",
+      }}
+    >
+      <span
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: 6,
+          flexShrink: 0,
+          border: checked ? "1px solid var(--accent)" : "1px solid var(--line2)",
+          background: checked ? "var(--accent)" : "var(--bg2)",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {checked ? <Icon name="check" size={12} stroke={2.4} /> : null}
+      </span>
+      <span style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.4 }}>{label}</span>
+    </button>
   );
 }

@@ -1,14 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { loginWithEscrow, oidcLogin } from "../api/auth-service";
+import { loginWithEscrow, NotAKeysetFileError, oidcLogin, restoreFromKit } from "../api/auth-service";
 import { ApiError } from "../api/errors";
 import type { InstanceInfo } from "../api/types";
 import { CryptoUnavailableError, getCrypto } from "../crypto/provider";
 import { usePrefs } from "../store/prefs";
 import { MONO } from "../theme/tokens";
-import { Icon } from "../ui/icons";
-import { Btn, Field, InlineError, TextInput } from "../ui/primitives";
+import { Icon, type IconName } from "../ui/icons";
+import { Btn, Field, InlineError, Segmented, TextInput } from "../ui/primitives";
 import { ClaimModal } from "./ClaimModal";
 
 function Brand() {
@@ -213,7 +213,58 @@ function InstanceSummary({ info, onChange }: { info: InstanceInfo; onChange: () 
   );
 }
 
+// The claimed-instance sign-in menu. A small segmented control chooses the way in:
+// "Identity" (escrow) and "Emergency Kit" (offline file restore) are always offered;
+// "SSO" appears only when the instance advertises an OIDC provider (`info.oidc`) —
+// never a dead entry. There is no "Reconnect" concept in the panel.
+type SignInMode = "identity" | "kit" | "sso";
+
 function LoginForm({ instanceUrl, info }: { instanceUrl: string; info: InstanceInfo }) {
+  const { t } = useTranslation();
+  const ssoEnabled = !!info.oidc;
+  const [mode, setMode] = useState<SignInMode>("identity");
+
+  const tabs: { value: SignInMode; label: string; icon: IconName }[] = [
+    { value: "identity", label: t("access.onb.signin_tab_identity"), icon: "fingerprint" },
+    { value: "kit", label: t("access.onb.signin_tab_kit"), icon: "file" },
+  ];
+  if (ssoEnabled) {
+    tabs.push({ value: "sso", label: t("access.onb.signin_tab_sso"), icon: "enter" });
+  }
+
+  return (
+    <>
+      <Segmented options={tabs} value={mode} onChange={setMode} />
+      <div style={{ height: 16 }} />
+      {mode === "identity" ? <IdentitySignIn instanceUrl={instanceUrl} /> : null}
+      {mode === "kit" ? <RestoreSignIn instanceUrl={instanceUrl} /> : null}
+      {mode === "sso" ? <SsoSignIn instanceUrl={instanceUrl} /> : null}
+    </>
+  );
+}
+
+// ── Crypto-unavailable notice (shared by the keyset paths) ─────
+function CryptoWarn() {
+  const { t } = useTranslation();
+  return (
+    <div
+      style={{
+        fontSize: 11.5,
+        color: "var(--amber)",
+        marginBottom: 12,
+        display: "flex",
+        gap: 6,
+        alignItems: "center",
+      }}
+    >
+      <Icon name="alert" size={13} color="var(--amber)" />
+      {t("access.onb.ks_crypto_warn")}
+    </div>
+  );
+}
+
+// ── Sign in with your identity (escrow: handle + password + Secret Key) ─────
+function IdentitySignIn({ instanceUrl }: { instanceUrl: string }) {
   const { t } = useTranslation();
   const [handle, setHandle] = useState("");
   const [password, setPassword] = useState("");
@@ -221,20 +272,6 @@ function LoginForm({ instanceUrl, info }: { instanceUrl: string; info: InstanceI
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cryptoReady = getCrypto().available;
-  const ssoEnabled = info.auth.includes("oidc");
-
-  // SSO: redirect the browser to the IdP. On the callback load, App resumes the flow.
-  const startSso = async () => {
-    if (!cryptoReady) return setError(t("access.onb.bs_err_crypto"));
-    setError(null);
-    setBusy(true);
-    try {
-      await oidcLogin(instanceUrl); // navigates away on success
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t("access.onb.sso_err"));
-      setBusy(false);
-    }
-  };
 
   const submit = async () => {
     if (!handle.trim()) return setError(t("access.onb.login_err_no_handle"));
@@ -293,54 +330,125 @@ function LoginForm({ instanceUrl, info }: { instanceUrl: string; info: InstanceI
         <TextInput value={secretKey} onChange={setSecretKey} placeholder="hex" mono />
       </Field>
 
-      {!cryptoReady ? (
-        <div
-          style={{
-            fontSize: 11.5,
-            color: "var(--amber)",
-            marginBottom: 12,
-            display: "flex",
-            gap: 6,
-            alignItems: "center",
-          }}
-        >
-          <Icon name="alert" size={13} color="var(--amber)" />
-          {t("access.onb.ks_crypto_warn")}
-        </div>
-      ) : null}
-
+      {!cryptoReady ? <CryptoWarn /> : null}
       {error ? <InlineError>{error}</InlineError> : null}
 
       <Btn variant="primary" full icon="enter" loading={busy} onClick={submit}>
         {t("access.onb.login_btn")}
       </Btn>
+    </>
+  );
+}
 
-      {ssoEnabled ? (
-        <>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              margin: "16px 0 12px",
-              color: "var(--txt3)",
-              fontSize: 11,
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-            }}
-          >
-            <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
-            {t("access.onb.sso_or")}
-            <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
-          </div>
-          <div style={{ fontSize: 12, color: "var(--txt3)", lineHeight: 1.5, marginBottom: 10 }}>
-            {t("access.onb.sso_hint")}
-          </div>
-          <Btn variant="soft" full icon="enter" loading={busy} onClick={startSso}>
-            {t("access.onb.sso_cta")}
-          </Btn>
-        </>
-      ) : null}
+// ── Restore from Emergency Kit (offline: identity.kit file + password + Secret Key) ──
+function RestoreSignIn({ instanceUrl }: { instanceUrl: string }) {
+  const { t } = useTranslation();
+  const [file, setFile] = useState<File | null>(null);
+  const [password, setPassword] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cryptoReady = getCrypto().available;
+
+  const submit = async () => {
+    if (!file) return setError(t("access.onb.restore_err_no_file"));
+    if (!secretKey.trim()) return setError(t("access.onb.login_err_no_secret"));
+    setError(null);
+    setBusy(true);
+    try {
+      // Read the recovery file as raw bytes and unlock it locally — the same tail as
+      // escrow sign-in, only the keyset blob comes from the FILE, not escrowFetch.
+      const fileBytes = new Uint8Array(await file.arrayBuffer());
+      await restoreFromKit({
+        instanceUrl,
+        fileBytes,
+        password: password || null,
+        secretKeyHex: secretKey,
+      });
+      // Success flips the app into the Shell (session committed in the store).
+    } catch (e) {
+      if (e instanceof CryptoUnavailableError) {
+        setError(t("access.onb.bs_err_crypto"));
+      } else if (e instanceof NotAKeysetFileError) {
+        setError(t("access.onb.restore_err_notkit"));
+      } else if (e instanceof ApiError) {
+        // A failure only after the file unlocked (self-enroll / challenge) — surface it.
+        setError(e.message);
+      } else {
+        // A local unlock failure: wrong password / Secret Key, or a corrupt file.
+        setError(t("access.onb.restore_err_bad"));
+      }
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.55, marginBottom: 14 }}>
+        {t("access.onb.restore_intro")}
+      </div>
+      <Field
+        label={t("access.onb.restore_file_label")}
+        tag={t("access.onb.restore_file_tag")}
+        hint={file ? file.name : t("access.onb.restore_file_hint")}
+      >
+        <TextInput type="file" accept=".kit,.keyset" onFile={setFile} />
+      </Field>
+      <Field
+        label={t("access.onb.ks_pwd_label")}
+        tag={t("access.onb.ks_pwd_tag")}
+        hint={t("access.onb.ks_pwd_hint")}
+      >
+        <TextInput type="password" value={password} onChange={setPassword} placeholder="••••••••" mono />
+      </Field>
+      <Field
+        label={t("access.onb.ks_secretkey_label")}
+        tag={t("access.onb.ks_secretkey_tag")}
+        hint={t("access.onb.ks_secretkey_hint")}
+      >
+        <TextInput value={secretKey} onChange={setSecretKey} placeholder="hex" mono />
+      </Field>
+
+      {!cryptoReady ? <CryptoWarn /> : null}
+      {error ? <InlineError>{error}</InlineError> : null}
+
+      <Btn variant="primary" full icon="enter" loading={busy} onClick={submit}>
+        {t("access.onb.restore_btn")}
+      </Btn>
+    </>
+  );
+}
+
+// ── Sign in with SSO (OIDC redirect) — shown only when info.oidc is set ─────
+function SsoSignIn({ instanceUrl }: { instanceUrl: string }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cryptoReady = getCrypto().available;
+
+  // SSO: redirect the browser to the IdP. On the callback load, App resumes the flow.
+  const startSso = async () => {
+    if (!cryptoReady) return setError(t("access.onb.bs_err_crypto"));
+    setError(null);
+    setBusy(true);
+    try {
+      await oidcLogin(instanceUrl); // navigates away on success
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("access.onb.sso_err"));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.55, marginBottom: 14 }}>
+        {t("access.onb.sso_hint")}
+      </div>
+      {!cryptoReady ? <CryptoWarn /> : null}
+      {error ? <InlineError>{error}</InlineError> : null}
+      <Btn variant="primary" full icon="enter" loading={busy} onClick={startSso}>
+        {t("access.onb.sso_cta")}
+      </Btn>
     </>
   );
 }

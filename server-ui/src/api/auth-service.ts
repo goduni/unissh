@@ -1,4 +1,4 @@
-import { getCrypto } from "../crypto/provider";
+import { getCrypto, type KeysetIdentity } from "../crypto/provider";
 import { usePrefs } from "../store/prefs";
 import { useSession, type KeysetSession } from "../store/session";
 import { b64ToBytes, bytesToB64, bytesToHex, hexToBytes, truncId } from "../util/bytes";
@@ -95,12 +95,61 @@ export interface EscrowLoginParams {
 }
 
 /**
+ * Shared sign-in tail for BOTH keyset paths (escrow fetch + offline Emergency-Kit
+ * restore). Precondition: the account keyset is ALREADY unlocked in wasm — `id` is
+ * its identity. Reuses the device this browser already registered for the account
+ * (only possible when the account_id is known up front — escrow's fetch supplies it);
+ * otherwise, on a fresh browser, self-enrolls one against the unlocked keyset via the
+ * public POST /v1/devices/self-enroll (the self-signed registration IS the credential
+ * — no Bearer; the placeholder id is inert, the server keys off the registration's
+ * Ed25519 pubkey). Then challenge→sign→verify mints the admin session and the device
+ * link is persisted (non-secret ids only). `knownAccountId` is escrow's fetched
+ * account_id; the restore path passes null (no pre-known id) and always self-enrolls,
+ * taking the account_id from the enroll response.
+ */
+async function enrollAndCommit(
+  instanceUrl: string,
+  id: KeysetIdentity,
+  knownAccountId: string | null,
+  handle: string,
+): Promise<void> {
+  const crypto_ = getCrypto();
+  const keyId = bytesToB64(id.ed25519_pub);
+
+  const link = knownAccountId ? findDeviceLink(instanceUrl, knownAccountId) : null;
+  let accountId: string;
+  let deviceId: string;
+  let priorHandle: string | null;
+  if (link && knownAccountId) {
+    accountId = knownAccountId;
+    deviceId = link.deviceId;
+    priorHandle = link.handle;
+  } else {
+    const reg = await crypto_.buildRegistration(randomBytes(16));
+    const enrolled = await api.deviceSelfEnroll({
+      registration_payload: bytesToB64(reg.payload),
+      registration_signature: bytesToB64(reg.signature),
+    });
+    accountId = enrolled.account_id;
+    deviceId = enrolled.device_id;
+    priorHandle = null;
+  }
+
+  const session = await buildSession(accountId, deviceId, keyId, handle || truncId(accountId));
+  useSession.getState().setKeysetSession(session);
+  saveDeviceLink(instanceUrl, {
+    accountId,
+    deviceId,
+    handle: handle || priorHandle,
+  });
+}
+
+/**
  * Escrow sign-in: re-derive K_auth from handle+password+Secret Key, fetch and
- * unlock the account keyset in wasm, then challenge→sign→verify for the admin
- * Bearer. Re-uses the device this browser already registered (claim / prior escrow
- * sign-in) when a link exists; on a fresh browser it self-enrolls one against the
- * now-unlocked keyset (public POST /v1/devices/self-enroll) so sign-in still
- * completes end-to-end.
+ * unlock the account keyset in wasm, then run the shared self-enroll → session tail
+ * ({@link enrollAndCommit}). Re-uses the device this browser already registered
+ * (claim / prior escrow sign-in) when a link exists; on a fresh browser it
+ * self-enrolls one against the now-unlocked keyset so sign-in still completes.
  */
 export async function loginWithEscrow(p: EscrowLoginParams): Promise<void> {
   const crypto_ = getCrypto();
@@ -119,39 +168,67 @@ export async function loginWithEscrow(p: EscrowLoginParams): Promise<void> {
   );
   const fetched = await api.escrowFetch(handle, kAuth);
   const id = await crypto_.unlock(b64ToBytes(fetched.keyset_blob), p.password, secretKeyBytes);
-  const keyId = bytesToB64(id.ed25519_pub);
 
-  // Fast path: this browser already registered a device for this account — reuse it
-  // (skip self-enroll). Otherwise self-enroll a device for the now-unlocked keyset:
-  // buildRegistration signs with the in-wasm keyset, and the public endpoint mints a
-  // device from that self-signed registration alone (no Bearer). The placeholder id
-  // is inert — the server keys off the registration's Ed25519 pubkey, as in claim.
-  const link = findDeviceLink(p.instanceUrl, fetched.account_id);
-  let accountId: string;
-  let deviceId: string;
-  let priorHandle: string | null;
-  if (link) {
-    accountId = fetched.account_id;
-    deviceId = link.deviceId;
-    priorHandle = link.handle;
-  } else {
-    const reg = await crypto_.buildRegistration(randomBytes(16));
-    const enrolled = await api.deviceSelfEnroll({
-      registration_payload: bytesToB64(reg.payload),
-      registration_signature: bytesToB64(reg.signature),
-    });
-    accountId = enrolled.account_id;
-    deviceId = enrolled.device_id;
-    priorHandle = null;
+  await enrollAndCommit(p.instanceUrl, id, fetched.account_id, handle);
+}
+
+// ── Offline restore from the Emergency Kit ─────────────────────
+/**
+ * Thrown by {@link restoreFromKit} when the chosen file isn't a recovery keyset at
+ * all — it fails to parse as an EncryptedKeyset (wrong length / version / framing) —
+ * as opposed to a valid keyset that merely failed to unlock (wrong password / Secret
+ * Key). Lets the Login UI show a precise "not a valid recovery file" message.
+ */
+export class NotAKeysetFileError extends Error {
+  constructor() {
+    super("not a valid recovery file");
+    this.name = "NotAKeysetFileError";
+  }
+}
+
+// Structural-parse failures from the wasm EncryptedKeyset decoder — i.e. the bytes
+// are not a keyset at all. Everything else unlock throws (AEAD "invalid credentials",
+// bad Secret Key length, post-decrypt checks) is a WRONG-CREDENTIAL failure, which
+// the caller maps to the same "wrong password or Secret Key" message escrow uses.
+const KEYSET_STRUCTURE_MARKERS = [
+  "keyset too short",
+  "bad keyset version",
+  "bad keyset mode",
+  "keyset truncated",
+  "mode/params mismatch",
+] as const;
+
+export interface RestoreKitParams {
+  instanceUrl: string;
+  /** Raw bytes of the identity.kit / .keyset recovery file (File.arrayBuffer()). */
+  fileBytes: Uint8Array;
+  password: string | null;
+  /** Secret Key from the Emergency Kit (hex, as shown at claim). */
+  secretKeyHex: string;
+}
+
+/**
+ * Offline twin of {@link loginWithEscrow}: unlock the account keyset from the
+ * Emergency-Kit FILE (never the server's escrow copy), then run the SAME self-enroll
+ * → session tail ({@link enrollAndCommit}). Belt-and-suspenders recovery for when the
+ * server's escrow copy is unreachable. The file bytes, password and Secret Key stay
+ * in wasm/JS memory — only the registration payload/signature and the derived session
+ * cross the wire.
+ */
+export async function restoreFromKit(p: RestoreKitParams): Promise<void> {
+  const crypto_ = getCrypto();
+  const secretKeyBytes = hexToBytes(p.secretKeyHex.trim());
+
+  let id: KeysetIdentity;
+  try {
+    id = await crypto_.unlock(p.fileBytes, p.password, secretKeyBytes);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (KEYSET_STRUCTURE_MARKERS.some((m) => msg.includes(m))) throw new NotAKeysetFileError();
+    throw e; // wrong-credential (or CryptoUnavailable) — surfaced/mapped by the caller
   }
 
-  const session = await buildSession(accountId, deviceId, keyId, handle || truncId(accountId));
-  useSession.getState().setKeysetSession(session);
-  saveDeviceLink(p.instanceUrl, {
-    accountId,
-    deviceId,
-    handle: handle || priorHandle,
-  });
+  await enrollAndCommit(p.instanceUrl, id, null, "");
 }
 
 // ── Claim (first-run owner setup) ──────────────────────────────
