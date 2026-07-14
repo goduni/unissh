@@ -197,6 +197,42 @@ The frozen codecs (`aead_*_pre_agility`, `derive_unlock_key_legacy_v1`,
 `*_key_pre_agility`) are pinned by golden vectors; `pre_agility.rs::*_incompatible`
 are the canaries that catch a construction change masquerading as a no-op.
 
+## Authentication & onboarding surface
+
+A server is one **instance** hosting many **spaces**. Accounts, sessions, and
+roles are **server-trusted** — they gate what the server lets you *do*; the
+zero-knowledge crypto boundary above is what actually protects vault *contents*.
+The current onboarding / sign-in entry points all verify a **self-attested keyset
+registration** and never see plaintext keys:
+
+- **Claim** (`POST /v1/claim`) — a first-boot **setup code** (printed to the log
+  while the instance is unclaimed, stored only as `sha256`) plus a keyset
+  registration wins a single-winner claim of the empty instance, creating the
+  owner and first space. The code is valid only while unclaimed.
+- **Invite / join** (`POST /v1/invite`, `POST /v1/join`) — a space admin issues a
+  single-use invite; a joiner self-attests a keyset and is added at the invited
+  role.
+- **Escrow sign-in** (`GET /v1/escrow/params`, `POST /v1/escrow/fetch`) — a
+  keyless device recovers its encrypted keyset from `(password, Secret Key)`. The
+  server stores only `sha256(K_auth)`, never the decryption key `K_unlock`; both
+  endpoints are enumeration-resistant (a deterministic per-handle decoy under a
+  server-private secret; a constant-time `403` on the fetch).
+- **SSO / OIDC** (`POST /v1/oidc/callback`, when `[oidc]` is enabled) — an
+  IdP-signed `id_token` is verified against the issuer JWKS and bound to the
+  keyset by a **nonce key-binding**, asserting identity + space memberships
+  **only** — never vault keys.
+
+See [`THREAT_MODEL.md`](THREAT_MODEL.md) for the full treatment (the two authority
+planes, the escrow decoy secret, the nonce binding, and the admin-panel
+web-crypto boundary).
+
+Relevant config (server TOML, override with `UNISSH__` env): `[setup].code` pins a
+fixed setup code (empty → one is generated at boot while unclaimed); the `[oidc]`
+block sets issuer / client_id / audience / jwks_url / group_map / reassertion age
+(disabled by default); and the optional `[ops].token` is a **server-trusted**
+infrastructure token that grants **no** decryption — empty disables the
+`/v1/ops/*` surface entirely.
+
 ## Scope
 
 Reports are welcome anywhere in the repo, but the **highest-value review targets**
@@ -213,11 +249,19 @@ Reports are welcome anywhere in the repo, but the **highest-value review targets
 
 Also in scope: the server's defense-in-depth signature re-verification, the
 admin-panel wasm crypto, anti-rollback floors, and any path that could route
-plaintext private keys across the FFI/UI boundary (which must never happen).
+plaintext private keys across the FFI/UI boundary (which must never happen). The
+onboarding / sign-in surface counts here too — the escrow endpoints'
+enumeration-resistance and constant-time behavior, the OIDC `id_token`
+verification (JWKS, asymmetric-only algorithms, `iss`/`aud`/`exp`) and nonce
+key-binding, and the single-winner claim CAS.
 
 Out of scope: the unsigned-build OS warnings above, and the documented
 **server-trusted** (not cryptographic) limitations — revocation/live-grant expiry,
-SSH-key offboarding, the TOFU onboarding gap, and audit origin-vs-integrity. These
-are known and explained in [`THREAT_MODEL.md`](THREAT_MODEL.md); a report that one
-of them is server-trusted isn't a vulnerability, but a way to make a documented
-limitation *worse* than documented is.
+SSH-key offboarding, the TOFU onboarding gap, audit origin-vs-integrity, and the
+server-trusted authority plane itself (instance owner / space roles, invites, and
+OIDC-asserted identity + memberships assert what the server *permits*, not what
+you can *decrypt*). These are known and explained in
+[`THREAT_MODEL.md`](THREAT_MODEL.md); a report that one of them is server-trusted
+isn't a vulnerability, but a way to make a documented limitation *worse* than
+documented is — including anything that lets the SSO/escrow surface **yield a
+decryption key**, which it must never do.
