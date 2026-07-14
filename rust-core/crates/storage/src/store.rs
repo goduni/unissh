@@ -228,10 +228,32 @@ impl Storage {
     /// valid. Call ONLY when exactly one server is bound (otherwise you may bind
     /// to the wrong one).
     pub fn bind_unbound_cloud_vaults(&self, tenant: &[u8]) -> Result<usize, StorageError> {
+        let cloud = SyncTarget::Cloud.to_i64();
+        // Dirty the about-to-be-bound vaults + their contents FIRST (while still identifiable
+        // by an empty sync_tenant), so binding triggers a full push to the newly-bound server.
+        let unbound = "sync_target = ?1 AND length(sync_tenant) = 0";
+        let in_unbound =
+            "vault_id IN (SELECT vault_id FROM vaults WHERE sync_target = ?1 AND length(sync_tenant) = 0)";
+        self.conn.execute(
+            &format!("UPDATE vaults SET dirty = 1 WHERE {unbound}"),
+            params![cloud],
+        )?;
+        self.conn.execute(
+            &format!("UPDATE items SET dirty = 1 WHERE {in_unbound}"),
+            params![cloud],
+        )?;
+        self.conn.execute(
+            &format!("UPDATE membership_manifests SET dirty = 1 WHERE {in_unbound}"),
+            params![cloud],
+        )?;
+        self.conn.execute(
+            &format!("UPDATE membership_grants SET dirty = 1 WHERE {in_unbound}"),
+            params![cloud],
+        )?;
         let n = self.conn.execute(
             "UPDATE vaults SET sync_tenant = ?1
              WHERE sync_target = ?2 AND length(sync_tenant) = 0",
-            params![tenant, SyncTarget::Cloud.to_i64()],
+            params![tenant, cloud],
         )?;
         Ok(n)
     }
@@ -242,10 +264,15 @@ impl Storage {
     /// other legacy vaults. A direct `UPDATE` of the routing label (NOT part of
     /// the signature) — the version/signature do not change.
     pub fn set_vault_tenant(&self, vault_id: &[u8], tenant: &[u8]) -> Result<(), StorageError> {
-        self.conn.execute(
+        let n = self.conn.execute(
             "UPDATE vaults SET sync_tenant = ?1 WHERE vault_id = ?2 AND sync_target = ?3",
             params![tenant, vault_id, SyncTarget::Cloud.to_i64()],
         )?;
+        // Binding is a routing-label change that dirties nothing — so re-mark the vault and
+        // its contents dirty, or a previously-synced vault never re-pushes to the new server.
+        if n > 0 {
+            self.mark_vault_and_contents_dirty(vault_id)?;
+        }
         Ok(())
     }
 
@@ -691,6 +718,31 @@ impl Storage {
         self.conn.execute(
             "UPDATE items SET dirty = 1 WHERE vault_id = ?1 AND item_id = ?2",
             params![vault_id, item_id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a vault record AND all of its items / manifests / grants dirty, so the next
+    /// `sync_push` re-uploads the ENTIRE vault. Used when (re-)binding an existing vault to
+    /// a server: the routing-label change (`sync_tenant`) alone touches no `dirty` flag, so
+    /// without this a previously-synced vault never re-pushes its record to the newly-bound
+    /// server — the classic "I bound my vault but it never uploaded" bug.
+    pub fn mark_vault_and_contents_dirty(&self, vault_id: &[u8]) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE vaults SET dirty = 1 WHERE vault_id = ?1",
+            params![vault_id],
+        )?;
+        self.conn.execute(
+            "UPDATE items SET dirty = 1 WHERE vault_id = ?1",
+            params![vault_id],
+        )?;
+        self.conn.execute(
+            "UPDATE membership_manifests SET dirty = 1 WHERE vault_id = ?1",
+            params![vault_id],
+        )?;
+        self.conn.execute(
+            "UPDATE membership_grants SET dirty = 1 WHERE vault_id = ?1",
+            params![vault_id],
         )?;
         Ok(())
     }

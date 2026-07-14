@@ -62,6 +62,36 @@ fn vault_cloud_epoch_cache_policy_roundtrip() {
 }
 
 #[test]
+fn binding_an_already_synced_vault_redirties_it_for_push() {
+    // Regression for "I bound my vault to a server but it never uploaded": binding is a
+    // routing-label change that touched no `dirty` flag, so a previously-synced vault
+    // (dirty cleared) never re-pushed its record to the newly-bound server.
+    let s = Storage::open_in_memory(&key(0x42)).unwrap();
+    let mut v = vault(b"vb", 1);
+    v.sync_target = SyncTarget::Cloud;
+    v.sync_tenant = b"tenant-A".to_vec();
+    s.put_vault(&v).unwrap();
+    s.put_item(&item(b"vb", b"i1", 1, false)).unwrap();
+
+    // Simulate a completed push to A: the whole vault is clean.
+    s.clear_dirty_for_tenant(b"tenant-A").unwrap();
+    assert!(
+        s.list_dirty_bound_vaults(b"tenant-A").unwrap().is_empty(),
+        "clean after the push to A"
+    );
+
+    // Re-bind the already-synced vault to a NEW server B.
+    s.set_vault_tenant(b"vb", b"tenant-B").unwrap();
+
+    // The fix: binding re-dirties the vault AND its contents, so a push to B uploads them.
+    let vaults = s.list_dirty_bound_vaults(b"tenant-B").unwrap();
+    assert_eq!(vaults.len(), 1, "the bound vault record is dirty for B");
+    assert_eq!(vaults[0].vault_id, b"vb".to_vec());
+    let items = s.list_dirty_bound_items(b"tenant-B").unwrap();
+    assert_eq!(items.len(), 1, "the bound vault's item is dirty for B");
+}
+
+#[test]
 fn pulled_empty_sync_tenant_does_not_clobber_binding() {
     // Regression: a pulled (wire) vault record carries an empty sync_tenant. A
     // higher-version put_vault must NOT erase an existing local binding, else the
