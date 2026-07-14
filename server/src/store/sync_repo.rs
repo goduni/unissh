@@ -295,12 +295,29 @@ pub(crate) async fn materialize(
                 .await?;
             match existing {
                 None => {
+                    // A push-materialized vault is personal (no space_id): bind
+                    // owner_account_id to the account that owns this keyset (author ==
+                    // owner_pubkey) so `can_admin_vault`'s personal branch
+                    // (owner_account_id == account_id) recognizes the owner — parity
+                    // with POST /v1/vaults/claim, which sets it. Without this, the owner
+                    // of a push-created personal vault cannot attach a selective
+                    // vault_intent to an invite for their own vault. An author with no
+                    // account row (e.g. synthetic test pushes) resolves to NULL, exactly
+                    // the previous behaviour.
+                    let owner_account_id = tx
+                        .fetch_optional_as::<crate::store::models::AccountIdOnly>(
+                            "SELECT account_id FROM accounts WHERE ed25519_pub = ?",
+                            vec![Val::b(author.as_slice())],
+                        )
+                        .await?
+                        .map(|r| r.account_id);
                     tx.exec(
-                        "INSERT INTO vaults (vault_id, owner_pubkey, latest_version, \
-                         latest_epoch, sync_target, cache_policy, tombstone, created_at) \
-                         VALUES (?,?,?,?,?,?,?,?)",
+                        "INSERT INTO vaults (vault_id, owner_account_id, owner_pubkey, \
+                         latest_version, latest_epoch, sync_target, cache_policy, tombstone, \
+                         created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                         vec![
                             Val::b(vault_id),
+                            Val::OptB(owner_account_id),
                             Val::b(author),
                             Val::I(version),
                             Val::I(epoch),

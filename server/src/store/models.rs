@@ -333,6 +333,13 @@ pub struct EdOnly {
     pub ed25519_pub: Vec<u8>,
 }
 
+/// Tiny helper row: an account_id (for ed25519 → account_id resolution when
+/// materializing a push-created personal vault's `owner_account_id`).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AccountIdOnly {
+    pub account_id: Vec<u8>,
+}
+
 /// Tiny helper row: the instance's server-PRIVATE escrow-decoy secret. Kept OUT
 /// of `InstanceRow` on purpose — it must never ride along on the widely-used
 /// instance read, and no endpoint ever returns it. Option because the column is

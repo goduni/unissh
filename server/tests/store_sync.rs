@@ -137,6 +137,57 @@ async fn idempotent_replay_returns_same_seqs_no_dups() {
     assert_eq!(err.code, unissh_server::ErrorCode::Conflict);
 }
 
+/// FIX: a personal vault first materialized via push (no prior `/v1/vaults/claim`) binds
+/// `owner_account_id` to the author's account, so `can_admin_vault` recognizes the owner —
+/// parity with claim. Without it the column stayed NULL and the owner could not attach a
+/// selective `vault_intent` to an invite for their own vault.
+#[tokio::test]
+async fn push_created_personal_vault_binds_owner_account() {
+    use unissh_server::ids;
+
+    let s = fresh_store().await;
+
+    // An account whose canonical keyset authors the vault.
+    let account_id = ids::random_id16().to_vec();
+    let ed = ids::random_bytes32().to_vec();
+    let x = ids::random_bytes32().to_vec();
+    s.create_account(&account_id, &ed, &x, None, None, false, &[], &[], None, None, 1)
+        .await
+        .unwrap();
+
+    // Push a Vault object authored by that keyset (no prior claim) → personal vault.
+    let vobj = SyncObject::Vault(VaultRecord {
+        vault_id: b"push-personal".to_vec(),
+        sync_target: SyncTarget::Cloud,
+        name_blob: vec![1, 2, 3],
+        wrapped_vk: vec![4, 5, 6],
+        version: 1,
+        tombstone: false,
+        signature: vec![9u8; 67],
+        author_pubkey: ed.clone(),
+        key_epoch: 1,
+        cache_policy: CachePolicy::OfflineAllowed,
+        sync_tenant: Vec::new(),
+    });
+    s.push_objects(None, b"pv", vec![push_obj(vobj)], 100)
+        .await
+        .unwrap();
+
+    // The author's account now admins its own push-created personal vault; a different
+    // account does not.
+    assert!(
+        s.can_admin_vault(&account_id, b"push-personal")
+            .await
+            .unwrap(),
+        "push-created personal vault is admin-able by its owner account"
+    );
+    let other = ids::random_id16().to_vec();
+    assert!(
+        !s.can_admin_vault(&other, b"push-personal").await.unwrap(),
+        "a different account cannot admin it"
+    );
+}
+
 #[tokio::test]
 async fn vault_claim_rule_owner_immutable() {
     let s = fresh_store().await;
