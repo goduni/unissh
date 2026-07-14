@@ -7,7 +7,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
-import { BTN_RESET, Icon, Btn, Checkbox, Tag, AuthBadge, ResizeHandle } from "@/components/primitives";
+import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot } from "@/components/primitives";
+import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
 import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -46,6 +47,7 @@ function HostCard({
   onToggle,
   onOpen,
   onConnect,
+  onSftp,
 }: {
   h: ConnectionProfile;
   selected: boolean;
@@ -54,16 +56,24 @@ function HostCard({
   onToggle: () => void;
   onOpen: () => void;
   onConnect: () => void;
+  onSftp: () => void;
 }) {
   const p = usePalette();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [hover, setHover] = useState(false);
   // Hover-only affordances (checkbox, Connect) also appear while the card or
   // anything inside it holds keyboard focus, so they stay reachable by Tab.
   const [focusIn, setFocusIn] = useState(false);
   const show = hover || focusIn;
+  const lc = useApp((s) => s.lastConnected[h.profileId]);
+  const authKind = profileAuthKind(h.auth);
+  const authWarn = authKind === "password" || authKind === "ask";
+  const authLabel = tDyn(AUTH_LABEL_KEY[authKind]);
   return (
-    <div
+    <Card
+      active={active || selected}
+      onClick={onOpen}
+      onDoubleClick={onConnect}
       // not a <button>: the card nests interactive controls (checkbox, Connect)
       role="button"
       tabIndex={0}
@@ -74,22 +84,7 @@ function HostCard({
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={onOpen}
-      style={{
-        padding: 14,
-        borderRadius: 14,
-        cursor: "pointer",
-        position: "relative",
-        background: p.bg1,
-        transition: "transform .16s, box-shadow .16s, border-color .16s",
-        border: `1px solid ${active || selected ? p.accentLine : hover ? p.line2 : p.line}`,
-        transform: hover ? "translateY(-2px)" : "none",
-        boxShadow: active
-          ? `0 0 0 1px ${p.accentLine}, 0 12px 30px -16px ${p.glow}`
-          : selected
-            ? `0 0 0 1px ${p.accentLine}`
-            : "none",
-      }}
+      style={{ position: "relative", cursor: "pointer" }}
     >
       <Checkbox
         checked={selected}
@@ -106,124 +101,106 @@ function HostCard({
         }}
       />
 
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 11, marginBottom: 12 }}>
+      {/* L1 — 7px status dot + name (reference: dot keys off a live session) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         <span
           style={{
-            width: 36,
-            height: 36,
-            borderRadius: 10,
-            background: p.bg3,
-            border: `1px solid ${p.line}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            position: "relative",
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
             flexShrink: 0,
+            background: session ? p.green : p.line2,
+          }}
+        />
+        <span
+          style={{
+            fontSize: 16,
+            fontWeight: 700,
+            letterSpacing: "-0.2px",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
           }}
         >
-          <Icon name="server" size={17} color={p.txt2} stroke={1.7} />
-          {session && (
-            <span
-              style={{
-                position: "absolute",
-                bottom: -2,
-                right: -2,
-                width: 11,
-                height: 11,
-                borderRadius: "50%",
-                background: p.green,
-                border: `2px solid ${p.bg1}`,
-                boxShadow: `0 0 6px ${p.green}`,
-                animation: "uhPulse 1.6s ease-in-out infinite",
-              }}
-            />
-          )}
+          {h.label}
         </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span
-              style={{
-                fontSize: 15,
-                fontWeight: 700,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                minWidth: 0,
-              }}
-            >
-              {h.label}
-            </span>
-            {h.jumps.length > 0 && <Icon name="branch" size={12} color={p.purple} stroke={1.8} />}
-          </div>
-          <div
-            style={{
-              fontFamily: MONO,
-              fontSize: 11.5,
-              color: p.txt3,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {h.user ? `${h.user}@${h.host}` : h.host}
-          </div>
-        </div>
+        {h.jumps.length > 0 && <Icon name="branch" size={12} color={p.txt3} stroke={1.8} />}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {session && (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              fontFamily: MONO,
-              fontSize: 12,
-              color: p.green,
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}
-          >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: p.green,
-                boxShadow: `0 0 6px ${p.green}`,
-              }}
-            />
-            {t("hosts.session")}
-          </span>
-        )}
-        {session && <span style={{ color: p.line2, flexShrink: 0 }}>·</span>}
-        <AuthBadge auth={profileAuthKind(h.auth)} jump={false} />
-        <div style={{ flex: 1 }} />
-        <div style={{ display: "flex", gap: 5 }}>
-          {h.tags.map((t) => (
-            <Tag key={t} mono>
-              #{t}
-            </Tag>
-          ))}
-        </div>
+      {/* L2 — address (mono, txt2) */}
+      <div
+        style={{
+          fontFamily: MONO,
+          fontSize: 11.5,
+          color: p.txt2,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          marginTop: 6,
+        }}
+      >
+        {h.user ? `${h.user}@${h.host}` : h.host}
+      </div>
+
+      {/* L3 — status · auth (one mono line; colour only on meaning). Fades on hover
+          so the hover Connect button never sits over the text. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          fontFamily: MONO,
+          fontSize: 11.5,
+          color: p.txt3,
+          marginTop: 16,
+          opacity: show ? 0 : 1,
+          transition: "opacity .12s ease",
+        }}
+      >
+        {session ? (
+          <>
+            <span style={{ color: p.green }}>{t("hosts.session")}</span>
+            <span style={{ opacity: 0.4 }}>·</span>
+          </>
+        ) : lc ? (
+          <>
+            <span>{fmtRelative(lc, i18n.language)}</span>
+            <span style={{ opacity: 0.4 }}>·</span>
+          </>
+        ) : null}
+        <span style={{ color: authWarn ? p.amber : p.txt3 }}>{authLabel}</span>
       </div>
 
       {show && (
-        <div style={{ position: "absolute", right: 12, bottom: 11, zIndex: 3 }}>
+        <div
+          style={{ position: "absolute", right: 12, bottom: 11, zIndex: 3, display: "flex", gap: 6 }}
+        >
           <Btn
             size="sm"
+            variant="ghost"
+            icon="folders"
+            title={t("hosts.openSftp")}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSftp();
+            }}
+          />
+          <Btn
+            size="sm"
+            variant="outline"
             icon="terminal"
+            style={{ border: `1px solid ${p.accent}`, color: p.accent, fontWeight: 700 }}
             onClick={(e) => {
               e.stopPropagation();
               onConnect();
             }}
-            style={{ boxShadow: `0 6px 16px -4px ${p.glow}, 0 0 0 4px ${p.bg1}` }}
           >
             {t("hosts.connect")}
           </Btn>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -233,6 +210,7 @@ function HostRow({
   selected,
   active,
   session,
+  first,
   onToggle,
   onOpen,
   onConnect,
@@ -241,12 +219,14 @@ function HostRow({
   selected: boolean;
   active: boolean;
   session: boolean;
+  first?: boolean;
   onToggle: () => void;
   onOpen: () => void;
   onConnect: () => void;
 }) {
   const p = usePalette();
   const { t } = useTranslation();
+  const compact = useTheme().density === "compact";
   const [hover, setHover] = useState(false);
   // Same focus-follows-hover trick as HostCard so the row's affordances are Tabbable.
   const [focusIn, setFocusIn] = useState(false);
@@ -261,18 +241,21 @@ function HostRow({
         if (!e.currentTarget.contains(e.relatedTarget as Node)) setFocusIn(false);
       }}
       onClick={onOpen}
+      onDoubleClick={onConnect}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
         display: "flex",
         alignItems: "center",
         gap: 12,
-        padding: "0 12px",
-        height: 46,
+        padding: "0 4px",
+        // Density is the spacing axis: compact packs the rows tighter.
+        height: compact ? 38 : 46,
         cursor: "pointer",
-        borderRadius: 10,
-        background: active ? p.bg3 : selected ? p.accentSoft : hover ? p.bg1 : "transparent",
-        boxShadow: active ? `inset 2.5px 0 0 ${p.accent}` : "none",
+        // Hairline row: no per-row box/radius/side-stripe. Selection = faint neutral
+        // fill; rows share one 1px line between them (all but the first).
+        borderTop: first ? "none" : `1px solid ${p.line}`,
+        background: active || selected ? p.bg2 : hover ? p.bg2 : "transparent",
       }}
     >
       <Checkbox
@@ -283,16 +266,10 @@ function HostRow({
         aria-label={t("hosts.selectHostLabel", { label: h.label })}
         style={{ opacity: show || selected ? 1 : 0.25 }}
       />
-      <span
-        style={{
-          width: 8,
-          height: 8,
-          flexShrink: 0,
-          borderRadius: "50%",
-          background: session ? p.green : p.line2,
-          boxShadow: session ? `0 0 6px ${p.green}` : "none",
-          animation: session ? "uhPulse 1.6s ease-in-out infinite" : "none",
-        }}
+      <StatusDot
+        status={session ? "online" : "unknown"}
+        size={8}
+        srLabel={session ? t("hosts.session") : undefined}
       />
       <span
         style={{
@@ -321,10 +298,11 @@ function HostRow({
       >
         {h.user}@{h.host}
       </span>
-      <div style={{ display: "flex", gap: 5, width: 130, flexShrink: 0, overflow: "hidden" }}>
-        {h.tags.map((t) => (
-          <Tag key={t}>{t}</Tag>
+      <div style={{ display: "flex", gap: 5, width: 130, flexShrink: 0, overflow: "hidden", alignItems: "center" }}>
+        {h.tags.slice(0, 2).map((tg) => (
+          <Tag key={tg}>{tg}</Tag>
         ))}
+        {h.tags.length > 2 && <MetaChip>{`+${h.tags.length - 2}`}</MetaChip>}
       </div>
       <span
         style={{
@@ -345,8 +323,9 @@ function HostRow({
         {show ? (
           <Btn
             size="sm"
-            variant="soft"
+            variant="outline"
             icon="terminal"
+            style={{ border: `1px solid ${p.accent}`, color: p.accent, fontWeight: 700 }}
             onClick={(e) => {
               e.stopPropagation();
               onConnect();
@@ -381,7 +360,17 @@ function DetailRow({
         borderBottom: `1px solid ${p.line}`,
       }}
     >
-      <span style={{ width: 80, fontSize: 12, color: p.txt3, flexShrink: 0 }}>{label}</span>
+      <span
+        style={{
+          minWidth: 72,
+          fontSize: 12,
+          color: p.txt3,
+          flexShrink: 0,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+      </span>
       <span
         style={{
           flex: 1,
@@ -403,13 +392,17 @@ function DetailRow({
 // ── Rail: host detail ──────────────────────────────────────────
 function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) {
   const p = usePalette();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ctx = useCtx();
   const vault = useApp((s) => s.vaultId);
   const knownHosts = useApp((s) => s.knownHosts);
+  const lastConnected = useApp((s) => s.lastConnected);
+  const groups = useApp((s) => s.groups);
   const authKind = profileAuthKind(h.auth);
   const known = knownHosts.find((k) => k.host === h.host && k.port === h.port);
   const firstJump = h.jumps[0];
+  const lc = lastConnected[h.profileId];
+  const memberOf = groups.filter((g) => g.memberIds.includes(h.profileId));
 
   const onDelete = () => {
     if (!vault) return;
@@ -441,8 +434,6 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
             borderRadius: "50%",
             flexShrink: 0,
             background: session ? p.green : p.line2,
-            boxShadow: session ? `0 0 7px ${p.green}` : "none",
-            animation: session ? "uhPulse 1.6s ease-in-out infinite" : "none",
           }}
         />
         <h3
@@ -466,77 +457,36 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
               alignItems: "center",
               gap: 3,
               fontSize: 11,
-              color: p.purple,
+              color: p.txt3,
               flexShrink: 0,
             }}
           >
-            <Icon name="branch" size={12} color={p.purple} />
+            <Icon name="branch" size={12} color={p.txt3} />
             {t("hosts.jump")}
           </span>
         )}
         <div style={{ flex: 1, minWidth: 8 }} />
         {h.auth.type === "personal" && vault && (
-          <button
-            onClick={() => ctx.openModal({ kind: "bindHost", host: h, vaultId: vault })}
+          <IconBtn
+            icon="fingerprint"
+            size={28}
             title={t("hosts.linkIdentity")}
-            aria-label={t("hosts.linkIdentity")}
-            style={{
-              width: 26,
-              height: 26,
-              flexShrink: 0,
-              borderRadius: 7,
-              border: `1px solid ${p.line}`,
-              background: p.bg2,
-              color: p.purple,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Icon name="fingerprint" size={13} />
-          </button>
+            onClick={() => ctx.openModal({ kind: "bindHost", host: h, vaultId: vault })}
+          />
         )}
-        <button
-          onClick={() => ctx.openModal({ kind: "host", edit: h })}
+        <IconBtn
+          icon="pencil"
+          size={28}
           title={t("common.edit")}
-          aria-label={t("common.edit")}
-          style={{
-            width: 26,
-            height: 26,
-            flexShrink: 0,
-            borderRadius: 7,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.txt3,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="pencil" size={13} />
-        </button>
-        <button
-          onClick={onDelete}
+          onClick={() => ctx.openModal({ kind: "host", edit: h })}
+        />
+        <IconBtn
+          icon="trash"
+          size={28}
+          color={p.red}
           title={t("common.delete")}
-          aria-label={t("common.delete")}
-          style={{
-            width: 26,
-            height: 26,
-            flexShrink: 0,
-            borderRadius: 7,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.red,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="trash" size={13} color={p.red} />
-        </button>
+          onClick={onDelete}
+        />
       </div>
       <div
         style={{
@@ -550,26 +500,31 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <Btn icon="terminal" style={{ flex: 1 }} onClick={() => ctx.connect(h)}>
-          {session ? t("hosts.openSession") : t("hosts.terminal")}
+        <Btn
+          variant="outline"
+          icon="terminal"
+          style={{ flex: 1, border: `1px solid ${p.accent}`, color: p.accent, fontWeight: 700 }}
+          onClick={() => ctx.connect(h)}
+        >
+          {t("hosts.connect")}
         </Btn>
         <Btn
           variant="ghost"
           icon="bolt"
+          title={t("nav.fleetExec")}
           style={{ padding: "8px 11px" }}
           onClick={() => ctx.go("fleet")}
         />
+        {/* Quick SFTP: connect + jump straight to the SFTP view for this host. */}
         <Btn
           variant="ghost"
           icon="folders"
+          title={t("hosts.openSftp")}
           style={{ padding: "8px 11px" }}
-          onClick={() => ctx.go("sftp")}
+          onClick={() => void ctx.connectSftp(h)}
         />
       </div>
 
-      <DetailRow label={t("hosts.detail.host")} mono>
-        {h.host}
-      </DetailRow>
       <DetailRow label={t("hosts.detail.address")} mono>
         {h.host}:{h.port}
       </DetailRow>
@@ -587,12 +542,36 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
           {firstJump.user}@{firstJump.host}:{firstJump.port}
         </DetailRow>
       )}
+      {lc != null && lc > 0 && (
+        <DetailRow label={t("hosts.detail.lastConnected")}>{fmtRelative(lc, i18n.language)}</DetailRow>
+      )}
 
+      {memberOf.length > 0 && (
+        <>
+          <div
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              letterSpacing: 0.6,
+              color: p.txt3,
+              textTransform: "uppercase",
+              margin: "14px 0 7px",
+            }}
+          >
+            {t("hosts.detail.groups")}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {memberOf.map((g) => (
+              <Tag key={g.groupId}>{g.label}</Tag>
+            ))}
+          </div>
+        </>
+      )}
       <div
         style={{
-          fontSize: 11,
+          fontSize: 10.5,
           fontWeight: 700,
-          letterSpacing: 0.5,
+          letterSpacing: 0.6,
           color: p.txt3,
           textTransform: "uppercase",
           margin: "14px 0 7px",
@@ -604,9 +583,9 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         {h.tags.length === 0 && (
           <span style={{ fontSize: 12, color: p.txt3 }}>{t("hosts.noTags")}</span>
         )}
-        {h.tags.map((t) => (
-          <Tag key={t} mono>
-            #{t}
+        {h.tags.map((tg) => (
+          <Tag key={tg} mono>
+            #{tg}
           </Tag>
         ))}
       </div>
@@ -618,10 +597,9 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         onKeyDown={pressActivate(() => ctx.go("known"))}
         onClick={() => ctx.go("known")}
         style={{
-          padding: 11,
-          borderRadius: 10,
-          background: p.bg2,
-          border: `1px solid ${p.line}`,
+          padding: "12px 0 2px",
+          borderTop: `1px solid ${p.line}`,
+          background: "transparent",
           cursor: "pointer",
         }}
       >
@@ -679,7 +657,7 @@ function SessionsRail() {
       )}
       {live.map((t) => {
         const online = t.status === "online";
-        const color = online ? p.green : p.accent;
+        const color = online ? p.green : p.amber;
         const statusLabel = tr(online ? "terminal.status.online" : "terminal.status.connecting");
         return (
           <div
@@ -698,27 +676,14 @@ function SessionsRail() {
             }}
             style={{
               padding: 12,
-              borderRadius: 13,
-              background: p.bg1,
+              borderRadius: 12,
+              background: p.bg0,
               border: `1px solid ${p.line}`,
               position: "relative",
               overflow: "hidden",
               cursor: "pointer",
             }}
           >
-            <div
-              style={{
-                position: "absolute",
-                top: -24,
-                right: -16,
-                width: 70,
-                height: 70,
-                borderRadius: "50%",
-                background: color,
-                opacity: 0.1,
-                filter: "blur(16px)",
-              }}
-            />
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {/* shape carries the state too: solid = online, hollow = connecting */}
               <span
@@ -729,8 +694,6 @@ function SessionsRail() {
                   background: online ? color : "transparent",
                   border: online ? "none" : `1.5px solid ${color}`,
                   boxSizing: "border-box",
-                  boxShadow: `0 0 7px ${color}`,
-                  animation: "uhPulse 1.6s ease-in-out infinite",
                 }}
               />
               <span style={{ fontSize: 13, fontWeight: 700 }}>{t.title}</span>
@@ -801,7 +764,7 @@ function SessionsRail() {
       {tunnels.length === 0 && (
         <div style={{ fontSize: 11.5, color: p.txt3 }}>{tr("hosts.noOpenTunnels")}</div>
       )}
-      {tunnels.map((t) => (
+      {tunnels.map((t, i) => (
         <div
           key={t.id}
           role="button"
@@ -814,14 +777,13 @@ function SessionsRail() {
             display: "flex",
             alignItems: "center",
             gap: 9,
-            padding: "9px 11px",
-            borderRadius: 11,
-            background: p.bg2,
-            border: `1px solid ${p.line}`,
+            padding: "9px 2px",
+            borderTop: i === 0 ? "none" : `1px solid ${p.line}`,
+            background: "transparent",
             cursor: "pointer",
           }}
         >
-          <Icon name="branch" size={15} color={p.purple} />
+          <Icon name="branch" size={15} color={p.txt3} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 600 }}>{t.label}</div>
             <div style={{ fontSize: 10.5, color: p.txt3 }}>{t.route}</div>
@@ -1082,13 +1044,17 @@ function BulkActionsMenu({
 export function ViewHosts() {
   const p = usePalette();
   const { t } = useTranslation();
-  const { density, setDensity } = useTheme();
+  const { hostsLayout, setHostsLayout } = useTheme();
   const ctx = useCtx();
   const hosts = useApp((s) => s.hosts);
   const groups = useApp((s) => s.groups);
   const terminals = useApp((s) => s.terminals);
   const hostFilter = useApp((s) => s.hostFilter);
   const setHostFilter = useApp((s) => s.setHostFilter);
+  // When the sidebar selects a GROUP, hostFilter holds a groupId (not a tag), so
+  // none of the tag chips highlight — surface the active group as its own visible,
+  // dismissable scope token so the filter is never invisible.
+  const activeGroup = groups.find((g) => g.groupId === hostFilter);
 
   const [sort, setSort] = useState<SortKey>(loadHostSort);
   const lastConnected = useApp((s) => s.lastConnected);
@@ -1219,17 +1185,17 @@ export function ViewHosts() {
 
   const segBtn = (icon: "grid" | "list", val: "cards" | "list") => (
     <button
-      onClick={() => setDensity(val)}
+      onClick={() => setHostsLayout(val)}
       title={t(val === "cards" ? "hosts.viewCards" : "hosts.viewList")}
       aria-label={t(val === "cards" ? "hosts.viewCards" : "hosts.viewList")}
-      aria-pressed={density === val}
+      aria-pressed={hostsLayout === val}
       style={{
         width: 30,
         height: 26,
         borderRadius: 6,
         border: "none",
-        background: density === val ? p.bg4 : "transparent",
-        color: density === val ? p.txt : p.txt3,
+        background: hostsLayout === val ? p.bg4 : "transparent",
+        color: hostsLayout === val ? p.txt : p.txt3,
         cursor: "pointer",
         display: "flex",
         alignItems: "center",
@@ -1237,44 +1203,6 @@ export function ViewHosts() {
       }}
     >
       <Icon name={icon} size={14} />
-    </button>
-  );
-
-  const railTab = (label: string, val: RailTab, count?: number) => (
-    <button
-      onClick={() => setRail(val)}
-      style={{
-        flex: 1,
-        height: 30,
-        borderRadius: 8,
-        cursor: "pointer",
-        fontFamily: UI,
-        fontSize: 12.5,
-        fontWeight: 600,
-        border: `1px solid ${rail === val ? p.accentLine : "transparent"}`,
-        background: rail === val ? p.accentSoft : "transparent",
-        color: rail === val ? p.accent : p.txt3,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 6,
-      }}
-    >
-      {label}
-      {count != null && (
-        <span
-          style={{
-            fontFamily: MONO,
-            fontSize: 10.5,
-            background: rail === val ? p.accent : p.bg4,
-            color: rail === val ? "#fff" : p.txt3,
-            borderRadius: 20,
-            padding: "0 6px",
-          }}
-        >
-          {count}
-        </span>
-      )}
     </button>
   );
 
@@ -1295,63 +1223,61 @@ export function ViewHosts() {
       >
         <div
           style={{
-            position: "absolute",
-            top: -130,
-            left: "20%",
-            width: 420,
-            height: 280,
-            borderRadius: "50%",
-            background: p.accent,
-            opacity: p.name === "dark" ? 0.08 : 0.05,
-            filter: "blur(80px)",
-            pointerEvents: "none",
-          }}
-        />
-
-        <div
-          style={{
             position: "relative",
             display: "flex",
             alignItems: "center",
-            gap: 10,
-            padding: "16px 22px 12px",
+            gap: 12,
+            padding: "24px 22px 14px",
           }}
         >
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>
-            {t("hosts.title")}
-          </h1>
-          <span
-            style={{
-              fontFamily: MONO,
-              fontSize: 12,
-              color: p.txt2,
-              background: p.bg2,
-              border: `1px solid ${p.line}`,
-              borderRadius: 20,
-              padding: "2px 9px",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {t("count.hosts", { count: hosts.length })}
-            {sessions ? ` · ${t("count.sessions", { count: sessions })}` : ""}
-          </span>
+          {/* Title + count share one baseline (reference .head); the outer row stays
+              center-aligned so the toolbar buttons don't ride the text baseline. */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
+              {t("hosts.title")}
+            </h1>
+            <span
+              style={{
+                fontFamily: MONO,
+                fontSize: 12,
+                color: p.txt3,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {t("count.hosts", { count: hosts.length })}
+              {sessions ? ` · ${t("count.sessions", { count: sessions })}` : ""}
+            </span>
+          </div>
           <div style={{ flex: 1 }} />
-          <Btn
-            variant="ghost"
-            icon="download"
-            size="sm"
+          {/* Header actions are quiet text, per the reference (.act / .new) — a
+              filled primary here becomes a glaring near-white block in dark mode. */}
+          <button
             title={t("hosts.importSshConfig")}
             onClick={() => ctx.openImport()}
+            style={{
+              ...BTN_RESET,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              height: 30,
+              fontSize: 13,
+              fontWeight: 600,
+              color: p.txt3,
+              cursor: "pointer",
+            }}
           >
+            <Icon name="download" size={14} />
             {!tight && t("hosts.importSshConfig")}
-          </Btn>
+          </button>
           <div
             style={{
               display: "flex",
-              background: p.bg2,
+              alignItems: "center",
+              height: 30,
+              background: "transparent",
               border: `1px solid ${p.line}`,
               borderRadius: 8,
-              padding: 2,
+              padding: 1,
               gap: 2,
             }}
           >
@@ -1372,15 +1298,20 @@ export function ViewHosts() {
                 height: 30,
                 padding: "0 10px",
                 borderRadius: 8,
-                border: `1px solid ${sortOpen ? p.accentLine : p.line}`,
-                background: sortOpen ? p.accentSoft : p.bg2,
-                color: sortOpen ? p.accent : p.txt2,
+                // No grey fill — just the frame. Open state reads via a stronger
+                // hairline + darker label instead of a bg tint.
+                border: `1px solid ${sortOpen ? p.line2 : p.line}`,
+                background: "transparent",
+                color: sortOpen ? p.txt : p.txt2,
                 cursor: "pointer",
                 fontSize: 12.5,
                 fontWeight: 600,
               }}
             >
-              <Icon name="arrows" size={14} />
+              <Icon
+                name={sort === "name" ? "list" : sort === "connected" ? "clock" : "plus"}
+                size={14}
+              />
               {!tight && tDyn(`hosts.sort.${SORT_KEYS[sort]}`)}
               <Icon name="cd" size={12} color={p.txt3} />
             </button>
@@ -1423,8 +1354,8 @@ export function ViewHosts() {
                       cursor: "pointer",
                       fontSize: 13,
                       fontWeight: sort === k ? 700 : 500,
-                      color: sort === k ? p.accent : p.txt2,
-                      background: sort === k ? p.accentSoft : "transparent",
+                      color: sort === k ? p.txt : p.txt2,
+                      background: "transparent",
                     }}
                     onMouseEnter={(e) => {
                       if (sort !== k) e.currentTarget.style.background = p.bg2;
@@ -1436,23 +1367,33 @@ export function ViewHosts() {
                     <Icon
                       name={k === "name" ? "list" : k === "connected" ? "clock" : "plus"}
                       size={15}
-                      color={sort === k ? p.accent : p.txt3}
+                      color={sort === k ? p.txt : p.txt3}
                     />
                     <span style={{ flex: 1 }}>{tDyn(`hosts.sort.${SORT_KEYS[k]}`)}</span>
-                    {sort === k && <Icon name="check" size={14} color={p.accent} />}
+                    {sort === k && <Icon name="check" size={14} color={p.txt} />}
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <Btn
-            icon="plus"
-            size="sm"
+          <button
             title={t("hosts.newHost")}
             onClick={() => ctx.onNewHost()}
+            style={{
+              ...BTN_RESET,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              height: 30,
+              fontSize: 13,
+              fontWeight: 700,
+              color: p.accent,
+              cursor: "pointer",
+            }}
           >
+            <Icon name="plus" size={15} />
             {!tight && t("hosts.newHost")}
-          </Btn>
+          </button>
           {!railOpen && (
             <button
               title={t("common.show")}
@@ -1463,7 +1404,7 @@ export function ViewHosts() {
                 height: 30,
                 borderRadius: 8,
                 border: `1px solid ${p.line}`,
-                background: p.bg2,
+                background: "transparent",
                 color: p.txt2,
                 cursor: "pointer",
                 display: "flex",
@@ -1480,29 +1421,60 @@ export function ViewHosts() {
           style={{
             position: "relative",
             display: "flex",
-            gap: 6,
-            padding: "0 22px 12px",
+            gap: 14,
+            padding: "0 22px 10px",
             alignItems: "center",
             flexWrap: "wrap",
           }}
         >
-          <Icon name="tag" size={13} color={p.txt3} />
+          {activeGroup && (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 13,
+                fontWeight: 700,
+                color: p.txt,
+              }}
+            >
+              {activeGroup.label}
+              <button
+                onClick={() => setHostFilter(HOST_FILTER_ALL)}
+                title={t("hosts.resetFilter")}
+                aria-label={t("hosts.resetFilter")}
+                style={{
+                  ...BTN_RESET,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: 2,
+                  cursor: "pointer",
+                  color: p.txt3,
+                }}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </span>
+          )}
           {[HOST_FILTER_ALL, ...tagSet].map((tag) => {
             const isAll = tag === HOST_FILTER_ALL;
+            const on = hostFilter === tag;
             return (
               <button
                 key={tag}
                 onClick={() => setHostFilter(tag)}
+                aria-pressed={on}
                 style={{
                   fontFamily: isAll ? UI : MONO,
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: 600,
                   cursor: "pointer",
-                  padding: "3px 10px",
-                  borderRadius: 20,
-                  border: `1px solid ${hostFilter === tag ? p.accentLine : p.line}`,
-                  background: hostFilter === tag ? p.accentSoft : "transparent",
-                  color: hostFilter === tag ? p.accent : p.txt2,
+                  padding: "2px 1px 5px",
+                  border: "none",
+                  borderRadius: 0,
+                  borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
+                  background: "transparent",
+                  color: on ? p.txt : p.txt3,
                 }}
               >
                 {isAll ? t("common.all") : "#" + tag}
@@ -1512,16 +1484,18 @@ export function ViewHosts() {
           {hosts.some((x) => x.tags.length === 0) && (
             <button
               onClick={() => setHostFilter("__untagged")}
+              aria-pressed={hostFilter === "__untagged"}
               style={{
                 fontFamily: UI,
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: 600,
                 cursor: "pointer",
-                padding: "3px 10px",
-                borderRadius: 20,
-                border: `1px solid ${hostFilter === "__untagged" ? p.accentLine : p.line}`,
-                background: hostFilter === "__untagged" ? p.accentSoft : "transparent",
-                color: hostFilter === "__untagged" ? p.accent : p.txt3,
+                padding: "2px 1px 5px",
+                border: "none",
+                borderRadius: 0,
+                borderBottom: `2px solid ${hostFilter === "__untagged" ? p.accent : "transparent"}`,
+                background: "transparent",
+                color: hostFilter === "__untagged" ? p.txt : p.txt3,
               }}
             >
               {t("hosts.untagged")}
@@ -1531,15 +1505,16 @@ export function ViewHosts() {
             <button
               onClick={() => setSel(shown.map((x) => x.profileId))}
               style={{
-                marginLeft: 4,
-                fontSize: 12,
+                marginLeft: 2,
+                fontSize: 12.5,
                 fontWeight: 600,
                 cursor: "pointer",
-                padding: "3px 10px",
-                borderRadius: 20,
-                border: `1px dashed ${p.accentLine}`,
+                padding: 0,
+                border: "none",
                 background: "transparent",
-                color: p.accent,
+                color: p.txt2,
+                textDecoration: "underline",
+                textUnderlineOffset: 3,
               }}
             >
               {t("hosts.selectWholeGroup")}
@@ -1613,7 +1588,7 @@ export function ViewHosts() {
                 {t("hosts.resetFilter")}
               </Btn>
             </div>
-          ) : density === "cards" ? (
+          ) : hostsLayout === "cards" ? (
             <div
               className="uh-stagger"
               style={{
@@ -1632,18 +1607,20 @@ export function ViewHosts() {
                   onToggle={() => toggle(h.profileId)}
                   onOpen={() => openHost(h.profileId)}
                   onConnect={() => ctx.connect(h)}
+                  onSftp={() => void ctx.connectSftp(h)}
                 />
               ))}
             </div>
           ) : (
-            <div className="uh-stagger" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              {shown.map((h) => (
+            <div className="uh-stagger" style={{ display: "flex", flexDirection: "column" }}>
+              {shown.map((h, i) => (
                 <HostRow
                   key={h.profileId}
                   h={h}
                   selected={sel.includes(h.profileId)}
                   active={open === h.profileId}
                   session={activeIds.has(h.profileId)}
+                  first={i === 0}
                   onToggle={() => toggle(h.profileId)}
                   onOpen={() => openHost(h.profileId)}
                   onConnect={() => ctx.connect(h)}
@@ -1662,9 +1639,9 @@ export function ViewHosts() {
               bottom: 16,
               height: 52,
               borderRadius: 13,
-              background: p.bg3,
-              border: `1px solid ${p.accentLine}`,
-              boxShadow: `0 -2px 30px -8px ${p.glow}, 0 12px 30px -12px rgba(0,0,0,0.5)`,
+              background: p.bg0,
+              border: `1px solid ${p.line2}`,
+              boxShadow: p.shadow,
               display: "flex",
               alignItems: "center",
               gap: 12,
@@ -1678,7 +1655,7 @@ export function ViewHosts() {
                 height: 26,
                 borderRadius: 8,
                 background: p.accent,
-                color: "#fff",
+                color: p.accentInk,
                 fontFamily: MONO,
                 fontWeight: 700,
                 fontSize: 13,
@@ -1720,10 +1697,9 @@ export function ViewHosts() {
               {t("nav.fleetExec")}
             </Btn>
             <Btn
-              variant="ghost"
+              variant="danger"
               size="sm"
               icon="trash"
-              style={{ color: p.red, borderColor: p.line2 }}
               onClick={() =>
                 ctx.confirm({
                   title: t("hosts.bulkDeleteTitle"),
@@ -1776,7 +1752,7 @@ export function ViewHosts() {
             width: railW,
             flexShrink: 0,
             position: "relative",
-            background: p.bg1,
+            background: p.bg0,
             borderLeft: `1px solid ${p.line}`,
             display: "flex",
             flexDirection: "column",
@@ -1787,22 +1763,29 @@ export function ViewHosts() {
           <div
             style={{
               display: "flex",
-              gap: 4,
-              padding: 3,
-              background: p.bg2,
-              border: `1px solid ${p.line}`,
-              borderRadius: 11,
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              borderBottom: `1px solid ${p.line}`,
               marginBottom: 14,
             }}
           >
-            {railTab(t("hosts.railHost"), "detail")}
-            {railTab(t("hosts.railSessions"), "sessions", liveSessions || undefined)}
+            <UnderlineTabs<RailTab>
+              ariaLabel={t("hosts.railHost")}
+              value={rail}
+              onChange={setRail}
+              tabs={[
+                { value: "detail", label: t("hosts.railHost") },
+                { value: "sessions", label: t("hosts.railSessions"), count: liveSessions || undefined },
+              ]}
+            />
             <button
               title={t("common.hide")}
               aria-label={t("common.hide")}
               onClick={() => toggleRail(false)}
               style={{
                 width: 30,
+                height: 30,
                 flexShrink: 0,
                 borderRadius: 8,
                 border: "none",

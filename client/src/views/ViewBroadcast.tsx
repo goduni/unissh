@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rgba } from "@/theme/tokens";
+import { MONO } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, StatusDot } from "@/components/primitives";
 import { useApp, type PendingMismatch } from "@/store/app";
 import { useIsMobile } from "@/store/responsive";
@@ -30,6 +30,11 @@ const TERM = "xterm-256color";
 const COLS = 80;
 const ROWS = 24;
 const TAIL_LINES = 6;
+
+// Obviously-destructive verbs — typing one into a fan-out-to-many-live-hosts bar
+// always re-confirms, even after the session's first send has been confirmed.
+const BROADCAST_DANGER =
+  /(\brm\s+-\w*[rf]|\breboot\b|\bshutdown\b|\bhalt\b|\bpoweroff\b|\bmkfs|\bdd\s+if=|:\(\)\s*\{|>\s*\/dev\/)/i;
 
 /** Keep only the last N non-trailing-empty lines of a mirrored buffer. */
 function tail(buf: string, n: number): string[] {
@@ -68,7 +73,7 @@ function HostTile({
         flexDirection: "column",
         borderRadius: 12,
         overflow: "hidden",
-        border: `1px solid ${off ? rgba(p.red, 0.35) : p.line}`,
+        border: `1px solid ${p.line}`,
         background: p.bg0,
         opacity: off ? 0.85 : 1,
       }}
@@ -79,17 +84,26 @@ function HostTile({
           alignItems: "center",
           gap: 8,
           padding: "8px 12px",
-          background: p.bg2,
           borderBottom: `1px solid ${p.line}`,
         }}
       >
-        <StatusDot status={off ? "offline" : "online"} size={7} />
-        <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" }}>
+        <StatusDot status={off ? (mismatch ? "error" : "offline") : "online"} size={7} />
+        <span
+          style={{
+            fontFamily: MONO,
+            fontSize: 12.5,
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
+          }}
+        >
           {host.profile.label}
         </span>
         <div style={{ flex: 1 }} />
-        <span style={{ fontFamily: MONO, fontSize: 10.5, color: off ? p.red : p.green }}>
-          {off ? t("broadcast.noRoute") : t("broadcast.mirrored")}
+        <span style={{ fontFamily: MONO, fontSize: 10.5, color: off ? p.txt3 : p.green }}>
+          {off ? t("broadcast.offline") : t("broadcast.mirrored")}
         </span>
       </div>
       <div
@@ -121,10 +135,7 @@ function HostTile({
             )}
           </div>
         ) : lines.length === 0 ? (
-          <div style={{ color: p.txt3 }}>
-            <span style={{ color: p.green }}>{host.profile.user}@{host.profile.label}</span>:~$
-            <span style={{ color: p.txt }}> </span>
-          </div>
+          <div style={{ color: p.txt3, fontStyle: "italic" }}>{t("broadcast.awaitingOutput")}</div>
         ) : (
           lines.map((ln, i) => (
             <div key={i} style={{ color: p.txt }}>
@@ -352,7 +363,8 @@ export function ViewBroadcast() {
     }
   };
 
-  const send = async () => {
+  const sentOnce = useRef(false);
+  const doSend = async () => {
     const id = bcIdRef.current;
     if (!id || liveCount === 0 || typed.length === 0) return;
     const data = Array.from(new TextEncoder().encode(typed + "\n"));
@@ -361,6 +373,30 @@ export function ViewBroadcast() {
       setTyped("");
     });
     inputRef.current?.focus();
+  };
+  // Fanning input out to many LIVE hosts is irreversible: confirm the FIRST send of a
+  // session (sober), and re-confirm (loud/danger) whenever the command looks
+  // destructive — no silent blast to the whole fleet.
+  const send = () => {
+    if (liveCount === 0 || typed.length === 0) return;
+    const dangerous = BROADCAST_DANGER.test(typed);
+    if (sentOnce.current && !dangerous) {
+      void doSend();
+      return;
+    }
+    useApp.getState().setConfirm({
+      title: dangerous ? t("broadcast.dangerTitle") : t("broadcast.sendConfirmTitle"),
+      body: dangerous
+        ? t("broadcast.dangerBody", { count: liveCount })
+        : t("broadcast.sendConfirmBody", { count: liveCount }),
+      danger: dangerous,
+      icon: dangerous ? "alert" : "radio",
+      confirmLabel: t("broadcast.sendConfirm"),
+      onConfirm: () => {
+        sentOnce.current = true;
+        void doSend();
+      },
+    });
   };
 
   const failed = opened.filter((h) => !h.status.connected);
@@ -390,9 +426,9 @@ export function ViewBroadcast() {
         <h1
           style={{
             margin: 0,
-            fontSize: 22,
+            fontSize: 28,
             fontWeight: 800,
-            letterSpacing: -0.5,
+            letterSpacing: -0.7,
             whiteSpace: "nowrap",
             flexShrink: 0,
           }}
@@ -404,10 +440,7 @@ export function ViewBroadcast() {
             fontFamily: MONO,
             fontSize: 12,
             color: p.txt2,
-            background: p.bg2,
-            border: `1px solid ${p.line}`,
-            borderRadius: 20,
-            padding: "2px 9px",
+            whiteSpace: "nowrap",
           }}
         >
           {bcId
@@ -424,8 +457,8 @@ export function ViewBroadcast() {
               fontFamily: MONO,
               fontSize: 12,
               color: p.txt,
-              background: p.accentSoft,
-              border: `1px solid ${p.accentLine}`,
+              background: "transparent",
+              border: `1px solid ${p.line}`,
               borderRadius: 20,
               padding: "2px 6px 2px 9px",
               whiteSpace: "nowrap",
@@ -463,7 +496,16 @@ export function ViewBroadcast() {
           // The Connect button is disabled at zero ready hosts; say WHY here so
           // broadcast.noHosts (otherwise unreachable behind the disabled button)
           // is actually surfaced.
-          <span style={{ fontSize: 12, color: p.txt3, whiteSpace: "nowrap" }}>
+          <span
+            style={{
+              fontSize: 12,
+              color: p.txt3,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              minWidth: 0,
+            }}
+          >
             {t("broadcast.noHosts")}
           </span>
         )}
@@ -544,8 +586,8 @@ export function ViewBroadcast() {
             padding: isMobile ? "12px 14px" : "0 16px",
             borderRadius: 12,
             background: p.bg0,
-            border: `1px solid ${p.accentLine}`,
-            boxShadow: `0 0 0 4px ${p.accentSoft}`,
+            border: `1px solid ${p.line2}`,
+            boxShadow: "none",
           }}
         >
           <div

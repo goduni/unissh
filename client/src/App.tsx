@@ -9,8 +9,7 @@ import { Sidebar, TitleBar } from "@/shell/Shell";
 
 import { ViewHosts } from "@/views/ViewHosts";
 import { ViewTerminal } from "@/views/ViewTerminal";
-import { ViewFleet } from "@/views/ViewFleet";
-import { ViewBroadcast } from "@/views/ViewBroadcast";
+import { ViewRun } from "@/views/ViewRun";
 import { ViewSftp } from "@/views/sftp/ViewSftp";
 import { ViewTunnels } from "@/views/ViewTunnels";
 import { ViewKnown } from "@/views/ViewKnown";
@@ -34,10 +33,10 @@ function RenderView() {
       return <ViewHosts />;
     case "terminal":
       return null; // rendered persistently in App() so sessions/scrollback survive navigation
+    case "run":
     case "fleet":
-      return <ViewFleet />;
     case "broadcast":
-      return <ViewBroadcast />;
+      return <ViewRun />;
     case "sftp":
       return null; // rendered persistently in App() so panes/cwd/selection survive navigation
     case "tunnels":

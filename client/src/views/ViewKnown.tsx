@@ -122,18 +122,14 @@ export function ViewKnown() {
         }}
       >
         <Icon name="shieldcheck" size={20} color={p.accent} />
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
           {t("nav.known")}
         </h1>
         <span
           style={{
             fontFamily: MONO,
             fontSize: 12,
-            color: p.txt2,
-            background: p.bg2,
-            border: `1px solid ${p.line}`,
-            borderRadius: 20,
-            padding: "2px 9px",
+            color: p.txt3,
           }}
         >
           TOFU · {knownHosts.length}
@@ -221,11 +217,9 @@ export function ViewKnown() {
                       ...(isMobile ? { wordBreak: "break-all" } : null),
                     }}
                   >
-                    {parseHostKey(
-                      knownHosts.find(
-                        (k) => k.host === pendingMismatch.host && k.port === pendingMismatch.port,
-                      )?.key ?? "",
-                    ).fp || "—"}
+                    {knownHosts.find(
+                      (k) => k.host === pendingMismatch.host && k.port === pendingMismatch.port,
+                    )?.fingerprint || "—"}
                   </div>
                 </div>
                 <Icon
@@ -333,7 +327,7 @@ export function ViewKnown() {
                     color: p.txt3,
                     textTransform: "uppercase",
                     borderBottom: `1px solid ${p.line}`,
-                    background: p.bg2,
+                    background: "transparent",
                   }}
                 >
                   <span>{t("known.col.host")}</span>
@@ -344,7 +338,7 @@ export function ViewKnown() {
                 </div>
               )}
               {knownHosts.map((k, i) => {
-                const { algo, fp } = parseHostKey(k.key);
+                const { algo } = parseHostKey(k.key);
                 const label = k.port && k.port !== 22 ? `${k.host}:${k.port}` : k.host;
                 const lastRow = i === knownHosts.length - 1;
                 if (isMobile) {
@@ -390,9 +384,9 @@ export function ViewKnown() {
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
                         }}
-                        title={fp}
+                        title={k.fingerprint}
                       >
-                        {fp}
+                        {k.fingerprint}
                       </div>
                       <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
                         {algo} · {fmtDate(k.addedAt)}
@@ -457,9 +451,9 @@ export function ViewKnown() {
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                       }}
-                      title={fp}
+                      title={k.fingerprint}
                     >
-                      {fp}
+                      {k.fingerprint}
                     </span>
                     <span style={{ fontSize: 11.5, color: p.txt3 }}>{fmtDate(k.addedAt)}</span>
                     <span style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>

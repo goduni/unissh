@@ -85,12 +85,14 @@ export const en = {
     passwords: "Passwords",
     identities: "Identities",
     notes: "Notes",
+    secrets: "Secrets",
     tunnels: "Tunnels",
     known: "Known hosts",
     settings: "Settings",
     fleet: "Fleet",
     fleetExec: "Fleet exec",
     broadcast: "Broadcast",
+    run: "Run",
     sftp: "SFTP",
     more: "More",
   },
@@ -204,7 +206,14 @@ export const en = {
 
   broadcast: {
     "noRoute": "no route",
+    "offline": "offline",
+    "awaitingOutput": "connected — awaiting output",
     "mirrored": "mirrored",
+    "sendConfirmTitle": "Send to all live hosts?",
+    "sendConfirmBody": "This types into {{count}} live sessions at once — it can't be undone.",
+    "sendConfirm": "Send to all",
+    "dangerTitle": "Destructive command — send to all?",
+    "dangerBody": "This runs on {{count}} live hosts at once and looks destructive. Double-check before sending.",
     "connectionRefused": "connection refused",
     "noStatus": "no status",
     "closedCode": "closed (code {{code}})",
@@ -238,6 +247,10 @@ export const en = {
       "tunnels": "-L / -R / -D",
       "known": "TOFU",
       "keys": "secrets",
+      "terminal": "live sessions",
+      "passwords": "stored passwords",
+      "identities": "SSH identities",
+      "notes": "secure notes",
       "settings": "preferences"
     },
     "action": {
@@ -249,6 +262,10 @@ export const en = {
       "newTunnelSub": "port forwarding",
       "import": "Import ~/.ssh/config",
       "importSub": "add hosts from a file",
+      "groups": "Manage groups",
+      "groupsSub": "organize hosts",
+      "sync": "Sync vault",
+      "syncSub": "pull + push now",
       "lock": "Lock instance",
       "lockSub": "zero out secrets"
     },
@@ -287,6 +304,7 @@ export const en = {
     "queued": "queued",
     "running": "running…",
     "exit": "exit {{code}}",
+    "timedOut": "timed out",
     "noOutput": "(no output)",
     "commandPlaceholder": "command for all hosts…",
     "stopOnError": "stop on error",
@@ -350,8 +368,8 @@ export const en = {
     "sortTitle": "Sort",
     "sort": {
       "name": "Name",
-      "connected": "Recently connected",
-      "recent": "Recently added"
+      "connected": "Date connected",
+      "recent": "Date added"
     },
     "viewCards": "Card view",
     "viewList": "List view",
@@ -368,6 +386,7 @@ export const en = {
     "sessionActive": "session active",
     "noActiveSession": "no active session",
     "openSession": "Open session",
+    "openSftp": "Open SFTP",
     "terminal": "Terminal",
     "jump": "jump",
     "tags": "Tags",
@@ -377,7 +396,9 @@ export const en = {
       "address": "Address",
       "user": "User",
       "userPersonal": "From personal identity",
-      "auth": "Auth"
+      "auth": "Auth",
+      "lastConnected": "Last connected",
+      "groups": "Groups"
     },
     "hostKeyPinned": "Host key pinned (TOFU)",
     "hostKeyUnpinned": "Host key not pinned",
@@ -456,6 +477,8 @@ export const en = {
     }
   },
   mobile: {
+    "keyVerified": "Key verified",
+    "notConnectedTofu": "Not yet connected (TOFU)",
     "vault": "Vault",
     "vaultLower": "vault",
     "noVaults": "No vaults",
@@ -486,6 +509,8 @@ export const en = {
       "port": "Port",
       "user": "User",
       "session": "Session",
+      "auth": "Auth",
+      "proxyJump": "ProxyJump",
       "tags": "Tags"
     },
     "more": {
@@ -624,7 +649,8 @@ export const en = {
   onboarding: {
     "step": {
       "instance": "Instance",
-      "masterPassword": "Master password"
+      "masterPassword": "Master password",
+      "emergencyKit": "Emergency Kit"
     },
     "newInstanceTitle": "New local instance",
     "newInstanceDesc": "An isolated space for your hosts and secrets. Everything stays on the device — no server, no cloud sync.",
@@ -741,6 +767,10 @@ export const en = {
   },
   secrets: {
     "title": "Secrets",
+    "updatedAgo": "Updated {{ago}}",
+    "usedByHosts_one": "{{count}} host",
+    "usedByHosts_other": "{{count}} hosts",
+    "unused": "unused",
     "newKey": "New key",
     "newPassword": "New password",
     "newIdentity": "New identity",
@@ -788,6 +818,8 @@ export const en = {
     "noteDeleted": "Note deleted",
     "deleteNoteTitle": "Delete note?",
     "showNote": "Show note",
+    "hideNote": "Hide",
+    "keyActions": "Key actions",
     "namePlaceholder": "name (item id)",
     "valuePlaceholder": "value",
     "noteTextPlaceholder": "note text…"
@@ -804,6 +836,7 @@ export const en = {
     "themePickerTitle": "Theme",
     "themePickerDesc": "Overall look — palette + linked terminal theme",
     "themeFamilyDesc": "Colour palette",
+    "themeFamilyMono": "Mono",
     "themeFamilyNebula": "Nebula",
     "themeFamilyCandy": "Candy Holo",
     "themeAutoSystem": "Auto (system)",
@@ -821,9 +854,13 @@ export const en = {
     "accentTitle": "Accent color",
     "accentDesc": "Primary interactive color of the interface",
     "densityTitle": "Interface density",
-    "densityDesc": "Cards or a compact host list",
-    "densityCards": "Cards",
-    "densityList": "List",
+    "densityDesc": "Comfortable spacing or a compact layout",
+    "densityComfortable": "Comfortable",
+    "densityCompact": "Compact",
+    "hostsLayoutTitle": "Hosts view",
+    "hostsLayoutDesc": "A card grid or a flat list",
+    "hostsLayoutCards": "Cards",
+    "hostsLayoutList": "List",
     "sectionTerminal": "Terminal",
     "termFontTitle": "Terminal font size",
     "termFontDesc": "Zoom the terminal text. Also ⌘/Ctrl +, −, 0 while a terminal is open.",
@@ -903,6 +940,7 @@ export const en = {
     "linkCopied": "Link copied"
   },
   sftp: {
+    "verified": "Verified",
     "pickHost": "pick a host",
     "noSavedHosts": "No saved hosts",
     "newFolder": "New folder",
@@ -1036,6 +1074,9 @@ export const en = {
     "lock": "Lock (⌘L)",
     "lockShort": "Lock",
     "newVault": "New vault",
+    "synced": "Synced",
+    "syncing": "Syncing…",
+    "syncError": "Sync error",
     "vaultCreated": "Vault created",
     "vaultCloudCreated": "Cloud vault created",
     "vaultCreateFailed": "Could not create vault",
@@ -1047,7 +1088,8 @@ export const en = {
     "groupsHeader": "Hosts",
     "operationsHeader": "Operations",
     "secretsHeader": "Secrets",
-    "networkHeader": "Network"
+    "networkHeader": "Network",
+    "vaultNetworkHeader": "Vault & network"
   },
   terminal: {
     "search": {

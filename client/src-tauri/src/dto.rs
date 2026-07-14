@@ -821,6 +821,9 @@ pub struct KnownHostInfo {
     pub host: String,
     pub port: u16,
     pub key: String,
+    /// SHA256 fingerprint (`SHA256:…`), computed core-side. Without this field the
+    /// client's Known-hosts list renders a blank fingerprint column.
+    pub fingerprint: String,
     pub added_at: i64,
 }
 impl From<ffi::KnownHostInfo> for KnownHostInfo {
@@ -829,6 +832,7 @@ impl From<ffi::KnownHostInfo> for KnownHostInfo {
             host: k.host,
             port: k.port,
             key: k.key,
+            fingerprint: k.fingerprint,
             added_at: k.added_at,
         }
     }

@@ -5,8 +5,9 @@
 
 import { useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, UI } from "@/theme/tokens";
+import { UI } from "@/theme/tokens";
 import { Icon, IconBtn, NO_AUTOCORRECT, type IconName } from "@/components/primitives";
+import { MetaChip } from "@/components/mono";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
@@ -199,26 +200,29 @@ export function PaneSlot({
             }}
           />
         </div>
+        {slot.location.kind === "remote" && (
+          <MetaChip icon="shield" tone="good">
+            {t("sftp.verified")}
+          </MetaChip>
+        )}
         {selCount > 0 && (
           <button
             onClick={slot.clearSelection}
+            title={t("common.cancel")}
+            aria-label={t("common.cancel")}
             style={{
               display: "inline-flex",
               alignItems: "center",
               gap: 5,
-              fontFamily: MONO,
-              fontSize: 11,
-              color: p.accent,
-              background: p.accentSoft,
-              border: `1px solid ${p.accentLine}`,
-              borderRadius: 20,
-              padding: "2px 8px",
+              background: "transparent",
+              border: "none",
+              padding: "2px 4px",
               cursor: "pointer",
+              flexShrink: 0,
             }}
-            title={t("common.cancel")}
           >
-            {t("sftp.selected", { count: selCount })}
-            <Icon name="x" size={10} />
+            <MetaChip>{t("sftp.selected", { count: selCount })}</MetaChip>
+            <Icon name="x" size={10} color={p.txt3} />
           </button>
         )}
         {isMobile && <IconBtn icon="list" size={40} title={t("sftp.sortBy")} onClick={() => setSortMenu(true)} />}

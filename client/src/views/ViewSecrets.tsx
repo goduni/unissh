@@ -8,8 +8,9 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, UI, rgba, vaultColor } from "@/theme/tokens";
+import { MONO, UI } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, VaultBadge } from "@/components/primitives";
+import { UnderlineTabs, fmtRelative, FlatAvatar, MetaChip, RowOverflowMenu, Card, HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
@@ -66,7 +67,6 @@ function TabBar({
   counts: Record<SecretTab, number>;
   isMobile: boolean;
 }) {
-  const p = usePalette();
   const { t } = useTranslation();
   const tabs: { id: SecretTab; icon: "key" | "lock" | "note" | "fingerprint"; label: string }[] = [
     { id: "keys", icon: "key", label: t("nav.keys") },
@@ -75,33 +75,22 @@ function TabBar({
     { id: "notes", icon: "note", label: t("nav.notes") },
   ];
   return (
-    <div style={{ display: "flex", gap: 6, flexWrap: isMobile ? "wrap" : "nowrap" }}>
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          onClick={() => setTab(t.id)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 7,
-            padding: "7px 14px",
-            borderRadius: 9,
-            cursor: "pointer",
-            fontFamily: UI,
-            fontSize: 13,
-            fontWeight: tab === t.id ? 700 : 600,
-            background: tab === t.id ? p.accentSoft : p.bg2,
-            color: tab === t.id ? p.accent : p.txt2,
-            border: `1px solid ${tab === t.id ? p.accentLine : p.line}`,
-          }}
-        >
-          <Icon name={t.icon} size={15} stroke={1.8} />
-          {t.label}
-          <span style={{ fontFamily: MONO, fontSize: 11, color: tab === t.id ? p.accent : p.txt3 }}>
-            {counts[t.id]}
-          </span>
-        </button>
-      ))}
+    <div style={{ overflowX: isMobile ? "auto" : "visible", minWidth: 0 }}>
+      <UnderlineTabs<SecretTab>
+        ariaLabel={t("nav.secrets")}
+        value={tab}
+        onChange={setTab}
+        tabs={tabs.map((tb) => ({
+          value: tb.id,
+          label: (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <Icon name={tb.icon} size={15} stroke={1.8} />
+              {tb.label}
+            </span>
+          ),
+          count: counts[tb.id],
+        }))}
+      />
     </div>
   );
 }
@@ -225,10 +214,11 @@ function RevealField({
 }
 
 // ── Keys ───────────────────────────────────────────────────────
-function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
+function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; first?: boolean }) {
   const p = usePalette();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ctx = useCtx();
+  const uses = countKeyRefs(item.itemId);
   const vault = useApp((s) => s.vaultId);
   const [fp, setFp] = useState<string | null>(null);
   const [openssh, setOpenssh] = useState<string | null>(null);
@@ -314,7 +304,6 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
     if (!vault) return;
     // Warn if the key still backs any host login (direct auth or a jump hop), so
     // deleting it doesn't silently break those connections.
-    const uses = countKeyRefs(item.itemId);
     ctx.confirm({
       title: t("secrets.deleteKeyTitle"),
       body: uses > 0 ? t("secrets.deleteKeyInUse", { item: item.itemId, count: uses }) : item.itemId,
@@ -342,16 +331,12 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
     justifyContent: "center",
   } as const;
   return (
-    <div
+    <HairlineRow
+      first={first}
       style={{
-        display: "flex",
         alignItems: isMobile ? "stretch" : "center",
         flexDirection: isMobile ? "column" : "row",
         gap: isMobile ? 10 : 14,
-        padding: "13px 16px",
-        borderRadius: 13,
-        background: p.bg1,
-        border: `1px solid ${p.line}`,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 12 : 14, minWidth: 0 }}>
@@ -360,22 +345,22 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
             width: 40,
             height: 40,
             borderRadius: 11,
-            background: p.accentSoft,
-            border: `1px solid ${p.accentLine}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="key" size={18} color={p.accent} />
+          <Icon name="key" size={18} color={p.txt2} />
         </span>
         <div style={{ width: isMobile ? "auto" : 150, flexShrink: 0, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {item.itemId}
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
-            v{item.version}
+            {t("secrets.updatedAgo", { ago: fmtRelative(item.updatedAt, i18n.language) })}
             {item.hasCertificate ? " · cert" : ""}
           </div>
         </div>
@@ -394,6 +379,9 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
       >
         {fp ?? "…"}
       </span>
+      <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
+        {uses === 0 ? t("secrets.unused") : t("secrets.usedByHosts", { count: uses })}
+      </MetaChip>
       <div
         style={{
           display: "flex",
@@ -419,52 +407,21 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
         >
           <Icon name={copied ? "check" : "copy"} size={14} />
         </button>
-        <button
-          onClick={() =>
-            openssh && ctx.openModal({ kind: "copyKeyToServer", openssh, keyItemId: item.itemId })
-          }
-          title={t("secrets.copyToServer")}
-          aria-label={t("secrets.copyToServer")}
-          disabled={!openssh}
-          style={{
-            ...actBtn,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.txt3,
-            cursor: openssh ? "pointer" : "default",
-            opacity: openssh ? 1 : 0.5,
-          }}
-        >
-          <Icon name="upload" size={14} />
-        </button>
-        <button
-          onClick={onRotate}
-          title={t("secrets.rotateKey")}
-          aria-label={t("secrets.rotateKey")}
-          style={{
-            ...actBtn,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.txt3,
-            cursor: "pointer",
-          }}
-        >
-          <Icon name="refresh" size={14} />
-        </button>
-        <button
-          onClick={onExport}
-          title={t("secrets.exportPrivateKey")}
-          aria-label={t("secrets.exportPrivateKey")}
-          style={{
-            ...actBtn,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.txt3,
-            cursor: "pointer",
-          }}
-        >
-          <Icon name="download" size={14} />
-        </button>
+        <RowOverflowMenu
+          ariaLabel={t("secrets.keyActions")}
+          items={[
+            {
+              label: t("secrets.copyToServer"),
+              icon: "upload",
+              onClick: () => {
+                if (openssh)
+                  ctx.openModal({ kind: "copyKeyToServer", openssh, keyItemId: item.itemId });
+              },
+            },
+            { label: t("secrets.rotateKey"), icon: "refresh", onClick: onRotate },
+            { label: t("secrets.exportPrivateKey"), icon: "download", onClick: onExport },
+          ]}
+        />
         <button
           onClick={onDelete}
           title={t("common.delete")}
@@ -480,7 +437,7 @@ function KeyRow({ item, isMobile }: { item: ItemInfo; isMobile: boolean }) {
           <Icon name="trash" size={14} />
         </button>
       </div>
-    </div>
+    </HairlineRow>
   );
 }
 
@@ -489,10 +446,12 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const { t } = useTranslation();
   const ctx = useCtx();
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-      {keys.map((k) => (
-        <KeyRow key={k.itemId} item={k} isMobile={isMobile} />
-      ))}
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div>
+        {keys.map((k, i) => (
+          <KeyRow key={k.itemId} item={k} isMobile={isMobile} first={i === 0} />
+        ))}
+      </div>
       <button
         onClick={() => ctx.openModal({ kind: "key" })}
         style={{
@@ -590,15 +549,15 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
             width: 34,
             height: 34,
             borderRadius: 9,
-            background: rgba(p.amber, 0.14),
-            border: `1px solid ${rgba(p.amber, 0.35)}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="lock" size={16} color={p.amber} />
+          <Icon name="lock" size={16} color={p.txt2} />
         </span>
         <input
           ref={nameRef}
@@ -652,7 +611,7 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
 
 function PasswordCard({ item }: { item: ItemInfo }) {
   const p = usePalette();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ctx = useCtx();
   const vault = useApp((s) => s.vaultId);
   const [editing, setEditing] = useState(false);
@@ -701,28 +660,30 @@ function PasswordCard({ item }: { item: ItemInfo }) {
   };
 
   return (
-    <div style={{ padding: 15, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
+    <Card>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <span
           style={{
             width: 34,
             height: 34,
             borderRadius: 9,
-            background: rgba(p.amber, 0.14),
-            border: `1px solid ${rgba(p.amber, 0.35)}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="lock" size={16} color={p.amber} />
+          <Icon name="lock" size={16} color={p.txt2} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {item.itemId}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>v{item.version}</div>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+            {t("secrets.updatedAgo", { ago: fmtRelative(item.updatedAt, i18n.language) })}
+          </div>
         </div>
         <button
           onClick={editing ? saveEdit : startEdit}
@@ -790,7 +751,7 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           onError={(e) => ctx.toast(apiErrorMessage(e), "err")}
         />
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -820,7 +781,7 @@ function PasswordsTab({
 }
 
 // ── Notes ──────────────────────────────────────────────────────
-function NoteCard({ item }: { item: ItemInfo }) {
+function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
@@ -904,9 +865,9 @@ function NoteCard({ item }: { item: ItemInfo }) {
   };
 
   return (
-    <div style={{ padding: 16, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
+    <HairlineRow first={first} style={{ flexDirection: "column", alignItems: "stretch", gap: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
-        <Icon name="note" size={16} color={p.purple} />
+        <Icon name="note" size={16} color={p.txt2} />
         <span style={{ fontSize: 14.5, fontWeight: 700 }}>{item.itemId}</span>
         <div style={{ flex: 1 }} />
         <button
@@ -1007,20 +968,66 @@ function NoteCard({ item }: { item: ItemInfo }) {
           {t("secrets.showNote")}
         </button>
       ) : (
-        <pre
-          style={{
-            margin: 0,
-            fontFamily: MONO,
-            fontSize: 12.5,
-            color: p.txt2,
-            lineHeight: 1.7,
-            whiteSpace: "pre-wrap",
-          }}
-        >
-          {body}
-        </pre>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <button
+              type="button"
+              onClick={() => setBody(null)}
+              title={t("secrets.hideNote")}
+              aria-label={t("secrets.hideNote")}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                border: "none",
+                background: "transparent",
+                padding: 0,
+                color: p.txt3,
+                fontFamily: UI,
+                fontSize: 12.5,
+                cursor: "pointer",
+              }}
+            >
+              <Icon name="eye" size={14} />
+              {t("secrets.hideNote")}
+            </button>
+            <div style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={async () => {
+                await writeSecretToClipboard(body);
+                flash();
+              }}
+              title={t("common.copy")}
+              aria-label={t("common.copy")}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                border: "none",
+                background: "transparent",
+                padding: 0,
+                color: copied ? p.green : p.txt3,
+                cursor: "pointer",
+              }}
+            >
+              <Icon name={copied ? "check" : "copy"} size={14} />
+            </button>
+          </div>
+          <pre
+            style={{
+              margin: 0,
+              fontFamily: MONO,
+              fontSize: 12.5,
+              color: p.txt2,
+              lineHeight: 1.7,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {body}
+          </pre>
+        </div>
       )}
-    </div>
+    </HairlineRow>
   );
 }
 
@@ -1089,7 +1096,7 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
   return (
     <div style={{ padding: 16, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
-        <Icon name="note" size={16} color={p.purple} />
+        <Icon name="note" size={16} color={p.txt2} />
         <input
           ref={nameRef}
           {...NO_AUTOCORRECT}
@@ -1145,9 +1152,11 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
 function NotesTab({ notes, openSignal }: { notes: ItemInfo[]; openSignal: number }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {notes.map((n) => (
-        <NoteCard key={n.itemId} item={n} />
-      ))}
+      <div>
+        {notes.map((n, i) => (
+          <NoteCard key={n.itemId} item={n} first={i === 0} />
+        ))}
+      </div>
       <NewNoteCard openSignal={openSignal} />
     </div>
   );
@@ -1299,15 +1308,15 @@ function NewIdentityCard({
             width: 34,
             height: 34,
             borderRadius: 9,
-            background: rgba(p.purple, 0.14),
-            border: `1px solid ${rgba(p.purple, 0.35)}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="fingerprint" size={16} color={p.purple} />
+          <Icon name="fingerprint" size={16} color={p.txt2} />
         </span>
         <input
           ref={nameRef}
@@ -1451,22 +1460,22 @@ function IdentityCard({
       : t("secrets.identityNoCred");
 
   return (
-    <div style={{ padding: 15, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
+    <Card>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: editing ? 12 : 0 }}>
         <span
           style={{
             width: 34,
             height: 34,
             borderRadius: 9,
-            background: rgba(p.purple, 0.14),
-            border: `1px solid ${rgba(p.purple, 0.35)}`,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
         >
-          <Icon name="fingerprint" size={16} color={p.purple} />
+          <Icon name="fingerprint" size={16} color={p.txt2} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -1548,7 +1557,7 @@ function IdentityCard({
           <CredSelect keys={keys} passwords={passwords} value={cred} onChange={setCred} />
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -1574,33 +1583,13 @@ function IdentityVaultSwitcher({
   const cur = vaults.find((v) => v.vaultId === selected) ?? vaults[0];
   if (!cur) return null;
 
-  // Shared deterministic palette-driven avatar colour (same hue in the shell/mobile).
-  const colorFor = (id: string) => vaultColor(p, id);
   const badgeLabel = (v: VaultInfo) => {
     const loc = vaultLoc(v, servers);
     return loc.local
       ? t("secrets.locLocal")
       : t("secrets.locCloud", { server: loc.server ?? t("vault.cloud") });
   };
-  const avatar = (v: VaultInfo, sz: number) => (
-    <span
-      style={{
-        width: sz,
-        height: sz,
-        borderRadius: sz * 0.27,
-        background: `linear-gradient(140deg, ${colorFor(v.vaultId)}, ${p.purple})`,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#fff",
-        fontWeight: 700,
-        fontSize: sz * 0.5,
-        flexShrink: 0,
-      }}
-    >
-      {v.name[0]?.toUpperCase()}
-    </span>
-  );
+  const avatar = (v: VaultInfo, sz: number) => <FlatAvatar name={v.name} size={sz} />;
   const row = (base: string): CSSProperties => ({
     display: "flex",
     alignItems: "center",
@@ -1810,7 +1799,7 @@ function IdentitiesTab({
         style={{
           border: `1px dashed ${p.line}`,
           borderRadius: 12,
-          background: p.bg2,
+          background: "transparent",
           padding: "20px 18px",
           display: "flex",
           flexDirection: "column",
@@ -1819,7 +1808,7 @@ function IdentitiesTab({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Icon name="fingerprint" size={16} color={p.accent} />
+          <Icon name="fingerprint" size={16} color={p.txt2} />
           <span style={{ fontSize: 13.5, fontWeight: 700 }}>{t("secrets.noIdentityVaultTitle")}</span>
         </div>
         <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.55, maxWidth: 470 }}>
@@ -1958,7 +1947,7 @@ export function ViewSecrets() {
           padding: isMobile ? "14px 14px 10px" : "16px 22px 12px",
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>{t("secrets.title")}</h1>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: -0.7 }}>{t("secrets.title")}</h1>
         <TabBar tab={tab} setTab={setTab} counts={counts} isMobile={isMobile} />
         <div style={{ flex: 1 }} />
         <Btn icon="plus" size="sm" onClick={onPrimary}>

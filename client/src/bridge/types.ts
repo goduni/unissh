@@ -180,6 +180,9 @@ export interface KnownHostInfo {
   host: string;
   port: number;
   key: string;
+  /** Core-computed SHA256 fingerprint ("SHA256:…") — the same format the
+   *  HostKeyMismatch error emits, so stored vs presented are directly comparable. */
+  fingerprint: string;
   addedAt: number;
 }
 
@@ -241,6 +244,9 @@ export interface SftpEntry {
   mode: number;
   /** Modified time, epoch seconds; 0 when the server didn't report it. */
   mtime: number;
+  /** Owner uid / gid (numeric); 0 when the server didn't report it. */
+  uid: number;
+  gid: number;
 }
 
 export interface SftpFileStat {

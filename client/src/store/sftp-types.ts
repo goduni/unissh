@@ -12,6 +12,9 @@ export interface Entry {
   size: number;
   mtime?: number;
   mode?: number;
+  /** Numeric owner uid/gid from the remote listing (once the core surfaces them). */
+  uid?: number;
+  gid?: number;
 }
 
 /** Which location a pane-slot / tab points at. "local" is a single virtual

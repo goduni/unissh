@@ -9,8 +9,13 @@ export const MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace";
 export type Mode = "dark" | "light" | "auto";
 export type EffMode = "dark" | "light";
 export type AccentKey = "blue" | "green" | "violet" | "amber" | "rose";
-export type Density = "cards" | "list";
-export type AppThemeFamily = "nebula" | "candy";
+/** Global SPACING axis (row height / padding / hairline-vs-shadow). Independent of
+ *  the Hosts card/list layout and of the mobile touch-shell platform flag. */
+export type Density = "comfortable" | "compact";
+/** Hosts list rendering: a card grid vs a flat row list. A per-view layout choice,
+ *  NOT the spacing density. */
+export type HostsLayout = "cards" | "list";
+export type AppThemeFamily = "mono" | "nebula" | "candy";
 
 export interface Palette {
   name: string;
@@ -47,6 +52,9 @@ export interface Palette {
    *  accent ink routinely fails on red (e.g. candy-light's plum on #d02545 is
    *  3.05:1). Consumers fall back to "#fff" when absent. */
   dangerInk?: string;
+  /** Modal / overlay backdrop scrim for this palette (light/dark-aware). Consumers
+   *  fall back to a neutral rgba when absent. */
+  scrim?: string;
 }
 
 // ── App palettes ───────────────────────────────────────────────
@@ -159,6 +167,68 @@ export const CANDY_DARK: Palette = {
   accentGradient: "linear-gradient(90deg,#ff5fb8,#b06aff 55%,#5ec7ff)",
   accentInk: "#3d1035", // same ink as candy-light — the gradient is shared
   dangerInk: "#3d1035", // white fails AA on this pastel red (2.71:1); plum is 5.86:1
+};
+
+// ── Mono — the minimalist DEFAULT family ───────────────────────
+// Near-monochrome: colour carries MEANING ONLY (green/amber/red status + one
+// neutral accent). No gradients; the 5-level bg ladder collapses to base (bg0/bg1)
+// + a barely-elevated panel/hover/selected tier (bg2..bg4 within ~2% L of base) so
+// existing bgN consumers render flat. Every txt/semantic pair is AA-verified on
+// base AND elevated in both twins (scripts/mono-contrast golden check).
+export const MONO_LIGHT: Palette = {
+  name: "mono-light",
+  desk: "#e7e8ec",
+  bg0: "#ffffff",
+  bg1: "#ffffff",
+  bg2: "#f7f8fa",
+  bg3: "#f1f2f5",
+  bg4: "#eceef2",
+  line: "rgba(20,24,40,0.09)",
+  line2: "rgba(20,24,40,0.15)",
+  txt: "#191b22",
+  txt2: "#545863", // AA on white & bg2..bg4
+  txt3: "#676a73", // AA (≥4.5:1) on white AND on bg2 (#f7f8fa)
+  accent: "#22242c",
+  accent2: "#111319",
+  accentSoft: "rgba(34,36,44,0.06)",
+  accentLine: "rgba(34,36,44,0.22)",
+  green: "#0c6e45", // AA (≥4.5:1) as text on bg0..bg4
+  amber: "#8f5e10",
+  red: "#c22e45", // AA (≥4.5:1) as text on bg0..bg4
+  purple: "#676a73", // decorative purple → neutral in mono
+  glow: "rgba(34,36,44,0.05)",
+  shadow: "0 8px 26px -14px rgba(30,36,55,0.22), 0 0 0 1px rgba(20,24,40,0.05)",
+  accentInk: "#ffffff", // on #22242c ≈ 15:1
+  dangerInk: "#ffffff", // on #c9334b ≈ 5.17:1
+  scrim: "rgba(18,22,38,0.42)",
+};
+
+export const MONO_DARK: Palette = {
+  name: "mono-dark",
+  desk: "#08090c",
+  bg0: "#0f1116",
+  bg1: "#0f1116",
+  bg2: "#14161d",
+  bg3: "#1b1e28",
+  bg4: "#232734",
+  line: "rgba(255,255,255,0.07)",
+  line2: "rgba(255,255,255,0.13)",
+  txt: "#e9ebf1",
+  txt2: "#9aa0b2",
+  txt3: "#8b93ac", // AA on bg0..bg4 (proven value from the shipped DARK palette)
+  accent: "#e9ebf1", // near-white "ink" accent
+  accent2: "#ffffff",
+  accentSoft: "rgba(233,235,241,0.10)",
+  accentLine: "rgba(233,235,241,0.24)",
+  green: "#3ad29f",
+  amber: "#e0a860",
+  red: "#ff6b80",
+  purple: "#9aa0b2", // decorative purple → neutral in mono
+  glow: "rgba(233,235,241,0.08)",
+  shadow: "0 12px 34px -18px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05)",
+  accentInk: "#12141a", // dark ink on the near-white accent
+  dangerInk: "#12141a", // dark ink on pastel red #ff6b80 (white fails AA there)
+  scrim: "rgba(0,0,0,0.6)",
 };
 
 // ── Terminal themes (classic + custom) ─────────────────────────
@@ -316,6 +386,7 @@ export function buildPalette(mode: EffMode, accentKey: AccentKey = "blue"): Pale
 // palette per effective mode. resolveAppPalette is the single entry point the
 // ThemeProvider uses instead of calling buildPalette directly.
 export const APP_THEMES: Record<Exclude<AppThemeFamily, "nebula">, { dark: Palette; light: Palette }> = {
+  mono: { dark: MONO_DARK, light: MONO_LIGHT },
   candy: { dark: CANDY_DARK, light: CANDY_LIGHT },
 };
 
@@ -334,6 +405,7 @@ export function resolveAppPalette(
 // Default terminal theme per (family, effective mode) — the linked default that a
 // per-mode manual override can replace (see ThemeProvider).
 export const TERM_LINK: Record<AppThemeFamily, { dark: string; light: string }> = {
+  mono: { dark: "nebula", light: "solight" },
   nebula: { dark: "nebula", light: "solight" },
   candy: { dark: "candy-dark", light: "candy-light" },
 };

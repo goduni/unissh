@@ -29,6 +29,7 @@ import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
 export type Route =
   | "hosts"
   | "terminal"
+  | "run"
   | "fleet"
   | "broadcast"
   | "sftp"
@@ -286,6 +287,9 @@ interface AppStore {
 
   // pending TOFU host-key mismatch (surfaced from a connect attempt)
   pendingMismatch: PendingMismatch | null;
+  // A freshly-opened SFTP session id the SFTP view should focus on next mount
+  // (set by the Hosts "quick SFTP" action, consumed + cleared by ViewSftp).
+  pendingSftpFocus: string | null;
 
   // cloud server — an instance may be linked to multiple servers at once.
   // `servers` is the full list; `serverStatus` mirrors the active one (kept for
@@ -422,6 +426,7 @@ interface AppStore {
   clearFinishedTransfers: () => void;
 
   setPendingMismatch: (m: PendingMismatch | null) => void;
+  setPendingSftpFocus: (id: string | null) => void;
   setFleetSelection: (ids: string[]) => void;
 }
 
@@ -590,6 +595,7 @@ export const useApp = create<AppStore>((set, get) => ({
   sftpSessions: [],
   transfers: [],
   pendingMismatch: null,
+  pendingSftpFocus: null,
   servers: [],
   activeServerId: null,
   serverStatus: null,
@@ -1332,6 +1338,7 @@ export const useApp = create<AppStore>((set, get) => ({
     })),
 
   setPendingMismatch: (m) => set({ pendingMismatch: m }),
+  setPendingSftpFocus: (id) => set({ pendingSftpFocus: id }),
   setFleetSelection: (ids) => set({ fleetSelection: ids }),
 }));
 

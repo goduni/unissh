@@ -724,7 +724,11 @@ pub fn canonical_host_key(key_openssh: &str) -> Result<Vec<u8>, TransportError> 
         .into_bytes())
 }
 
-pub(crate) fn fingerprint_openssh(openssh: &[u8]) -> String {
+/// The OpenSSH SHA256 fingerprint (`SHA256:…`) of a public key in OpenSSH text
+/// form, or `"unknown"` if it can't be parsed. This is the exact format the
+/// `HostKeyMismatch` error emits for the presented key, so a stored key run through
+/// this is directly comparable against it.
+pub fn fingerprint_openssh(openssh: &[u8]) -> String {
     let s = String::from_utf8_lossy(openssh);
     match PublicKey::from_openssh(s.trim()) {
         Ok(pk) => pk.fingerprint(HashAlg::Sha256).to_string(),

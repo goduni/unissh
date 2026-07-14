@@ -70,6 +70,8 @@ export function ViewSftp() {
   const hosts = useApp((s) => s.hosts);
   const enqueueTransfer = useApp((s) => s.enqueueTransfer);
   const closeSftpSession = useApp((s) => s.closeSftpSession);
+  const pendingSftpFocus = useApp((s) => s.pendingSftpFocus);
+  const setPendingSftpFocus = useApp((s) => s.setPendingSftpFocus);
 
   const [leftLoc, setLeftLoc] = useState<LocationRef>({ kind: "local" });
   // Right pane starts empty (a "pick a host" prompt) so the remote half of a
@@ -83,6 +85,15 @@ export function ViewSftp() {
   const [conflict, setConflict] = useState<ConflictReq | null>(null);
   const [editor, setEditor] = useState<{ source: FileSource; path: string; name: string; size: number } | null>(null);
   const [dropTab, setDropTab] = useState<{ slot: "left" | "right"; id: string } | null>(null);
+
+  // "Quick SFTP" from the Hosts view opens a session then routes here; show it in
+  // the RIGHT pane (Local stays on the left — the natural transfer layout) and
+  // clear the one-shot flag.
+  useEffect(() => {
+    if (!pendingSftpFocus) return;
+    setRightLoc({ kind: "remote", sessionId: pendingSftpFocus });
+    setPendingSftpFocus(null);
+  }, [pendingSftpFocus, setPendingSftpFocus]);
 
   // Live refs so a refresh fired after a long transfer targets the slot's
   // CURRENT location/cwd, not the render that started the transfer.

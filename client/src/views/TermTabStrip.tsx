@@ -126,6 +126,7 @@ export function TermTabStrip({
         display: "flex",
         alignItems: "stretch",
         background: bg,
+        borderBottom: `1px solid ${p.line}`,
         flexShrink: 0,
         minHeight: 38,
       }}
