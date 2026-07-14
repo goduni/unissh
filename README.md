@@ -98,10 +98,10 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 
 **Sync & team (server-backed)**
 - Device + team **sync** of encrypted blobs over a self-hosted server, with **signed monotonic versions** and last-writer-wins conflict resolution (verify-before-apply).
-- **Membership, roles, sharing, and revocation** with cryptographic vault roles (viewer/editor/admin) distinct from server-trusted instance-admin powers.
+- **Membership, roles, sharing, and revocation** with cryptographic vault roles (viewer/editor/admin) distinct from the server-trusted owner / space-admin roles.
 - Server-side **audit hash-chain** and Prometheus metrics for operators.
 
-> **Status note.** The sync engine, the server, **and the desktop client's cloud integration** are implemented and tested end-to-end: a live test drives the real Tauri backend through bootstrap → auth → cloud vault + membership → sync push → a second device → sync pull, asserting a secret round-trips byte-for-byte across devices. Today the user simply picks a **Local** or **Cloud** vault; local-only operation stays the default and the server is purely additive. Packaging a signed GUI build on every platform and finishing the mobile sync UI are the remaining frontier — see [Project status](#project-status).
+> **Status note.** The sync engine, the server, **and the desktop client's cloud integration** are implemented and tested end-to-end: a live test drives the real Tauri backend through claim → auth → cloud vault + membership → sync push → a second device → sync pull, asserting a secret round-trips byte-for-byte across devices. Today the user simply picks a **Local** or **Cloud** vault; local-only operation stays the default and the server is purely additive. Packaging a signed GUI build on every platform and finishing the mobile sync UI are the remaining frontier — see [Project status](#project-status).
 
 ---
 
@@ -137,7 +137,7 @@ flowchart LR
 
     core -- "encrypted blobs + signed versions<br/>(TLS 1.3)" --> server
     server -- "delta sync" --> core
-    admin -. "ops + per-tenant admin" .-> server
+    admin -. "escrow/SSO sign-in · admin" .-> server
 
     core == "direct SSH — never via the server" ==> hosts
 ```
@@ -146,9 +146,11 @@ flowchart LR
 
 ### Identity model
 
+**One account, many spaces.** An instance is a single server that hosts many **spaces** (teams — Backend, Security, …). A person has **one account** across every space they belong to; there are no tenants and no separate logins per team.
+
 - An **account = one keyset identity**; its Ed25519 public key is the canonical **member-id** that vault grants are keyed on. The private keyset never leaves the device.
-- **Devices share an account's keyset** — grant a teammate once and it works on all their devices. Each device has its own id for sessions/revocation.
-- Two separate "admin" concepts, kept distinct: **instance-admin** (server-trusted: invites, audit, device-revoke) and **vault role** (cryptographic: who can decrypt/write a vault).
+- **Devices share an account's keyset** — grant a teammate once and it works on all their devices. Each device has its own id for sessions/revocation. A fresh device recovers the keyset by **escrow sign-in** (handle + password + Secret Key) — no key file to copy around.
+- **Server-trusted roles** are distinct from the cryptographic vault roles. The first user to **claim** the instance is its **owner** (creates spaces, appoints space admins, runs ops); each space then has **admin** and **member** roles. These say who can administer the server; the **vault role** (viewer/editor/admin) is cryptographic and says who can actually decrypt or write a vault.
 
 ---
 
@@ -217,14 +219,21 @@ On first launch you pick a **Local** or **Cloud** vault. Local needs nothing els
 
 ```bash
 # from the repository root
-cp deploy/.env.example .env        # then edit: set UNISSH_DOMAIN and a bootstrap token
-docker compose up --build
+cp deploy/.env.example .env        # then edit: set UNISSH_DOMAIN (+ a TLS directive)
+docker compose up -d --build
 ```
 
-Edit `.env` before first boot — at minimum:
+Edit `.env` before first boot — the **only required** value is:
 
 - `UNISSH_DOMAIN` — your public domain (→ automatic Let's Encrypt ACME), or a `*.local`/IP host together with `UNISSH_TLS_DIRECTIVE="tls internal"` for a Caddy-issued self-signed cert on a LAN.
-- `UNISSH__BOOTSTRAP__TOKEN` — required to create the first account; generate one with `head -c 32 /dev/urandom | base64`.
+
+**There is no bootstrap token.** On first boot, while the instance is still unclaimed, the server prints a one-time **SETUP CODE** to its log. Grab it:
+
+```bash
+docker compose logs server 2>&1 | grep -i "setup code"
+```
+
+Then open the client (or the admin panel), point it at your instance URL, and **claim** the instance with that code — the first user to claim becomes the **owner**. (For IaC/automation you can pin a deterministic code with `UNISSH__SETUP__CODE=…` instead of the random one.) After that, teammates join via a space-scoped **invite link** or **SSO** — no code needed.
 
 Caddy publishes **:80 / :443** (and `:443/udp` for HTTP/3); the server (`:8443`) and metrics (`:9090`) stay internal to the compose network. SQLite is the default (data persisted in a named Docker volume); the server runs as a non-root user on a read-only rootfs.
 
@@ -262,9 +271,14 @@ npm install
 npm run dev                                  # http://localhost:5180
 ```
 
-(Or from the repo root: `just build-ui` then `just dev-ui`.) On the login screen, point it at your instance URL and sign in. Two access tiers (mirroring the server):
-1. **Ops** — a static `X-UniSSH-Ops-Token` from the server config (`[ops] token`), for cross-tenant ops (tenants, overview, `seq-bump`).
-2. **Admin keyset** — per-tenant: import a `.keyset` + password (+ Secret Key) → unlock in-browser (key stays in memory) → challenge/sign/verify. **Lock** wipes the key.
+(Or from the repo root: `just build-ui` then `just dev-ui`.) On the login screen, point it at your instance URL and sign in as the **owner** (or a space admin) — the same account you claimed the instance with:
+
+- **Escrow sign-in** — handle + password + Secret Key. The keyset is recovered and unlocked **in-browser** (it never leaves the page, and never reaches the server); **Lock** wipes it. There is **no `.keyset` file to import** and no ops-token to enter first. A brand-new browser that isn't linked yet is onboarded by **QR-approve** from an already-trusted device.
+- **SSO** — if the instance has `[oidc]` enabled, "Sign in with SSO" runs the browser OIDC flow instead.
+
+If the instance is still **unclaimed**, the login screen offers to claim it with the setup code from the server log (see [above](#b-self-host-a-sync-server-optional)).
+
+The panel's screens include the instance **Overview**, **Spaces**, and the member **Directory**, plus devices/sessions/invites, vaults/grants, objects, and audit. An optional server-trusted **ops** break-glass token (`[ops] token`) unlocks only the infrastructure surface (overview / instance / `seq-bump`) and grants **no** decryption.
 
 For production, build it (`npm run build`) and serve `dist/` behind your reverse proxy.
 
@@ -321,9 +335,9 @@ Config is layered: **built-in defaults → `config.toml` → environment** (`UNI
 | Caddy domain | `UNISSH_DOMAIN` | _(required in `.env`)_ | real domain → automatic ACME; `*.local`/IP + `UNISSH_TLS_DIRECTIVE="tls internal"` → self-signed |
 | DB backend | `UNISSH__DB__BACKEND` | `sqlite` | `sqlite` \| `postgres` |
 | DB URL | `UNISSH__DB__URL` | `/app/data/unissh.db` | sqlite path (or `:memory:`); or `postgres://…` |
-| Bootstrap token | `UNISSH__BOOTSTRAP__TOKEN` | _(empty → closed)_ | base64; required to create the first account. Set via env/secret, never commit. |
-| Default tier | `UNISSH__BOOTSTRAP__DEFAULT_TIER` | `personal` | `personal` \| `org` |
-| Ops token | `UNISSH__OPS__TOKEN` | _(empty → ops disabled)_ | server-trusted cross-tenant ops; `X-UniSSH-Ops-Token` header |
+| Setup code | `UNISSH__SETUP__CODE` | _(empty → random)_ | first-user claim code. Empty → a random one is printed to the log on first boot; set a value to pin it for IaC. |
+| Ops token | `UNISSH__OPS__TOKEN` | _(empty → ops disabled)_ | optional server-trusted **break-glass** for `/v1/ops/*` (overview / instance / `seq-bump`); `X-UniSSH-Ops-Token` header. Not a keyset — grants no decryption. |
+| SSO (OIDC) | `UNISSH__OIDC__ENABLED` + `[oidc]` | `false` | enable "Sign in with your IdP"; set `issuer` / `client_id` / `audience` / `jwks_url` / `groups_claim` and `[[oidc.group_map]]` (IdP group → space). |
 | Metrics bind | `UNISSH__OBS__METRICS_BIND` | `127.0.0.1:9090` | Prometheus `/metrics` (internal-only in the stack) |
 | Signature validation | `UNISSH__SYNC__VALIDATE_SIGNATURES` | `true` | server re-verifies record signatures on write (defense-in-depth) |
 | Anti-rollback floor | `UNISSH__SYNC__MIN_INSTANCE_GENERATION` | `0` (off) | refuse to boot if a restored snapshot is below this operator-anchored floor |
@@ -415,9 +429,15 @@ This is honest, in-progress software. The cryptographic core, the server, and th
 
 ---
 
-## Roadmap
+**Recently landed:** the instance-scoped model — claim-with-setup-code, one account across many **spaces**, space-scoped **invite links**, **escrow sign-in** on a fresh device, and **SSO (OIDC)** ("Sign in with your IdP").
+
+The two open frontiers:
 
 - Finish & polish the **mobile** sync UI (the engine, server, and desktop integration are done and e2e-verified).
+- **Cross-account vault decryption for space members** — a member is granted into a space server-side today, but the client-side cryptographic key hand-off across accounts (so a newly-added member seamlessly decrypts a shared vault) is still being wired.
+
+Also on the list:
+
 - **Prebuilt installers** for every client platform + a documented **`SHA256SUMS` / signature** verification flow.
 - **Per-object dirty tracking** in the sync engine (it currently re-pushes the whole vault each sync; pushes are idempotent, so this is an efficiency win, not a correctness gap).
 - Planned core/server extensions (design hooks exist; not yet implemented): certificate authority, P2P/relay sharing between people, VK rotation, device-bound / FIDO2, key transparency, post-quantum hybrid, CRDT merge.
@@ -449,10 +469,10 @@ Click **More info → Run anyway**. The binary is unsigned.
 **A client can't reach my server.**
 Check, in order: the server is up (`curl -k https://YOUR_DOMAIN/healthz`); TLS is resolving (with the bundled Caddy, a real `UNISSH_DOMAIN` gets an automatic Let's Encrypt cert, while a `*.local`/IP needs `UNISSH_TLS_DIRECTIVE="tls internal"`); the instance URL in the client/admin-panel login is correct; firewall allows `:80`/`:443`. Running the server **without** the bundled Caddy? Then you terminate TLS yourself — in-process rustls needs `tls_cert`/`tls_key`, or front it with your own proxy and set `trust_proxy=true`.
 
-**Bootstrap is rejected / I can't create the first account.**
-The first account needs a bootstrap token: set `UNISSH__BOOTSTRAP__TOKEN` (in `.env` or `[bootstrap] token`) and use it. An empty token means bootstrap is closed.
+**I can't find the setup code / I can't claim the instance.**
+There is no bootstrap token. On first boot the server prints a one-time **SETUP CODE** to its log while the instance is unclaimed — read it with `docker compose logs server 2>&1 | grep -i "setup code"` (or your process manager's log), then enter it in the client/admin-panel to claim the instance and become the owner. Pinned a code via `UNISSH__SETUP__CODE`? Use that value. "Already claimed" means someone (or a previous run) has already taken it — sign in with that account, or join via an invite link / SSO.
 
-**The admin panel says "wasm not loaded" on unlock/bootstrap.**
+**The admin panel says "wasm not loaded" on unlock/claim.**
 The crypto bundle wasn't built. Run `npm run build:wasm` in `server-ui/` (needs `rustup` + `wasm-pack` + the `wasm32-unknown-unknown` target).
 
 **After a server restore, clients refuse to sync (`TransportRollback`).**

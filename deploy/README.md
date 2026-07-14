@@ -20,7 +20,7 @@ The production stack is the **`compose.yml` at the repo root** (build context
 
 ```bash
 cp deploy/.env.example .env      # at the repo root, next to compose.yml
-$EDITOR .env                     # set domain, email, and secrets
+$EDITOR .env                     # set UNISSH_DOMAIN (+ a TLS directive); rest is optional
 docker compose up -d --build
 ```
 
@@ -30,6 +30,30 @@ docker compose up -d --build
   admin panel and its API share one origin (CORS stays off).
 
 Open `https://<UNISSH_DOMAIN>/`.
+
+### First-run: claim the instance
+
+There is **no bootstrap token**. On first boot, while the instance is still
+unclaimed, the server prints a one-time **SETUP CODE** to its log. Read it, then
+claim the instance from the client or the admin panel — the first user to claim
+becomes the **owner**:
+
+```bash
+docker compose logs server 2>&1 | grep -i "setup code"
+```
+
+Open `https://<UNISSH_DOMAIN>/`, enter the setup code to claim, and you're the
+owner. From there teammates join via a space-scoped **invite link** or **SSO**
+(if `[oidc]` is enabled) — no code needed. For IaC/automation, pin a
+deterministic code with `UNISSH__SETUP__CODE=…` instead of the random one.
+
+**Admin-panel sign-in.** After claiming, the panel logs in by **escrow**
+(handle + password + Secret Key — the keyset is recovered and unlocked
+in-browser, never on the server) or by **SSO**. There is no `.keyset` file to
+import and no ops-token to enter first. The optional server-trusted **ops**
+break-glass token (`UNISSH__OPS__TOKEN`, `X-UniSSH-Ops-Token` header) unlocks
+only the `/v1/ops/*` infrastructure surface (overview / instance / `seq-bump`)
+and grants **no** decryption.
 
 ## TLS strategy
 
