@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { b64ToBytes, bytesToB64 } from "../util/bytes";
 import {
+  getCrypto,
   setCryptoProvider,
   type ChallengeInput,
   type CryptoProvider,
@@ -171,7 +173,9 @@ async function doLoadWasmProvider(): Promise<boolean> {
     const urlMod = (await import("../../crypto-wasm/pkg/unissh_crypto_wasm_bg.wasm?url")) as {
       default: string;
     };
-    await mod.default(urlMod.default);
+    // Object form (wasm-bindgen ≥0.2.93). Passing the URL positionally still works but
+    // logs a deprecation warning; the single-object form is the current, stable API.
+    await mod.default({ module_or_path: urlMod.default });
     setCryptoProvider(makeProvider(mod));
     return true;
   } catch (e) {
@@ -188,4 +192,26 @@ let loadPromise: Promise<boolean> | null = null;
 export function loadWasmProvider(): Promise<boolean> {
   if (!loadPromise) loadPromise = doLoadWasmProvider();
   return loadPromise;
+}
+
+/**
+ * Reactive crypto-readiness. `getCrypto().available` alone is a one-shot read: a
+ * component that renders BEFORE the async wasm load finishes captures `false` and never
+ * updates (React won't re-render on a plain module mutation) — so a keyset form would
+ * show "crypto not loaded" forever even though the module loaded a moment later. This
+ * hook kicks the (idempotent) load and re-renders the moment it resolves.
+ */
+export function useCryptoReady(): boolean {
+  const [ready, setReady] = useState<boolean>(() => getCrypto().available);
+  useEffect(() => {
+    if (ready) return;
+    let alive = true;
+    void loadWasmProvider().then((ok) => {
+      if (alive && ok) setReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [ready]);
+  return ready;
 }

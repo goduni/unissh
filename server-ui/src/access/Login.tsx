@@ -4,7 +4,8 @@ import { api } from "../api";
 import { loginWithEscrow, NotAKeysetFileError, oidcLogin, restoreFromKit } from "../api/auth-service";
 import { ApiError } from "../api/errors";
 import type { InstanceInfo } from "../api/types";
-import { CryptoUnavailableError, getCrypto } from "../crypto/provider";
+import { CryptoUnavailableError } from "../crypto/provider";
+import { useCryptoReady } from "../crypto/wasm-provider";
 import { usePrefs } from "../store/prefs";
 import { MONO } from "../theme/tokens";
 import { Icon, type IconName } from "../ui/icons";
@@ -271,7 +272,7 @@ function IdentitySignIn({ instanceUrl }: { instanceUrl: string }) {
   const [secretKey, setSecretKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cryptoReady = getCrypto().available;
+  const cryptoReady = useCryptoReady();
 
   const submit = async () => {
     if (!handle.trim()) return setError(t("access.onb.login_err_no_handle"));
@@ -348,7 +349,7 @@ function RestoreSignIn({ instanceUrl }: { instanceUrl: string }) {
   const [secretKey, setSecretKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cryptoReady = getCrypto().available;
+  const cryptoReady = useCryptoReady();
 
   const submit = async () => {
     if (!file) return setError(t("access.onb.restore_err_no_file"));
@@ -424,7 +425,7 @@ function SsoSignIn({ instanceUrl }: { instanceUrl: string }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cryptoReady = getCrypto().available;
+  const cryptoReady = useCryptoReady();
 
   // SSO: redirect the browser to the IdP. On the callback load, App resumes the flow.
   const startSso = async () => {

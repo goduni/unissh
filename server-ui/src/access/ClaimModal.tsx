@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { claimInstance, type ClaimOutcome } from "../api/auth-service";
 import { ApiError } from "../api/errors";
-import { CryptoUnavailableError, getCrypto } from "../crypto/provider";
+import { CryptoUnavailableError } from "../crypto/provider";
+import { useCryptoReady } from "../crypto/wasm-provider";
 import { useUi } from "../store/ui";
 import { Icon } from "../ui/icons";
 import { Btn, Field, InlineError, TextInput } from "../ui/primitives";
@@ -42,7 +43,7 @@ export function ClaimModal({
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
 
-  const cryptoReady = getCrypto().available;
+  const cryptoReady = useCryptoReady();
 
   const create = async () => {
     if (!setupCode.trim()) return setError(t("access.onb.claim_err_no_code"));
