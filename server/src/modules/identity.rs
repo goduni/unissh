@@ -34,6 +34,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/devices/add", post(device_add))
         .route("/v1/devices", get(devices_list_self))
         .route("/v1/invite", post(invite_issue_v2))
+        .route("/v1/invite/revoke", post(invite_revoke_v2))
         .route("/v1/join/preview", post(join_preview))
         .route("/v1/join", post(join))
         .route(
@@ -868,6 +869,76 @@ async fn invite_issue_v2(
             expires_at,
         }),
     ))
+}
+
+#[derive(Deserialize)]
+struct InviteRevokeReq {
+    invite_id: String,
+}
+
+/// `POST /v1/invite/revoke` (Bearer): cancel a still-pending invite so its token can no
+/// longer be redeemed. Without this, a leaked invite link stays live until its TTL. AUTHZ
+/// mirrors mint exactly: the caller must be able to admin EVERY space intent
+/// (`is_space_admin`) AND every vault intent (`can_admin_vault`), OR be the instance
+/// owner. Unknown id → 404; unauthorized caller → 403; an invite that is no longer pending
+/// (already redeemed/expired/revoked) → 409. The redeem CAS gates on `state = 'pending'`,
+/// so marking it revoked makes any later `/v1/join` fail cleanly (410).
+async fn invite_revoke_v2(
+    auth: AuthCtx,
+    State(state): State<AppState>,
+    Json(req): Json<InviteRevokeReq>,
+) -> AppResult<StatusCode> {
+    let invite_id = ids::unb64(&req.invite_id)?;
+    let invite = state
+        .store
+        .get_invite_v2_by_id(&invite_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("invite"))?;
+
+    // The instance owner may cancel any invite; otherwise the caller must have had the
+    // authority to MINT this invite (admin of every space + vault intent) — so a leaked
+    // link is cancellable by exactly the principals who could have created it.
+    if !state.store.account_is_owner(auth.account_id()).await? {
+        let space_intents: Vec<SpaceIntent> = serde_json::from_str(&invite.space_intents)
+            .map_err(|_| AppError::internal("corrupt space intents"))?;
+        for si in &space_intents {
+            let space_id = ids::unb64(&si.space_id)?;
+            if !state
+                .store
+                .is_space_admin(&space_id, auth.account_id())
+                .await?
+            {
+                return Err(AppError::forbidden("not authorized to revoke this invite"));
+            }
+        }
+        let vault_intents: Vec<VaultIntent> = serde_json::from_str(&invite.vault_intents)
+            .map_err(|_| AppError::internal("corrupt vault intents"))?;
+        for vi in &vault_intents {
+            let vault_id = ids::unb64(&vi.vault_id)?;
+            if !state
+                .store
+                .can_admin_vault(auth.account_id(), &vault_id)
+                .await?
+            {
+                return Err(AppError::forbidden("not authorized to revoke this invite"));
+            }
+        }
+    }
+
+    if state.store.revoke_invite_v2(&invite_id).await? != 1 {
+        return Err(AppError::conflict(
+            "invite is not pending (already redeemed, expired, or revoked)",
+        ));
+    }
+
+    let ev = serde_json::json!({
+        "event": "invite_revoke",
+        "invite_id": ids::b64(&invite_id),
+        "account_id": ids::b64(auth.account_id()),
+        "ts": state.now(),
+    });
+    state.audit_event(&ev, None).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

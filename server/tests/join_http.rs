@@ -328,6 +328,109 @@ async fn invite_vault_intent_admin_gate() {
     assert_eq!(r.status(), 403, "cannot grant a nonexistent vault");
 }
 
+/// FIX (invite revoke): a still-pending invite can be cancelled so its (possibly leaked)
+/// token can no longer be redeemed. Unknown id → 404; a caller who could not have minted
+/// it → 403; revoke then redeem → 410; a second revoke → 409.
+#[tokio::test]
+async fn invite_revoke_blocks_redeem() {
+    let app = spawn().await;
+    let owner = make_identity();
+    let claimed = claim_owner(&app, &owner.payload_b64, &owner.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_dev = claimed["device_id"].as_str().unwrap().to_string();
+    let owner_tok = common::login_v2(&app, &owner, &owner_acct, &owner_dev).await;
+
+    // Owner creates "Backend" and mints an invite for it.
+    let backend_id = app
+        .client
+        .post(format!("{}/v1/spaces", app.base))
+        .bearer_auth(&owner_tok)
+        .json(&json!({ "name": "Backend" }))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let inv: Value = app
+        .client
+        .post(format!("{}/v1/invite", app.base))
+        .bearer_auth(&owner_tok)
+        .json(&json!({ "space_intents": [{ "space_id": backend_id, "role": "member" }] }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let invite_id = inv["invite_id"].as_str().unwrap().to_string();
+    let token = inv["token"].as_str().unwrap().to_string();
+
+    let revoke = |bearer: &str, id: String| {
+        app.client
+            .post(format!("{}/v1/invite/revoke", app.base))
+            .bearer_auth(bearer)
+            .json(&json!({ "invite_id": id }))
+            .send()
+    };
+
+    // Unknown invite id → 404 (even for the owner).
+    assert_eq!(
+        revoke(&owner_tok, b64(&[9u8; 16])).await.unwrap().status(),
+        404,
+        "unknown invite id → 404"
+    );
+
+    // A caller who is not admin of the invite's space (and not the instance owner) → 403.
+    let outsider = app.seed_session("").await;
+    assert_eq!(
+        revoke(&outsider.access_token_b64, invite_id.clone())
+            .await
+            .unwrap()
+            .status(),
+        403,
+        "non-admin cannot revoke"
+    );
+
+    // Owner revokes → 204.
+    assert_eq!(
+        revoke(&owner_tok, invite_id.clone())
+            .await
+            .unwrap()
+            .status(),
+        204,
+        "owner revokes the invite"
+    );
+
+    // Redeeming the now-revoked token fails cleanly (gone).
+    let joiner = make_identity();
+    let r = app
+        .client
+        .post(format!("{}/v1/join", app.base))
+        .json(&json!({
+            "invite_token": token,
+            "registration_payload": joiner.payload_b64,
+            "registration_signature": joiner.sig_b64,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 410, "a revoked invite cannot be redeemed");
+
+    // A second revoke → 409 (no longer pending).
+    assert_eq!(
+        revoke(&owner_tok, invite_id.clone())
+            .await
+            .unwrap()
+            .status(),
+        409,
+        "already-revoked invite → 409"
+    );
+}
+
 #[tokio::test]
 async fn invite_url_rendered_when_public_url_set() {
     let app = spawn_with(|c| c.server.public_url = "https://ssh.example.com".into()).await;
