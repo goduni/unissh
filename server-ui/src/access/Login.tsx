@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { DeviceNotLinkedError, loginWithEscrow, oidcLogin } from "../api/auth-service";
+import { loginWithEscrow, oidcLogin } from "../api/auth-service";
 import { ApiError } from "../api/errors";
 import type { InstanceInfo } from "../api/types";
 import { CryptoUnavailableError, getCrypto } from "../crypto/provider";
@@ -250,9 +250,7 @@ function LoginForm({ instanceUrl, info }: { instanceUrl: string; info: InstanceI
       });
       // Success flips the app into the Shell (session committed in the store).
     } catch (e) {
-      if (e instanceof DeviceNotLinkedError) {
-        setError(t("access.onb.login_err_nodevice"));
-      } else if (e instanceof CryptoUnavailableError) {
+      if (e instanceof CryptoUnavailableError) {
         setError(t("access.onb.bs_err_crypto"));
       } else if (e instanceof ApiError) {
         setError(e.status === 403 ? t("access.onb.login_err_bad") : e.message);

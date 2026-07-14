@@ -12,6 +12,8 @@ import type {
   ConfigPutResp,
   ConfigResp,
   CreateSpaceResp,
+  DeviceSelfEnrollReq,
+  DeviceSelfEnrollResp,
   DevicesResp,
   DirectoryResp,
   EscrowFetchResp,
@@ -173,6 +175,11 @@ export function createClient(
         method: "POST",
         body: { handle, k_auth },
       }),
+    // Enroll a device for an escrow-recovered keyset on a fresh browser (public: the
+    // self-signed registration is the credential). Lets escrow sign-in complete on a
+    // browser that never claimed here — no session/Bearer needed to add the device.
+    deviceSelfEnroll: (req: DeviceSelfEnrollReq) =>
+      call<DeviceSelfEnrollResp>("/v1/devices/self-enroll", { method: "POST", body: req }),
 
     // ── admin (Bearer + is_owner, OwnerCtx-gated) ──
     admin: {

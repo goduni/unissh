@@ -387,6 +387,19 @@ export interface EscrowFetchResp {
   account_id: string;
 }
 
+// ── Device self-enroll (POST /v1/devices/self-enroll) — public ─────
+/** Register a device for an escrow-recovered keyset on a fresh browser. PUBLIC (no
+ *  bearer): the self-signed registration IS the credential — the server looks the
+ *  account up by the registration's Ed25519 keyset and verifies the signature. */
+export interface DeviceSelfEnrollReq {
+  registration_payload: string;
+  registration_signature: string;
+}
+export interface DeviceSelfEnrollResp {
+  account_id: string;
+  device_id: string;
+}
+
 // ── Keyset upload (PUT /v1/keyset) ─────────────────────────────
 /** Optional escrow enrollment carried with a keyset upload. The client sends the
  *  RAW `k_auth`; the server persists only sha256(k_auth), never the raw credential. */

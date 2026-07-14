@@ -7,12 +7,12 @@ import { api } from "./index";
 // ── Device-link persistence ────────────────────────────────────
 // The panel's browser device_id is NOT a secret (it merely addresses the auth
 // challenge — the account keyset is the secret). We persist it, keyed by
-// (instanceUrl, account_id), so a returning owner's escrow sign-in can re-use the
-// device that was registered at claim time. `auth/challenge` requires an existing,
-// active device row and device registration is session-gated (POST /v1/devices/add
-// needs a Bearer), so a browser that never claimed here has no device to sign in
-// with — see `DeviceNotLinkedError`. (Fresh-device onboarding = QR-approve / signed
-// device-add is a server-side follow-up; the desktop client carries the same gap.)
+// (instanceUrl, account_id), so a returning owner's escrow sign-in re-uses the
+// device this browser already registered (at claim time, or on a prior escrow
+// sign-in) instead of enrolling a fresh one each visit. `auth/challenge` requires an
+// existing, active device row; a browser that never registered here self-enrolls one
+// during escrow sign-in via the public POST /v1/devices/self-enroll (the unlocked
+// keyset's self-signed registration is the credential — no Bearer needed).
 const LINK_KEY = "unissh-admin-device-links";
 interface DeviceLink {
   accountId: string;
@@ -53,14 +53,6 @@ function randomBytes(n: number): Uint8Array {
   const b = new Uint8Array(n);
   crypto.getRandomValues(b);
   return b;
-}
-
-/** No account linked a device in this browser for the target instance. */
-export class DeviceNotLinkedError extends Error {
-  constructor() {
-    super("no linked device for this account in this browser");
-    this.name = "DeviceNotLinkedError";
-  }
 }
 
 // challenge → sign (unissh-server-auth-v1) → verify → session tokens. Does NOT
@@ -105,8 +97,10 @@ export interface EscrowLoginParams {
 /**
  * Escrow sign-in: re-derive K_auth from handle+password+Secret Key, fetch and
  * unlock the account keyset in wasm, then challenge→sign→verify for the admin
- * Bearer. Re-uses the device this browser registered at claim time (see
- * `DeviceNotLinkedError`).
+ * Bearer. Re-uses the device this browser already registered (claim / prior escrow
+ * sign-in) when a link exists; on a fresh browser it self-enrolls one against the
+ * now-unlocked keyset (public POST /v1/devices/self-enroll) so sign-in still
+ * completes end-to-end.
  */
 export async function loginWithEscrow(p: EscrowLoginParams): Promise<void> {
   const crypto_ = getCrypto();
@@ -127,23 +121,36 @@ export async function loginWithEscrow(p: EscrowLoginParams): Promise<void> {
   const id = await crypto_.unlock(b64ToBytes(fetched.keyset_blob), p.password, secretKeyBytes);
   const keyId = bytesToB64(id.ed25519_pub);
 
+  // Fast path: this browser already registered a device for this account — reuse it
+  // (skip self-enroll). Otherwise self-enroll a device for the now-unlocked keyset:
+  // buildRegistration signs with the in-wasm keyset, and the public endpoint mints a
+  // device from that self-signed registration alone (no Bearer). The placeholder id
+  // is inert — the server keys off the registration's Ed25519 pubkey, as in claim.
   const link = findDeviceLink(p.instanceUrl, fetched.account_id);
-  if (!link) {
-    crypto_.lock();
-    throw new DeviceNotLinkedError();
+  let accountId: string;
+  let deviceId: string;
+  let priorHandle: string | null;
+  if (link) {
+    accountId = fetched.account_id;
+    deviceId = link.deviceId;
+    priorHandle = link.handle;
+  } else {
+    const reg = await crypto_.buildRegistration(randomBytes(16));
+    const enrolled = await api.deviceSelfEnroll({
+      registration_payload: bytesToB64(reg.payload),
+      registration_signature: bytesToB64(reg.signature),
+    });
+    accountId = enrolled.account_id;
+    deviceId = enrolled.device_id;
+    priorHandle = null;
   }
 
-  const session = await buildSession(
-    fetched.account_id,
-    link.deviceId,
-    keyId,
-    handle || truncId(fetched.account_id),
-  );
+  const session = await buildSession(accountId, deviceId, keyId, handle || truncId(accountId));
   useSession.getState().setKeysetSession(session);
   saveDeviceLink(p.instanceUrl, {
-    accountId: fetched.account_id,
-    deviceId: link.deviceId,
-    handle: handle || link.handle,
+    accountId,
+    deviceId,
+    handle: handle || priorHandle,
   });
 }
 
