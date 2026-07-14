@@ -865,3 +865,50 @@ pub fn lock() {
 pub fn is_unlocked() -> bool {
     UNLOCKED.with(|c| c.borrow().is_some())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ESCROW GOLDEN CROSS-CHECK: the panel's escrow K_auth derivation MUST be
+    /// byte-identical to rust-core `keychain::unlock::derive_escrow_auth_key`.
+    ///
+    /// The public `derive_escrow_auth` export computes `argon_key` internally via
+    /// Argon2id, so we cannot feed it the golden `argon_key = [7u8;32]` directly.
+    /// Instead we exercise the SAME internal HKDF-from-argon_key helper
+    /// (`derive_escrow_auth_key`) that the export calls, injecting the known
+    /// argon_key and Secret Key used by the core's `escrow_auth_key_golden` test
+    /// (argon_key = SymmetricKey([7u8;32]), secret_key = [9u8;16]) and assert the
+    /// output equals the core's frozen vector. If this drifts, escrow login is
+    /// broken (the server compares `sha256(K_auth)`), and the framing in
+    /// `derive_escrow_auth_key` must be fixed until it matches — NOT this vector.
+    #[test]
+    fn escrow_auth_key_matches_core_golden() {
+        // Frozen in rust-core `keychain/src/unlock.rs::escrow_auth_key_golden`.
+        const FROZEN_ESCROW_AUTH_KEY: [u8; 32] = [
+            0xb9, 0xd6, 0xbf, 0x86, 0x91, 0xa8, 0x4d, 0x5b, 0x12, 0x90, 0x5f, 0xc6, 0xb5, 0xfa,
+            0xd5, 0x9e, 0x7e, 0x9a, 0xdd, 0x07, 0xb4, 0xdb, 0xb6, 0x52, 0xaf, 0x9e, 0xf3, 0x27,
+            0xfb, 0x4e, 0x47, 0xc2,
+        ];
+        let argon_key = SymmetricKey::from_bytes([7u8; 32]);
+        let secret_key = [9u8; SECRET_KEY_LEN];
+        let got = derive_escrow_auth_key(Some(&argon_key), &secret_key);
+        assert_eq!(
+            got.expose_bytes(),
+            &FROZEN_ESCROW_AUTH_KEY,
+            "panel escrow K_auth diverged from rust-core golden vector"
+        );
+    }
+
+    /// Passwordless (SSO) accounts derive K_auth with `argon_key = None`; assert
+    /// that branch stays deterministic and independent of the with-password key.
+    #[test]
+    fn escrow_auth_key_passwordless_is_distinct_and_stable() {
+        let secret_key = [9u8; SECRET_KEY_LEN];
+        let a = derive_escrow_auth_key(None, &secret_key);
+        let b = derive_escrow_auth_key(None, &secret_key);
+        assert_eq!(a.expose_bytes(), b.expose_bytes(), "deterministic");
+        let with_pw = derive_escrow_auth_key(Some(&SymmetricKey::from_bytes([7u8; 32])), &secret_key);
+        assert_ne!(a.expose_bytes(), with_pw.expose_bytes());
+    }
+}
