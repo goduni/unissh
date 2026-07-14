@@ -162,9 +162,12 @@ export interface ClaimOutcome {
   /** EncryptedKeyset bytes to download as the genesis key file. */
   enc: Uint8Array;
   accountId: string;
-  /** Commit the admin session — flips the app into the Shell. Call after the
-   *  Secret Key has been saved. */
-  commit: () => void;
+  /** Mint + commit the admin session (challenge→sign→verify), then persist the
+   *  device link — flips the app into the Shell. Call AFTER the Secret Key has been
+   *  saved. RETRYABLE: the (irreversible) owner is already minted and the Secret Key
+   *  is already on screen, so a transient failure here just rejects — the caller
+   *  keeps the saved key visible and can retry, never losing it. */
+  commit: () => Promise<void>;
   /** Arm escrow sign-in so future logins work by handle+password+Secret Key. Must
    *  run AFTER {@link commit} (needs the Bearer). Resolves true when armed; never
    *  throws — claim already succeeded, so a failure just means the owner re-signs-in
@@ -197,14 +200,20 @@ export async function claimInstance(p: ClaimParams): Promise<ClaimOutcome> {
   });
 
   const keyId = bytesToB64(acc.ed25519_pub);
-  const session = await buildSession(
-    claimed.account_id,
-    claimed.device_id,
-    keyId,
-    handle || truncId(claimed.account_id),
-  );
 
-  const commit = (): void => {
+  // Session-mint is DEFERRED into commit() — never a precondition for revealing the
+  // Secret Key. api.claim() above already minted the (irreversible) owner, so the
+  // caller surfaces secretKeyHex/enc immediately; challenge→sign→verify then runs as
+  // a retryable step behind the save-gate. A transient 5xx here rejects commit()
+  // (caller keeps the saved key + a retry) instead of losing the one-time key. The
+  // wasm keyset stays installed from createAccount(), so buildSession can re-run.
+  const commit = async (): Promise<void> => {
+    const session = await buildSession(
+      claimed.account_id,
+      claimed.device_id,
+      keyId,
+      handle || truncId(claimed.account_id),
+    );
     useSession.getState().setKeysetSession(session);
     saveDeviceLink(p.instanceUrl, {
       accountId: claimed.account_id,

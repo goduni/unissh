@@ -34,6 +34,10 @@ export function ClaimModal({
   // Gate "Done" until the genesis keyset is downloaded — losing it (with the
   // password) makes the owner unrecoverable, so it can't be the easy skip.
   const [downloaded, setDownloaded] = useState(false);
+  // Session-mint runs behind the save-gate and is retryable: a transient failure
+  // must keep the (already-revealed) Secret Key on screen, never a null result.
+  const [finishing, setFinishing] = useState(false);
+  const [finishError, setFinishError] = useState<string | null>(null);
 
   const cryptoReady = getCrypto().available;
 
@@ -92,15 +96,25 @@ export function ClaimModal({
     }
   };
 
-  const finish = () => {
+  const finish = async () => {
     if (!result) return;
-    const armWarn = t("access.onb.claim_arm_warn");
-    // Commit the session (flips the app into the Shell), then arm escrow with the
-    // now-live Bearer. armEscrow never throws; a failure is advisory only.
-    result.commit();
-    void result.armEscrow().then((armed) => {
-      if (!armed) useUi.getState().toast("info", armWarn);
-    });
+    setFinishError(null);
+    setFinishing(true);
+    try {
+      // Mint + commit the session (flips the app into the Shell). Retryable — the
+      // owner is already minted and the Secret Key is saved, so on failure we just
+      // surface an error and let the operator retry with the key still on screen.
+      await result.commit();
+      // Session live → arm escrow with the now-live Bearer. armEscrow never throws;
+      // a failure is advisory only.
+      const armWarn = t("access.onb.claim_arm_warn");
+      void result.armEscrow().then((armed) => {
+        if (!armed) useUi.getState().toast("info", armWarn);
+      });
+    } catch (e) {
+      setFinishError(e instanceof Error ? e.message : t("access.onb.bs_err_generic"));
+      setFinishing(false);
+    }
   };
 
   // Once the genesis Secret Key exists but isn't saved yet, Escape / backdrop must
@@ -159,9 +173,20 @@ export function ClaimModal({
             >
               {t("access.onb.bs_download_btn")}
             </Btn>
-            <Btn full variant="soft" disabled={!downloaded} onClick={finish}>
+            <Btn
+              full
+              variant="soft"
+              disabled={!downloaded || finishing}
+              loading={finishing}
+              onClick={finish}
+            >
               {t("access.onb.claim_enter_btn")}
             </Btn>
+            {finishError ? (
+              <div style={{ marginTop: 9 }}>
+                <InlineError>{finishError}</InlineError>
+              </div>
+            ) : null}
             {!downloaded ? (
               <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 8, textAlign: "center" }}>
                 {t("access.onb.bs_done_gate")}
