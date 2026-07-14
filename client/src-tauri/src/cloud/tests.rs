@@ -293,12 +293,22 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
         report_b.applied >= 1,
         "B should receive & accept A's shared-vault objects after the grant: {report_b:?}"
     );
-    // NOTE: asserting B *decrypts* the secret is intentionally NOT done here. The
-    // member read path (`open_grant`) exists in the vault crate but is not yet wired
-    // into the FFI read surface (`get_password`/`list_vaults`/`Vault::open` are
-    // owner-only), so a distinct-account member cannot decrypt a shared vault through
-    // the client today. The decisive byte-for-byte secret round-trip below is done on
-    // the owner read path via a sibling device (A2, sharing A's keyset).
+    // DECISIVE: B — a DISTINCT account, not a sibling device of A — decrypts the shared
+    // secret through the ordinary FFI read surface using ITS OWN keyset. B's grant wraps
+    // the VK under B's X25519 key, and `Vault::open` now takes the member path
+    // (open_grant, anchored on the pinned genesis owner A) instead of the owner-only
+    // wrap. This proves the full cross-account chain: invite → join → grant → member
+    // decrypt over the real server.
+    let member_pw = core_b
+        .get_password(vid.clone(), "db-pw".into())
+        .expect("B (distinct account) decrypts the shared secret via its own grant");
+    assert_eq!(
+        member_pw, "s3cr3t",
+        "the member-decrypted secret must match byte-for-byte"
+    );
+
+    // Below: the owner read path via a sibling device (A2, sharing A's keyset) is kept
+    // as a control that the owner-wrap path is unchanged.
 
     // ── Device A2 (a sibling of A, shared keyset): the decisive secret read ─────
     let device_a2 = identity::device_add(http, base, &session_a.access_token)
