@@ -32,6 +32,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/accounts", get(accounts_list))
         .route("/v1/owner/set", post(owner_set))
         .route("/v1/devices/add", post(device_add))
+        .route("/v1/devices/self-enroll", post(device_self_enroll))
         .route("/v1/devices", get(devices_list_self))
         .route("/v1/invite", post(invite_issue_v2))
         .route("/v1/invite/revoke", post(invite_revoke_v2))
@@ -742,6 +743,90 @@ async fn device_add(
     Ok((
         StatusCode::CREATED,
         Json(DeviceAddResp {
+            device_id: ids::b64(&device_id),
+        }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct SelfEnrollReq {
+    /// Canonical registration payload (base64) — the SAME self-attestation as claim/join.
+    registration_payload: String,
+    /// Ed25519 signature over the payload (base64), proving keyset possession.
+    registration_signature: String,
+}
+
+#[derive(Serialize)]
+struct SelfEnrollResp {
+    account_id: String,
+    device_id: String,
+}
+
+/// `POST /v1/devices/self-enroll` (PUBLIC — no session). Register a NEW device for an
+/// EXISTING account, authenticated ONLY by a keyset-signed registration.
+///
+/// This is the "log in on a fresh device via escrow" seam: escrow unlocks the keyset,
+/// but a device with no session cannot call the Bearer-gated `POST /v1/devices/add`.
+/// Here the self-attested registration signature IS the credential (mirroring
+/// claim/join/oidc): the caller proves possession of the canonical keyset, and the
+/// account is resolved BY that keyset (not by a session).
+///
+/// It is NOT an enumeration oracle: producing a valid signature already requires holding
+/// the keyset, so a caller can only ever resolve THEIR OWN identity.
+async fn device_self_enroll(
+    State(state): State<AppState>,
+    Json(req): Json<SelfEnrollReq>,
+) -> AppResult<(StatusCode, Json<SelfEnrollResp>)> {
+    // 1. Verify the self-attested registration signature (proves keyset possession).
+    //    Bad blob → malformed; bad signature → unauthenticated (same as claim/join/oidc).
+    let payload_bytes = ids::unb64(&req.registration_payload)?;
+    let payload = RegistrationPayload::parse_canonical(&payload_bytes)?;
+    let sig = ids::unb64(&req.registration_signature)?;
+    crypto::verify_registration(&payload, &sig)?;
+
+    // 2. Resolve the account by its canonical ed25519 keyset (= member-id). Unknown
+    //    keyset → 404 (the caller already holds the keyset, so this leaks nothing).
+    let acct = state
+        .store
+        .get_account_by_ed(&payload.ed25519_pub)
+        .await?
+        .ok_or_else(|| AppError::not_found("account"))?;
+
+    // 3. The account must be active (mirrors join / oidc): a suspended/disabled account
+    //    cannot silently gain a fresh device.
+    if acct.status != "active" {
+        return Err(AppError::forbidden("account is not active"));
+    }
+
+    // 4. X-key binding. The canonical keyset is ONE identity (ed25519 + x25519 bound
+    //    together at registration). A payload whose ed matches the account but whose x
+    //    differs is a forged / rebound keyset — refuse it.
+    if acct.x25519_pub.as_deref() != Some(&payload.x25519_pub[..]) {
+        return Err(AppError::malformed("registration key mismatch"));
+    }
+
+    // 5. Register the fresh device sharing the account's canonical keyset. Non-tx,
+    //    exactly like the Bearer `device_add`: kind defaults to 'app', never expires.
+    let now = state.now();
+    let device_id = ids::random_id16().to_vec();
+    state
+        .store
+        .create_device(
+            &acct.account_id,
+            &device_id,
+            &payload.ed25519_pub,
+            &payload.x25519_pub,
+            now,
+        )
+        .await?;
+
+    // 6. Audit (owner-visible): a keyset-authenticated enrollment on this account.
+    audit_observed(&state, "device_self_enroll", &acct.account_id, &device_id).await;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(SelfEnrollResp {
+            account_id: ids::b64(&acct.account_id),
             device_id: ids::b64(&device_id),
         }),
     ))
