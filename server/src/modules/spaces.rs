@@ -9,6 +9,8 @@ use crate::error::{AppError, AppResult};
 use crate::http::extract::AuthCtx;
 use crate::ids;
 use crate::state::AppState;
+use crate::store::models::EdOnly;
+use crate::store::{Tx, Val};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -57,6 +59,98 @@ async fn audit_space(state: &AppState, event: &str, space_id: &[u8], account_id:
         "ts": state.now(),
     });
     state.audit_event(&ev, None).await;
+}
+
+/// Mirror of the join step-6 policy-grant loop: enqueue a `grant` pending-action for
+/// every space_wide vault of `space_id` for `account_id`, at the vault's
+/// `space_wide_role` (source `"policy"`), so a member added directly (or transitioned via
+/// the role endpoint) gets the same space-wide access a joiner would.
+///
+/// Idempotent: a vault is skipped when the member already holds a live grant at its latest
+/// epoch, or already has an outstanding pending `grant` — so repeated adds / role changes
+/// never pile up duplicate work for the vault-admin. Must run INSIDE the caller's tx
+/// (single-connection SQLite: no `Store` pool call may interleave with the open tx).
+async fn enqueue_space_wide_grants(
+    state: &AppState,
+    tx: &mut Tx<'_>,
+    space_id: &[u8],
+    account_id: &[u8],
+    now: i64,
+) -> AppResult<()> {
+    // The member's canonical keyset (grants are keyed by ed25519 pubkey). A member with no
+    // keyset row can hold no live grant, so a None here just skips the live-grant probe.
+    let member_ed = tx
+        .fetch_optional_as::<EdOnly>(
+            "SELECT ed25519_pub FROM accounts WHERE account_id = ?",
+            vec![Val::b(account_id)],
+        )
+        .await?
+        .map(|r| r.ed25519_pub);
+
+    for v in tx.space_wide_vaults(space_id).await? {
+        if let Some(ed) = member_ed.as_deref() {
+            let live = tx
+                .fetch_scalar_i64(
+                    "SELECT COUNT(*) FROM membership_grants g \
+                     WHERE g.vault_id = ? AND g.member_pubkey = ? AND g.revoked = 0 \
+                       AND (g.not_after IS NULL OR g.not_after > ?) \
+                       AND g.key_epoch = (SELECT MAX(m.key_epoch) FROM membership_manifests m \
+                                          WHERE m.vault_id = g.vault_id)",
+                    vec![Val::b(v.vault_id.as_slice()), Val::b(ed), Val::I(now)],
+                )
+                .await?
+                .unwrap_or(0);
+            if live > 0 {
+                continue;
+            }
+        }
+        let pending = tx
+            .fetch_scalar_i64(
+                "SELECT COUNT(*) FROM pending_actions \
+                 WHERE vault_id = ? AND account_id = ? AND kind = 'grant' AND state = 'pending'",
+                vec![Val::b(v.vault_id.as_slice()), Val::b(account_id)],
+            )
+            .await?
+            .unwrap_or(0);
+        if pending > 0 {
+            continue;
+        }
+        let action_id = ids::random_id16().to_vec();
+        state
+            .store
+            .pending_enqueue(
+                tx,
+                &action_id,
+                "grant",
+                &v.vault_id,
+                account_id,
+                v.space_wide_role,
+                "policy",
+                None,
+                now,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+/// Owner hardening: a space admin who is NOT the instance owner must not be able to evict
+/// (remove or demote) the instance owner from a space. The instance owner is the claim
+/// owner (`instance.owner_account_id`) and is NOT auto-admin of the spaces they belong to,
+/// so without this a co-admin could orphan them. The instance owner may still manage their
+/// own membership (actor == target is allowed).
+async fn guard_instance_owner_eviction(
+    state: &AppState,
+    target: &[u8],
+    actor: &[u8],
+) -> AppResult<()> {
+    let inst = state.store.instance().await?;
+    if inst.owner_account_id.as_deref() == Some(target) && actor != target {
+        return Err(AppError::forbidden(
+            "cannot remove or demote the instance owner from a space",
+        ));
+    }
+    Ok(())
 }
 
 // ---- spaces ----
@@ -144,8 +238,9 @@ struct MemberAddReq {
     role: String,
 }
 
-/// `POST /v1/spaces/members` (space admin): add (or re-affirm — idempotent) a
-/// member of the space at the given role. (Pending-grant enqueue is Task 9.)
+/// `POST /v1/spaces/members` (space admin): add a NEW member of the space at the given
+/// role. An already-present member is a 409 (the role endpoint changes roles). Space-wide
+/// vault grants are enqueued for the new member, mirroring the join flow's step 6.
 async fn members_add(
     auth: AuthCtx,
     State(state): State<AppState>,
@@ -160,7 +255,22 @@ async fn members_add(
     if state.store.get_account_by_id(&account_id).await?.is_none() {
         return Err(AppError::not_found("account"));
     }
+    // An already-present member is NOT silently re-affirmed: `space_member_add` upserts
+    // with ON CONFLICT DO NOTHING, so re-adding at a NEW role would 204 while changing
+    // nothing. Reject with 409 (the add path never mutates an existing member's role —
+    // that is the role endpoint's job).
+    if state
+        .store
+        .space_member_role(&space_id, &account_id)
+        .await?
+        .is_some()
+    {
+        return Err(AppError::conflict(
+            "account is already a member of this space; use the role endpoint to change its role",
+        ));
+    }
 
+    let now = state.now();
     let mut tx = state.store.begin().await?;
     state
         .store
@@ -170,9 +280,12 @@ async fn members_add(
             &account_id,
             &req.role,
             Some(auth.account_id()),
-            state.now(),
+            now,
         )
         .await?;
+    // Space-wide vault grants, exactly as the join flow (step 6): a directly added member
+    // receives a pending `grant` for each of the space's space_wide vaults.
+    enqueue_space_wide_grants(&state, &mut tx, &space_id, &account_id, now).await?;
     tx.commit().await?;
 
     audit_space(&state, "space_member_add", &space_id, &account_id).await;
@@ -196,6 +309,8 @@ async fn members_remove(
     let space_id = ids::unb64(&req.space_id)?;
     let account_id = ids::unb64(&req.account_id)?;
     require_space_admin(&state, &space_id, auth.account_id()).await?;
+    // Owner hardening: a co-admin (not the instance owner) cannot evict the instance owner.
+    guard_instance_owner_eviction(&state, &account_id, auth.account_id()).await?;
     // Anti-orphan: refuse to remove the LAST admin of a space (no recovery path).
     if state
         .store
@@ -265,24 +380,40 @@ async fn members_set_role(
     let account_id = ids::unb64(&req.account_id)?;
     validate_role(&req.role)?;
     require_space_admin(&state, &space_id, auth.account_id()).await?;
+    let current_role = state.store.space_member_role(&space_id, &account_id).await?;
+    // Owner hardening: demoting (role → non-admin) the instance owner is a form of
+    // eviction — a co-admin (not the instance owner) must not be able to do it.
+    if req.role != "admin" {
+        guard_instance_owner_eviction(&state, &account_id, auth.account_id()).await?;
+    }
     // Anti-orphan: refuse to demote the LAST admin of a space (no recovery path).
     if req.role != "admin"
-        && state
-            .store
-            .space_member_role(&space_id, &account_id)
-            .await?
-            .as_deref()
-            == Some("admin")
+        && current_role.as_deref() == Some("admin")
         && state.store.space_admin_count(&space_id).await? <= 1
     {
         return Err(AppError::forbidden(
             "cannot demote the last admin of a space",
         ));
     }
-    state
-        .store
-        .space_member_set_role(&space_id, &account_id, &req.role)
-        .await?;
+    let now = state.now();
+    let mut tx = state.store.begin().await?;
+    // Role change (kept as the space_members UPDATE, mirroring `space_member_set_role`).
+    tx.exec(
+        "UPDATE space_members SET role = ? WHERE space_id = ? AND account_id = ?",
+        vec![
+            Val::t(req.role.as_str()),
+            Val::b(space_id.as_slice()),
+            Val::b(account_id.as_slice()),
+        ],
+    )
+    .await?;
+    // Mirror join step-6 (idempotent) so a member transitioned via the role endpoint holds
+    // the space's space_wide grants. Only a real member is granted — a role change on a
+    // non-member is a no-op UPDATE and enqueues nothing.
+    if current_role.is_some() {
+        enqueue_space_wide_grants(&state, &mut tx, &space_id, &account_id, now).await?;
+    }
+    tx.commit().await?;
     audit_space(&state, "space_member_role", &space_id, &account_id).await;
     Ok(StatusCode::NO_CONTENT)
 }

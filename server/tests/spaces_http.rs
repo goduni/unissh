@@ -10,6 +10,7 @@ mod common;
 use common::{claim_owner, spawn};
 use serde_json::{Value, json};
 use unissh_server::ids::b64;
+use unissh_server::store::Val;
 
 #[tokio::test]
 async fn spaces_members_directory_lifecycle() {
@@ -332,4 +333,232 @@ async fn member_add_unknown_404_and_last_admin_protected() {
         .find(|s| s["space_id"] == solo_id)
         .unwrap();
     assert_eq!(solo["role"], "admin", "owner remains Solo's admin");
+}
+
+/// FIX 1: a member added DIRECTLY via `POST /v1/spaces/members` receives pending `grant`
+/// actions for the space's `access_policy='space_wide'` vaults — the same step-6 policy
+/// grants the join flow enqueues.
+#[tokio::test]
+async fn members_add_enqueues_space_wide_grants() {
+    let app = spawn().await;
+    let id = common::make_identity();
+    let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let tok = common::login_v2(&app, &id, &owner_acct, claimed["device_id"].as_str().unwrap()).await;
+
+    let post = |path: &str, bearer: &str, body: Value| {
+        app.client
+            .post(format!("{}/v1/{}", app.base, path))
+            .bearer_auth(bearer)
+            .json(&body)
+            .send()
+    };
+
+    // Owner creates "Backend" and claims a space_wide vault in it (owner admins the vault).
+    let backend_id = post("spaces", &tok, json!({ "name": "Backend" }))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let vault_bytes = [3u8; 16];
+    let r = post(
+        "vaults/claim",
+        &tok,
+        json!({
+            "vault_id": b64(&vault_bytes),
+            "space_id": backend_id,
+            "access_policy": "space_wide",
+            "space_wide_role": 1,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 200, "owner claims a space_wide vault");
+
+    // A brand-new member is added directly.
+    let member = app.seed_session("").await;
+    let member_acct = b64(&member.account_id);
+    let r = post(
+        "spaces/members",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 204, "member added");
+
+    // A pending `grant` for the new member on the space_wide vault now exists.
+    let n = app
+        .state
+        .store
+        .fetch_scalar_i64(
+            "SELECT COUNT(*) FROM pending_actions \
+             WHERE account_id = ? AND vault_id = ? AND kind = 'grant' AND state = 'pending'",
+            vec![
+                Val::b(&member.account_id[..]),
+                Val::b(&vault_bytes[..]),
+            ],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(n, 1, "space_wide grant enqueued for the directly-added member");
+}
+
+/// FIX 2: re-adding an EXISTING member (e.g. hoping to change its role) via the add path
+/// is a clear 409 — not a silent 204 that masks the `ON CONFLICT DO NOTHING` no-op.
+#[tokio::test]
+async fn members_add_existing_conflicts() {
+    let app = spawn().await;
+    let id = common::make_identity();
+    let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let tok = common::login_v2(&app, &id, &owner_acct, claimed["device_id"].as_str().unwrap()).await;
+
+    let post = |path: &str, bearer: &str, body: Value| {
+        app.client
+            .post(format!("{}/v1/{}", app.base, path))
+            .bearer_auth(bearer)
+            .json(&body)
+            .send()
+    };
+
+    let backend_id = post("spaces", &tok, json!({ "name": "Backend" }))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let member = app.seed_session("").await;
+    let member_acct = b64(&member.account_id);
+
+    let r = post(
+        "spaces/members",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 204, "first add succeeds");
+
+    let r = post(
+        "spaces/members",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct, "role": "admin" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 409, "re-adding an existing member conflicts");
+}
+
+/// FIX 7: a space co-admin who is NOT the instance owner cannot remove or demote the
+/// instance owner from a space; ordinary removals by that co-admin still work.
+#[tokio::test]
+async fn instance_owner_protected_from_coadmin_eviction() {
+    let app = spawn().await;
+    let id = common::make_identity();
+    let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_tok = common::login_v2(&app, &id, &owner_acct, claimed["device_id"].as_str().unwrap()).await;
+
+    let post = |path: &str, bearer: &str, body: Value| {
+        app.client
+            .post(format!("{}/v1/{}", app.base, path))
+            .bearer_auth(bearer)
+            .json(&body)
+            .send()
+    };
+
+    // Owner creates "Backend" (owner is its auto-admin AND the instance owner).
+    let backend_id = post("spaces", &owner_tok, json!({ "name": "Backend" }))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A distinct principal is added as a co-admin of Backend.
+    let coadmin = app.seed_session("").await;
+    let coadmin_acct = b64(&coadmin.account_id);
+    let coadmin_tok = coadmin.access_token_b64.clone();
+    assert_eq!(
+        post(
+            "spaces/members",
+            &owner_tok,
+            json!({ "space_id": backend_id, "account_id": coadmin_acct, "role": "admin" }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        204,
+        "co-admin added"
+    );
+
+    // A plain member is added too (the co-admin will later remove it — the happy path).
+    let member = app.seed_session("").await;
+    let member_acct = b64(&member.account_id);
+    assert_eq!(
+        post(
+            "spaces/members",
+            &owner_tok,
+            json!({ "space_id": backend_id, "account_id": member_acct, "role": "member" }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        204,
+        "plain member added"
+    );
+
+    // Co-admin CANNOT remove the instance owner → 403.
+    assert_eq!(
+        post(
+            "spaces/members/remove",
+            &coadmin_tok,
+            json!({ "space_id": backend_id, "account_id": owner_acct }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        403,
+        "co-admin cannot remove the instance owner"
+    );
+
+    // Co-admin CANNOT demote the instance owner → 403.
+    assert_eq!(
+        post(
+            "spaces/members/role",
+            &coadmin_tok,
+            json!({ "space_id": backend_id, "account_id": owner_acct, "role": "member" }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        403,
+        "co-admin cannot demote the instance owner"
+    );
+
+    // Ordinary removal still works: co-admin removes the plain member → 204.
+    assert_eq!(
+        post(
+            "spaces/members/remove",
+            &coadmin_tok,
+            json!({ "space_id": backend_id, "account_id": member_acct }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        204,
+        "co-admin removes an ordinary member"
+    );
 }
