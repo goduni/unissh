@@ -242,7 +242,7 @@ overclaiming them would be dishonest:
   protection is the client's floor once it's established.
 - **Whole-DB snapshot rollback is bounded, not eliminated.** Per-record version
   monotonicity catches lowering of any single object. Across the whole DB, an
-  **instance generation** (the sum of per-space sequences) is checked at startup
+  **instance generation** (the instance-wide `next_seq`) is checked at startup
   against an operator-anchored, out-of-band floor (`min_instance_generation`); the
   server refuses to boot below it. The client's trusted **anti-rollback cursor**
   (a last-seen `server_seq` held locally, never replicated back from the server)
