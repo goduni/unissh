@@ -897,18 +897,54 @@ pub fn escrow_params(http: &Client, base_url: &str, handle: &str) -> ApiResult<E
 }
 
 /// `POST /v1/escrow/fetch { handle, k_auth }` (PUBLIC) — the encrypted keyset blob for
-/// a handle, gated on `sha256(k_auth) == stored sha256(K_auth)`. Returns the blob
-/// bytes (the server answers 403 on unknown-handle / not-enrolled / wrong-credential,
-/// indistinguishably).
+/// a handle, gated on `sha256(k_auth) == stored sha256(K_auth)`. Returns `(blob bytes,
+/// account_id_b64)` — the blob to install/unlock plus the server-resolved account the
+/// escrow belongs to (the same account the keyset resolves to on self-enroll). The
+/// server answers 403 on unknown-handle / not-enrolled / wrong-credential,
+/// indistinguishably.
 pub fn escrow_fetch(
     http: &Client,
     base_url: &str,
     handle: &str,
     k_auth: &[u8],
-) -> ApiResult<Vec<u8>> {
+) -> ApiResult<(Vec<u8>, String)> {
     let body = json!({ "handle": handle, "k_auth": client::b64(k_auth) });
     let v = client::send_json(
         client::headers(http.post(client::url(base_url, "/v1/escrow/fetch")), None).json(&body),
     )?;
-    client::unb64(&client::jstr(&v, "keyset_blob")?)
+    let blob = client::unb64(&client::jstr(&v, "keyset_blob")?)?;
+    let account_id = client::jstr(&v, "account_id")?;
+    Ok((blob, account_id))
+}
+
+/// `POST /v1/devices/self-enroll` (PUBLIC — no bearer). Register a FRESH device for the
+/// EXISTING account resolved by the (already-unlocked) keyset. The self-attested
+/// registration signature IS the credential — the SAME `registration_payload` /
+/// `registration_signature` fields as `claim`/`join`/`oidc_callback` — so no session is
+/// required. This is the "sign in on a fresh device via escrow" seam: escrow unlocks the
+/// keyset, but a device with no session cannot call the Bearer-gated `devices/add`; here
+/// the keyset possession proof authenticates the enrollment and the account is resolved
+/// BY that keyset. Returns `(account_id_b64, device_id_b64)` for the newly created device.
+/// Errors: 404 unknown keyset, 403 account not active, 401 bad signature, 400 malformed /
+/// key mismatch.
+pub fn device_self_enroll(
+    http: &Client,
+    base_url: &str,
+    reg: &ffi::RegistrationRequest,
+) -> ApiResult<(String, String)> {
+    let body = json!({
+        "registration_payload": client::b64(&reg.payload),
+        "registration_signature": client::b64(&reg.signature),
+    });
+    let v = client::send_json(
+        client::headers(
+            http.post(client::url(base_url, "/v1/devices/self-enroll")),
+            None,
+        )
+        .json(&body),
+    )?;
+    Ok((
+        client::jstr(&v, "account_id")?,
+        client::jstr(&v, "device_id")?,
+    ))
 }

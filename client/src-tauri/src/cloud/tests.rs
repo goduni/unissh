@@ -542,19 +542,42 @@ fn live_e2e_escrow_recovery() {
             params.argon_parallelism,
         )
         .expect("re-derive K_auth from the Emergency Kit");
-    let recovered = identity::escrow_fetch(http, base, "alice", &k_auth).expect("escrow fetch");
+    let (recovered, escrow_account_id) =
+        identity::escrow_fetch(http, base, "alice", &k_auth).expect("escrow fetch");
     assert_eq!(
         recovered, blob_a,
         "the fetched keyset blob is exactly A's uploaded blob"
+    );
+    assert_eq!(
+        escrow_account_id, out_a.account_id,
+        "escrow resolves the account the keyset belongs to (A's)"
     );
     core_c
         .unlock_from_server_blob(recovered, Some("pw-a".into()), secret_a.clone())
         .expect("C unlocks from the escrowed keyset blob");
 
-    // C now holds A's account keyset (shared). It authenticates as an existing device
-    // of the account (the recovered keyset signs the challenge) and syncs.
-    let session_c = identity::login(http, base, &core_c, &out_a.account_id, &out_a.device_id)
-        .expect("C login with the recovered keyset should succeed");
+    // C holds A's account keyset (shared) but is a BRAND-NEW device with no server-side
+    // device row. It SELF-ENROLLS a fresh device (keyset-signed, session-less) — the real
+    // fresh-device seam — and MUST receive a device_id distinct from A's. The old test
+    // reused `out_a.device_id` here, which is exactly why the missing-enroll gap was
+    // invisible; enrolling a genuinely new device is the true regression guard.
+    let reg_c = core_c
+        .build_registration_request()
+        .expect("C builds a registration from the recovered keyset");
+    let (enroll_account_id, device_c) =
+        identity::device_self_enroll(http, base, &reg_c).expect("C self-enrolls a fresh device");
+    assert_eq!(
+        enroll_account_id, out_a.account_id,
+        "self-enroll resolves A's account by the shared keyset"
+    );
+    assert_ne!(
+        device_c, out_a.device_id,
+        "C's self-enrolled device is a NEW device, distinct from A's"
+    );
+
+    // C authenticates as that NEW device (the recovered keyset signs the challenge) and syncs.
+    let session_c = identity::login(http, base, &core_c, &out_a.account_id, &device_c)
+        .expect("C login with the freshly self-enrolled device should succeed");
     let transport_c: Arc<dyn unissh_ffi::FfiSyncTransport> = Arc::new(HttpSyncTransport::new(
         base.clone(),
         session_c.access_token.clone(),

@@ -1190,12 +1190,14 @@ function ConnectField({
   onChange,
   placeholder,
   mono,
+  type,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   mono?: boolean;
+  type?: "text" | "password";
 }) {
   const p = usePalette();
   return (
@@ -1203,6 +1205,7 @@ function ConnectField({
       <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>{label}</div>
       <input
         {...NO_AUTOCORRECT}
+        type={type ?? "text"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -1248,10 +1251,16 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
   const [setupCode, setSetupCode] = useState("");
   const [spaceName, setSpaceName] = useState("");
 
-  // join a claimed instance: redeem an invite link, or sign in with the local keyset.
-  const [branch, setBranch] = useState<"invite" | "signin">("invite");
+  // join a claimed instance: redeem an invite link, sign in with an existing identity
+  // (escrow), or reconnect the local keyset.
+  const [branch, setBranch] = useState<"invite" | "identity" | "signin">("invite");
   const [inviteToken, setInviteToken] = useState("");
   const [preview, setPreview] = useState<JoinPreview | null>(null);
+
+  // "Sign in with existing identity" (escrow): the account handle + password + Secret
+  // Key (Emergency Kit) recover the keyset on this fresh device with no prior link.
+  const [escrowPw, setEscrowPw] = useState("");
+  const [secretKey, setSecretKey] = useState("");
 
   const optProfile = () => ({
     displayName: displayName.trim() || undefined,
@@ -1332,11 +1341,42 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
     }
   };
 
-  // Sign in with the local account keyset (no invite, no tenant). server_login
-  // proves the keyset and re-establishes the session for an account this device
-  // already belongs to. TODO(gate): a first-time sign-in to a brand-new server
-  // (never linked here) needs a session-less keyset link, escrow, or QR pairing —
-  // tracked as a follow-up; serverLogin reconnects an already-linked account.
+  // Sign in with an existing identity via ESCROW (the fresh-device path). By handle +
+  // password + Secret Key, the server-side keyset escrow is recovered, THIS device is
+  // self-enrolled, and a session + link are established — no invite, no prior link on
+  // this device. This is the session-less keyset link the old TODO tracked.
+  // Zero-knowledge: the password + Secret Key go straight to the Rust command (which
+  // feeds them only into the core to derive K_auth / unwrap the blob); never logged.
+  const doIdentitySignIn = async () => {
+    if (busy) return;
+    if (!handle.trim()) {
+      toast(t("serverCloud.fillHandle"), "warn");
+      return;
+    }
+    if (!secretKey.trim()) {
+      toast(t("serverCloud.fillSecretKey"), "warn");
+      return;
+    }
+    setBusy(true);
+    try {
+      const status = await api.serverEscrowFetchAndUnlock(
+        baseUrl.trim(),
+        handle.trim(),
+        escrowPw ? escrowPw : null,
+        secretKey.replace(/[\s-]/g, ""),
+      );
+      toast(t("serverCloud.signedIn"), "ok");
+      onConnected(status);
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+      setBusy(false);
+    }
+  };
+
+  // Reconnect the local account keyset (no invite, no escrow). server_login proves the
+  // keyset and re-establishes the session for an account this device ALREADY belongs to
+  // (a persisted link whose session dropped) — the recovery counterpart to the escrow
+  // "existing identity" path above, which handles a brand-new device with no local link.
   const doSignIn = async () => {
     if (busy) return;
     setBusy(true);
@@ -1489,7 +1529,7 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
         ) : (
           // Claimed → join with an invite link, or sign in with the local keyset.
           <>
-            <Segmented<"invite" | "signin">
+            <Segmented<"invite" | "identity" | "signin">
               value={branch}
               onChange={(v) => {
                 setBranch(v);
@@ -1497,6 +1537,7 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
               }}
               options={[
                 { value: "invite", label: t("serverCloud.branchInvite") },
+                { value: "identity", label: t("serverCloud.branchIdentity") },
                 { value: "signin", label: t("serverCloud.branchSignIn") },
               ]}
             />
@@ -1578,6 +1619,43 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <Btn icon={busy ? undefined : "enter"} onClick={doJoin} disabled={busy}>
                     {busy ? t("serverCloud.connecting") : t("serverCloud.joinCta")}
+                  </Btn>
+                </div>
+              </>
+            ) : branch === "identity" ? (
+              <>
+                <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                  {t("serverCloud.identityHint")}
+                </div>
+                <ConnectField
+                  label={t("serverCloud.handle")}
+                  value={handle}
+                  onChange={setHandle}
+                  placeholder={t("serverCloud.handlePlaceholder")}
+                  mono
+                />
+                <ConnectField
+                  label={t("serverCloud.identityPassword")}
+                  value={escrowPw}
+                  onChange={setEscrowPw}
+                  placeholder={t("serverCloud.identityPasswordPlaceholder")}
+                  type="password"
+                />
+                <ConnectField
+                  label={t("serverCloud.identitySecretKey")}
+                  value={secretKey}
+                  onChange={setSecretKey}
+                  placeholder={t("serverCloud.identitySecretKeyPlaceholder")}
+                  type="password"
+                  mono
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <Btn
+                    icon={busy ? undefined : "unlock"}
+                    onClick={doIdentitySignIn}
+                    disabled={busy}
+                  >
+                    {busy ? t("serverCloud.connecting") : t("serverCloud.identityCta")}
                   </Btn>
                 </div>
               </>

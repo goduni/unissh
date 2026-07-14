@@ -1134,13 +1134,26 @@ pub async fn server_escrow_params(
     .await
 }
 
-/// Recover this device's keyset from a server's ESCROW by handle and unlock it (PUBLIC —
-/// no session; the escrow endpoints are unauthenticated). Reads the enrolled Argon2id
-/// params (`GET /v1/escrow/params`), re-derives `K_auth` with THOSE params so it matches
-/// what enrollment uploaded (the server gates the fetch on `sha256(K_auth)`), fetches the
-/// encrypted keyset blob (`POST /v1/escrow/fetch`), then unlocks the local instance from
-/// it. `password` is `None` for passwordless/SSO accounts; `secret_key_hex` is the
-/// account Secret Key (from the Emergency Kit). A wrong password/key → the server's 403.
+/// Sign in with an existing identity via a server's ESCROW: recover this device's keyset
+/// by handle, register this device, authenticate, and persist the link (PUBLIC — the
+/// escrow + self-enroll endpoints are session-less). The full flow, run keyset-first so a
+/// brand-new device with no prior local link can obtain a session:
+///   1. `GET /v1/escrow/params` — the enrolled Argon2id params for the handle.
+///   2. `derive_escrow_auth_with_params` — re-derive `K_auth` with THOSE params (so it
+///      reproduces what enrollment uploaded; the server gates the fetch on `sha256(K_auth)`).
+///   3. `POST /v1/escrow/fetch` — the encrypted keyset blob + the account it belongs to.
+///   4. `unlock_from_server_blob` — install + unlock the keyset locally (now loaded).
+///   5. `POST /v1/devices/self-enroll` — register a FRESH device for the account, proven
+///      by a keyset-signed registration (no session needed).
+///   6. `identity::login` — challenge→verify with the NEW device_id → a session.
+/// Then persist a `ServerConfig` (idempotent via `find_by_identity`), store the access
+/// token + refresh, and return the resulting `ServerStatus` — mirroring claim/join.
+/// `password` is `None` for passwordless/SSO accounts; `secret_key_hex` is the account
+/// Secret Key (from the Emergency Kit). A wrong password/key → the server's 403.
+///
+/// Zero-knowledge: `password` / `secret_key_hex` flow ONLY into the core FFI (to derive
+/// `K_auth` and unwrap the blob) — never logged, never sent; only the derived `K_auth`
+/// and the keyset-signed registration leave the device.
 #[tauri::command]
 pub async fn server_escrow_fetch_and_unlock(
     base_url: String,
@@ -1148,14 +1161,21 @@ pub async fn server_escrow_fetch_and_unlock(
     password: Option<String>,
     secret_key_hex: String,
     state: State<'_, AppState>,
-) -> ApiResult<()> {
+) -> ApiResult<ServerStatus> {
     client::validate_base_url(&base_url)?;
     let core = state.core.clone();
-    blocking_api(move || {
+    let base = base_url.clone();
+    let hd = handle.clone();
+
+    // Recover + self-enroll + login in one blocking pass. The self-enroll (step 5) is the
+    // only server-mutating step; a login failure right after it (same server, same round-
+    // trip) is rare, and any orphaned device is revocable — so, unlike the irreversible
+    // claim/join, this need not persist a link before login.
+    let (instance, account_id, device_id, session, primary_space) = blocking_api(move || {
         let http = client::http();
-        let params = identity::escrow_params(http, &base_url, &handle)?;
-        // Re-derive K_auth with the SERVER-STORED params (not fresh ones) so it
-        // reproduces the K_auth enrollment uploaded — enroll/fetch symmetry.
+        // 1–2. Enrolled Argon2id params → re-derive K_auth with THOSE params (enroll/fetch
+        //       symmetry). password/secret_key only enter the core here.
+        let params = identity::escrow_params(http, &base, &hd)?;
         let k_auth = core
             .derive_escrow_auth_with_params(
                 password.clone(),
@@ -1166,11 +1186,59 @@ pub async fn server_escrow_fetch_and_unlock(
                 params.argon_parallelism,
             )
             .map_err(ApiError::from)?;
-        let blob = identity::escrow_fetch(http, &base_url, &handle, &k_auth)?;
+        // 3–4. Fetch the escrowed keyset blob + the account it belongs to, then install +
+        //       unlock it locally (this loads the keyset the next steps sign with).
+        let (blob, account_id) = identity::escrow_fetch(http, &base, &hd, &k_auth)?;
         core.unlock_from_server_blob(blob, password, secret_key_hex)
-            .map_err(ApiError::from)
+            .map_err(ApiError::from)?;
+        // 5. Register a FRESH device for the account (keyset-signed; no session). Its
+        //    account_id equals the escrow-fetch account_id (the same keyset resolves the
+        //    same account); we keep escrow's as the link identity and take the new device.
+        let reg = core.build_registration_request().map_err(ApiError::from)?;
+        let (_enroll_account_id, device_id) = identity::device_self_enroll(http, &base, &reg)?;
+        // 6. Authenticate the new device (the recovered keyset signs the challenge).
+        let session = identity::login(http, &base, &core, &account_id, &device_id)?;
+        // The opaque instance id (link identity) comes from the public descriptor; the
+        // primary space (cloud-vault binding label) is the caller's first space, if any.
+        let instance = identity::instance_info(http, &base)?;
+        let primary_space = identity::list_spaces(http, &base, &session.access_token)
+            .ok()
+            .and_then(|spaces| spaces.first().map(|s| s.space_id.clone()))
+            .unwrap_or_default();
+        Ok((instance, account_id, device_id, session, primary_space))
     })
-    .await
+    .await?;
+
+    // Persist the link (active). Idempotent: re-signing-in on this device reuses the
+    // existing link id (via find_by_identity) rather than minting a duplicate, and
+    // preserves its `owned` flag so an owner recovering on a fresh device isn't downgraded
+    // (a brand-new link has no prior flag → false, matching join/oidc: escrow recovery
+    // confers no NEW ownership).
+    let server_id = state
+        .cloud
+        .find_by_identity(&base_url, &instance.instance_id, &account_id)
+        .unwrap_or_else(new_server_id);
+    let owned = state
+        .cloud
+        .config_for(Some(&server_id))
+        .map(|c| c.owned)
+        .unwrap_or(false);
+    state.cloud.upsert_config(ServerConfig {
+        server_id: server_id.clone(),
+        base_url,
+        instance_id: instance.instance_id,
+        space_id: primary_space,
+        account_id,
+        device_id,
+        handle: Some(handle),
+        owned,
+    })?;
+    state
+        .cloud
+        .set_access_token_for(Some(&server_id), Some(session.access_token));
+    persist_refresh(&server_id, &session.refresh_token);
+    refresh_spaces_cache(&state, &server_id).await;
+    Ok(state.cloud.status_for(Some(&server_id)))
 }
 
 // ---------- device-to-device onboarding (Path B) ----------

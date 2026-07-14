@@ -745,17 +745,18 @@ export const serverKeysetPullAndUnlock = (
  *  handles), so callers must not treat this as an existence oracle. */
 export const serverEscrowParams = (baseUrl: string, handle: string) =>
   invoke<EscrowParamsInfo>("server_escrow_params", { baseUrl, handle });
-/** Recover this device's keyset from a server's ESCROW by handle and unlock it
- *  (PUBLIC — no session). `password` is null for passwordless/SSO accounts;
- *  `secretKeyHex` is the account Secret Key (Emergency Kit). A wrong password/key
- *  surfaces as the server's 403. */
+/** Sign in with an existing identity via a server's ESCROW (PUBLIC — no session): by
+ *  handle, recover + unlock the keyset, self-enroll THIS device, authenticate, and
+ *  persist the link. `password` is null for passwordless/SSO accounts; `secretKeyHex`
+ *  is the account Secret Key (Emergency Kit). A wrong password/key surfaces as the
+ *  server's 403. Returns the resulting linked-server status (mirrors claim/join). */
 export const serverEscrowFetchAndUnlock = (
   baseUrl: string,
   handle: string,
   password: string | null,
   secretKeyHex: string,
 ) =>
-  invoke<void>("server_escrow_fetch_and_unlock", {
+  invoke<ServerStatus>("server_escrow_fetch_and_unlock", {
     baseUrl,
     handle,
     password,
