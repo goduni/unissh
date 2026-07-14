@@ -38,6 +38,13 @@ function DirectoryBody() {
   }, [accounts, q]);
 
   const nameOf = (a: DirEntry) => a.display_name || a.handle || "—";
+  // Seed the avatar color from a char-hash of account_id (same hash as the Spaces
+  // tile) — seeding on .length collapses nearly every account onto one color.
+  const seedOf = (id: string) => {
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+    return Math.abs(h);
+  };
 
   const columns: Column<DirEntry>[] = [
     {
@@ -46,7 +53,7 @@ function DirectoryBody() {
       width: "1.8fr",
       render: (a) => (
         <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <Avatar label={initialsOf(nameOf(a))} seed={a.account_id.length} size={30} />
+          <Avatar label={initialsOf(nameOf(a))} seed={seedOf(a.account_id)} size={30} />
           <span style={{ minWidth: 0 }}>
             <span
               style={{
