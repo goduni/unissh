@@ -737,7 +737,16 @@ async fn device_add(
     let device_id = ids::random_id16().to_vec();
     state
         .store
-        .create_device(auth.account_id(), &device_id, &ed, &x, state.now())
+        .create_device(
+            auth.account_id(),
+            &device_id,
+            &ed,
+            &x,
+            "app",
+            None,
+            None,
+            state.now(),
+        )
         .await?;
     audit_observed(&state, "device_add", auth.account_id(), &device_id).await;
     Ok((
@@ -754,7 +763,18 @@ struct SelfEnrollReq {
     registration_payload: String,
     /// Ed25519 signature over the payload (base64), proving keyset possession.
     registration_signature: String,
+    /// Device kind: `"app"` (desktop client, default) or `"web"` (browser panel).
+    /// Web devices auto-expire so a browser session is not a permanent device.
+    #[serde(default)]
+    kind: Option<String>,
+    /// Optional short, human-readable label shown in the Devices list.
+    #[serde(default)]
+    label: Option<String>,
 }
+
+/// Web/panel devices auto-expire after 30 days (the Bearer path enforces
+/// `device.expires_at`); app devices never expire.
+const WEB_DEVICE_TTL_SECONDS: i64 = 2_592_000; // 30 days
 
 #[derive(Serialize)]
 struct SelfEnrollResp {
@@ -777,6 +797,12 @@ async fn device_self_enroll(
     State(state): State<AppState>,
     Json(req): Json<SelfEnrollReq>,
 ) -> AppResult<(StatusCode, Json<SelfEnrollResp>)> {
+    // 0. Validate the device kind up front (default "app"); anything else is a 400.
+    let kind = req.kind.as_deref().unwrap_or("app");
+    if kind != "app" && kind != "web" {
+        return Err(AppError::malformed("device kind must be 'app' or 'web'"));
+    }
+
     // 1. Verify the self-attested registration signature (proves keyset possession).
     //    Bad blob → malformed; bad signature → unauthenticated (same as claim/join/oidc).
     let payload_bytes = ids::unb64(&req.registration_payload)?;
@@ -806,9 +832,16 @@ async fn device_self_enroll(
     }
 
     // 5. Register the fresh device sharing the account's canonical keyset. Non-tx,
-    //    exactly like the Bearer `device_add`: kind defaults to 'app', never expires.
+    //    exactly like the Bearer `device_add`. Web/panel devices carry a 30-day
+    //    expiry so a browser sign-in is not a permanent device; app devices never
+    //    expire (expires_at = NULL).
     let now = state.now();
     let device_id = ids::random_id16().to_vec();
+    let expires_at = if kind == "web" {
+        Some(now + WEB_DEVICE_TTL_SECONDS)
+    } else {
+        None
+    };
     state
         .store
         .create_device(
@@ -816,6 +849,9 @@ async fn device_self_enroll(
             &device_id,
             &payload.ed25519_pub,
             &payload.x25519_pub,
+            kind,
+            req.label.as_deref(),
+            expires_at,
             now,
         )
         .await?;
@@ -1210,6 +1246,9 @@ async fn join(
         &device_id,
         &payload.ed25519_pub,
         &payload.x25519_pub,
+        "app",
+        None,
+        None,
         now,
     )
     .await?;
@@ -1392,6 +1431,8 @@ async fn devices_list_self(
         .map(|d| {
             serde_json::json!({
                 "device_id": ids::b64(&d.device_id),
+                "kind": d.kind,
+                "label": d.label,
                 "status": d.status,
                 "registered_at": d.registered_at,
                 "active_sessions": d.session_count,

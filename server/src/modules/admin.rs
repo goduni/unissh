@@ -164,6 +164,8 @@ async fn devices_list(
         .map(|d| {
             json!({
                 "device_id": ids::b64(&d.device_id),
+                "kind": d.kind,
+                "label": d.label,
                 "status": d.status,
                 "registered_at": d.registered_at,
                 "active_sessions": d.session_count,

@@ -163,6 +163,11 @@ pub struct RelayRow {
 #[derive(Debug, Clone, FromRow)]
 pub struct AdminDeviceRow {
     pub device_id: Vec<u8>,
+    /// `"app"` (desktop client) | `"web"` (browser panel) — lets the panel distinguish
+    /// client from panel devices.
+    pub kind: String,
+    /// Optional short human label (e.g. hostname / "Admin panel · Chrome"); NULL when unset.
+    pub label: Option<String>,
     pub status: String,
     pub registered_at: i64,
     pub session_count: i64,

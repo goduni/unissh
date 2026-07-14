@@ -45,6 +45,7 @@ export const CACHE_POLICY_LABEL: Record<number, string> = {
 export type InviteState = "pending" | "redeemed" | "expired" | "revoked";
 export type AccountStatus = "active" | "disabled";
 export type DeviceStatus = "active" | "revoked";
+export type DeviceKind = "app" | "web";
 export type AuditSource = "client-signed" | "server-observed";
 
 // ── Service ────────────────────────────────────────────────────
@@ -120,6 +121,10 @@ export interface AdminOverview {
 
 export interface DeviceRow {
   device_id: string;
+  /** 'app' (desktop client) | 'web' (browser panel). */
+  kind: DeviceKind;
+  /** Short human label (hostname / browser tag); null when unset. */
+  label: string | null;
   status: DeviceStatus;
   registered_at: number;
   active_sessions: number;
@@ -394,6 +399,10 @@ export interface EscrowFetchResp {
 export interface DeviceSelfEnrollReq {
   registration_payload: string;
   registration_signature: string;
+  /** 'web' for the browser panel (auto-expires server-side); 'app' for desktop. */
+  kind?: DeviceKind;
+  /** Short, non-fingerprinty label shown in the Devices list. */
+  label?: string;
 }
 export interface DeviceSelfEnrollResp {
   account_id: string;

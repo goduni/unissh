@@ -53,24 +53,36 @@ impl Store {
         Ok(())
     }
 
+    /// Register a device. `kind` is `"app"` (desktop client) or `"web"` (browser
+    /// panel); `label` is an optional short human tag; `expires_at` auto-expires web
+    /// devices (`None` = never expires). Callers other than self-enroll pass
+    /// `"app", None, None` (the pre-existing default behaviour).
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_device(
         &self,
         account_id: &[u8],
         device_id: &[u8],
         ed25519_pub: &[u8],
         x25519_pub: &[u8],
+        kind: &str,
+        label: Option<&str>,
+        expires_at: Option<i64>,
         now: i64,
     ) -> AppResult<()> {
         self.exec(
             "INSERT INTO devices \
-             (account_id, device_id, ed25519_pub, x25519_pub, registered_at, status) \
-             VALUES (?, ?, ?, ?, ?, 'active')",
+             (account_id, device_id, ed25519_pub, x25519_pub, kind, label, \
+              registered_at, status, expires_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)",
             vec![
                 Val::b(account_id),
                 Val::b(device_id),
                 Val::b(ed25519_pub),
                 Val::b(x25519_pub),
+                Val::t(kind),
+                Val::OptT(label.map(|s| s.to_string())),
                 Val::I(now),
+                Val::OptI(expires_at),
             ],
         )
         .await?;
@@ -442,24 +454,32 @@ impl Tx<'_> {
     }
 
     /// Transactional mirror of [`Store::create_device`].
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_device(
         &mut self,
         account_id: &[u8],
         device_id: &[u8],
         ed25519_pub: &[u8],
         x25519_pub: &[u8],
+        kind: &str,
+        label: Option<&str>,
+        expires_at: Option<i64>,
         now: i64,
     ) -> AppResult<()> {
         self.exec(
             "INSERT INTO devices \
-             (account_id, device_id, ed25519_pub, x25519_pub, registered_at, status) \
-             VALUES (?, ?, ?, ?, ?, 'active')",
+             (account_id, device_id, ed25519_pub, x25519_pub, kind, label, \
+              registered_at, status, expires_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)",
             vec![
                 Val::b(account_id),
                 Val::b(device_id),
                 Val::b(ed25519_pub),
                 Val::b(x25519_pub),
+                Val::t(kind),
+                Val::OptT(label.map(|s| s.to_string())),
                 Val::I(now),
+                Val::OptI(expires_at),
             ],
         )
         .await?;

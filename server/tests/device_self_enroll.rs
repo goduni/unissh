@@ -90,6 +90,79 @@ async fn self_enroll_happy_path_new_device_can_login() {
     );
 }
 
+/// A `kind = "web"` (browser panel) self-enroll creates a device recorded as
+/// kind='web' AND carrying a non-null `expires_at`, so browser devices auto-expire
+/// (the Bearer path enforces `device.expires_at`). App devices, by contrast, never
+/// expire (see the happy-path test, which self-enrolls with the default kind).
+#[tokio::test]
+async fn self_enroll_web_device_is_kind_web_and_expires() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let account_id = c["account_id"].as_str().unwrap().to_string();
+
+    let r = app
+        .client
+        .post(format!("{}/v1/devices/self-enroll", app.base))
+        .json(&json!({
+            "registration_payload": id.payload_b64,
+            "registration_signature": id.sig_b64,
+            "kind": "web",
+            "label": "Admin panel",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201, "web self-enroll should be 201 CREATED");
+    let body: Value = r.json().await.unwrap();
+    assert_eq!(body["account_id"], account_id);
+    let device_id = ids::unb64(body["device_id"].as_str().unwrap()).unwrap();
+
+    // The created device is recorded as kind='web' with a non-null expires_at.
+    let matched = app
+        .state
+        .store
+        .fetch_scalar_i64(
+            "SELECT COUNT(*) FROM devices \
+             WHERE device_id = ? AND kind = 'web' AND expires_at IS NOT NULL",
+            vec![Val::b(&device_id[..])],
+        )
+        .await
+        .unwrap()
+        .unwrap_or(0);
+    assert_eq!(
+        matched, 1,
+        "web self-enroll creates a kind='web' device with a non-null expires_at"
+    );
+}
+
+/// An unrecognized `kind` is rejected up front with 400 and adds no device.
+#[tokio::test]
+async fn self_enroll_bad_kind_400() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let account_id = c["account_id"].as_str().unwrap().to_string();
+
+    let r = app
+        .client
+        .post(format!("{}/v1/devices/self-enroll", app.base))
+        .json(&json!({
+            "registration_payload": id.payload_b64,
+            "registration_signature": id.sig_b64,
+            "kind": "toaster",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400, "unrecognized kind → malformed");
+    assert_eq!(
+        device_count(&app, &account_id).await,
+        1,
+        "no device added for a rejected kind"
+    );
+}
+
 /// A keyset that was never claimed/joined → 404 (no such account). The valid signature
 /// proves the caller already holds this keyset, so 404 leaks nothing.
 #[tokio::test]

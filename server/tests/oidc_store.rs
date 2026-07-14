@@ -81,7 +81,7 @@ async fn oidc_session_records_auth_source_and_reassert() {
     let s = store_v2().await;
     let (account_id, ed, x) = mk_account(&s, Some("https://idp"), Some("u456")).await;
     let device_id = ids::random_id16().to_vec();
-    s.create_device(&account_id, &device_id, &ed, &x, 1000)
+    s.create_device(&account_id, &device_id, &ed, &x, "app", None, None, 1000)
         .await
         .unwrap();
 
@@ -116,7 +116,7 @@ async fn keyset_session_defaults_are_null() {
     let s = store_v2().await;
     let (account_id, ed, x) = mk_account(&s, None, None).await;
     let device_id = ids::random_id16().to_vec();
-    s.create_device(&account_id, &device_id, &ed, &x, 1000)
+    s.create_device(&account_id, &device_id, &ed, &x, "app", None, None, 1000)
         .await
         .unwrap();
 

@@ -72,7 +72,7 @@ impl Store {
 
     pub async fn admin_list_devices(&self, account_id: &[u8]) -> AppResult<Vec<AdminDeviceRow>> {
         self.fetch_all_as::<AdminDeviceRow>(
-            "SELECT d.device_id, d.status, d.registered_at, \
+            "SELECT d.device_id, d.kind, d.label, d.status, d.registered_at, \
              (SELECT COUNT(*) FROM sessions s WHERE s.device_id = d.device_id AND s.revoked = 0) \
                 AS session_count \
              FROM devices d WHERE d.account_id = ? ORDER BY d.registered_at ASC",

@@ -139,6 +139,9 @@ async fn claim(
         &device_id,
         &payload.ed25519_pub,
         &payload.x25519_pub,
+        "app",
+        None,
+        None,
         now,
     )
     .await?;

@@ -107,6 +107,25 @@ export interface EscrowLoginParams {
  * account_id; the restore path passes null (no pre-known id) and always self-enrolls,
  * taking the account_id from the enroll response.
  */
+/**
+ * A short, non-fingerprinty label for a browser (panel) device — the browser family
+ * only, never a version string — so the Devices list can tell one panel from another
+ * without leaking a full user-agent. E.g. "Admin panel · Chrome".
+ */
+function panelDeviceLabel(): string {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const family = /Edg\//.test(ua)
+    ? "Edge"
+    : /Firefox\//.test(ua)
+      ? "Firefox"
+      : /Chrome\//.test(ua)
+        ? "Chrome"
+        : /Safari\//.test(ua)
+          ? "Safari"
+          : "Browser";
+  return `Admin panel · ${family}`;
+}
+
 async function enrollAndCommit(
   instanceUrl: string,
   id: KeysetIdentity,
@@ -129,6 +148,8 @@ async function enrollAndCommit(
     const enrolled = await api.deviceSelfEnroll({
       registration_payload: bytesToB64(reg.payload),
       registration_signature: bytesToB64(reg.signature),
+      kind: "web",
+      label: panelDeviceLabel(),
     });
     accountId = enrolled.account_id;
     deviceId = enrolled.device_id;

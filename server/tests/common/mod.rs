@@ -108,7 +108,7 @@ impl TestApp {
         )
         .await
         .unwrap();
-        s.create_device(&account_id, &device_id, &ed, &x, now)
+        s.create_device(&account_id, &device_id, &ed, &x, "app", None, None, now)
             .await
             .unwrap();
 
@@ -168,7 +168,7 @@ impl TestApp {
         )
         .await
         .unwrap();
-        s.create_device(&account_id, &device_id, ed, x, now)
+        s.create_device(&account_id, &device_id, ed, x, "app", None, None, now)
             .await
             .unwrap();
         if make_owner {
