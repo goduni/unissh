@@ -13,10 +13,10 @@ The whole log is a hash chain:
 prev_hash[n] = SHA-256( prev_hash[n-1] ‖ record_bytes(n) )     domain: unissh-audit-chain-v1
 ```
 
-It is computed under the per-tenant write lock. `GET /v1/admin/audit/verify` recomputes the chain and returns `{ ok, count, broken_at, head_hash }`, detecting any edit, reorder, or deletion. A client does **not** need to recompute the chain itself, and `prev_hash` is not exposed on the `/v1/audit` listing.
+It is computed under the instance write lock. `GET /v1/admin/audit/verify` recomputes the chain and returns `{ ok, count, broken_at, head_hash }`, detecting any edit, reorder, or deletion. A client does **not** need to recompute the chain itself, and `prev_hash` is not exposed on the `/v1/audit` listing.
 
 :::caution[Honest limits of audit v1]
-The chain proves the **integrity of the recorded sequence**. It does **not** stop a malicious operator from refusing to serve the log wholesale, and server-observed entries are **unsigned** — their *origin* is not provable, only their *integrity* within the chain. Client-signed entries are authentic via the genesis-owner signature. See the [zero-knowledge model](../../architecture/zero-knowledge-model/).
+The chain proves the **integrity of the recorded sequence**. It does **not** stop a malicious operator from refusing to serve the log wholesale, and server-observed entries are **unsigned** — their *origin* is not provable, only their *integrity* within the chain. Client-signed entries are authentic via the instance **owner** signature. See the [zero-knowledge model](../../architecture/zero-knowledge-model/).
 :::
 
 ## The listing shape
@@ -50,22 +50,27 @@ Every server-observed event has `event` (a string discriminator) and `ts` (unix 
 
 | `event` | Extra fields | Emitted when |
 |---|---|---|
-| `bootstrap_admin` | `account_id`, `device_id` | First admin bootstrapped for a tenant |
 | `login` | `account_id`, `device_id` | `POST /v1/auth/verify` succeeds |
 | `logout` | `account_id`, `device_id` | `POST /v1/session/logout` |
-| `device_add` | `account_id`, `device_id` | A new device is registered |
+| `join` | `account_id`, `device_id` | `POST /v1/join` redeems an invite → new account |
+| `oidc_login` | `account_id`, `device_id` | `POST /v1/oidc/callback` (SSO) |
+| `device_add` | `account_id`, `device_id` | A new sibling device is registered (`POST /v1/devices/add`) |
 | `device_remove` | `account_id`, `device_id` | `POST /v1/session/device-revoke` |
 | `keyset_publish` | `account_id`, `device_id` | A keyset generation is published (`PUT /v1/keyset`) |
-| `admin_grant` | `account_id` | `POST /v1/admin/set {is_admin:true}` |
-| `admin_revoke` | `account_id` | `POST /v1/admin/set {is_admin:false}` |
+| `key_attest` | `account_id`, `attestor_pubkey` | A space-admin attests a member's key |
+| `owner_grant` | `account_id` | `POST /v1/owner/set {is_owner:true}` |
+| `owner_revoke` | `account_id` | `POST /v1/owner/set {is_owner:false}` |
 | `account_disable` | `account_id` | `POST /v1/admin/account/status {disabled:true}` |
 | `account_enable` | `account_id` | `POST /v1/admin/account/status {disabled:false}` |
-| `tenant_suspend` | `by: "ops"` only when via the ops console | Tenant suspended |
-| `tenant_activate` | `by: "ops"` only when via the ops console | Tenant re-activated |
-| `tenant_rename` | `by: "ops"`, `display_name` (string\|null) | Tenant label set/cleared |
+| `space_create` | `space_id`, `account_id` | `POST /v1/spaces` |
+| `space_member_add` | `space_id`, `account_id` | `POST /v1/spaces/members` |
+| `space_member_remove` | `space_id`, `account_id` | `POST /v1/spaces/members/remove` |
+| `space_member_role` | `space_id`, `account_id` | `POST /v1/spaces/members/role` |
+| `invite_create` | `invite_id`, `account_id` | `POST /v1/invite` |
+| `invite_revoke` | `invite_id`, `account_id` | `POST /v1/invite/revoke` |
 | `access_grant` | `vault_id`, `new_epoch`, `revoke_epoch` (int\|null) | `POST /v1/grants/publish` (publish / rotation / revoke) |
 
-`account_id`, `device_id`, and `vault_id` are **base64**. Treat the `event` set as **open** — render an unknown `event` generically (show `event` plus remaining keys) rather than failing.
+`account_id`, `device_id`, `space_id`, `invite_id`, `vault_id`, and `attestor_pubkey` are **base64**. The instance **owner** is established at claim (a server-side lifecycle event, not one of the rows above); subsequent owner changes surface as `owner_grant` / `owner_revoke`. Treat the `event` set as **open** — render an unknown `event` generically (show `event` plus remaining keys) rather than failing.
 
 Example decoded blob:
 
@@ -75,7 +80,7 @@ Example decoded blob:
 
 ## Source 2 — `client-signed`
 
-`entry_blob` is **opaque canonical bytes** produced and signed by the client (rust-core), submitted via `POST /v1/audit` or a sync push. The server stores it verbatim and **does not parse it** — it only enforces that `author_pubkey` equals the tenant's genesis owner and that the `signature` verifies.
+`entry_blob` is **opaque canonical bytes** produced and signed by the client (rust-core), submitted via `POST /v1/audit` or a sync push. The server stores it verbatim and **does not parse it** — it only enforces that `author_pubkey` equals the instance **owner** and that the `signature` verifies.
 
 For these entries `signature` and `author_pubkey` are present (non-null, base64). The internal structure of `entry_blob` is **not defined by the server** — a dedicated `audit` crate in the core will fix the canonical domain/format; until then it is application-defined and may not be JSON.
 

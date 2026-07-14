@@ -79,7 +79,7 @@ npm run build          # tsc --noEmit && vite build → dist/
 ```
 
 :::caution
-If `crypto-wasm/pkg/` is not built, the panel still loads, but keyset operations (unlock, bootstrap, rotation) report "wasm not loaded". See [Admin panel](../../components/server-ui/).
+If `crypto-wasm/pkg/` is not built, the panel still loads, but keyset operations (unlock, claim, rotation) report "wasm not loaded". See [Admin panel](../../components/server-ui/).
 :::
 
 ## Quick bootstrap with `just`

@@ -7,7 +7,7 @@ Backing up a UniSSH server is mostly ordinary — the data is **only ciphertext*
 
 ## The invariant you must respect
 
-`server_seq` is a per-tenant **monotonic counter**, and each client keeps a trusted last-seen cursor **outside** the server. The invariant: `report_version()` (= `next_seq`) must **never drop below a cursor a client has seen** — otherwise the client treats it as a snapshot-replay **attack** and refuses to sync (a fatal `TransportRollback`). So a restore that lowers `next_seq` breaks sync until corrected. (The model is detailed in [Sync & anti-rollback](../../architecture/sync-model/).)
+`server_seq` is a single instance-wide **monotonic counter**, and each client keeps a trusted last-seen cursor **outside** the server. The invariant: `report_version()` (= `next_seq`) must **never drop below a cursor a client has seen** — otherwise the client treats it as a snapshot-replay **attack** and refuses to sync (a fatal `TransportRollback`). So a restore that lowers `next_seq` breaks sync until corrected. (The model is detailed in [Sync & anti-rollback](../../architecture/sync-model/).)
 
 The good news: **no WAL/PITR setup is required for self-hosting.**
 
@@ -22,9 +22,9 @@ SQLite WAL recovers the live DB to the last committed write on restart. No corru
 A plain nightly `cp data/unissh.db …` (or a volume snapshot, or `VACUUM INTO`) is fine for a homelab. The snapshot is stale, so after restoring, raise the floor:
 
 ```bash
-unissh-server seq-bump --config config.toml --by 100000000      # all tenants
-# or a single tenant to an exact floor:
-unissh-server seq-bump --config config.toml --tenant <b64> --to <N>
+unissh-server seq-bump --config config.toml --by 100000000      # raise by a delta
+# or raise the instance counter to an exact floor:
+unissh-server seq-bump --config config.toml --to <N>
 ```
 
 In the Compose stack: `docker compose run --rm server seq-bump ...`.
@@ -48,7 +48,7 @@ The most-recent **server-only** changes are lost — specifically a deletion (to
 That is **loss-of-latest-state, not corruption**, and it is exactly the window between your snapshot and the failure.
 
 :::tip[Tighten the window cheaply]
-Snapshot **`MAX(next_seq)` per tenant** to a tiny out-of-band durable key, more often than the full backup. That lets you `seq-bump --to` precisely after a restore. You can also anchor `[sync] min_instance_generation` (the sum of per-tenant sequences) out-of-band — see [Configuration](../configuration/) — so the server refuses to boot below a known floor.
+Snapshot the instance **`next_seq`** to a tiny out-of-band durable key, more often than the full backup. That lets you `seq-bump --to` precisely after a restore. You can also anchor `[sync] min_instance_generation` (the instance-wide `next_seq`) out-of-band — see [Configuration](../configuration/) — so the server refuses to boot below a known floor.
 :::
 
 ## Backend specifics
