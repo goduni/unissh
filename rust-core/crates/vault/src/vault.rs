@@ -235,10 +235,13 @@ impl<'a> Vault<'a> {
             verify_grant(&grant, &record.vault_id, &members)?;
             // `now` for local not_after enforcement (F16): wall-clock unix seconds
             // (the FFI only exposes a monotonic Instant, so read SystemTime here).
+            // Fail CLOSED on an unreadable clock: a pre-epoch wall clock must not silently
+            // bypass local `not_after` enforcement (F16). `i64::MAX` marks any expiry-bearing
+            // grant expired; no-expiry grants (`not_after <= 0`) are unaffected.
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+                .unwrap_or(i64::MAX);
             open_grant(
                 &grant,
                 &record.vault_id,
@@ -277,7 +280,21 @@ impl<'a> Vault<'a> {
     }
 
     /// Deletes the vault (tombstone with a bumped version).
+    /// Whole-record operations (rename / delete / cache-policy) re-seal the owner-bound
+    /// `wrapped_vk` and re-sign the record as the caller. Only the genesis owner may do
+    /// this: a member — who opened the vault via a grant — would re-seal the record to its
+    /// OWN keyset and lock the true owner out (the owner branch has no grant fallback), and
+    /// could tombstone the shared vault. Item operations (put/delete/rename item) do NOT
+    /// rewrite the owner-wrap and remain open to writer members.
+    fn require_owner(&self) -> Result<(), VaultError> {
+        if self.keyset.signing.verifying.to_bytes().as_slice() != self.genesis_owner.as_slice() {
+            return Err(VaultError::AuthorityInvalid);
+        }
+        Ok(())
+    }
+
     pub fn delete(self) -> Result<(), VaultError> {
+        self.require_owner()?;
         let version = self.version + 1;
         let name_blob = aead_encrypt(
             &self.vk,
@@ -361,6 +378,7 @@ impl<'a> Vault<'a> {
     /// `cache_policy` (otherwise a membership vault would degrade to epoch 0 →
     /// an unreadable vault record, as items did before the fix).
     pub fn set_name(&mut self, new_name: &[u8]) -> Result<(), VaultError> {
+        self.require_owner()?;
         let version = self.version + 1;
         let name_blob = aead_encrypt(&self.vk, new_name, &name_aad(&self.vault_id, version))?;
         let cur = self
@@ -764,6 +782,7 @@ impl<'a> Vault<'a> {
     /// `put_vault`. `cache_policy` is open metadata (outside the signed
     /// content), but the record is re-signed with a new version anyway (LWW).
     pub fn set_cache_policy(&mut self, policy: CachePolicy) -> Result<(), VaultError> {
+        self.require_owner()?;
         let version = self.version + 1;
         let name_blob = aead_encrypt(
             &self.vk,

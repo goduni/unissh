@@ -1271,3 +1271,51 @@ fn revoked_member_cannot_open_after_rotation() {
         "revoked member open must fail cleanly, got {err:?}"
     );
 }
+
+/// Enabling member-open makes the owner-only whole-record re-seal methods reachable by a
+/// member. They MUST stay owner-only: a member running `set_name`/`delete` would re-seal
+/// the owner-bound `wrapped_vk` under its own keyset and lock the true owner out. Each is
+/// refused with `AuthorityInvalid`; the genuine owner can still perform them.
+#[test]
+fn member_cannot_rewrite_owner_record() {
+    let st = storage();
+    let owner = keyset();
+    let member_kc = keyset();
+    let owner_ed = owner.signing.verifying.to_bytes().to_vec();
+    let member_ed = member_kc.signing.verifying.to_bytes().to_vec();
+    let member_x = member_kc.encryption.public.to_bytes().to_vec();
+
+    let v = Vault::create(&st, &owner, new_vault_id(), b"Shared").unwrap();
+    let vid = v.vault_id().to_vec();
+    let members = vec![
+        Member {
+            ed25519_pub: owner_ed.clone(),
+            role: MemberRole::Admin,
+        },
+        Member {
+            ed25519_pub: member_ed.clone(),
+            role: MemberRole::Editor,
+        },
+    ];
+    let x_by_ed = vec![(member_ed.clone(), member_x.clone())];
+    v.establish_or_extend_membership(&owner, &members, &x_by_ed)
+        .unwrap();
+    pin_and_verify_vault_anchor(&st, &vid, &owner_ed).unwrap();
+
+    // The member opens via its grant, but whole-record re-seal ops are refused (they would
+    // re-seal the owner-wrap under the member → owner lockout).
+    let mut vm = Vault::open(&st, &member_kc, &vid).unwrap();
+    assert!(matches!(
+        vm.set_name(b"Hijacked"),
+        Err(VaultError::AuthorityInvalid)
+    ));
+    assert!(matches!(
+        Vault::open(&st, &member_kc, &vid).unwrap().delete(),
+        Err(VaultError::AuthorityInvalid)
+    ));
+
+    // The genuine owner can still rename and re-open their own vault.
+    let mut vo = Vault::open(&st, &owner, &vid).unwrap();
+    vo.set_name(b"Renamed").unwrap();
+    assert_eq!(Vault::open(&st, &owner, &vid).unwrap().name(), b"Renamed");
+}
