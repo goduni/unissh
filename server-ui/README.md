@@ -31,18 +31,31 @@ cargo install wasm-pack
 which does not compile to wasm), and instead **vendors** the storage-free keyset crypto logic 1-to-1, so
 signatures are **byte-compatible** with the real clients (domains `unissh-server-auth-v1`,
 `unissh-registration-v1`). If `pkg/` is not built, the panel still works, but keyset operations
-(unlock, bootstrap, rotation) show "wasm not loaded".
+(unlock, claim, rotation) show "wasm not loaded".
 
-## Access model (two tiers, as on the server)
+## Sign-in (one instance, no tenant switcher)
 
-1. **Ops** — the static `X-UniSSH-Ops-Token` token from the server config (`[ops] token`).
-   Entered on the login screen. Grants cross-tenant `/v1/ops/*` (tenants, overview, seq-bump).
-2. **Admin keyset** — a per-tenant Bearer. Flow: import `.keyset` + password (+ Secret Key)
-   → `unlock` in the browser (key in memory only) → `auth/challenge` → sign (wasm) →
-   `auth/verify`. Opens all of `/v1/admin/*` and crypto actions. **Lock** wipes the key.
+The panel administers **one instance**. You sign in as the **owner** or a **space-admin** —
+the same account you use in the desktop client:
 
-Crypto sections are behind `LockGate` until unlocked. Dangerous actions go through `ConfirmDialog`
-(for suspend/seq-bump — re-entering the identifier). There is no read-only role (there isn't one on the server either).
+1. **Escrow sign-in** — `handle + password + Secret Key`. The panel fetches the account's
+   **encrypted** keyset from escrow and `unlock`s it in the browser (key in memory only);
+   a single flow then mints the admin session (`auth/challenge` → sign via wasm →
+   `auth/verify`) and leaves the keyset unlocked for crypto actions. **Lock** wipes it.
+   There is **no `.keyset` file to import** and **no ops token to enter first**.
+2. **SSO** — if the instance has `[oidc]` enabled, "Sign in with SSO" runs the browser OIDC flow.
+3. **QR-approve** — a brand-new, unlinked browser is onboarded by scanning a QR from an
+   already-trusted device (the device-to-device relay).
+4. **Claim** — while the instance is unclaimed, the login screen offers to claim it with
+   the setup code from the server log.
+
+Crypto sections are behind `LockGate` until the keyset is unlocked. Dangerous actions go through
+`ConfirmDialog` (for `seq-bump` — re-entering the identifier). There is no read-only role (there
+isn't one on the server either).
+
+The optional server-trusted **ops** break-glass token (`[ops] token`, `X-UniSSH-Ops-Token`) is a
+separate, default-off lever for `/v1/ops/*` (overview / instance / seq-bump) — **not** the panel's
+normal way in, and never a decryption key.
 
 ## Deploy
 
@@ -56,11 +69,11 @@ origin; the instance address is configured on the login screen and in settings.
 src/
   api/         typed client (headers/idempotency/error envelope), auth-service
   crypto/      CryptoProvider (seam) + wasm-provider (real crypto)
-  store/       Zustand: session(ops/keyset), tenant, prefs, ui, meta
+  store/       Zustand: session (access + keyset-unlocked), prefs, ui, meta
   theme/       token port + ThemeProvider (CSS variables, dark/light × 5 accents)
   ui/          primitives, DataTable, overlays (Drawer/Modal/ConfirmDialog/LockGate/Toaster)
-  shell/       Win chrome: Titlebar, Sidebar (TenantSwitcher+nav), SettingsPanel
-  access/      OpsLogin, KeysetModal, BootstrapModal, InviteModal
+  shell/       Win chrome: Titlebar, Sidebar (instance identity + nav), SettingsPanel
+  access/      Login (escrow / SSO), ClaimModal, InviteModal
   screens/     16 screens (Instance / Identity / Access / Data)
   i18n/        ru/en
 crypto-wasm/   Rust → wasm crate (crypto)
