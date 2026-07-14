@@ -12,6 +12,10 @@ pub struct AccountRow {
     pub ed25519_pub: Option<Vec<u8>>,
     pub x25519_pub: Option<Vec<u8>>,
     pub status: String,
+    /// SSO seam (Phase 5): the IdP issuer + subject this account is bound to.
+    /// NULL for keyset (non-SSO) accounts.
+    pub external_issuer: Option<String>,
+    pub external_subject: Option<String>,
 }
 
 /// Account + device count (for admin listing).
@@ -124,6 +128,10 @@ pub struct SessionRow {
     pub refresh_hash: Vec<u8>,
     pub access_expires: i64,
     pub refresh_expires: i64,
+    /// How this session was authenticated: 'keyset' (default) | 'oidc' (Phase 5).
+    pub auth_source: String,
+    /// When the OIDC assertion must be re-checked; NULL for keyset sessions.
+    pub reassert_expires: Option<i64>,
     pub revoked: i64,
 }
 

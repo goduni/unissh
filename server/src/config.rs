@@ -115,13 +115,48 @@ pub struct SetupConfig {
     pub code: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// One IdP-group → space grant: members whose `groups_claim` contains `group`
+/// are provisioned into `space_id` at `role` on OIDC callback (Phase 5).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct GroupMap {
+    pub group: String,
+    pub space_id: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OidcConfig {
-    /// SSO seam (Phase 5): disabled by default; issuer/client_id only for now.
+    /// SSO seam (Phase 5): disabled by default.
     pub enabled: bool,
     pub issuer: String,
     pub client_id: String,
+    /// Expected `aud` in the id_token; empty → the callback falls back to `client_id`.
+    pub audience: String,
+    /// JWKS endpoint; empty → derived by the callback as `{issuer}/.well-known/jwks.json`.
+    pub jwks_url: String,
+    /// The id_token claim name holding the user's group list.
+    pub groups_claim: String,
+    /// IdP-group → space grants applied on callback. Empty by default.
+    pub group_map: Vec<GroupMap>,
+    /// Max age (seconds) an OIDC session may be silently reasserted before a full
+    /// re-authentication is required. Default 7 days.
+    pub max_reassertion_age_seconds: i64,
+}
+
+impl Default for OidcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            issuer: String::new(),
+            client_id: String::new(),
+            audience: String::new(),
+            jwks_url: String::new(),
+            groups_claim: "groups".into(),
+            group_map: Vec::new(),
+            max_reassertion_age_seconds: 604_800,
+        }
+    }
 }
 
 impl Default for ServerConfig {

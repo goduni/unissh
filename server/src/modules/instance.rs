@@ -108,6 +108,8 @@ async fn claim(
         true, // is_owner
         &payload_bytes,
         &sig,
+        None, // external_issuer (keyset account)
+        None, // external_subject
         now,
     )
     .await?;

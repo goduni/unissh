@@ -23,13 +23,18 @@ impl Store {
         // x25519<->ed25519 binding (M14). NOT re-serialized.
         reg_payload: &[u8],
         reg_signature: &[u8],
+        // SSO seam (Phase 5): the IdP (issuer, subject) this account is bound to,
+        // or `None, None` for keyset accounts.
+        external_issuer: Option<&str>,
+        external_subject: Option<&str>,
         now: i64,
     ) -> AppResult<()> {
         self.exec(
             "INSERT INTO accounts \
              (account_id, created_at, status, ed25519_pub, x25519_pub, \
-              display_name, handle, is_owner, reg_payload, reg_signature) \
-             VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)",
+              display_name, handle, is_owner, reg_payload, reg_signature, \
+              external_issuer, external_subject) \
+             VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             vec![
                 Val::b(account_id),
                 Val::I(now),
@@ -40,6 +45,8 @@ impl Store {
                 Val::I(is_owner as i64),
                 Val::b(reg_payload),
                 Val::b(reg_signature),
+                Val::OptT(external_issuer.map(String::from)),
+                Val::OptT(external_subject.map(String::from)),
             ],
         )
         .await?;
@@ -89,13 +96,18 @@ impl Store {
         refresh_hash: &[u8],
         access_expires: i64,
         refresh_expires: i64,
+        // How the session was authenticated ('keyset' | 'oidc') and, for OIDC, when
+        // the assertion must be re-checked (`None` for keyset sessions).
+        auth_source: &str,
+        reassert_expires: Option<i64>,
         now: i64,
     ) -> AppResult<()> {
         self.exec(
             "INSERT INTO sessions \
              (session_id, account_id, device_id, access_hash, refresh_hash, \
-              access_expires, refresh_expires, created_at, revoked) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+              access_expires, refresh_expires, auth_source, reassert_expires, \
+              created_at, revoked) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
             vec![
                 Val::b(session_id),
                 Val::b(account_id),
@@ -104,6 +116,8 @@ impl Store {
                 Val::b(refresh_hash),
                 Val::I(access_expires),
                 Val::I(refresh_expires),
+                Val::t(auth_source),
+                Val::OptI(reassert_expires),
                 Val::I(now),
             ],
         )
@@ -373,13 +387,16 @@ impl Tx<'_> {
         is_owner: bool,
         reg_payload: &[u8],
         reg_signature: &[u8],
+        external_issuer: Option<&str>,
+        external_subject: Option<&str>,
         now: i64,
     ) -> AppResult<()> {
         self.exec(
             "INSERT INTO accounts \
              (account_id, created_at, status, ed25519_pub, x25519_pub, \
-              display_name, handle, is_owner, reg_payload, reg_signature) \
-             VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)",
+              display_name, handle, is_owner, reg_payload, reg_signature, \
+              external_issuer, external_subject) \
+             VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             vec![
                 Val::b(account_id),
                 Val::I(now),
@@ -390,6 +407,8 @@ impl Tx<'_> {
                 Val::I(is_owner as i64),
                 Val::b(reg_payload),
                 Val::b(reg_signature),
+                Val::OptT(external_issuer.map(String::from)),
+                Val::OptT(external_subject.map(String::from)),
             ],
         )
         .await?;

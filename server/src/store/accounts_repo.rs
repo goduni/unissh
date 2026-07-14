@@ -5,8 +5,8 @@ use super::models::{AccountListRow, AccountRow};
 use super::{Store, Val};
 use crate::error::{AppError, AppResult};
 
-const ACCOUNT_COLS: &str =
-    "account_id, display_name, handle, is_owner, ed25519_pub, x25519_pub, status";
+const ACCOUNT_COLS: &str = "account_id, display_name, handle, is_owner, ed25519_pub, x25519_pub, \
+                            status, external_issuer, external_subject";
 
 impl Store {
     pub async fn get_account_by_id(&self, account_id: &[u8]) -> AppResult<Option<AccountRow>> {
@@ -22,6 +22,23 @@ impl Store {
         self.fetch_optional_as::<AccountRow>(
             &format!("SELECT {ACCOUNT_COLS} FROM accounts WHERE ed25519_pub = ?"),
             vec![Val::b(ed25519_pub)],
+        )
+        .await
+    }
+
+    /// Account by external SSO identity `(issuer, subject)` (Phase 5). Returns
+    /// `None` for keyset accounts (whose external columns are NULL).
+    pub async fn get_account_by_external(
+        &self,
+        issuer: &str,
+        subject: &str,
+    ) -> AppResult<Option<AccountRow>> {
+        self.fetch_optional_as::<AccountRow>(
+            &format!(
+                "SELECT {ACCOUNT_COLS} FROM accounts \
+                 WHERE external_issuer = ? AND external_subject = ?"
+            ),
+            vec![Val::t(issuer), Val::t(subject)],
         )
         .await
     }

@@ -416,7 +416,16 @@ async fn config_get(_owner: OwnerCtx, State(state): State<AppState>) -> AppResul
             "metrics_bind": c.obs.metrics_bind,
         },
         "setup": { "code": mask(&c.setup.code) },
-        "oidc": { "enabled": c.oidc.enabled, "issuer": c.oidc.issuer },
+        "oidc": {
+            "enabled": c.oidc.enabled,
+            "issuer": c.oidc.issuer,
+            "client_id": c.oidc.client_id,
+            "audience": c.oidc.audience,
+            "jwks_url": c.oidc.jwks_url,
+            "groups_claim": c.oidc.groups_claim,
+            "group_map_len": c.oidc.group_map.len(),
+            "max_reassertion_age_seconds": c.oidc.max_reassertion_age_seconds,
+        },
         "ops": { "token": mask(&c.ops.token) },
     })))
 }

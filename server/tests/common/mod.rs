@@ -93,7 +93,7 @@ impl TestApp {
         let x = ids::random_bytes32().to_vec();
         let now = self.now();
         let s = &self.state.store;
-        s.create_account(&account_id, &ed, &x, None, None, false, &[], &[], now)
+        s.create_account(&account_id, &ed, &x, None, None, false, &[], &[], None, None, now)
             .await
             .unwrap();
         s.create_device(&account_id, &device_id, &ed, &x, now)
@@ -111,6 +111,8 @@ impl TestApp {
             &ids::sha256(&refresh),
             now + 900,
             now + 1_000_000,
+            "keyset",
+            None,
             now,
         )
         .await
@@ -139,7 +141,7 @@ impl TestApp {
         let s = &self.state.store;
         let account_id = ids::random_id16().to_vec();
         let device_id = ids::random_id16().to_vec();
-        s.create_account(&account_id, ed, x, None, None, make_owner, &[], &[], now)
+        s.create_account(&account_id, ed, x, None, None, make_owner, &[], &[], None, None, now)
             .await
             .unwrap();
         s.create_device(&account_id, &device_id, ed, x, now)
@@ -164,6 +166,8 @@ impl TestApp {
             &ids::sha256(&ids::random_bytes32()),
             now + 900,
             now + 1_000_000,
+            "keyset",
+            None,
             now,
         )
         .await

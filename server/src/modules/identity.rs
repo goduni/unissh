@@ -68,6 +68,8 @@ async fn mint_session(
     state: &AppState,
     account_id: &[u8],
     device_id: &[u8],
+    auth_source: &str,
+    reassert_expires: Option<i64>,
 ) -> AppResult<SessionTokens> {
     let now = state.now();
     let access = ids::random_bytes32();
@@ -85,6 +87,8 @@ async fn mint_session(
             &ids::sha256(&refresh),
             access_expires,
             refresh_expires,
+            auth_source,
+            reassert_expires,
             now,
         )
         .await?;
@@ -217,7 +221,7 @@ async fn auth_verify(
         ));
     }
 
-    let tokens = mint_session(&state, &account_id, &device_id).await?;
+    let tokens = mint_session(&state, &account_id, &device_id, "keyset", None).await?;
     metrics::counter!("unissh_auth_verify_total").increment(1);
     audit_observed(&state, "login", &account_id, &device_id).await;
     Ok(Json(tokens))
@@ -1002,6 +1006,8 @@ async fn join(
             false, // joiners are never owners
             &payload_bytes,
             &sig,
+            None, // external_issuer (keyset account)
+            None, // external_subject
             now,
         )
         .await?;

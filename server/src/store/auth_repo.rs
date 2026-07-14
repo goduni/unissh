@@ -6,7 +6,7 @@ use super::{Store, Val};
 use crate::error::AppResult;
 
 const SESSION_COLS: &str = "session_id, account_id, device_id, access_hash, refresh_hash, \
-                            access_expires, refresh_expires, revoked";
+                            access_expires, refresh_expires, auth_source, reassert_expires, revoked";
 const DEVICE_COLS: &str = "account_id, device_id, ed25519_pub, x25519_pub, \
                            registered_at, status, expires_at";
 
