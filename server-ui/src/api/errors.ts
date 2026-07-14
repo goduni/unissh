@@ -10,7 +10,6 @@ export type ErrorCode =
   | "rate_limited"
   | "payload_too_large"
   | "malformed"
-  | "tenant_suspended"
   | "rollback_detected"
   | "internal"
   | "network"
@@ -33,7 +32,7 @@ export class ApiError extends Error {
     this.retryAfter = retryAfter;
   }
 
-  /** A 401/403 demands raising access (ops token / keyset). */
+  /** A 401/403 demands re-authenticating with the keyset. */
   get needsAuth(): boolean {
     return this.code === "unauthenticated" || this.code === "forbidden";
   }
@@ -51,7 +50,6 @@ const KNOWN: ReadonlySet<string> = new Set([
   "rate_limited",
   "payload_too_large",
   "malformed",
-  "tenant_suspended",
   "rollback_detected",
   "internal",
 ]);

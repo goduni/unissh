@@ -45,7 +45,7 @@ function Brand() {
         <div style={{ fontSize: 17, fontWeight: 800 }}>
           Uni<span style={{ color: "var(--accent)" }}>SSH</span> Admin
         </div>
-        <div style={{ fontSize: 12, color: "var(--txt3)" }}>{t("access.onb.ops_subtitle")}</div>
+        <div style={{ fontSize: 12, color: "var(--txt3)" }}>{t("access.onb.server_subtitle")}</div>
       </div>
     </div>
   );
@@ -101,7 +101,7 @@ export function Login() {
       setInfo(r);
     } catch (e) {
       setInfo(null);
-      setError(e instanceof ApiError ? e.message : t("access.onb.ops_err_network"));
+      setError(e instanceof ApiError ? e.message : t("access.onb.server_err_network"));
     } finally {
       setProbing(false);
     }
@@ -157,9 +157,9 @@ export function Login() {
           {t("access.onb.disc_intro")}
         </div>
         <Field
-          label={t("access.onb.ops_url_label")}
-          tag={t("access.onb.ops_url_tag")}
-          hint={t("access.onb.ops_url_hint")}
+          label={t("access.onb.server_url_label")}
+          tag={t("access.onb.server_url_tag")}
+          hint={t("access.onb.server_url_hint")}
         >
           <TextInput value={url} onChange={setUrl} placeholder="https://unissh.example:8443" mono />
         </Field>
