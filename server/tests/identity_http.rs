@@ -284,8 +284,8 @@ async fn escrow_enroll_rejects_off_spec_argon_params() {
     let weak = put(json!({
         "keyset_blob": b64(&gen1),
         "escrow": {
-            "k_auth": b64(&vec![9u8; 40]),
-            "argon_salt": b64(&vec![3u8; 16]),
+            "k_auth": b64(&[9u8; 40]),
+            "argon_salt": b64(&[3u8; 16]),
             "argon_mem_kib": 19456,
             "argon_iterations": 2,
             "argon_parallelism": 1,
@@ -303,8 +303,8 @@ async fn escrow_enroll_rejects_off_spec_argon_params() {
     let bad_salt = put(json!({
         "keyset_blob": b64(&gen1),
         "escrow": {
-            "k_auth": b64(&vec![9u8; 40]),
-            "argon_salt": b64(&vec![3u8; 24]),
+            "k_auth": b64(&[9u8; 40]),
+            "argon_salt": b64(&[3u8; 24]),
             "argon_mem_kib": 65536,
             "argon_iterations": 3,
             "argon_parallelism": 1,

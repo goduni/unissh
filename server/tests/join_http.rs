@@ -173,7 +173,7 @@ async fn join_new_then_existing_keyset_and_admin_gate() {
         jr2["device_id"].is_string(),
         "a fresh device is minted even on reuse"
     );
-    assert_eq!(jr2["spaces"].as_array().unwrap(), &vec![json!(frontend_id)]);
+    assert_eq!(jr2["spaces"].as_array().unwrap(), &[json!(frontend_id)]);
 
     // Membership was added: the joiner now belongs to both spaces.
     let spaces: Value = app
