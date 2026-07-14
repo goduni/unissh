@@ -662,6 +662,24 @@ pub async fn server_bind_cloud_vault(
     .await
 }
 
+/// Unbind ONE cloud vault (by hex vault id) from whichever server it's bound to —
+/// clears its local binding label so it stops syncing. No `server_id` is needed:
+/// unbinding only clears the vault's own label. The vault and its data stay on
+/// this device; any server-side copy is left as-is (it can be re-bound later).
+#[tauri::command]
+pub async fn server_unbind_cloud_vault(
+    vault_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking_api(move || {
+        core.unbind_cloud_vault(vault_id)
+            .map(|_| ())
+            .map_err(ApiError::from)
+    })
+    .await
+}
+
 /// Run a full sync against a linked server (defaults to active): push local cloud
 /// objects, then pull + verify the delta. Requires an active session. Returns a
 /// report of what changed.

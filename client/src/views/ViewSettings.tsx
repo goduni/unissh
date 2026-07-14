@@ -15,7 +15,7 @@ import { useCtx } from "@/store/ctx";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
-import { serverShortLabel, vaultSpace } from "@/bridge/vaults";
+import { serverShortLabel, vaultServer, vaultSpace } from "@/bridge/vaults";
 import {
   apiErrorMessage,
   isServerErrorCode,
@@ -972,14 +972,25 @@ function SettingsVaults() {
   const setConfirm = useApp((s) => s.setConfirm);
   const servers = useApp((s) => s.servers);
   const activeServerId = useApp((s) => s.activeServerId);
+  // Which vault (if any) has its inline "move to another server" picker open.
+  const [moveVault, setMoveVault] = useState<string | null>(null);
 
   // Resolve a cloud vault's bound Space (by its base64 space id `syncTenant`) to a
-  // friendly label — the Space name so the Space surfaces in the vault list; falls
-  // back to the server handle/host. null when the Space isn't visible on any link.
+  // friendly label — the Space name (needs a session) so the Space surfaces in the
+  // vault list; else the server handle/host via the session-independent binding
+  // label. null only when the vault is bound to no currently-linked server.
   const boundSpaceLabel = (v: VaultInfo): string | null => {
     const found = vaultSpace(v, servers);
-    if (!found) return null;
-    return found.space.name || serverShortLabel(found.server);
+    if (found) return found.space.name || serverShortLabel(found.server);
+    const srv = vaultServer(v, servers);
+    return srv ? serverShortLabel(srv) : null;
+  };
+
+  // The linked servers a bound vault could be MOVED to: every link except the one
+  // it's already bound to (so a foreign-bound vault can be reclaimed to any of yours).
+  const moveTargets = (v: VaultInfo): ServerStatus[] => {
+    const cur = vaultServer(v, servers)?.serverId ?? null;
+    return servers.filter((s) => s.serverId != null && s.serverId !== cur);
   };
 
   // Manually bind an unbound cloud vault to the active (or first) linked server —
@@ -993,6 +1004,36 @@ function SettingsVaults() {
         toast(t("vault.boundDone"), "ok");
       })
       .catch((e) => toast(apiErrorMessage(e), "err"));
+  };
+
+  // Move a bound cloud vault to a different linked server: re-point its binding
+  // label; the vault is re-dirtied server-side so it re-pushes to the new server.
+  const onMoveVault = (v: VaultInfo, serverId: string) => {
+    api
+      .serverBindCloudVault(v.vaultId, serverId)
+      .then(() => {
+        void useApp.getState().reloadVaults();
+        setMoveVault(null);
+        toast(t("vault.moveDone"), "ok");
+      })
+      .catch((e) => toast(apiErrorMessage(e), "err"));
+  };
+
+  // Unbind a bound cloud vault (confirm first): it stops syncing and stays only on
+  // this device. Data already on the server is untouched; it can be bound again.
+  const onUnbindVault = (v: VaultInfo) => {
+    setConfirm({
+      title: t("vault.unbindTitle"),
+      body: t("vault.unbindBody", { name: v.name }),
+      confirmLabel: t("vault.unbind"),
+      onConfirm: async () => {
+        await guard(async () => {
+          await api.serverUnbindCloudVault(v.vaultId);
+          await useApp.getState().reloadVaults();
+          toast(t("vault.unbindDone"), "ok");
+        });
+      },
+    });
   };
 
   const remove = (v: VaultInfo) => {
@@ -1080,12 +1121,53 @@ function SettingsVaults() {
             />
             {v.syncTarget === "cloud" &&
               (v.syncTenant ? (
-                <span style={{ fontSize: 11, color: p.txt3, whiteSpace: "nowrap" }}>
-                  {(() => {
-                    const label = boundSpaceLabel(v);
-                    return label ? t("vault.boundTo", { server: label }) : t("vault.boundOther");
-                  })()}
-                </span>
+                moveVault === v.vaultId ? (
+                  // Inline "move to another server" picker (one button per candidate link).
+                  <span
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}
+                  >
+                    <span style={{ fontSize: 11, color: p.txt3 }}>{t("vault.moveTo")}</span>
+                    {moveTargets(v).map((s) => (
+                      <Btn
+                        key={s.serverId!}
+                        variant="ghost"
+                        size="sm"
+                        icon="server"
+                        onClick={() => onMoveVault(v, s.serverId!)}
+                      >
+                        {serverShortLabel(s)}
+                      </Btn>
+                    ))}
+                    <Btn
+                      variant="ghost"
+                      size="sm"
+                      icon="x"
+                      title={t("common.cancel")}
+                      onClick={() => setMoveVault(null)}
+                    />
+                  </span>
+                ) : (
+                  <span
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}
+                  >
+                    <span style={{ fontSize: 11, color: p.txt3, whiteSpace: "nowrap" }}>
+                      {(() => {
+                        const label = boundSpaceLabel(v);
+                        return label
+                          ? t("vault.boundTo", { server: label })
+                          : t("vault.boundOther");
+                      })()}
+                    </span>
+                    {moveTargets(v).length > 0 && (
+                      <Btn variant="ghost" size="sm" onClick={() => setMoveVault(v.vaultId)}>
+                        {t("vault.move")}
+                      </Btn>
+                    )}
+                    <Btn variant="ghost" size="sm" onClick={() => onUnbindVault(v)}>
+                      {t("vault.unbind")}
+                    </Btn>
+                  </span>
+                )
               ) : (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 11, color: p.amber, whiteSpace: "nowrap" }}>

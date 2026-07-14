@@ -29,6 +29,20 @@ export function vaultSpace(
   return null;
 }
 
+/** Resolve just the linked SERVER a cloud vault is bound to. Tries the
+ *  session-cached `spaces` first (also gives the Space name via {@link vaultSpace});
+ *  falls back to matching the link's own binding label `spaceId`, which needs no
+ *  session — so a bound vault still attributes to its server when signed out. null
+ *  for local/unbound vaults, or a binding to no currently-linked server. Distinct
+ *  from {@link vaultSpace} (kept session-only) so the owned/personal semantics that
+ *  depend on it are unaffected. */
+export function vaultServer(v: VaultInfo, servers: ServerStatus[]): ServerStatus | null {
+  if (v.syncTarget !== "cloud" || !v.syncTenant) return null;
+  const viaSpace = vaultSpace(v, servers);
+  if (viaSpace) return viaSpace.server;
+  return servers.find((s) => s.spaceId != null && s.spaceId === v.syncTenant) ?? null;
+}
+
 /** Where a vault physically lives: on-device (local) or a cloud Space on a server.
  *  `server` names the bound Space (falling back to the server host) so the Space
  *  surfaces directly in the vault list/sidebar; `space` is the bare Space name. */

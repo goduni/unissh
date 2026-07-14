@@ -167,6 +167,36 @@ fn set_vault_tenant_targets_one_and_clear_binding_targets_a_tenant() {
 }
 
 #[test]
+fn unbind_vault_clears_one_binding_and_leaves_others() {
+    let s = Storage::open_in_memory(&key(0x47)).unwrap();
+    let mut c1 = vault(b"c1", 1);
+    c1.sync_target = SyncTarget::Cloud;
+    c1.sync_tenant = b"tenant-A".to_vec();
+    let mut c2 = vault(b"c2", 1);
+    c2.sync_target = SyncTarget::Cloud;
+    c2.sync_tenant = b"tenant-A".to_vec();
+    s.put_vault(&c1).unwrap();
+    s.put_vault(&c2).unwrap();
+
+    // Unbind ONLY c1: it clears (returns 1), c2 (same tenant) stays bound.
+    let n = s.unbind_vault(b"c1").unwrap();
+    assert_eq!(n, 1);
+    assert!(
+        s.get_vault(b"c1").unwrap().unwrap().sync_tenant.is_empty(),
+        "c1 unbound"
+    );
+    assert_eq!(
+        s.get_vault(b"c2").unwrap().unwrap().sync_tenant,
+        b"tenant-A".to_vec(),
+        "c2 (same tenant) untouched — unbind is per-vault, not per-tenant"
+    );
+
+    // Unbinding a missing / already-unbound vault is a no-op (0 rows).
+    assert_eq!(s.unbind_vault(b"c1").unwrap(), 0, "already unbound → 0");
+    assert_eq!(s.unbind_vault(b"nope").unwrap(), 0, "unknown vault → 0");
+}
+
+#[test]
 fn vault_bad_enum_values_are_errors_not_panics() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("badenum.db");

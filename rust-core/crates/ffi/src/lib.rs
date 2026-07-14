@@ -1343,7 +1343,10 @@ impl Core {
     }
 
     /// Bind ONE cloud vault (by hex `vault_id`) to the server `tenant_b64` (1:1).
-    /// For manually binding an unbound vault to a chosen server from the UI.
+    /// For manually binding an unbound vault to a chosen server from the UI, OR
+    /// moving an already-bound vault to a different server (the label is
+    /// overwritten unconditionally, and the vault is re-dirtied so it re-pushes
+    /// to the new server).
     pub fn bind_cloud_vault(&self, vault_id: String, tenant_b64: String) -> Result<(), FfiError> {
         if tenant_b64.is_empty() {
             return Err(FfiError::Other {
@@ -1357,6 +1360,18 @@ impl Core {
                 .set_vault_tenant(&vid, tenant_b64.as_bytes())
                 .map_err(FfiError::other)?;
             Ok(())
+        })
+    }
+
+    /// Unbind ONE cloud vault (by hex `vault_id`) from its server — clears its
+    /// binding label so it stops syncing. The vault and its data stay on this
+    /// device; any server-side copy is left orphaned. Returns true if a vault
+    /// was unbound (false if the id matched no cloud vault).
+    pub fn unbind_cloud_vault(&self, vault_id: String) -> Result<bool, FfiError> {
+        let vid = hex::decode(vault_id.trim()).map_err(|_| FfiError::other("invalid vault id"))?;
+        self.with_state(|state| {
+            let n = state.storage.unbind_vault(&vid).map_err(FfiError::other)?;
+            Ok(n > 0)
         })
     }
 

@@ -601,10 +601,15 @@ export const serverCreateCloudVault = (name: string, serverId?: string, spaceId?
 // One-time migration: bind legacy unbound cloud vaults to a server (default active).
 export const serverBindUnboundCloudVaults = (serverId?: string) =>
   invoke<number>("server_bind_unbound_cloud_vaults", { serverId: serverId ?? null });
-// Bind ONE unbound cloud vault (hex id) to a server (default active) — reclaim an
-// orphaned/never-bound vault manually.
+// Bind ONE cloud vault (hex id) to a server (default active). Reclaims an
+// orphaned/never-bound vault, OR moves an already-bound vault to a different
+// server (the label is overwritten; the vault re-pushes to the new server).
 export const serverBindCloudVault = (vaultId: string, serverId?: string) =>
   invoke<void>("server_bind_cloud_vault", { vaultId, serverId: serverId ?? null });
+// Unbind ONE cloud vault (hex id) from its server — stops it syncing. The vault +
+// its data stay on this device; any server-side copy is left as-is.
+export const serverUnbindCloudVault = (vaultId: string) =>
+  invoke<void>("server_unbind_cloud_vault", { vaultId });
 export const serverSyncNow = (serverId?: string) =>
   invoke<SyncReport>("server_sync_now", { serverId: serverId ?? null });
 /** Full re-pull: reset the pull cursor then sync — recovers vaults that an

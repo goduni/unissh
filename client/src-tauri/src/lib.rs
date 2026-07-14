@@ -282,6 +282,7 @@ pub fn run() {
             cloud::commands::server_create_cloud_vault,
             cloud::commands::server_bind_unbound_cloud_vaults,
             cloud::commands::server_bind_cloud_vault,
+            cloud::commands::server_unbind_cloud_vault,
             cloud::commands::server_sync_now,
             cloud::commands::server_repull,
             cloud::commands::server_restore_deleted_vaults,

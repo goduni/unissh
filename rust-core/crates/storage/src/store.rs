@@ -289,6 +289,24 @@ impl Storage {
         Ok(n)
     }
 
+    /// Unbind EXACTLY ONE cloud vault from its server (the per-vault inverse of
+    /// [`Self::set_vault_tenant`]): clears its routing label so it stops syncing.
+    /// The vault and its data stay on this device; any server-side copy is left
+    /// as-is (orphaned). A direct `UPDATE` of the label — the version/signature
+    /// do not change. Nothing is re-dirtied: an unbound vault matches no server's
+    /// tenant, so there is nothing to push. Returns the rows affected (0 or 1).
+    pub fn unbind_vault(&self, vault_id: &[u8]) -> Result<usize, StorageError> {
+        // `length(sync_tenant) > 0` scopes the UPDATE to a *bound* vault, so a
+        // repeat on an already-unbound (or never-bound) vault matches nothing and
+        // returns 0 — SQLite otherwise counts an X''→X'' no-op write as a change.
+        let n = self.conn.execute(
+            "UPDATE vaults SET sync_tenant = X''
+             WHERE vault_id = ?1 AND sync_target = ?2 AND length(sync_tenant) > 0",
+            params![vault_id, SyncTarget::Cloud.to_i64()],
+        )?;
+        Ok(n)
+    }
+
     // --- items ---
 
     /// Inserts or updates an item. The version must grow monotonically. A

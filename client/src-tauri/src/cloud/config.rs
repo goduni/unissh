@@ -140,6 +140,11 @@ pub struct ServerStatus {
     pub handle: Option<String>,
     /// This account owns (claimed) the Space — eligible to hold the personal vault.
     pub owned: bool,
+    /// base64(space_id) — this link's cloud-vault binding label (the config's own
+    /// `space_id`). A cloud vault's `sync_tenant` equals this when bound here, so the
+    /// frontend can attribute a vault to its server WITHOUT a live session (unlike
+    /// `spaces`, which needs `GET /v1/spaces`). None when the link has no space yet.
+    pub space_id: Option<String>,
     /// The caller's spaces on this link (server-v2), cached in memory from the last
     /// `GET /v1/spaces` (populated on claim/join/login/refresh; needs a session).
     /// Empty when no session has fetched them yet.
@@ -159,6 +164,7 @@ impl ServerStatus {
             device_id: None,
             handle: None,
             owned: false,
+            space_id: None,
             spaces: Vec::new(),
         }
     }
@@ -544,6 +550,7 @@ impl CloudState {
             device_id: Some(c.device_id.clone()),
             handle: c.handle.clone(),
             owned: c.owned,
+            space_id: (!c.space_id.is_empty()).then(|| c.space_id.clone()),
             spaces,
         }
     }

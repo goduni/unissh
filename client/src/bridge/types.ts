@@ -432,6 +432,11 @@ export interface ServerStatus {
   /** This account owns (claimed) the instance's first Space — eligible to hold the
    *  personal vault. */
   owned: boolean;
+  /** base64 space id — this link's cloud-vault binding label. A cloud vault whose
+   *  `syncTenant` equals this is bound to THIS server; unlike `spaces` it needs no
+   *  live session, so the vault→server attribution resolves even when signed out.
+   *  null when the link has no space yet. */
+  spaceId: string | null;
   /** The caller's spaces on this server link (name + role), so the UI can name a
    *  vault's bound space (vault.syncTenant = space id) and show spaces in the vault
    *  list/sidebar without a separate round-trip. The Rust ServerStatus always
