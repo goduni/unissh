@@ -429,6 +429,8 @@ This is honest, in-progress software. The cryptographic core, the server, and th
 
 ---
 
+## Roadmap
+
 **Recently landed:** the instance-scoped model — claim-with-setup-code, one account across many **spaces**, space-scoped **invite links**, **escrow sign-in** on a fresh device, and **SSO (OIDC)** ("Sign in with your IdP").
 
 The two open frontiers:

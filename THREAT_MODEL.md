@@ -250,7 +250,7 @@ overclaiming them would be dishonest:
   these bound a stale restore — but a restore *within* the bound can still
   resurrect a deleted item, which is why a full re-push is safe and expected.
 - **Audit: integrity is provable, origin is not.** Client-signed entries are
-  authentic (genesis-owner Ed25519 signature, verified with associated data
+  authentic (owner Ed25519 signature, verified with associated data
   `(vault_id, "__audit__", 0)`). The log is a server-side **hash chain**, and a
   verify endpoint detects any edit, reorder, or deletion. But a malicious operator
   can still refuse to serve the log wholesale, and server-observed entries are
