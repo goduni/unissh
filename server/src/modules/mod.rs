@@ -6,6 +6,7 @@ pub mod audit;
 pub mod escrow;
 pub mod identity;
 pub mod instance;
+pub mod oidc;
 pub mod ops;
 pub mod pending;
 pub mod policy;

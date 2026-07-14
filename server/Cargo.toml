@@ -27,8 +27,10 @@ getrandom = "0.4.2"
 hex = "0.4.3"
 hmac = "0.13.0"
 http = "1.4.2"
+jsonwebtoken = "9"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
 rustls = "0.23.40"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

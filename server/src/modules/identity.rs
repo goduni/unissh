@@ -45,7 +45,7 @@ pub fn routes() -> Router<AppState> {
 // ---- helpers ----
 
 #[derive(Serialize)]
-struct SessionTokens {
+pub(crate) struct SessionTokens {
     access_token: String,
     refresh_token: String,
     access_expires: i64,
@@ -64,7 +64,7 @@ fn build_refresh_token(session_id: &[u8], secret: &[u8; 32]) -> Vec<u8> {
     t
 }
 
-async fn mint_session(
+pub(crate) async fn mint_session(
     state: &AppState,
     account_id: &[u8],
     device_id: &[u8],

@@ -21,9 +21,21 @@ async fn mk_account(
     let account_id = ids::random_id16().to_vec();
     let ed = ids::random_bytes32().to_vec();
     let x = ids::random_bytes32().to_vec();
-    s.create_account(&account_id, &ed, &x, None, None, false, &[1], &[2], issuer, subject, 1000)
-        .await
-        .unwrap();
+    s.create_account(
+        &account_id,
+        &ed,
+        &x,
+        None,
+        None,
+        false,
+        &[1],
+        &[2],
+        issuer,
+        subject,
+        1000,
+    )
+    .await
+    .unwrap();
     (account_id, ed, x)
 }
 
