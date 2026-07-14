@@ -25,7 +25,7 @@ export function Directory() {
 function DirectoryBody() {
   const { t } = useTranslation();
   const reloadTick = useUi((s) => s.reloadTick);
-  const data = useAsync(() => api.directory(), [reloadTick]);
+  const data = useAsync(() => api.identity.directory(), [reloadTick]);
   const [q, setQ] = useState("");
 
   const accounts = data.data?.accounts ?? [];

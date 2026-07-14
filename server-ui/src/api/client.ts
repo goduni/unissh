@@ -30,7 +30,6 @@ import type {
   MetricsSummary,
   MigrationsResp,
   ObjectsResp,
-  OpsOverview,
   PendingResp,
   RelayResp,
   SeqBumpResp,
@@ -169,18 +168,6 @@ export function createClient(
         method: "POST",
         body: { handle, k_auth },
       }),
-
-    // ── ops (instance-wide operator aggregates) ──
-    ops: {
-      overview: () => call<OpsOverview>("/v1/ops/overview"),
-      instance: () => call<InstanceGeneration>("/v1/ops/instance"),
-      seqBump: (req: { by?: number; to?: number }) =>
-        call<SeqBumpResp>("/v1/ops/seq-bump", {
-          method: "POST",
-          idem: true,
-          body: req,
-        }),
-    },
 
     // ── admin (Bearer + is_owner, OwnerCtx-gated) ──
     admin: {

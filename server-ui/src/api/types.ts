@@ -77,13 +77,8 @@ export interface ClaimResp {
   instance_id: string;
 }
 
-// ── Ops (instance-wide operator aggregates) ────────────────────
-export interface OpsOverview {
-  accounts: number;
-  objects: number;
-  instance_generation: number;
-}
-/** Anti-rollback generation + floor (GET /v1/ops/instance, /v1/admin/instance). */
+// ── Anti-rollback generation ───────────────────────────────────
+/** Anti-rollback generation + floor (GET /v1/admin/instance). */
 export interface InstanceGeneration {
   generation: number;
   min_floor: number;
