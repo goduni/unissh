@@ -22,6 +22,14 @@ import {
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
+// Seed the avatar color from a char-hash of account_id (same hash as the Directory
+// list / Spaces tile) — seeding on .length collapses nearly every account onto one color.
+const seedOf = (id: string) => {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(h);
+};
+
 export function Accounts() {
   const { t } = useTranslation();
   return (
@@ -64,7 +72,7 @@ function AccountsBody() {
       width: "2fr",
       render: (a) => (
         <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <Avatar label={initialsOf(nameOf(a))} seed={a.account_id.length} size={30} />
+          <Avatar label={initialsOf(nameOf(a))} seed={seedOf(a.account_id)} size={30} />
           <span style={{ minWidth: 0 }}>
             <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -146,7 +154,7 @@ function AccountsBody() {
               style={{ background: "var(--bg1)", border: "1px solid var(--line)", borderRadius: 13, padding: "15px 16px", cursor: "pointer" }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-                <Avatar label={initialsOf(nameOf(a))} seed={a.account_id.length} size={38} />
+                <Avatar label={initialsOf(nameOf(a))} seed={seedOf(a.account_id)} size={38} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <span style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -258,7 +266,7 @@ function AccountDrawer({
   return (
     <Drawer onClose={onClose}>
       <div style={{ padding: "20px 22px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 13 }}>
-        <Avatar label={initialsOf(name)} seed={account.account_id.length} size={44} />
+        <Avatar label={initialsOf(name)} seed={seedOf(account.account_id)} size={44} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <span style={{ fontSize: 16, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
