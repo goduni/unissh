@@ -98,9 +98,12 @@ services:
       # --- Observability (metrics internal-only on :9090; never host-published) ---
       UNISSH__OBS__LOG_FORMAT: "json"
       UNISSH__OBS__METRICS_BIND: "0.0.0.0:9090"
-      # --- Secrets (from .env) ---
-      UNISSH__BOOTSTRAP__TOKEN: "${UNISSH__BOOTSTRAP__TOKEN:-}"
-      UNISSH__BOOTSTRAP__DEFAULT_TIER: "${UNISSH__BOOTSTRAP__DEFAULT_TIER:-personal}"
+      # --- First-run setup + ops (optional; from .env) ---
+      # No bootstrap token: the first user CLAIMS the instance with a SETUP CODE
+      # the server prints to its log on first boot
+      # (docker compose logs server 2>&1 | grep -i "setup code"). Pin a
+      # deterministic code for IaC via UNISSH__SETUP__CODE (see .env.example).
+      # UNISSH__OPS__TOKEN is an OPTIONAL break-glass for /v1/ops/* (default OFF).
       UNISSH__OPS__TOKEN: "${UNISSH__OPS__TOKEN:-}"
     volumes:
       - unissh-data:/app/data        # SQLite db; owned by uid 65532 (distroless nonroot).
