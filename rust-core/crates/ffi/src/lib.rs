@@ -2016,6 +2016,17 @@ impl Core {
             parallelism: argon_parallelism,
             salt: argon_salt,
         };
+        // Defense-in-depth FLOOR (mirror of the ceiling above): a malicious server could
+        // also pin TRIVIALLY WEAK params to make the fetch-side K_auth cheap to
+        // brute-force. Reject anything below the crate's hard Argon2id minimum (the OWASP
+        // floor `meets_minimum` encodes: mem/iters/lanes + salt length). Only meaningful
+        // when a password is present — a passwordless (SecretKeyOnly / SSO) account skips
+        // Argon2id entirely, so its params are unused and unconstrained (mirrors enroll).
+        if password.is_some() && !params.meets_minimum() {
+            return Err(FfiError::other(
+                "escrow Argon2id parameters are below the minimum strength floor",
+            ));
+        }
         // None → SecretKeyOnly account: K_auth is derived from the Secret Key alone
         // and the Argon2id params are unused (mirrors derive_escrow_credentials).
         let argon_key = match password.as_deref() {
@@ -7074,6 +7085,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(refetched, creds.k_auth);
+    }
+
+    /// Fetch-side Argon2id FLOOR (defense-in-depth): a malicious server pinning
+    /// trivially-weak params is rejected when a password is in play (the K_auth would
+    /// otherwise be cheap to brute-force). A passwordless account skips Argon2id, so the
+    /// same (unused) weak params are ignored.
+    #[test]
+    fn escrow_fetch_rejects_below_floor_params() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        let sk_hex = core.create_account(Some("hunter2".into())).unwrap();
+        let creds = core
+            .derive_escrow_credentials(Some("hunter2".into()), sk_hex.clone())
+            .unwrap();
+
+        // Below the OWASP floor (mem 8 KiB, t=1) WITH a password → rejected.
+        let weak = core.derive_escrow_auth_with_params(
+            Some("hunter2".into()),
+            sk_hex.clone(),
+            creds.argon_salt.clone(),
+            8,
+            1,
+            1,
+        );
+        assert!(
+            weak.is_err(),
+            "below-floor fetch params must be rejected when a password is present"
+        );
+
+        // Passwordless: Argon2id is skipped, so the same weak params are irrelevant.
+        let ok = core.derive_escrow_auth_with_params(None, sk_hex, creds.argon_salt, 8, 1, 1);
+        assert!(
+            ok.is_ok(),
+            "passwordless fetch ignores the (unused) weak params"
+        );
     }
 
     #[test]

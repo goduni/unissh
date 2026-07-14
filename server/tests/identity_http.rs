@@ -192,6 +192,9 @@ async fn keyset_put_stores_optional_escrow() {
     );
 
     // --- An escrow-enrolling PUT (gen 2) stores sha256(K_auth) + the Argon params. ---
+    // Params MUST be `KdfParams::recommended()` (64 MiB / t=3 / p=1, 16-byte salt): the
+    // enroll handler rejects anything else so a real enrollment can never be distinguished
+    // from a decoy (enumeration resistance).
     let k_auth_raw = vec![9u8; 40];
     let salt = vec![3u8; 16];
     let r = put_keyset(json!({
@@ -199,8 +202,8 @@ async fn keyset_put_stores_optional_escrow() {
         "escrow": {
             "k_auth": b64(&k_auth_raw),
             "argon_salt": b64(&salt),
-            "argon_mem_kib": 19456,
-            "argon_iterations": 2,
+            "argon_mem_kib": 65536,
+            "argon_iterations": 3,
             "argon_parallelism": 1,
         }
     }))
@@ -240,9 +243,76 @@ async fn keyset_put_stores_optional_escrow() {
         Some(&salt[..]),
         "salt round-trips"
     );
-    assert_eq!(row.argon_mem_kib, Some(19456));
-    assert_eq!(row.argon_iterations, Some(2));
+    assert_eq!(row.argon_mem_kib, Some(65536));
+    assert_eq!(row.argon_iterations, Some(3));
     assert_eq!(row.argon_parallelism, Some(1));
+}
+
+/// The escrow enroll handler REJECTS any Argon params that are not
+/// `KdfParams::recommended()` (64 MiB / t=3 / p=1) with a 400 — an off-spec enrollment
+/// would otherwise make a real account distinguishable from a same-shaped decoy (see
+/// `modules::escrow`). All shipped FFI/wasm clients enroll at the recommended defaults,
+/// so this is a no-regression guard.
+#[tokio::test]
+async fn escrow_enroll_rejects_off_spec_argon_params() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim(&app, &id).await;
+    let access = login_v2(
+        &app,
+        &id,
+        c["account_id"].as_str().unwrap(),
+        c["device_id"].as_str().unwrap(),
+    )
+    .await;
+
+    // A real EncryptedKeyset (gen 1) from the core — the enroll gate runs before the
+    // keyset is stored, so a rejected off-spec PUT leaves no keyset behind (both PUTs
+    // below re-use gen 1).
+    let (_sk, ks, _u) =
+        unissh_keychain::create_account(None, unissh_keychain::KdfParams::recommended()).unwrap();
+    let gen1 = ks.to_bytes().unwrap();
+    let put = |body: Value| {
+        app.client
+            .put(format!("{}/v1/keyset", app.base))
+            .header("Authorization", format!("Bearer {access}"))
+            .json(&body)
+            .send()
+    };
+
+    // Off-spec cost (OWASP minimum, not the recommended default) → 400.
+    let weak = put(json!({
+        "keyset_blob": b64(&gen1),
+        "escrow": {
+            "k_auth": b64(&vec![9u8; 40]),
+            "argon_salt": b64(&vec![3u8; 16]),
+            "argon_mem_kib": 19456,
+            "argon_iterations": 2,
+            "argon_parallelism": 1,
+        }
+    }))
+    .await
+    .unwrap();
+    assert_eq!(
+        weak.status(),
+        400,
+        "off-spec Argon params are rejected at enroll (enumeration resistance)"
+    );
+
+    // A non-16-byte salt is likewise rejected (the decoy salt is always 16 bytes).
+    let bad_salt = put(json!({
+        "keyset_blob": b64(&gen1),
+        "escrow": {
+            "k_auth": b64(&vec![9u8; 40]),
+            "argon_salt": b64(&vec![3u8; 24]),
+            "argon_mem_kib": 65536,
+            "argon_iterations": 3,
+            "argon_parallelism": 1,
+        }
+    }))
+    .await
+    .unwrap();
+    assert_eq!(bad_salt.status(), 400, "a non-16-byte escrow salt is rejected");
 }
 
 #[tokio::test]

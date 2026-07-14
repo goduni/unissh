@@ -29,12 +29,26 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-/// The recommended Argon2id parameters (`KdfParams::recommended()`: 64 MiB, t=3,
-/// p=1), used verbatim for the decoy so a decoy response is shaped exactly like a
-/// real enrollment (which the client is expected to make at these defaults).
-const DECOY_MEM_KIB: i64 = 65536;
-const DECOY_ITERATIONS: i64 = 3;
-const DECOY_PARALLELISM: i64 = 1;
+/// The recommended Argon2id parameters (mirroring `unissh_crypto::KdfParams::recommended()`:
+/// 64 MiB, t=3, p=1, 16-byte salt). These are the SINGLE source of truth for both:
+///   * the DECOY shape returned by `GET /v1/escrow/params` on any miss, and
+///   * the enroll-side param gate (`keyset_put` rejects any escrow enrollment whose
+///     Argon params differ — see `identity::keyset_put`).
+///
+/// Enumeration resistance depends on the two being byte-identical: `escrow_params`
+/// returns FIXED recommended params for a decoy but the account's STORED params for a
+/// real enrollment, so if a real enroll could use off-spec params it would be
+/// distinguishable from a decoy. Pinning both to these constants — and rejecting any
+/// other enroll params — guarantees params can never split real vs decoy. A
+/// `#[cfg(test)]` assertion below fails the build if these ever drift from
+/// `KdfParams::recommended()`, so a future `recommended()` bump can't silently reopen
+/// the leak.
+pub(crate) const RECOMMENDED_MEM_KIB: i64 = 64 * 1024;
+pub(crate) const RECOMMENDED_ITERATIONS: i64 = 3;
+pub(crate) const RECOMMENDED_PARALLELISM: i64 = 1;
+/// The decoy salt is always 16 bytes (`decoy_salt`), so a real enrollment's salt MUST
+/// also be 16 bytes or its length alone would distinguish it from a decoy.
+pub(crate) const RECOMMENDED_SALT_LEN: usize = 16;
 
 /// Domain-separation label folded into the decoy HMAC key. Distinct per purpose so
 /// the decoy key can never coincide with any other server-side derivation.
@@ -116,9 +130,9 @@ async fn escrow_params(
             let salt = decoy_salt(&state.escrow_decoy_secret, &q.handle);
             ParamsResp {
                 argon_salt: ids::b64(&salt),
-                argon_mem_kib: DECOY_MEM_KIB,
-                argon_iterations: DECOY_ITERATIONS,
-                argon_parallelism: DECOY_PARALLELISM,
+                argon_mem_kib: RECOMMENDED_MEM_KIB,
+                argon_iterations: RECOMMENDED_ITERATIONS,
+                argon_parallelism: RECOMMENDED_PARALLELISM,
             }
         }
     };
@@ -149,7 +163,15 @@ async fn escrow_fetch(
     Json(req): Json<FetchReq>,
 ) -> AppResult<Json<FetchResp>> {
     // Always hash the presented credential, regardless of whether the handle exists.
-    let got = ids::sha256(&ids::unb64(&req.k_auth)?);
+    // A MALFORMED (un-decodable) `k_auth` is normalized to the SAME uniform 403 as
+    // every other failure — not a 400 — to honour the module's uniform-403 contract.
+    // It is handle-independent, so this is not an oracle; an undecodable credential
+    // simply becomes a fixed 32-byte value that can never equal a stored sha256(K_auth),
+    // so the constant-time compare below still runs and denies.
+    let got: [u8; 32] = match ids::unb64(&req.k_auth) {
+        Ok(bytes) => ids::sha256(&bytes),
+        Err(_) => [0u8; 32],
+    };
     let row = state.store.get_escrow_by_handle(&req.handle).await?;
 
     // `want` is the enrolled hash when present, else a FIXED 32-byte dummy — so the
@@ -171,4 +193,23 @@ async fn escrow_fetch(
         }));
     }
     Err(AppError::forbidden("escrow fetch denied"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unissh_crypto::KdfParams;
+
+    /// The decoy/enroll-gate constants MUST equal `KdfParams::recommended()`. If a
+    /// future `recommended()` bump changed the cost, this fails the build — forcing
+    /// the constants (and the enroll gate) to move in lockstep so a real enrollment can
+    /// never take params that differ from a decoy (which would reopen enumeration).
+    #[test]
+    fn decoy_shape_equals_recommended() {
+        let r = KdfParams::recommended();
+        assert_eq!(RECOMMENDED_MEM_KIB, r.mem_kib as i64);
+        assert_eq!(RECOMMENDED_ITERATIONS, r.iterations as i64);
+        assert_eq!(RECOMMENDED_PARALLELISM, r.parallelism as i64);
+        assert_eq!(RECOMMENDED_SALT_LEN, r.salt.len());
+    }
 }

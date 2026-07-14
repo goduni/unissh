@@ -417,13 +417,40 @@ async fn keyset_put(
     // re-PUT is a 409, the escrow could never be attached to that generation.) The
     // server stores only sha256(K_auth) — never the raw credential the client sent.
     let escrow = match &req.escrow {
-        Some(e) => Some((
-            ids::sha256(&ids::unb64(&e.k_auth)?),
-            ids::unb64(&e.argon_salt)?,
-            e.argon_mem_kib,
-            e.argon_iterations,
-            e.argon_parallelism,
-        )),
+        Some(e) => {
+            // Enumeration-resistance invariant (see modules::escrow): `escrow_params`
+            // returns FIXED recommended params for a DECOY but the STORED params for a
+            // real account. An off-spec enrollment would therefore make a real account
+            // distinguishable from a decoy → account enumeration. All shipped FFI/wasm
+            // clients enroll at `KdfParams::recommended()`, so we hard-require exactly
+            // those params (incl. the 16-byte salt length the decoy uses); params can
+            // then never split real vs decoy.
+            use crate::modules::escrow::{
+                RECOMMENDED_ITERATIONS, RECOMMENDED_MEM_KIB, RECOMMENDED_PARALLELISM,
+                RECOMMENDED_SALT_LEN,
+            };
+            if e.argon_mem_kib != RECOMMENDED_MEM_KIB
+                || e.argon_iterations != RECOMMENDED_ITERATIONS
+                || e.argon_parallelism != RECOMMENDED_PARALLELISM
+            {
+                return Err(AppError::malformed(
+                    "escrow Argon2id parameters must be the recommended defaults",
+                ));
+            }
+            let salt = ids::unb64(&e.argon_salt)?;
+            if salt.len() != RECOMMENDED_SALT_LEN {
+                return Err(AppError::malformed(
+                    "escrow Argon2id salt must be 16 bytes",
+                ));
+            }
+            Some((
+                ids::sha256(&ids::unb64(&e.k_auth)?),
+                salt,
+                e.argon_mem_kib,
+                e.argon_iterations,
+                e.argon_parallelism,
+            ))
+        }
         None => None,
     };
     state

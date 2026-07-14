@@ -147,13 +147,16 @@ async fn escrow_params_and_fetch_resist_enumeration() {
     let p2: Value = resp2.json().await.unwrap();
 
     // Stable per handle across calls, recommended params, 16-byte salt (same shape).
+    // Asserted against `KdfParams::recommended()` (NOT bare literals) so a future
+    // `recommended()` bump can't silently split a real enrollment from a decoy.
     assert_eq!(
         p1["argon_salt"], p2["argon_salt"],
         "the decoy salt is stable per handle across calls"
     );
-    assert_eq!(p1["argon_mem_kib"], 65536);
-    assert_eq!(p1["argon_iterations"], 3);
-    assert_eq!(p1["argon_parallelism"], 1);
+    let rec = KdfParams::recommended();
+    assert_eq!(p1["argon_mem_kib"], rec.mem_kib as i64);
+    assert_eq!(p1["argon_iterations"], rec.iterations as i64);
+    assert_eq!(p1["argon_parallelism"], rec.parallelism as i64);
     let salt = unb64(p1["argon_salt"].as_str().unwrap()).unwrap();
     assert_eq!(
         salt.len(),
@@ -266,9 +269,10 @@ async fn escrow_unenrolled_account_is_indistinguishable() {
         .json()
         .await
         .unwrap();
-    assert_eq!(owner1["argon_mem_kib"], 65536);
-    assert_eq!(owner1["argon_iterations"], 3);
-    assert_eq!(owner1["argon_parallelism"], 1);
+    let rec = KdfParams::recommended();
+    assert_eq!(owner1["argon_mem_kib"], rec.mem_kib as i64);
+    assert_eq!(owner1["argon_iterations"], rec.iterations as i64);
+    assert_eq!(owner1["argon_parallelism"], rec.parallelism as i64);
     assert_eq!(
         unb64(owner1["argon_salt"].as_str().unwrap()).unwrap().len(),
         16,
