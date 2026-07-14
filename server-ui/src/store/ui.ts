@@ -44,7 +44,6 @@ export interface Toast {
 interface UiState {
   route: Route;
   panelOpen: boolean;
-  keysetModalOpen: boolean;
   inviteOpen: boolean;
   rotateOpen: boolean;
   drawer: DrawerRef | null;
@@ -56,8 +55,6 @@ interface UiState {
   go: (r: Route) => void;
   bumpReload: () => void;
   togglePanel: () => void;
-  openKeyset: () => void;
-  closeKeyset: () => void;
   openInvite: () => void;
   closeInvite: () => void;
   openRotate: () => void;
@@ -75,7 +72,6 @@ let toastSeq = 1;
 export const useUi = create<UiState>()((set) => ({
   route: "overview",
   panelOpen: false,
-  keysetModalOpen: false,
   inviteOpen: false,
   rotateOpen: false,
   drawer: null,
@@ -91,8 +87,6 @@ export const useUi = create<UiState>()((set) => ({
       drawer: null,
     }),
   togglePanel: () => set((s) => ({ panelOpen: !s.panelOpen })),
-  openKeyset: () => set({ keysetModalOpen: true }),
-  closeKeyset: () => set({ keysetModalOpen: false }),
   openInvite: () => set({ inviteOpen: true }),
   closeInvite: () => set({ inviteOpen: false }),
   openRotate: () => set({ rotateOpen: true }),

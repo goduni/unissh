@@ -1,11 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { useSession } from "../store/session";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { fmtNum } from "../util/format";
-import { Icon } from "../ui/icons";
 import { Btn, Card, Field, Segmented, Spinner, TextInput, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
@@ -32,11 +30,7 @@ export function Maintenance() {
 
 function MigrationsCard() {
   const { t } = useTranslation();
-  const unlocked = useSession((s) => s.keysetUnlocked);
-  const migrations = useAsync(
-    () => (unlocked ? api.admin.migrations() : Promise.resolve(null)),
-    [unlocked],
-  );
+  const migrations = useAsync(() => api.admin.migrations(), []);
 
   return (
     <Card pad={false}>
@@ -51,20 +45,7 @@ function MigrationsCard() {
         {t("screen.maint.migrations")}
       </div>
       <div style={{ padding: 14 }}>
-        {!unlocked ? (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              fontSize: 12.5,
-              color: "var(--txt3)",
-            }}
-          >
-            <Icon name="lock" size={14} color="var(--txt3)" />
-            {t("screen.maint.keysetRequired")}
-          </div>
-        ) : migrations.loading ? (
+        {migrations.loading ? (
           <div style={{ display: "flex", justifyContent: "center", padding: 24 }}>
             <Spinner />
           </div>

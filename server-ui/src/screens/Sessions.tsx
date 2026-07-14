@@ -7,7 +7,6 @@ import { truncId } from "../util/bytes";
 import { fmtRelative, isExpired } from "../util/format";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Btn, PubkeyChip, StateBadge, TextInput, ZkBanner } from "../ui/primitives";
-import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -24,9 +23,7 @@ export function Sessions() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.sessions.title")} sub={t("screen.sessions.sub")}>
-      <KeysetGate>
-        <SessionsBody />
-      </KeysetGate>
+      <SessionsBody />
     </Screen>
   );
 }

@@ -7,7 +7,6 @@ import { OBJECT_TAG_LABEL } from "../api/types";
 import type { ObjectMeta } from "../api/types";
 import { DataTable, type Column } from "../ui/DataTable";
 import { PubkeyChip, Tag, ZkBanner, type TagTone } from "../ui/primitives";
-import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -44,9 +43,7 @@ export function Objects() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.objects.title")} sub={t("screen.objects.sub")} zk>
-      <KeysetGate>
-        <ObjectsBody />
-      </KeysetGate>
+      <ObjectsBody />
     </Screen>
   );
 }

@@ -11,10 +11,8 @@ export function Titlebar() {
   const { effMode } = useTheme();
   const toggleMode = usePrefs((s) => s.toggleMode);
 
-  const keysetUnlocked = useSession((s) => s.keysetUnlocked);
   const adminLabel = useSession((s) => s.adminLabel);
 
-  const openKeyset = useUi((s) => s.openKeyset);
   const togglePanel = useUi((s) => s.togglePanel);
 
   return (
@@ -80,9 +78,8 @@ export function Titlebar() {
       <div style={{ flex: 1 }} />
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {/* Keyset badge */}
+        {/* Keyset / identity badge */}
         <div
-          onClick={keysetUnlocked ? undefined : openKeyset}
           style={{
             display: "flex",
             alignItems: "center",
@@ -90,19 +87,14 @@ export function Titlebar() {
             height: 30,
             padding: "0 11px",
             borderRadius: 8,
-            background: keysetUnlocked
-              ? "color-mix(in srgb, var(--green) 12%, transparent)"
-              : "color-mix(in srgb, var(--amber) 12%, transparent)",
-            border: keysetUnlocked
-              ? "1px solid color-mix(in srgb, var(--green) 34%, transparent)"
-              : "1px solid color-mix(in srgb, var(--amber) 34%, transparent)",
-            color: keysetUnlocked ? "var(--green)" : "var(--amber)",
-            cursor: keysetUnlocked ? "default" : "pointer",
+            background: "color-mix(in srgb, var(--green) 12%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--green) 34%, transparent)",
+            color: "var(--green)",
           }}
         >
-          <Icon name={keysetUnlocked ? "unlock" : "lock"} size={13} />
+          <Icon name="unlock" size={13} />
           <span style={{ fontSize: 12, fontWeight: 600 }}>
-            {keysetUnlocked ? `${t("access.keyset")} · ${adminLabel ?? ""}` : t("access.keysetLocked")}
+            {`${t("access.keyset")} · ${adminLabel ?? ""}`}
           </span>
         </div>
 

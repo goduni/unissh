@@ -6,7 +6,6 @@ import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { fmtRelative } from "../util/format";
 import { DataTable, type Column } from "../ui/DataTable";
-import { KeysetGate } from "../ui/overlays";
 import { Card, StateBadge, TextInput, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
@@ -15,9 +14,7 @@ export function Relay() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.relay.title")} sub={t("screen.relay.sub")} zk>
-      <KeysetGate>
-        <RelayBody />
-      </KeysetGate>
+      <RelayBody />
     </Screen>
   );
 }

@@ -7,7 +7,7 @@ import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Btn, Field, Tag, TextInput, gradientFor } from "../ui/primitives";
-import { KeysetGate, Modal } from "../ui/overlays";
+import { Modal } from "../ui/overlays";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -15,9 +15,7 @@ export function Spaces() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.spaces.title")} sub={t("screen.spaces.sub")}>
-      <KeysetGate>
-        <SpacesBody />
-      </KeysetGate>
+      <SpacesBody />
     </Screen>
   );
 }

@@ -1,15 +1,12 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { useSession } from "../store/session";
-import { useUi } from "../store/ui";
 import { fmtRelative } from "../util/format";
 import type { AuditEntry } from "../api/types";
 import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Icon } from "../ui/icons";
 import { Btn, PubkeyChip, Tag, ZkBanner } from "../ui/primitives";
-import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -86,8 +83,6 @@ type VerifyResult = { kind: "ok" | "tamper" | "broken" | "error"; msg: string };
 
 export function Audit() {
   const { t } = useTranslation();
-  const keysetUnlocked = useSession((s) => s.keysetUnlocked);
-  const openKeyset = useUi((s) => s.openKeyset);
   // The tamper finding is the panel's headline security result — it must NOT be a
   // 4.5s toast that vanishes. Hold it as a persistent, dismissible card.
   const [result, setResult] = useState<VerifyResult | null>(null);
@@ -140,24 +135,13 @@ export function Audit() {
       sub={t("screen.audit.sub")}
       zk
       actions={
-        // Keep enabled, gate on click — a disabled button's title isn't reliably
-        // shown or announced. Locked → clicking opens the unlock modal.
-        <Btn
-          icon="shieldcheck"
-          size="sm"
-          onClick={() => {
-            if (keysetUnlocked) void verify();
-            else openKeyset();
-          }}
-        >
+        <Btn icon="shieldcheck" size="sm" onClick={() => void verify()}>
           {t("screen.audit.verifyChain")}
         </Btn>
       }
     >
-      <KeysetGate>
-        {result ? <VerifyResultCard result={result} onDismiss={() => setResult(null)} /> : null}
-        <AuditBody />
-      </KeysetGate>
+      {result ? <VerifyResultCard result={result} onDismiss={() => setResult(null)} /> : null}
+      <AuditBody />
     </Screen>
   );
 }

@@ -3,7 +3,6 @@ import { api } from "../api";
 import { useAsync } from "../util/useAsync";
 import { fmtNum } from "../util/format";
 import { type IconName } from "../ui/icons";
-import { KeysetGate } from "../ui/overlays";
 import { Btn, Card, ErrorCard, KpiCard, Spinner } from "../ui/primitives";
 import type { MetricsPoint } from "../api/types";
 import { Screen } from "./Screen";
@@ -13,9 +12,7 @@ export function Metrics() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.metrics.title")} sub={t("screen.metrics.sub")}>
-      <KeysetGate>
-        <MetricsBody />
-      </KeysetGate>
+      <MetricsBody />
     </Screen>
   );
 }

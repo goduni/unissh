@@ -7,7 +7,7 @@ import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Icon } from "../ui/icons";
-import { Drawer, KeysetGate } from "../ui/overlays";
+import { Drawer } from "../ui/overlays";
 import {
   Avatar,
   Btn,
@@ -26,9 +26,7 @@ export function Accounts() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.accounts.title")} sub={t("screen.accounts.sub")} zk>
-      <KeysetGate>
-        <AccountsBody />
-      </KeysetGate>
+      <AccountsBody />
     </Screen>
   );
 }

@@ -8,7 +8,6 @@ import { fmtDate } from "../util/format";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Btn, StateBadge, TextInput } from "../ui/primitives";
 import { Icon } from "../ui/icons";
-import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -23,9 +22,7 @@ export function Devices() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.devices.title")} sub={t("screen.devices.sub")}>
-      <KeysetGate>
-        <DevicesBody />
-      </KeysetGate>
+      <DevicesBody />
     </Screen>
   );
 }

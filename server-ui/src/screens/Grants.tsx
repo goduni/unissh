@@ -9,7 +9,7 @@ import { useAsync } from "../util/useAsync";
 import { b64ToBytes, truncId } from "../util/bytes";
 import { decodeManifestMembers, type ManifestMember } from "../util/grant-codec";
 import { Icon } from "../ui/icons";
-import { KeysetGate, Modal } from "../ui/overlays";
+import { Modal } from "../ui/overlays";
 import { Btn, PubkeyChip, Spinner, Tag, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
@@ -18,9 +18,7 @@ export function Grants() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.grants.title")} sub={t("screen.grants.sub")} zk>
-      <KeysetGate>
-        <GrantsBody />
-      </KeysetGate>
+      <GrantsBody />
     </Screen>
   );
 }

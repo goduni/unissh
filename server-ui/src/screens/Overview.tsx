@@ -2,7 +2,6 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useMeta } from "../store/meta";
-import { useSession } from "../store/session";
 import { useUi, type Route } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { fmtNum } from "../util/format";
@@ -14,7 +13,6 @@ import { Screen } from "./Screen";
 export function Overview() {
   const { t } = useTranslation();
   const go = useUi((s) => s.go);
-  const keysetUnlocked = useSession((s) => s.keysetUnlocked);
   const reloadTick = useUi((s) => s.reloadTick);
   const setCounts = useMeta((s) => s.setCounts);
 
@@ -150,14 +148,6 @@ export function Overview() {
       >
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>{t("screen.overview.attentionTitle")}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-          {!keysetUnlocked ? (
-            <WarnRow
-              color="var(--amber)"
-              icon="lock"
-              title={t("access.keysetLocked")}
-              desc={t("screen.overview.keysetLockedDesc")}
-            />
-          ) : null}
           <WarnRow
             color={ready.data ? "var(--green)" : "var(--red)"}
             icon={ready.data ? "check" : "alert"}

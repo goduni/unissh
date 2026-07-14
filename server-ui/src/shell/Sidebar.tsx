@@ -15,7 +15,6 @@ export function Sidebar() {
   const route = useUi((s) => s.route);
   const go = useUi((s) => s.go);
 
-  const keysetUnlocked = useSession((s) => s.keysetUnlocked);
   const adminLabel = useSession((s) => s.adminLabel);
   const counts = useMeta((s) => s.counts);
 
@@ -115,26 +114,9 @@ export function Sidebar() {
               >
                 {t(`nav.${group.key}`)}
               </span>
-              {group.keysetTag ? (
-                <span
-                  style={{
-                    fontSize: 9,
-                    fontWeight: 700,
-                    letterSpacing: 0.4,
-                    color: "var(--amber)",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 3,
-                  }}
-                >
-                  <Icon name="key" size={10} color="var(--amber)" />
-                  KEYSET
-                </span>
-              ) : null}
             </div>
             {group.items.map((it) => {
               const isActive = route === it.route;
-              const locked = !!it.keyset && !keysetUnlocked;
               const count = it.count ? counts[it.count] : undefined;
               return (
                 <div
@@ -168,7 +150,6 @@ export function Sidebar() {
                   >
                     {t(`nav.${it.key}`)}
                   </span>
-                  {locked ? <Icon name="lock" size={12} color="var(--txt3)" /> : null}
                   {count != null ? (
                     <span
                       style={{
@@ -209,38 +190,34 @@ export function Sidebar() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: keysetUnlocked ? "var(--green)" : "var(--amber)",
+            color: "var(--green)",
             flexShrink: 0,
           }}
         >
-          <Icon name={keysetUnlocked ? "unlock" : "lock"} size={14} />
+          <Icon name="unlock" size={14} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600 }}>{t("access.selfHosted")}</div>
-          <div style={{ fontSize: 10.5, color: "var(--txt3)" }}>
-            {keysetUnlocked ? t("access.footerUnlocked") : t("access.footerLocked")}
-          </div>
+          <div style={{ fontSize: 10.5, color: "var(--txt3)" }}>{t("access.footerUnlocked")}</div>
         </div>
-        {keysetUnlocked ? (
-          <button
-            onClick={lockKeyset}
-            title={t("access.lock")}
-            style={{
-              width: 28,
-              height: 28,
-              borderRadius: 8,
-              border: "1px solid var(--line)",
-              background: "var(--bg1)",
-              color: "var(--txt2)",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Icon name="lock" size={14} />
-          </button>
-        ) : null}
+        <button
+          onClick={lockKeyset}
+          title={t("access.lock")}
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            border: "1px solid var(--line)",
+            background: "var(--bg1)",
+            color: "var(--txt2)",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Icon name="lock" size={14} />
+        </button>
       </div>
     </div>
   );

@@ -6,7 +6,6 @@ import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Icon } from "../ui/icons";
-import { KeysetGate } from "../ui/overlays";
 import { Avatar, PubkeyChip, StatusDot, ZkBanner, initialsOf } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
@@ -15,9 +14,7 @@ export function Directory() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.directory.title")} sub={t("screen.directory.sub")} zk>
-      <KeysetGate>
-        <DirectoryBody />
-      </KeysetGate>
+      <DirectoryBody />
     </Screen>
   );
 }

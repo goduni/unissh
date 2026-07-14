@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ApiError } from "../api/errors";
-import { useSession } from "../store/session";
 import { useUi } from "../store/ui";
 import { Icon } from "./icons";
 import { Btn } from "./primitives";
@@ -211,66 +210,6 @@ export function ConfirmDialog() {
       </div>
     </Modal>
   );
-}
-
-// ── LockGate ───────────────────────────────────────────────────
-export function LockGate() {
-  const { t } = useTranslation();
-  const openKeyset = useUi((s) => s.openKeyset);
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "70px 20px",
-        textAlign: "center",
-      }}
-    >
-      <span
-        style={{
-          width: 66,
-          height: 66,
-          borderRadius: 18,
-          background: "color-mix(in srgb, var(--amber) 13%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--amber) 36%, transparent)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          marginBottom: 18,
-          color: "var(--amber)",
-        }}
-      >
-        <Icon name="lock" size={26} />
-      </span>
-      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--txt)" }}>
-        {t("access.onb.lockgate_title")}
-      </div>
-      <div
-        style={{
-          fontSize: 13,
-          color: "var(--txt3)",
-          marginTop: 7,
-          maxWidth: 420,
-          lineHeight: 1.55,
-        }}
-      >
-        {t("access.onb.lockgate_desc")}
-      </div>
-      <div style={{ marginTop: 18 }}>
-        <Btn variant="primary" icon="unlock" onClick={openKeyset}>
-          {t("access.onb.unlock_cta")}
-        </Btn>
-      </div>
-    </div>
-  );
-}
-
-/** Renders children only when the admin keyset is unlocked, else a LockGate. */
-export function KeysetGate({ children }: { children: ReactNode }) {
-  const unlocked = useSession((s) => s.keysetUnlocked);
-  return unlocked ? <>{children}</> : <LockGate />;
 }
 
 // ── Toaster ────────────────────────────────────────────────────

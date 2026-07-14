@@ -5,7 +5,6 @@ import { useAsync } from "../util/useAsync";
 import { fmtNum, fmtRelative } from "../util/format";
 import { Btn, Card, Spinner, Tag } from "../ui/primitives";
 import { Icon } from "../ui/icons";
-import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -122,10 +121,8 @@ export function Health() {
         </Card>
       </div>
 
-      {/* diagnostics — keyset-gated */}
-      <KeysetGate>
-        <HealthBody />
-      </KeysetGate>
+      {/* diagnostics */}
+      <HealthBody />
     </Screen>
   );
 }

@@ -1,13 +1,11 @@
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import type { InviteRow } from "../api/types";
-import { useSession } from "../store/session";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { fmtDate, fmtRelative } from "../util/format";
 import { DataTable, type Column } from "../ui/DataTable";
-import { KeysetGate } from "../ui/overlays";
 import { Btn, StateBadge } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
@@ -15,27 +13,17 @@ import { MONO } from "../theme/tokens";
 export function Invites() {
   const { t } = useTranslation();
   const openInvite = useUi((s) => s.openInvite);
-  const openKeyset = useUi((s) => s.openKeyset);
-  const keysetUnlocked = useSession((s) => s.keysetUnlocked);
   return (
     <Screen
       title={t("screen.invites.title")}
       sub={t("screen.invites.sub")}
       actions={
-        // Keep enabled and gate on click: a disabled button's `title` is neither
-        // reliably shown nor announced. Locked → clicking opens the unlock modal.
-        <Btn
-          variant="primary"
-          icon="tag"
-          onClick={keysetUnlocked ? openInvite : openKeyset}
-        >
+        <Btn variant="primary" icon="tag" onClick={openInvite}>
           {t("screen.invites.issue")}
         </Btn>
       }
     >
-      <KeysetGate>
-        <InvitesBody />
-      </KeysetGate>
+      <InvitesBody />
     </Screen>
   );
 }

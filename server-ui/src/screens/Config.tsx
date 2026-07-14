@@ -4,7 +4,6 @@ import { api } from "../api";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { Btn, Spinner, Tag, TextInput, Toggle } from "../ui/primitives";
-import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
 import type { ConfigResp } from "../api/types";
 import { MONO } from "../theme/tokens";
@@ -28,9 +27,7 @@ export function Config() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.config.title")} sub={t("screen.config.sub")}>
-      <KeysetGate>
-        <ConfigBody />
-      </KeysetGate>
+      <ConfigBody />
     </Screen>
   );
 }
