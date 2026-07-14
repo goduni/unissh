@@ -46,6 +46,7 @@ interface WasmModule {
     argon_iterations: number,
     argon_parallelism: number,
   ) => string;
+  oidc_nonce: () => string;
   lock: () => void;
 }
 
@@ -149,6 +150,13 @@ function makeProvider(m: WasmModule): CryptoProvider {
       // (null → SecretKeyOnly / SSO) + Secret Key + the server's stored Argon2id
       // params. Synchronous — no keyset state is touched.
       return m.derive_escrow_auth(password ?? undefined, secretKeyB64, saltB64, mem, iter, par);
+    },
+
+    oidcNonce(): string {
+      // base64(sha256(ed25519_pub ‖ x25519_pub)) over the unlocked keyset — the
+      // id_token `nonce` the server's /v1/oidc/callback binds to this keyset.
+      // Synchronous; reads the in-memory unlocked keyset only.
+      return m.oidc_nonce();
     },
 
     lock() {

@@ -1667,6 +1667,28 @@ impl Core {
         })
     }
 
+    /// The OIDC nonce key-binding (server `/v1/oidc/callback`): the string that the
+    /// IdP-signed id_token's `nonce` claim MUST equal — `base64(sha256(ed25519_pub ‖
+    /// x25519_pub))` over the unlocked keyset's public keys, Ed25519 FIRST, then X25519.
+    /// (NOTE: this is the REVERSE of the registration payload's x‖ed byte order; do not
+    /// confuse them.) STANDARD base64 with padding, byte-matching the server's
+    /// `ids::b64(&ids::sha256(..))` and the panel's `oidc_nonce`. Because the nonce sits
+    /// inside the IdP's signature, this binding is what stops a stolen id_token from being
+    /// re-bound to an attacker's keyset. Requires unlock. NOT a secret.
+    pub fn oidc_nonce(&self) -> Result<String, FfiError> {
+        self.with_state(|state| {
+            use base64::Engine as _;
+            use sha2::Digest as _;
+            let ed = state.keyset.signing.verifying.to_bytes();
+            let x = state.keyset.encryption.public.to_bytes();
+            let mut bind = Vec::with_capacity(64);
+            bind.extend_from_slice(&ed);
+            bind.extend_from_slice(&x);
+            let hash: [u8; 32] = Sha256::digest(&bind).into();
+            Ok(base64::engine::general_purpose::STANDARD.encode(hash))
+        })
+    }
+
     /// Signs a server challenge with the keyset's Ed25519 key (server-tz §2.2,
     /// domain `unissh-server-auth-v1`). Returns the signature blob (NOT a secret);
     /// the private key never leaves. Nonce/expiry checking is done by the server.

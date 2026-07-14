@@ -146,6 +146,14 @@ export interface CryptoProvider {
     iter: number,
     par: number,
   ): string;
+  /**
+   * The OIDC nonce key-binding for the unlocked keyset:
+   * `base64(sha256(ed25519_pub ‖ x25519_pub))` (Ed25519 first, then X25519). The
+   * id_token requested from the IdP MUST carry this exact string as its `nonce`, so
+   * the server's `/v1/oidc/callback` binds the IdP-signed token to THIS keyset. Byte-
+   * matches the server's `expected_nonce`. Requires an unlocked keyset. Synchronous.
+   */
+  oidcNonce(): string;
   /** Wipe the UnlockedKeyset from memory. */
   lock(): void;
 }
@@ -217,6 +225,9 @@ const unavailable: CryptoProvider = {
     throw new CryptoUnavailableError();
   },
   deriveEscrowAuth(): string {
+    throw new CryptoUnavailableError();
+  },
+  oidcNonce(): string {
     throw new CryptoUnavailableError();
   },
   lock() {},

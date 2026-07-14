@@ -452,6 +452,29 @@ pub fn build_registration(account_id_b64: String) -> Result<String, JsError> {
     })
 }
 
+/// The OIDC nonce key-binding: `base64(sha256(ed25519_pub ‖ x25519_pub))` over the
+/// unlocked keyset — Ed25519 FIRST, then X25519 (NOTE: the REVERSE of the registration
+/// payload's x‖ed order above; do not confuse them). The IdP-signed id_token's `nonce`
+/// claim MUST equal this string, so a stolen id_token cannot be re-bound to another
+/// keyset. STANDARD base64 with padding — must byte-match the server's `expected_nonce`
+/// (`ids::b64(&ids::sha256(..))`) and the FFI `Core::oidc_nonce`, or the callback rejects
+/// the login. NOT a secret.
+#[wasm_bindgen]
+pub fn oidc_nonce() -> Result<String, JsValue> {
+    use sha2::Digest as _;
+    UNLOCKED.with(|c| {
+        let g = c.borrow();
+        let u = g.as_ref().ok_or_else(|| JsError::new("keyset locked"))?;
+        let ed25519_pub = u.signing.verifying.to_bytes();
+        let x25519_pub = u.encryption.public.to_bytes();
+        let mut bind = Vec::with_capacity(64);
+        bind.extend_from_slice(&ed25519_pub);
+        bind.extend_from_slice(&x25519_pub);
+        let hash: [u8; 32] = Sha256::digest(&bind).into();
+        Ok(b64(&hash))
+    })
+}
+
 /// Verify that a member's x25519 encryption key is cryptographically BOUND to its
 /// ed25519 identity (finding M14), and return the ATTESTED x25519 (base64) so the
 /// caller wraps the fresh VK to THAT key rather than to a server-supplied account
