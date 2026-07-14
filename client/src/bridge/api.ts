@@ -762,6 +762,26 @@ export const serverEscrowFetchAndUnlock = (
     password,
     secretKeyHex,
   });
+/** Restore this device's identity OFFLINE from an Emergency-Kit keyset FILE (`identity.kit`
+ *  — the raw EncryptedKeyset bytes), then self-enroll THIS device and sign in (PUBLIC — no
+ *  session): the escrow tail with the blob sourced from a file instead of the server's escrow.
+ *  `password` is null for passwordless/SSO accounts; `secretKeyHex` is the account Secret Key
+ *  (also in the Emergency Kit). No prior link/session needed — a brand-new device holding only
+ *  the kit file + Secret Key can recover. Returns the resulting linked-server status (mirrors
+ *  the escrow path). Zero-knowledge: password / Secret Key / bytes go straight to the Rust
+ *  command (only the core FFI sees them); never logged. */
+export const serverImportKeysetAndUnlock = (
+  baseUrl: string,
+  keysetBytes: number[],
+  password: string | null,
+  secretKeyHex: string,
+) =>
+  invoke<ServerStatus>("server_import_keyset_and_unlock", {
+    baseUrl,
+    keysetBlob: keysetBytes,
+    password,
+    secretKeyHex,
+  });
 export const serverOnboardInitiate = (serverId?: string) =>
   invoke<PairingPayload>("server_onboard_initiate", { serverId: serverId ?? null });
 export const serverOnboardComplete = (channelId: string, oobCode: string, serverId?: string) =>

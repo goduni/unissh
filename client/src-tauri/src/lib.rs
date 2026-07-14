@@ -311,6 +311,7 @@ pub fn run() {
             cloud::commands::server_keyset_pull_and_unlock,
             cloud::commands::server_escrow_params,
             cloud::commands::server_escrow_fetch_and_unlock,
+            cloud::commands::server_import_keyset_and_unlock,
             cloud::commands::server_onboard_initiate,
             cloud::commands::server_onboard_complete,
             cloud::commands::server_onboard_join,

@@ -1238,6 +1238,10 @@ async function pullCloudVaultsAfterConnect(): Promise<void> {
 function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => void }) {
   const p = usePalette();
   const { t } = useTranslation();
+  // Persisted links — the "Reconnect" segment only makes sense when THIS instance is
+  // already linked on this device (server_login targets the active link; with no link
+  // it is a dead entry). Match on the probed instance id below.
+  const servers = useApp((s) => s.servers);
   const [baseUrl, setBaseUrl] = useState("");
   const [info, setInfo] = useState<InstanceInfo | null>(null);
   const [probing, setProbing] = useState(false);
@@ -1252,8 +1256,9 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
   const [spaceName, setSpaceName] = useState("");
 
   // join a claimed instance: redeem an invite link, sign in with an existing identity
-  // (escrow), or reconnect the local keyset.
-  const [branch, setBranch] = useState<"invite" | "identity" | "signin">("invite");
+  // (escrow), restore that identity offline from an Emergency-Kit file, or reconnect the
+  // local keyset.
+  const [branch, setBranch] = useState<"invite" | "identity" | "kit" | "signin">("invite");
   const [inviteToken, setInviteToken] = useState("");
   const [preview, setPreview] = useState<JoinPreview | null>(null);
 
@@ -1261,6 +1266,11 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
   // Key (Emergency Kit) recover the keyset on this fresh device with no prior link.
   const [escrowPw, setEscrowPw] = useState("");
   const [secretKey, setSecretKey] = useState("");
+
+  // "Restore from Emergency Kit" (offline): the encrypted keyset FILE (identity.kit) bytes
+  // + password + Secret Key install the keyset from disk — no server escrow round-trip.
+  const [keysetBytes, setKeysetBytes] = useState<number[] | null>(null);
+  const [kitFileName, setKitFileName] = useState("");
 
   const optProfile = () => ({
     displayName: displayName.trim() || undefined,
@@ -1373,6 +1383,57 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
     }
   };
 
+  // Pick the Emergency-Kit keyset file (identity.kit) and read its RAW bytes — the encrypted
+  // EncryptedKeyset blob the offline restore installs. Uses the same dialog+fs idiom as the
+  // other import flows (known-hosts, ssh config), but readFile (binary) not readTextFile.
+  const pickKitFile = async () => {
+    await guard(async () => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const { readFile } = await import("@tauri-apps/plugin-fs");
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        title: t("serverCloud.kitPickTitle"),
+      });
+      if (!selected || Array.isArray(selected)) return;
+      const bytes = await readFile(selected);
+      setKeysetBytes(Array.from(bytes));
+      setKitFileName(selected.split(/[/\\]/).pop() || selected);
+    });
+  };
+
+  // Restore an existing identity OFFLINE from the Emergency-Kit keyset FILE (the escrow tail
+  // sourced from disk): the kit bytes + password + Secret Key install + unlock the keyset,
+  // THIS device is self-enrolled, and a session + link are established — no server escrow, no
+  // prior link on this device. For recovering when the server's escrow is unavailable, or an
+  // identity that was never escrowed. Zero-knowledge: the bytes + password + Secret Key go
+  // straight to the Rust command (fed only into the core to unwrap the blob); never logged.
+  const doKitRestore = async () => {
+    if (busy) return;
+    if (!keysetBytes) {
+      toast(t("serverCloud.fillKitFile"), "warn");
+      return;
+    }
+    if (!secretKey.trim()) {
+      toast(t("serverCloud.fillSecretKey"), "warn");
+      return;
+    }
+    setBusy(true);
+    try {
+      const status = await api.serverImportKeysetAndUnlock(
+        baseUrl.trim(),
+        keysetBytes,
+        escrowPw ? escrowPw : null,
+        secretKey.replace(/[\s-]/g, ""),
+      );
+      toast(t("serverCloud.signedIn"), "ok");
+      onConnected(status);
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+      setBusy(false);
+    }
+  };
+
   // Reconnect the local account keyset (no invite, no escrow). server_login proves the
   // keyset and re-establishes the session for an account this device ALREADY belongs to
   // (a persisted link whose session dropped) — the recovery counterpart to the escrow
@@ -1405,6 +1466,12 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
       setBusy(false);
     }
   };
+
+  // The probed instance is already linked on this device (a persisted ServerConfig for it
+  // exists) — gates the "Reconnect" action, whose server_login re-auths an existing link.
+  const alreadyLinked = !!info && servers.some((s) => s.connected && s.instanceId === info.instanceId);
+  // The instance advertises OIDC SSO — gates the "Sign in with SSO" action.
+  const hasOidc = !!info && info.auth.includes("oidc");
 
   // ── Step 1: enter the server address ──────────────────────────
   if (!info) {
@@ -1529,7 +1596,7 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
         ) : (
           // Claimed → join with an invite link, or sign in with the local keyset.
           <>
-            <Segmented<"invite" | "identity" | "signin">
+            <Segmented<"invite" | "identity" | "kit" | "signin">
               value={branch}
               onChange={(v) => {
                 setBranch(v);
@@ -1538,7 +1605,21 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
               options={[
                 { value: "invite", label: t("serverCloud.branchInvite") },
                 { value: "identity", label: t("serverCloud.branchIdentity") },
-                { value: "signin", label: t("serverCloud.branchSignIn") },
+                { value: "kit", label: t("serverCloud.branchKit") },
+                // "Reconnect" re-auths an existing link (server_login) — only when this
+                // instance is already linked here; when it isn't but the server advertises
+                // SSO, the same segment carries the (fresh-device) SSO sign-in instead.
+                // Hidden entirely when neither applies, so no dead entry shows.
+                ...(alreadyLinked || hasOidc
+                  ? [
+                      {
+                        value: "signin" as const,
+                        label: alreadyLinked
+                          ? t("serverCloud.branchSignIn")
+                          : t("serverCloud.branchSso"),
+                      },
+                    ]
+                  : []),
               ]}
             />
 
@@ -1659,34 +1740,98 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
                   </Btn>
                 </div>
               </>
-            ) : (
+            ) : branch === "kit" ? (
               <>
                 <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
-                  {t("serverCloud.signInHint")}
+                  {t("serverCloud.kitHint")}
                 </div>
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                  <Btn icon={busy ? undefined : "unlock"} onClick={doSignIn} disabled={busy}>
-                    {busy ? t("serverCloud.connecting") : t("serverCloud.signInCta")}
-                  </Btn>
-                </div>
-                {info.auth.includes("oidc") && (
-                  <>
-                    <div
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
+                    {t("serverCloud.kitFile")}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <Btn
+                      variant="ghost"
+                      size="sm"
+                      icon="folder"
+                      onClick={pickKitFile}
+                      disabled={busy}
+                    >
+                      {t("serverCloud.kitChooseFile")}
+                    </Btn>
+                    <span
                       style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        color: p.txt3,
-                        fontSize: 11.5,
-                        textTransform: "uppercase",
-                        letterSpacing: 0.4,
-                        margin: "2px 0",
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: 12.5,
+                        fontFamily: MONO,
+                        color: kitFileName ? p.txt2 : p.txt3,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
                       }}
                     >
-                      <span style={{ flex: 1, height: 1, background: p.line2 }} />
-                      {t("serverCloud.ssoOr")}
-                      <span style={{ flex: 1, height: 1, background: p.line2 }} />
+                      {kitFileName || t("serverCloud.kitNoFile")}
+                    </span>
+                  </div>
+                </div>
+                <ConnectField
+                  label={t("serverCloud.identityPassword")}
+                  value={escrowPw}
+                  onChange={setEscrowPw}
+                  placeholder={t("serverCloud.identityPasswordPlaceholder")}
+                  type="password"
+                />
+                <ConnectField
+                  label={t("serverCloud.identitySecretKey")}
+                  value={secretKey}
+                  onChange={setSecretKey}
+                  placeholder={t("serverCloud.identitySecretKeyPlaceholder")}
+                  type="password"
+                  mono
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <Btn icon={busy ? undefined : "unlock"} onClick={doKitRestore} disabled={busy}>
+                    {busy ? t("serverCloud.connecting") : t("serverCloud.kitCta")}
+                  </Btn>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Reconnect the local keyset — only for an already-linked instance. */}
+                {alreadyLinked && (
+                  <>
+                    <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                      {t("serverCloud.signInHint")}
                     </div>
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <Btn icon={busy ? undefined : "unlock"} onClick={doSignIn} disabled={busy}>
+                        {busy ? t("serverCloud.connecting") : t("serverCloud.signInCta")}
+                      </Btn>
+                    </div>
+                  </>
+                )}
+                {hasOidc && (
+                  <>
+                    {/* The "or" separator only makes sense above another option. */}
+                    {alreadyLinked && (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          color: p.txt3,
+                          fontSize: 11.5,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.4,
+                          margin: "2px 0",
+                        }}
+                      >
+                        <span style={{ flex: 1, height: 1, background: p.line2 }} />
+                        {t("serverCloud.ssoOr")}
+                        <span style={{ flex: 1, height: 1, background: p.line2 }} />
+                      </div>
+                    )}
                     <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
                       {t("serverCloud.ssoHint")}
                     </div>
