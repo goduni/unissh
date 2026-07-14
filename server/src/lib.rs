@@ -42,22 +42,39 @@ pub async fn build_state(
     // read instance row — the decoy in `GET /v1/escrow/params` is keyed from THIS,
     // never from the PUBLIC `instance_id`.
     let escrow_decoy_secret = store.escrow_decoy_secret().await?;
-    // Unclaimed: publish a setup code so a client can claim this instance. The code
-    // is the config-fixed one (IaC/tests) if set, else a fresh random one. We store
+    // Unclaimed: publish a setup code so a client can claim this instance. We store
     // only sha256(code); the human code is printed to logs (never persisted).
+    //
+    // Stability across restarts (docker-restart model): a fresh code was previously
+    // minted on EVERY unclaimed boot, silently invalidating a code an operator may
+    // have copied from an earlier boot. Now:
+    //   * `[setup].code` set  → hash+use it (stable; setting UNISSH__SETUP__CODE rotates).
+    //   * empty + a hash already exists → a code was issued before; keep it (do NOT
+    //     regenerate — we only have its hash, not the plaintext).
+    //   * empty + no hash yet (first-ever boot) → mint one and print it exactly once.
     if instance_row.claimed == 0 {
-        let code = if config.setup.code.is_empty() {
+        if !config.setup.code.is_empty() {
+            let code = config.setup.code.clone();
+            store
+                .set_setup_code_hash(&ids::sha256(code.as_bytes()))
+                .await?;
+            tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
+            println!("SETUP CODE: {code}");
+        } else if instance_row.setup_code_hash.is_some() {
+            tracing::warn!(
+                "server unclaimed — a setup code was already issued on an earlier boot and is \
+                 still valid (its plaintext was printed then); set UNISSH__SETUP__CODE to rotate it"
+            );
+        } else {
             let mut rnd = [0u8; 6];
             ids::fill_random(&mut rnd);
-            ids::generate_setup_code(&rnd)
-        } else {
-            config.setup.code.clone()
-        };
-        store
-            .set_setup_code_hash(&ids::sha256(code.as_bytes()))
-            .await?;
-        tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
-        println!("SETUP CODE: {code}");
+            let code = ids::generate_setup_code(&rnd);
+            store
+                .set_setup_code_hash(&ids::sha256(code.as_bytes()))
+                .await?;
+            tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
+            println!("SETUP CODE: {code}");
+        }
     }
     // Whole-DB-snapshot anti-rollback (§16): refuse to come up if
     // the instance-generation (instance.next_seq) has fallen below the
