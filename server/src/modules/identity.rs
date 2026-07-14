@@ -268,6 +268,16 @@ async fn session_refresh(
     if !state.store.account_is_active(&session.account_id).await? {
         return Err(AppError::unauthenticated("account is not active"));
     }
+    // OIDC reassertion gate (Phase 5): an OIDC session rotates freely until its
+    // reassert deadline; past it, refresh fails and the client must re-run the OIDC
+    // flow (POST /v1/oidc/callback), which mints a fresh session with a new reassert
+    // window. Keyset sessions (auth_source != "oidc", reassert_expires None) are
+    // unaffected — they refresh as before.
+    if session.auth_source == "oidc"
+        && session.reassert_expires.is_some_and(|deadline| now > deadline)
+    {
+        return Err(AppError::unauthenticated("oidc reassertion required"));
+    }
     // Rotate access + refresh (new secret under the same session_id).
     let access = ids::random_bytes32();
     let refresh = build_refresh_token(&session.session_id, &ids::random_bytes32());

@@ -419,3 +419,107 @@ async fn refresh_rejects_malformed_and_unknown_tokens() {
     // Well-formed length but unknown session id → 401.
     assert_eq!(refresh(&app, &b64(&[7u8; 48])).await.status(), 401);
 }
+
+// ---- OIDC reassertion gate (Phase 5, Task 3) ----
+
+/// Seed an account+device+session directly in the store and return its refresh token
+/// (`session_id(16) || secret(32)`, base64). `reassert_expires` is set explicitly so
+/// the assertion does not depend on config; `auth_source` selects the gate path.
+async fn seed_refreshable_session(
+    app: &common::TestApp,
+    auth_source: &str,
+    reassert_expires: Option<i64>,
+) -> String {
+    let s = &app.state.store;
+    let now = app.now();
+    let account_id = ids::random_id16().to_vec();
+    let device_id = ids::random_id16().to_vec();
+    let ed = ids::random_bytes32().to_vec();
+    let x = ids::random_bytes32().to_vec();
+    let (issuer, subject) = if auth_source == "oidc" {
+        (Some("https://idp"), Some("sub-1"))
+    } else {
+        (None, None)
+    };
+    s.create_account(
+        &account_id,
+        &ed,
+        &x,
+        None,
+        None,
+        false,
+        &[],
+        &[],
+        issuer,
+        subject,
+        now,
+    )
+    .await
+    .unwrap();
+    s.create_device(&account_id, &device_id, &ed, &x, now)
+        .await
+        .unwrap();
+
+    let session_id = ids::random_id16();
+    let mut refresh_token = session_id.to_vec();
+    refresh_token.extend_from_slice(&ids::random_bytes32());
+    s.create_session(
+        &session_id,
+        &account_id,
+        &device_id,
+        &ids::sha256(&ids::random_bytes32()),
+        &ids::sha256(&refresh_token),
+        now + 900,
+        now + 1_000_000,
+        auth_source,
+        reassert_expires,
+        now,
+    )
+    .await
+    .unwrap();
+    b64(&refresh_token)
+}
+
+#[tokio::test]
+async fn oidc_session_refresh_requires_reassertion_past_deadline() {
+    // An OIDC session rotates freely until its reassert deadline; past it, refresh is
+    // rejected and the client must re-run the OIDC flow to mint a fresh window.
+    let app = spawn().await;
+    let deadline = app.now() + 100;
+    let rt0 = seed_refreshable_session(&app, "oidc", Some(deadline)).await;
+
+    // Before the deadline: rotates like any session (and preserves auth_source/reassert).
+    let r0 = refresh(&app, &rt0).await;
+    assert_eq!(
+        r0.status(),
+        200,
+        "oidc session refreshes before its reassert deadline"
+    );
+    let rt1 = rt(&r0.json().await.unwrap());
+
+    // Past the deadline: refresh is rejected.
+    app.clock.advance(200);
+    let r1 = refresh(&app, &rt1).await;
+    assert_eq!(
+        r1.status(),
+        401,
+        "oidc refresh past the reassert deadline must be rejected"
+    );
+}
+
+#[tokio::test]
+async fn keyset_session_refresh_ignores_reassertion() {
+    // Control: a keyset session (auth_source != "oidc", reassert_expires NULL) is
+    // untouched by the gate — the same clock advance that kills an OIDC session leaves
+    // it refreshing normally.
+    let app = spawn().await;
+    let rt0 = seed_refreshable_session(&app, "keyset", None).await;
+
+    app.clock.advance(200);
+    let r = refresh(&app, &rt0).await;
+    assert_eq!(
+        r.status(),
+        200,
+        "keyset session refreshes regardless of any reassert window"
+    );
+}
