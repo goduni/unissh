@@ -60,11 +60,15 @@ credential is in the body (setup code / invite token / password proof / id_token
   unclaimed instance with the **setup code** printed to the server log → becomes the
   **owner**, and optionally names the first space).
 - **onboarding:** `POST /v1/invite` (owner / space admin: mint a one-time,
-  space-scoped invite link with role intents), `POST /v1/join/preview` +
+  space-scoped invite link with role intents), `POST /v1/invite/revoke` (the
+  minting admin / owner: cancel a still-pending invite so a leaked token can no
+  longer be redeemed), `POST /v1/join/preview` +
   `POST /v1/join` (public: redeem an invite → a new account bound to the invited
   spaces), `POST /v1/oidc/callback` (public: **SSO** — the server verifies the
   IdP id_token against the JWKS, maps IdP groups → spaces via `[[oidc.group_map]]`,
   and binds the account's pubkeys via the OIDC nonce; SSO never yields vault keys).
+  Group→space mappings are **reconciled on every SSO login**: a space the user
+  is no longer in the mapped group for is removed (manual grants are untouched).
 - **auth / escrow:** `POST /v1/auth/{challenge,verify}` (Ed25519 challenge-response),
   `POST /v1/session/{refresh,logout,device-revoke}`, `GET|PUT /v1/keyset`,
   `GET /v1/escrow/params` + `POST /v1/escrow/fetch` (public: a fresh device/browser
