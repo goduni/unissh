@@ -279,10 +279,9 @@ impl<'a> Vault<'a> {
         })
     }
 
-    /// Deletes the vault (tombstone with a bumped version).
-    /// Whole-record operations (rename / delete / cache-policy) re-seal the owner-bound
-    /// `wrapped_vk` and re-sign the record as the caller. Only the genesis owner may do
-    /// this: a member — who opened the vault via a grant — would re-seal the record to its
+    /// Only the genesis owner may run whole-record operations (rename / delete /
+    /// cache-policy): they re-seal the owner-bound `wrapped_vk` and re-sign the record as the
+    /// caller. A member — who opened the vault via a grant — would re-seal the record to its
     /// OWN keyset and lock the true owner out (the owner branch has no grant fallback), and
     /// could tombstone the shared vault. Item operations (put/delete/rename item) do NOT
     /// rewrite the owner-wrap and remain open to writer members.
@@ -293,6 +292,7 @@ impl<'a> Vault<'a> {
         Ok(())
     }
 
+    /// Deletes the vault (tombstone with a bumped version). Owner-only (see `require_owner`).
     pub fn delete(self) -> Result<(), VaultError> {
         self.require_owner()?;
         let version = self.version + 1;
