@@ -428,9 +428,9 @@ export interface ServerStatus {
   owned: boolean;
   /** The caller's spaces on this server link (name + role), so the UI can name a
    *  vault's bound space (vault.syncTenant = space id) and show spaces in the vault
-   *  list/sidebar without a separate round-trip.
-   *  TODO(gate): the Rust ServerStatus must serialize this `spaces` array (server-v2
-   *  snapshot). Until then it may arrive undefined — callers use `?.`/`?? []`. */
+   *  list/sidebar without a separate round-trip. The Rust ServerStatus always
+   *  serializes this as an array (empty until a session fetches /v1/spaces); callers
+   *  still guard with `?? []` defensively. */
   spaces: SpaceInfo[];
 }
 

@@ -49,6 +49,19 @@ export function vaultLoc(
  *  inside the company perimeter, invisible to that server's admin. Keyed on the
  *  caller's `admin` role in the vault's bound Space. */
 export function isOwnedCloud(v: VaultInfo, servers: ServerStatus[]): boolean {
+  // Only a bound cloud vault can be "owned" (a Space you administer). Local /
+  // not-yet-bound vaults are handled by the callers' `syncTarget !== "cloud"` guard.
+  if (v.syncTarget !== "cloud" || !v.syncTenant) return false;
   const found = vaultSpace(v, servers);
-  return found !== null && found.space.role === "admin";
+  if (found) return found.space.role === "admin";
+  // The vault's bound Space isn't in any link's spaces cache. This is ambiguous:
+  // right after unlock the caches are still empty (session not yet restored, or
+  // /v1/spaces hasn't returned), so a Space you DO administer would momentarily look
+  // foreign and drop out of `privateVaults` — making "Personal" spuriously report
+  // "no vault". Stay fail-safe but avoid that transient false: only once at least one
+  // linked server has loaded its spaces do we trust an unresolved Space to be
+  // genuinely not-ours (→ false). Until then, treat the vault as owned from its local
+  // binding (optimistic), so it isn't briefly excluded during the load window.
+  const spacesLoaded = servers.some((s) => (s.spaces ?? []).length > 0);
+  return !spacesLoaded;
 }

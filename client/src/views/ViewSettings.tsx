@@ -1212,6 +1212,21 @@ function ConnectField({
   );
 }
 
+// After a server is linked/joined via Settings, run the SAME post-session sequence
+// as every other session-establishing path (boot / Unlock / JoinDevice): refresh the
+// server list, bind any legacy unbound cloud vaults, then pull the account's cloud
+// vaults — so a newly added server's cloud vaults appear without a manual "Sync now"
+// or a restart. reloadServerStatus must complete first (it populates `servers`, which
+// the bind + auto-sync steps read); cloudAutoSync is fire-and-forget (it reloads the
+// vault list itself once its pass finishes).
+async function pullCloudVaultsAfterConnect(): Promise<void> {
+  const app = useApp.getState();
+  await app.reloadServerStatus();
+  await app.maybeBindLegacyCloudVaults();
+  app.cloudAutoSync();
+  await app.reloadVaults();
+}
+
 // Add-server flow (shown when no server is linked, and to link another). Requires
 // an unlocked instance. One flow: enter the server address → probe it with
 // instanceInfo → an UNCLAIMED instance is set up with a setup code (you become its
@@ -2544,7 +2559,7 @@ function SettingsCloud() {
 
   // No servers linked yet → straight to the connect form (first link).
   if (servers.length === 0) {
-    return <CloudConnectForm onConnected={() => void reloadServerStatus()} />;
+    return <CloudConnectForm onConnected={() => void pullCloudVaultsAfterConnect()} />;
   }
 
   // Resolve the active server explicitly so the panels — and the commands below,
@@ -2554,7 +2569,7 @@ function SettingsCloud() {
 
   const onAddedServer = () => {
     setAddingServer(false);
-    void reloadServerStatus();
+    void pullCloudVaultsAfterConnect();
   };
 
   const doSync = async () => {

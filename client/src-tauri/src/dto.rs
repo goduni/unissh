@@ -490,9 +490,11 @@ pub struct VaultInfo {
     /// Local vault (offline only) or Cloud vault (syncs with the server). Drives
     /// the Local/Cloud badge and gates cloud-only operations in the UI.
     pub sync_target: SyncTarget,
-    /// For a cloud vault, the `tenant_id` (base64) of the server it is bound 1:1
-    /// to. `None` for local vaults and not-yet-bound legacy cloud vaults. Lets the
-    /// UI show which linked server a cloud vault syncs with.
+    /// For a cloud vault, the `space_id` (base64) of the server Space it is bound 1:1
+    /// to. `None` for local vaults and not-yet-bound legacy cloud vaults. Lets the UI
+    /// show which linked server + Space a cloud vault syncs with. NOTE: the field name
+    /// `sync_tenant` is deliberately frozen — only its meaning moved (tenant → space)
+    /// under the instance+space model; see `types.ts` `syncTenant` for the same note.
     pub sync_tenant: Option<String>,
 }
 impl From<ffi::VaultInfo> for VaultInfo {

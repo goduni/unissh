@@ -2087,17 +2087,22 @@ function IdentityVaultModal({
         await useApp.getState().reloadVaults();
       } else {
         const serverId = account?.serverId ?? undefined;
+        // Resolve the Space to bind the vault into: a freshly-created one, the chosen
+        // existing Space, or (fallback) the link's primary Space. Threaded through to
+        // serverCreateCloudVault so the picker's choice is honoured — not silently
+        // dropped into the primary Space.
+        let boundSpace: string | undefined;
         if (newSpace) {
-          // Create a NEW Space on this account, then put the vault in it — the
+          // Create a NEW Space on this account, then bind the vault into it — the
           // in-flow "make my own Space" path (no separate server link needed).
-          await api.serverCreateSpace(nm, serverId);
+          boundSpace = await api.serverCreateSpace(nm, serverId);
           await useApp.getState().reloadServerStatus();
+        } else if (space && space !== NEW_SPACE) {
+          // Bind into the specific existing Space the user picked (may differ from
+          // the link's primary Space).
+          boundSpace = space;
         }
-        // TODO(gate): serverCreateCloudVault binds to the link's primary Space;
-        // binding into a specific chosen Space needs a spaceId arg on the Rust
-        // command. Until then, an existing-Space pick other than the primary falls
-        // back to the primary Space.
-        vid = await api.serverCreateCloudVault(nm, serverId);
+        vid = await api.serverCreateCloudVault(nm, serverId, boundSpace);
         await useApp.getState().reloadVaults();
       }
       onCreated?.(vid);

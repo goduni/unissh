@@ -193,7 +193,11 @@ pub async fn server_join(
     let dn = display_name;
     let hd = handle.clone();
 
-    let (outcome, instance, session) = blocking_api(move || {
+    // Redeem the invite. This is IRREVERSIBLE — the single-use token is consumed and
+    // the account + device are created server-side. Deliberately NOT coupled with the
+    // follow-up login: a transient login failure must still leave a persisted link so
+    // the user can retry (a re-join would 409 on the now-redeemed invite).
+    let (outcome, instance) = blocking_api(move || {
         let http = client::http();
         // The join response carries only account/device/spaces; the opaque
         // instance id (link identity) comes from the public instance descriptor.
@@ -202,30 +206,43 @@ pub async fn server_join(
         // `binding_mac` is None for now — the server accepts a join without the
         // optional invite-binding proof; wiring the MAC is a later concern.
         let outcome = identity::join(http, &base, &invite_token, reg, None, dn, hd)?;
-        let session = identity::login(http, &base, &core, &outcome.account_id, &outcome.device_id)?;
-        Ok((outcome, instance, session))
+        Ok((outcome, instance))
     })
     .await?;
 
-    // Bind cloud vaults on this link to the primary granted space (first entry).
+    // Persist the link IMMEDIATELY after the irreversible join, BEFORE login, so a
+    // transient login failure leaves a recoverable ServerConfig (the Settings "Sign
+    // in" branch → server_login retries against it). Bind cloud vaults on this link
+    // to the primary granted space (first entry). Idempotent: re-joining the same
+    // server (same base_url + instance + account) reuses its existing link id (via
+    // find_by_identity) instead of minting a duplicate.
     let space_id = outcome.spaces.first().cloned().unwrap_or_default();
-    // Idempotent: re-joining the same server (same base_url + instance + account)
-    // reuses its existing link id instead of minting a duplicate.
     let server_id = state
         .cloud
         .find_by_identity(&base_url, &instance.instance_id, &outcome.account_id)
         .unwrap_or_else(new_server_id);
+    let account_id = outcome.account_id;
+    let device_id = outcome.device_id;
     state.cloud.upsert_config(ServerConfig {
         server_id: server_id.clone(),
-        base_url,
+        base_url: base_url.clone(),
         instance_id: instance.instance_id,
         space_id,
-        account_id: outcome.account_id,
-        device_id: outcome.device_id,
+        account_id: account_id.clone(),
+        device_id: device_id.clone(),
         handle,
         // Joiners are never instance owners.
         owned: false,
     })?;
+
+    // Log in. A failure here is now recoverable — the link above is persisted, so
+    // server_login (the "Sign in" recovery branch) can re-authenticate against it.
+    let core = state.core.clone();
+    let session = blocking_api(move || {
+        let http = client::http();
+        identity::login(http, &base_url, &core, &account_id, &device_id)
+    })
+    .await?;
     state
         .cloud
         .set_access_token_for(Some(&server_id), Some(session.access_token));
@@ -255,29 +272,46 @@ pub async fn server_claim(
     let hd = handle.clone();
     let sn = space_name;
 
-    let (outcome, session) = blocking_api(move || {
+    // Claim the instance. This is IRREVERSIBLE — the single-use setup code is consumed
+    // and the owner account + device + first space are created server-side (a re-claim
+    // returns 409). Deliberately NOT coupled with the follow-up login: a transient login
+    // failure must still leave a persisted link so the user can retry.
+    let outcome = blocking_api(move || {
         let http = client::http();
         let reg = core.build_registration_request().map_err(ApiError::from)?;
-        let outcome = identity::claim(http, &base, &code, reg, dn, hd, sn)?;
-        let session = identity::login(http, &base, &core, &outcome.account_id, &outcome.device_id)?;
-        Ok((outcome, session))
+        identity::claim(http, &base, &code, reg, dn, hd, sn)
     })
     .await?;
 
+    // Persist the link IMMEDIATELY after the irreversible claim, BEFORE login, so a
+    // transient login failure leaves a recoverable ServerConfig (the Settings "Sign
+    // in" branch → server_login retries against it). Idempotent: a retry reuses the
+    // existing link id (via find_by_identity) rather than minting a duplicate.
     let server_id = state
         .cloud
         .find_by_identity(&base_url, &outcome.instance_id, &outcome.account_id)
         .unwrap_or_else(new_server_id);
+    let account_id = outcome.account_id;
+    let device_id = outcome.device_id;
     state.cloud.upsert_config(ServerConfig {
         server_id: server_id.clone(),
-        base_url,
+        base_url: base_url.clone(),
         instance_id: outcome.instance_id,
         space_id: outcome.space_id,
-        account_id: outcome.account_id,
-        device_id: outcome.device_id,
+        account_id: account_id.clone(),
+        device_id: device_id.clone(),
         handle,
         owned: true, // you claimed it → your instance + first Space (owner)
     })?;
+
+    // Log in. A failure here is now recoverable — the link above is persisted, so
+    // server_login (the "Sign in" recovery branch) can re-authenticate against it.
+    let core = state.core.clone();
+    let session = blocking_api(move || {
+        let http = client::http();
+        identity::login(http, &base_url, &core, &account_id, &device_id)
+    })
+    .await?;
     state
         .cloud
         .set_access_token_for(Some(&server_id), Some(session.access_token));
@@ -569,24 +603,26 @@ pub async fn server_account_profile(
 // ---------- cloud vaults + sync ----------
 
 /// Create a cloud (server-synced) vault, BOUND 1:1 to a server (defaults to the
-/// active server) by its `space_id`. This is a LOCAL operation — the vault is
-/// marked Cloud in local storage, bound to the server's space, and propagates to
-/// THAT server on the next `server_sync_now`. Requires a linked server: with none,
-/// `require_config` errors (the UI also gates the Cloud option behind a session).
-/// Returns the vault id (hex).
+/// active server) by a `space_id`. This is a LOCAL operation — the vault is marked
+/// Cloud in local storage, bound to the chosen space, and propagates to THAT server
+/// on the next `server_sync_now`. `space_id` selects the bound space (an existing
+/// space the caller admins, or one just created); when `None` it defaults to the
+/// link's primary space. Requires a linked server: with none, `require_config` errors
+/// (the UI also gates the Cloud option behind a session). Returns the vault id (hex).
 #[tauri::command]
 pub async fn server_create_cloud_vault(
     server_id: Option<String>,
     name: String,
+    space_id: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let cfg = require_config(&state, server_id.as_deref())?;
     let core = state.core.clone();
-    blocking_api(move || {
-        core.create_cloud_vault(name, cfg.space_id)
-            .map_err(ApiError::from)
-    })
-    .await
+    // Bind to the caller-chosen space when supplied; otherwise the link's primary.
+    // The binding is a local label — the server enforces space authority at sync time
+    // via the Bearer + space membership, so a stale/foreign pick can't leak the vault.
+    let space = space_id.unwrap_or(cfg.space_id);
+    blocking_api(move || core.create_cloud_vault(name, space).map_err(ApiError::from)).await
 }
 
 /// Bind every still-unbound (legacy) cloud vault to a server's `space_id`

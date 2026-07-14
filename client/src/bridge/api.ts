@@ -589,9 +589,15 @@ export const serverAccountProfile = (
   });
 
 // ── cloud vaults + sync ────────────────────────────────────────
-// Bound 1:1 to a server (defaults to the active one) by that link's space id.
-export const serverCreateCloudVault = (name: string, serverId?: string) =>
-  invoke<string>("server_create_cloud_vault", { serverId: serverId ?? null, name });
+// Bound 1:1 to a server (defaults to the active one) by a space id. `spaceId` picks
+// the bound space (an existing space you admin, or one just created); omit it to bind
+// to the link's primary space.
+export const serverCreateCloudVault = (name: string, serverId?: string, spaceId?: string) =>
+  invoke<string>("server_create_cloud_vault", {
+    serverId: serverId ?? null,
+    name,
+    spaceId: spaceId ?? null,
+  });
 // One-time migration: bind legacy unbound cloud vaults to a server (default active).
 export const serverBindUnboundCloudVaults = (serverId?: string) =>
   invoke<number>("server_bind_unbound_cloud_vaults", { serverId: serverId ?? null });
