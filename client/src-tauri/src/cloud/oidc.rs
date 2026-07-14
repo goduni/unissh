@@ -153,9 +153,15 @@ pub fn exchange_code(
         ("client_id", client_id),
         ("code_verifier", code_verifier),
     ];
+    let body = serde_urlencoded::to_string(form)
+        .map_err(|e| ApiError::other(format!("OIDC token exchange body encode failed: {e}")))?;
     let resp = http
         .post(token_endpoint)
-        .form(&form)
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .body(body)
         .send()
         .map_err(|e| ApiError::other(format!("OIDC token exchange request failed: {e}")))?;
     let status = resp.status();
@@ -229,10 +235,7 @@ pub fn wait_for_redirect(listener: TcpListener, expected_state: &str) -> ApiResu
 /// `Some(Err(..))` on an IdP error / state mismatch, and `None` for a request that is
 /// not the callback (so the caller keeps waiting). Always writes a short HTML reply so
 /// the browser tab shows a friendly "you can close this" page.
-fn handle_connection(
-    mut stream: TcpStream,
-    expected_state: &str,
-) -> Option<ApiResult<String>> {
+fn handle_connection(mut stream: TcpStream, expected_state: &str) -> Option<ApiResult<String>> {
     // The listener runs non-blocking (for the accept-timeout loop); force the accepted
     // stream blocking so the read below honours the timeout instead of erroring EAGAIN.
     let _ = stream.set_nonblocking(false);
@@ -280,18 +283,27 @@ fn handle_connection(
     }
     // CSRF: the state must round-trip byte-for-byte.
     if state.as_deref() != Some(expected_state) {
-        respond(&mut stream, "Sign-in state mismatch. You can close this window.");
+        respond(
+            &mut stream,
+            "Sign-in state mismatch. You can close this window.",
+        );
         return Some(Err(ApiError::other(
             "SSO redirect state mismatch (possible CSRF) — sign-in aborted",
         )));
     }
     match code {
         Some(c) => {
-            respond(&mut stream, "Signed in. You can close this window and return to UniSSH.");
+            respond(
+                &mut stream,
+                "Signed in. You can close this window and return to UniSSH.",
+            );
             Some(Ok(c))
         }
         None => {
-            respond(&mut stream, "Sign-in incomplete. You can close this window.");
+            respond(
+                &mut stream,
+                "Sign-in incomplete. You can close this window.",
+            );
             Some(Err(ApiError::other(
                 "SSO redirect carried no authorization code",
             )))
