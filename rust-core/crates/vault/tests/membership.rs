@@ -1212,7 +1212,8 @@ fn member_opens_shared_vault_and_decrypts_item() {
         },
     ];
     let x_by_ed = vec![(member_ed.clone(), member_x.clone())];
-    v.establish_or_extend_membership(&owner, &members, &x_by_ed).unwrap();
+    v.establish_or_extend_membership(&owner, &members, &x_by_ed)
+        .unwrap();
     v.put_item(b"db-pw", 1, b"s3cr3t").unwrap();
 
     // The member pins the owner as the vault's genesis anchor (TOFU share-accept), then
@@ -1248,7 +1249,8 @@ fn revoked_member_cannot_open_after_rotation() {
         },
     ];
     let x_by_ed = vec![(member_ed.clone(), member_x.clone())];
-    v.establish_or_extend_membership(&owner, &members, &x_by_ed).unwrap();
+    v.establish_or_extend_membership(&owner, &members, &x_by_ed)
+        .unwrap();
     v.put_item(b"db-pw", 1, b"s3cr3t").unwrap();
     pin_and_verify_vault_anchor(&st, &vid, &owner_ed).unwrap();
 
