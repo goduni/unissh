@@ -204,19 +204,6 @@ impl Store {
             > 0)
     }
 
-    /// Number of `admin`-role members of a space — the anti-orphan guard reads this
-    /// before removing/demoting an admin (a space with no admin has no recovery path:
-    /// the instance owner is NOT auto-admin of spaces they did not create).
-    pub async fn space_admin_count(&self, space_id: &[u8]) -> AppResult<i64> {
-        Ok(self
-            .fetch_scalar_i64(
-                "SELECT COUNT(*) FROM space_members WHERE space_id = ? AND role = 'admin'",
-                vec![Val::b(space_id)],
-            )
-            .await?
-            .unwrap_or(0))
-    }
-
     /// The target account's current role in a space (`None` if not a member).
     pub async fn space_member_role(
         &self,

@@ -311,23 +311,47 @@ async fn members_remove(
     require_space_admin(&state, &space_id, auth.account_id()).await?;
     // Owner hardening: a co-admin (not the instance owner) cannot evict the instance owner.
     guard_instance_owner_eviction(&state, &account_id, auth.account_id()).await?;
-    // Anti-orphan: refuse to remove the LAST admin of a space (no recovery path).
-    if state
+    // Anti-orphan: refuse to remove the LAST admin of a space (no recovery path). Done as a
+    // single conditional DELETE so the admin-count check and the delete cannot race — a
+    // separate count-then-delete let two concurrent removals each observe 2 admins and both
+    // proceed, orphaning the space. Airtight under SQLite (writers serialize); under Postgres
+    // READ COMMITTED it narrows but does not fully close a concurrent-writer race (rare, and
+    // an orphaned space is recoverable by the instance owner).
+    match state
         .store
         .space_member_role(&space_id, &account_id)
         .await?
         .as_deref()
-        == Some("admin")
-        && state.store.space_admin_count(&space_id).await? <= 1
     {
-        return Err(AppError::forbidden(
-            "cannot remove the last admin of a space",
-        ));
+        Some("admin") => {
+            let mut tx = state.store.begin().await?;
+            let removed = tx
+                .exec(
+                    "DELETE FROM space_members WHERE space_id = ? AND account_id = ? \
+                     AND role = 'admin' AND (SELECT COUNT(*) FROM space_members \
+                     WHERE space_id = ? AND role = 'admin') > 1",
+                    vec![
+                        Val::b(space_id.as_slice()),
+                        Val::b(account_id.as_slice()),
+                        Val::b(space_id.as_slice()),
+                    ],
+                )
+                .await?;
+            tx.commit().await?;
+            if removed == 0 {
+                return Err(AppError::forbidden(
+                    "cannot remove the last admin of a space",
+                ));
+            }
+        }
+        // Non-admin member (or already absent): removal cannot orphan the admin set.
+        _ => {
+            state
+                .store
+                .space_member_remove(&space_id, &account_id)
+                .await?;
+        }
     }
-    state
-        .store
-        .space_member_remove(&space_id, &account_id)
-        .await?;
 
     // Enqueue a `revoke` per space vault the removed account can still decrypt.
     if let Some(member_ed) = state.store.account_ed(&account_id).await? {
@@ -389,27 +413,42 @@ async fn members_set_role(
     if req.role != "admin" {
         guard_instance_owner_eviction(&state, &account_id, auth.account_id()).await?;
     }
-    // Anti-orphan: refuse to demote the LAST admin of a space (no recovery path).
-    if req.role != "admin"
-        && current_role.as_deref() == Some("admin")
-        && state.store.space_admin_count(&space_id).await? <= 1
-    {
+    let now = state.now();
+    let mut tx = state.store.begin().await?;
+    // Anti-orphan: when demoting (role → non-admin), do it as a single conditional UPDATE so
+    // the last-admin check and the update cannot race (see `members_remove`). A demotion that
+    // matches no row while the target is a current admin means it was the sole admin → refuse.
+    // A promotion, or a no-op on a non-member, uses the plain UPDATE.
+    let changed = if req.role != "admin" {
+        tx.exec(
+            "UPDATE space_members SET role = ? WHERE space_id = ? AND account_id = ? \
+             AND (role != 'admin' OR (SELECT COUNT(*) FROM space_members \
+             WHERE space_id = ? AND role = 'admin') > 1)",
+            vec![
+                Val::t(req.role.as_str()),
+                Val::b(space_id.as_slice()),
+                Val::b(account_id.as_slice()),
+                Val::b(space_id.as_slice()),
+            ],
+        )
+        .await?
+    } else {
+        tx.exec(
+            "UPDATE space_members SET role = ? WHERE space_id = ? AND account_id = ?",
+            vec![
+                Val::t(req.role.as_str()),
+                Val::b(space_id.as_slice()),
+                Val::b(account_id.as_slice()),
+            ],
+        )
+        .await?
+    };
+    if req.role != "admin" && changed == 0 && current_role.as_deref() == Some("admin") {
+        tx.rollback().await?;
         return Err(AppError::forbidden(
             "cannot demote the last admin of a space",
         ));
     }
-    let now = state.now();
-    let mut tx = state.store.begin().await?;
-    // Role change (kept as the space_members UPDATE, mirroring `space_member_set_role`).
-    tx.exec(
-        "UPDATE space_members SET role = ? WHERE space_id = ? AND account_id = ?",
-        vec![
-            Val::t(req.role.as_str()),
-            Val::b(space_id.as_slice()),
-            Val::b(account_id.as_slice()),
-        ],
-    )
-    .await?;
     // Mirror join step-6 (idempotent) so a member transitioned via the role endpoint holds
     // the space's space_wide grants. Only a real member is granted — a role change on a
     // non-member is a no-op UPDATE and enqueues nothing.
