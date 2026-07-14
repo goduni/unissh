@@ -24,8 +24,11 @@ export function InviteModal() {
 
   // The invite is scoped to a SPACE the caller admins (v2). The invitee joins that
   // space with the token; the server resolves the space from the token's intents.
+  // Filter to spaces the caller ADMINS — the server rejects an invite into a space
+  // the caller only belongs to (403), so member-only spaces must not be offered
+  // (mirrors the Spaces "Add member" gate).
   const spaces = useAsync(() => api.spaces.list(), [open]);
-  const spaceList = spaces.data?.spaces ?? [];
+  const spaceList = (spaces.data?.spaces ?? []).filter((s) => s.role === "admin");
 
   const [spaceId, setSpaceId] = useState("");
   const [role, setRole] = useState<(typeof ROLES)[number]>("member");
