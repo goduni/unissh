@@ -307,6 +307,35 @@ impl Store {
         .await
     }
 
+    // ---- OIDC id_token one-time / replay guard (Phase 5) ----
+
+    /// Consume an id_token's one-time id inside the callback transaction. `key` is the
+    /// token's `jti` claim (or a hash of the token when `jti` is absent) and `exp` is
+    /// the token expiry. Returns `true` if it was newly recorded, `false` if it was
+    /// ALREADY present (a replay). Because the insert rides the callback tx, a failed /
+    /// rolled-back login does NOT burn the token (the row disappears with the rollback).
+    pub async fn oidc_consume_jti(&self, tx: &mut Tx<'_>, key: &str, exp: i64) -> AppResult<bool> {
+        let n = tx
+            .exec(
+                "INSERT INTO oidc_used_jti (jti, exp) VALUES (?, ?) \
+                 ON CONFLICT (jti) DO NOTHING",
+                vec![Val::t(key), Val::I(exp)],
+            )
+            .await?;
+        Ok(n == 1)
+    }
+
+    /// Opportunistically drop consumed-id_token rows whose token has already expired
+    /// (they can never be replayed past `exp` anyway, so the guard stays bounded).
+    pub async fn oidc_prune_expired_jti(&self, tx: &mut Tx<'_>, now: i64) -> AppResult<()> {
+        tx.exec(
+            "DELETE FROM oidc_used_jti WHERE exp < ?",
+            vec![Val::I(now)],
+        )
+        .await?;
+        Ok(())
+    }
+
     // ---- PAKE relay (§4.12) ----
 
     pub async fn relay_open(&self, channel_id: &[u8], expires_at: i64, now: i64) -> AppResult<()> {

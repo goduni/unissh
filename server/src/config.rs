@@ -144,6 +144,43 @@ pub struct OidcConfig {
     pub max_reassertion_age_seconds: i64,
 }
 
+impl OidcConfig {
+    /// Validate the config at LOAD time so the per-login callback path is INFALLIBLE:
+    /// a single malformed `group_map[].space_id` (bad base64) or an unknown `role`
+    /// would otherwise fail — or silently mis-provision — EVERY SSO login (the
+    /// `ids::unb64`/role handling runs inside the per-login loop). Failing fast at
+    /// startup surfaces the operator's typo immediately instead of at first login.
+    pub fn validate(&self) -> Result<(), String> {
+        use base64::Engine;
+        for (i, gm) in self.group_map.iter().enumerate() {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(gm.space_id.as_bytes())
+                .map_err(|_| {
+                    format!(
+                        "oidc.group_map[{i}].space_id is not valid base64: {:?}",
+                        gm.space_id
+                    )
+                })?;
+            // Every space_id in this system is a 16-byte id (`ids::random_id16`); a
+            // different length is certainly a config typo.
+            if bytes.len() != 16 {
+                return Err(format!(
+                    "oidc.group_map[{i}].space_id must decode to a 16-byte space id (got {} bytes)",
+                    bytes.len()
+                ));
+            }
+            // The space-membership role set (server-trusted): 'member' | 'admin'.
+            if gm.role != "member" && gm.role != "admin" {
+                return Err(format!(
+                    "oidc.group_map[{i}].role must be 'member' or 'admin', got {:?}",
+                    gm.role
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Default for OidcConfig {
     fn default() -> Self {
         Self {
@@ -280,7 +317,14 @@ impl Config {
             }
         }
         fig = fig.merge(Env::prefixed("UNISSH__").split("__"));
-        fig.extract().map_err(Box::new)
+        let config: Config = fig.extract().map_err(Box::new)?;
+        // Fail fast on a bad OIDC group_map so no per-login SSO path can be broken by
+        // one malformed entry (see `OidcConfig::validate`).
+        config
+            .oidc
+            .validate()
+            .map_err(|msg| Box::new(figment::Error::from(msg)))?;
+        Ok(config)
     }
 
     pub fn is_sqlite(&self) -> bool {
@@ -288,5 +332,65 @@ impl Config {
     }
     pub fn is_postgres(&self) -> bool {
         self.db.backend.eq_ignore_ascii_case("postgres")
+    }
+}
+
+#[cfg(test)]
+mod oidc_validate_tests {
+    use super::{GroupMap, OidcConfig};
+    use base64::Engine;
+
+    fn gm(space_id: &str, role: &str) -> GroupMap {
+        GroupMap {
+            group: "eng".into(),
+            space_id: space_id.into(),
+            role: role.into(),
+        }
+    }
+
+    fn b64_16() -> String {
+        base64::engine::general_purpose::STANDARD.encode([0x5au8; 16])
+    }
+
+    #[test]
+    fn empty_group_map_is_valid() {
+        assert!(OidcConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn valid_entry_passes() {
+        let c = OidcConfig {
+            group_map: vec![gm(&b64_16(), "member"), gm(&b64_16(), "admin")],
+            ..Default::default()
+        };
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn bad_base64_space_id_fails() {
+        let c = OidcConfig {
+            group_map: vec![gm("not base64!!", "member")],
+            ..Default::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn wrong_length_space_id_fails() {
+        let short = base64::engine::general_purpose::STANDARD.encode([0u8; 8]);
+        let c = OidcConfig {
+            group_map: vec![gm(&short, "member")],
+            ..Default::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn unknown_role_fails() {
+        let c = OidcConfig {
+            group_map: vec![gm(&b64_16(), "superuser")],
+            ..Default::default()
+        };
+        assert!(c.validate().is_err());
     }
 }

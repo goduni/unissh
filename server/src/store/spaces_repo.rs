@@ -11,6 +11,11 @@ struct RoleOnly {
     role: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct SpaceIdOnly {
+    space_id: Vec<u8>,
+}
+
 impl Store {
     pub async fn create_space(
         &self,
@@ -53,6 +58,9 @@ impl Store {
         .await
     }
 
+    /// Add a MANUAL membership (invite redemption / direct add / space creation).
+    /// Writes `source = 'manual'` explicitly so the OIDC de-provisioning reconciler
+    /// never removes or overrides it (it only touches `source = 'oidc'` rows).
     pub async fn space_member_add(
         &self,
         tx: &mut Tx<'_>,
@@ -63,8 +71,8 @@ impl Store {
         now: i64,
     ) -> AppResult<()> {
         tx.exec(
-            "INSERT INTO space_members (space_id, account_id, role, added_by, added_at) \
-             VALUES (?, ?, ?, ?, ?) ON CONFLICT (space_id, account_id) DO NOTHING",
+            "INSERT INTO space_members (space_id, account_id, role, added_by, added_at, source) \
+             VALUES (?, ?, ?, ?, ?, 'manual') ON CONFLICT (space_id, account_id) DO NOTHING",
             vec![
                 Val::b(space_id),
                 Val::b(account_id),
@@ -72,6 +80,71 @@ impl Store {
                 Val::OptB(added_by.map(|b| b.to_vec())),
                 Val::I(now),
             ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Upsert an OIDC-sourced membership (Phase 5 group→space mapping). Sets
+    /// `source = 'oidc'` and the mapped `role`; on an existing OIDC row it UPDATES the
+    /// role (so a role change in the IdP token is reflected on reassertion). The
+    /// `WHERE space_members.source = 'oidc'` guard on the conflict path means a MANUAL
+    /// row for the same (space, account) is left completely untouched — OIDC never
+    /// overrides a manually-granted membership.
+    pub async fn space_member_upsert_oidc(
+        &self,
+        tx: &mut Tx<'_>,
+        space_id: &[u8],
+        account_id: &[u8],
+        role: &str,
+        now: i64,
+    ) -> AppResult<()> {
+        tx.exec(
+            "INSERT INTO space_members (space_id, account_id, role, added_by, added_at, source) \
+             VALUES (?, ?, ?, ?, ?, 'oidc') \
+             ON CONFLICT (space_id, account_id) \
+             DO UPDATE SET role = excluded.role WHERE space_members.source = 'oidc'",
+            vec![
+                Val::b(space_id),
+                Val::b(account_id),
+                Val::t(role),
+                Val::OptB(None),
+                Val::I(now),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// The space_ids of this account's OIDC-sourced memberships — the reconciler reads
+    /// this to compute which OIDC grants to de-provision (those no longer in the token).
+    pub async fn list_oidc_member_spaces(
+        &self,
+        tx: &mut Tx<'_>,
+        account_id: &[u8],
+    ) -> AppResult<Vec<Vec<u8>>> {
+        let rows = tx
+            .fetch_all_as::<SpaceIdOnly>(
+                "SELECT space_id FROM space_members WHERE account_id = ? AND source = 'oidc'",
+                vec![Val::b(account_id)],
+            )
+            .await?;
+        Ok(rows.into_iter().map(|r| r.space_id).collect())
+    }
+
+    /// Delete a single OIDC-sourced membership (never a manual one — the `source`
+    /// predicate guarantees a manually-granted row survives). Used to de-provision an
+    /// account from a space it was dropped from in the IdP.
+    pub async fn delete_oidc_member(
+        &self,
+        tx: &mut Tx<'_>,
+        space_id: &[u8],
+        account_id: &[u8],
+    ) -> AppResult<()> {
+        tx.exec(
+            "DELETE FROM space_members \
+             WHERE space_id = ? AND account_id = ? AND source = 'oidc'",
+            vec![Val::b(space_id), Val::b(account_id)],
         )
         .await?;
         Ok(())

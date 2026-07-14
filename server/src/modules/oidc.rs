@@ -137,6 +137,21 @@ async fn oidc_callback(
     // 5. ONE transaction: account (new only) + device + memberships all roll back
     //    together if anything fails (mirrors claim/join).
     let mut tx = state.store.begin().await?;
+
+    // 5a. id_token one-time / replay guard. The nonce is deterministic (a key-binding,
+    //     not a freshness token) and nothing else consumes the id_token, so a captured
+    //     full callback body is otherwise replayable until `exp`. Key on the `jti`
+    //     claim, or a hash of the token when absent, and reject a second use (401).
+    //     Inside the tx: a login that later fails/rolls back does NOT burn the token.
+    let jti_key = match claims.jti.as_deref() {
+        Some(j) if !j.is_empty() => j.to_string(),
+        _ => format!("h:{}", ids::b64(&ids::sha256(req.id_token.as_bytes()))),
+    };
+    state.store.oidc_prune_expired_jti(&mut tx, now).await?;
+    if !state.store.oidc_consume_jti(&mut tx, &jti_key, claims.exp).await? {
+        return Err(AppError::unauthenticated("id_token already used"));
+    }
+
     if is_new {
         tx.create_account(
             &account_id,
@@ -162,21 +177,46 @@ async fn oidc_callback(
     )
     .await?;
 
-    // 6. Group → space mapping. For each configured GroupMap whose `group` appears in
-    //    the token's groups claim, add an (idempotent) membership. Unmapped/no groups
-    //    → the account still exists, just with no memberships.
+    // 6. Group → space mapping, RECONCILED against the token (not merely additive).
+    //    Compute the DESIRED {(space_id, role)} set from this token's groups, then:
+    //      * upsert each as `source='oidc'` (updating the role if the IdP changed it),
+    //      * DELETE the account's `source='oidc'` memberships NOT in the desired set,
+    //    so a user dropped from an IdP group loses that space on reassertion. Manual
+    //    (`source='manual'`) memberships — invite / direct-add — are NEVER touched.
+    //    Each `group_map[].space_id` / `role` was validated at config load, so the
+    //    per-login path can't be broken by one bad entry (the `unb64` is defensive).
+    let mut desired: Vec<(Vec<u8>, String)> = Vec::new();
     let mut spaces: Vec<String> = Vec::new();
     for gm in &config.group_map {
         if !claims.groups.iter().any(|g| g == &gm.group) {
             continue;
         }
         let space_id = ids::unb64(&gm.space_id)?;
-        state
-            .store
-            .space_member_add(&mut tx, &space_id, &account_id, &gm.role, None, now)
-            .await?;
+        // First mapping for a space wins its role (matches the prior insert-first-wins).
+        if !desired.iter().any(|(s, _)| *s == space_id) {
+            desired.push((space_id, gm.role.clone()));
+        }
         if !spaces.contains(&gm.space_id) {
             spaces.push(gm.space_id.clone());
+        }
+    }
+    for (space_id, role) in &desired {
+        state
+            .store
+            .space_member_upsert_oidc(&mut tx, space_id, &account_id, role, now)
+            .await?;
+    }
+    // De-provision: any prior oidc membership no longer mapped by this token is removed.
+    for existing in state
+        .store
+        .list_oidc_member_spaces(&mut tx, &account_id)
+        .await?
+    {
+        if !desired.iter().any(|(s, _)| *s == existing) {
+            state
+                .store
+                .delete_oidc_member(&mut tx, &existing, &account_id)
+                .await?;
         }
     }
 
@@ -225,17 +265,48 @@ struct VerifiedClaims {
     nonce: Option<String>,
     name: Option<String>,
     groups: Vec<String>,
+    /// The token's expiry (validated present + in-future by `decode`). Bounds how long
+    /// the replay-guard row must be kept.
+    exp: i64,
+    /// The token's `jti` (one-time id) claim, if present. Keys the replay guard; a
+    /// token without a `jti` is keyed on a hash of the token instead.
+    jti: Option<String>,
 }
 
-/// TTL of a cached JWK (bounds staleness when an IdP rotates a key *under the same
-/// kid*; a rotation to a NEW kid is picked up immediately via cache-miss refetch).
+/// TTL of a POSITIVE cached JWK (bounds staleness when an IdP rotates a key *under the
+/// same kid*; a rotation to a NEW kid is picked up on the next cache-miss refetch).
 const JWKS_TTL_SECONDS: i64 = 3600;
 
-/// Cache-miss refetch keyed by `"{jwks_url}\n{kid}"`. Storing the parsed `Jwk` (not a
-/// `DecodingKey`) keeps the entry cheaply cloneable and rebuilds the key per request.
-/// Keying by the full jwks_url isolates distinct issuers/mock-servers from each other.
-fn jwks_cache() -> &'static Mutex<HashMap<String, (Jwk, i64)>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, (Jwk, i64)>>> = OnceLock::new();
+/// TTL of a NEGATIVE cache entry (an unresolved kid, or a kid-less token against a
+/// multi-key set). Short, so a genuinely new key is picked up within a minute, but
+/// non-zero so a token with an absent/unknown `kid` does NOT trigger a JWKS refetch on
+/// EVERY request (pre-verify outbound-fetch amplification). Without this, a stream of
+/// kid-less or bogus-kid tokens would refetch the JWKS unboundedly before any signature
+/// check even runs.
+const JWKS_NEG_TTL_SECONDS: i64 = 60;
+
+/// Cache-key suffix for a KID-LESS token (its header carried no `kid`). Resolution for
+/// such a token is "the sole key iff the set has exactly one"; caching it under this
+/// fixed sentinel means a kid-less login is served from cache like any kid'd one,
+/// instead of refetching the JWKS every time. `\n` matches the `{url}\n{kid}` scheme
+/// and the sentinel body can't collide with a real base64url/opaque kid.
+const NOKID_SENTINEL: &str = "\u{0}__nokid__";
+
+/// A cached JWKS resolution for one (jwks_url, kid|sentinel) key: either the selected
+/// key, or a short-lived NEGATIVE result (no such key). Boxed `Jwk` keeps the enum
+/// small (avoids `clippy::large_enum_variant`).
+enum Resolution {
+    Found(Box<Jwk>),
+    Unresolved,
+}
+
+/// Cache-miss refetch keyed by `"{jwks_url}\n{kid|sentinel}"`. Storing the parsed `Jwk`
+/// (not a `DecodingKey`) keeps the entry cheaply cloneable and rebuilds the key per
+/// request. Keying by the full jwks_url isolates distinct issuers/mock-servers, and by
+/// the kid (or the kid-less sentinel) lets BOTH positive and negative resolutions be
+/// cached so no path refetches the JWKS on every request.
+fn jwks_cache() -> &'static Mutex<HashMap<String, (Resolution, i64)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (Resolution, i64)>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -319,48 +390,75 @@ fn key_algorithms(jwk: &Jwk) -> AppResult<Vec<Algorithm>> {
     }
 }
 
-/// Resolve the signing `Jwk` for `kid`: serve a fresh cache entry, else fetch the JWKS
-/// (over TLS, no redirects), repopulate the cache, and select the key. Never holds the
-/// cache mutex across the network await.
+/// Resolve the signing `Jwk` for `kid` (or the sole key when the token carried no
+/// `kid`): serve a fresh cache entry — POSITIVE *or* NEGATIVE — else fetch the JWKS
+/// (over TLS, no redirects) exactly once, repopulate the cache, select the key, and
+/// cache the resolution. Both the kid-less path and an unknown kid are cached, so
+/// neither refetches the JWKS on every request. Never holds the cache mutex across the
+/// network await.
 async fn resolve_jwk(config: &OidcConfig, now: i64, kid: Option<&str>) -> AppResult<Jwk> {
     let jwks_url = resolve_jwks_url(config);
-    let cache_key = |kid: &str| format!("{jwks_url}\n{kid}");
+    // The concrete kid, or a fixed sentinel for a kid-less token — so the kid-less
+    // resolution is cached under a stable key instead of refetching each time.
+    let ck = match kid {
+        Some(k) => format!("{jwks_url}\n{k}"),
+        None => format!("{jwks_url}\n{NOKID_SENTINEL}"),
+    };
 
-    if let Some(kid) = kid {
-        let ck = cache_key(kid);
-        let mut guard = jwks_cache().lock().unwrap_or_else(|e| e.into_inner());
-        // Clone out first (ending the borrow) so we can evict a stale entry below.
-        let hit = match guard.get(&ck) {
-            Some((jwk, ts)) if now.saturating_sub(*ts) < JWKS_TTL_SECONDS => Some(jwk.clone()),
-            _ => None,
-        };
-        match hit {
-            Some(jwk) => return Ok(jwk),
-            None => {
-                // Absent or stale → drop it; the refetch below repopulates the cache.
-                guard.remove(&ck);
+    // 1. Serve a fresh cache entry (positive or negative) with NO network I/O.
+    {
+        let guard = jwks_cache().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((entry, ts)) = guard.get(&ck) {
+            let ttl = match entry {
+                Resolution::Found(_) => JWKS_TTL_SECONDS,
+                Resolution::Unresolved => JWKS_NEG_TTL_SECONDS,
+            };
+            if now.saturating_sub(*ts) < ttl {
+                return match entry {
+                    Resolution::Found(jwk) => Ok((**jwk).clone()),
+                    Resolution::Unresolved => Err(AppError::unauthenticated("invalid id_token")),
+                };
             }
         }
     }
 
+    // 2. Cache miss/stale → fetch the JWKS once, then repopulate + cache this request's
+    //    resolution (positive or negative) so a repeat is served from cache.
     let set = fetch_jwks(&jwks_url).await?;
+    let selected = select_key(&set, kid).cloned();
     {
         let mut guard = jwks_cache().lock().unwrap_or_else(|e| e.into_inner());
+        // Refresh every kid'd key present in the fetched set.
         for k in &set.keys {
             if let Some(id) = &k.common.key_id {
-                guard.insert(cache_key(id), (k.clone(), now));
+                guard.insert(
+                    format!("{jwks_url}\n{id}"),
+                    (Resolution::Found(Box::new(k.clone())), now),
+                );
             }
         }
+        // Cache THIS request's resolution under its (kid or sentinel) key. A negative
+        // result is remembered under a short TTL so a repeat doesn't refetch.
+        let entry = match &selected {
+            Some(jwk) => Resolution::Found(Box::new(jwk.clone())),
+            None => Resolution::Unresolved,
+        };
+        guard.insert(ck, (entry, now));
     }
-    select_key(&set, kid)
-        .cloned()
-        .ok_or_else(|| AppError::unauthenticated("invalid id_token"))
+    selected.ok_or_else(|| AppError::unauthenticated("invalid id_token"))
 }
 
+/// Hard cap on the JWKS response body. A real JWKS is a few keys (single-digit KiB);
+/// 1 MiB is comfortably above any legitimate document while bounding a compromised-
+/// but-config-trusted IdP that returns an enormous body. The request timeout is a TIME
+/// bound, NOT a size bound — `resp.json()`/`resp.bytes()` would buffer the whole body.
+const MAX_JWKS_BYTES: usize = 1024 * 1024;
+
 /// Fetch + parse the JWKS. Any transport/parse failure is logged server-side but
-/// surfaced to the caller as the uniform "invalid id_token" (no detail leak).
+/// surfaced to the caller as the uniform "invalid id_token" (no detail leak). The body
+/// is read with a MAX-byte limit before deserializing (DoS via an oversized body).
 async fn fetch_jwks(url: &str) -> AppResult<JwkSet> {
-    let resp = http_client().get(url).send().await.map_err(|e| {
+    let mut resp = http_client().get(url).send().await.map_err(|e| {
         tracing::warn!(error = %e, "oidc: JWKS fetch failed");
         AppError::unauthenticated("invalid id_token")
     })?;
@@ -368,7 +466,24 @@ async fn fetch_jwks(url: &str) -> AppResult<JwkSet> {
         tracing::warn!(status = %resp.status(), "oidc: JWKS fetch non-success");
         return Err(AppError::unauthenticated("invalid id_token"));
     }
-    resp.json::<JwkSet>().await.map_err(|e| {
+    // Fast reject on an advertised oversized length, then enforce the cap while reading
+    // (a missing/lying Content-Length can't bypass the streamed byte-count check).
+    if resp.content_length().is_some_and(|len| len > MAX_JWKS_BYTES as u64) {
+        tracing::warn!("oidc: JWKS Content-Length exceeds cap");
+        return Err(AppError::unauthenticated("invalid id_token"));
+    }
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(bytes) = resp.chunk().await.map_err(|e| {
+        tracing::warn!(error = %e, "oidc: JWKS body read failed");
+        AppError::unauthenticated("invalid id_token")
+    })? {
+        if body.len() + bytes.len() > MAX_JWKS_BYTES {
+            tracing::warn!("oidc: JWKS body exceeds cap");
+            return Err(AppError::unauthenticated("invalid id_token"));
+        }
+        body.extend_from_slice(&bytes);
+    }
+    serde_json::from_slice::<JwkSet>(&body).map_err(|e| {
         tracing::warn!(error = %e, "oidc: JWKS parse failed");
         AppError::unauthenticated("invalid id_token")
     })
@@ -434,6 +549,16 @@ async fn verify_id_token(
         .get("name")
         .and_then(|v| v.as_str())
         .map(String::from);
+    // `exp` is required + validated in-future by `decode`; read it back to bound the
+    // replay-guard row. `jti` is optional (keys the replay guard when present).
+    let exp = claims
+        .get("exp")
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
+        .ok_or_else(|| AppError::unauthenticated("invalid id_token"))?;
+    let jti = claims
+        .get("jti")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     // The groups claim name is operator-configured; read it out of the raw claims.
     let groups = claims
         .get(config.groups_claim.as_str())
@@ -451,5 +576,7 @@ async fn verify_id_token(
         nonce,
         name,
         groups,
+        exp,
+        jti,
     })
 }

@@ -161,7 +161,14 @@ fn sign_token(pem: &str, claims: &serde_json::Value) -> String {
 }
 
 /// A well-formed claim set: valid `exp` (real-now + 1h), the given `nonce`, groups
-/// `["eng"]`, `aud = CLIENT_ID`, `iss = ISSUER`. Individual tests override fields.
+/// `["eng"]`, `aud = CLIENT_ID`, `iss = ISSUER`, and a UNIQUE `jti`. Individual tests
+/// override fields.
+///
+/// The unique `jti` matters because RS256 (PKCS#1 v1.5) is deterministic, so two tokens
+/// with identical claims are byte-identical — and the callback's one-time / replay guard
+/// keys on `jti` (or a hash of the token). A distinct `jti` per token keeps the normal
+/// two-callback flows (reuse-account, reassertion) from tripping the replay guard; the
+/// dedicated replay test posts the SAME token twice on purpose.
 fn base_claims(nonce: &str) -> serde_json::Value {
     let now = real_now();
     serde_json::json!({
@@ -173,6 +180,7 @@ fn base_claims(nonce: &str) -> serde_json::Value {
         "name": "Alice Example",
         "nonce": nonce,
         "groups": ["eng"],
+        "jti": ids::b64(&ids::random_bytes32()),
     })
 }
 
@@ -498,6 +506,140 @@ async fn reassertion_gate_blocks_stale_refresh_then_fresh_callback_works() {
         .await
         .unwrap();
     assert_eq!(who.status(), 200, "the re-minted session authenticates");
+}
+
+// ---- (h) group→space de-provisioning + manual survival + role update ---------------
+
+/// Boot with a THREE-entry group_map over two spaces (A mapped at both `member` and
+/// `admin` via distinct groups, B at `member`) and materialize spaces A/B/C so a manual
+/// membership can be seeded in C.
+async fn boot_reconcile() -> (common::TestApp, [u8; 16], [u8; 16], [u8; 16]) {
+    let jwks_url = spawn_jwks().await;
+    let space_a = [0xa1u8; 16];
+    let space_b = [0xb2u8; 16];
+    let space_c = [0xc3u8; 16];
+    let (a_b64, b_b64) = (ids::b64(&space_a), ids::b64(&space_b));
+    let app = common::spawn_with(move |cfg| {
+        cfg.oidc.enabled = true;
+        cfg.oidc.issuer = ISSUER.into();
+        cfg.oidc.client_id = CLIENT_ID.into();
+        cfg.oidc.audience = String::new();
+        cfg.oidc.jwks_url = jwks_url;
+        cfg.oidc.groups_claim = "groups".into();
+        cfg.oidc.group_map = vec![
+            GroupMap {
+                group: "a".into(),
+                space_id: a_b64.clone(),
+                role: "member".into(),
+            },
+            GroupMap {
+                group: "a-admin".into(),
+                space_id: a_b64,
+                role: "admin".into(),
+            },
+            GroupMap {
+                group: "b".into(),
+                space_id: b_b64,
+                role: "member".into(),
+            },
+        ];
+        cfg.oidc.max_reassertion_age_seconds = 604_800;
+    })
+    .await;
+
+    let now = app.now();
+    let mut tx = app.state.store.begin().await.unwrap();
+    for (id, name) in [(&space_a, "A"), (&space_b, "B"), (&space_c, "C")] {
+        app.state
+            .store
+            .create_space(&mut tx, id, name, None, now)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    (app, space_a, space_b, space_c)
+}
+
+#[tokio::test]
+async fn oidc_deprovisions_dropped_groups_updates_role_and_keeps_manual() {
+    let (app, space_a, space_b, space_c) = boot_reconcile().await;
+    let id = common::make_identity();
+
+    // 1. Token groups {a, b} → oidc member of A and B.
+    let mut claims = base_claims(&nonce_for(&id));
+    claims["groups"] = serde_json::json!(["a", "b"]);
+    let r1 = post_callback(&app, &sign_token(SIGNING_PEM, &claims), &id).await;
+    assert_eq!(r1.status(), 201, "first callback creates the SSO account");
+    let b1: serde_json::Value = r1.json().await.unwrap();
+    let account_id = ids::unb64(b1["account_id"].as_str().unwrap()).unwrap();
+
+    async fn role(app: &common::TestApp, space: &[u8], account_id: &[u8]) -> Option<String> {
+        app.state
+            .store
+            .space_member_role(space, account_id)
+            .await
+            .unwrap()
+    }
+    assert_eq!(
+        role(&app, &space_a, &account_id).await.as_deref(),
+        Some("member"),
+        "member of A"
+    );
+    assert_eq!(
+        role(&app, &space_b, &account_id).await.as_deref(),
+        Some("member"),
+        "member of B"
+    );
+
+    // 2. A pre-existing MANUAL membership in C (invite / direct-add) must survive both
+    //    callbacks — the oidc reconciler only ever touches source='oidc' rows.
+    let now = app.now();
+    let mut tx = app.state.store.begin().await.unwrap();
+    app.state
+        .store
+        .space_member_add(&mut tx, &space_c, &account_id, "member", None, now)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    // 3. Re-callback with groups {a-admin} only → B dropped, A kept + role bumped to
+    //    admin, C (manual) untouched.
+    let mut claims2 = base_claims(&nonce_for(&id));
+    claims2["groups"] = serde_json::json!(["a-admin"]);
+    let r2 = post_callback(&app, &sign_token(SIGNING_PEM, &claims2), &id).await;
+    assert_eq!(r2.status(), 200, "returning identity reuses the account");
+
+    assert_eq!(
+        role(&app, &space_a, &account_id).await.as_deref(),
+        Some("admin"),
+        "A kept, its oidc role updated member→admin on reassertion"
+    );
+    assert!(
+        role(&app, &space_b, &account_id).await.is_none(),
+        "B (oidc) de-provisioned once its group was dropped from the token"
+    );
+    assert_eq!(
+        role(&app, &space_c, &account_id).await.as_deref(),
+        Some("member"),
+        "the manual membership in C survives both callbacks"
+    );
+}
+
+// ---- (i) id_token replay guard -----------------------------------------------------
+
+#[tokio::test]
+async fn replayed_id_token_is_rejected() {
+    let app = boot().await;
+    let id = common::make_identity();
+    let token = sign_token(SIGNING_PEM, &base_claims(&nonce_for(&id)));
+
+    let r1 = post_callback(&app, &token, &id).await;
+    assert_eq!(r1.status(), 201, "first use of the id_token creates the account");
+
+    // The SAME token replayed (a captured callback body) → 401: the id_token is
+    // one-time, so a stolen-then-replayed body cannot re-authenticate.
+    let r2 = post_callback(&app, &token, &id).await;
+    assert_eq!(r2.status(), 401, "a replayed id_token is rejected");
 }
 
 // ---- oidc disabled → the surface does not exist (404) ------------------------------
