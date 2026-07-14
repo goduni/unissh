@@ -33,6 +33,7 @@ import {
 } from "@/bridge/types";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { writeSecretToClipboard } from "@/bridge/clipboard";
+import { readSecretKeyOnce } from "@/bridge/secretKey";
 import { getVersion } from "@tauri-apps/api/app";
 import { platform, version as osVersion } from "@tauri-apps/plugin-os";
 import { useTranslation, setLang, currentLang, tDyn, LANGS, LANG_LABELS } from "@/i18n";
@@ -1233,7 +1234,17 @@ async function pullCloudVaultsAfterConnect(): Promise<void> {
 // instanceInfo → an UNCLAIMED instance is set up with a setup code (you become its
 // owner); a CLAIMED instance is joined with an invite link, or signed in to with
 // your existing account keyset.
-function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => void }) {
+function CloudConnectForm({
+  onConnected,
+  onArm,
+}: {
+  onConnected: (s: ServerStatus) => void;
+  // Fired ONLY on a fresh claim/join (not on sign-in / reconnect / SSO, which
+  // recover an already-escrowed identity): the parent arms this identity's keyset
+  // escrow so it can sign in from other devices. Kept separate from onConnected so
+  // the recovery/reconnect paths never re-run it.
+  onArm?: (s: ServerStatus) => void;
+}) {
   const p = usePalette();
   const { t } = useTranslation();
   // Persisted links — the "Reconnect" segment only makes sense when THIS instance is
@@ -1326,6 +1337,7 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
       });
       toast(t("serverCloud.claimed"), "ok");
       onConnected(status);
+      onArm?.(status);
     } catch (e) {
       toast(apiErrorMessage(e), "err");
       setBusy(false);
@@ -1343,6 +1355,7 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
       const status = await api.serverJoin(baseUrl.trim(), inviteToken.trim(), optProfile());
       toast(t("serverCloud.registered"), "ok");
       onConnected(status);
+      onArm?.(status);
     } catch (e) {
       toast(apiErrorMessage(e), "err");
       setBusy(false);
@@ -2142,6 +2155,107 @@ function CloudProfileForm({ status, onClose }: { status: ServerStatus; onClose: 
   );
 }
 
+// Inline "enable sign-in on your other devices" step shown right after a claim/join
+// when we can't arm the escrow silently (a master-password account, or a passwordless
+// account whose Secret Key isn't in the keychain). Arming uploads the encrypted keyset
+// + the escrow K_auth derived from (master password?, Secret Key), so the SAME identity
+// can later sign in from the admin panel or another client by handle + Secret Key.
+// The password field appears ONLY for master-password accounts (`requiresPassword !==
+// false`); a passwordless account is armed with password=null. Idempotent — re-arming
+// just re-uploads. Zero-knowledge: the password + Secret Key go straight to the Rust
+// command; never logged, never persisted, cleared once the step closes.
+function ArmEscrowForm({
+  serverId,
+  prefillKey,
+  onClose,
+}: {
+  serverId: string | null;
+  prefillKey?: string;
+  onClose: () => void;
+}) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  // `requiresPassword === false` is the strict "passwordless" signal used across
+  // Settings (see startupDisabled); anything else keeps the password field so a
+  // master-password account is never armed without its password.
+  const usesPassword = useApp((s) => s.requiresPassword) !== false;
+  const [password, setPassword] = useState("");
+  const [secretKey, setSecretKey] = useState(prefillKey ?? "");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (busy) return;
+    if (!secretKey.trim()) {
+      toast(t("serverCloud.fillSecretKey"), "warn");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.serverKeysetPush(
+        usesPassword && password ? password : null,
+        secretKey.replace(/[\s-]/g, ""),
+        serverId ?? undefined,
+      );
+      toast(t("serverCloud.armEscrowDone"), "ok");
+      setPassword("");
+      setSecretKey("");
+      onClose();
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+      style={{
+        marginTop: 12,
+        padding: 16,
+        borderRadius: 13,
+        border: `1px solid ${p.line2}`,
+        background: p.bg1,
+        display: "flex",
+        flexDirection: "column",
+        gap: 11,
+      }}
+    >
+      <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t("serverCloud.armEscrowFormTitle")}</div>
+      <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+        {t("serverCloud.armEscrowHint")}
+      </div>
+      {usesPassword && (
+        <ConnectField
+          label={t("serverCloud.armEscrowPasswordLabel")}
+          value={password}
+          onChange={setPassword}
+          placeholder={t("serverCloud.armEscrowPasswordPlaceholder")}
+          type="password"
+        />
+      )}
+      <ConnectField
+        label={t("serverCloud.armEscrowSecretKeyLabel")}
+        value={secretKey}
+        onChange={setSecretKey}
+        placeholder={t("serverCloud.armEscrowSecretKeyPlaceholder")}
+        type="password"
+        mono
+      />
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <Btn variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+          {t("common.cancel")}
+        </Btn>
+        <Btn size="sm" icon="shieldcheck" onClick={submit} disabled={busy}>
+          {t("serverCloud.armEscrowSubmit")}
+        </Btn>
+      </div>
+    </form>
+  );
+}
+
 // Audit log subsection — admin-only; tolerate a forbidden error gracefully.
 function CloudAuditLog() {
   const p = usePalette();
@@ -2725,6 +2839,13 @@ function SettingsCloud() {
   const [pairing, setPairing] = useState(false);
   // The "Add server" form is a persistent entry below the linked-server list.
   const [addingServer, setAddingServer] = useState(false);
+  // Post-claim/join "enable sign-in on other devices" step: set when we couldn't arm
+  // the escrow silently (master-password account, or a passwordless account with no
+  // keychain Secret Key) → we render the inline ArmEscrowForm, Secret Key pre-filled
+  // when we could read it. Null once armed or dismissed.
+  const [armPrompt, setArmPrompt] = useState<{ serverId: string | null; prefillKey: string } | null>(
+    null,
+  );
 
   // Refresh server status whenever the Cloud section mounts.
   useEffect(() => {
@@ -2733,6 +2854,38 @@ function SettingsCloud() {
   }, []);
 
   const currentVault = vaults.find((v) => v.vaultId === vaultId);
+
+  // Make a freshly claimed/joined identity recoverable on OTHER devices out of the
+  // box, without extra work for the user. A passwordless account arms fully
+  // automatically from the keychain Secret Key (the same value Settings → Security
+  // reveals) with password=null — zero prompts. A master-password account can't
+  // retain the plaintext password, so we surface a one-time inline step (Secret Key
+  // pre-filled from the keychain; the user types the password once). Non-blocking:
+  // the claim/join already succeeded. Zero-knowledge: the Secret Key only rides the
+  // process cache the keychain already primed; it never lands in a store or a log.
+  const armEscrowAfterConnect = async (status: ServerStatus) => {
+    const serverId = status.serverId;
+    const passwordless = useApp.getState().requiresPassword === false;
+    let key = "";
+    try {
+      const raw = await readSecretKeyOnce();
+      key = raw ? raw.replace(/[\s-]/g, "") : "";
+    } catch {
+      key = "";
+    }
+    if (passwordless && key) {
+      try {
+        await api.serverKeysetPush(null, key, serverId ?? undefined);
+        toast(t("serverCloud.armEscrowDone"), "ok");
+        return;
+      } catch {
+        // Silent arm failed → fall through to the manual step so the user can retry.
+      }
+    }
+    // Master-password account, no keychain Secret Key, or a failed silent arm → the
+    // one-time inline step (Secret Key pre-filled when we could read it).
+    setArmPrompt({ serverId, prefillKey: key });
+  };
 
   if (!unlocked) {
     return (
@@ -2744,7 +2897,12 @@ function SettingsCloud() {
 
   // No servers linked yet → straight to the connect form (first link).
   if (servers.length === 0) {
-    return <CloudConnectForm onConnected={() => void pullCloudVaultsAfterConnect()} />;
+    return (
+      <CloudConnectForm
+        onConnected={() => void pullCloudVaultsAfterConnect()}
+        onArm={(st) => void armEscrowAfterConnect(st)}
+      />
+    );
   }
 
   // Resolve the active server explicitly so the panels — and the commands below,
@@ -2857,7 +3015,41 @@ function SettingsCloud() {
             background: p.bg1,
           }}
         >
-          <CloudConnectForm onConnected={onAddedServer} />
+          <CloudConnectForm onConnected={onAddedServer} onArm={(st) => void armEscrowAfterConnect(st)} />
+        </div>
+      )}
+
+      {armPrompt && (
+        <div
+          style={{
+            marginTop: 8,
+            marginBottom: 4,
+            padding: "13px 15px 15px",
+            borderRadius: 12,
+            border: `1px solid ${rgba(p.accent, 0.5)}`,
+            background: p.accentSoft,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              fontSize: 13.5,
+              fontWeight: 700,
+            }}
+          >
+            <Icon name="shieldcheck" size={16} color={p.accent} />
+            {t("serverCloud.armEscrowPromptTitle")}
+          </div>
+          <div style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5, marginTop: 4 }}>
+            {t("serverCloud.armEscrowPromptBody")}
+          </div>
+          <ArmEscrowForm
+            serverId={armPrompt.serverId}
+            prefillKey={armPrompt.prefillKey}
+            onClose={() => setArmPrompt(null)}
+          />
         </div>
       )}
 
