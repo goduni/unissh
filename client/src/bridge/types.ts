@@ -444,8 +444,10 @@ export interface InstanceInfo {
   name: string;
   version: string;
   instanceId: string;
-  /** Advertised sign-in methods, e.g. `["password", "sso"]`. */
+  /** Advertised sign-in methods, e.g. `["password", "oidc"]`. */
   auth: string[];
+  /** IdP hints for "Sign in with SSO" — present iff `auth` includes `"oidc"`. */
+  oidc?: { issuer: string; clientId: string };
 }
 
 /** The full set of linked cloud servers plus the active selection. */

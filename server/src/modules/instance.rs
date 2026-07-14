@@ -17,6 +17,17 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/claim", post(claim))
 }
 
+/// The public OIDC hints a browser-flow client needs to build the IdP authorize
+/// URL: the `issuer` (from which it resolves the authorization/token endpoints via
+/// `{issuer}/.well-known/openid-configuration`) and the public `client_id`. Both are
+/// non-secret — they already travel in the browser's redirect to the IdP. The
+/// `audience`, `jwks_url`, `group_map` and reassertion window stay server-side.
+#[derive(Serialize)]
+struct OidcInfo {
+    issuer: String,
+    client_id: String,
+}
+
 #[derive(Serialize)]
 struct InstanceInfo {
     claimed: bool,
@@ -24,13 +35,22 @@ struct InstanceInfo {
     version: String,
     instance_id: String,
     auth: Vec<&'static str>,
+    /// Present only when OIDC is enabled — the browser-flow clients read the issuer
+    /// + client_id from here to start the SSO dance. Omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    oidc: Option<OidcInfo>,
 }
 
 async fn instance_info(State(state): State<AppState>) -> AppResult<Json<InstanceInfo>> {
     let row = state.store.instance().await?;
     let mut auth = vec!["password"];
+    let mut oidc = None;
     if state.config.oidc.enabled {
         auth.push("oidc");
+        oidc = Some(OidcInfo {
+            issuer: state.config.oidc.issuer.clone(),
+            client_id: state.config.oidc.client_id.clone(),
+        });
     }
     Ok(Json(InstanceInfo {
         claimed: row.claimed != 0,
@@ -38,6 +58,7 @@ async fn instance_info(State(state): State<AppState>) -> AppResult<Json<Instance
         version: env!("CARGO_PKG_VERSION").to_string(),
         instance_id: ids::b64(&row.instance_id),
         auth,
+        oidc,
     }))
 }
 

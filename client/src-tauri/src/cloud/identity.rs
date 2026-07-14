@@ -55,6 +55,16 @@ pub struct JoinPreview {
     pub spaces: Vec<JoinPreviewSpace>,
 }
 
+/// Public OIDC hints from `GET /v1/instance` (present only when SSO is enabled): the
+/// IdP `issuer` (the browser flow resolves its authorize/token endpoints via
+/// discovery) and the public `client_id`. Both are non-secret.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OidcInstanceInfo {
+    pub issuer: String,
+    pub client_id: String,
+}
+
 /// `GET /v1/instance` — public instance descriptor (before/after claim).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +79,18 @@ pub struct InstanceInfo {
     pub instance_id: String,
     /// Supported auth methods (e.g. `["password", "oidc"]`).
     pub auth: Vec<String>,
+    /// IdP hints for the "Sign in with SSO" flow — `Some` iff `auth` contains `oidc`.
+    pub oidc: Option<OidcInstanceInfo>,
+}
+
+/// Result of an `oidc_callback` — the server-assigned identity + granted spaces,
+/// mirroring `join` (a returning SSO identity reuses its account; each login is a
+/// fresh device).
+pub struct OidcOutcome {
+    pub account_id: String,
+    pub device_id: String,
+    /// Space ids (base64) the group→space mapping provisioned this login into.
+    pub spaces: Vec<String>,
 }
 
 /// Session tokens minted by `auth/verify` / `session/refresh`. (Token expiries are
@@ -216,6 +238,20 @@ pub fn instance_info(http: &Client, base_url: &str) -> ApiResult<InstanceInfo> {
                 .collect()
         })
         .unwrap_or_default();
+    let oidc = v.get("oidc").and_then(Value::as_object).map(|o| {
+        OidcInstanceInfo {
+            issuer: o
+                .get("issuer")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            client_id: o
+                .get("client_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        }
+    });
     Ok(InstanceInfo {
         claimed: v.get("claimed").and_then(Value::as_bool).unwrap_or(false),
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
@@ -226,7 +262,47 @@ pub fn instance_info(http: &Client, base_url: &str) -> ApiResult<InstanceInfo> {
             .to_string(),
         instance_id: client::jstr(&v, "instance_id")?,
         auth,
+        oidc,
     })
+}
+
+/// `POST /v1/oidc/callback` (PUBLIC — the IdP-signed `id_token` IS the credential; no
+/// bearer). Presents the id_token plus the self-attested keyset registration (same
+/// `registration_payload`/`registration_signature` fields as `claim`/`join`); the
+/// server verifies the token against the issuer JWKS, enforces the nonce key-binding
+/// (`id_token.nonce == Core::oidc_nonce`), find-or-creates the SSO account + a fresh
+/// device, maps IdP groups → spaces, and mints an `oidc` session. Returns the identity
+/// outcome + the session tokens (parsed like `login`).
+pub fn oidc_callback(
+    http: &Client,
+    base_url: &str,
+    id_token: &str,
+    reg: ffi::RegistrationRequest,
+) -> ApiResult<(OidcOutcome, SessionTokens)> {
+    let body = json!({
+        "id_token": id_token,
+        "registration_payload": client::b64(&reg.payload),
+        "registration_signature": client::b64(&reg.signature),
+    });
+    let v = client::send_json(
+        client::headers(http.post(client::url(base_url, "/v1/oidc/callback")), None).json(&body),
+    )?;
+    let spaces = v
+        .get("spaces")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let outcome = OidcOutcome {
+        account_id: client::jstr(&v, "account_id")?,
+        device_id: client::jstr(&v, "device_id")?,
+        spaces,
+    };
+    let session = SessionTokens::from_value(&v)?;
+    Ok((outcome, session))
 }
 
 /// Full auth handshake: `auth/challenge` → core `sign_server_challenge_raw` →

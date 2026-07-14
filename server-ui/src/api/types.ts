@@ -61,6 +61,24 @@ export interface InstanceInfo {
   instance_id: string;
   /** Enabled sign-in mechanisms, e.g. ["password"] or ["password", "oidc"]. */
   auth: string[];
+  /** IdP hints for "Sign in with SSO" — present iff `auth` includes "oidc". */
+  oidc?: { issuer: string; client_id: string };
+}
+// ── OIDC callback (POST /v1/oidc/callback) — public: the id_token is the credential ──
+export interface OidcCallbackReq {
+  id_token: string;
+  registration_payload: string;
+  registration_signature: string;
+}
+export interface OidcCallbackResp {
+  account_id: string;
+  device_id: string;
+  spaces: string[];
+  access_token: string;
+  refresh_token: string;
+  access_expires: number;
+  refresh_expires: number;
+  session_id: string;
 }
 export interface ClaimReq {
   setup_code: string;

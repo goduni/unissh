@@ -30,6 +30,8 @@ import type {
   MetricsSummary,
   MigrationsResp,
   ObjectsResp,
+  OidcCallbackReq,
+  OidcCallbackResp,
   PendingResp,
   RelayResp,
   SeqBumpResp,
@@ -159,6 +161,9 @@ export function createClient(
     instance: () => call<InstanceInfo>("/v1/instance"),
     claim: (req: ClaimReq) =>
       call<ClaimResp>("/v1/claim", { method: "POST", body: req }),
+    // ── SSO (public: the IdP-signed id_token is the credential; no bearer) ──
+    oidcCallback: (req: OidcCallbackReq) =>
+      call<OidcCallbackResp>("/v1/oidc/callback", { method: "POST", body: req }),
 
     // ── escrow sign-in (public: fresh-device keyset recovery) ──
     escrowParams: (handle: string) =>

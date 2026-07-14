@@ -1,4 +1,5 @@
 import { getCrypto } from "../crypto/provider";
+import { usePrefs } from "../store/prefs";
 import { useSession, type KeysetSession } from "../store/session";
 import { b64ToBytes, bytesToB64, bytesToHex, hexToBytes, truncId } from "../util/bytes";
 import { api } from "./index";
@@ -246,6 +247,204 @@ export async function claimInstance(p: ClaimParams): Promise<ClaimOutcome> {
     commit,
     armEscrow,
   };
+}
+
+// ── SSO (OIDC Authorization Code + PKCE, browser redirect) ─────
+//
+// Two legs around a full-page redirect to the IdP:
+//   · oidcLogin(): mint an ephemeral SSO keyset, compute the key-binding nonce,
+//     stash the PKCE verifier + keyset material in sessionStorage, and redirect the
+//     browser to the IdP authorize URL.
+//   · resumeOidcLogin(): on the callback load (?code=…), restore the exact keyset,
+//     exchange the code for an id_token at the IdP token endpoint (public client),
+//     and POST /v1/oidc/callback — the server verifies the nonce key-binding and
+//     mints the session, which we commit directly (no separate challenge→verify).
+//
+// The keyset is a throwaway per-login device keyset (passwordless), mirroring the
+// desktop client. It is persisted in sessionStorage ONLY across the redirect and
+// cleared immediately on resume.
+//
+// MANUAL-TEST NOTE: the browser↔IdP round-trip needs a real IdP + browser and cannot
+// be exercised in CI. The server side is proven by the `oidc_http` test (Task 4).
+
+const OIDC_FLOW_KEY = "unissh-admin-oidc-flow";
+interface OidcFlowState {
+  instanceUrl: string;
+  codeVerifier: string;
+  state: string;
+  /** Ephemeral SSO EncryptedKeyset + Secret Key (base64) — to restore the SAME keyset
+   *  the nonce was bound to, after the redirect reload. */
+  encB64: string;
+  secretKeyB64: string;
+  tokenEndpoint: string;
+  clientId: string;
+}
+
+/** URL-safe base64 without padding (PKCE + `state`). */
+function b64url(bytes: Uint8Array): string {
+  return bytesToB64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function pkceChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return b64url(new Uint8Array(digest));
+}
+
+/** The redirect target = this SPA's own origin + path (registered at the IdP). */
+function oidcRedirectUri(): string {
+  return window.location.origin + window.location.pathname;
+}
+
+/** Resolve the IdP authorize/token endpoints from the issuer's discovery document
+ *  (`{issuer}/.well-known/openid-configuration`). The REAL OIDC discovery endpoint —
+ *  handles any standards-compliant IdP regardless of its endpoint paths. */
+async function discoverOidc(
+  issuer: string,
+): Promise<{ authorization_endpoint: string; token_endpoint: string }> {
+  const url = issuer.replace(/\/+$/, "") + "/.well-known/openid-configuration";
+  const r = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!r.ok) throw new Error(`OIDC discovery failed (HTTP ${r.status})`);
+  const d = (await r.json()) as { authorization_endpoint?: string; token_endpoint?: string };
+  if (!d.authorization_endpoint || !d.token_endpoint) {
+    throw new Error("OIDC discovery is missing authorization/token endpoints");
+  }
+  return { authorization_endpoint: d.authorization_endpoint, token_endpoint: d.token_endpoint };
+}
+
+/** True when this page load is an OIDC redirect callback with a pending flow. */
+export function pendingOidcRedirect(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return (params.has("code") || params.has("error")) && sessionStorage.getItem(OIDC_FLOW_KEY) !== null;
+}
+
+/**
+ * Begin SSO sign-in: mint an ephemeral keyset, compute the key-binding nonce, and
+ * redirect the browser to the IdP. Does not return normally — it navigates away.
+ */
+export async function oidcLogin(instanceUrl: string): Promise<void> {
+  const crypto_ = getCrypto();
+  const info = await api.instance();
+  if (!info.oidc) throw new Error("this server does not offer SSO sign-in");
+  const { authorization_endpoint, token_endpoint } = await discoverOidc(info.oidc.issuer);
+
+  // Fresh throwaway SSO keyset (passwordless). Its pubkeys bind the id_token nonce.
+  const acc = await crypto_.createAccount(null);
+  const nonce = crypto_.oidcNonce();
+
+  const codeVerifier = b64url(randomBytes(32));
+  const state = b64url(randomBytes(16));
+  const codeChallenge = await pkceChallenge(codeVerifier);
+
+  const flow: OidcFlowState = {
+    instanceUrl,
+    codeVerifier,
+    state,
+    encB64: bytesToB64(acc.enc),
+    secretKeyB64: bytesToB64(acc.secretKey),
+    tokenEndpoint: token_endpoint,
+    clientId: info.oidc.client_id,
+  };
+  sessionStorage.setItem(OIDC_FLOW_KEY, JSON.stringify(flow));
+
+  const authUrl = new URL(authorization_endpoint);
+  authUrl.search = new URLSearchParams({
+    response_type: "code",
+    client_id: info.oidc.client_id,
+    redirect_uri: oidcRedirectUri(),
+    scope: "openid profile groups",
+    state,
+    nonce,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+  }).toString();
+  window.location.assign(authUrl.toString());
+}
+
+/**
+ * Resume SSO sign-in on the callback load: validate `state`, restore the ephemeral
+ * keyset, exchange the code for an id_token, run POST /v1/oidc/callback, and commit
+ * the returned session. Clears the pending flow + the `?code` from the URL first so a
+ * reload can't replay it.
+ */
+export async function resumeOidcLogin(): Promise<void> {
+  const raw = sessionStorage.getItem(OIDC_FLOW_KEY);
+  const params = new URLSearchParams(window.location.search);
+  // Scrub the code from the address bar and drop the pending flow up front.
+  const redirectUri = oidcRedirectUri();
+  window.history.replaceState({}, "", redirectUri);
+  sessionStorage.removeItem(OIDC_FLOW_KEY);
+  if (!raw) throw new Error("no pending SSO sign-in");
+  const flow = JSON.parse(raw) as OidcFlowState;
+
+  const err = params.get("error");
+  if (err) throw new Error(`the identity provider returned an error: ${err}`);
+  const code = params.get("code");
+  if (!code) throw new Error("SSO redirect carried no authorization code");
+  if (params.get("state") !== flow.state) {
+    throw new Error("SSO redirect state mismatch (possible CSRF)");
+  }
+
+  // Keep subsequent api calls pointed at the same instance across the reload.
+  usePrefs.getState().setInstanceUrl(flow.instanceUrl);
+
+  const crypto_ = getCrypto();
+  // Restore the exact keyset the nonce was bound to (passwordless).
+  await crypto_.unlock(b64ToBytes(flow.encB64), null, b64ToBytes(flow.secretKeyB64));
+  const reg = await crypto_.buildRegistration(randomBytes(16));
+
+  // PKCE token exchange straight to the IdP (public client — no secret).
+  const tokenRes = await fetch(flow.tokenEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: flow.clientId,
+      code_verifier: flow.codeVerifier,
+    }).toString(),
+  });
+  if (!tokenRes.ok) {
+    let detail = `HTTP ${tokenRes.status}`;
+    try {
+      const j = (await tokenRes.json()) as { error?: string; error_description?: string };
+      detail = j.error_description || j.error || detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    crypto_.lock();
+    throw new Error(`OIDC token exchange failed: ${detail}`);
+  }
+  const tokens = (await tokenRes.json()) as { id_token?: string };
+  if (!tokens.id_token) {
+    crypto_.lock();
+    throw new Error("OIDC token response is missing id_token");
+  }
+
+  const resp = await api.oidcCallback({
+    id_token: tokens.id_token,
+    registration_payload: bytesToB64(reg.payload),
+    registration_signature: bytesToB64(reg.signature),
+  });
+
+  // The callback already minted the session; the keyset is already unlocked → commit
+  // both together (App shows the Shell only when bearer && keysetUnlocked).
+  useSession.getState().setKeysetSession({
+    bearer: resp.access_token,
+    refreshToken: resp.refresh_token,
+    accessExpires: resp.access_expires,
+    accountId: resp.account_id,
+    deviceId: resp.device_id,
+    label: truncId(resp.account_id),
+  });
+  saveDeviceLink(flow.instanceUrl, {
+    accountId: resp.account_id,
+    deviceId: resp.device_id,
+    handle: null,
+  });
 }
 
 /** Wipe the unlocked keyset + Bearer from memory. */

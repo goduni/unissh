@@ -165,8 +165,7 @@ function makeProvider(m: WasmModule): CryptoProvider {
   };
 }
 
-/** Load the wasm crypto module and register it as the active CryptoProvider. */
-export async function loadWasmProvider(): Promise<boolean> {
+async function doLoadWasmProvider(): Promise<boolean> {
   try {
     const mod = (await import("../../crypto-wasm/pkg/unissh_crypto_wasm.js")) as unknown as WasmModule;
     const urlMod = (await import("../../crypto-wasm/pkg/unissh_crypto_wasm_bg.wasm?url")) as {
@@ -179,4 +178,14 @@ export async function loadWasmProvider(): Promise<boolean> {
     console.warn("[crypto-wasm] failed to load:", e);
     return false;
   }
+}
+
+// Memoized: main.tsx kicks the load off at startup, and the OIDC redirect resume
+// awaits the SAME promise so it never double-initializes the wasm module.
+let loadPromise: Promise<boolean> | null = null;
+
+/** Load the wasm crypto module and register it as the active CryptoProvider. Idempotent. */
+export function loadWasmProvider(): Promise<boolean> {
+  if (!loadPromise) loadPromise = doLoadWasmProvider();
+  return loadPromise;
 }

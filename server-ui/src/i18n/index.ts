@@ -370,6 +370,11 @@ const ru = {
         login_err_bad: "Неверный логин, пароль или Секретный ключ.",
         login_err_nodevice: "Этот браузер ещё не связан с аккаунтом. Войдите с устройства, где настраивали инстанс, или подключите новое устройство.",
         login_err_generic: "Не удалось войти.",
+        sso_or: "или",
+        sso_cta: "Войти через SSO",
+        sso_hint: "Этот инстанс поддерживает единый вход. Продолжите у своего провайдера идентичности.",
+        sso_resuming: "Завершаем вход через SSO…",
+        sso_err: "Не удалось войти через SSO.",
       },
     },
     zk: {
@@ -765,6 +770,11 @@ const en: typeof ru = {
         login_err_bad: "Wrong handle, password or Secret Key.",
         login_err_nodevice: "This browser isn't linked to your account yet. Sign in from the device you set the instance up on, or pair a new device.",
         login_err_generic: "Could not sign in.",
+        sso_or: "or",
+        sso_cta: "Sign in with SSO",
+        sso_hint: "This instance supports single sign-on. Continue with your identity provider.",
+        sso_resuming: "Completing SSO sign-in…",
+        sso_err: "Could not sign in with SSO.",
       },
     },
     zk: {

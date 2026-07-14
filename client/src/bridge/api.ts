@@ -554,6 +554,13 @@ export const serverClaim = (
   });
 export const serverLogin = (serverId?: string) =>
   invoke<ServerStatus>("server_login", { serverId: serverId ?? null });
+/** Sign in with SSO (OIDC browser flow). Opens the system browser to the instance's
+ *  IdP, catches the loopback redirect, exchanges the code for an id_token, and runs
+ *  `POST /v1/oidc/callback` (nonce-bound to the local keyset). Gated on the probed
+ *  `instanceInfo().auth.includes("oidc")`. Requires the local keyset to be unlocked.
+ *  NOTE: the browser↔IdP round-trip needs a real IdP + browser (manual test). */
+export const serverOidcLogin = (baseUrl: string) =>
+  invoke<ServerStatus>("server_oidc_login", { baseUrl });
 export const serverRefreshSession = (serverId?: string) =>
   invoke<ServerStatus>("server_refresh_session", { serverId: serverId ?? null });
 export const serverLogout = (serverId?: string) =>

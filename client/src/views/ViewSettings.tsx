@@ -1335,6 +1335,22 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
     }
   };
 
+  // Sign in with SSO (OIDC browser flow). Opens the system browser to the instance's
+  // IdP; on the loopback redirect the Rust command exchanges the code and runs the
+  // nonce-bound callback. Gated on the probed `auth.includes("oidc")`.
+  const doOidc = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const status = await api.serverOidcLogin(baseUrl.trim());
+      toast(t("serverCloud.signedIn"), "ok");
+      onConnected(status);
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+      setBusy(false);
+    }
+  };
+
   // ── Step 1: enter the server address ──────────────────────────
   if (!info) {
     return (
@@ -1560,6 +1576,39 @@ function CloudConnectForm({ onConnected }: { onConnected: (s: ServerStatus) => v
                     {busy ? t("serverCloud.connecting") : t("serverCloud.signInCta")}
                   </Btn>
                 </div>
+                {info.auth.includes("oidc") && (
+                  <>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        color: p.txt3,
+                        fontSize: 11.5,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.4,
+                        margin: "2px 0",
+                      }}
+                    >
+                      <span style={{ flex: 1, height: 1, background: p.line2 }} />
+                      {t("serverCloud.ssoOr")}
+                      <span style={{ flex: 1, height: 1, background: p.line2 }} />
+                    </div>
+                    <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                      {t("serverCloud.ssoHint")}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <Btn
+                        variant="ghost"
+                        icon={busy ? undefined : "enter"}
+                        onClick={doOidc}
+                        disabled={busy}
+                      >
+                        {busy ? t("serverCloud.connecting") : t("serverCloud.ssoCta")}
+                      </Btn>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </>

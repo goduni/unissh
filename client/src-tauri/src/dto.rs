@@ -646,6 +646,17 @@ pub struct InstanceInfoDto {
     pub version: String,
     pub instance_id: String,
     pub auth: Vec<String>,
+    /// IdP hints for "Sign in with SSO" — present iff `auth` contains `oidc`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<OidcInfoDto>,
+}
+
+/// Public OIDC hints (issuer + client_id) the browser-flow "Sign in with SSO" needs.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OidcInfoDto {
+    pub issuer: String,
+    pub client_id: String,
 }
 
 // ---------- spaces / directory / pending / invites (server-v2) ----------

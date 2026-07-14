@@ -12,11 +12,12 @@
 use std::sync::Arc;
 
 use tauri::State;
+use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use crate::cloud::config::{new_server_id, ServerConfig, SpaceEntry};
 use crate::cloud::transport::HttpSyncTransport;
-use crate::cloud::{client, identity, onboard, tokens, ServerList, ServerStatus};
+use crate::cloud::{client, identity, oidc, onboard, tokens, ServerList, ServerStatus};
 use crate::dto;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -119,6 +120,10 @@ pub async fn server_instance_info(base_url: String) -> ApiResult<dto::InstanceIn
             version: info.version,
             instance_id: info.instance_id,
             auth: info.auth,
+            oidc: info.oidc.map(|o| dto::OidcInfoDto {
+                issuer: o.issuer,
+                client_id: o.client_id,
+            }),
         })
     })
     .await
@@ -272,6 +277,109 @@ pub async fn server_claim(
         device_id: outcome.device_id,
         handle,
         owned: true, // you claimed it → your instance + first Space (owner)
+    })?;
+    state
+        .cloud
+        .set_access_token_for(Some(&server_id), Some(session.access_token));
+    persist_refresh(&server_id, &session.refresh_token);
+    refresh_spaces_cache(&state, &server_id).await;
+    Ok(state.cloud.status_for(Some(&server_id)))
+}
+
+/// Sign in with SSO (OIDC Authorization Code + PKCE). Probes the instance (SSO must be
+/// enabled; learns issuer + client_id), resolves the IdP endpoints via discovery,
+/// opens the system browser to the authorize URL with `nonce = Core::oidc_nonce()`
+/// (the keyset key-binding), catches the `?code=` redirect on a localhost loopback
+/// listener, exchanges the code for an `id_token`, and presents it + the self-attested
+/// keyset registration to `POST /v1/oidc/callback`. The server mints the session and
+/// (for a fresh SSO identity) provisions the account; on return the link is stored and
+/// made active. Requires the local keyset to be unlocked (it signs the registration and
+/// derives the nonce) — same precondition as claim/join.
+///
+/// MANUAL-TEST NOTE: the browser↔IdP hop needs a real IdP + browser and cannot be
+/// exercised in CI. The server side is proven by `oidc_http` (Task 4).
+#[tauri::command]
+pub async fn server_oidc_login(
+    base_url: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> ApiResult<ServerStatus> {
+    client::validate_base_url(&base_url)?;
+    let core = state.core.clone();
+    let base = base_url.clone();
+
+    let (instance, outcome, session) = blocking_api(move || {
+        let http = client::http();
+        // 1. Probe: SSO must be enabled, and the instance must advertise its IdP.
+        let instance = identity::instance_info(http, &base)?;
+        if !instance.auth.iter().any(|a| a == "oidc") {
+            return Err(ApiError::other(
+                "this server does not offer SSO sign-in",
+            ));
+        }
+        let oidc_info = instance.oidc.clone().ok_or_else(|| {
+            ApiError::other(
+                "the server advertises SSO but did not expose its OIDC issuer/client_id",
+            )
+        })?;
+
+        // 2. Resolve the IdP authorize/token endpoints from its discovery document.
+        let endpoints = oidc::discover(http, &oidc_info.issuer)?;
+
+        // 3. Keyset key-binding nonce (requires an unlocked local keyset).
+        let nonce = core.oidc_nonce().map_err(ApiError::from)?;
+
+        // 4. PKCE + CSRF state + a loopback redirect target.
+        let (verifier, challenge) = oidc::pkce();
+        let state_param = oidc::random_state();
+        let (listener, redirect_uri) = oidc::bind_loopback()?;
+
+        // 5. Open the system browser to the authorize URL, then catch the redirect.
+        let authorize_url = oidc::build_authorize_url(
+            &endpoints.authorization_endpoint,
+            &oidc_info.client_id,
+            &redirect_uri,
+            &state_param,
+            &nonce,
+            &challenge,
+        );
+        app.opener()
+            .open_url(authorize_url, None::<&str>)
+            .map_err(|e| ApiError::other(format!("failed to open the system browser: {e}")))?;
+        let code = oidc::wait_for_redirect(listener, &state_param)?;
+
+        // 6. Exchange the code for the IdP-signed id_token, then run the callback.
+        let id_token = oidc::exchange_code(
+            http,
+            &endpoints.token_endpoint,
+            &oidc_info.client_id,
+            &code,
+            &verifier,
+            &redirect_uri,
+        )?;
+        let reg = core.build_registration_request().map_err(ApiError::from)?;
+        let (outcome, session) = identity::oidc_callback(http, &base, &id_token, reg)?;
+        Ok((instance, outcome, session))
+    })
+    .await?;
+
+    // Bind cloud vaults on this link to the primary granted space (first entry),
+    // mirroring server_join. Idempotent: re-signing-in reuses the existing link id.
+    let space_id = outcome.spaces.first().cloned().unwrap_or_default();
+    let server_id = state
+        .cloud
+        .find_by_identity(&base_url, &instance.instance_id, &outcome.account_id)
+        .unwrap_or_else(new_server_id);
+    state.cloud.upsert_config(ServerConfig {
+        server_id: server_id.clone(),
+        base_url,
+        instance_id: instance.instance_id,
+        space_id,
+        account_id: outcome.account_id,
+        device_id: outcome.device_id,
+        handle: None,
+        // SSO sign-in never confers instance ownership.
+        owned: false,
     })?;
     state
         .cloud

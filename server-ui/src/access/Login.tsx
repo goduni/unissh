@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { DeviceNotLinkedError, loginWithEscrow } from "../api/auth-service";
+import { DeviceNotLinkedError, loginWithEscrow, oidcLogin } from "../api/auth-service";
 import { ApiError } from "../api/errors";
 import type { InstanceInfo } from "../api/types";
 import { CryptoUnavailableError, getCrypto } from "../crypto/provider";
@@ -142,7 +142,7 @@ export function Login() {
         <div style={{ padding: "18px 24px 24px" }}>
           <InstanceSummary info={info} onChange={back} />
           <div style={{ height: 14 }} />
-          <LoginForm instanceUrl={url.trim()} />
+          <LoginForm instanceUrl={url.trim()} info={info} />
         </div>
       </Card>
     );
@@ -213,7 +213,7 @@ function InstanceSummary({ info, onChange }: { info: InstanceInfo; onChange: () 
   );
 }
 
-function LoginForm({ instanceUrl }: { instanceUrl: string }) {
+function LoginForm({ instanceUrl, info }: { instanceUrl: string; info: InstanceInfo }) {
   const { t } = useTranslation();
   const [handle, setHandle] = useState("");
   const [password, setPassword] = useState("");
@@ -221,6 +221,20 @@ function LoginForm({ instanceUrl }: { instanceUrl: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cryptoReady = getCrypto().available;
+  const ssoEnabled = info.auth.includes("oidc");
+
+  // SSO: redirect the browser to the IdP. On the callback load, App resumes the flow.
+  const startSso = async () => {
+    if (!cryptoReady) return setError(t("access.onb.bs_err_crypto"));
+    setError(null);
+    setBusy(true);
+    try {
+      await oidcLogin(instanceUrl); // navigates away on success
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("access.onb.sso_err"));
+      setBusy(false);
+    }
+  };
 
   const submit = async () => {
     if (!handle.trim()) return setError(t("access.onb.login_err_no_handle"));
@@ -302,6 +316,33 @@ function LoginForm({ instanceUrl }: { instanceUrl: string }) {
       <Btn variant="primary" full icon="enter" loading={busy} onClick={submit}>
         {t("access.onb.login_btn")}
       </Btn>
+
+      {ssoEnabled ? (
+        <>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              margin: "16px 0 12px",
+              color: "var(--txt3)",
+              fontSize: 11,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
+            {t("access.onb.sso_or")}
+            <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
+          </div>
+          <div style={{ fontSize: 12, color: "var(--txt3)", lineHeight: 1.5, marginBottom: 10 }}>
+            {t("access.onb.sso_hint")}
+          </div>
+          <Btn variant="soft" full icon="enter" loading={busy} onClick={startSso}>
+            {t("access.onb.sso_cta")}
+          </Btn>
+        </>
+      ) : null}
     </>
   );
 }

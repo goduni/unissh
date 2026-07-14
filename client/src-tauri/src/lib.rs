@@ -268,6 +268,7 @@ pub fn run() {
             cloud::commands::server_remove,
             cloud::commands::server_join,
             cloud::commands::server_claim,
+            cloud::commands::server_oidc_login,
             cloud::commands::server_login,
             cloud::commands::server_refresh_session,
             cloud::commands::server_logout,
