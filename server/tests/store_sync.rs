@@ -151,9 +151,21 @@ async fn push_created_personal_vault_binds_owner_account() {
     let account_id = ids::random_id16().to_vec();
     let ed = ids::random_bytes32().to_vec();
     let x = ids::random_bytes32().to_vec();
-    s.create_account(&account_id, &ed, &x, None, None, false, &[], &[], None, None, 1)
-        .await
-        .unwrap();
+    s.create_account(
+        &account_id,
+        &ed,
+        &x,
+        None,
+        None,
+        false,
+        &[],
+        &[],
+        None,
+        None,
+        1,
+    )
+    .await
+    .unwrap();
 
     // Push a Vault object authored by that keyset (no prior claim) → personal vault.
     let vobj = SyncObject::Vault(VaultRecord {

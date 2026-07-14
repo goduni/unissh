@@ -634,7 +634,11 @@ async fn replayed_id_token_is_rejected() {
     let token = sign_token(SIGNING_PEM, &base_claims(&nonce_for(&id)));
 
     let r1 = post_callback(&app, &token, &id).await;
-    assert_eq!(r1.status(), 201, "first use of the id_token creates the account");
+    assert_eq!(
+        r1.status(),
+        201,
+        "first use of the id_token creates the account"
+    );
 
     // The SAME token replayed (a captured callback body) → 401: the id_token is
     // one-time, so a stolen-then-replayed body cannot re-authenticate.

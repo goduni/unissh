@@ -328,11 +328,8 @@ impl Store {
     /// Opportunistically drop consumed-id_token rows whose token has already expired
     /// (they can never be replayed past `exp` anyway, so the guard stays bounded).
     pub async fn oidc_prune_expired_jti(&self, tx: &mut Tx<'_>, now: i64) -> AppResult<()> {
-        tx.exec(
-            "DELETE FROM oidc_used_jti WHERE exp < ?",
-            vec![Val::I(now)],
-        )
-        .await?;
+        tx.exec("DELETE FROM oidc_used_jti WHERE exp < ?", vec![Val::I(now)])
+            .await?;
         Ok(())
     }
 

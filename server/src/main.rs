@@ -99,7 +99,10 @@ async fn main() -> anyhow::Result<()> {
         // instance.owner_account_id, but a stale accounts.is_owner=1 would leave a
         // ghost owner that still passes `require_owner` after a new owner claims.
         store
-            .exec("UPDATE accounts SET is_owner = 0 WHERE is_owner = 1", vec![])
+            .exec(
+                "UPDATE accounts SET is_owner = 0 WHERE is_owner = 1",
+                vec![],
+            )
             .await?;
         let code = if config.setup.code.is_empty() {
             let mut rnd = [0u8; 6];

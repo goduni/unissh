@@ -344,7 +344,13 @@ async fn members_add_enqueues_space_wide_grants() {
     let id = common::make_identity();
     let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
     let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
-    let tok = common::login_v2(&app, &id, &owner_acct, claimed["device_id"].as_str().unwrap()).await;
+    let tok = common::login_v2(
+        &app,
+        &id,
+        &owner_acct,
+        claimed["device_id"].as_str().unwrap(),
+    )
+    .await;
 
     let post = |path: &str, bearer: &str, body: Value| {
         app.client
@@ -398,15 +404,15 @@ async fn members_add_enqueues_space_wide_grants() {
         .fetch_scalar_i64(
             "SELECT COUNT(*) FROM pending_actions \
              WHERE account_id = ? AND vault_id = ? AND kind = 'grant' AND state = 'pending'",
-            vec![
-                Val::b(&member.account_id[..]),
-                Val::b(&vault_bytes[..]),
-            ],
+            vec![Val::b(&member.account_id[..]), Val::b(&vault_bytes[..])],
         )
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(n, 1, "space_wide grant enqueued for the directly-added member");
+    assert_eq!(
+        n, 1,
+        "space_wide grant enqueued for the directly-added member"
+    );
 }
 
 /// FIX 2: re-adding an EXISTING member (e.g. hoping to change its role) via the add path
@@ -417,7 +423,13 @@ async fn members_add_existing_conflicts() {
     let id = common::make_identity();
     let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
     let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
-    let tok = common::login_v2(&app, &id, &owner_acct, claimed["device_id"].as_str().unwrap()).await;
+    let tok = common::login_v2(
+        &app,
+        &id,
+        &owner_acct,
+        claimed["device_id"].as_str().unwrap(),
+    )
+    .await;
 
     let post = |path: &str, bearer: &str, body: Value| {
         app.client
@@ -466,7 +478,13 @@ async fn instance_owner_protected_from_coadmin_eviction() {
     let id = common::make_identity();
     let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
     let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
-    let owner_tok = common::login_v2(&app, &id, &owner_acct, claimed["device_id"].as_str().unwrap()).await;
+    let owner_tok = common::login_v2(
+        &app,
+        &id,
+        &owner_acct,
+        claimed["device_id"].as_str().unwrap(),
+    )
+    .await;
 
     let post = |path: &str, bearer: &str, body: Value| {
         app.client

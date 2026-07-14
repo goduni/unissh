@@ -439,9 +439,7 @@ async fn keyset_put(
             }
             let salt = ids::unb64(&e.argon_salt)?;
             if salt.len() != RECOMMENDED_SALT_LEN {
-                return Err(AppError::malformed(
-                    "escrow Argon2id salt must be 16 bytes",
-                ));
+                return Err(AppError::malformed("escrow Argon2id salt must be 16 bytes"));
             }
             Some((
                 ids::sha256(&ids::unb64(&e.k_auth)?),

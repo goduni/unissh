@@ -380,7 +380,10 @@ async fn members_set_role(
     let account_id = ids::unb64(&req.account_id)?;
     validate_role(&req.role)?;
     require_space_admin(&state, &space_id, auth.account_id()).await?;
-    let current_role = state.store.space_member_role(&space_id, &account_id).await?;
+    let current_role = state
+        .store
+        .space_member_role(&space_id, &account_id)
+        .await?;
     // Owner hardening: demoting (role → non-admin) the instance owner is a form of
     // eviction — a co-admin (not the instance owner) must not be able to do it.
     if req.role != "admin" {

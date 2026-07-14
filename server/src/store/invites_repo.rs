@@ -47,8 +47,11 @@ impl Store {
     /// Fetch an invite by its (non-secret) id — the revoke path authorizes the caller
     /// against the invite's intents, so it looks the invite up by id, not by token.
     pub async fn get_invite_v2_by_id(&self, invite_id: &[u8]) -> AppResult<Option<InviteV2Row>> {
-        self.fetch_optional_as(&format!("{SEL} WHERE invite_id = ?"), vec![Val::b(invite_id)])
-            .await
+        self.fetch_optional_as(
+            &format!("{SEL} WHERE invite_id = ?"),
+            vec![Val::b(invite_id)],
+        )
+        .await
     }
 
     /// CAS pending→redeemed; expired or already-redeemed → None (loser must rollback).

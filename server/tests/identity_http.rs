@@ -312,7 +312,11 @@ async fn escrow_enroll_rejects_off_spec_argon_params() {
     }))
     .await
     .unwrap();
-    assert_eq!(bad_salt.status(), 400, "a non-16-byte escrow salt is rejected");
+    assert_eq!(
+        bad_salt.status(),
+        400,
+        "a non-16-byte escrow salt is rejected"
+    );
 }
 
 #[tokio::test]

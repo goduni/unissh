@@ -148,7 +148,11 @@ async fn oidc_callback(
         _ => format!("h:{}", ids::b64(&ids::sha256(req.id_token.as_bytes()))),
     };
     state.store.oidc_prune_expired_jti(&mut tx, now).await?;
-    if !state.store.oidc_consume_jti(&mut tx, &jti_key, claims.exp).await? {
+    if !state
+        .store
+        .oidc_consume_jti(&mut tx, &jti_key, claims.exp)
+        .await?
+    {
         return Err(AppError::unauthenticated("id_token already used"));
     }
 
@@ -468,7 +472,10 @@ async fn fetch_jwks(url: &str) -> AppResult<JwkSet> {
     }
     // Fast reject on an advertised oversized length, then enforce the cap while reading
     // (a missing/lying Content-Length can't bypass the streamed byte-count check).
-    if resp.content_length().is_some_and(|len| len > MAX_JWKS_BYTES as u64) {
+    if resp
+        .content_length()
+        .is_some_and(|len| len > MAX_JWKS_BYTES as u64)
+    {
         tracing::warn!("oidc: JWKS Content-Length exceeds cap");
         return Err(AppError::unauthenticated("invalid id_token"));
     }
@@ -555,10 +562,7 @@ async fn verify_id_token(
         .get("exp")
         .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
         .ok_or_else(|| AppError::unauthenticated("invalid id_token"))?;
-    let jti = claims
-        .get("jti")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let jti = claims.get("jti").and_then(|v| v.as_str()).map(String::from);
     // The groups claim name is operator-configured; read it out of the raw claims.
     let groups = claims
         .get(config.groups_claim.as_str())
