@@ -292,6 +292,8 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
             display: "flex",
             gap: 10,
             justifyContent: "flex-end",
+            // wrap so a long RU confirmLabel (e.g. "Сбросить и начать заново") doesn't spill a narrow card
+            flexWrap: "wrap",
             flexDirection: isMobile ? "column-reverse" : undefined,
           }}
         >
@@ -360,8 +362,9 @@ export function ShortcutsHelp() {
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>{t("feedback.shortcutsTitle")}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {SHORTCUTS.map(([k, label]) => (
-            <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 13.5, color: p.txt2 }}>{tDyn(label)}</span>
+            <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              {/* minWidth:0 lets a long RU shortcut description wrap instead of shoving the keycap */}
+              <span style={{ fontSize: 13.5, color: p.txt2, minWidth: 0 }}>{tDyn(label)}</span>
               <span
                 style={{
                   fontFamily: MONO,
@@ -371,6 +374,7 @@ export function ShortcutsHelp() {
                   background: p.bg3,
                   border: `1px solid ${p.line2}`,
                   color: p.txt,
+                  flexShrink: 0, // keycap must never shrink/wrap
                 }}
               >
                 {k}

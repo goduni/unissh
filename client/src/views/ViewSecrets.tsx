@@ -13,7 +13,7 @@ import { Btn, Icon, NO_AUTOCORRECT, VaultBadge } from "@/components/primitives";
 import { UnderlineTabs, fmtRelative, FlatAvatar, MetaChip, RowOverflowMenu, Card, HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import { useIsMobile } from "@/store/responsive";
+import { useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
 import type { ItemInfo, Identity, ServerStatus, VaultInfo } from "@/bridge/types";
@@ -1879,7 +1879,7 @@ export function ViewSecrets() {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   const route = useApp((s) => s.route);
   const items = useApp((s) => s.items);
   const vaults = useApp((s) => s.vaults);
@@ -1949,7 +1949,9 @@ export function ViewSecrets() {
           display: "flex",
           alignItems: "center",
           gap: isMobile ? 10 : 14,
-          flexWrap: isMobile ? "wrap" : "nowrap",
+          // Always wrap: long RU tab strip + primary button overlap on desktop otherwise.
+          flexWrap: "wrap",
+          rowGap: 8,
           padding: isMobile ? "14px 14px 10px" : "16px 22px 12px",
         }}
       >

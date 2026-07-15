@@ -154,10 +154,16 @@ export function MetaChip({
         color: c,
         fontFamily: mono ? MONO : UI,
         whiteSpace: "nowrap",
+        // Let a long (RU) datum ("не используется") truncate when its row is tight
+        // instead of forcing the row past the pane edge.
+        minWidth: 0,
+        overflow: "hidden",
       }}
     >
       {icon && <Icon name={icon} size={12} color={c} stroke={1.8} />}
-      {children}
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+        {children}
+      </span>
     </span>
   );
 }
@@ -240,7 +246,15 @@ export function UnderlineTabs<T extends string>({
     focusTab(n);
   };
   return (
-    <div ref={ref} role="tablist" aria-label={ariaLabel} style={{ display: "flex", gap }}>
+    <div
+      ref={ref}
+      role="tablist"
+      aria-label={ariaLabel}
+      // Wrap to a second row rather than spill off the edge / over an adjacent
+      // primary action when the (RU) tab labels don't fit; minWidth:0 lets the
+      // strip shrink inside a nowrap header instead of forcing it wider.
+      style={{ display: "flex", flexWrap: "wrap", gap, rowGap: 4, minWidth: 0 }}
+    >
       {tabs.map((tb) => {
         const on = tb.value === value;
         return (

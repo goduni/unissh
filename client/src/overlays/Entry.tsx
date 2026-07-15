@@ -9,7 +9,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, UI, rgba } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
-import { useIsMobile } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
@@ -21,6 +21,7 @@ import { useTranslation, Trans } from "@/i18n";
 function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number }) {
   const p = usePalette();
   const isMobile = useIsMobile();
+  const narrow = useNarrow();
   return (
     <div
       style={{
@@ -28,7 +29,7 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
         inset: 0,
         zIndex: 100,
         display: "flex",
-        flexDirection: isMobile ? "column" : "row",
+        flexDirection: narrow ? "column" : "row",
         // Center the card. On phones the card's `margin: auto` does the vertical
         // centering (not `justifyContent`), so when content + the software
         // keyboard exceed the viewport a focused input can still scroll above the
@@ -92,7 +93,8 @@ function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
       style={{
         display: "flex",
         alignItems: "center",
-        flexWrap: isMobile ? "wrap" : "nowrap",
+        // wrap on desktop too: 3 long RU step labels exhaust the ~400px card and hyphen-break
+        flexWrap: "wrap",
         gap: isMobile ? "8px 6px" : 10,
         marginBottom: 26,
       }}
@@ -480,7 +482,8 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
           <div
             style={{
               display: "flex",
-              flexWrap: isMobile ? "wrap" : "nowrap",
+              // wrap on desktop too: long RU labels (Скачать .txt / Скопировать) overlap below ~587px
+              flexWrap: "wrap",
               gap: 10,
               marginBottom: 16,
             }}
