@@ -1106,9 +1106,23 @@ export function ViewHosts() {
   const [sel, setSel] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(hosts[0]?.profileId ?? null);
   const [rail, setRail] = useState<RailTab>("detail");
-  // On a narrow window the fixed-width detail rail would squish the list to a sliver,
-  // so render it as a full-width overlay over the list instead of a side column.
+  // The fixed-width detail rail would squish the list to a sliver when there isn't
+  // room for both side by side, so render it as a full-width overlay instead. Trigger
+  // on the CONTENT width (window minus sidebar), not the raw window: a wide sidebar can
+  // starve the row while the window is still wide, so useNarrow alone would miss it.
   const narrow = useNarrow();
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [rowW, setRowW] = useState(0);
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((ents) => {
+      for (const e of ents) setRowW(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const railOverlay = narrow || (rowW > 0 && rowW < 640);
   // Collapse toolbar button labels to icons when the main area is too narrow
   // (e.g. rail open + sidebar expanded) so buttons never slide under the rail.
   const mainRef = useRef<HTMLDivElement | null>(null);
@@ -1242,7 +1256,7 @@ export function ViewHosts() {
   );
 
   return (
-    <div style={{ flex: 1, display: "flex", minWidth: 0 }}>
+    <div ref={rowRef} style={{ flex: 1, display: "flex", minWidth: 0 }}>
       {/* main */}
       <div
         ref={mainRef}
@@ -1796,12 +1810,12 @@ export function ViewHosts() {
             display: "flex",
             flexDirection: "column",
             padding: 14,
-            ...(narrow
+            ...(railOverlay
               ? { position: "absolute", inset: 0, width: "100%", zIndex: 6 }
               : { width: railW, position: "relative", borderLeft: `1px solid ${p.line}` }),
           }}
         >
-          {!narrow && <ResizeHandle side="left" onDrag={resizeRail} />}
+          {!railOverlay && <ResizeHandle side="left" onDrag={resizeRail} />}
           <div
             style={{
               display: "flex",

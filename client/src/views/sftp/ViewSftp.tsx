@@ -66,6 +66,22 @@ export function ViewSftp() {
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
+  // Collapse to a single pane based on the CONTENT width, not the raw window width:
+  // two panes need ~536px, and a wide sidebar can starve the content area below that
+  // while the window is still > the useNarrow breakpoint (otherwise the 2nd pane
+  // overflows with no scroll). Measure the pane area itself.
+  const paneAreaRef = useRef<HTMLDivElement>(null);
+  const [paneAreaW, setPaneAreaW] = useState(0);
+  useEffect(() => {
+    const el = paneAreaRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((ents) => {
+      for (const e of ents) setPaneAreaW(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const oneCol = isMobile || (paneAreaW > 0 && paneAreaW < 560);
   const sessions = useApp((s) => s.sftpSessions);
   const hosts = useApp((s) => s.hosts);
   const enqueueTransfer = useApp((s) => s.enqueueTransfer);
@@ -445,19 +461,20 @@ export function ViewSftp() {
       </div>
 
       <div
+        ref={paneAreaRef}
         style={{
           flex: 1,
           display: "flex",
-          flexDirection: isMobile ? "column" : "row",
+          flexDirection: oneCol ? "column" : "row",
           alignItems: "stretch",
           gap: 12,
           padding: isMobile ? "0 14px 12px" : "0 22px 12px",
           minHeight: 0,
-          ...(isMobile ? { overflow: "auto" } : {}),
+          ...(oneCol ? { overflow: "auto" } : {}),
         }}
       >
         <PaneSlot {...paneProps(left, "left", right, setLeftLoc)} />
-        {!isMobile && <PaneSlot {...paneProps(right, "right", left, setRightLoc)} />}
+        {!oneCol && <PaneSlot {...paneProps(right, "right", left, setRightLoc)} />}
       </div>
 
       <TransferQueue />
