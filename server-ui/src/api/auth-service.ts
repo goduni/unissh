@@ -3,6 +3,7 @@ import { usePrefs } from "../store/prefs";
 import { useSession, type KeysetSession } from "../store/session";
 import { b64ToBytes, bytesToB64, bytesToHex, hexToBytes, truncId } from "../util/bytes";
 import { api } from "./index";
+import { ApiError } from "./errors";
 
 // ── Device-link persistence ────────────────────────────────────
 // The panel's browser device_id is NOT a secret (it merely addresses the auth
@@ -41,6 +42,15 @@ function saveDeviceLink(instanceUrl: string, link: DeviceLink): void {
 }
 function findDeviceLink(instanceUrl: string, accountId: string): DeviceLink | null {
   return readLinks()[linkKey(instanceUrl, accountId)] ?? null;
+}
+function removeDeviceLink(instanceUrl: string, accountId: string): void {
+  try {
+    const all = readLinks();
+    delete all[linkKey(instanceUrl, accountId)];
+    localStorage.setItem(LINK_KEY, JSON.stringify(all));
+  } catch {
+    /* storage may be unavailable — nothing to clear */
+  }
 }
 
 // Recommended Argon2id params for escrow enrollment — match the server's
@@ -135,34 +145,35 @@ async function enrollAndCommit(
   const crypto_ = getCrypto();
   const keyId = bytesToB64(id.ed25519_pub);
 
+  const commit = async (accountId: string, deviceId: string, priorHandle: string | null) => {
+    const session = await buildSession(accountId, deviceId, keyId, handle || truncId(accountId));
+    useSession.getState().setKeysetSession(session);
+    saveDeviceLink(instanceUrl, { accountId, deviceId, handle: handle || priorHandle });
+  };
+
+  // Reuse the device this browser already registered — but a saved link can go stale:
+  // a 30-day `web` device hits its expiry, or the device is revoked/deleted. On a
+  // device-auth rejection (401/403/404) drop the stale link and self-enroll a fresh
+  // device below; the already-unlocked keyset is the credential, so it's seamless.
   const link = knownAccountId ? findDeviceLink(instanceUrl, knownAccountId) : null;
-  let accountId: string;
-  let deviceId: string;
-  let priorHandle: string | null;
   if (link && knownAccountId) {
-    accountId = knownAccountId;
-    deviceId = link.deviceId;
-    priorHandle = link.handle;
-  } else {
-    const reg = await crypto_.buildRegistration(randomBytes(16));
-    const enrolled = await api.deviceSelfEnroll({
-      registration_payload: bytesToB64(reg.payload),
-      registration_signature: bytesToB64(reg.signature),
-      kind: "web",
-      label: panelDeviceLabel(),
-    });
-    accountId = enrolled.account_id;
-    deviceId = enrolled.device_id;
-    priorHandle = null;
+    try {
+      await commit(knownAccountId, link.deviceId, link.handle);
+      return;
+    } catch (e) {
+      if (!(e instanceof ApiError) || ![401, 403, 404].includes(e.status)) throw e;
+      removeDeviceLink(instanceUrl, knownAccountId);
+    }
   }
 
-  const session = await buildSession(accountId, deviceId, keyId, handle || truncId(accountId));
-  useSession.getState().setKeysetSession(session);
-  saveDeviceLink(instanceUrl, {
-    accountId,
-    deviceId,
-    handle: handle || priorHandle,
+  const reg = await crypto_.buildRegistration(randomBytes(16));
+  const enrolled = await api.deviceSelfEnroll({
+    registration_payload: bytesToB64(reg.payload),
+    registration_signature: bytesToB64(reg.signature),
+    kind: "web",
+    label: panelDeviceLabel(),
   });
+  await commit(enrolled.account_id, enrolled.device_id, null);
 }
 
 /**

@@ -1028,9 +1028,9 @@ function SettingsVaults() {
       confirmLabel: t("vault.unbind"),
       onConfirm: async () => {
         await guard(async () => {
-          await api.serverUnbindCloudVault(v.vaultId);
+          const changed = await api.serverUnbindCloudVault(v.vaultId);
           await useApp.getState().reloadVaults();
-          toast(t("vault.unbindDone"), "ok");
+          if (changed) toast(t("vault.unbindDone"), "ok");
         });
       },
     });
@@ -1158,7 +1158,7 @@ function SettingsVaults() {
                           : t("vault.boundOther");
                       })()}
                     </span>
-                    {moveTargets(v).length > 0 && (
+                    {vaultServer(v, servers) != null && moveTargets(v).length > 0 && (
                       <Btn variant="ghost" size="sm" onClick={() => setMoveVault(v.vaultId)}>
                         {t("vault.move")}
                       </Btn>

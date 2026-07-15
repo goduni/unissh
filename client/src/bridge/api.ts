@@ -609,7 +609,7 @@ export const serverBindCloudVault = (vaultId: string, serverId?: string) =>
 // Unbind ONE cloud vault (hex id) from its server — stops it syncing. The vault +
 // its data stay on this device; any server-side copy is left as-is.
 export const serverUnbindCloudVault = (vaultId: string) =>
-  invoke<void>("server_unbind_cloud_vault", { vaultId });
+  invoke<boolean>("server_unbind_cloud_vault", { vaultId });
 export const serverSyncNow = (serverId?: string) =>
   invoke<SyncReport>("server_sync_now", { serverId: serverId ?? null });
 /** Full re-pull: reset the pull cursor then sync — recovers vaults that an

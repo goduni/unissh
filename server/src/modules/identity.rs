@@ -197,6 +197,12 @@ async fn auth_verify(
     if device.status != "active" {
         return Err(AppError::unauthenticated("device not active"));
     }
+    // A device past its expiry (30-day `web` devices) must not mint a session — else
+    // it would succeed here only to be refused at every Bearer call (extract.rs), a
+    // silent lockout loop. Failing fast lets the panel drop the stale link + re-enroll.
+    if device.expires_at.is_some_and(|exp| exp <= now) {
+        return Err(AppError::unauthenticated("device expired"));
+    }
     if device.account_id != account_id {
         return Err(AppError::unauthenticated("device/account mismatch"));
     }
@@ -269,6 +275,17 @@ async fn session_refresh(
     }
     if !state.store.account_is_active(&session.account_id).await? {
         return Err(AppError::unauthenticated("account is not active"));
+    }
+    // A device past its expiry must not keep rotating tokens (mirrors auth_verify /
+    // extract.rs): reject so an expired 30-day web device's session dies here instead
+    // of limping — the panel then drops the stale link and self-enrolls a fresh device.
+    let device = state
+        .store
+        .get_device(&session.device_id)
+        .await?
+        .ok_or_else(|| AppError::unauthenticated("device not found"))?;
+    if device.expires_at.is_some_and(|exp| exp <= now) {
+        return Err(AppError::unauthenticated("device expired"));
     }
     // OIDC reassertion gate (Phase 5): an OIDC session rotates freely until its
     // reassert deadline; past it, refresh fails and the client must re-run the OIDC
@@ -801,6 +818,15 @@ async fn device_self_enroll(
     let kind = req.kind.as_deref().unwrap_or("app");
     if kind != "app" && kind != "web" {
         return Err(AppError::malformed("device kind must be 'app' or 'web'"));
+    }
+    // Bound the open-metadata label so a keyset holder can't bloat the devices table
+    // (and every device listing) with a multi-MB value.
+    if req
+        .label
+        .as_deref()
+        .is_some_and(|l| l.chars().count() > 128)
+    {
+        return Err(AppError::malformed("device label too long (max 128 chars)"));
     }
 
     // 1. Verify the self-attested registration signature (proves keyset possession).

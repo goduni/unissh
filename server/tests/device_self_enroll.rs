@@ -7,9 +7,12 @@
 
 mod common;
 
-use common::{TestApp, claim_owner, login_v2, make_identity, spawn};
+use common::{TestApp, claim_owner, login_tokens_v2, login_v2, make_identity, spawn};
 use serde_json::{Value, json};
-use unissh_crypto::{RegistrationPayload as CoreReg, X25519Keypair, sign_registration};
+use unissh_crypto::{
+    RegistrationPayload as CoreReg, ServerAuthChallenge as CoreChal, X25519Keypair,
+    sign_registration, sign_server_auth,
+};
 use unissh_server::crypto::RegistrationPayload as SrvReg;
 use unissh_server::ids;
 use unissh_server::store::Val;
@@ -252,4 +255,119 @@ async fn self_enroll_suspended_account_403() {
         1,
         "no device added for a suspended account"
     );
+}
+
+/// A `label` past the 128-char cap → 400, no device added (bounds the open metadata so a
+/// keyset holder can't bloat the devices table / listings).
+#[tokio::test]
+async fn self_enroll_label_too_long_400() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let account_id = c["account_id"].as_str().unwrap().to_string();
+
+    let r = app
+        .client
+        .post(format!("{}/v1/devices/self-enroll", app.base))
+        .json(&json!({
+            "registration_payload": id.payload_b64,
+            "registration_signature": id.sig_b64,
+            "label": "x".repeat(129),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400, "over-long label → malformed");
+    assert_eq!(
+        device_count(&app, &account_id).await,
+        1,
+        "no device added for a rejected label"
+    );
+}
+
+/// Force a device past its `expires_at`: `auth/verify` must fail fast (401) rather than
+/// mint a session that every Bearer call would then reject — the fix that lets the panel
+/// drop a stale link and self-enroll a fresh device instead of looping.
+#[tokio::test]
+async fn expired_device_cannot_log_in() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let account_id = c["account_id"].as_str().unwrap().to_string();
+    let device_b64 = c["device_id"].as_str().unwrap().to_string();
+
+    let device_id = ids::unb64(&device_b64).unwrap();
+    app.state
+        .store
+        .exec(
+            "UPDATE devices SET expires_at = ? WHERE device_id = ?",
+            vec![Val::I(1), Val::b(&device_id[..])],
+        )
+        .await
+        .unwrap();
+
+    // challenge issues a nonce (no expiry gate); verify is where the expired device dies.
+    let chal: Value = app
+        .client
+        .post(format!("{}/v1/auth/challenge", app.base))
+        .json(&json!({
+            "account_id": account_id, "device_id": device_b64, "key_id": ids::b64(b"k1")
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let g = |k: &str| ids::unb64(chal[k].as_str().unwrap()).unwrap();
+    let core_chal = CoreChal {
+        host: g("host"),
+        account_id: g("account_id"),
+        device_id: g("device_id"),
+        key_id: g("key_id"),
+        nonce: g("nonce"),
+        expiry: chal["expiry"].as_u64().unwrap(),
+    };
+    let sig = sign_server_auth(&id.kp.signing, &core_chal).unwrap();
+    let resp = app
+        .client
+        .post(format!("{}/v1/auth/verify", app.base))
+        .json(&json!({ "challenge": chal, "signature": ids::b64(&sig) }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "expired device must not mint a session");
+}
+
+/// An expired device can't keep rotating tokens either: after `expires_at` passes, a
+/// `session/refresh` with a previously-valid refresh token is refused (401).
+#[tokio::test]
+async fn expired_device_cannot_refresh() {
+    let app = spawn().await;
+    let id = make_identity();
+    let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let account_id = c["account_id"].as_str().unwrap().to_string();
+    let device_b64 = c["device_id"].as_str().unwrap().to_string();
+
+    // A valid session first (device not yet expired), then expire the device.
+    let tokens = login_tokens_v2(&app, &id, &account_id, &device_b64).await;
+    let refresh = tokens["refresh_token"].as_str().unwrap().to_string();
+    let device_id = ids::unb64(&device_b64).unwrap();
+    app.state
+        .store
+        .exec(
+            "UPDATE devices SET expires_at = ? WHERE device_id = ?",
+            vec![Val::I(1), Val::b(&device_id[..])],
+        )
+        .await
+        .unwrap();
+
+    let resp = app
+        .client
+        .post(format!("{}/v1/session/refresh", app.base))
+        .json(&json!({ "refresh_token": refresh }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "expired device cannot rotate tokens");
 }

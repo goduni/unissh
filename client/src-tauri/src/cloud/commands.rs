@@ -670,14 +670,11 @@ pub async fn server_bind_cloud_vault(
 pub async fn server_unbind_cloud_vault(
     vault_id: String,
     state: State<'_, AppState>,
-) -> ApiResult<()> {
+) -> ApiResult<bool> {
     let core = state.core.clone();
-    blocking_api(move || {
-        core.unbind_cloud_vault(vault_id)
-            .map(|_| ())
-            .map_err(ApiError::from)
-    })
-    .await
+    // Returns true iff a bound cloud vault was actually cleared (false = nothing to do),
+    // so the UI only reports "unbound" when something changed.
+    blocking_api(move || core.unbind_cloud_vault(vault_id).map_err(ApiError::from)).await
 }
 
 /// Run a full sync against a linked server (defaults to active): push local cloud

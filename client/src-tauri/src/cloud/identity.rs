@@ -932,14 +932,17 @@ pub fn device_self_enroll(
     base_url: &str,
     reg: &ffi::RegistrationRequest,
 ) -> ApiResult<(String, String)> {
-    // Desktop clients enroll as `kind="app"` (never auto-expires). The label is a
-    // best-effort OS hostname (short, non-fingerprinty), falling back to "Desktop".
-    let label = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "Desktop".to_string());
+    // Desktop clients enroll as `kind="app"` (never auto-expires). Label = the OS family
+    // only (e.g. "Desktop · macOS") — short, stable, and non-fingerprinty (no hostname),
+    // mirroring the panel's "Admin panel · Chrome". `$HOSTNAME` is unreliable (not
+    // exported in most desktop process envs → it was almost always just "Desktop").
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    };
+    let label = format!("Desktop · {os}");
     let body = json!({
         "registration_payload": client::b64(&reg.payload),
         "registration_signature": client::b64(&reg.signature),
