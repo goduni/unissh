@@ -880,11 +880,22 @@ export const useApp = create<AppStore>((set, get) => ({
   maybeBindLegacyCloudVaults: async () => {
     // One-time 1:1 migration: cloud vaults created before binding existed have no
     // syncTenant (now the bound SPACE id — see VaultInfo.syncTenant). They were all
-    // made under the single pre-multi-server server, so
-    // bind them to THAT one — but ONLY when exactly one server is linked, so the
-    // binding can't go to the wrong one. Idempotent; safe on every boot/unlock.
-    // With 0 or 2+ servers it no-ops (the user binds such vaults manually).
+    // made under the single pre-multi-server server, so bind them to THAT one — but
+    // ONLY when exactly one server is linked, so the binding can't go to the wrong one.
+    //
+    // Runs ONCE per install. It used to run on every boot/unlock, which silently
+    // RE-BOUND any cloud vault the user had deliberately Unbound (with one server the
+    // vault is always "unbound → rebind" fodder) — the "I keep unbinding but it stays
+    // bound to the one server" bug. New vaults are bound at creation, so after this
+    // one migration pass the user's explicit Bind/Unbind is authoritative.
+    const DONE_KEY = "unissh-legacy-cloud-bind-done";
+    try {
+      if (localStorage.getItem(DONE_KEY)) return;
+    } catch {
+      /* storage unavailable (rare) — fall through, best-effort */
+    }
     const servers = get().servers;
+    if (servers.length === 0) return; // no server yet — retry after one is linked
     if (
       servers.length === 1 &&
       get().vaults.some((v) => v.syncTarget === "cloud" && !v.syncTenant)
@@ -895,7 +906,15 @@ export const useApp = create<AppStore>((set, get) => ({
       } catch (e) {
         // best-effort — retries next boot/unlock while one server is linked
         logDebug(`maybeBindLegacyCloudVaults: bind skipped (will retry): ${apiErrorMessage(e)}`);
+        return; // don't mark done on failure
       }
+    }
+    // Migration window passed (a server is linked; legacy vaults, if any, are now
+    // bound). Never auto-bind again → a deliberate Unbind sticks.
+    try {
+      localStorage.setItem(DONE_KEY, "1");
+    } catch {
+      /* storage unavailable — will re-run next boot (an idempotent no-op bind) */
     }
   },
 
