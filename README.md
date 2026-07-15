@@ -34,7 +34,6 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 - [Configuration](#configuration)
 - [Security & Privacy](#security--privacy)
 - [Build from source](#build-from-source)
-- [Project status](#project-status) · [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [FAQ / Troubleshooting](#faq--troubleshooting)
 - [License](#license)
@@ -100,8 +99,6 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 - Device + team **sync** of encrypted blobs over a self-hosted server, with **signed monotonic versions** and last-writer-wins conflict resolution (verify-before-apply).
 - **Membership, roles, sharing, and revocation** with cryptographic vault roles (viewer/editor/admin) distinct from the server-trusted owner / space-admin roles.
 - Server-side **audit hash-chain** and Prometheus metrics for operators.
-
-> **Status note.** The sync engine, the server, **and the desktop client's cloud integration** are implemented and tested end-to-end: a live test drives the real Tauri backend through claim → auth → cloud vault + membership → sync push → a second device → sync pull, asserting a secret round-trips byte-for-byte across devices. Today the user simply picks a **Local** or **Cloud** vault; local-only operation stays the default and the server is purely additive. Packaging a signed GUI build on every platform and finishing the mobile sync UI are the remaining frontier — see [Project status](#project-status).
 
 ---
 
@@ -413,37 +410,6 @@ Prefer raw cargo? `cargo build --workspace` / `cargo test --workspace` from the 
 **Toolchain:** Rust **1.94+** (`rust-toolchain.toml`), a C toolchain + system OpenSSL (for bundled SQLCipher), Node 20.19+/22.12+, and `wasm-pack` + the `wasm32-unknown-unknown` target for the admin panel. Each component has its own README with platform specifics.
 
 The core's per-crate map (crypto, keychain, storage, vault, ssh-agent, ssh-transport, ffi, cli, sync) and architecture are in [`rust-core/README.md`](rust-core/README.md).
-
----
-
-## Project status
-
-| Component | Status |
-| --- | --- |
-| `rust-core` | **Functional.** Milestone 1 complete + extended local features; ~194 tests; CI (fmt, clippy, tests, cargo-deny) on Linux + macOS. |
-| `server` | **Functional.** Full spec implemented; SQLite default + Postgres; Docker (distroless, non-root); tested against the real core via a byte-compat oracle. |
-| `server-ui` | **Functional.** 16-screen admin panel with real wasm crypto, talking to a live server. |
-| `client` (Tauri) | **Builds, runs & syncs.** `cargo check`, `tsc --noEmit` (0 errors) and `vite build` pass; the cloud surface (Local/Cloud vaults, device/team sync, membership, device onboarding) is wired through 29 Tauri commands and **verified by a live end-to-end test** against a real server. A full on-device packaged `tauri build` still needs a desktop machine; mobile sync UI is the next step. |
-
-This is honest, in-progress software. The cryptographic core, the server, and the desktop sync loop are the mature parts; polished cross-platform packaging and the mobile sync UI are the active frontier.
-
----
-
-## Roadmap
-
-**Recently landed:** the instance-scoped model — claim-with-setup-code, one account across many **spaces**, space-scoped **invite links**, **escrow sign-in** on a fresh device, and **SSO (OIDC)** ("Sign in with your IdP").
-
-The two open frontiers:
-
-- Finish & polish the **mobile** sync UI (the engine, server, and desktop integration are done and e2e-verified).
-- **Cross-account vault decryption for space members** — a member is granted into a space server-side today, but the client-side cryptographic key hand-off across accounts (so a newly-added member seamlessly decrypts a shared vault) is still being wired.
-
-Also on the list:
-
-- **Prebuilt installers** for every client platform + a documented **`SHA256SUMS` / signature** verification flow.
-- **Per-object dirty tracking** in the sync engine (it currently re-pushes the whole vault each sync; pushes are idempotent, so this is an efficiency win, not a correctness gap).
-- Planned core/server extensions (design hooks exist; not yet implemented): certificate authority, P2P/relay sharing between people, VK rotation, device-bound / FIDO2, key transparency, post-quantum hybrid, CRDT merge.
-- Translate the remaining component docs to English.
 
 ---
 
