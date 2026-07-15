@@ -68,23 +68,23 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   const p = usePalette();
-  // Stack the label/desc block above the control when the WINDOW is narrow, not
-  // just on the phone shell — otherwise long RU titles + a control overflow on a
-  // shrunk desktop window. flexWrap is a backstop if a control is still too wide.
-  const narrow = useNarrow();
+  // Keep the control inline with the label and let it WRAP to the next line only
+  // when it genuinely doesn't fit (flexWrap) — a small button stays in the remaining
+  // space, a wide control (Segmented) drops below on its own. minWidth:0 lets a long
+  // RU title wrap instead of forcing the control off the row.
   return (
     <div
       style={{
         display: "flex",
-        alignItems: narrow ? "stretch" : "center",
-        flexDirection: narrow ? "column" : "row",
+        alignItems: "center",
         flexWrap: "wrap",
-        gap: narrow ? 8 : 16,
+        gap: 16,
+        rowGap: 12,
         padding: "16px 0",
         borderBottom: `1px solid ${p.line}`,
       }}
     >
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 700 }}>{title}</div>
         {desc && <div style={{ fontSize: 12.5, color: p.txt3, marginTop: 2 }}>{desc}</div>}
       </div>
