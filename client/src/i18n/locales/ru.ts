@@ -216,6 +216,7 @@ export const ru = {
     grpUnbound: "Не синхронизируется",
     grpUnboundHint: "облачные волты без сервера",
     wontSync: "не синкается без привязки",
+    badgeUnbound: "без сервера",
     roleMember: "Участник",
     memberManaged: "Куда синкать этот волт, решает владелец",
     switchCloseTitle: "Закрыть открытые подключения?",

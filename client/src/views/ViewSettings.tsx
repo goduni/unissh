@@ -1251,7 +1251,7 @@ function SettingsVaults() {
         <Btn
           variant="ghost"
           size="sm"
-          icon="trash"
+          icon="zap"
           title={t("vault.purge")}
           disabled={vaults.length <= 1}
           onClick={() => purge(v)}

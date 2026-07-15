@@ -187,6 +187,7 @@ export const en = {
     grpUnbound: "Not synced anywhere",
     grpUnboundHint: "cloud vaults bound to no server",
     wontSync: "won’t sync until bound",
+    badgeUnbound: "no server",
     roleMember: "Member",
     memberManaged: "The owner controls where this vault syncs",
     switchCloseTitle: "Close open connections?",
