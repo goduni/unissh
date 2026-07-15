@@ -2,7 +2,6 @@ import i18n from "i18next";
 import { getCrypto } from "../crypto/provider";
 import { usePrefs } from "../store/prefs";
 import { useSession } from "../store/session";
-import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
 import { createClient } from "./client";
 import { ApiError } from "./errors";
@@ -13,9 +12,7 @@ import type { VerifyResp } from "./types";
 export const api = createClient(
   () => ({
     instanceUrl: usePrefs.getState().instanceUrl,
-    opsToken: useSession.getState().opsToken,
     bearer: useSession.getState().bearer,
-    tenantId: useTenant.getState().activeTenantId,
   }),
   // Rotate the admin access token with the in-memory refresh token. Called by the
   // client on a 401 (deduped). The refresh call itself carries no Bearer, so a 401 on
@@ -26,7 +23,6 @@ export const api = createClient(
     try {
       const r = await api.call<VerifyResp>("/v1/session/refresh", {
         method: "POST",
-        tenant: true,
         body: { refresh_token: refreshToken },
       });
       useSession.getState().setBearer(r.access_token, r.access_expires);
@@ -41,30 +37,19 @@ export const api = createClient(
       throw e;
     }
   },
-  // Auth-tier loss: don't let a dead session hide behind a green badge and a wall
-  // of raw 401s. Lock (keyset) or bounce to login (ops), and say why. Guarded so
-  // concurrent 401s don't fire duplicate toasts.
-  (scope) => {
+  // Auth-tier loss: don't let a dead keyset session hide behind a green badge and a
+  // wall of raw 401s. Lock the keyset and say why. Guarded so concurrent 401s don't
+  // fire duplicate toasts.
+  () => {
     const s = useSession.getState();
-    if (scope === "keyset") {
-      if (!s.keysetUnlocked && !s.bearer) return;
-      try {
-        getCrypto().lock();
-      } catch {
-        /* crypto may be unavailable */
-      }
-      s.lock();
-      useUi.getState().toast("error", i18n.t("access.sessionExpired"));
-    } else {
-      if (!s.opsToken) return;
-      try {
-        getCrypto().lock();
-      } catch {
-        /* crypto may be unavailable */
-      }
-      s.lock();
-      s.clearOps(i18n.t("access.opsSessionLost"));
+    if (!s.keysetUnlocked && !s.bearer) return;
+    try {
+      getCrypto().lock();
+    } catch {
+      /* crypto may be unavailable */
     }
+    s.lock();
+    useUi.getState().toast("error", i18n.t("access.sessionExpired"));
   },
 );
 

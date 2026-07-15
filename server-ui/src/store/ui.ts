@@ -6,20 +6,20 @@ export type Route =
   | "metrics"
   | "config"
   | "maint"
-  | "tenants"
+  | "spaces"
   | "accounts"
+  | "directory"
   | "devices"
   | "sessions"
   | "invites"
   | "vaults"
   | "grants"
-  | "enroll"
   | "relay"
   | "objects"
   | "audit";
 
 export interface DrawerRef {
-  type: "account" | "tenant" | "vault";
+  type: "account" | "vault";
   id: string;
 }
 
@@ -43,13 +43,8 @@ export interface Toast {
 
 interface UiState {
   route: Route;
-  tenantSwitcherOpen: boolean;
   panelOpen: boolean;
-  keysetModalOpen: boolean;
-  opsLoginOpen: boolean;
   inviteOpen: boolean;
-  enrollOpen: boolean;
-  bootstrapOpen: boolean;
   rotateOpen: boolean;
   drawer: DrawerRef | null;
   confirm: ConfirmCfg | null;
@@ -59,19 +54,9 @@ interface UiState {
 
   go: (r: Route) => void;
   bumpReload: () => void;
-  toggleTenantSwitcher: () => void;
-  closeTenantSwitcher: () => void;
   togglePanel: () => void;
-  openKeyset: () => void;
-  closeKeyset: () => void;
-  openOpsLogin: () => void;
-  closeOpsLogin: () => void;
   openInvite: () => void;
   closeInvite: () => void;
-  openEnroll: () => void;
-  closeEnroll: () => void;
-  openBootstrap: () => void;
-  closeBootstrap: () => void;
   openRotate: () => void;
   closeRotate: () => void;
   openDrawer: (d: DrawerRef) => void;
@@ -86,13 +71,8 @@ let toastSeq = 1;
 
 export const useUi = create<UiState>()((set) => ({
   route: "overview",
-  tenantSwitcherOpen: false,
   panelOpen: false,
-  keysetModalOpen: false,
-  opsLoginOpen: false,
   inviteOpen: false,
-  enrollOpen: false,
-  bootstrapOpen: false,
   rotateOpen: false,
   drawer: null,
   confirm: null,
@@ -103,24 +83,12 @@ export const useUi = create<UiState>()((set) => ({
   go: (route) =>
     set({
       route,
-      tenantSwitcherOpen: false,
       panelOpen: false,
       drawer: null,
     }),
-  toggleTenantSwitcher: () =>
-    set((s) => ({ tenantSwitcherOpen: !s.tenantSwitcherOpen })),
-  closeTenantSwitcher: () => set({ tenantSwitcherOpen: false }),
   togglePanel: () => set((s) => ({ panelOpen: !s.panelOpen })),
-  openKeyset: () => set({ keysetModalOpen: true }),
-  closeKeyset: () => set({ keysetModalOpen: false }),
-  openOpsLogin: () => set({ opsLoginOpen: true }),
-  closeOpsLogin: () => set({ opsLoginOpen: false }),
   openInvite: () => set({ inviteOpen: true }),
   closeInvite: () => set({ inviteOpen: false }),
-  openEnroll: () => set({ enrollOpen: true }),
-  closeEnroll: () => set({ enrollOpen: false }),
-  openBootstrap: () => set({ bootstrapOpen: true }),
-  closeBootstrap: () => set({ bootstrapOpen: false }),
   openRotate: () => set({ rotateOpen: true }),
   closeRotate: () => set({ rotateOpen: false }),
   openDrawer: (drawer) => set({ drawer }),

@@ -1,6 +1,7 @@
 # UniSSH Server — example configuration (spec §14.2).
 # Hierarchy: defaults → this TOML → env (UNISSH__SECTION__KEY=...).
-# Secrets (tls_key, postgres url, bootstrap token) — via env/Docker secret.
+# Secrets (tls_key, postgres url) — via env/Docker secret. The ops token is an
+# optional break-glass (see [ops]), not a required secret.
 
 [server]
 bind = "0.0.0.0:8443"
@@ -12,6 +13,8 @@ trust_proxy = false
 acme = false                      # in-process ACME is NOT built in: acme=true → startup
                                   # refusal. Use a reverse-proxy (Caddy/nginx)
                                   # or tls_cert+tls_key.
+# Public base URL for rendering invite links (empty → clients compose their own).
+public_url = ""
 
 [db]
 backend = "sqlite"                # "sqlite" | "postgres"
@@ -48,15 +51,30 @@ otel_endpoint = ""                # OTLP export is NOT compiled in: if set — w
                                   # at startup. Metrics: /metrics; tracing: logs/sidecar.
 metrics_bind = "127.0.0.1:9090"
 
-[bootstrap]
-# Global bootstrap token (base64). Empty + allow_open=false → bootstrap is closed.
-# Set via env: UNISSH__BOOTSTRAP__TOKEN=...
-token = ""
-allow_open = false
-default_tier = "personal"         # "personal" | "org"
+[setup]
+# code = "" → empty → a random setup code is printed to the server log on first
+# boot (while the instance is unclaimed); the first user claims the instance with
+# it. Set a value to pin a deterministic code for IaC/tests. Env: UNISSH__SETUP__CODE=...
+code = ""
+
+[oidc]
+# SSO seam (Phase 5): disabled by default. Env: UNISSH__OIDC__*
+enabled = false
+issuer = ""                       # IdP issuer URL, e.g. https://idp.example.com
+client_id = ""
+audience = ""                     # expected id_token `aud`; empty → falls back to client_id
+jwks_url = ""                     # empty → derived as {issuer}/.well-known/jwks.json
+groups_claim = "groups"           # id_token claim holding the user's group list
+max_reassertion_age_seconds = 604800  # 7 days: max silent session reassertion before full re-auth
+# IdP-group → space grants applied on OIDC callback (empty by default). Repeat
+# the block per mapping; each maps an IdP group to a space membership at a role:
+# [[oidc.group_map]]
+# group = "engineering"
+# space_id = "<space-id>"
+# role = "member"
 
 [ops]
-# Operator token for cross-tenant /v1/ops/* (X-UniSSH-Ops-Token header).
-# Empty → ops surface is DISABLED. Set via env: UNISSH__OPS__TOKEN=...
-# This is server-trusted infrastructure access (tenants/suspend/seq-bump), NOT a keyset.
+# Optional break-glass for /v1/ops/* (X-UniSSH-Ops-Token header); empty → disabled.
+# Server-trusted infrastructure access (overview/instance/seq-bump), NOT a keyset —
+# grants no decryption. Set via env: UNISSH__OPS__TOKEN=...
 token = ""

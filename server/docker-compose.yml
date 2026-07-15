@@ -37,9 +37,11 @@ services:
       # DEV: no proxy in front of this single service — do NOT trust X-Forwarded-*.
       UNISSH__SERVER__TRUST_PROXY: "false"
       UNISSH__OBS__LOG_FORMAT: "json"
-      # Dev secret — override for anything real.
-      UNISSH__BOOTSTRAP__TOKEN: "${UNISSH_BOOTSTRAP_TOKEN:-dev-bootstrap-token}"
-      UNISSH__BOOTSTRAP__DEFAULT_TIER: "personal"
+      # First-run: the server prints a SETUP CODE to its log on first boot; claim
+      # the instance with it:
+      #   docker compose -f server/docker-compose.yml logs unissh-server | grep -i "setup code"
+      # Uncomment to pin a deterministic code for local/dev instead:
+      # UNISSH__SETUP__CODE: "dev-setup-code"
     volumes:
       - unissh-data:/app/data         # SQLite file; writable by uid 65532 (distroless nonroot)
     read_only: true

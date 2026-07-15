@@ -45,6 +45,14 @@ UniSSH is deliberately multi-instance. An organization or team runs **its own se
 
 A **local vault** is a special case: an "instance with no server" that lives only on the device and is connected to nothing.
 
+## One account, many spaces
+
+Within a single instance, teams are first-class **spaces** (Backend, Security, …) — groupings under one account, **not** identity boundaries. A person has **one account** across every space they belong to (no separate login per team), and a shared people **directory** spans those spaces.
+
+- An **account = one keyset identity**; its Ed25519 public key is the canonical member-id that vault grants are keyed on, and an account's devices share that keyset.
+- **Onboarding** is by a space-scoped, revocable **invite link** (`/join`) or **SSO (OIDC)** with a group→space mapping that is reconciled on every login (dropping an IdP group removes that space). An existing account joins further spaces via a directory-add.
+- **Server-trusted roles** — **owner** (the first user to *claim* the instance with its one-time setup code), **space-admin**, and **member** — govern who may administer the server. They are distinct from the cryptographic **vault roles** (viewer/editor/admin) that decide who can actually decrypt a vault.
+
 ## Repository at a glance
 
 UniSSH is a monorepo. The Rust core is the shared foundation; the server, client, and admin panel all build on it.

@@ -11,10 +11,16 @@ export interface KeysetSession {
   label: string;
 }
 
+// Two-level admin session (both established atomically by escrow/claim sign-in):
+//   · server-trusted — a live Bearer (`bearer != null`); grants the server-scoped
+//     ops/admin endpoints and can be rotated with the refresh token.
+//   · keyset-unlocked — the account keyset is decrypted in the wasm module
+//     (`keysetUnlocked`); the private key signs challenges + grant rotations and
+//     never leaves the tab.
+// escrow sign-in fetches+unlocks the keyset FIRST, then challenge→verify mints the
+// Bearer, so the two flags flip together; `lock()` clears both. Neither is
+// persisted — a reload drops the session and returns to the sign-in screen.
 interface SessionState {
-  /** Ops-tier auth: static X-UniSSH-Ops-Token (in memory only). */
-  opsToken: string | null;
-  /** Admin-tier auth: Bearer from the keyset unlock (in memory only). */
   bearer: string | null;
   refreshToken: string | null;
   accessExpires: number | null;
@@ -22,18 +28,13 @@ interface SessionState {
   adminAccountId: string | null;
   adminDeviceId: string | null;
   adminLabel: string | null;
-  /** Reason the ops session ended (shown on the login screen after a bounce). */
-  opsNotice: string | null;
 
-  setOpsToken: (t: string) => void;
-  clearOps: (notice?: string | null) => void;
   setKeysetSession: (s: KeysetSession) => void;
   setBearer: (bearer: string, accessExpires: number) => void;
   lock: () => void;
 }
 
 export const useSession = create<SessionState>()((set) => ({
-  opsToken: null,
   bearer: null,
   refreshToken: null,
   accessExpires: null,
@@ -41,10 +42,7 @@ export const useSession = create<SessionState>()((set) => ({
   adminAccountId: null,
   adminDeviceId: null,
   adminLabel: null,
-  opsNotice: null,
 
-  setOpsToken: (opsToken) => set({ opsToken, opsNotice: null }),
-  clearOps: (notice = null) => set({ opsToken: null, opsNotice: notice }),
   setKeysetSession: (s) =>
     set({
       bearer: s.bearer,

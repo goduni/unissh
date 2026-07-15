@@ -3,12 +3,11 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import type { AccountRow } from "../api/types";
 import { usePrefs } from "../store/prefs";
-import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Icon } from "../ui/icons";
-import { Drawer, KeysetGate } from "../ui/overlays";
+import { Drawer } from "../ui/overlays";
 import {
   Avatar,
   Btn,
@@ -23,13 +22,19 @@ import {
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
+// Seed the avatar color from a char-hash of account_id (same hash as the Directory
+// list / Spaces tile) — seeding on .length collapses nearly every account onto one color.
+const seedOf = (id: string) => {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(h);
+};
+
 export function Accounts() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.accounts.title")} sub={t("screen.accounts.sub")} zk>
-      <KeysetGate>
-        <AccountsBody />
-      </KeysetGate>
+      <AccountsBody />
     </Screen>
   );
 }
@@ -38,16 +43,13 @@ function AccountsBody() {
   const { t } = useTranslation();
   const density = usePrefs((s) => s.density);
   const setDensity = usePrefs((s) => s.setDensity);
-  const activeTenantId = useTenant((s) => s.activeTenantId);
   const reloadTick = useUi((s) => s.reloadTick);
 
-  const data = useAsync(() => api.identity.accounts(), [activeTenantId, reloadTick]);
+  const data = useAsync(() => api.identity.accounts(), [reloadTick]);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(null);
 
   const accounts = data.data?.accounts ?? [];
-  // The space owner (genesis) — its member/ed25519 pubkey == genesis_owner.
-  const genesisOwner = data.data?.genesis_owner ?? null;
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return accounts;
@@ -70,17 +72,13 @@ function AccountsBody() {
       width: "2fr",
       render: (a) => (
         <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <Avatar label={initialsOf(nameOf(a))} seed={a.account_id.length} size={30} />
+          <Avatar label={initialsOf(nameOf(a))} seed={seedOf(a.account_id)} size={30} />
           <span style={{ minWidth: 0 }}>
             <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {nameOf(a)}
               </span>
-              {genesisOwner && a.member_pubkey === genesisOwner ? (
-                <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag>
-              ) : a.is_admin ? (
-                <Tag tone="amber">ADMIN</Tag>
-              ) : null}
+              {a.is_owner ? <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag> : null}
             </span>
             <span style={{ fontSize: 11, color: "var(--txt3)", fontFamily: MONO }}>
               {a.handle ?? "—"}
@@ -156,13 +154,13 @@ function AccountsBody() {
               style={{ background: "var(--bg1)", border: "1px solid var(--line)", borderRadius: 13, padding: "15px 16px", cursor: "pointer" }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-                <Avatar label={initialsOf(nameOf(a))} seed={a.account_id.length} size={38} />
+                <Avatar label={initialsOf(nameOf(a))} seed={seedOf(a.account_id)} size={38} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <span style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {nameOf(a)}
                     </span>
-                    {a.is_admin ? <Tag tone="amber">ADMIN</Tag> : null}
+                    {a.is_owner ? <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag> : null}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: MONO }}>{a.handle ?? "—"}</div>
                 </div>
@@ -231,16 +229,16 @@ function AccountDrawer({
   const name = account.display_name || account.handle || "—";
   const disabled = account.status === "disabled";
 
-  const toggleAdmin = () => {
+  const toggleOwner = () => {
     askConfirm({
-      title: account.is_admin ? t("screen.accounts.adminRevokeTitle") : t("screen.accounts.adminGrantTitle"),
-      desc: account.is_admin
-        ? t("screen.accounts.adminRevokeDesc")
-        : t("screen.accounts.adminGrantDesc"),
-      danger: account.is_admin,
-      confirmLabel: account.is_admin ? t("screen.accounts.adminRevokeConfirm") : t("screen.accounts.adminGrantConfirm"),
+      title: account.is_owner ? t("screen.accounts.ownerRevokeTitle") : t("screen.accounts.ownerGrantTitle"),
+      desc: account.is_owner
+        ? t("screen.accounts.ownerRevokeDesc")
+        : t("screen.accounts.ownerGrantDesc"),
+      danger: account.is_owner,
+      confirmLabel: account.is_owner ? t("screen.accounts.ownerRevokeConfirm") : t("screen.accounts.ownerGrantConfirm"),
       onConfirm: async () => {
-        await api.identity.adminSet(account.account_id, !account.is_admin);
+        await api.owner.set(account.account_id, !account.is_owner);
         toast("success", t("common.done"));
         onChanged();
         onClose();
@@ -268,11 +266,11 @@ function AccountDrawer({
   return (
     <Drawer onClose={onClose}>
       <div style={{ padding: "20px 22px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 13 }}>
-        <Avatar label={initialsOf(name)} seed={account.account_id.length} size={44} />
+        <Avatar label={initialsOf(name)} seed={seedOf(account.account_id)} size={44} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <span style={{ fontSize: 16, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
-            {account.is_admin ? <Tag tone="amber">ADMIN</Tag> : null}
+            {account.is_owner ? <Tag tone="green">{t("screen.accounts.ownerBadge")}</Tag> : null}
           </div>
           <div style={{ fontSize: 12, color: "var(--txt3)", fontFamily: MONO }}>{account.handle ?? "—"}</div>
         </div>
@@ -314,8 +312,8 @@ function AccountDrawer({
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-          <Btn full variant={account.is_admin ? "outline" : "soft"} icon="shield" onClick={toggleAdmin}>
-            {account.is_admin ? t("screen.accounts.adminRevokeTitle") : t("screen.accounts.adminGrantTitle")}
+          <Btn full variant={account.is_owner ? "outline" : "soft"} icon="shield" onClick={toggleOwner}>
+            {account.is_owner ? t("screen.accounts.ownerRevokeTitle") : t("screen.accounts.ownerGrantTitle")}
           </Btn>
           <Btn full icon="shieldcheck" onClick={() => go("grants")}>
             {t("screen.accounts.issueGrant")}

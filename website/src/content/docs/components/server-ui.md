@@ -1,6 +1,6 @@
 ---
 title: Admin panel (server-ui)
-description: The UniSSH self-hosted admin panel — a React SPA that does real cryptography in the browser, with a two-tier access model (ops token plus admin keyset).
+description: The UniSSH self-hosted admin panel — a React SPA that does real cryptography in the browser, signing in by escrow or SSO with the account keyset unlocked in-page.
 ---
 
 `server-ui` is the production web admin panel for a self-hosted UniSSH **zero-knowledge** control plane. It is a single-page app that connects to a **live** server API and shares its visual language with the desktop client (it ports the client's design tokens).
@@ -14,17 +14,21 @@ Keyset operations in the panel use genuine cryptography, not a re-implementation
 It deliberately **does not pull in** `keychain`/`vault` (those depend on `storage` → rusqlite/SQLCipher, which does not compile to wasm). Instead it **vendors the storage-free keyset crypto 1:1**, so the panel's signatures are **byte-compatible** with real clients (domains `unissh-server-auth-v1`, `unissh-registration-v1`).
 
 :::caution
-If `crypto-wasm/pkg/` is not built, the panel still loads, but keyset operations (unlock, bootstrap, rotation) report "wasm not loaded". Build it with `npm run build:wasm` — see [Install & prerequisites](../../overview/install/).
+If `crypto-wasm/pkg/` is not built, the panel still loads, but keyset operations (unlock, claim, rotation) report "wasm not loaded". Build it with `npm run build:wasm` — see [Install & prerequisites](../../overview/install/).
 :::
 
-## Two-tier access (mirroring the server)
+## Signing in
 
-The panel has exactly two ways in, matching the server's two authorities (see [Server & API surface](../server/)):
+The panel administers **one instance** (there is no tenant switcher). You sign in as the **owner** or a **space-admin** — the same account you use in the desktop client:
 
-1. **Ops** — a static token (`X-UniSSH-Ops-Token`) from the server config (`[ops] token`), entered on the login screen. It grants cross-tenant `/v1/ops/*` (tenants, overview, `seq-bump`). This is **server-trusted infrastructure access**, not a keyset.
-2. **Admin keyset** — a per-tenant Bearer credential. The flow: import a `.keyset` + password (+ Secret Key) → **unlock in the browser** (the key stays in memory only) → `auth/challenge` → sign (via wasm) → `auth/verify`. This opens all `/v1/admin/*` routes and the cryptographic actions. **Lock** wipes the key.
+1. **Escrow sign-in** — enter **handle + password + Secret Key**. The panel fetches the account's **encrypted** keyset from escrow and unlocks it **in the browser** (the keyset never leaves the page, and never reaches the server); a single flow then mints the admin session and the keyset stays unlocked for crypto actions. **Lock** wipes it. There is **no `.keyset` file to import** and **no ops token to enter first**.
+2. **SSO** — if the instance has `[oidc]` enabled, "Sign in with SSO" runs the browser OIDC flow instead.
+3. **QR-approve** — a brand-new browser that isn't linked yet is onboarded by scanning a QR from an already-trusted device (the device-to-device relay).
+4. **Claim** — if the instance is still unclaimed, the login screen offers to claim it with the setup code from the server log.
 
-Cryptographic sections sit behind a `LockGate` until unlocked. Dangerous actions go through a confirmation dialog (for suspend / `seq-bump`, you re-type the identifier). There is no read-only role — the server does not have one.
+Both levels of the session (the admin/ops access token and the unlocked keyset) are established **together** by escrow/claim sign-in; nothing is persisted, so a reload returns to the sign-in screen. Cryptographic sections sit behind a `LockGate` until the keyset is unlocked, and dangerous actions go through a confirmation dialog (for `seq-bump`, you re-type the identifier). There is no read-only role — the server does not have one.
+
+The optional server-trusted **ops** break-glass token (`[ops] token`, `X-UniSSH-Ops-Token`) is a separate, default-off infrastructure lever for `/v1/ops/*` (overview / instance / `seq-bump`) — **not** the panel's normal way in, and never a decryption key.
 
 ## Layout
 
@@ -32,17 +36,17 @@ Cryptographic sections sit behind a `LockGate` until unlocked. Dangerous actions
 src/
   api/         typed client (headers/idempotency/error envelope), auth-service
   crypto/      CryptoProvider (seam) + wasm-provider (real crypto)
-  store/       Zustand: session (ops/keyset), tenant, prefs, ui, meta
+  store/       Zustand: session (access + keyset-unlocked), prefs, ui, meta
   theme/       ported tokens + ThemeProvider (CSS vars, dark/light × 5 accents)
   ui/          primitives, DataTable, overlays (Drawer/Modal/ConfirmDialog/LockGate/Toaster)
-  shell/       window chrome: Titlebar, Sidebar (TenantSwitcher + nav), SettingsPanel
-  access/      OpsLogin, KeysetModal, BootstrapModal, InviteModal
-  screens/     16 screens (Instance / Identity / Access / Data)
+  shell/       window chrome: Titlebar, Sidebar (instance identity + nav), SettingsPanel
+  access/      Login (escrow / SSO), ClaimModal, InviteModal
+  screens/     ~16 screens (Instance / Identity / Access / Data)
   i18n/        ru/en
 crypto-wasm/   Rust → wasm crate (crypto)
 ```
 
-The 16 screens cover instance operations (overview, devices, sessions, config, migrations), identity (accounts, invites, keysets), access (vaults, grants), and data (objects, audit) — all driven by the server's [admin/ops read-projections](../server/), which expose only **open metadata** and never ciphertext.
+The screens cover instance operations (overview, devices, sessions, config, health, metrics, maintenance, migrations), identity (accounts, **spaces**, **directory**, invites), access (vaults, grants), and data (objects, audit, relay) — all driven by the server's [admin read-projections](../server/), which expose only **open metadata** and never ciphertext.
 
 ## Build and deploy
 

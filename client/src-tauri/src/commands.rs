@@ -627,8 +627,8 @@ pub async fn get_binding(
     state: State<'_, AppState>,
 ) -> ApiResult<Option<dto::IdentityBinding>> {
     let core = state.core.clone();
-    let b = blocking(move || core.get_binding(personal_vault_id, team_vault_id, profile_uid))
-        .await?;
+    let b =
+        blocking(move || core.get_binding(personal_vault_id, team_vault_id, profile_uid)).await?;
     Ok(b.map(Into::into))
 }
 
@@ -718,7 +718,9 @@ pub async fn apply_username_template(
     username_template: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
-    Ok(state.core.apply_username_template(base_user, username_template))
+    Ok(state
+        .core
+        .apply_username_template(base_user, username_template))
 }
 
 #[tauri::command]
@@ -819,8 +821,7 @@ pub async fn ssh_exec(
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
-    let r =
-        blocking(move || core.ssh_exec(host, port, user, auth, command, jumps)).await?;
+    let r = blocking(move || core.ssh_exec(host, port, user, auth, command, jumps)).await?;
     Ok(r.into())
 }
 
@@ -899,10 +900,8 @@ pub async fn exec_stream_open(
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
     let obs: Arc<dyn ExecObserver> = Arc::new(ChannelExecObserver { chan: on_event });
-    let handle = blocking(move || {
-        core.ssh_exec_stream(host, port, user, auth, command, jumps, obs)
-    })
-    .await?;
+    let handle =
+        blocking(move || core.ssh_exec_stream(host, port, user, auth, command, jumps, obs)).await?;
     let id = new_id();
     state.exec_handles.insert(id.clone(), handle);
     Ok(id)
@@ -950,12 +949,9 @@ pub async fn session_open(
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
     let obs: Arc<dyn SessionObserver> = Arc::new(ChannelSessionObserver { chan: on_event });
-    let session = blocking(move || {
-        core.open_session(
-            host, port, user, auth, jumps, term, cols, rows, obs,
-        )
-    })
-    .await?;
+    let session =
+        blocking(move || core.open_session(host, port, user, auth, jumps, term, cols, rows, obs))
+            .await?;
     let id = new_id();
     state
         .sessions
@@ -1155,10 +1151,8 @@ pub async fn tunnel_open_dynamic(
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
-    let t = blocking(move || {
-        core.open_dynamic_forward(host, port, user, auth, jumps, local_bind)
-    })
-    .await?;
+    let t = blocking(move || core.open_dynamic_forward(host, port, user, auth, jumps, local_bind))
+        .await?;
     let bind_address = t.bind_address();
     let id = new_id();
     state.tunnels.insert(id.clone(), t);
@@ -1225,8 +1219,7 @@ pub async fn sftp_open(
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
-    let sftp =
-        blocking(move || core.open_sftp(host, port, user, auth, jumps, parallelism)).await?;
+    let sftp = blocking(move || core.open_sftp(host, port, user, auth, jumps, parallelism)).await?;
     let id = new_id();
     state.sftp.insert(id.clone(), sftp);
     Ok(id)
@@ -1269,7 +1262,12 @@ pub async fn local_list_dir(path: String) -> ApiResult<Vec<dto::LocalEntry>> {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            out.push(dto::LocalEntry { name, is_dir, size, mtime });
+            out.push(dto::LocalEntry {
+                name,
+                is_dir,
+                size,
+                mtime,
+            });
         }
         Ok(out)
     })
@@ -1345,7 +1343,12 @@ pub async fn sftp_rename(
 
 /// chmod a remote path (low 12 mode bits).
 #[tauri::command]
-pub async fn sftp_chmod(id: String, path: String, mode: u32, state: State<'_, AppState>) -> ApiResult<()> {
+pub async fn sftp_chmod(
+    id: String,
+    path: String,
+    mode: u32,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
     let s = get_sftp(&state, &id)?;
     blocking(move || s.chmod(path, mode)).await
 }
@@ -1388,8 +1391,17 @@ pub async fn sftp_download(
     let cancel = cancel_id.and_then(|cid| state.cancels.get(&cid).map(|c| c.clone()));
     let progress: Option<Arc<dyn SftpProgressObserver>> =
         Some(Arc::new(ChannelSftpProgress { chan: on_progress }));
-    blocking(move || s.sftp_download(remote_path, local_path, offset, known_size, progress, cancel))
-        .await
+    blocking(move || {
+        s.sftp_download(
+            remote_path,
+            local_path,
+            offset,
+            known_size,
+            progress,
+            cancel,
+        )
+    })
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]

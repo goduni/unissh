@@ -130,9 +130,9 @@ body:
         code block, so no backticks needed.
 
         > [!WARNING]
-        > Scrub secrets first — bootstrap tokens, instance URLs you don't want public,
-        > passwords, and anything resembling private key material. **Never** paste
-        > private keys or vault ciphertext.
+        > Scrub secrets first — setup codes, ops tokens, instance URLs you don't want
+        > public, passwords, and anything resembling private key material. **Never**
+        > paste private keys or vault ciphertext.
       render: text
     validations:
       required: false

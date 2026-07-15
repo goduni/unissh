@@ -22,7 +22,6 @@ pub enum ErrorCode {
     RateLimited,
     PayloadTooLarge,
     Malformed,
-    TenantSuspended,
     RollbackDetected,
     Internal,
 }
@@ -38,7 +37,6 @@ impl ErrorCode {
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::Malformed => StatusCode::BAD_REQUEST,
-            ErrorCode::TenantSuspended => StatusCode::FORBIDDEN,
             ErrorCode::RollbackDetected => StatusCode::CONFLICT,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -54,7 +52,6 @@ impl ErrorCode {
             ErrorCode::RateLimited => "rate_limited",
             ErrorCode::PayloadTooLarge => "payload_too_large",
             ErrorCode::Malformed => "malformed",
-            ErrorCode::TenantSuspended => "tenant_suspended",
             ErrorCode::RollbackDetected => "rollback_detected",
             ErrorCode::Internal => "internal",
         }
@@ -105,9 +102,6 @@ impl AppError {
     }
     pub fn malformed(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Malformed, m)
-    }
-    pub fn tenant_suspended() -> Self {
-        Self::new(ErrorCode::TenantSuspended, "tenant suspended")
     }
     pub fn rollback_detected(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::RollbackDetected, m)

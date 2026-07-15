@@ -1,0 +1,582 @@
+//! v2 spaces/members/directory HTTP surface (§ Task 7): owner creates a space,
+//! lists memberships with roles, runs the membership lifecycle (add → read →
+//! role → remove) and reads the shared directory. The SECOND account is seeded
+//! through the store seam (`TestApp::seed_session`) because there is no HTTP join
+//! endpoint until Task 8 — the endpoints under test are all exercised over HTTP;
+//! only the second account's *creation* uses the store handle the harness exposes.
+
+mod common;
+
+use common::{claim_owner, spawn};
+use serde_json::{Value, json};
+use unissh_server::ids::b64;
+use unissh_server::store::Val;
+
+#[tokio::test]
+async fn spaces_members_directory_lifecycle() {
+    let app = spawn().await;
+    let id = common::make_identity();
+    let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let tok = common::login_v2(
+        &app,
+        &id,
+        &owner_acct,
+        claimed["device_id"].as_str().unwrap(),
+    )
+    .await;
+
+    let get = |path: String, bearer: &str| {
+        app.client
+            .get(format!("{}{}", app.base, path))
+            .bearer_auth(bearer)
+            .send()
+    };
+    let post = |path: &str, bearer: &str, body: Value| {
+        app.client
+            .post(format!("{}/v1/{}", app.base, path))
+            .bearer_auth(bearer)
+            .json(&body)
+            .send()
+    };
+
+    // --- GET /v1/spaces: the claim seeded "Main", owner is its admin ---
+    let spaces: Value = get("/v1/spaces".into(), &tok)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let list = spaces["spaces"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "only Main after claim");
+    assert_eq!(list[0]["name"], "Main");
+    assert_eq!(list[0]["role"], "admin");
+
+    // --- POST /v1/spaces (owner) → 201, creator auto-added as admin ---
+    let r = post("spaces", &tok, json!({ "name": "Backend" }))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201, "owner creates space");
+    let backend_id = r.json::<Value>().await.unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let spaces: Value = get("/v1/spaces".into(), &tok)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let list = spaces["spaces"].as_array().unwrap();
+    assert_eq!(list.len(), 2, "Main + Backend");
+    let names: Vec<&str> = list.iter().map(|s| s["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"Main") && names.contains(&"Backend"));
+    assert!(
+        list.iter().all(|s| s["role"] == "admin"),
+        "owner is admin of both"
+    );
+
+    // --- role validation: a bad role is rejected (400) ---
+    let r = post(
+        "spaces/members",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": owner_acct, "role": "superuser" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 400, "invalid role → malformed");
+
+    // --- admin guard: owner is NOT admin of an unknown space → 403 ---
+    let fake_space = b64(&[9u8; 16]);
+    let r = post(
+        "spaces/members",
+        &tok,
+        json!({ "space_id": fake_space, "account_id": owner_acct, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 403, "not admin of unknown space");
+
+    // --- seed a SECOND account via the store seam (no HTTP join until Task 8) ---
+    let member = app.seed_session("").await;
+    let member_acct = b64(&member.account_id);
+    let member_tok = member.access_token_b64.clone();
+
+    // owner adds the member to Backend as "member" → 204
+    let r = post(
+        "spaces/members",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 204, "admin adds member");
+
+    // the member now sees Backend with role "member"
+    let m_spaces: Value = get("/v1/spaces".into(), &member_tok)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ml = m_spaces["spaces"].as_array().unwrap();
+    assert_eq!(ml.len(), 1);
+    assert_eq!(ml[0]["name"], "Backend");
+    assert_eq!(ml[0]["role"], "member");
+
+    // GET /v1/spaces/members?space_id= (admin) → both members, with handles/pubkeys.
+    // `space_id` is standard base64 (may contain '+' '/' '='), which MUST be percent-
+    // encoded in the query string — a raw '+' decodes to a space server-side and is
+    // then rejected as invalid base64 (a flaky ~1-in-3 failure otherwise).
+    let backend_q = backend_id
+        .replace('+', "%2B")
+        .replace('/', "%2F")
+        .replace('=', "%3D");
+    let ms: Value = get(format!("/v1/spaces/members?space_id={backend_q}"), &tok)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let members = ms["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    let owner_row = members
+        .iter()
+        .find(|m| m["account_id"] == owner_acct)
+        .unwrap();
+    assert_eq!(owner_row["role"], "admin");
+    assert_eq!(owner_row["handle"], "owner");
+    assert!(
+        owner_row["member_pubkey"].is_string(),
+        "member_pubkey present"
+    );
+    let member_row = members
+        .iter()
+        .find(|m| m["account_id"] == member_acct)
+        .unwrap();
+    assert_eq!(member_row["role"], "member");
+
+    // a plain member MAY read the member list (space member gate)
+    let r = get(
+        format!("/v1/spaces/members?space_id={backend_q}"),
+        &member_tok,
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 200, "member reads member list");
+
+    // a non-admin member CANNOT change roles → 403
+    let r = post(
+        "spaces/members/role",
+        &member_tok,
+        json!({ "space_id": backend_id, "account_id": owner_acct, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 403, "member cannot set roles");
+
+    // a bad role on the role endpoint is rejected (400)
+    let r = post(
+        "spaces/members/role",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct, "role": "boss" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 400, "invalid role on set-role");
+
+    // owner promotes the member to admin → 204, reflected in the member's listing
+    let r = post(
+        "spaces/members/role",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct, "role": "admin" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 204, "admin promotes member");
+    let m_spaces: Value = get("/v1/spaces".into(), &member_tok)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(m_spaces["spaces"][0]["role"], "admin", "promotion visible");
+
+    // owner removes the member → 204; Backend disappears from the member's listing
+    let r = post(
+        "spaces/members/remove",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 204, "admin removes member");
+    let m_spaces: Value = get("/v1/spaces".into(), &member_tok)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        m_spaces["spaces"].as_array().unwrap().len(),
+        0,
+        "member no longer in any space"
+    );
+
+    // --- GET /v1/directory (any authenticated caller) → both accounts ---
+    let dir: Value = get("/v1/directory".into(), &tok)
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let accts = dir["accounts"].as_array().unwrap();
+    assert_eq!(accts.len(), 2, "owner + seeded account");
+    let owner_dir = accts
+        .iter()
+        .find(|a| a["account_id"] == owner_acct)
+        .unwrap();
+    assert_eq!(owner_dir["handle"], "owner");
+    assert!(owner_dir["member_pubkey"].is_string());
+    assert!(owner_dir["x25519_pub"].is_string());
+    assert_eq!(owner_dir["status"], "active");
+
+    // the directory is readable by a plain member too (company model)
+    let r = get("/v1/directory".into(), &member_tok).await.unwrap();
+    assert_eq!(r.status(), 200);
+    let dir2: Value = r.json().await.unwrap();
+    assert_eq!(dir2["accounts"].as_array().unwrap().len(), 2);
+}
+
+/// Whole-branch review FIXes: (2) member-add on an unknown account 404s instead of
+/// 500-ing on the FK violation; (3) a space's LAST admin cannot be removed or demoted
+/// (anti-orphan — the instance owner is NOT auto-admin of spaces they didn't create,
+/// so an orphaned space has no recovery path).
+#[tokio::test]
+async fn member_add_unknown_404_and_last_admin_protected() {
+    let app = spawn().await;
+    let id = common::make_identity();
+    let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let tok = common::login_v2(
+        &app,
+        &id,
+        &owner_acct,
+        claimed["device_id"].as_str().unwrap(),
+    )
+    .await;
+
+    let post = |path: &str, body: Value| {
+        app.client
+            .post(format!("{}/v1/{}", app.base, path))
+            .bearer_auth(&tok)
+            .json(&body)
+            .send()
+    };
+
+    // Owner creates "Solo" → owner is its SOLE admin.
+    let solo_id = post("spaces", json!({ "name": "Solo" }))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // FIX 2: adding a member with a random NONEXISTENT account_id → 404 (not 500). The
+    // admin guard runs first, so this is reached only because the caller IS an admin.
+    let ghost = b64(&[7u8; 16]);
+    let r = post(
+        "spaces/members",
+        json!({ "space_id": solo_id, "account_id": ghost, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 404, "unknown account → 404, not 500");
+
+    // FIX 3a: removing the last admin (the owner) of Solo → 403.
+    let r = post(
+        "spaces/members/remove",
+        json!({ "space_id": solo_id, "account_id": owner_acct }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 403, "cannot remove the last admin of a space");
+
+    // FIX 3b: demoting the last admin (the owner) of Solo → 403.
+    let r = post(
+        "spaces/members/role",
+        json!({ "space_id": solo_id, "account_id": owner_acct, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 403, "cannot demote the last admin of a space");
+
+    // The guards did not mutate: the owner is still an admin of Solo.
+    let spaces: Value = app
+        .client
+        .get(format!("{}/v1/spaces", app.base))
+        .bearer_auth(&tok)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let solo = spaces["spaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["space_id"] == solo_id)
+        .unwrap();
+    assert_eq!(solo["role"], "admin", "owner remains Solo's admin");
+}
+
+/// FIX 1: a member added DIRECTLY via `POST /v1/spaces/members` receives pending `grant`
+/// actions for the space's `access_policy='space_wide'` vaults — the same step-6 policy
+/// grants the join flow enqueues.
+#[tokio::test]
+async fn members_add_enqueues_space_wide_grants() {
+    let app = spawn().await;
+    let id = common::make_identity();
+    let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let tok = common::login_v2(
+        &app,
+        &id,
+        &owner_acct,
+        claimed["device_id"].as_str().unwrap(),
+    )
+    .await;
+
+    let post = |path: &str, bearer: &str, body: Value| {
+        app.client
+            .post(format!("{}/v1/{}", app.base, path))
+            .bearer_auth(bearer)
+            .json(&body)
+            .send()
+    };
+
+    // Owner creates "Backend" and claims a space_wide vault in it (owner admins the vault).
+    let backend_id = post("spaces", &tok, json!({ "name": "Backend" }))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let vault_bytes = [3u8; 16];
+    let r = post(
+        "vaults/claim",
+        &tok,
+        json!({
+            "vault_id": b64(&vault_bytes),
+            "space_id": backend_id,
+            "access_policy": "space_wide",
+            "space_wide_role": 1,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 200, "owner claims a space_wide vault");
+
+    // A brand-new member is added directly.
+    let member = app.seed_session("").await;
+    let member_acct = b64(&member.account_id);
+    let r = post(
+        "spaces/members",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 204, "member added");
+
+    // A pending `grant` for the new member on the space_wide vault now exists.
+    let n = app
+        .state
+        .store
+        .fetch_scalar_i64(
+            "SELECT COUNT(*) FROM pending_actions \
+             WHERE account_id = ? AND vault_id = ? AND kind = 'grant' AND state = 'pending'",
+            vec![Val::b(&member.account_id[..]), Val::b(&vault_bytes[..])],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        n, 1,
+        "space_wide grant enqueued for the directly-added member"
+    );
+}
+
+/// FIX 2: re-adding an EXISTING member (e.g. hoping to change its role) via the add path
+/// is a clear 409 — not a silent 204 that masks the `ON CONFLICT DO NOTHING` no-op.
+#[tokio::test]
+async fn members_add_existing_conflicts() {
+    let app = spawn().await;
+    let id = common::make_identity();
+    let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let tok = common::login_v2(
+        &app,
+        &id,
+        &owner_acct,
+        claimed["device_id"].as_str().unwrap(),
+    )
+    .await;
+
+    let post = |path: &str, bearer: &str, body: Value| {
+        app.client
+            .post(format!("{}/v1/{}", app.base, path))
+            .bearer_auth(bearer)
+            .json(&body)
+            .send()
+    };
+
+    let backend_id = post("spaces", &tok, json!({ "name": "Backend" }))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let member = app.seed_session("").await;
+    let member_acct = b64(&member.account_id);
+
+    let r = post(
+        "spaces/members",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct, "role": "member" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 204, "first add succeeds");
+
+    let r = post(
+        "spaces/members",
+        &tok,
+        json!({ "space_id": backend_id, "account_id": member_acct, "role": "admin" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 409, "re-adding an existing member conflicts");
+}
+
+/// FIX 7: a space co-admin who is NOT the instance owner cannot remove or demote the
+/// instance owner from a space; ordinary removals by that co-admin still work.
+#[tokio::test]
+async fn instance_owner_protected_from_coadmin_eviction() {
+    let app = spawn().await;
+    let id = common::make_identity();
+    let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_tok = common::login_v2(
+        &app,
+        &id,
+        &owner_acct,
+        claimed["device_id"].as_str().unwrap(),
+    )
+    .await;
+
+    let post = |path: &str, bearer: &str, body: Value| {
+        app.client
+            .post(format!("{}/v1/{}", app.base, path))
+            .bearer_auth(bearer)
+            .json(&body)
+            .send()
+    };
+
+    // Owner creates "Backend" (owner is its auto-admin AND the instance owner).
+    let backend_id = post("spaces", &owner_tok, json!({ "name": "Backend" }))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["space_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A distinct principal is added as a co-admin of Backend.
+    let coadmin = app.seed_session("").await;
+    let coadmin_acct = b64(&coadmin.account_id);
+    let coadmin_tok = coadmin.access_token_b64.clone();
+    assert_eq!(
+        post(
+            "spaces/members",
+            &owner_tok,
+            json!({ "space_id": backend_id, "account_id": coadmin_acct, "role": "admin" }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        204,
+        "co-admin added"
+    );
+
+    // A plain member is added too (the co-admin will later remove it — the happy path).
+    let member = app.seed_session("").await;
+    let member_acct = b64(&member.account_id);
+    assert_eq!(
+        post(
+            "spaces/members",
+            &owner_tok,
+            json!({ "space_id": backend_id, "account_id": member_acct, "role": "member" }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        204,
+        "plain member added"
+    );
+
+    // Co-admin CANNOT remove the instance owner → 403.
+    assert_eq!(
+        post(
+            "spaces/members/remove",
+            &coadmin_tok,
+            json!({ "space_id": backend_id, "account_id": owner_acct }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        403,
+        "co-admin cannot remove the instance owner"
+    );
+
+    // Co-admin CANNOT demote the instance owner → 403.
+    assert_eq!(
+        post(
+            "spaces/members/role",
+            &coadmin_tok,
+            json!({ "space_id": backend_id, "account_id": owner_acct, "role": "member" }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        403,
+        "co-admin cannot demote the instance owner"
+    );
+
+    // Ordinary removal still works: co-admin removes the plain member → 204.
+    assert_eq!(
+        post(
+            "spaces/members/remove",
+            &coadmin_tok,
+            json!({ "space_id": backend_id, "account_id": member_acct }),
+        )
+        .await
+        .unwrap()
+        .status(),
+        204,
+        "co-admin removes an ordinary member"
+    );
+}

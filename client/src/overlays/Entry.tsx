@@ -945,9 +945,9 @@ function parsePairingPayload(text: string): PairingPayload | null {
     const v = line.slice(i + 1).trim();
     if (k && v) map[k] = v;
   }
-  const { baseUrl, tenantId, accountId, deviceId, channelId, oobCode } = map;
-  if (baseUrl && tenantId && accountId && deviceId && channelId && oobCode) {
-    return { baseUrl, tenantId, accountId, deviceId, channelId, oobCode };
+  const { baseUrl, instanceId, spaceId, accountId, deviceId, channelId, oobCode } = map;
+  if (baseUrl && instanceId && spaceId && accountId && deviceId && channelId && oobCode) {
+    return { baseUrl, instanceId, spaceId, accountId, deviceId, channelId, oobCode };
   }
   return null;
 }

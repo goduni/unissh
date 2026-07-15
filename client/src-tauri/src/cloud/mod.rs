@@ -14,6 +14,7 @@ pub mod client;
 pub mod commands;
 pub mod config;
 pub mod identity;
+pub mod oidc;
 pub mod onboard;
 pub mod tokens;
 pub mod transport;

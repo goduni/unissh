@@ -13,7 +13,7 @@ pub fn fill_random(buf: &mut [u8]) {
     getrandom::fill(buf).expect("OS RNG failure");
 }
 
-/// 16 random bytes (account-id, tenant-id, device-id, invite-id, channel-id …).
+/// 16 random bytes (account-id, space-id, device-id, invite-id, channel-id …).
 pub fn random_id16() -> [u8; 16] {
     let mut b = [0u8; 16];
     fill_random(&mut b);
@@ -63,4 +63,10 @@ pub fn unb64_exact(s: &str, len: usize, what: &str) -> Result<Vec<u8>, AppError>
         )));
     }
     Ok(v)
+}
+
+/// Human setup code from 6 random bytes: "XXXX-XXXX-XXXX" (uppercase hex).
+pub fn generate_setup_code(bytes: &[u8; 6]) -> String {
+    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+    format!("{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
 }

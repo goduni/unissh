@@ -1,7 +1,4 @@
-import { BootstrapModal } from "../access/BootstrapModal";
 import { InviteModal } from "../access/InviteModal";
-import { KeysetModal } from "../access/KeysetModal";
-import { MintGrantModal } from "../access/MintGrantModal";
 import { ScreenRouter } from "../screens/registry";
 import { ConfirmDialog, Toaster } from "../ui/overlays";
 import { Sidebar } from "./Sidebar";
@@ -33,10 +30,7 @@ export function Shell() {
       </div>
 
       <SettingsPanel />
-      <KeysetModal />
-      <BootstrapModal />
       <InviteModal />
-      <MintGrantModal />
       <ConfirmDialog />
       <Toaster />
     </>

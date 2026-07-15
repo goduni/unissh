@@ -1,12 +1,10 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { useTenant } from "../store/tenant";
 import { useAsync } from "../util/useAsync";
 import { fmtNum, fmtRelative } from "../util/format";
 import { Btn, Card, Spinner, Tag } from "../ui/primitives";
 import { Icon } from "../ui/icons";
-import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -123,10 +121,8 @@ export function Health() {
         </Card>
       </div>
 
-      {/* diagnostics — keyset-gated */}
-      <KeysetGate>
-        <HealthBody />
-      </KeysetGate>
+      {/* diagnostics */}
+      <HealthBody />
     </Screen>
   );
 }
@@ -205,9 +201,8 @@ function LivenessCard({
 
 function HealthBody() {
   const { t } = useTranslation();
-  const activeTenantId = useTenant((s) => s.activeTenantId);
 
-  const health = useAsync(() => api.admin.health(), [activeTenantId]);
+  const health = useAsync(() => api.admin.health(), []);
 
   if (health.loading && !health.data) {
     return (

@@ -14,28 +14,23 @@ use unissh_sync::{
     SyncTransport, pull_cursor_key, sync_pull,
 };
 
-const TID: &[u8] = b"tenant-oracle-01";
-
 /// HTTP adapter of the core `SyncTransport` (blocking reqwest → live server).
 struct HttpTransport {
     base: String,
-    tenant_b64: String,
     bearer: String,
     client: reqwest::blocking::Client,
 }
 
 impl HttpTransport {
-    fn new(base: String, tenant_id: &[u8], bearer: String) -> Self {
+    fn new(base: String, bearer: String) -> Self {
         Self {
             base,
-            tenant_b64: ids::b64(tenant_id),
             bearer,
             client: reqwest::blocking::Client::new(),
         }
     }
     fn auth(&self, rb: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
-        rb.header("UniSSH-Tenant", &self.tenant_b64)
-            .header("Authorization", format!("Bearer {}", self.bearer))
+        rb.header("Authorization", format!("Bearer {}", self.bearer))
     }
 }
 
@@ -156,7 +151,7 @@ fn seq_bytes(d: &[(u64, SyncObject)]) -> Vec<(u64, Vec<u8>)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_transport_matches_inmemory_reference() {
     let app = spawn().await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let (base, bearer) = (app.base.clone(), s.access_token_b64.clone());
     // The vault is claimed by this device to pass the A1 membership filter of the delta.
     let owner = s.ed25519_pub.clone();
@@ -171,7 +166,7 @@ async fn http_transport_matches_inmemory_reference() {
         ];
 
         let mut mem = InMemoryTransport::new();
-        let mut http = HttpTransport::new(base, TID, bearer);
+        let mut http = HttpTransport::new(base, bearer);
 
         let mem_seqs = mem.push_objects(&objs).unwrap();
         let http_seqs = http.push_objects(&objs).unwrap();
@@ -211,11 +206,11 @@ async fn http_transport_matches_inmemory_reference() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn core_sync_pull_against_live_server() {
     let app = spawn().await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let (base, bearer) = (app.base.clone(), s.access_token_b64.clone());
 
     tokio::task::spawn_blocking(move || {
-        let mut http = HttpTransport::new(base, TID, bearer);
+        let mut http = HttpTransport::new(base, bearer);
 
         // Two audit objects from the genesis owner [2;32] + one from a stranger [9;32].
         let seqs = http

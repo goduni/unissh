@@ -39,9 +39,9 @@ use zeroize::Zeroizing;
 use unissh_crypto::{aead_decrypt, aead_encrypt, derive_key, AssociatedData};
 use unissh_keychain::{
     build_registration, build_registration_request, change_password, create_account,
-    generate_account_id, load_account_id, sign_server_challenge, store_account_id, unlock_account,
-    unlock_account_migrating, EncryptedKeyset, KdfParams, OnboardInitiator, OnboardResponder,
-    SecretKey, ServerAuthChallenge,
+    derive_escrow_auth_key, generate_account_id, load_account_id, sign_server_challenge,
+    store_account_id, unlock_account, unlock_account_migrating, EncryptedKeyset, KdfParams,
+    OnboardInitiator, OnboardResponder, SecretKey, ServerAuthChallenge,
 };
 use unissh_ssh_agent::{generate_ed25519_openssh, InMemoryAgent};
 use unissh_ssh_transport::{
@@ -1054,6 +1054,24 @@ pub struct Core {
     rt: Arc<tokio::runtime::Runtime>,
 }
 
+/// Escrow enrollment/fetch credentials derived on the device (spec 5.1 / server-tz
+/// escrow). `k_auth` is the retrieval credential the server pins as `sha256(K_auth)`;
+/// the `argon_*` fields are the Argon2id parameters (with a fresh salt) used to stretch
+/// the password into `K_auth`. A pure derivation — nothing is persisted here.
+#[derive(uniffi::Record)]
+pub struct EscrowCreds {
+    /// The 256-bit escrow retrieval credential `K_auth` (domain-separated from K_unlock).
+    pub k_auth: Vec<u8>,
+    /// Fresh Argon2id salt (16 bytes) that produced `k_auth`.
+    pub argon_salt: Vec<u8>,
+    /// Argon2id memory cost in KiB.
+    pub argon_mem_kib: u32,
+    /// Argon2id iterations (time cost).
+    pub argon_iterations: u32,
+    /// Argon2id parallelism (lanes).
+    pub argon_parallelism: u32,
+}
+
 #[uniffi::export]
 impl Core {
     /// Creates the facade over the DB and keyset-sidecar paths (not yet unlocked).
@@ -1325,7 +1343,10 @@ impl Core {
     }
 
     /// Bind ONE cloud vault (by hex `vault_id`) to the server `tenant_b64` (1:1).
-    /// For manually binding an unbound vault to a chosen server from the UI.
+    /// For manually binding an unbound vault to a chosen server from the UI, OR
+    /// moving an already-bound vault to a different server (the label is
+    /// overwritten unconditionally, and the vault is re-dirtied so it re-pushes
+    /// to the new server).
     pub fn bind_cloud_vault(&self, vault_id: String, tenant_b64: String) -> Result<(), FfiError> {
         if tenant_b64.is_empty() {
             return Err(FfiError::Other {
@@ -1339,6 +1360,18 @@ impl Core {
                 .set_vault_tenant(&vid, tenant_b64.as_bytes())
                 .map_err(FfiError::other)?;
             Ok(())
+        })
+    }
+
+    /// Unbind ONE cloud vault (by hex `vault_id`) from its server — clears its
+    /// binding label so it stops syncing. The vault and its data stay on this
+    /// device; any server-side copy is left orphaned. Returns true if a vault
+    /// was unbound (false if the id matched no cloud vault).
+    pub fn unbind_cloud_vault(&self, vault_id: String) -> Result<bool, FfiError> {
+        let vid = hex::decode(vault_id.trim()).map_err(|_| FfiError::other("invalid vault id"))?;
+        self.with_state(|state| {
+            let n = state.storage.unbind_vault(&vid).map_err(FfiError::other)?;
+            Ok(n > 0)
         })
     }
 
@@ -1657,6 +1690,28 @@ impl Core {
         })
     }
 
+    /// The OIDC nonce key-binding (server `/v1/oidc/callback`): the string that the
+    /// IdP-signed id_token's `nonce` claim MUST equal — `base64(sha256(ed25519_pub ‖
+    /// x25519_pub))` over the unlocked keyset's public keys, Ed25519 FIRST, then X25519.
+    /// (NOTE: this is the REVERSE of the registration payload's x‖ed byte order; do not
+    /// confuse them.) STANDARD base64 with padding, byte-matching the server's
+    /// `ids::b64(&ids::sha256(..))` and the panel's `oidc_nonce`. Because the nonce sits
+    /// inside the IdP's signature, this binding is what stops a stolen id_token from being
+    /// re-bound to an attacker's keyset. Requires unlock. NOT a secret.
+    pub fn oidc_nonce(&self) -> Result<String, FfiError> {
+        self.with_state(|state| {
+            use base64::Engine as _;
+            use sha2::Digest as _;
+            let ed = state.keyset.signing.verifying.to_bytes();
+            let x = state.keyset.encryption.public.to_bytes();
+            let mut bind = Vec::with_capacity(64);
+            bind.extend_from_slice(&ed);
+            bind.extend_from_slice(&x);
+            let hash: [u8; 32] = Sha256::digest(&bind).into();
+            Ok(base64::engine::general_purpose::STANDARD.encode(hash))
+        })
+    }
+
     /// Signs a server challenge with the keyset's Ed25519 key (server-tz §2.2,
     /// domain `unissh-server-auth-v1`). Returns the signature blob (NOT a secret);
     /// the private key never leaves. Nonce/expiry checking is done by the server.
@@ -1880,6 +1935,129 @@ impl Core {
         });
         log::info!("instance unlocked from server keyset");
         Ok(())
+    }
+
+    /// Derives the escrow credentials the client uploads (enroll) or presents (fetch):
+    /// the retrieval credential `K_auth` plus the Argon2id parameters (with a fresh salt)
+    /// used to stretch the password.
+    ///
+    /// `secret_key_hex` is the account Secret Key (the same key held by all of the
+    /// account's devices; the Core does not persist it). `password = None` selects a
+    /// passwordless (SecretKeyOnly / SSO) account: `K_auth` is derived from the Secret
+    /// Key alone and the server authorizes the fetch by the OIDC session instead.
+    ///
+    /// This is a **pure derivation** — nothing is stored. **Caller contract (enroll):**
+    /// the returned `argon_*` parameters MUST be uploaded alongside the escrow block so a
+    /// fresh device re-derives the identical `K_auth` from the same password. Each call
+    /// generates FRESH recommended params + a fresh salt; the enroll flow must persist the
+    /// escrow block and THESE params together (and ensure the wrapped keyset the device
+    /// recovers is consistent with them). Fetch simply re-runs this with the stored salt.
+    pub fn derive_escrow_credentials(
+        &self,
+        password: Option<String>,
+        secret_key_hex: String,
+    ) -> Result<EscrowCreds, FfiError> {
+        let password = password.map(Zeroizing::new);
+        let secret_key_hex = Zeroizing::new(secret_key_hex);
+        let sk_bytes = Zeroizing::new(
+            hex::decode(secret_key_hex.trim()).map_err(|_| FfiError::InvalidCredentials)?,
+        );
+        let secret_key =
+            SecretKey::from_slice(&sk_bytes).map_err(|_| FfiError::InvalidCredentials)?;
+
+        let params = KdfParams::recommended();
+        // None → SecretKeyOnly account: K_auth is derived from the Secret Key alone.
+        let argon_key = match password.as_deref() {
+            Some(p) => Some(derive_key(p.as_bytes(), &params).map_err(FfiError::other)?),
+            None => None,
+        };
+        let k_auth = derive_escrow_auth_key(argon_key.as_ref(), &secret_key);
+
+        Ok(EscrowCreds {
+            k_auth: k_auth.expose_bytes().to_vec(),
+            argon_salt: params.salt.clone(),
+            argon_mem_kib: params.mem_kib,
+            argon_iterations: params.iterations,
+            argon_parallelism: params.parallelism,
+        })
+    }
+
+    /// Derives ONLY the escrow retrieval credential `K_auth` from EXPLICIT Argon2id
+    /// parameters (salt + cost), instead of minting fresh ones. This is the fetch-side
+    /// counterpart to [`Core::derive_escrow_credentials`]: a fresh device recovers the
+    /// enrolled `argon_salt`/params via `GET /v1/escrow/params` and re-derives the SAME
+    /// `K_auth` that enrollment uploaded. The server gates the fetch on
+    /// `sha256(K_auth)`, so the enroll-time and fetch-time derivations MUST agree
+    /// bit-for-bit. Both funnel through the identical `derive_key` + `derive_escrow_auth_key`
+    /// primitives, so enroll (fresh params) and fetch (these params) are symmetric by
+    /// construction — feed this the params `derive_escrow_credentials` returned and it
+    /// reproduces that call's `k_auth` (see the `escrow_*_symmetry` tests).
+    ///
+    /// `password = None` selects a passwordless (SecretKeyOnly / SSO) account: the
+    /// Argon2id stage is skipped and `K_auth` derives from the Secret Key alone (the
+    /// `argon_*` inputs are then irrelevant), exactly as `derive_escrow_credentials`.
+    ///
+    /// A **pure derivation** — nothing is persisted and no unlocked state is required.
+    pub fn derive_escrow_auth_with_params(
+        &self,
+        password: Option<String>,
+        secret_key_hex: String,
+        argon_salt: Vec<u8>,
+        argon_mem_kib: u32,
+        argon_iterations: u32,
+        argon_parallelism: u32,
+    ) -> Result<Vec<u8>, FfiError> {
+        let password = password.map(Zeroizing::new);
+        let secret_key_hex = Zeroizing::new(secret_key_hex);
+        let sk_bytes = Zeroizing::new(
+            hex::decode(secret_key_hex.trim()).map_err(|_| FfiError::InvalidCredentials)?,
+        );
+        let secret_key =
+            SecretKey::from_slice(&sk_bytes).map_err(|_| FfiError::InvalidCredentials)?;
+
+        // Bound the SERVER-PROVIDED Argon2id cost before running the KDF: the escrow
+        // params come from an untrusted `GET /v1/escrow/params`, so a malicious server
+        // could otherwise pin absurd mem/time/lanes and force a huge Argon2 allocation
+        // (memory-exhaustion / DoS) on a recovering device. These ceilings sit far above
+        // the recommended enroll params (64 MiB, t=3, p=1), so a genuine fetch is
+        // unaffected; anything past them is a hostile response → reject.
+        const MAX_ESCROW_MEM_KIB: u32 = 1024 * 1024; // 1 GiB
+        const MAX_ESCROW_ITERATIONS: u32 = 10;
+        const MAX_ESCROW_PARALLELISM: u32 = 4;
+        if argon_mem_kib > MAX_ESCROW_MEM_KIB
+            || argon_iterations > MAX_ESCROW_ITERATIONS
+            || argon_parallelism > MAX_ESCROW_PARALLELISM
+        {
+            return Err(FfiError::other(
+                "escrow Argon2id parameters exceed the allowed maximum",
+            ));
+        }
+
+        let params = KdfParams {
+            mem_kib: argon_mem_kib,
+            iterations: argon_iterations,
+            parallelism: argon_parallelism,
+            salt: argon_salt,
+        };
+        // Defense-in-depth FLOOR (mirror of the ceiling above): a malicious server could
+        // also pin TRIVIALLY WEAK params to make the fetch-side K_auth cheap to
+        // brute-force. Reject anything below the crate's hard Argon2id minimum (the OWASP
+        // floor `meets_minimum` encodes: mem/iters/lanes + salt length). Only meaningful
+        // when a password is present — a passwordless (SecretKeyOnly / SSO) account skips
+        // Argon2id entirely, so its params are unused and unconstrained (mirrors enroll).
+        if password.is_some() && !params.meets_minimum() {
+            return Err(FfiError::other(
+                "escrow Argon2id parameters are below the minimum strength floor",
+            ));
+        }
+        // None → SecretKeyOnly account: K_auth is derived from the Secret Key alone
+        // and the Argon2id params are unused (mirrors derive_escrow_credentials).
+        let argon_key = match password.as_deref() {
+            Some(p) => Some(derive_key(p.as_bytes(), &params).map_err(FfiError::other)?),
+            None => None,
+        };
+        let k_auth = derive_escrow_auth_key(argon_key.as_ref(), &secret_key);
+        Ok(k_auth.expose_bytes().to_vec())
     }
 
     /// **Onboarding Path B (initiator):** completes PAKE using the responder's `msg2`,
@@ -6797,6 +6975,181 @@ fn derive_db_key(keyset: &unissh_keychain::UnlockedKeyset) -> Zeroizing<[u8; 32]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `derive_escrow_credentials` returns a 256-bit K_auth, a 16-byte salt and the
+    /// recommended Argon2id params; and re-deriving K_auth from the RETURNED params
+    /// (same salt) + the Secret Key reproduces the same bytes — exactly what a fresh
+    /// device does on escrow fetch.
+    #[test]
+    fn derive_escrow_credentials_shape_and_rederivable() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        let sk_hex = core.create_account(Some("password".into())).unwrap();
+
+        let creds = core
+            .derive_escrow_credentials(Some("password".into()), sk_hex.clone())
+            .unwrap();
+
+        assert_eq!(creds.k_auth.len(), 32, "K_auth is a 256-bit HKDF output");
+        assert_eq!(creds.argon_salt.len(), 16, "fresh 16-byte salt");
+        assert_eq!(creds.argon_mem_kib, 65536);
+        assert_eq!(creds.argon_iterations, 3);
+        assert_eq!(creds.argon_parallelism, 1);
+
+        // Re-derive with the returned params (same salt) → identical K_auth.
+        let params = KdfParams {
+            mem_kib: creds.argon_mem_kib,
+            iterations: creds.argon_iterations,
+            parallelism: creds.argon_parallelism,
+            salt: creds.argon_salt.clone(),
+        };
+        let argon_key = derive_key(b"password", &params).unwrap();
+        let sk_bytes = hex::decode(sk_hex.trim()).unwrap();
+        let sk = SecretKey::from_slice(&sk_bytes).unwrap();
+        let rederived = derive_escrow_auth_key(Some(&argon_key), &sk);
+        assert_eq!(
+            &rederived.expose_bytes()[..],
+            &creds.k_auth[..],
+            "re-deriving with the returned params reproduces K_auth"
+        );
+    }
+
+    /// Passwordless (SecretKeyOnly / SSO) accounts pass `password = None`: K_auth is
+    /// derived from the Secret Key alone and is still a 256-bit credential.
+    #[test]
+    fn derive_escrow_credentials_passwordless_returns_k_auth() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        let sk_hex = core.create_account(None).unwrap();
+
+        let creds = core.derive_escrow_credentials(None, sk_hex).unwrap();
+        assert_eq!(creds.k_auth.len(), 32);
+        assert_eq!(creds.argon_salt.len(), 16);
+        assert_eq!(creds.argon_mem_kib, 65536);
+    }
+
+    /// Enroll/fetch symmetry: the `K_auth` minted by `derive_escrow_credentials`
+    /// (fresh params) is reproduced BIT-FOR-BIT by `derive_escrow_auth_with_params`
+    /// fed those SAME params — exactly what a fresh device does on escrow fetch after
+    /// reading the stored params from `GET /v1/escrow/params`. This is the invariant
+    /// the server relies on (it gates the fetch on `sha256(K_auth)`).
+    #[test]
+    fn escrow_enroll_fetch_kauth_symmetry() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        let sk_hex = core.create_account(Some("hunter2".into())).unwrap();
+
+        // ENROLL: mint fresh params + K_auth (what server_keyset_push uploads).
+        let creds = core
+            .derive_escrow_credentials(Some("hunter2".into()), sk_hex.clone())
+            .unwrap();
+
+        // FETCH: re-derive K_auth from the SAME params (what the server echoes back).
+        let refetched = core
+            .derive_escrow_auth_with_params(
+                Some("hunter2".into()),
+                sk_hex.clone(),
+                creds.argon_salt.clone(),
+                creds.argon_mem_kib,
+                creds.argon_iterations,
+                creds.argon_parallelism,
+            )
+            .unwrap();
+        assert_eq!(
+            refetched, creds.k_auth,
+            "enroll and fetch must derive the same K_auth"
+        );
+
+        // A wrong password must NOT reproduce K_auth (the server fetch would 403).
+        let wrong = core
+            .derive_escrow_auth_with_params(
+                Some("wrong".into()),
+                sk_hex,
+                creds.argon_salt.clone(),
+                creds.argon_mem_kib,
+                creds.argon_iterations,
+                creds.argon_parallelism,
+            )
+            .unwrap();
+        assert_ne!(
+            wrong, creds.k_auth,
+            "a wrong password must not reproduce K_auth"
+        );
+    }
+
+    /// Passwordless (SSO) symmetry: with `password = None`, `K_auth` derives from the
+    /// Secret Key alone and the params-taking variant reproduces it regardless of the
+    /// (ignored) Argon2id params.
+    #[test]
+    fn escrow_passwordless_kauth_symmetry() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        let sk_hex = core.create_account(None).unwrap();
+        let creds = core
+            .derive_escrow_credentials(None, sk_hex.clone())
+            .unwrap();
+        let refetched = core
+            .derive_escrow_auth_with_params(
+                None,
+                sk_hex,
+                creds.argon_salt.clone(),
+                creds.argon_mem_kib,
+                creds.argon_iterations,
+                creds.argon_parallelism,
+            )
+            .unwrap();
+        assert_eq!(refetched, creds.k_auth);
+    }
+
+    /// Fetch-side Argon2id FLOOR (defense-in-depth): a malicious server pinning
+    /// trivially-weak params is rejected when a password is in play (the K_auth would
+    /// otherwise be cheap to brute-force). A passwordless account skips Argon2id, so the
+    /// same (unused) weak params are ignored.
+    #[test]
+    fn escrow_fetch_rejects_below_floor_params() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        let sk_hex = core.create_account(Some("hunter2".into())).unwrap();
+        let creds = core
+            .derive_escrow_credentials(Some("hunter2".into()), sk_hex.clone())
+            .unwrap();
+
+        // Below the OWASP floor (mem 8 KiB, t=1) WITH a password → rejected.
+        let weak = core.derive_escrow_auth_with_params(
+            Some("hunter2".into()),
+            sk_hex.clone(),
+            creds.argon_salt.clone(),
+            8,
+            1,
+            1,
+        );
+        assert!(
+            weak.is_err(),
+            "below-floor fetch params must be rejected when a password is present"
+        );
+
+        // Passwordless: Argon2id is skipped, so the same weak params are irrelevant.
+        let ok = core.derive_escrow_auth_with_params(None, sk_hex, creds.argon_salt, 8, 1, 1);
+        assert!(
+            ok.is_ok(),
+            "passwordless fetch ignores the (unused) weak params"
+        );
+    }
 
     #[test]
     fn backup_keyset_sidecar_copies_and_is_noop_when_absent() {

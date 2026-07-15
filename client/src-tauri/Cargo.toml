@@ -41,6 +41,9 @@ once_cell = "1"
 # Cloud server integration: blocking HTTP client (rustls TLS, no system OpenSSL)
 # and base64 STANDARD (the server's wire encoding for every crypto blob/id).
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "blocking"] }
+# x-www-form-urlencoded body for the OIDC token exchange (reqwest's `.form()` is
+# stripped by default-features=false; this is the same crate it uses internally).
+serde_urlencoded = "0.7"
 base64 = "0.22.1"
 # Content-stable Idempotency-Key for sync/push (server replays identical pushes).
 sha2 = "0.10"

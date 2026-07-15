@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { b64ToBytes, bytesToB64 } from "../util/bytes";
 import {
+  getCrypto,
   setCryptoProvider,
   type ChallengeInput,
   type CryptoProvider,
@@ -38,6 +40,15 @@ interface WasmModule {
     reg_sig_b64: string,
     expected_ed25519_b64: string,
   ) => string;
+  derive_escrow_auth: (
+    password: string | null | undefined,
+    secret_key_b64: string,
+    argon_salt_b64: string,
+    argon_mem_kib: number,
+    argon_iterations: number,
+    argon_parallelism: number,
+  ) => string;
+  oidc_nonce: () => string;
   lock: () => void;
 }
 
@@ -136,24 +147,71 @@ function makeProvider(m: WasmModule): CryptoProvider {
       return m.verify_member_binding(regPayloadB64, regSigB64, expectedEd25519B64);
     },
 
+    deriveEscrowAuth(password, secretKeyB64, saltB64, mem, iter, par): string {
+      // Reproduces the server's K_auth (base64) from the account password
+      // (null → SecretKeyOnly / SSO) + Secret Key + the server's stored Argon2id
+      // params. Synchronous — no keyset state is touched.
+      return m.derive_escrow_auth(password ?? undefined, secretKeyB64, saltB64, mem, iter, par);
+    },
+
+    oidcNonce(): string {
+      // base64(sha256(ed25519_pub ‖ x25519_pub)) over the unlocked keyset — the
+      // id_token `nonce` the server's /v1/oidc/callback binds to this keyset.
+      // Synchronous; reads the in-memory unlocked keyset only.
+      return m.oidc_nonce();
+    },
+
     lock() {
       m.lock();
     },
   };
 }
 
-/** Load the wasm crypto module and register it as the active CryptoProvider. */
-export async function loadWasmProvider(): Promise<boolean> {
+async function doLoadWasmProvider(): Promise<boolean> {
   try {
     const mod = (await import("../../crypto-wasm/pkg/unissh_crypto_wasm.js")) as unknown as WasmModule;
     const urlMod = (await import("../../crypto-wasm/pkg/unissh_crypto_wasm_bg.wasm?url")) as {
       default: string;
     };
-    await mod.default(urlMod.default);
+    // Object form (wasm-bindgen ≥0.2.93). Passing the URL positionally still works but
+    // logs a deprecation warning; the single-object form is the current, stable API.
+    await mod.default({ module_or_path: urlMod.default });
     setCryptoProvider(makeProvider(mod));
     return true;
   } catch (e) {
     console.warn("[crypto-wasm] failed to load:", e);
     return false;
   }
+}
+
+// Memoized: main.tsx kicks the load off at startup, and the OIDC redirect resume
+// awaits the SAME promise so it never double-initializes the wasm module.
+let loadPromise: Promise<boolean> | null = null;
+
+/** Load the wasm crypto module and register it as the active CryptoProvider. Idempotent. */
+export function loadWasmProvider(): Promise<boolean> {
+  if (!loadPromise) loadPromise = doLoadWasmProvider();
+  return loadPromise;
+}
+
+/**
+ * Reactive crypto-readiness. `getCrypto().available` alone is a one-shot read: a
+ * component that renders BEFORE the async wasm load finishes captures `false` and never
+ * updates (React won't re-render on a plain module mutation) — so a keyset form would
+ * show "crypto not loaded" forever even though the module loaded a moment later. This
+ * hook kicks the (idempotent) load and re-renders the moment it resolves.
+ */
+export function useCryptoReady(): boolean {
+  const [ready, setReady] = useState<boolean>(() => getCrypto().available);
+  useEffect(() => {
+    if (ready) return;
+    let alive = true;
+    void loadWasmProvider().then((ok) => {
+      if (alive && ok) setReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [ready]);
+  return ready;
 }

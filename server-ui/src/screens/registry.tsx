@@ -4,7 +4,7 @@ import { Accounts } from "./Accounts";
 import { Audit } from "./Audit";
 import { Config } from "./Config";
 import { Devices } from "./Devices";
-import { Enroll } from "./Enroll";
+import { Directory } from "./Directory";
 import { Grants } from "./Grants";
 import { Health } from "./Health";
 import { Invites } from "./Invites";
@@ -14,7 +14,7 @@ import { Objects } from "./Objects";
 import { Overview } from "./Overview";
 import { Relay } from "./Relay";
 import { Sessions } from "./Sessions";
-import { Tenants } from "./Tenants";
+import { Spaces } from "./Spaces";
 import { Vaults } from "./Vaults";
 
 const SCREENS: Record<Route, ComponentType> = {
@@ -23,14 +23,14 @@ const SCREENS: Record<Route, ComponentType> = {
   metrics: Metrics,
   config: Config,
   maint: Maintenance,
-  tenants: Tenants,
+  spaces: Spaces,
   accounts: Accounts,
+  directory: Directory,
   devices: Devices,
   sessions: Sessions,
   invites: Invites,
   vaults: Vaults,
   grants: Grants,
-  enroll: Enroll,
   relay: Relay,
   objects: Objects,
   audit: Audit,

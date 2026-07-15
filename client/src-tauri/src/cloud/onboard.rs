@@ -32,13 +32,12 @@ const POLL_BUDGET: Duration = Duration::from_secs(110);
 fn poll_until(
     http: &reqwest::blocking::Client,
     base_url: &str,
-    tenant_b64: &str,
     channel_id: &str,
     want: &str,
 ) -> ApiResult<Vec<u8>> {
     let max_iters = (POLL_BUDGET.as_millis() / POLL_INTERVAL.as_millis()).max(1);
     for _ in 0..max_iters {
-        if let Some(msg) = identity::relay_poll(http, base_url, tenant_b64, channel_id, want)? {
+        if let Some(msg) = identity::relay_poll(http, base_url, channel_id, want)? {
             return Ok(msg);
         }
         sleep(POLL_INTERVAL);
@@ -55,21 +54,20 @@ pub fn initiator_complete(
     core: &ffi::Core,
     http: &reqwest::blocking::Client,
     base_url: &str,
-    tenant_b64: &str,
     channel_id: &str,
     oob_code: Vec<u8>,
     secret_key_hex: String,
 ) -> ApiResult<()> {
     let handle = OnboardInitiatorHandle::start(oob_code);
     let msg1 = handle.msg();
-    identity::relay_post(http, base_url, tenant_b64, channel_id, "msg1", &msg1)?;
+    identity::relay_post(http, base_url, channel_id, "msg1", &msg1)?;
 
-    let msg2 = poll_until(http, base_url, tenant_b64, channel_id, "msg2")?;
+    let msg2 = poll_until(http, base_url, channel_id, "msg2")?;
     // Seal the keyset secrets + this device's (shared) Secret Key for the new device.
     let msg3 = core
         .onboard_confirm_and_seal(handle, msg2, secret_key_hex)
         .map_err(ApiError::from)?;
-    identity::relay_post(http, base_url, tenant_b64, channel_id, "msg3", &msg3)?;
+    identity::relay_post(http, base_url, channel_id, "msg3", &msg3)?;
     Ok(())
 }
 
@@ -79,17 +77,16 @@ pub fn responder_join(
     core: &ffi::Core,
     http: &reqwest::blocking::Client,
     base_url: &str,
-    tenant_b64: &str,
     channel_id: &str,
     oob_code: Vec<u8>,
     password: Option<String>,
 ) -> ApiResult<()> {
-    let msg1 = poll_until(http, base_url, tenant_b64, channel_id, "msg1")?;
+    let msg1 = poll_until(http, base_url, channel_id, "msg1")?;
     let handle = OnboardResponderHandle::respond(oob_code, msg1).map_err(ApiError::from)?;
     let msg2 = handle.msg();
-    identity::relay_post(http, base_url, tenant_b64, channel_id, "msg2", &msg2)?;
+    identity::relay_post(http, base_url, channel_id, "msg2", &msg2)?;
 
-    let msg3 = poll_until(http, base_url, tenant_b64, channel_id, "msg3")?;
+    let msg3 = poll_until(http, base_url, channel_id, "msg3")?;
     let secret_key_hex = core
         .onboard_finish_install(handle, msg3, password)
         .map_err(ApiError::from)?;

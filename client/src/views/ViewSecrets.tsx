@@ -17,7 +17,7 @@ import { useIsMobile } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
 import type { ItemInfo, Identity, ServerStatus, VaultInfo } from "@/bridge/types";
-import { isOwnedCloud, vaultLoc } from "@/bridge/vaults";
+import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 
 type SecretTab = "keys" | "passwords" | "notes" | "identities";
 
@@ -1585,9 +1585,15 @@ function IdentityVaultSwitcher({
 
   const badgeLabel = (v: VaultInfo) => {
     const loc = vaultLoc(v, servers);
-    return loc.local
-      ? t("secrets.locLocal")
-      : t("secrets.locCloud", { server: loc.server ?? t("vault.cloud") });
+    if (loc.local) return t("secrets.locLocal");
+    // Prefer the space/server name (needs a session); else resolve the server
+    // session-independently; else it's bound to nothing.
+    const server =
+      loc.server ??
+      (vaultServer(v, servers) ? serverShortLabel(vaultServer(v, servers)!) : null);
+    return server
+      ? t("secrets.locCloud", { server })
+      : t("secrets.locCloud", { server: t("vault.badgeUnbound") });
   };
   const avatar = (v: VaultInfo, sz: number) => <FlatAvatar name={v.name} size={sz} />;
   const row = (base: string): CSSProperties => ({
@@ -1882,9 +1888,7 @@ export function ViewSecrets() {
   // you own) — never a shared team vault (would leak to members). The Identities tab
   // manages them across those vaults; the core enforces single-member on write.
   const privateVaults = vaults.filter(
-    (v) =>
-      v.syncTarget !== "cloud" ||
-      servers.some((s) => s.tenantId && s.tenantId === v.syncTenant && s.owned),
+    (v) => v.syncTarget !== "cloud" || isOwnedCloud(v, servers),
   );
 
   const tab: SecretTab =

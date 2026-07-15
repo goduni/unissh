@@ -12,7 +12,8 @@ import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import type { Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import { ItemType } from "@/bridge/types";
+import { ItemType, type VaultInfo } from "@/bridge/types";
+import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { useTranslation, tDyn } from "@/i18n";
 
 // The four vault-item types share one screen (ViewSecrets, with in-screen tabs) and
@@ -373,6 +374,7 @@ function VaultSwitcher() {
   const [open, setOpen] = useState(false);
   const vaults = useApp((s) => s.vaults);
   const vaultId = useApp((s) => s.vaultId);
+  const servers = useApp((s) => s.servers);
   const syncStatus = useApp((s) => s.syncStatus);
   const setVault = useApp((s) => s.setVault);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -380,6 +382,20 @@ function VaultSwitcher() {
   useMenu(open, () => setOpen(false), menuRef);
   const v = vaults.find((x) => x.vaultId === vaultId) || vaults[0];
   if (!v) return null;
+
+  // The vault's LOCATION for its badge: the bound server (space name via a live
+  // session, else the server host, session-independently), so the switcher shows
+  // *which* server a cloud vault syncs to — not a generic "Cloud". Amber "no server"
+  // flags a cloud vault bound to nothing.
+  const badgeLabel = (x: VaultInfo): string => {
+    if (x.syncTarget !== "cloud") return t("vault.local");
+    const loc = vaultLoc(x, servers);
+    if (loc.server) return loc.server;
+    const srv = vaultServer(x, servers);
+    return srv ? serverShortLabel(srv) : t("vault.badgeUnbound");
+  };
+  const unboundCloud = (x: VaultInfo) =>
+    x.syncTarget === "cloud" && vaultServer(x, servers) == null;
   return (
     <div ref={menuRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
       <button
@@ -426,12 +442,9 @@ function VaultSwitcher() {
               gap: 6,
             }}
           >
-            <VaultBadge
-              target={v.syncTarget}
-              label={v.syncTarget === "cloud" ? t("vault.cloud") : t("vault.local")}
-              size={11}
-            />
-            {v.syncTarget === "cloud" && (
+            <VaultBadge target={v.syncTarget} label={badgeLabel(v)} size={11} />
+            {unboundCloud(v) && <Icon name="alert" size={11} color={p.amber} />}
+            {v.syncTarget === "cloud" && !unboundCloud(v) && (
               <SyncBadge
                 state={syncStatus.syncing ? "syncing" : syncStatus.lastError ? "error" : "synced"}
                 label={
@@ -512,11 +525,8 @@ function VaultSwitcher() {
               >
                 {x.name}
               </span>
-              <VaultBadge
-                target={x.syncTarget}
-                label={x.syncTarget === "cloud" ? t("vault.cloud") : t("vault.local")}
-                size={11}
-              />
+              <VaultBadge target={x.syncTarget} label={badgeLabel(x)} size={11} />
+              {unboundCloud(x) && <Icon name="alert" size={11} color={p.amber} />}
               {x.vaultId === vaultId && <Icon name="check" size={14} color={p.accent} />}
             </button>
           ))}

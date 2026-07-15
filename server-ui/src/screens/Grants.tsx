@@ -3,13 +3,13 @@ import { Trans, useTranslation } from "react-i18next";
 import { api } from "../api";
 import { ROLE_BY_CODE, type VaultRole } from "../api/types";
 import { CryptoUnavailableError, getCrypto } from "../crypto/provider";
-import { useTenant } from "../store/tenant";
+import { usePrefs } from "../store/prefs";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { b64ToBytes, truncId } from "../util/bytes";
 import { decodeManifestMembers, type ManifestMember } from "../util/grant-codec";
 import { Icon } from "../ui/icons";
-import { KeysetGate, Modal } from "../ui/overlays";
+import { Modal } from "../ui/overlays";
 import { Btn, PubkeyChip, Spinner, Tag, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
@@ -18,9 +18,7 @@ export function Grants() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.grants.title")} sub={t("screen.grants.sub")} zk>
-      <KeysetGate>
-        <GrantsBody />
-      </KeysetGate>
+      <GrantsBody />
     </Screen>
   );
 }
@@ -31,10 +29,9 @@ function roleTone(role: number): "amber" | "accent" | "neutral" {
 
 function GrantsBody() {
   const { t } = useTranslation();
-  const activeTenantId = useTenant((s) => s.activeTenantId);
   const reloadTick = useUi((s) => s.reloadTick);
 
-  const vaults = useAsync(() => api.admin.vaults(), [activeTenantId, reloadTick]);
+  const vaults = useAsync(() => api.admin.vaults(), [reloadTick]);
   const [sel, setSel] = useState<string | null>(null);
   const selected = sel ?? vaults.data?.vaults[0]?.vault_id ?? null;
 
@@ -187,7 +184,6 @@ function RotateModal({
 }) {
   const { t } = useTranslation();
   const toast = useUi((s) => s.toast);
-  const activeTenantId = useTenant((s) => s.activeTenantId);
   const accounts = useAsync(() => api.identity.accounts(), []);
   const [keep, setKeep] = useState<Record<string, VaultRole | "remove">>({});
   // Per-member access expiry as a "YYYY-MM-DD" string (empty = no expiry).
@@ -214,22 +210,29 @@ function RotateModal({
     try {
       const cr = getCrypto();
 
-      // C1: verify the CURRENT manifest against the TOFU-pinned genesis owner
+      // C1: verify the CURRENT manifest against the TOFU-pinned instance owner
       // before trusting its member set for rotation. The server cannot forge the
-      // genesis owner's Ed25519 signature, so it can no longer slip an injected,
-      // unverified member set past the panel.
-      const genesis = accounts.data?.genesis_owner ?? null;
-      if (!genesis) throw new Error("cannot verify members: server did not report a genesis owner");
-      // Pin per-tenant: each instance/tenant has its own genesis owner, so a global
-      // key would raise a false MITM alarm on every tenant switch (and train the
-      // operator to clear the pin — defeating TOFU).
-      const PIN_KEY = `unissh.genesisOwnerPin:${activeTenantId ?? ""}`;
+      // owner's Ed25519 signature, so it can no longer slip an injected, unverified
+      // member set past the panel. The instance owner (the claimer) is the root of
+      // trust; we require exactly one so the anchor is unambiguous — a multi-owner
+      // instance fails closed here (see the Task-5 note: multi-owner rotation needs
+      // a proper trust-anchor design).
+      const owners = (accounts.data?.accounts ?? []).filter((a) => a.is_owner);
+      const genesis = owners.length === 1 ? owners[0].member_pubkey : null;
+      if (!genesis) {
+        throw new Error(
+          "cannot verify members: the instance does not have exactly one owner to anchor trust",
+        );
+      }
+      // Pin per-instance (discriminated by the instance URL): a global key would
+      // raise a false MITM alarm across different instances the panel connects to.
+      const PIN_KEY = `unissh.ownerPin:${usePrefs.getState().instanceUrl}`;
       const pinned = localStorage.getItem(PIN_KEY);
       if (pinned && pinned !== genesis) {
         throw new Error(
-          "genesis-owner pin mismatch — the server reported a different genesis owner " +
-            "than first seen for this tenant. Possible MITM; rotation blocked. Clear the " +
-            "pin only if you intentionally re-bootstrapped this tenant.",
+          "owner pin mismatch — the server reported a different instance owner than " +
+            "first seen. Possible MITM; rotation blocked. Clear the pin only if you " +
+            "intentionally re-claimed this instance.",
         );
       }
       if (!pinned) localStorage.setItem(PIN_KEY, genesis); // trust-on-first-use

@@ -1180,3 +1180,142 @@ fn account_payload_seal_open_roundtrip() {
     let other = keyset();
     assert!(open_account_payload(&other, &sealed).is_err());
 }
+
+// --- P4 member-decrypt: a distinct-account member reads a shared vault via open_grant ---
+
+/// A distinct-account member opens a teammate's shared VAULT through the same
+/// `Vault::open` the FFI read surface uses, and decrypts a real item via their own
+/// membership grant (owner-wrap is bound to the owner, so the member MUST go through
+/// `open_grant`). This is the read path that unblocks `get_password`/`get_note`.
+#[test]
+fn member_opens_shared_vault_and_decrypts_item() {
+    let st = storage();
+    let owner = keyset();
+    let member_kc = keyset(); // a DISTINCT account (own keyset)
+    let owner_ed = owner.signing.verifying.to_bytes().to_vec();
+    let member_ed = member_kc.signing.verifying.to_bytes().to_vec();
+    let member_x = member_kc.encryption.public.to_bytes().to_vec();
+
+    // Owner creates the vault, establishes membership (owner Admin + member Editor; the
+    // grant wraps the VK under the member's X25519 key), and stores a secret AFTER
+    // membership so the item is stamped at the epoch the grant unlocks.
+    let v = Vault::create(&st, &owner, new_vault_id(), b"Shared").unwrap();
+    let vid = v.vault_id().to_vec();
+    let members = vec![
+        Member {
+            ed25519_pub: owner_ed.clone(),
+            role: MemberRole::Admin,
+        },
+        Member {
+            ed25519_pub: member_ed.clone(),
+            role: MemberRole::Editor,
+        },
+    ];
+    let x_by_ed = vec![(member_ed.clone(), member_x.clone())];
+    v.establish_or_extend_membership(&owner, &members, &x_by_ed)
+        .unwrap();
+    v.put_item(b"db-pw", 1, b"s3cr3t").unwrap();
+
+    // The member pins the owner as the vault's genesis anchor (TOFU share-accept), then
+    // opens the vault WITH THEIR OWN KEYSET and reads the item byte-for-byte.
+    pin_and_verify_vault_anchor(&st, &vid, &owner_ed).unwrap();
+    let vm = Vault::open(&st, &member_kc, &vid).unwrap();
+    assert_eq!(vm.name(), b"Shared");
+    let got = vm.get_item(b"db-pw").unwrap().unwrap();
+    assert_eq!(got.content.as_slice(), b"s3cr3t");
+}
+
+/// After a VK rotation that REVOKES the member (no grant at the latest epoch), the
+/// member can no longer open the vault — and it fails cleanly (a typed error, no panic).
+#[test]
+fn revoked_member_cannot_open_after_rotation() {
+    let st = storage();
+    let owner = keyset();
+    let member_kc = keyset();
+    let owner_ed = owner.signing.verifying.to_bytes().to_vec();
+    let member_ed = member_kc.signing.verifying.to_bytes().to_vec();
+    let member_x = member_kc.encryption.public.to_bytes().to_vec();
+
+    let v = Vault::create(&st, &owner, new_vault_id(), b"Shared").unwrap();
+    let vid = v.vault_id().to_vec();
+    let members = vec![
+        Member {
+            ed25519_pub: owner_ed.clone(),
+            role: MemberRole::Admin,
+        },
+        Member {
+            ed25519_pub: member_ed.clone(),
+            role: MemberRole::Editor,
+        },
+    ];
+    let x_by_ed = vec![(member_ed.clone(), member_x.clone())];
+    v.establish_or_extend_membership(&owner, &members, &x_by_ed)
+        .unwrap();
+    v.put_item(b"db-pw", 1, b"s3cr3t").unwrap();
+    pin_and_verify_vault_anchor(&st, &vid, &owner_ed).unwrap();
+
+    // Sanity: before revocation the member CAN open.
+    assert!(Vault::open(&st, &member_kc, &vid).is_ok());
+
+    // Owner rotates the VK, keeping ONLY themselves (member revoked → no grant@latest).
+    let remaining = vec![Member {
+        ed25519_pub: owner_ed.clone(),
+        role: MemberRole::Admin,
+    }];
+    v.rotate_vk(&owner, &remaining, &[]).unwrap();
+
+    // The revoked member cannot open: no grant at the latest epoch → a typed error, not a panic.
+    let err = Vault::open(&st, &member_kc, &vid).unwrap_err();
+    assert!(
+        matches!(err, VaultError::NotAMember),
+        "revoked member open must fail cleanly, got {err:?}"
+    );
+}
+
+/// Enabling member-open makes the owner-only whole-record re-seal methods reachable by a
+/// member. They MUST stay owner-only: a member running `set_name`/`delete` would re-seal
+/// the owner-bound `wrapped_vk` under its own keyset and lock the true owner out. Each is
+/// refused with `AuthorityInvalid`; the genuine owner can still perform them.
+#[test]
+fn member_cannot_rewrite_owner_record() {
+    let st = storage();
+    let owner = keyset();
+    let member_kc = keyset();
+    let owner_ed = owner.signing.verifying.to_bytes().to_vec();
+    let member_ed = member_kc.signing.verifying.to_bytes().to_vec();
+    let member_x = member_kc.encryption.public.to_bytes().to_vec();
+
+    let v = Vault::create(&st, &owner, new_vault_id(), b"Shared").unwrap();
+    let vid = v.vault_id().to_vec();
+    let members = vec![
+        Member {
+            ed25519_pub: owner_ed.clone(),
+            role: MemberRole::Admin,
+        },
+        Member {
+            ed25519_pub: member_ed.clone(),
+            role: MemberRole::Editor,
+        },
+    ];
+    let x_by_ed = vec![(member_ed.clone(), member_x.clone())];
+    v.establish_or_extend_membership(&owner, &members, &x_by_ed)
+        .unwrap();
+    pin_and_verify_vault_anchor(&st, &vid, &owner_ed).unwrap();
+
+    // The member opens via its grant, but whole-record re-seal ops are refused (they would
+    // re-seal the owner-wrap under the member → owner lockout).
+    let mut vm = Vault::open(&st, &member_kc, &vid).unwrap();
+    assert!(matches!(
+        vm.set_name(b"Hijacked"),
+        Err(VaultError::AuthorityInvalid)
+    ));
+    assert!(matches!(
+        Vault::open(&st, &member_kc, &vid).unwrap().delete(),
+        Err(VaultError::AuthorityInvalid)
+    ));
+
+    // The genuine owner can still rename and re-open their own vault.
+    let mut vo = Vault::open(&st, &owner, &vid).unwrap();
+    vo.set_name(b"Renamed").unwrap();
+    assert_eq!(Vault::open(&st, &owner, &vid).unwrap().name(), b"Renamed");
+}

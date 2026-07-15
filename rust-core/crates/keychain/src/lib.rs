@@ -46,6 +46,7 @@ pub use onboarding_floor::{
 pub use onboarding_pake::{OnboardInitiator, OnboardResponder};
 pub use secret_key::{SecretKey, SECRET_KEY_LEN};
 pub use server_auth::sign_server_challenge;
+pub use unlock::derive_escrow_auth_key;
 
 // Re-export of the crypto types needed by keyset consumers.
 pub use unissh_crypto::{Ed25519Keypair, KdfParams, ServerAuthChallenge, X25519Keypair};

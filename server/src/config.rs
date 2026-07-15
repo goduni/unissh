@@ -15,8 +15,9 @@ pub struct Config {
     pub sync: SyncConfig,
     pub session: SessionConfig,
     pub obs: ObsConfig,
-    pub bootstrap: BootstrapConfig,
     pub ops: OpsConfig,
+    pub setup: SetupConfig,
+    pub oidc: OidcConfig,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -34,6 +35,9 @@ pub struct ServerConfig {
     /// `https://admin.example.com`). Empty → the CORS layer is not attached (the panel
     /// is served from the same origin / behind the same proxy — headers not needed).
     pub cors_allowed_origins: Vec<String>,
+    /// Public base URL used to render invite URLs (`{public_url}/join#<token>`).
+    /// Empty → the server returns `url: null` and clients compose it themselves.
+    pub public_url: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -66,7 +70,7 @@ pub struct SyncConfig {
     /// Defense-in-depth server-side signature validation (§2.4).
     pub validate_signatures: bool,
     /// Anti-rollback floor for the whole-DB snapshot (§16): the instance-generation
-    /// (= Σ next_seq across tenants) MUST be ≥ this value at startup, otherwise
+    /// (= the instance-wide next_seq) MUST be ≥ this value at startup, otherwise
     /// the server refuses to come up (a stale snapshot was restored). The operator
     /// anchors this number outside the DB (like MAX(next_seq) in the backup runbook). 0 = off.
     pub min_instance_generation: i64,
@@ -95,24 +99,101 @@ pub struct ObsConfig {
     pub metrics_bind: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct BootstrapConfig {
-    /// Global bootstrap token (base64). Empty + `allow_open=false` → bootstrap is closed.
+pub struct OpsConfig {
+    /// Operator token (server-trusted) for the infrastructure `/v1/ops/*` surface (the
+    /// `X-UniSSH-Ops-Token` header). Empty → ops surface is DISABLED. This is NOT a keyset and does NOT
+    /// grant decryption — only infrastructure operations (account suspend/seq-bump).
     pub token: String,
-    /// Allow bootstrap without a token (for dev/local only).
-    pub allow_open: bool,
-    /// Default tier for an auto-created tenant: "personal" | "org".
-    pub default_tier: String,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct OpsConfig {
-    /// Operator token (server-trusted) for cross-tenant `/v1/ops/*` (the
-    /// `X-UniSSH-Ops-Token` header). Empty → ops surface is DISABLED. This is NOT a keyset and does NOT
-    /// grant decryption — only infrastructure operations (tenants/suspend/seq-bump).
-    pub token: String,
+pub struct SetupConfig {
+    /// Optional fixed setup code (IaC/tests). Empty → generated at boot while unclaimed.
+    pub code: String,
+}
+
+/// One IdP-group → space grant: members whose `groups_claim` contains `group`
+/// are provisioned into `space_id` at `role` on OIDC callback (Phase 5).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct GroupMap {
+    pub group: String,
+    pub space_id: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OidcConfig {
+    /// SSO seam (Phase 5): disabled by default.
+    pub enabled: bool,
+    pub issuer: String,
+    pub client_id: String,
+    /// Expected `aud` in the id_token; empty → the callback falls back to `client_id`.
+    pub audience: String,
+    /// JWKS endpoint; empty → derived by the callback as `{issuer}/.well-known/jwks.json`.
+    pub jwks_url: String,
+    /// The id_token claim name holding the user's group list.
+    pub groups_claim: String,
+    /// IdP-group → space grants applied on callback. Empty by default.
+    pub group_map: Vec<GroupMap>,
+    /// Max age (seconds) an OIDC session may be silently reasserted before a full
+    /// re-authentication is required. Default 7 days.
+    pub max_reassertion_age_seconds: i64,
+}
+
+impl OidcConfig {
+    /// Validate the config at LOAD time so the per-login callback path is INFALLIBLE:
+    /// a single malformed `group_map[].space_id` (bad base64) or an unknown `role`
+    /// would otherwise fail — or silently mis-provision — EVERY SSO login (the
+    /// `ids::unb64`/role handling runs inside the per-login loop). Failing fast at
+    /// startup surfaces the operator's typo immediately instead of at first login.
+    pub fn validate(&self) -> Result<(), String> {
+        use base64::Engine;
+        for (i, gm) in self.group_map.iter().enumerate() {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(gm.space_id.as_bytes())
+                .map_err(|_| {
+                    format!(
+                        "oidc.group_map[{i}].space_id is not valid base64: {:?}",
+                        gm.space_id
+                    )
+                })?;
+            // Every space_id in this system is a 16-byte id (`ids::random_id16`); a
+            // different length is certainly a config typo.
+            if bytes.len() != 16 {
+                return Err(format!(
+                    "oidc.group_map[{i}].space_id must decode to a 16-byte space id (got {} bytes)",
+                    bytes.len()
+                ));
+            }
+            // The space-membership role set (server-trusted): 'member' | 'admin'.
+            if gm.role != "member" && gm.role != "admin" {
+                return Err(format!(
+                    "oidc.group_map[{i}].role must be 'member' or 'admin', got {:?}",
+                    gm.role
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for OidcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            issuer: String::new(),
+            client_id: String::new(),
+            audience: String::new(),
+            jwks_url: String::new(),
+            groups_claim: "groups".into(),
+            group_map: Vec::new(),
+            max_reassertion_age_seconds: 604_800,
+        }
+    }
 }
 
 impl Default for ServerConfig {
@@ -124,6 +205,7 @@ impl Default for ServerConfig {
             trust_proxy: false,
             acme: false,
             cors_allowed_origins: Vec::new(),
+            public_url: String::new(),
         }
     }
 }
@@ -180,15 +262,6 @@ impl Default for ObsConfig {
         }
     }
 }
-impl Default for BootstrapConfig {
-    fn default() -> Self {
-        Self {
-            token: String::new(),
-            allow_open: false,
-            default_tier: "personal".into(),
-        }
-    }
-}
 // Manual `Debug` for secret-bearing sub-structs: even an accidental
 // `tracing::debug!(?config)`, a panic message, or an error wrapper must NOT
 // emit tokens / the TLS key / the db-URL (with pg creds) to the logs (obs rule §13).
@@ -201,6 +274,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("trust_proxy", &self.trust_proxy)
             .field("acme", &self.acme)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
+            .field("public_url", &self.public_url)
             .finish()
     }
 }
@@ -213,19 +287,17 @@ impl std::fmt::Debug for DbConfig {
             .finish()
     }
 }
-impl std::fmt::Debug for BootstrapConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BootstrapConfig")
-            .field("token", &redacted(&self.token))
-            .field("allow_open", &self.allow_open)
-            .field("default_tier", &self.default_tier)
-            .finish()
-    }
-}
 impl std::fmt::Debug for OpsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpsConfig")
             .field("token", &redacted(&self.token))
+            .finish()
+    }
+}
+impl std::fmt::Debug for SetupConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetupConfig")
+            .field("code", &redacted(&self.code))
             .finish()
     }
 }
@@ -245,7 +317,14 @@ impl Config {
             }
         }
         fig = fig.merge(Env::prefixed("UNISSH__").split("__"));
-        fig.extract().map_err(Box::new)
+        let config: Config = fig.extract().map_err(Box::new)?;
+        // Fail fast on a bad OIDC group_map so no per-login SSO path can be broken by
+        // one malformed entry (see `OidcConfig::validate`).
+        config
+            .oidc
+            .validate()
+            .map_err(|msg| Box::new(figment::Error::from(msg)))?;
+        Ok(config)
     }
 
     pub fn is_sqlite(&self) -> bool {
@@ -253,5 +332,65 @@ impl Config {
     }
     pub fn is_postgres(&self) -> bool {
         self.db.backend.eq_ignore_ascii_case("postgres")
+    }
+}
+
+#[cfg(test)]
+mod oidc_validate_tests {
+    use super::{GroupMap, OidcConfig};
+    use base64::Engine;
+
+    fn gm(space_id: &str, role: &str) -> GroupMap {
+        GroupMap {
+            group: "eng".into(),
+            space_id: space_id.into(),
+            role: role.into(),
+        }
+    }
+
+    fn b64_16() -> String {
+        base64::engine::general_purpose::STANDARD.encode([0x5au8; 16])
+    }
+
+    #[test]
+    fn empty_group_map_is_valid() {
+        assert!(OidcConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn valid_entry_passes() {
+        let c = OidcConfig {
+            group_map: vec![gm(&b64_16(), "member"), gm(&b64_16(), "admin")],
+            ..Default::default()
+        };
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn bad_base64_space_id_fails() {
+        let c = OidcConfig {
+            group_map: vec![gm("not base64!!", "member")],
+            ..Default::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn wrong_length_space_id_fails() {
+        let short = base64::engine::general_purpose::STANDARD.encode([0u8; 8]);
+        let c = OidcConfig {
+            group_map: vec![gm(&short, "member")],
+            ..Default::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn unknown_role_fails() {
+        let c = OidcConfig {
+            group_map: vec![gm(&b64_16(), "superuser")],
+            ..Default::default()
+        };
+        assert!(c.validate().is_err());
     }
 }

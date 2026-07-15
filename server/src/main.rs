@@ -26,9 +26,6 @@ enum Command {
     Migrate,
     /// Raise next_seq after restoring an old backup (anti-rollback runbook §14.3); never lowers it.
     SeqBump {
-        /// Base64 tenant id; omit to apply to every tenant.
-        #[arg(long, value_name = "B64")]
-        tenant: Option<String>,
         /// Raise next_seq to at least this floor N.
         #[arg(long, value_name = "N")]
         to: Option<i64>,
@@ -36,6 +33,8 @@ enum Command {
         #[arg(long, value_name = "DELTA")]
         by: Option<i64>,
     },
+    /// Unclaim the instance and print a fresh setup code (owner lost everything — spec §8).
+    Reclaim,
 }
 
 #[tokio::main]
@@ -60,43 +59,62 @@ async fn main() -> anyhow::Result<()> {
 
     // Anti-rollback runbook (§14.3): after a restore from an old backup, raise
     // next_seq so report_version doesn't fall below client cursors (otherwise
-    // a fatal TransportRollback). NEVER lowers it.
-    //   seq-bump --by <delta>            (for ALL tenants: next_seq += delta)
-    //   seq-bump --tenant <b64> --to <N> (raise a specific one to floor N)
-    //   seq-bump --tenant <b64> --by <d> (raise a specific one by delta)
-    if let Some(Command::SeqBump { tenant, to, by }) = command {
-        use base64::Engine;
+    // a fatal TransportRollback). NEVER lowers it. Instance-wide.
+    //   seq-bump --by <delta>   (next_seq += delta)
+    //   seq-bump --to <N>       (raise to floor N)
+    if let Some(Command::SeqBump { to, by }) = command {
         let store = unissh_server::Store::connect(&config.db).await?;
         store.migrate().await?;
-        let tenants: Vec<Vec<u8>> = match &tenant {
-            Some(t) => vec![
-                base64::engine::general_purpose::STANDARD
-                    .decode(t)
-                    .map_err(|_| anyhow::anyhow!("--tenant must be base64"))?,
-            ],
-            None => store.list_tenant_ids().await?,
+        let now = time::system_clock().now_unix();
+        store.ensure_instance(now).await?;
+        let (old, new) = if let Some(to) = to {
+            store.bump_instance_seq_to(to).await?
+        } else if let Some(by) = by {
+            store.bump_instance_seq_by(by).await?
+        } else {
+            return Err(anyhow::anyhow!(
+                "seq-bump requires --by <delta> or --to <N>"
+            ));
         };
-        if tenants.is_empty() {
-            println!("no tenants found");
-            return Ok(());
-        }
-        for tid in &tenants {
-            let (old, new) = if let Some(to) = to {
-                store.bump_next_seq_to(tid, to).await?
-            } else if let Some(by) = by {
-                store.bump_next_seq_by(tid, by).await?
-            } else {
-                return Err(anyhow::anyhow!(
-                    "seq-bump requires --by <delta> or --to <N>"
-                ));
-            };
-            println!(
-                "tenant {} : next_seq {} -> {}",
-                base64::engine::general_purpose::STANDARD.encode(tid),
-                old,
-                new
-            );
-        }
+        println!("instance next_seq {old} -> {new}");
+        return Ok(());
+    }
+
+    // Reclaim (§8): the owner lost every device/keyset. Unclaim the instance and mint
+    // a fresh setup code so a new owner can claim it. Data (accounts/vaults/objects)
+    // is left intact — only the claim/owner binding + a fresh code.
+    if matches!(command, Some(Command::Reclaim)) {
+        use unissh_server::ids;
+        let store = unissh_server::Store::connect(&config.db).await?;
+        store.migrate().await?;
+        let now = time::system_clock().now_unix();
+        store.ensure_instance(now).await?;
+        store
+            .exec(
+                "UPDATE instance SET claimed = 0, owner_account_id = NULL WHERE id = 1",
+                vec![],
+            )
+            .await?;
+        // Also strip the owner ROLE from the prior owner(s): reclaim nulls
+        // instance.owner_account_id, but a stale accounts.is_owner=1 would leave a
+        // ghost owner that still passes `require_owner` after a new owner claims.
+        store
+            .exec(
+                "UPDATE accounts SET is_owner = 0 WHERE is_owner = 1",
+                vec![],
+            )
+            .await?;
+        let code = if config.setup.code.is_empty() {
+            let mut rnd = [0u8; 6];
+            ids::fill_random(&mut rnd);
+            ids::generate_setup_code(&rnd)
+        } else {
+            config.setup.code.clone()
+        };
+        store
+            .set_setup_code_hash(&ids::sha256(code.as_bytes()))
+            .await?;
+        println!("SETUP CODE: {code}");
         return Ok(());
     }
 

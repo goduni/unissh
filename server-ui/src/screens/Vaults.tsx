@@ -1,11 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { SYNC_TARGET_LABEL, CACHE_POLICY_LABEL, type VaultRow } from "../api/types";
-import { useTenant } from "../store/tenant";
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
-import { KeysetGate } from "../ui/overlays";
 import { PubkeyChip, Tag, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
@@ -14,17 +12,14 @@ export function Vaults() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.vaults.title")} sub={t("screen.vaults.sub")} zk>
-      <KeysetGate>
-        <VaultsBody />
-      </KeysetGate>
+      <VaultsBody />
     </Screen>
   );
 }
 
 function VaultsBody() {
   const { t } = useTranslation();
-  const activeTenantId = useTenant((s) => s.activeTenantId);
-  const vaults = useAsync(() => api.admin.vaults(), [activeTenantId]);
+  const vaults = useAsync(() => api.admin.vaults(), []);
 
   const columns: Column<VaultRow>[] = [
     {

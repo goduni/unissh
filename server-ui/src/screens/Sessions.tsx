@@ -1,14 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { useTenant } from "../store/tenant";
 import { useUi } from "../store/ui";
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { fmtRelative, isExpired } from "../util/format";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Btn, PubkeyChip, StateBadge, TextInput, ZkBanner } from "../ui/primitives";
-import { KeysetGate } from "../ui/overlays";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -25,9 +23,7 @@ export function Sessions() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.sessions.title")} sub={t("screen.sessions.sub")}>
-      <KeysetGate>
-        <SessionsBody />
-      </KeysetGate>
+      <SessionsBody />
     </Screen>
   );
 }
@@ -35,11 +31,10 @@ export function Sessions() {
 function SessionsBody() {
   const { t } = useTranslation();
   const [acc, setAcc] = useState("");
-  const activeTenantId = useTenant((s) => s.activeTenantId);
   const askConfirm = useUi((s) => s.askConfirm);
   const toast = useUi((s) => s.toast);
 
-  const x = useAsync(() => api.admin.sessions(acc || undefined), [acc, activeTenantId]);
+  const x = useAsync(() => api.admin.sessions(acc || undefined), [acc]);
 
   const columns: Column<SessionRow>[] = [
     {

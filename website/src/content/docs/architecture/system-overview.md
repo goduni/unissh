@@ -74,7 +74,7 @@ This milestone's Definition of Done is **complete**, and the core was then exten
 
 ### Milestone 2 — the server, plus cloud and multi-device
 
-The server stands up **on top of** the finished core and adds exactly what a local client lacks: instance management, cloud-vault sharing wrappers and VK rotation, the `sync` engine (offline-first, item-level cursors, signed-version LWW with conflict detection, tombstones), device onboarding (Secret Key and QR/code without push), recovery (Emergency Kit), and the self-hosted backend itself (identity/auth, vault metadata, vault RBAC, audit, the sync blob store).
+The server stands up **on top of** the finished core and adds exactly what a local client lacks: instance management with **spaces** (teams) under one account, cloud-vault sharing wrappers and VK rotation, the `sync` engine (offline-first, item-level cursors, signed-version LWW with conflict detection, tombstones), onboarding (setup-code **claim** for the owner, space-scoped **invite links**, **SSO/OIDC**, and **escrow sign-in** or QR-approve to recover a keyset on a fresh device), recovery (Emergency Kit), and the self-hosted backend itself (identity/auth, vault metadata, vault RBAC, audit, the sync blob store).
 
 ### Milestone 3 — the remaining clients
 

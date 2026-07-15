@@ -48,7 +48,7 @@ Guarantees (the engine never panics):
 
 This is the heart of defending against a malicious or restored-stale server.
 
-`server_seq` is a per-tenant monotonic counter. Each client keeps a **trusted last-seen cursor outside the server**, stored locally-to-the-instance and **never replicated back** from the server. The invariant: the server's reported version (`report_version()`, equal to `next_seq`) must **never drop below a cursor a client has already seen**. If it does, the client treats it as a snapshot-replay **attack** and refuses to sync (a fatal `TransportRollback`).
+`server_seq` is a single instance-wide monotonic counter. Each client keeps a **trusted last-seen cursor outside the server**, stored locally-to-the-instance and **never replicated back** from the server. The invariant: the server's reported version (`report_version()`, equal to `next_seq`) must **never drop below a cursor a client has already seen**. If it does, the client treats it as a snapshot-replay **attack** and refuses to sync (a fatal `TransportRollback`).
 
 The cursor advances **incrementally** in strict `server_seq` ascending order after each object is processed — applied, skipped, conflicted, and verify-rejected objects all advance it; a below-cursor read does not. So an interrupted delta loses no progress and never skips an unverified tail.
 
