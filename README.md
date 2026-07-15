@@ -16,7 +16,7 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 
 <br/>
 
-<img src="docs/screenshots/hosts-dark.png" alt="UniSSH desktop client — host library in the dark Nebula theme" width="900">
+<img src="docs/screenshots/hosts-dark.png" alt="UniSSH desktop client — the host library in dark mode" width="900">
 
 </div>
 
@@ -107,7 +107,7 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 
 ## Screenshots
 
-The host library is shown [at the top](#unissh) — dark **Nebula** theme, with the operations rail (terminals, SFTP, broadcast, fleet), secrets, and network on the left, and the selected host's auth and host-key status on the right.
+The host library is shown [at the top](#unissh) — dark mode, with the operations rail (terminals, SFTP, run) and the vault & network group (secrets, tunnels, known hosts) on the left, and the selected host's connection, auth, and host-key status on the right.
 
 > _More captures — terminal · SFTP · fleet · the Candy Holo theme — land with the first public release._
 
