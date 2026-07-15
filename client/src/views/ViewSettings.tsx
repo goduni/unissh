@@ -4,7 +4,7 @@
 // platform strings: the About panel reads real platform info from plugin-os,
 // and the danger zone clears real known_hosts via api.forgetHost.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { ACCENT_KEYS, ACCENTS, MONO, UI, rgba } from "@/theme/tokens";
 import type { AppThemeFamily, Density, HostsLayout, Mode, Palette, TermTheme } from "@/theme/tokens";
@@ -15,7 +15,7 @@ import { useCtx } from "@/store/ctx";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
-import { serverShortLabel, vaultServer, vaultSpace } from "@/bridge/vaults";
+import { isOwnedCloud, serverShortLabel, vaultServer } from "@/bridge/vaults";
 import {
   apiErrorMessage,
   isServerErrorCode,
@@ -972,51 +972,77 @@ function SettingsVaults() {
   const setConfirm = useApp((s) => s.setConfirm);
   const servers = useApp((s) => s.servers);
   const activeServerId = useApp((s) => s.activeServerId);
-  // Which vault (if any) has its inline "move to another server" picker open.
-  const [moveVault, setMoveVault] = useState<string | null>(null);
 
-  // Resolve a cloud vault's bound Space (by its base64 space id `syncTenant`) to a
-  // friendly label — the Space name (needs a session) so the Space surfaces in the
-  // vault list; else the server handle/host via the session-independent binding
-  // label. null only when the vault is bound to no currently-linked server.
-  const boundSpaceLabel = (v: VaultInfo): string | null => {
-    const found = vaultSpace(v, servers);
-    if (found) return found.space.name || serverShortLabel(found.server);
-    const srv = vaultServer(v, servers);
-    return srv ? serverShortLabel(srv) : null;
-  };
+  // Inline "pick a server" popover for Bind / Move (the accessible path alongside
+  // drag-and-drop): holds the vault id whose picker is open.
+  const [pickerVault, setPickerVault] = useState<string | null>(null);
+  // Drag-and-drop: `dragId` is the live source (a ref, read in dragover/drop without
+  // forcing a re-render); `dragging`/`dragOver` drive the visual state only.
+  const dragId = useRef<string | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
 
-  // The linked servers a bound vault could be MOVED to: every link except the one
-  // it's already bound to (so a foreign-bound vault can be reclaimed to any of yours).
-  const moveTargets = (v: VaultInfo): ServerStatus[] => {
-    const cur = vaultServer(v, servers)?.serverId ?? null;
-    return servers.filter((s) => s.serverId != null && s.serverId !== cur);
-  };
+  const reload = () => useApp.getState().reloadVaults();
+  const errToast = (e: unknown) => toast(apiErrorMessage(e), "err");
 
-  // Manually bind an unbound cloud vault to the active (or first) linked server —
-  // reclaims a vault orphaned by server removal or one that couldn't be auto-bound.
-  const onBindVault = (v: VaultInfo) => {
-    const sid = activeServerId ?? servers[0]?.serverId ?? undefined;
-    api
-      .serverBindCloudVault(v.vaultId, sid)
-      .then(() => {
-        void useApp.getState().reloadVaults();
-        toast(t("vault.boundDone"), "ok");
-      })
-      .catch((e) => toast(apiErrorMessage(e), "err"));
-  };
+  // Binding management (bind / move / unbind) is OWNER-ONLY: only a vault you
+  // administer (admin in its space) may be re-homed. A member sees where a shared
+  // vault lives but can't move it — that would desync the team and scatter the
+  // owner's ciphertext onto personal servers (it grants a member no new plaintext,
+  // since they can already decrypt, but WHERE the vault syncs is the owner's call).
+  const owned = (v: VaultInfo) => isOwnedCloud(v, servers);
 
-  // Move a bound cloud vault to a different linked server: re-point its binding
-  // label; the vault is re-dirtied server-side so it re-pushes to the new server.
-  const onMoveVault = (v: VaultInfo, serverId: string) => {
+  const cloudVaults = vaults.filter((v) => v.syncTarget === "cloud");
+  const localVaults = vaults.filter((v) => v.syncTarget !== "cloud");
+  const vaultsOn = (s: ServerStatus) =>
+    cloudVaults.filter((v) => vaultServer(v, servers)?.serverId === s.serverId);
+  // Cloud vaults resolving to NO linked server: unbound (empty tenant) or bound to a
+  // server that isn't linked here. They don't sync until (re)bound.
+  const unboundVaults = cloudVaults.filter((v) => vaultServer(v, servers) == null);
+
+  // Bind an unbound vault immediately (no prior server → no old copy to warn about).
+  const bindTo = (v: VaultInfo, serverId: string) =>
     api
       .serverBindCloudVault(v.vaultId, serverId)
       .then(() => {
-        void useApp.getState().reloadVaults();
-        setMoveVault(null);
-        toast(t("vault.moveDone"), "ok");
+        void reload();
+        setPickerVault(null);
+        toast(t("vault.boundDone"), "ok");
       })
-      .catch((e) => toast(apiErrorMessage(e), "err"));
+      .catch(errToast);
+
+  // (Re)bind a vault to `s`. A MOVE (it was already bound to a linked server) is
+  // confirmed first and we're explicit that the OLD server keeps its (encrypted)
+  // copy — Move re-points syncing, it does NOT delete remotely.
+  const rebindTo = (v: VaultInfo, s: ServerStatus) => {
+    if (!s.serverId || !owned(v)) return;
+    if (vaultServer(v, servers)?.serverId === s.serverId) return; // already there
+    if (vaultServer(v, servers) == null) {
+      void bindTo(v, s.serverId);
+      return;
+    }
+    setConfirm({
+      title: t("vault.moveTitle"),
+      body: t("vault.moveBody", { name: v.name, server: serverShortLabel(s) }),
+      confirmLabel: t("vault.moveConfirm"),
+      onConfirm: async () => {
+        await guard(async () => {
+          await api.serverBindCloudVault(v.vaultId, s.serverId!);
+          await reload();
+          setPickerVault(null);
+          toast(t("vault.moveDone"), "ok");
+        });
+      },
+    });
+  };
+
+  const syncNow = (s: ServerStatus) => {
+    if (!s.serverId) return;
+    void guard(async () => {
+      await api.serverSyncNow(s.serverId!);
+      await reload();
+      toast(t("vault.syncDone"), "ok");
+    });
   };
 
   // Unbind a bound cloud vault (confirm first): it stops syncing and stays only on
@@ -1085,142 +1111,314 @@ function SettingsVaults() {
     });
   };
 
+  // ── one vault row ─────────────────────────────────────────────
+  const vaultRow = (v: VaultInfo, kind: "server" | "local" | "unbound") => {
+    const isCurrent = v.vaultId === vaultId;
+    const canBind = kind !== "local" && owned(v); // owner-only binding + drag
+    const isMember = kind === "server" && !owned(v);
+    const picking = pickerVault === v.vaultId;
+    const targets =
+      kind === "server"
+        ? servers.filter(
+            (s) => s.serverId != null && s.serverId !== vaultServer(v, servers)?.serverId,
+          )
+        : servers.filter((s) => s.serverId != null);
+    return (
+      <div
+        key={v.vaultId}
+        draggable={canBind}
+        onDragStart={
+          canBind
+            ? (e) => {
+                dragId.current = v.vaultId;
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", v.vaultId);
+                setDragging(v.vaultId);
+              }
+            : undefined
+        }
+        onDragEnd={
+          canBind
+            ? () => {
+                dragId.current = null;
+                setDragging(null);
+                setDragOver(null);
+              }
+            : undefined
+        }
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexWrap: isMobile ? "wrap" : "nowrap",
+          gap: 10,
+          padding: "12px 14px",
+          borderTop: `1px solid ${p.line}`,
+          background: isCurrent ? p.bg2 : "transparent",
+          opacity: dragging === v.vaultId ? 0.45 : 1,
+          cursor: canBind ? "grab" : "default",
+        }}
+      >
+        <Icon name="layers" size={16} color={p.txt3} />
+        <div
+          style={{
+            flex: 1,
+            minWidth: isMobile ? "100%" : 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontSize: 13.5, fontWeight: 650 }}>{v.name}</span>
+          {isCurrent && <Tag>{t("vault.current")}</Tag>}
+          {kind === "local" && <VaultBadge target="local" label={t("vault.local")} />}
+          {isMember && (
+            <span
+              title={t("vault.memberManaged")}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 11,
+                color: p.txt3,
+              }}
+            >
+              <Icon name="lock" size={12} color={p.txt3} />
+              {t("vault.roleMember")}
+            </span>
+          )}
+          {kind === "unbound" && (
+            <span style={{ fontSize: 11, color: p.amber, fontWeight: 600, whiteSpace: "nowrap" }}>
+              {t("vault.wontSync")}
+            </span>
+          )}
+        </div>
+
+        {canBind &&
+          (picking ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: p.txt3 }}>
+                {t(kind === "server" ? "vault.moveTo" : "vault.bindTo")}
+              </span>
+              {targets.map((s) => (
+                <Btn
+                  key={s.serverId!}
+                  variant="ghost"
+                  size="sm"
+                  icon="cloud"
+                  onClick={() => rebindTo(v, s)}
+                >
+                  {serverShortLabel(s)}
+                </Btn>
+              ))}
+              <Btn
+                variant="ghost"
+                size="sm"
+                icon="x"
+                title={t("common.cancel")}
+                onClick={() => setPickerVault(null)}
+              />
+            </span>
+          ) : (
+            <>
+              {targets.length > 0 && (
+                <Btn variant="ghost" size="sm" onClick={() => setPickerVault(v.vaultId)}>
+                  {t(kind === "server" ? "vault.move" : "vault.bind")}
+                </Btn>
+              )}
+              {kind === "server" && (
+                <Btn variant="ghost" size="sm" onClick={() => onUnbindVault(v)}>
+                  {t("vault.unbind")}
+                </Btn>
+              )}
+            </>
+          ))}
+
+        <Btn
+          variant="ghost"
+          size="sm"
+          icon="pencil"
+          title={t("vault.rename")}
+          onClick={() => openModal({ kind: "vault", edit: v })}
+        />
+        <Btn
+          variant="ghost"
+          size="sm"
+          icon="shieldcheck"
+          title={t("vault.verify")}
+          onClick={() => verify(v)}
+        />
+        <Btn
+          variant="ghost"
+          size="sm"
+          icon="trash"
+          title={t("vault.purge")}
+          disabled={vaults.length <= 1}
+          onClick={() => purge(v)}
+          style={{ color: p.red, borderColor: rgba(p.red, 0.4) }}
+        />
+        <Btn
+          variant="ghost"
+          size="sm"
+          icon="trash"
+          title={t("common.delete")}
+          disabled={vaults.length <= 1}
+          onClick={() => remove(v)}
+          style={{ color: p.red, borderColor: rgba(p.red, 0.4) }}
+        />
+      </div>
+    );
+  };
+
+  // Bordered "group box" holding the rows; a server box is a drop target for owner
+  // vaults (drop = bind/move to that server).
+  const groupBox = (children: React.ReactNode, dropServerId?: string) => {
+    const over = dropServerId != null && dragOver === dropServerId;
+    return (
+      <div
+        onDragOver={
+          dropServerId != null
+            ? (e) => {
+                if (dragId.current) {
+                  e.preventDefault();
+                  setDragOver(dropServerId);
+                }
+              }
+            : undefined
+        }
+        onDragLeave={
+          dropServerId != null
+            ? () => setDragOver((o) => (o === dropServerId ? null : o))
+            : undefined
+        }
+        onDrop={
+          dropServerId != null
+            ? (e) => {
+                e.preventDefault();
+                const vid = dragId.current;
+                dragId.current = null;
+                setDragging(null);
+                setDragOver(null);
+                const s = servers.find((x) => x.serverId === dropServerId);
+                const v = vaults.find((x) => x.vaultId === vid);
+                if (v && s) rebindTo(v, s);
+              }
+            : undefined
+        }
+        style={{
+          border: `1px solid ${over ? p.accent : p.line}`,
+          borderRadius: 12,
+          overflow: "hidden",
+          background: over ? p.bg2 : "transparent",
+          transition: "border-color .12s, background .12s",
+        }}
+      >
+        {children}
+      </div>
+    );
+  };
+
+  const groupIcon = (name: IconName, color: string, borderColor: string) => (
+    <span
+      style={{
+        width: 28,
+        height: 28,
+        borderRadius: 8,
+        flex: "none",
+        display: "grid",
+        placeItems: "center",
+        border: `1px solid ${borderColor}`,
+        color,
+      }}
+    >
+      <Icon name={name} size={15} />
+    </span>
+  );
+
+  const serverGroup = (s: ServerStatus) => {
+    const vs = vaultsOn(s);
+    const isActive = s.serverId === activeServerId;
+    return (
+      <div key={s.serverId ?? s.baseUrl ?? ""} style={{ marginBottom: 22 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 9px" }}>
+          {groupIcon("cloud", p.txt, p.line)}
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" }}
+          >
+            <span style={{ fontSize: 14, fontWeight: 700 }}>{serverShortLabel(s)}</span>
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                background: s.hasSession ? p.green : p.txt3,
+                opacity: s.hasSession ? 1 : 0.5,
+              }}
+            />
+            <span style={{ fontSize: 11.5, color: p.txt3 }}>
+              {s.hasSession ? t("vault.srvConnected") : t("vault.srvSignedOut")}
+            </span>
+            {isActive && <Tag>{t("vault.srvActive")}</Tag>}
+          </div>
+          <div style={{ flex: 1 }} />
+          {s.hasSession && (
+            <Btn variant="ghost" size="sm" icon="refresh" onClick={() => syncNow(s)}>
+              {t("vault.syncNow")}
+            </Btn>
+          )}
+        </div>
+        {groupBox(
+          vs.length === 0 ? (
+            <div style={{ padding: "14px 15px", fontSize: 12.5, color: p.txt3 }}>
+              {dragging ? t("vault.dropHere") : t("vault.emptyServer")}
+            </div>
+          ) : (
+            vs.map((v) => vaultRow(v, "server"))
+          ),
+          s.serverId ?? undefined,
+        )}
+      </div>
+    );
+  };
+
+  const localGroup = () => (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 9px" }}>
+        {groupIcon("home", p.txt3, p.line)}
+        <span style={{ fontSize: 14, fontWeight: 700 }}>{t("vault.grpLocal")}</span>
+        <span style={{ fontSize: 11.5, color: p.txt3 }}>· {t("vault.grpLocalHint")}</span>
+      </div>
+      {groupBox(localVaults.map((v) => vaultRow(v, "local")))}
+    </div>
+  );
+
+  const unboundGroup = () => (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 9px" }}>
+        {groupIcon("alert", p.amber, rgba(p.amber, 0.4))}
+        <span style={{ fontSize: 14, fontWeight: 700, color: p.amber }}>
+          {t("vault.grpUnbound")}
+        </span>
+        <span style={{ fontSize: 11.5, color: p.amber, opacity: 0.85 }}>
+          · {t("vault.grpUnboundHint")}
+        </span>
+      </div>
+      {groupBox(unboundVaults.map((v) => vaultRow(v, "unbound")))}
+    </div>
+  );
+
   return (
     <>
       <SectionLabel first>{t("vault.manage")}</SectionLabel>
-      <div style={{ fontSize: 12.5, color: p.txt3, margin: "6px 0 12px" }}>
-        {t("vault.manageDesc")}
+      <div style={{ fontSize: 12.5, color: p.txt3, margin: "6px 0 18px", maxWidth: 560 }}>
+        {t("vault.topoDesc")}
       </div>
-      {vaults.map((v) => (
-        <div
-          key={v.vaultId}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            flexWrap: isMobile ? "wrap" : "nowrap",
-            gap: 12,
-            padding: "14px 0",
-            borderBottom: `1px solid ${p.line}`,
-          }}
-        >
-          <Icon name="layers" size={16} color={p.txt3} />
-          <div
-            style={{
-              flex: 1,
-              minWidth: isMobile ? "100%" : 0,
-              display: "flex",
-              alignItems: "center",
-              flexWrap: isMobile ? "wrap" : "nowrap",
-              gap: 8,
-            }}
-          >
-            <span style={{ fontSize: 14, fontWeight: 700 }}>{v.name}</span>
-            <VaultBadge
-              target={v.syncTarget}
-              label={v.syncTarget === "cloud" ? t("vault.cloud") : t("vault.local")}
-            />
-            {v.syncTarget === "cloud" &&
-              (v.syncTenant ? (
-                moveVault === v.vaultId ? (
-                  // Inline "move to another server" picker (one button per candidate link).
-                  <span
-                    style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}
-                  >
-                    <span style={{ fontSize: 11, color: p.txt3 }}>{t("vault.moveTo")}</span>
-                    {moveTargets(v).map((s) => (
-                      <Btn
-                        key={s.serverId!}
-                        variant="ghost"
-                        size="sm"
-                        icon="server"
-                        onClick={() => onMoveVault(v, s.serverId!)}
-                      >
-                        {serverShortLabel(s)}
-                      </Btn>
-                    ))}
-                    <Btn
-                      variant="ghost"
-                      size="sm"
-                      icon="x"
-                      title={t("common.cancel")}
-                      onClick={() => setMoveVault(null)}
-                    />
-                  </span>
-                ) : (
-                  <span
-                    style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}
-                  >
-                    <span style={{ fontSize: 11, color: p.txt3, whiteSpace: "nowrap" }}>
-                      {(() => {
-                        const label = boundSpaceLabel(v);
-                        return label
-                          ? t("vault.boundTo", { server: label })
-                          : t("vault.boundOther");
-                      })()}
-                    </span>
-                    {vaultServer(v, servers) != null && moveTargets(v).length > 0 && (
-                      <Btn variant="ghost" size="sm" onClick={() => setMoveVault(v.vaultId)}>
-                        {t("vault.move")}
-                      </Btn>
-                    )}
-                    <Btn variant="ghost" size="sm" onClick={() => onUnbindVault(v)}>
-                      {t("vault.unbind")}
-                    </Btn>
-                  </span>
-                )
-              ) : (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontSize: 11, color: p.amber, whiteSpace: "nowrap" }}>
-                    {t("vault.boundUnknown")}
-                  </span>
-                  {servers.length > 0 && (
-                    <Btn variant="ghost" size="sm" onClick={() => onBindVault(v)}>
-                      {t("vault.bind")}
-                    </Btn>
-                  )}
-                </span>
-              ))}
-            {v.vaultId === vaultId && <Tag>{t("vault.current")}</Tag>}
-          </div>
-          {/* Identities now live in any of your private vaults, picked in Secrets ›
-              Identities (auto-provisioned) — no per-vault "make personal" designation. */}
-          <Btn
-            variant="ghost"
-            size="sm"
-            icon="pencil"
-            onClick={() => openModal({ kind: "vault", edit: v })}
-          >
-            {t("vault.rename")}
-          </Btn>
-          <Btn
-            variant="ghost"
-            size="sm"
-            icon="shieldcheck"
-            title={t("vault.verify")}
-            onClick={() => verify(v)}
-          />
-          <Btn
-            variant="ghost"
-            size="sm"
-            icon="trash"
-            title={t("vault.purge")}
-            disabled={vaults.length <= 1}
-            onClick={() => purge(v)}
-            style={{ color: p.red, borderColor: rgba(p.red, 0.4) }}
-          />
-          <Btn
-            variant="ghost"
-            size="sm"
-            icon="trash"
-            disabled={vaults.length <= 1}
-            onClick={() => remove(v)}
-            style={{ color: p.red, borderColor: rgba(p.red, 0.4) }}
-          >
-            {t("common.delete")}
-          </Btn>
-        </div>
-      ))}
-      <div style={{ marginTop: 16 }}>
+
+      {servers.map((s) => serverGroup(s))}
+      {localVaults.length > 0 && localGroup()}
+      {unboundVaults.length > 0 && unboundGroup()}
+
+      <div style={{ marginTop: 20 }}>
         <Btn icon="plus" onClick={() => openModal({ kind: "vault" })}>
           {t("vault.create")}
         </Btn>
