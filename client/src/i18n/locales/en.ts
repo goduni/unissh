@@ -190,6 +190,7 @@ export const en = {
     badgeUnbound: "no server",
     roleMember: "Member",
     memberManaged: "The owner controls where this vault syncs",
+    removeLocal: "Remove from this device",
     switchCloseTitle: "Close open connections?",
     switchCloseBody: "Switching vaults will close {{count}} open connection(s) (terminals, tunnels, broadcasts) from the current vault.",
     switchCloseConfirm: "Close and switch",

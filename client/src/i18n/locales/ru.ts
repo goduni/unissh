@@ -219,6 +219,7 @@ export const ru = {
     badgeUnbound: "без сервера",
     roleMember: "Участник",
     memberManaged: "Куда синкать этот волт, решает владелец",
+    removeLocal: "Убрать с этого устройства",
     switchCloseTitle: "Закрыть открытые подключения?",
     switchCloseBody: "Смена волта закроет {{count}} открытых подключений (терминалы, туннели, broadcast) из текущего волта.",
     switchCloseConfirm: "Закрыть и переключить",

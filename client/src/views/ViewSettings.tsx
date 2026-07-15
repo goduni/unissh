@@ -1116,6 +1116,10 @@ function SettingsVaults() {
     const isCurrent = v.vaultId === vaultId;
     const canBind = kind !== "local" && owned(v); // owner-only binding + drag
     const isMember = kind === "server" && !owned(v);
+    // Rename + delete are owner-only in core (require_owner → AuthorityInvalid for a
+    // member), so don't offer them on a shared vault you don't own. Verify + purge are
+    // local (a member can integrity-check and remove their own copy).
+    const canEdit = kind === "local" || owned(v);
     const picking = pickerVault === v.vaultId;
     const targets =
       kind === "server"
@@ -1234,13 +1238,15 @@ function SettingsVaults() {
             </>
           ))}
 
-        <Btn
-          variant="ghost"
-          size="sm"
-          icon="pencil"
-          title={t("vault.rename")}
-          onClick={() => openModal({ kind: "vault", edit: v })}
-        />
+        {canEdit && (
+          <Btn
+            variant="ghost"
+            size="sm"
+            icon="pencil"
+            title={t("vault.rename")}
+            onClick={() => openModal({ kind: "vault", edit: v })}
+          />
+        )}
         <Btn
           variant="ghost"
           size="sm"
@@ -1252,20 +1258,22 @@ function SettingsVaults() {
           variant="ghost"
           size="sm"
           icon="zap"
-          title={t("vault.purge")}
+          title={isMember ? t("vault.removeLocal") : t("vault.purge")}
           disabled={vaults.length <= 1}
           onClick={() => purge(v)}
           style={{ color: p.red, borderColor: rgba(p.red, 0.4) }}
         />
-        <Btn
-          variant="ghost"
-          size="sm"
-          icon="trash"
-          title={t("common.delete")}
-          disabled={vaults.length <= 1}
-          onClick={() => remove(v)}
-          style={{ color: p.red, borderColor: rgba(p.red, 0.4) }}
-        />
+        {canEdit && (
+          <Btn
+            variant="ghost"
+            size="sm"
+            icon="trash"
+            title={t("common.delete")}
+            disabled={vaults.length <= 1}
+            onClick={() => remove(v)}
+            style={{ color: p.red, borderColor: rgba(p.red, 0.4) }}
+          />
+        )}
       </div>
     );
   };
