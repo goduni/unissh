@@ -1,8 +1,9 @@
 import type { ServerStatus, SpaceInfo, VaultInfo } from "./types";
 
-/** Short human label for a server link: its handle, else the host of its base URL. */
+/** Short label IDENTIFYING a server link: the host of its base URL (e.g.
+ *  `cloud.example.com`), so "which server a vault syncs to" reads as the SERVER, not
+ *  the caller's account handle. Falls back to the handle, then a generic label. */
 export function serverShortLabel(s: ServerStatus): string {
-  if (s.handle) return s.handle;
   if (s.baseUrl) {
     try {
       return new URL(s.baseUrl).host;
@@ -10,6 +11,7 @@ export function serverShortLabel(s: ServerStatus): string {
       return s.baseUrl;
     }
   }
+  if (s.handle) return s.handle;
   return "server";
 }
 
