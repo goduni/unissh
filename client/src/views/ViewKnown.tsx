@@ -3,6 +3,7 @@
 // store.knownHosts list and api.* calls. The mismatch banner is surfaced from a
 // live connect attempt via store.pendingMismatch (no fake mismatch state).
 
+import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rgba } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
@@ -30,7 +31,22 @@ export function ViewKnown() {
   const p = usePalette();
   const { t } = useTranslation();
   const { fmtDate } = useFmt();
-  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
+  // The wide (grid) layout needs ~680px; switch to the stacked card layout on the
+  // CONTENT width, not the window — a wide sidebar can starve the content below that
+  // while the window is still > the useNarrow breakpoint (else the 5-col grid collides
+  // and clips its right edge).
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [rootW, setRootW] = useState(0);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((ents) => {
+      for (const e of ents) setRootW(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const isMobile = useNarrow() || (rootW > 0 && rootW < 720);
   const knownHosts = useApp((s) => s.knownHosts);
   const pendingMismatch = useApp((s) => s.pendingMismatch);
 
@@ -103,6 +119,7 @@ export function ViewKnown() {
 
   return (
     <div
+      ref={rootRef}
       className="uh-view"
       style={{
         flex: 1,
