@@ -13,7 +13,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, StatusDot } from "@/components/primitives";
 import { useApp, type PendingMismatch } from "@/store/app";
-import { useIsMobile } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
@@ -127,6 +127,8 @@ function HostTile({
                   variant="danger"
                   size="sm"
                   icon="fingerprint"
+                  // Security label must stay fully readable in the clipped grid tile — wrap, don't ellipsize.
+                  wrap
                   onClick={() => onReviewMismatch(host, mismatch)}
                 >
                   {t("known.changedReview")}
@@ -152,6 +154,7 @@ export function ViewBroadcast() {
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const narrow = useNarrow();
   const hosts = useApp((s) => s.hosts);
   const vaultId = useApp((s) => s.vaultId);
   const fleetSelection = useApp((s) => s.fleetSelection);
@@ -419,7 +422,8 @@ export function ViewBroadcast() {
           alignItems: "center",
           gap: 10,
           padding: isMobile ? "16px 14px 12px" : "16px 22px 12px",
-          flexWrap: isMobile ? "wrap" : "nowrap",
+          // Always wrap so Connect drops to a second row instead of clipping below ~640px.
+          flexWrap: "wrap",
         }}
       >
         <Icon name="radio" size={20} color={p.accent} />
@@ -441,6 +445,10 @@ export function ViewBroadcast() {
             fontSize: 12,
             color: p.txt2,
             whiteSpace: "nowrap",
+            // Shrink+ellipsize the status so the selection chip and Connect stay reachable.
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
           }}
         >
           {bcId
@@ -579,10 +587,10 @@ export function ViewBroadcast() {
         <div
           style={{
             display: "flex",
-            flexDirection: isMobile ? "column" : "row",
-            alignItems: isMobile ? "stretch" : "center",
+            flexDirection: narrow ? "column" : "row",
+            alignItems: narrow ? "stretch" : "center",
             gap: 12,
-            height: isMobile ? undefined : 50,
+            height: narrow ? undefined : 50,
             padding: isMobile ? "12px 14px" : "0 16px",
             borderRadius: 12,
             background: p.bg0,
@@ -595,8 +603,8 @@ export function ViewBroadcast() {
               display: "flex",
               alignItems: "center",
               gap: 12,
-              alignSelf: isMobile ? "stretch" : undefined,
-              flex: isMobile ? undefined : 1,
+              alignSelf: narrow ? "stretch" : undefined,
+              flex: narrow ? undefined : 1,
             }}
           >
           <Icon name="radio" size={17} color={p.accent} />
@@ -642,7 +650,7 @@ export function ViewBroadcast() {
             )}
           </div>
           </div>
-          {!isMobile && (
+          {!narrow && (
             <span style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
               Enter → {t("broadcast.toAllHosts")}
             </span>
@@ -650,7 +658,7 @@ export function ViewBroadcast() {
           <Btn
             icon="send"
             size="sm"
-            full={isMobile}
+            full={narrow}
             onClick={() => void send()}
             disabled={!bcId || liveCount === 0}
             style={isMobile ? { minHeight: 44 } : undefined}

@@ -201,6 +201,8 @@ export function TermTabStrip({
                 cursor: "pointer",
                 flexShrink: 0,
                 maxWidth: 220,
+                // clip so a long title truncates inside the tab instead of spilling over
+                overflow: "hidden",
                 borderRight: `1px solid ${p.line}`,
                 background: on ? p.bg0 : "transparent",
                 color: on ? p.txt : p.txt3,
@@ -251,6 +253,9 @@ export function TermTabStrip({
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
+                    // without minWidth:0 the flex item never shrinks, so the ellipsis
+                    // never fires and a long title shoves the pane-count + ✕ sideways.
+                    minWidth: 0,
                   }}
                 >
                   {tab.title}

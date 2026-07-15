@@ -39,7 +39,7 @@ import { platform, version as osVersion } from "@tauri-apps/plugin-os";
 import { useTranslation, setLang, currentLang, tDyn, LANGS, LANG_LABELS } from "@/i18n";
 import type { Lang } from "@/i18n";
 import { useFmt } from "@/i18n/format";
-import { useIsMobile } from "@/store/responsive";
+import { useNarrow } from "@/store/responsive";
 
 // ── localStorage helpers ───────────────────────────────────────
 function lsGet(key: string, fallback: string): string {
@@ -68,14 +68,18 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   const p = usePalette();
-  const isMobile = useIsMobile();
+  // Stack the label/desc block above the control when the WINDOW is narrow, not
+  // just on the phone shell — otherwise long RU titles + a control overflow on a
+  // shrunk desktop window. flexWrap is a backstop if a control is still too wide.
+  const narrow = useNarrow();
   return (
     <div
       style={{
         display: "flex",
-        alignItems: isMobile ? "stretch" : "center",
-        flexDirection: isMobile ? "column" : "row",
-        gap: isMobile ? 8 : 16,
+        alignItems: narrow ? "stretch" : "center",
+        flexDirection: narrow ? "column" : "row",
+        flexWrap: "wrap",
+        gap: narrow ? 8 : 16,
         padding: "16px 0",
         borderBottom: `1px solid ${p.line}`,
       }}
@@ -161,7 +165,7 @@ function ThemeCardAction({
 function SettingsAppearance() {
   const p = usePalette();
   const { t } = useTranslation();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   const {
     mode,
     setMode,
@@ -375,9 +379,10 @@ function SettingsAppearance() {
             justifyContent: "space-between",
             gap: 12,
             marginBottom: 14,
+            flexWrap: "wrap", // let the reset Btn drop below the title on a narrow window
           }}
         >
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 3 }}>
               {t("settings.termThemeTitle")}
             </div>
@@ -588,7 +593,8 @@ function SettingsGeneral() {
 
       <SectionLabel>{t("settings.sectionDiagnostics")}</SectionLabel>
       <SettingRow title={t("settings.logsTitle")} desc={t("settings.logsDesc")}>
-        <div style={{ display: "flex", gap: 8 }}>
+        {/* wrap so the two long RU labels can stack instead of overflowing */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Btn variant="ghost" icon="folder" onClick={openLogs}>
             {t("settings.openLogFolder")}
           </Btn>
@@ -788,7 +794,7 @@ function SettingsSecurity() {
 // ── About ──────────────────────────────────────────────────────
 function AboutRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   const p = usePalette();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   return (
     <div
       style={{
@@ -823,7 +829,7 @@ function AboutRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
 function LinkRow({ label, url }: { label: string; url: string }) {
   const p = usePalette();
   const { t } = useTranslation();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   const copy = async () => {
     await guard(async () => {
       await writeText(url);
@@ -965,7 +971,7 @@ function SettingsAbout() {
 function SettingsVaults() {
   const p = usePalette();
   const { t } = useTranslation();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   const vaults = useApp((s) => s.vaults);
   const vaultId = useApp((s) => s.vaultId);
   const openModal = useApp((s) => s.openModal);
@@ -1153,8 +1159,11 @@ function SettingsVaults() {
         style={{
           display: "flex",
           alignItems: "center",
-          flexWrap: isMobile ? "wrap" : "nowrap",
+          // Always wrap: on desktop the trailing destructive move/unbind/delete
+          // Btns were clipped by groupBox overflow:hidden. rowGap spaces wrapped rows.
+          flexWrap: "wrap",
           gap: 10,
+          rowGap: 10,
           padding: "12px 14px",
           borderTop: `1px solid ${p.line}`,
           background: isCurrent ? p.bg2 : "transparent",
@@ -1348,7 +1357,15 @@ function SettingsVaults() {
     const isActive = s.serverId === activeServerId;
     return (
       <div key={s.serverId ?? s.baseUrl ?? ""} style={{ marginBottom: 22 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 9px" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "0 2px 9px",
+            flexWrap: "wrap", // let the "Sync now" Btn drop below the server name when narrow
+          }}
+        >
           {groupIcon("cloud", p.txt, p.line)}
           <div
             style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" }}
@@ -1454,7 +1471,7 @@ function SettingsVaults() {
 /** Read-only key/value row — mirrors AboutRow, with monospace value option. */
 function CloudInfoRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   const p = usePalette();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   return (
     <div
       style={{
@@ -2564,7 +2581,7 @@ function CloudAuditLog() {
   const p = usePalette();
   const { t } = useTranslation();
   const { fmtDate } = useFmt();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [forbidden, setForbidden] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -3043,6 +3060,7 @@ function CloudServersList({
                     fontSize: 13.5,
                     fontWeight: 600,
                     color: p.txt,
+                    minWidth: 0, // let the ellipsis label span actually truncate
                   }}
                 >
                   <span
@@ -3050,6 +3068,7 @@ function CloudServersList({
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
+                      minWidth: 0,
                     }}
                   >
                     {serverLabel(s)}
@@ -3509,7 +3528,7 @@ const SETTINGS_TABS: { id: TabId; icon: IconName; labelKey: string }[] = [
 export function ViewSettings() {
   const p = usePalette();
   const { t } = useTranslation();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   const [tab, setTab] = useState<TabId>("appearance");
   const title = tDyn(SETTINGS_TABS.find((tb) => tb.id === tab)?.labelKey ?? "");
 

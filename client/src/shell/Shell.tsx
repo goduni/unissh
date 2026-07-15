@@ -103,7 +103,9 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
       }}
     >
       <Icon name="search" size={14} color={p.txt3} />
-      <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden" }}>
+      <span
+        style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+      >
         {t("shell.searchPlaceholder")}
       </span>
       <span
@@ -440,6 +442,11 @@ function VaultSwitcher() {
               display: "flex",
               alignItems: "center",
               gap: 6,
+              // Complete the shrink chain so the location/sync badges truncate here
+              // instead of spilling over the chevron + collapse toggle at the
+              // default (220px) sidebar width.
+              minWidth: 0,
+              overflow: "hidden",
             }}
           >
             <VaultBadge target={v.syncTarget} label={badgeLabel(v)} size={11} />

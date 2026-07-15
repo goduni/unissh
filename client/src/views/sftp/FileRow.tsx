@@ -183,8 +183,19 @@ export function FileRow({
           {modeString(entry.mode)}
         </span>
       )}
+      {/* ellipsis: RU medium date ("12 сент. 2026 г.") exceeds 96px and would wrap the 30px row */}
       {!isUp && showModified && (
-        <span style={{ fontSize: 11, color: p.txt2, width: 96, textAlign: "right" }}>
+        <span
+          style={{
+            fontSize: 11,
+            color: p.txt2,
+            width: 96,
+            textAlign: "right",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
           {entry.mtime ? fmtDate(entry.mtime) : ""}
         </span>
       )}

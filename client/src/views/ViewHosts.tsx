@@ -156,6 +156,10 @@ function HostCard({
           marginTop: 16,
           opacity: show ? 0 : 1,
           transition: "opacity .12s ease",
+          // keep it one line: long RU auth ("Спросить при подключении") must ellipsize,
+          // not wrap to a 2nd line and change the card height.
+          minWidth: 0,
+          overflow: "hidden",
         }}
       >
         {session ? (
@@ -169,7 +173,17 @@ function HostCard({
             <span style={{ opacity: 0.4 }}>·</span>
           </>
         ) : null}
-        <span style={{ color: authWarn ? p.amber : p.txt3 }}>{authLabel}</span>
+        <span
+          style={{
+            color: authWarn ? p.amber : p.txt3,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {authLabel}
+        </span>
       </div>
 
       {show && (
@@ -319,7 +333,8 @@ function HostRow({
       <span style={{ flexShrink: 0, display: "inline-flex" }}>
         <AuthBadge auth={profileAuthKind(h.auth)} jump={h.jumps.length > 0} />
       </span>
-      <div style={{ width: 84, flexShrink: 0, display: "flex", justifyContent: "flex-end" }}>
+      {/* 112 (not 84): fits the RU "Подключить" icon+label so it never spills over AuthBadge */}
+      <div style={{ width: 112, flexShrink: 0, display: "flex", justifyContent: "flex-end" }}>
         {show ? (
           <Btn
             size="sm"
@@ -363,10 +378,15 @@ function DetailRow({
       <span
         style={{
           minWidth: 72,
+          // cap + ellipsis so a long RU label ("Последнее подключение") can't shove
+          // the value off the row; the fixed flexShrink:0 stays.
+          maxWidth: 140,
           fontSize: 12,
           color: p.txt3,
           flexShrink: 0,
           whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
         }}
       >
         {label}
@@ -532,9 +552,20 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         {h.auth.type === "personal" ? t("hosts.detail.userPersonal") : h.user}
       </DetailRow>
       <DetailRow label={t("hosts.detail.auth")}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        {/* badge + its OWN ellipsizing text child (minWidth:0+triad) so long RU auth
+            labels ("Спросить при подключении") truncate with dots, not mid-word. */}
+        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           <AuthBadge auth={authKind} />
-          {tDyn(AUTH_LABEL_KEY[authKind])}
+          <span
+            style={{
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {tDyn(AUTH_LABEL_KEY[authKind])}
+          </span>
         </span>
       </DetailRow>
       {firstJump && (
@@ -1637,14 +1668,18 @@ export function ViewHosts() {
               left: 22,
               right: 22,
               bottom: 16,
-              height: 52,
+              // minHeight (not height) + wrap: in RU the destructive Delete + clear-✕
+              // can't fit one row inside overflow:hidden main — let them wrap, don't clip.
+              minHeight: 52,
               borderRadius: 13,
               background: p.bg0,
               border: `1px solid ${p.line2}`,
               boxShadow: p.shadow,
               display: "flex",
               alignItems: "center",
+              flexWrap: "wrap",
               gap: 12,
+              rowGap: 8,
               padding: "0 14px",
               zIndex: 5,
             }}

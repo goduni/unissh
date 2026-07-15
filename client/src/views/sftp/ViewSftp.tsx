@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { Icon, type IconName } from "@/components/primitives";
-import { useIsMobile } from "@/store/responsive";
+import { useNarrow } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
 import { useApp } from "@/store/app";
 import { toast } from "@/store/toast";
@@ -65,7 +65,7 @@ interface ConflictReq {
 export function ViewSftp() {
   const p = usePalette();
   const { t } = useTranslation();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   const sessions = useApp((s) => s.sftpSessions);
   const hosts = useApp((s) => s.hosts);
   const enqueueTransfer = useApp((s) => s.enqueueTransfer);

@@ -36,7 +36,7 @@ import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import { useIsMobile } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType, profileToAuth } from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc } from "@/bridge/vaults";
@@ -177,6 +177,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const narrow = useNarrow();
   const ctx = useCtx();
   // This modal carries its own shell (not MShell) — give it the same Escape /
   // focus-trap-in / focus-restore contract.
@@ -402,7 +403,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
         alignItems: "center",
         justifyContent: "center",
         gap: 7,
-        height: 38,
+        // minHeight (not a fixed height) so a wrapped RU auth label ("SSH-ключ")
+        // grows the tile instead of clipping when the segment row wraps.
+        minHeight: 38,
         borderRadius: 8,
         cursor: "pointer",
         fontFamily: UI,
@@ -778,11 +781,11 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
             <Input value={label} placeholder="web-04" accent onChange={setLabel} />
           </Field>
 
-          <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
             <Field label={t("modals.host.hostAddress")} w="100%">
               <Input value={host} placeholder="web-04.prod.example.net" mono onChange={setHost} />
             </Field>
-            <Field label={t("modals.host.port")} w={isMobile ? "100%" : "96px"}>
+            <Field label={t("modals.host.port")} w={narrow ? "100%" : "96px"}>
               <Input value={port} mono onChange={setPort} />
             </Field>
           </div>
@@ -795,7 +798,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           )}
 
           <Field label={t("modals.host.auth")}>
-            <div style={{ display: "flex", gap: 8 }}>
+            {/* wrap so the 4 auth segments can drop to a 2×2 on a narrow modal
+                rather than cramming one row and clipping the long RU labels */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {seg("key", t("modals.host.authKey"), "key")}
               {seg("password", t("modals.host.authPassword"), "lock")}
               {seg("ask", t("modals.host.authAsk"), "eye")}
@@ -1108,15 +1113,15 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   </Field>
                 ) : (
                   <>
-                    <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 12 }}>
+                    <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
                       <Field label={t("modals.host.bastionHost")} w="100%">
                         <Input value={jHost} placeholder="bastion.corp.net" mono onChange={setJHost} />
                       </Field>
-                      <Field label={t("modals.host.port")} w={isMobile ? "100%" : "96px"}>
+                      <Field label={t("modals.host.port")} w={narrow ? "100%" : "96px"}>
                         <Input value={jPort} mono onChange={setJPort} />
                       </Field>
                     </div>
-                    <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 12 }}>
+                    <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
                       <Field label={t("modals.host.user")} w="100%">
                         <Input value={jUser} placeholder="ops" mono onChange={setJUser} />
                       </Field>
@@ -1343,7 +1348,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
             padding: isMobile ? "14px 16px" : "14px 22px",
             borderTop: `1px solid ${p.line}`,
             background: p.bg0,
-            ...(isMobile ? { flexWrap: "wrap" } : null),
+            flexWrap: "wrap",
           }}
         >
           <span style={{ fontSize: 11.5, color: p.txt3, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1679,6 +1684,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const narrow = useNarrow();
   const ctx = useCtx();
   const vault = useApp((s) => s.vaultId);
   const hosts = useApp((s) => s.hosts);
@@ -1809,8 +1815,8 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
       <div
         style={{
           display: "flex",
-          flexDirection: isMobile ? "column" : "row",
-          alignItems: isMobile ? "stretch" : "flex-end",
+          flexDirection: narrow ? "column" : "row",
+          alignItems: narrow ? "stretch" : "flex-end",
           gap: 12,
         }}
       >
@@ -1819,12 +1825,12 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
         </Field>
         <span
           style={{
-            height: isMobile ? "auto" : 40,
+            height: narrow ? "auto" : 40,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             color: p.txt3,
-            transform: isMobile ? "rotate(90deg)" : undefined,
+            transform: narrow ? "rotate(90deg)" : undefined,
           }}
         >
           <Icon name="ar" size={18} color={p.txt3} />
@@ -2671,7 +2677,9 @@ function CopyKeyToServerModal({
           <label
             style={{
               display: "flex",
-              alignItems: "center",
+              // flex-start so a wrapped long RU label keeps the toggle beside its
+              // first line (the Toggle primitive is already flexShrink:0).
+              alignItems: "flex-start",
               gap: 10,
               cursor: "pointer",
               fontSize: 12.5,

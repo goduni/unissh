@@ -13,7 +13,7 @@ import * as api from "@/bridge/api";
 import type { KnownHostInfo } from "@/bridge/types";
 import { useTranslation, Trans } from "@/i18n";
 import { useFmt } from "@/i18n/format";
-import { useIsMobile } from "@/store/responsive";
+import { useNarrow } from "@/store/responsive";
 
 // ── helpers ────────────────────────────────────────────────────
 /** Split a stored host key string ("ssh-ed25519 AAAA…") into algo + fingerprint. */
@@ -23,13 +23,14 @@ function parseHostKey(key: string): { algo: string; fp: string } {
   return { algo: "", fp: key };
 }
 
-const GRID = "1fr 130px 1fr 110px 90px";
+// minmax(0,1fr) lets the host/fingerprint tracks shrink below content so cells can ellipsize.
+const GRID = "minmax(0,1fr) 130px minmax(0,1fr) 110px 90px";
 
 export function ViewKnown() {
   const p = usePalette();
   const { t } = useTranslation();
   const { fmtDate } = useFmt();
-  const isMobile = useIsMobile();
+  const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   const knownHosts = useApp((s) => s.knownHosts);
   const pendingMismatch = useApp((s) => s.pendingMismatch);
 
@@ -214,7 +215,8 @@ export function ViewKnown() {
                       fontFamily: MONO,
                       fontSize: 12,
                       color: p.txt2,
-                      ...(isMobile ? { wordBreak: "break-all" } : null),
+                      // Break fingerprint on desktop too: full SHA256 overflows its ~200px column.
+                      wordBreak: "break-all",
                     }}
                   >
                     {knownHosts.find(
@@ -237,7 +239,8 @@ export function ViewKnown() {
                       fontFamily: MONO,
                       fontSize: 12,
                       color: p.red,
-                      ...(isMobile ? { wordBreak: "break-all" } : null),
+                      // Break fingerprint on desktop too: full SHA256 overflows its ~200px column.
+                      wordBreak: "break-all",
                     }}
                   >
                     {pendingMismatch.fingerprint}
@@ -436,12 +439,30 @@ export function ViewKnown() {
                         gap: 8,
                         fontSize: 13,
                         fontWeight: 600,
+                        // Ellipsize long host:port instead of forcing horizontal scroll.
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        minWidth: 0,
                       }}
                     >
                       <Icon name="fingerprint" size={15} color={p.green} />
                       {label}
                     </span>
-                    <span style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>{algo}</span>
+                    <span
+                      style={{
+                        fontFamily: MONO,
+                        fontSize: 11.5,
+                        color: p.txt3,
+                        // Ellipsize long algo names in the fixed 130px track.
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        minWidth: 0,
+                      }}
+                    >
+                      {algo}
+                    </span>
                     <span
                       style={{
                         fontFamily: MONO,
