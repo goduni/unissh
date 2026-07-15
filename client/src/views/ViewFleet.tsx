@@ -560,7 +560,16 @@ export function ViewFleet() {
         overflow: "hidden",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 22px 12px" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          // Wrap so the done-summary group (counts + rerun-failed) drops below the title instead of overflowing.
+          flexWrap: "wrap",
+          padding: "16px 22px 12px",
+        }}
+      >
         <Icon name="layers" size={20} color={p.accent} />
         <h1
           style={{
@@ -704,7 +713,9 @@ export function ViewFleet() {
             display: "flex",
             alignItems: "center",
             gap: 12,
-            height: 50,
+            // Wrap so the count-labelled Execute isn't clipped below ~500px; minHeight lets a wrapped row grow.
+            flexWrap: "wrap",
+            minHeight: 50,
             padding: "0 16px",
             borderRadius: 12,
             background: p.bg1,

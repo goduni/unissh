@@ -140,7 +140,10 @@ export function Modal({
               padding: isMobile ? "14px 16px" : "14px 22px",
               borderTop: `1px solid ${p.line}`,
               background: p.bg0,
-              ...(isMobile ? { flexWrap: "wrap" } : null),
+              // Always wrap: a narrow (or RU-labelled) footer drops trailing buttons
+              // to a second row instead of pushing the primary action off-card behind
+              // a horizontal scrollbar. No-op when the row already fits.
+              flexWrap: "wrap",
             }}
           >
             {footer}

@@ -9,7 +9,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { UI } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT } from "@/components/primitives";
 import { useApp } from "@/store/app";
-import { useIsMobile } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
@@ -29,6 +29,7 @@ function GroupsModalBody() {
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const narrow = useNarrow();
   const setGroupsModal = useApp((s) => s.setGroupsModal);
   const groups = useApp((s) => s.groups);
   const hosts = useApp((s) => s.hosts);
@@ -422,19 +423,21 @@ function GroupsModalBody() {
         <div
           style={{
             display: "flex",
-            alignItems: isMobile ? "stretch" : "center",
-            flexDirection: isMobile ? "column" : undefined,
+            alignItems: narrow ? "stretch" : "center",
+            flexDirection: narrow ? "column" : undefined,
+            // wrap so the long footer note reflows above "Готово" instead of crowding it
+            flexWrap: "wrap",
             gap: 10,
             padding: "14px 22px",
             borderTop: `1px solid ${p.line}`,
             background: p.bg0,
           }}
         >
-          <span style={{ fontSize: 12, color: p.txt3 }}>
+          <span style={{ fontSize: 12, color: p.txt3, minWidth: 0 }}>
             {t("groups.footerNote")}
           </span>
-          {!isMobile && <div style={{ flex: 1 }} />}
-          <Btn icon="check" full={isMobile} style={isMobile ? { minHeight: 44 } : undefined} onClick={close}>
+          {!narrow && <div style={{ flex: 1 }} />}
+          <Btn icon="check" full={narrow} style={isMobile ? { minHeight: 44 } : undefined} onClick={close}>
             {t("common.done")}
           </Btn>
         </div>

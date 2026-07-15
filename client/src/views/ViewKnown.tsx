@@ -3,6 +3,7 @@
 // store.knownHosts list and api.* calls. The mismatch banner is surfaced from a
 // live connect attempt via store.pendingMismatch (no fake mismatch state).
 
+import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rgba } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
@@ -13,7 +14,7 @@ import * as api from "@/bridge/api";
 import type { KnownHostInfo } from "@/bridge/types";
 import { useTranslation, Trans } from "@/i18n";
 import { useFmt } from "@/i18n/format";
-import { useIsMobile } from "@/store/responsive";
+import { useNarrow } from "@/store/responsive";
 
 // ── helpers ────────────────────────────────────────────────────
 /** Split a stored host key string ("ssh-ed25519 AAAA…") into algo + fingerprint. */
@@ -23,13 +24,29 @@ function parseHostKey(key: string): { algo: string; fp: string } {
   return { algo: "", fp: key };
 }
 
-const GRID = "1fr 130px 1fr 110px 90px";
+// minmax(0,1fr) lets the host/fingerprint tracks shrink below content so cells can ellipsize.
+const GRID = "minmax(0,1fr) 130px minmax(0,1fr) 110px 90px";
 
 export function ViewKnown() {
   const p = usePalette();
   const { t } = useTranslation();
   const { fmtDate } = useFmt();
-  const isMobile = useIsMobile();
+  // The wide (grid) layout needs ~680px; switch to the stacked card layout on the
+  // CONTENT width, not the window — a wide sidebar can starve the content below that
+  // while the window is still > the useNarrow breakpoint (else the 5-col grid collides
+  // and clips its right edge).
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [rootW, setRootW] = useState(0);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((ents) => {
+      for (const e of ents) setRootW(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const isMobile = useNarrow() || (rootW > 0 && rootW < 720);
   const knownHosts = useApp((s) => s.knownHosts);
   const pendingMismatch = useApp((s) => s.pendingMismatch);
 
@@ -102,6 +119,7 @@ export function ViewKnown() {
 
   return (
     <div
+      ref={rootRef}
       className="uh-view"
       style={{
         flex: 1,
@@ -214,7 +232,8 @@ export function ViewKnown() {
                       fontFamily: MONO,
                       fontSize: 12,
                       color: p.txt2,
-                      ...(isMobile ? { wordBreak: "break-all" } : null),
+                      // Break fingerprint on desktop too: full SHA256 overflows its ~200px column.
+                      wordBreak: "break-all",
                     }}
                   >
                     {knownHosts.find(
@@ -237,7 +256,8 @@ export function ViewKnown() {
                       fontFamily: MONO,
                       fontSize: 12,
                       color: p.red,
-                      ...(isMobile ? { wordBreak: "break-all" } : null),
+                      // Break fingerprint on desktop too: full SHA256 overflows its ~200px column.
+                      wordBreak: "break-all",
                     }}
                   >
                     {pendingMismatch.fingerprint}
@@ -436,12 +456,30 @@ export function ViewKnown() {
                         gap: 8,
                         fontSize: 13,
                         fontWeight: 600,
+                        // Ellipsize long host:port instead of forcing horizontal scroll.
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        minWidth: 0,
                       }}
                     >
                       <Icon name="fingerprint" size={15} color={p.green} />
                       {label}
                     </span>
-                    <span style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>{algo}</span>
+                    <span
+                      style={{
+                        fontFamily: MONO,
+                        fontSize: 11.5,
+                        color: p.txt3,
+                        // Ellipsize long algo names in the fixed 130px track.
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        minWidth: 0,
+                      }}
+                    >
+                      {algo}
+                    </span>
                     <span
                       style={{
                         fontFamily: MONO,

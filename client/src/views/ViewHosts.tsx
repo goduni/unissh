@@ -11,6 +11,7 @@ import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, 
 import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
 import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
+import { useNarrow } from "@/store/responsive";
 import { useCtx } from "@/store/ctx";
 import * as api from "@/bridge/api";
 import { profileAuthKind, apiErrorMessage } from "@/bridge/types";
@@ -156,6 +157,10 @@ function HostCard({
           marginTop: 16,
           opacity: show ? 0 : 1,
           transition: "opacity .12s ease",
+          // keep it one line: long RU auth ("Спросить при подключении") must ellipsize,
+          // not wrap to a 2nd line and change the card height.
+          minWidth: 0,
+          overflow: "hidden",
         }}
       >
         {session ? (
@@ -169,7 +174,17 @@ function HostCard({
             <span style={{ opacity: 0.4 }}>·</span>
           </>
         ) : null}
-        <span style={{ color: authWarn ? p.amber : p.txt3 }}>{authLabel}</span>
+        <span
+          style={{
+            color: authWarn ? p.amber : p.txt3,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {authLabel}
+        </span>
       </div>
 
       {show && (
@@ -319,7 +334,8 @@ function HostRow({
       <span style={{ flexShrink: 0, display: "inline-flex" }}>
         <AuthBadge auth={profileAuthKind(h.auth)} jump={h.jumps.length > 0} />
       </span>
-      <div style={{ width: 84, flexShrink: 0, display: "flex", justifyContent: "flex-end" }}>
+      {/* 112 (not 84): fits the RU "Подключить" icon+label so it never spills over AuthBadge */}
+      <div style={{ width: 112, flexShrink: 0, display: "flex", justifyContent: "flex-end" }}>
         {show ? (
           <Btn
             size="sm"
@@ -363,10 +379,15 @@ function DetailRow({
       <span
         style={{
           minWidth: 72,
+          // cap + ellipsis so a long RU label ("Последнее подключение") can't shove
+          // the value off the row; the fixed flexShrink:0 stays.
+          maxWidth: 140,
           fontSize: 12,
           color: p.txt3,
           flexShrink: 0,
           whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
         }}
       >
         {label}
@@ -532,9 +553,20 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         {h.auth.type === "personal" ? t("hosts.detail.userPersonal") : h.user}
       </DetailRow>
       <DetailRow label={t("hosts.detail.auth")}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        {/* badge + its OWN ellipsizing text child (minWidth:0+triad) so long RU auth
+            labels ("Спросить при подключении") truncate with dots, not mid-word. */}
+        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           <AuthBadge auth={authKind} />
-          {tDyn(AUTH_LABEL_KEY[authKind])}
+          <span
+            style={{
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {tDyn(AUTH_LABEL_KEY[authKind])}
+          </span>
         </span>
       </DetailRow>
       {firstJump && (
@@ -1074,6 +1106,23 @@ export function ViewHosts() {
   const [sel, setSel] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(hosts[0]?.profileId ?? null);
   const [rail, setRail] = useState<RailTab>("detail");
+  // The fixed-width detail rail would squish the list to a sliver when there isn't
+  // room for both side by side, so render it as a full-width overlay instead. Trigger
+  // on the CONTENT width (window minus sidebar), not the raw window: a wide sidebar can
+  // starve the row while the window is still wide, so useNarrow alone would miss it.
+  const narrow = useNarrow();
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [rowW, setRowW] = useState(0);
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((ents) => {
+      for (const e of ents) setRowW(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const railOverlay = narrow || (rowW > 0 && rowW < 640);
   // Collapse toolbar button labels to icons when the main area is too narrow
   // (e.g. rail open + sidebar expanded) so buttons never slide under the rail.
   const mainRef = useRef<HTMLDivElement | null>(null);
@@ -1207,7 +1256,7 @@ export function ViewHosts() {
   );
 
   return (
-    <div style={{ flex: 1, display: "flex", minWidth: 0 }}>
+    <div ref={rowRef} style={{ flex: 1, display: "flex", minWidth: 0 }}>
       {/* main */}
       <div
         ref={mainRef}
@@ -1226,7 +1275,9 @@ export function ViewHosts() {
             position: "relative",
             display: "flex",
             alignItems: "center",
+            flexWrap: "wrap",
             gap: 12,
+            rowGap: 10,
             padding: "24px 22px 14px",
           }}
         >
@@ -1637,14 +1688,18 @@ export function ViewHosts() {
               left: 22,
               right: 22,
               bottom: 16,
-              height: 52,
+              // minHeight (not height) + wrap: in RU the destructive Delete + clear-✕
+              // can't fit one row inside overflow:hidden main — let them wrap, don't clip.
+              minHeight: 52,
               borderRadius: 13,
               background: p.bg0,
               border: `1px solid ${p.line2}`,
               boxShadow: p.shadow,
               display: "flex",
               alignItems: "center",
+              flexWrap: "wrap",
               gap: 12,
+              rowGap: 8,
               padding: "0 14px",
               zIndex: 5,
             }}
@@ -1745,21 +1800,22 @@ export function ViewHosts() {
         )}
       </div>
 
-      {/* right rail */}
+      {/* right rail — a fixed-width side column normally; a full-width overlay over
+          the list when the window is too narrow to show both side by side */}
       {railOpen && (
         <div
           style={{
-            width: railW,
             flexShrink: 0,
-            position: "relative",
             background: p.bg0,
-            borderLeft: `1px solid ${p.line}`,
             display: "flex",
             flexDirection: "column",
             padding: 14,
+            ...(railOverlay
+              ? { position: "absolute", inset: 0, width: "100%", zIndex: 6 }
+              : { width: railW, position: "relative", borderLeft: `1px solid ${p.line}` }),
           }}
         >
-          <ResizeHandle side="left" onDrag={resizeRail} />
+          {!railOverlay && <ResizeHandle side="left" onDrag={resizeRail} />}
           <div
             style={{
               display: "flex",

@@ -80,7 +80,20 @@ function QueueRow({ t }: { t: Transfer }) {
           {t.label}
           {t.kind === "dir" && t.filesTotal > 0 ? ` (${t.filesDone}/${t.filesTotal})` : ""}
         </span>
-        <span style={{ fontFamily: MONO, fontSize: 10.5, color: t.state === "done" ? p.green : p.txt3 }}>{status}</span>
+        <span
+          style={{
+            fontFamily: MONO,
+            fontSize: 10.5,
+            color: t.state === "done" ? p.green : p.txt3,
+            // ellipsis so a long RU active status ("42% · 1,2 МБ/с · осталось 0:12") can't wrap
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {status}
+        </span>
         {controls.map((c) => (
           <button
             key={c.icon}
@@ -183,7 +196,8 @@ function QueueBody({ transfers }: { transfers: Transfer[] }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+      {/* flexWrap so the pauseAll/cancelAll/clear labels wrap instead of overflowing a narrow panel */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, rowGap: 6, flexWrap: "wrap", marginBottom: 10 }}>
         <Icon name="arrows" size={15} color={p.txt2} />
         <span style={{ fontSize: 12.5, fontWeight: 700 }}>{t("sftp.queue.title")}</span>
         <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>

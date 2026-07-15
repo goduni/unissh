@@ -10,6 +10,7 @@ import { BTN_RESET, Icon, IconName, Logo, ResizeHandle, VaultBadge } from "@/com
 import { FlatAvatar, SyncBadge } from "@/components/mono";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
+import { useNarrow } from "@/store/responsive";
 import type { Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { ItemType, type VaultInfo } from "@/bridge/types";
@@ -80,6 +81,33 @@ function TitleIconBtn({
 export function SearchBar({ onClick }: { onClick: () => void }) {
   const p = usePalette();
   const { t } = useTranslation();
+  // On a narrow window the full search box would be crushed to an unreadable sliver
+  // by its 40vw cap, so collapse it to a clean icon-only button (same action).
+  const narrow = useNarrow();
+  if (narrow) {
+    return (
+      <button
+        onClick={onClick}
+        aria-label={t("shell.searchPlaceholder")}
+        aria-keyshortcuts="Meta+K"
+        style={{
+          ...BTN_RESET,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 34,
+          height: 30,
+          borderRadius: 9,
+          background: p.bg2,
+          border: `1px solid ${p.line}`,
+          color: p.txt3,
+          cursor: "pointer",
+        }}
+      >
+        <Icon name="search" size={15} color={p.txt3} />
+      </button>
+    );
+  }
   return (
     <button
       onClick={onClick}
@@ -103,7 +131,9 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
       }}
     >
       <Icon name="search" size={14} color={p.txt3} />
-      <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden" }}>
+      <span
+        style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+      >
         {t("shell.searchPlaceholder")}
       </span>
       <span
@@ -413,6 +443,9 @@ function VaultSwitcher() {
           alignItems: "center",
           gap: 9,
           cursor: "pointer",
+          // clip the location/sync badges to the card so a long "Синхронизировано"
+          // + space name can never spill past the rounded frame
+          overflow: "hidden",
         }}
       >
         <FlatAvatar name={v.name} size={26} />
@@ -440,6 +473,11 @@ function VaultSwitcher() {
               display: "flex",
               alignItems: "center",
               gap: 6,
+              // Complete the shrink chain so the location/sync badges truncate here
+              // instead of spilling over the chevron + collapse toggle at the
+              // default (220px) sidebar width.
+              minWidth: 0,
+              overflow: "hidden",
             }}
           >
             <VaultBadge target={v.syncTarget} label={badgeLabel(v)} size={11} />
