@@ -33,16 +33,66 @@ pub async fn build_state(
 ) -> AppResult<AppState> {
     let store = Store::connect(&config.db).await?;
     store.migrate().await?;
+    // v2 boot order (Task-2 review finding): the singleton `instance` row MUST
+    // exist before anything reads it — `Store::instance()` panics otherwise.
+    let now = clock.now_unix();
+    let instance_row = store.ensure_instance(now).await?;
+    // Load the server-PRIVATE escrow-decoy secret (set once by `ensure_instance`,
+    // just above). Kept off `InstanceRow` so it never rides along on the widely
+    // read instance row — the decoy in `GET /v1/escrow/params` is keyed from THIS,
+    // never from the PUBLIC `instance_id`.
+    let escrow_decoy_secret = store.escrow_decoy_secret().await?;
+    // Unclaimed: publish a setup code so a client can claim this instance. We store
+    // only sha256(code); the human code is printed to logs (never persisted).
+    //
+    // Stability across restarts (docker-restart model): a fresh code was previously
+    // minted on EVERY unclaimed boot, silently invalidating a code an operator may
+    // have copied from an earlier boot. Now:
+    //   * `[setup].code` set  → hash+use it (stable; setting UNISSH__SETUP__CODE rotates).
+    //   * empty + a hash already exists → a code was issued before; keep it (do NOT
+    //     regenerate — we only have its hash, not the plaintext).
+    //   * empty + no hash yet (first-ever boot) → mint one and print it exactly once.
+    if instance_row.claimed == 0 {
+        if !config.setup.code.is_empty() {
+            let code = config.setup.code.clone();
+            store
+                .set_setup_code_hash(&ids::sha256(code.as_bytes()))
+                .await?;
+            tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
+            println!("SETUP CODE: {code}");
+        } else if instance_row.setup_code_hash.is_some() {
+            tracing::warn!(
+                "server unclaimed — a setup code was already issued on an earlier boot and is \
+                 still valid (its plaintext was printed then); set UNISSH__SETUP__CODE to rotate it"
+            );
+        } else {
+            let mut rnd = [0u8; 6];
+            ids::fill_random(&mut rnd);
+            let code = ids::generate_setup_code(&rnd);
+            store
+                .set_setup_code_hash(&ids::sha256(code.as_bytes()))
+                .await?;
+            tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
+            println!("SETUP CODE: {code}");
+        }
+    }
     // Whole-DB-snapshot anti-rollback (§16): refuse to come up if
-    // the instance-generation (Σ next_seq) has fallen below the operator-anchored floor.
-    // Checked HERE (not only in `main`) so that in-process/embedded
-    // deployments also get a fatal refusal when a stale
+    // the instance-generation (instance.next_seq) has fallen below the
+    // operator-anchored floor. Checked HERE (not only in `main`) so that
+    // in-process/embedded deployments also get a fatal refusal when a stale
     // snapshot is restored — otherwise anti-rollback degrades to "not checked".
     let generation = store.instance_generation().await?;
     let floor = config.sync.min_instance_generation;
     rollback_guard(generation, floor)?;
     tracing::info!(generation, floor, "anti-rollback check passed");
-    Ok(AppStateInner::new(store, config, clock, metrics))
+    Ok(AppStateInner::new(
+        store,
+        config,
+        instance_row.instance_id,
+        escrow_decoy_secret,
+        clock,
+        metrics,
+    ))
 }
 
 /// Build the router from a ready state.

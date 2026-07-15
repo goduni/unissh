@@ -31,7 +31,7 @@ pub(crate) fn page<T>(
     (has_more, next_cursor)
 }
 
-/// Public service endpoints (§5.7), without tenant/auth/rate-limit.
+/// Public service endpoints (§5.7), without auth/rate-limit.
 /// `/metrics` is NOT included here — it lives on a separate internal listener (§5.7/§13:
 /// "protected by config/network"), see `build_metrics_router` + main.rs.
 fn service_routes() -> Router<AppState> {
@@ -54,12 +54,17 @@ pub fn build_router(state: AppState) -> Router {
     let max_body = state.config.limits.max_body_bytes;
     let cors = cors_layer(&state.config.server.cors_allowed_origins);
 
-    // /v1 API routes: rate-limited + tenant/authn extractors inside the handlers.
+    // /v1 API routes: rate-limited + authn extractors inside the handlers.
     let v1 = Router::new()
+        .merge(modules::instance::routes())
         .merge(modules::identity::routes())
+        .merge(modules::oidc::routes())
+        .merge(modules::escrow::routes())
+        .merge(modules::spaces::routes())
         .merge(modules::sync::routes())
         .merge(modules::vault_meta::routes())
         .merge(modules::policy::routes())
+        .merge(modules::pending::routes())
         .merge(modules::audit::routes())
         .merge(modules::admin::routes())
         .merge(modules::ops::routes())
@@ -114,7 +119,6 @@ fn cors_layer(origins: &[String]) -> Option<CorsLayer> {
             .allow_headers([
                 header::AUTHORIZATION,
                 header::CONTENT_TYPE,
-                HeaderName::from_static("unissh-tenant"),
                 HeaderName::from_static("x-unissh-ops-token"),
                 HeaderName::from_static("idempotency-key"),
             ])

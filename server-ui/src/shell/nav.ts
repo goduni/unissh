@@ -6,15 +6,12 @@ export interface NavItemDef {
   icon: IconName;
   /** i18n key under `nav.*` */
   key: string;
-  /** Requires the admin keyset to act (screen shows LockGate when locked). */
-  keyset?: boolean;
   /** Which overview counter to show as a badge, if any. */
   count?: "accounts" | "pending_invites" | "devices";
 }
 
 export interface NavGroupDef {
   key: string;
-  keysetTag?: boolean;
   items: NavItemDef[];
 }
 
@@ -23,38 +20,36 @@ export const NAV: NavGroupDef[] = [
     key: "instance",
     items: [
       { route: "overview", icon: "grid", key: "overview" },
-      { route: "health", icon: "activity", key: "health", keyset: true },
-      { route: "metrics", icon: "zap", key: "metrics", keyset: true },
-      { route: "config", icon: "sliders", key: "config", keyset: true },
+      { route: "health", icon: "activity", key: "health" },
+      { route: "metrics", icon: "zap", key: "metrics" },
+      { route: "config", icon: "sliders", key: "config" },
       { route: "maint", icon: "refresh", key: "maint" },
     ],
   },
   {
     key: "identity",
     items: [
-      { route: "tenants", icon: "database", key: "tenants" },
-      { route: "enroll", icon: "key", key: "enroll" },
-      { route: "accounts", icon: "server", key: "accounts", count: "accounts", keyset: true },
-      { route: "devices", icon: "fingerprint", key: "devices", keyset: true },
-      { route: "sessions", icon: "clock", key: "sessions", keyset: true },
-      { route: "invites", icon: "tag", key: "invites", count: "pending_invites", keyset: true },
+      { route: "spaces", icon: "box", key: "spaces" },
+      { route: "accounts", icon: "server", key: "accounts", count: "accounts" },
+      { route: "directory", icon: "user", key: "directory" },
+      { route: "devices", icon: "fingerprint", key: "devices" },
+      { route: "sessions", icon: "clock", key: "sessions" },
+      { route: "invites", icon: "tag", key: "invites", count: "pending_invites" },
     ],
   },
   {
     key: "access",
-    keysetTag: true,
     items: [
-      { route: "vaults", icon: "lock", key: "vaults", keyset: true },
-      { route: "grants", icon: "shieldcheck", key: "grants", keyset: true },
-      { route: "relay", icon: "link", key: "relay", keyset: true },
+      { route: "vaults", icon: "lock", key: "vaults" },
+      { route: "grants", icon: "shieldcheck", key: "grants" },
+      { route: "relay", icon: "link", key: "relay" },
     ],
   },
   {
     key: "data",
-    keysetTag: true,
     items: [
-      { route: "objects", icon: "layers", key: "objects", keyset: true },
-      { route: "audit", icon: "eye", key: "audit", keyset: true },
+      { route: "objects", icon: "layers", key: "objects" },
+      { route: "audit", icon: "eye", key: "audit" },
     ],
   },
 ];

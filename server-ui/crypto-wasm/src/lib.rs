@@ -23,11 +23,22 @@ use unissh_crypto::{
     X25519PublicKey, X25519SecretKey,
 };
 
-const KEYSET_FORMAT_VERSION: u8 = 2;
+/// Current on-disk keyset format version (written by `to_bytes`). Matches
+/// rust-core `keychain::keyset::KEYSET_FORMAT_VERSION`.
+const KEYSET_FORMAT_VERSION: u8 = 3;
+/// Legacy keyset version still accepted for READ. The wire byte layout is
+/// identical to v3 and this vendored copy already uses the current Scheme-B
+/// unlock recipe, so a v2 blob opens with no AEAD/derivation change. Mirrors
+/// rust-core `keychain::keyset::KEYSET_FORMAT_LEGACY`.
+const KEYSET_FORMAT_LEGACY: u8 = 2;
 const SK_LEN: usize = 32;
 const SECRET_KEY_LEN: usize = 16;
 const UNLOCK_HKDF_SALT: &[u8] = b"unissh-unlock-salt-v1";
 const UNLOCK_HKDF_INFO: &[u8] = b"unissh-unlock-key-v1";
+/// HKDF `info` for the escrow retrieval credential K_auth. A distinct label →
+/// an independent key: K_auth cannot recover the Unlock Key. Byte-matches
+/// rust-core `keychain::unlock::ESCROW_AUTH_HKDF_INFO`.
+const ESCROW_AUTH_HKDF_INFO: &[u8] = b"unissh-escrow-auth-v1";
 
 thread_local! {
     /// The single in-memory unlocked keyset for this tab. Cleared on `lock()`.
@@ -102,6 +113,35 @@ fn derive_unlock_key(argon_key: Option<&SymmetricKey>, secret_key: &[u8; SECRET_
     SymmetricKey::from_bytes(*okm)
 }
 
+/// Derives the escrow **auth** credential `K_auth`. Same length-framed IKM and
+/// salt as [`derive_unlock_key`] but a distinct HKDF `info`, so K_auth is
+/// domain-separated from K_unlock. MUST stay byte-identical to rust-core
+/// `keychain::unlock::derive_escrow_auth_key`: field framing
+/// `present:u8 || len:u32be || data` for [argon_key (present iff Some),
+/// secret_key (present), device_secret (always absent in the panel)], then
+/// HKDF-SHA256 with salt `UNLOCK_HKDF_SALT` and info `ESCROW_AUTH_HKDF_INFO`.
+/// The framing deliberately duplicates `derive_unlock_key`'s (rather than
+/// factoring it out) to keep that format-frozen function byte-untouched.
+fn derive_escrow_auth_key(argon_key: Option<&SymmetricKey>, secret_key: &[u8; SECRET_KEY_LEN]) -> SymmetricKey {
+    fn push_field(ikm: &mut Vec<u8>, present: bool, data: &[u8]) {
+        ikm.push(present as u8);
+        ikm.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        ikm.extend_from_slice(data);
+    }
+    let mut ikm = Zeroizing::new(Vec::new());
+    match argon_key {
+        Some(ak) => push_field(&mut ikm, true, ak.expose_bytes()),
+        None => push_field(&mut ikm, false, &[]),
+    }
+    push_field(&mut ikm, true, secret_key);
+    push_field(&mut ikm, false, &[]); // device_secret: always absent in the panel
+    let hk = Hkdf::<Sha256>::new(Some(UNLOCK_HKDF_SALT), ikm.as_ref());
+    let mut okm = Zeroizing::new([0u8; 32]);
+    hk.expand(ESCROW_AUTH_HKDF_INFO, okm.as_mut())
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    SymmetricKey::from_bytes(*okm)
+}
+
 fn wrap_keyset(
     unlock_key: &SymmetricKey,
     encryption: &X25519Keypair,
@@ -143,7 +183,11 @@ impl EncryptedKeyset {
         if bytes.len() < 8 + 64 {
             return Err(JsError::new("keyset too short"));
         }
-        if bytes[0] != KEYSET_FORMAT_VERSION {
+        // Accept the current (v3) and legacy (v2) versions — the wire layout is
+        // identical and this copy already uses the current unlock recipe, so a v2
+        // blob opens unchanged. A record from the future (> current) is a loud
+        // rejection (unknown recipe). Mirrors rust-core `keyset::from_bytes`.
+        if bytes[0] != KEYSET_FORMAT_VERSION && bytes[0] != KEYSET_FORMAT_LEGACY {
             return Err(JsError::new("bad keyset version"));
         }
         let mode = UnlockMode::from_u8(bytes[1])?;
@@ -313,6 +357,48 @@ pub fn unlock(enc_b64: String, password: Option<String>, secret_key_b64: String)
     Ok(json)
 }
 
+/// Derive the escrow retrieval credential `K_auth` (base64) for escrow login.
+///
+/// Reproduces the server's K_auth from the account's password (None for
+/// SecretKeyOnly / SSO accounts), the 16-byte Secret Key, and the account's
+/// SERVER-STORED Argon2id parameters (mem/iterations/parallelism/salt). The
+/// server-stored params are passed in DIRECTLY (not `KdfParams::recommended()`,
+/// which would mint fresh params) so `argon_key = Argon2id(password, params)`
+/// reproduces exactly; the escrow HKDF then byte-matches rust-core
+/// `keychain::unlock::derive_escrow_auth_key`. The server compares
+/// `sha256(K_auth)`, so any byte drift here makes login always fail.
+#[wasm_bindgen]
+pub fn derive_escrow_auth(
+    password: Option<String>,
+    secret_key_b64: String,
+    argon_salt_b64: String,
+    argon_mem_kib: u32,
+    argon_iterations: u32,
+    argon_parallelism: u32,
+) -> Result<String, JsValue> {
+    let skv = unb64(&secret_key_b64)?;
+    let secret_key: [u8; SECRET_KEY_LEN] = skv
+        .as_slice()
+        .try_into()
+        .map_err(|_| JsError::new("secret key must be 16 bytes"))?;
+    let salt = unb64(&argon_salt_b64)?;
+
+    // Rebuild the account's exact Argon2id params from the server's stored values
+    // (fields are all public) so the derived argon_key reproduces the server's.
+    let params = KdfParams {
+        mem_kib: argon_mem_kib,
+        iterations: argon_iterations,
+        parallelism: argon_parallelism,
+        salt,
+    };
+    let argon_key = match password {
+        Some(pw) => Some(derive_key(pw.as_bytes(), &params).map_err(|e| JsError::new(&format!("{e:?}")))?),
+        None => None,
+    };
+    let k_auth = derive_escrow_auth_key(argon_key.as_ref(), &secret_key);
+    Ok(b64(k_auth.expose_bytes()))
+}
+
 #[wasm_bindgen]
 pub fn sign_challenge(
     host_b64: String,
@@ -363,6 +449,29 @@ pub fn build_registration(account_id_b64: String) -> Result<String, JsError> {
             b64(&payload),
             b64(&sig)
         ))
+    })
+}
+
+/// The OIDC nonce key-binding: `base64(sha256(ed25519_pub ‖ x25519_pub))` over the
+/// unlocked keyset — Ed25519 FIRST, then X25519 (NOTE: the REVERSE of the registration
+/// payload's x‖ed order above; do not confuse them). The IdP-signed id_token's `nonce`
+/// claim MUST equal this string, so a stolen id_token cannot be re-bound to another
+/// keyset. STANDARD base64 with padding — must byte-match the server's `expected_nonce`
+/// (`ids::b64(&ids::sha256(..))`) and the FFI `Core::oidc_nonce`, or the callback rejects
+/// the login. NOT a secret.
+#[wasm_bindgen]
+pub fn oidc_nonce() -> Result<String, JsValue> {
+    use sha2::Digest as _;
+    UNLOCKED.with(|c| {
+        let g = c.borrow();
+        let u = g.as_ref().ok_or_else(|| JsError::new("keyset locked"))?;
+        let ed25519_pub = u.signing.verifying.to_bytes();
+        let x25519_pub = u.encryption.public.to_bytes();
+        let mut bind = Vec::with_capacity(64);
+        bind.extend_from_slice(&ed25519_pub);
+        bind.extend_from_slice(&x25519_pub);
+        let hash: [u8; 32] = Sha256::digest(&bind).into();
+        Ok(b64(&hash))
     })
 }
 
@@ -778,4 +887,51 @@ pub fn lock() {
 #[wasm_bindgen]
 pub fn is_unlocked() -> bool {
     UNLOCKED.with(|c| c.borrow().is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ESCROW GOLDEN CROSS-CHECK: the panel's escrow K_auth derivation MUST be
+    /// byte-identical to rust-core `keychain::unlock::derive_escrow_auth_key`.
+    ///
+    /// The public `derive_escrow_auth` export computes `argon_key` internally via
+    /// Argon2id, so we cannot feed it the golden `argon_key = [7u8;32]` directly.
+    /// Instead we exercise the SAME internal HKDF-from-argon_key helper
+    /// (`derive_escrow_auth_key`) that the export calls, injecting the known
+    /// argon_key and Secret Key used by the core's `escrow_auth_key_golden` test
+    /// (argon_key = SymmetricKey([7u8;32]), secret_key = [9u8;16]) and assert the
+    /// output equals the core's frozen vector. If this drifts, escrow login is
+    /// broken (the server compares `sha256(K_auth)`), and the framing in
+    /// `derive_escrow_auth_key` must be fixed until it matches — NOT this vector.
+    #[test]
+    fn escrow_auth_key_matches_core_golden() {
+        // Frozen in rust-core `keychain/src/unlock.rs::escrow_auth_key_golden`.
+        const FROZEN_ESCROW_AUTH_KEY: [u8; 32] = [
+            0xb9, 0xd6, 0xbf, 0x86, 0x91, 0xa8, 0x4d, 0x5b, 0x12, 0x90, 0x5f, 0xc6, 0xb5, 0xfa,
+            0xd5, 0x9e, 0x7e, 0x9a, 0xdd, 0x07, 0xb4, 0xdb, 0xb6, 0x52, 0xaf, 0x9e, 0xf3, 0x27,
+            0xfb, 0x4e, 0x47, 0xc2,
+        ];
+        let argon_key = SymmetricKey::from_bytes([7u8; 32]);
+        let secret_key = [9u8; SECRET_KEY_LEN];
+        let got = derive_escrow_auth_key(Some(&argon_key), &secret_key);
+        assert_eq!(
+            got.expose_bytes(),
+            &FROZEN_ESCROW_AUTH_KEY,
+            "panel escrow K_auth diverged from rust-core golden vector"
+        );
+    }
+
+    /// Passwordless (SSO) accounts derive K_auth with `argon_key = None`; assert
+    /// that branch stays deterministic and independent of the with-password key.
+    #[test]
+    fn escrow_auth_key_passwordless_is_distinct_and_stable() {
+        let secret_key = [9u8; SECRET_KEY_LEN];
+        let a = derive_escrow_auth_key(None, &secret_key);
+        let b = derive_escrow_auth_key(None, &secret_key);
+        assert_eq!(a.expose_bytes(), b.expose_bytes(), "deterministic");
+        let with_pw = derive_escrow_auth_key(Some(&SymmetricKey::from_bytes([7u8; 32])), &secret_key);
+        assert_ne!(a.expose_bytes(), with_pw.expose_bytes());
+    }
 }

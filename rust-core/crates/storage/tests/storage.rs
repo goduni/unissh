@@ -62,6 +62,36 @@ fn vault_cloud_epoch_cache_policy_roundtrip() {
 }
 
 #[test]
+fn binding_an_already_synced_vault_redirties_it_for_push() {
+    // Regression for "I bound my vault to a server but it never uploaded": binding is a
+    // routing-label change that touched no `dirty` flag, so a previously-synced vault
+    // (dirty cleared) never re-pushed its record to the newly-bound server.
+    let s = Storage::open_in_memory(&key(0x42)).unwrap();
+    let mut v = vault(b"vb", 1);
+    v.sync_target = SyncTarget::Cloud;
+    v.sync_tenant = b"tenant-A".to_vec();
+    s.put_vault(&v).unwrap();
+    s.put_item(&item(b"vb", b"i1", 1, false)).unwrap();
+
+    // Simulate a completed push to A: the whole vault is clean.
+    s.clear_dirty_for_tenant(b"tenant-A").unwrap();
+    assert!(
+        s.list_dirty_bound_vaults(b"tenant-A").unwrap().is_empty(),
+        "clean after the push to A"
+    );
+
+    // Re-bind the already-synced vault to a NEW server B.
+    s.set_vault_tenant(b"vb", b"tenant-B").unwrap();
+
+    // The fix: binding re-dirties the vault AND its contents, so a push to B uploads them.
+    let vaults = s.list_dirty_bound_vaults(b"tenant-B").unwrap();
+    assert_eq!(vaults.len(), 1, "the bound vault record is dirty for B");
+    assert_eq!(vaults[0].vault_id, b"vb".to_vec());
+    let items = s.list_dirty_bound_items(b"tenant-B").unwrap();
+    assert_eq!(items.len(), 1, "the bound vault's item is dirty for B");
+}
+
+#[test]
 fn pulled_empty_sync_tenant_does_not_clobber_binding() {
     // Regression: a pulled (wire) vault record carries an empty sync_tenant. A
     // higher-version put_vault must NOT erase an existing local binding, else the
@@ -134,6 +164,36 @@ fn set_vault_tenant_targets_one_and_clear_binding_targets_a_tenant() {
         b"tenant-B".to_vec(),
         "c1 untouched"
     );
+}
+
+#[test]
+fn unbind_vault_clears_one_binding_and_leaves_others() {
+    let s = Storage::open_in_memory(&key(0x47)).unwrap();
+    let mut c1 = vault(b"c1", 1);
+    c1.sync_target = SyncTarget::Cloud;
+    c1.sync_tenant = b"tenant-A".to_vec();
+    let mut c2 = vault(b"c2", 1);
+    c2.sync_target = SyncTarget::Cloud;
+    c2.sync_tenant = b"tenant-A".to_vec();
+    s.put_vault(&c1).unwrap();
+    s.put_vault(&c2).unwrap();
+
+    // Unbind ONLY c1: it clears (returns 1), c2 (same tenant) stays bound.
+    let n = s.unbind_vault(b"c1").unwrap();
+    assert_eq!(n, 1);
+    assert!(
+        s.get_vault(b"c1").unwrap().unwrap().sync_tenant.is_empty(),
+        "c1 unbound"
+    );
+    assert_eq!(
+        s.get_vault(b"c2").unwrap().unwrap().sync_tenant,
+        b"tenant-A".to_vec(),
+        "c2 (same tenant) untouched — unbind is per-vault, not per-tenant"
+    );
+
+    // Unbinding a missing / already-unbound vault is a no-op (0 rows).
+    assert_eq!(s.unbind_vault(b"c1").unwrap(), 0, "already unbound → 0");
+    assert_eq!(s.unbind_vault(b"nope").unwrap(), 0, "unknown vault → 0");
 }
 
 #[test]

@@ -27,9 +27,9 @@ struct AppendResp {
 }
 
 /// `POST /v1/audit` (§5.6): direct ingest of a client-signed audit object.
-/// author_pubkey MUST == tenants.genesis_owner_pubkey (§11.3), otherwise reject.
+/// author_pubkey MUST == the instance owner's keyset (§11.3), otherwise reject.
 async fn audit_append(
-    auth: AuthCtx,
+    _auth: AuthCtx,
     State(state): State<AppState>,
     Json(req): Json<AppendReq>,
 ) -> AppResult<(StatusCode, Json<AppendResp>)> {
@@ -48,20 +48,19 @@ async fn audit_append(
         .author_pubkey
         .ok_or_else(|| AppError::malformed("missing author"))?;
 
-    let genesis = auth
-        .tenant
-        .genesis_owner_pubkey
-        .as_deref()
-        .ok_or_else(|| AppError::forbidden("tenant not bootstrapped"))?;
-    if author != genesis {
-        return Err(AppError::forbidden("audit author must be genesis owner"));
+    let owner_ed = match state.store.instance().await?.owner_account_id {
+        Some(aid) => state.store.account_ed(&aid).await?,
+        None => None,
+    };
+    let owner_ed = owner_ed.ok_or_else(|| AppError::forbidden("instance not claimed"))?;
+    if author != owner_ed {
+        return Err(AppError::forbidden("audit author must be instance owner"));
     }
 
     let vault_id = p.vault_id.filter(|v| !v.is_empty());
     let seq = state
         .store
         .append_audit_client_signed(
-            auth.tenant_id(),
             &entry_blob,
             &signature,
             &author,
@@ -102,16 +101,13 @@ async fn audit_query(
     State(state): State<AppState>,
     Query(q): Query<AuditQuery>,
 ) -> AppResult<Json<AuditQueryResp>> {
-    auth.require_admin(&state.store).await?;
+    auth.require_owner(&state.store).await?;
     let since = q.since_seq.unwrap_or(0).max(0);
     let max = state.config.limits.delta_max_page_size as i64;
     let def = state.config.limits.delta_page_size as i64;
     let limit = q.limit.unwrap_or(def).clamp(1, max);
 
-    let rows = state
-        .store
-        .query_audit(auth.tenant_id(), since, limit)
-        .await?;
+    let rows = state.store.query_audit(since, limit).await?;
     let has_more = rows.len() as i64 == limit;
     let next_since = rows.last().map(|r| r.seq + 1).unwrap_or(since);
     let entries = rows

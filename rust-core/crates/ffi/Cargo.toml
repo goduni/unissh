@@ -36,6 +36,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
 log = "0.4"
 hkdf = "0.12"
 sha2 = "0.10"
+# STANDARD base64 (with padding) for the OIDC nonce key-binding — MUST match the
+# server's `ids::b64` (base64 0.22, STANDARD) so `oidc_nonce` byte-agrees.
+base64 = "0.22"
 hex = "0.4"
 zeroize = "1.8"
 thiserror = "2"

@@ -21,8 +21,8 @@ use unissh_storage::{CachePolicy, ItemRecord, MemberRole, Storage, SyncTarget, V
 
 use crate::error::VaultError;
 use crate::membership::{
-    add_member, build_grant, build_manifest, verify_chain_to_epoch, verify_grant, verify_manifest,
-    Member,
+    add_member, build_grant, build_manifest, open_grant, verify_chain_to_epoch, verify_grant,
+    verify_manifest, Member,
 };
 
 /// How many past versions of a secret to keep in history (per-item retention).
@@ -45,6 +45,13 @@ pub struct Vault<'a> {
     /// membership mode is not allowed: `verify_record_authority` looks up manifest@epoch
     /// and requires epoch >= floor, otherwise the record is forever unreadable (`EpochInvalid`).
     key_epoch: Cell<u64>,
+    /// The trusted authority anchor of this vault: the pinned genesis-owner pubkey.
+    /// Own vaults (owner path) → the local keyset's Ed25519 pubkey; a teammate's
+    /// shared vault (member path) → the TOFU-pinned creator pubkey read from
+    /// `get_vault_trust_anchor`. `decrypt_record`/`verify_chain` anchor the D1
+    /// authority chain on this (NOT on the local keyset), so a member reading a
+    /// shared vault verifies against the true owner. Resolved once in `open`.
+    genesis_owner: Vec<u8>,
 }
 
 impl core::fmt::Debug for Vault<'_> {
@@ -166,6 +173,8 @@ impl<'a> Vault<'a> {
             // build_vault_record_epoch above). Raised on the first
             // establish_or_extend_membership/rotate_vk.
             key_epoch: Cell::new(0),
+            // The creator is the genesis owner (own vault; no anchor row exists yet).
+            genesis_owner: owner_ed.to_vec(),
         })
     }
 
@@ -181,18 +190,67 @@ impl<'a> Vault<'a> {
         }
         verify_vault_record(&record)?;
 
-        // The owner wrapping is bound to (vault_id, owner_ed, the record's key_epoch); the same
-        // info as at seal time. Only the owner opens it (members go through open_grant).
-        let owner_ed = keyset.signing.verifying.to_bytes();
-        // read-fallback: the current info binding, on failure — pre-round-2 (raw
-        // vault_id). Only the owner opens it (members go through open_grant).
-        let vk = open_owner_vk(
-            &keyset.encryption.secret,
-            &record.wrapped_vk,
-            &record.vault_id,
-            &owner_ed,
-            record.key_epoch,
-        )?;
+        // Resolve the trusted authority anchor exactly as the sync engine does
+        // (`sync::engine::vault_anchor`): the TOFU-pinned per-vault genesis owner
+        // (a teammate's shared vault) or the local keyset (own vault, no anchor row).
+        // Read from storage, never from the untrusted vault record.
+        let genesis_owner: Vec<u8> = match storage.get_vault_trust_anchor(&record.vault_id)? {
+            Some(a) => a.genesis_owner_pubkey,
+            None => keyset.signing.verifying.to_bytes().to_vec(),
+        };
+        let own_ed = keyset.signing.verifying.to_bytes();
+
+        let vk = if genesis_owner == own_ed {
+            // Owner path (UNCHANGED): the owner wrapping is bound to (vault_id,
+            // owner_ed, the record's key_epoch); the same info as at seal time.
+            // read-fallback: current info binding, on failure — pre-round-2 (raw vault_id).
+            open_owner_vk(
+                &keyset.encryption.secret,
+                &record.wrapped_vk,
+                &record.vault_id,
+                &own_ed,
+                record.key_epoch,
+            )?
+        } else {
+            // Member path: this account is not the genesis owner. Acquire the VK from
+            // this member's own grant at the latest membership epoch, anchoring
+            // authority on the pinned owner. Mirrors `sync::engine::process_grant`'s
+            // verification set (verify_chain_to_epoch + verify_grant) exactly.
+            let epoch = match storage.latest_membership_epoch(&record.vault_id)? {
+                Some(latest) => latest,
+                // No manifest synced yet for a pinned teammate vault: fall back to the
+                // record's epoch so verify_chain_to_epoch surfaces a clean error (an
+                // epoch of 0 or without a manifest → EpochInvalid/AuthorityInvalid).
+                None => record.key_epoch,
+            };
+            let members = verify_chain_to_epoch(storage, &record.vault_id, epoch, &genesis_owner)?;
+            // This member's own grant at the latest epoch. A revoked member has NO grant
+            // at the latest epoch → read denied (NotAMember, the same kind the owner-set
+            // authority check surfaces for a non-member).
+            let grant = storage
+                .list_membership_grants(&record.vault_id, epoch)?
+                .into_iter()
+                .find(|g| g.member_pubkey == own_ed)
+                .ok_or(VaultError::NotAMember)?;
+            verify_grant(&grant, &record.vault_id, &members)?;
+            // `now` for local not_after enforcement (F16): wall-clock unix seconds
+            // (the FFI only exposes a monotonic Instant, so read SystemTime here).
+            // Fail CLOSED on an unreadable clock: a pre-epoch wall clock must not silently
+            // bypass local `not_after` enforcement (F16). `i64::MAX` marks any expiry-bearing
+            // grant expired; no-expiry grants (`not_after <= 0`) are unaffected.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(i64::MAX);
+            open_grant(
+                &grant,
+                &record.vault_id,
+                &keyset.encryption.secret,
+                &own_ed,
+                epoch,
+                now,
+            )?
+        };
         let name = aead_decrypt_compat(
             &vk,
             &record.name_blob,
@@ -217,11 +275,26 @@ impl<'a> Vault<'a> {
             vk,
             version: record.version,
             key_epoch: Cell::new(key_epoch),
+            genesis_owner,
         })
     }
 
-    /// Deletes the vault (tombstone with a bumped version).
+    /// Only the genesis owner may run whole-record operations (rename / delete /
+    /// cache-policy): they re-seal the owner-bound `wrapped_vk` and re-sign the record as the
+    /// caller. A member — who opened the vault via a grant — would re-seal the record to its
+    /// OWN keyset and lock the true owner out (the owner branch has no grant fallback), and
+    /// could tombstone the shared vault. Item operations (put/delete/rename item) do NOT
+    /// rewrite the owner-wrap and remain open to writer members.
+    fn require_owner(&self) -> Result<(), VaultError> {
+        if self.keyset.signing.verifying.to_bytes().as_slice() != self.genesis_owner.as_slice() {
+            return Err(VaultError::AuthorityInvalid);
+        }
+        Ok(())
+    }
+
+    /// Deletes the vault (tombstone with a bumped version). Owner-only (see `require_owner`).
     pub fn delete(self) -> Result<(), VaultError> {
+        self.require_owner()?;
         let version = self.version + 1;
         let name_blob = aead_encrypt(
             &self.vk,
@@ -305,6 +378,7 @@ impl<'a> Vault<'a> {
     /// `cache_policy` (otherwise a membership vault would degrade to epoch 0 →
     /// an unreadable vault record, as items did before the fix).
     pub fn set_name(&mut self, new_name: &[u8]) -> Result<(), VaultError> {
+        self.require_owner()?;
         let version = self.version + 1;
         let name_blob = aead_encrypt(&self.vk, new_name, &name_aad(&self.vault_id, version))?;
         let cur = self
@@ -413,13 +487,16 @@ impl<'a> Vault<'a> {
         // owner==author by swapping the unsigned key_epoch (P4 review, anti-rollback
         // bypass). In membership mode a record at an epoch without a manifest / below the floor /
         // from a non-member is rejected; in local mode — the former owner==author check.
-        let genesis_owner = self.keyset.signing.verifying.to_bytes();
+        //
+        // The anchor is the vault's pinned genesis owner (resolved once in `open`): for
+        // own vaults it equals the local keyset's pubkey; for a teammate's shared vault
+        // it is the TOFU-pinned creator, so a member verifies against the TRUE owner.
         verify_record_authority(
             self.storage,
             &self.vault_id,
             &record.author_pubkey,
             record.key_epoch,
-            &genesis_owner,
+            &self.genesis_owner,
         )?;
 
         // read-fallback to the pre-round-2 item wrapping/content (see the *_compat helpers).
@@ -705,6 +782,7 @@ impl<'a> Vault<'a> {
     /// `put_vault`. `cache_policy` is open metadata (outside the signed
     /// content), but the record is re-signed with a new version anyway (LWW).
     pub fn set_cache_policy(&mut self, policy: CachePolicy) -> Result<(), VaultError> {
+        self.require_owner()?;
         let version = self.version + 1;
         let name_blob = aead_encrypt(
             &self.vk,
@@ -982,7 +1060,11 @@ impl<'a> Vault<'a> {
     /// `Err` only on a top-level storage failure; bad signatures/authors are
     /// report data.
     pub fn verify_chain(&self) -> Result<IntegrityReport, VaultError> {
-        let trusted = self.keyset.signing.verifying.to_bytes();
+        // Anchor the audit on the vault's pinned genesis owner (own vault → the local
+        // keyset; a teammate's shared vault → the TOFU-pinned creator). Using the local
+        // keyset here would make a member's audit re-verify the D1 chain against their
+        // OWN key and reject every owner-authored record.
+        let trusted = self.genesis_owner.as_slice();
         let mut issues = Vec::new();
         let mut checked = 0u64;
 
@@ -994,7 +1076,7 @@ impl<'a> Vault<'a> {
                     &self.vault_id,
                     &vrec.author_pubkey,
                     vrec.key_epoch,
-                    &trusted,
+                    trusted,
                 )
             });
             if let Some(failure) = failure {
@@ -1013,7 +1095,7 @@ impl<'a> Vault<'a> {
                     &self.vault_id,
                     &rec.author_pubkey,
                     rec.key_epoch,
-                    &trusted,
+                    trusted,
                 )
             });
             if let Some(failure) = failure {

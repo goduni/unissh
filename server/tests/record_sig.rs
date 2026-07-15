@@ -14,7 +14,6 @@ use unissh_storage::{
 };
 use unissh_sync::SyncObject;
 
-const TID: &[u8] = b"tenant-recsig-01";
 const VID: &[u8] = b"v-recsig-aaaaaaa";
 const GRANT_DOMAIN: &[u8] = b"unissh-grant-v1";
 
@@ -111,7 +110,7 @@ fn push_body(objs: &[SyncObject]) -> serde_json::Value {
 #[tokio::test]
 async fn validate_accepts_real_signatures() {
     let app = spawn_with(|c| c.sync.validate_signatures = true).await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let kp = Ed25519Keypair::generate();
 
     let objs = vec![
@@ -123,7 +122,6 @@ async fn validate_accepts_real_signatures() {
     let r = app
         .client
         .post(format!("{}/v1/sync/push", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {}", s.access_token_b64))
         .json(&push_body(&objs))
         .send()
@@ -137,7 +135,7 @@ async fn validate_accepts_real_signatures() {
 #[tokio::test]
 async fn validate_rejects_tampered_signature() {
     let app = spawn_with(|c| c.sync.validate_signatures = true).await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let kp = Ed25519Keypair::generate();
 
     // tamper: sign the content, then change name_blob (the content digest won't match)
@@ -163,7 +161,6 @@ async fn validate_rejects_tampered_signature() {
     let r = app
         .client
         .post(format!("{}/v1/sync/push", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {}", s.access_token_b64))
         .json(&push_body(&[tampered]))
         .send()
@@ -179,7 +176,7 @@ async fn validate_rejects_tampered_signature() {
 #[tokio::test]
 async fn validate_rejects_forged_author() {
     let app = spawn_with(|c| c.sync.validate_signatures = true).await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let signer = Ed25519Keypair::generate();
     let other = Ed25519Keypair::generate();
 
@@ -191,7 +188,6 @@ async fn validate_rejects_forged_author() {
     let r = app
         .client
         .post(format!("{}/v1/sync/push", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {}", s.access_token_b64))
         .json(&push_body(&[obj]))
         .send()
@@ -208,7 +204,7 @@ async fn validate_rejects_forged_author() {
 async fn passthrough_accepts_unsigned_when_validate_off() {
     // validate=false → synthetic objects with dummy signatures are accepted.
     let app = spawn_with(|c| c.sync.validate_signatures = false).await;
-    let s = app.seed_session(TID, "personal").await;
+    let s = app.seed_session("personal").await;
     let dummy = SyncObject::Item(ItemRecord {
         vault_id: VID.to_vec(),
         item_id: b"i-x".to_vec(),
@@ -226,7 +222,6 @@ async fn passthrough_accepts_unsigned_when_validate_off() {
     let r = app
         .client
         .post(format!("{}/v1/sync/push", app.base))
-        .header("UniSSH-Tenant", b64(TID))
         .header("Authorization", format!("Bearer {}", s.access_token_b64))
         .json(&push_body(&[dummy]))
         .send()

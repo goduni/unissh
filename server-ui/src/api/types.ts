@@ -1,6 +1,7 @@
 // Wire types — mirror the server's JSON response shapes (architecture spec §2.2).
-// Verified against server/src/modules/{admin,ops,identity}.rs. All crypto blobs
-// are base64 strings; *_seq / *_expires / *_at are integers.
+// Verified against server/src/modules/{admin,ops,identity,instance,escrow,spaces,
+// pending}.rs. Instance-scoped (v2): no tenant_id anywhere. All crypto blobs are
+// base64 strings; *_seq / *_expires / *_at are integers.
 
 // ── Enums (open metadata) ──────────────────────────────────────
 export enum ObjectTag {
@@ -43,8 +44,8 @@ export const CACHE_POLICY_LABEL: Record<number, string> = {
 
 export type InviteState = "pending" | "redeemed" | "expired" | "revoked";
 export type AccountStatus = "active" | "disabled";
-export type TenantStatus = "active" | "suspended";
 export type DeviceStatus = "active" | "revoked";
+export type DeviceKind = "app" | "web";
 export type AuditSource = "client-signed" | "server-observed";
 
 // ── Service ────────────────────────────────────────────────────
@@ -53,69 +54,63 @@ export interface VersionInfo {
   server: string;
 }
 
-// ── Ops (cross-tenant) ─────────────────────────────────────────
-export interface OpsTenant {
-  tenant_id: string;
-  tier: string;
-  status: TenantStatus;
-  next_seq: number;
-  created_at: number;
-  accounts: number;
-  /** Human label (P1.4 — POST /v1/ops/tenant/profile); null until set. */
-  display_name: string | null;
-  /** Genesis-owner ed25519 (base64) — who owns this space; null until bootstrapped. */
-  genesis_owner: string | null;
+// ── Instance identity (GET /v1/instance) + claim (POST /v1/claim) ──
+export interface InstanceInfo {
+  claimed: boolean;
+  name: string | null;
+  version: string;
+  instance_id: string;
+  /** Enabled sign-in mechanisms, e.g. ["password"] or ["password", "oidc"]. */
+  auth: string[];
+  /** IdP hints for "Sign in with SSO" — present iff `auth` includes "oidc". */
+  oidc?: { issuer: string; client_id: string };
+}
+// ── OIDC callback (POST /v1/oidc/callback) — public: the id_token is the credential ──
+export interface OidcCallbackReq {
+  id_token: string;
+  registration_payload: string;
+  registration_signature: string;
+}
+export interface OidcCallbackResp {
+  account_id: string;
+  device_id: string;
+  spaces: string[];
+  access_token: string;
+  refresh_token: string;
+  access_expires: number;
+  refresh_expires: number;
+  session_id: string;
+}
+export interface ClaimReq {
+  setup_code: string;
+  registration_payload: string;
+  registration_signature: string;
+  display_name?: string;
+  handle?: string;
+  space_name?: string;
+}
+export interface ClaimResp {
+  account_id: string;
+  device_id: string;
+  space_id: string;
+  instance_id: string;
 }
 
-export interface AccountMatchDevice {
-  device_id: string;
-  status: string;
-  registered_at: number;
-}
-export interface AccountMatch {
-  tenant_id: string;
-  account_id: string;
-  display_name: string | null;
-  handle: string | null;
-  is_admin: boolean;
-  status: string;
-  devices: AccountMatchDevice[];
-}
-export interface AccountLookupResp {
-  matches: AccountMatch[];
-}
-export interface OpsTenantsResp {
-  tenants: OpsTenant[];
-}
-export interface OpsOverview {
-  tenants: number;
-  /** How many of the spaces are personal-tier (rest are org). */
-  tenants_personal?: number;
-  accounts: number;
-  objects: number;
-  instance_generation: number;
-}
-export interface InstanceInfo {
+// ── Anti-rollback generation ───────────────────────────────────
+/** Anti-rollback generation + floor (GET /v1/admin/instance). */
+export interface InstanceGeneration {
   generation: number;
   min_floor: number;
 }
-export interface SeqBumpOne {
-  tenant_id: string;
-  old: number;
-  new: number;
-}
-export interface OpsSeqBumpResp {
-  bumped: SeqBumpOne[];
-}
 
-// ── Admin (per-tenant) ─────────────────────────────────────────
+// ── Admin overview (instance-scoped) ───────────────────────────
 export interface AdminOverview {
-  tenant_id: string;
-  tier: string;
-  status: TenantStatus;
+  instance_id: string;
+  name: string | null;
+  claimed: boolean;
   next_seq: number;
   accounts: number;
-  admins: number;
+  owners: number;
   devices: number;
   active_sessions: number;
   vaults: number;
@@ -126,6 +121,10 @@ export interface AdminOverview {
 
 export interface DeviceRow {
   device_id: string;
+  /** 'app' (desktop client) | 'web' (browser panel). */
+  kind: DeviceKind;
+  /** Short human label (hostname / browser tag); null when unset. */
+  label: string | null;
   status: DeviceStatus;
   registered_at: number;
   active_sessions: number;
@@ -146,10 +145,10 @@ export interface SessionsResp {
   sessions: SessionRow[];
 }
 
+// v2 invites carry per-space intents, not a single role/scope. The admin listing
+// (GET /v1/admin/invites) is read-only metadata: id, lifecycle state, timestamps.
 export interface InviteRow {
   invite_id: string;
-  role: VaultRole;
-  scope: string | null;
   state: InviteState;
   expires_at: number;
   created_at: number;
@@ -288,7 +287,8 @@ export interface ConfigResp {
   sync: Record<string, unknown>;
   session: Record<string, unknown>;
   obs: Record<string, unknown>;
-  bootstrap: Record<string, unknown>;
+  setup: Record<string, unknown>;
+  oidc: Record<string, unknown>;
   ops: Record<string, unknown>;
 }
 
@@ -297,7 +297,7 @@ export interface AccountRow {
   account_id: string;
   display_name: string | null;
   handle: string | null;
-  is_admin: boolean;
+  is_owner: boolean;
   member_pubkey: string | null;
   /** X25519 encryption key (P0) — needed for HPKE-wrapping the VK on rotation. */
   x25519_pub: string | null;
@@ -311,9 +311,6 @@ export interface AccountRow {
 }
 export interface AccountsResp {
   accounts: AccountRow[];
-  /** Pinned genesis-owner ed25519 (base64) — the panel TOFU-pins this and verifies
-   *  manifest signatures against it before trusting a member set for rotation. */
-  genesis_owner: string | null;
 }
 
 export interface AuthChallenge {
@@ -331,35 +328,28 @@ export interface VerifyResp {
   refresh_expires: number;
   session_id: string;
 }
+// v2 invite intents (POST /v1/invite). A space intent joins `space_id` at server-
+// trusted `role` ("member" | "admin"); a vault intent enqueues a `grant` for
+// `vault_id` at crypto role (0|1|2). See server identity.rs invite_issue_v2.
+export interface SpaceIntent {
+  space_id: string;
+  role: string;
+}
+export interface VaultIntent {
+  vault_id: string;
+  role: number;
+}
+export interface InviteIssueReq {
+  space_intents: SpaceIntent[];
+  vault_intents?: VaultIntent[];
+  ttl_seconds?: number;
+}
 export interface InviteIssueResp {
   invite_id: string;
   token: string;
+  /** `{public_url}/join#<token>` when the server has a public_url configured, else null. */
+  url: string | null;
   expires_at: number;
-}
-
-/** Enrollment grant: instance-level, single-use, revocable bootstrap credential. */
-export interface EnrollGrant {
-  grant_id: string;
-  label: string;
-  tier: string | null;
-  state: "pending" | "redeemed" | "revoked";
-  expires_at: number | null;
-  redeemed_tenant: string | null;
-  redeemed_at: number | null;
-  created_at: number;
-}
-export interface EnrollGrantsResp {
-  grants: EnrollGrant[];
-}
-export interface EnrollIssueResp {
-  grant_id: string;
-  token: string;
-  expires_at: number | null;
-}
-export interface BootstrapResp {
-  account_id: string;
-  device_id: string;
-  role: string;
 }
 
 export interface AuditEntry {
@@ -385,4 +375,113 @@ export interface GrantsResp {
   manifest: string; // base64 SyncObject manifest envelope (tag 3)
   grants: string[]; // base64 SyncObject grant envelopes (tag 4)
   key_epoch: number;
+}
+
+// ── Escrow sign-in (Phase 2, public) ───────────────────────────
+/** Argon2id params to re-derive K_auth (GET /v1/escrow/params?handle=). */
+export interface EscrowParams {
+  argon_salt: string;
+  argon_mem_kib: number;
+  argon_iterations: number;
+  argon_parallelism: number;
+}
+/** Encrypted keyset recovered by handle (POST /v1/escrow/fetch). */
+export interface EscrowFetchResp {
+  keyset_blob: string;
+  generation: number;
+  account_id: string;
+}
+
+// ── Device self-enroll (POST /v1/devices/self-enroll) — public ─────
+/** Register a device for an escrow-recovered keyset on a fresh browser. PUBLIC (no
+ *  bearer): the self-signed registration IS the credential — the server looks the
+ *  account up by the registration's Ed25519 keyset and verifies the signature. */
+export interface DeviceSelfEnrollReq {
+  registration_payload: string;
+  registration_signature: string;
+  /** 'web' for the browser panel (auto-expires server-side); 'app' for desktop. */
+  kind?: DeviceKind;
+  /** Short, non-fingerprinty label shown in the Devices list. */
+  label?: string;
+}
+export interface DeviceSelfEnrollResp {
+  account_id: string;
+  device_id: string;
+}
+
+// ── Keyset upload (PUT /v1/keyset) ─────────────────────────────
+/** Optional escrow enrollment carried with a keyset upload. The client sends the
+ *  RAW `k_auth`; the server persists only sha256(k_auth), never the raw credential. */
+export interface KeysetEscrowIn {
+  k_auth: string;
+  argon_salt: string;
+  argon_mem_kib: number;
+  argon_iterations: number;
+  argon_parallelism: number;
+}
+export interface KeysetPutReq {
+  keyset_blob: string;
+  escrow?: KeysetEscrowIn;
+}
+export interface KeysetPutResp {
+  generation: number;
+}
+
+// ── Spaces (server-trusted groupings) ──────────────────────────
+export interface SpaceInfo {
+  space_id: string;
+  name: string;
+  /** The caller's role in this space ("admin" | "member"). */
+  role: string;
+}
+export interface SpacesResp {
+  spaces: SpaceInfo[];
+}
+export interface CreateSpaceResp {
+  space_id: string;
+}
+
+// ── Directory (shared people address book) ─────────────────────
+export interface DirEntry {
+  account_id: string;
+  handle: string | null;
+  display_name: string | null;
+  /** Canonical member-id (Ed25519 keyset, base64). */
+  member_pubkey: string;
+  x25519_pub: string;
+  status: string;
+}
+export interface DirectoryResp {
+  accounts: DirEntry[];
+}
+
+// ── Pending crypto queue (vault-admin to-do list) ──────────────
+export interface PendingAction {
+  action_id: string;
+  kind: string;
+  vault_id: string;
+  account_id: string;
+  /** Target account's canonical Ed25519 keyset (base64); null if keyless. */
+  member_pubkey: string | null;
+  /** Target account's X25519 key (base64) — recipient of the HPKE-wrapped VK. */
+  x25519_pub: string | null;
+  crypto_role: number | null;
+  source: string;
+  /** Opaque binding MAC (base64) or null. */
+  proof: string | null;
+  created_at: number;
+}
+export interface PendingResp {
+  actions: PendingAction[];
+}
+
+// ── Key-binding attestations ───────────────────────────────────
+export interface AttestationInfo {
+  attestor_pubkey: string;
+  blob: string;
+  signature: string;
+  created_at: number;
+}
+export interface AttestationsResp {
+  attestations: AttestationInfo[];
 }

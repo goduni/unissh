@@ -1,7 +1,7 @@
 //! Repository layer (sqlx). Dual-dialect: SQLite (self-host default, WAL) and
-//! Postgres (scale). A single `Store` facade with `enum Db`; every method is
-//! tenant-scoped (spec §12). Opaque blobs — verbatim; open columns mirror the
-//! core's record contract.
+//! Postgres (scale). A single `Store` facade with `enum Db`; v2 is
+//! instance-scoped (one instance per server, spec §5.1). Opaque blobs — verbatim;
+//! open columns mirror the core's record contract.
 //!
 //! Decision: we use the **runtime** query API of sqlx (`sqlx::query(...).bind(...)`),
 //! not the compile-time macros — they are incompatible with dual-dialect + DB-free
@@ -18,14 +18,17 @@ use std::str::FromStr;
 
 pub mod accounts_repo;
 pub mod admin_repo;
+pub mod attest_repo;
 pub mod audit_repo;
 pub mod auth_repo;
-pub mod enroll_repo;
 pub mod identity_repo;
+pub mod instance_repo;
+pub mod invites_repo;
 pub mod models;
+pub mod pending_repo;
 pub mod policy_repo;
+pub mod spaces_repo;
 pub mod sync_repo;
-pub mod tenants;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
@@ -161,14 +164,18 @@ impl Store {
         })
     }
 
-    /// Apply the dialect's migrations (idempotent, forward-only). Reads
-    /// `migrations/<dialect>/` at runtime (the dir is shipped in the image).
+    /// Apply the dialect's migrations (idempotent, forward-only) from the default dir.
     pub async fn migrate(&self) -> AppResult<()> {
-        use sqlx::migrate::Migrator;
         let dir = match self.dialect() {
             Dialect::Sqlite => "./migrations/sqlite",
             Dialect::Postgres => "./migrations/postgres",
         };
+        self.migrate_from(dir).await
+    }
+
+    /// Apply migrations from an explicit directory (used by the v2 staging tests).
+    pub async fn migrate_from(&self, dir: &str) -> AppResult<()> {
+        use sqlx::migrate::Migrator;
         let m = Migrator::new(std::path::Path::new(dir))
             .await
             .map_err(|e| AppError::internal(format!("load migrations {dir}: {e}")))?;

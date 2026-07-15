@@ -32,7 +32,7 @@ struct PushResp {
 }
 
 /// `POST /v1/sync/push` → push_objects (§5.1). Atomically assigns a monotonic
-/// per-tenant server_seq; idempotent by `Idempotency-Key`.
+/// instance-wide server_seq; idempotent by `Idempotency-Key`.
 async fn push(
     auth: AuthCtx,
     headers: HeaderMap,
@@ -46,8 +46,12 @@ async fn push(
         return Err(AppError::payload_too_large("too many objects per push"));
     }
 
-    // genesis_owner (for the unconditional audit-author check, §11.3).
-    let genesis = auth.tenant.genesis_owner_pubkey.clone();
+    // Instance owner's keyset (for the unconditional audit-author check, §11.3):
+    // instance.owner_account_id → its account ed25519. None until claimed.
+    let genesis = match state.store.instance().await?.owner_account_id {
+        Some(aid) => state.store.account_ed(&aid).await?,
+        None => None,
+    };
 
     let mut items = Vec::with_capacity(req.objects.len());
     for o in &req.objects {
@@ -67,18 +71,18 @@ async fn push(
                 "vault sync_target must be Cloud; Local objects never reach the server",
             ));
         }
-        // Audit record via push: author MUST == genesis_owner (§11.3), if the
-        // tenant is bootstrapped. (The client re-verifies on read anyway.)
+        // Audit record via push: author MUST == the instance owner (§11.3), if the
+        // instance is claimed. (The client re-verifies on read anyway.)
         if parsed.tag() == Some(crate::codec::ObjectTag::Audit) {
             if let Some(g) = genesis.as_deref() {
                 if parsed.author_pubkey.as_deref() != Some(g) {
-                    return Err(AppError::forbidden("audit author must be genesis owner"));
+                    return Err(AppError::forbidden("audit author must be instance owner"));
                 }
             }
         }
         // A3: account-state MUST be self-authored by the pushing device (== the
         // account's keyset). Unconditional (not under validate_signatures): otherwise
-        // a tenant member could write someone else's account-state, and delta
+        // a member could write someone else's account-state, and delta
         // addresses tag-7 by author_pubkey.
         if parsed.tag() == Some(crate::codec::ObjectTag::AccountState)
             && parsed.author_pubkey.as_deref() != Some(auth.device_ed25519())
@@ -94,7 +98,7 @@ async fn push(
     // validate_signatures, BUT ACL objects (manifest/grant, tag 3/4) are ALWAYS
     // verified (S5): their integrity is not a client read concern but a server
     // authorization decision (the delta visibility filter trusts materialized
-    // manifests/grants); otherwise, with validate_signatures=off, a tenant member
+    // manifests/grants); otherwise, with validate_signatures=off, a space member
     // could push a forged grant and gain delta visibility of someone else's vault.
     let validate = state.validate_signatures();
     for it in &items {
@@ -112,18 +116,11 @@ async fn push(
     // of ACL objects (author==Admin@epoch) is ALWAYS checked; full RBAC for
     // Item/Vault/Audit is under validate_signatures (`acl_only = !validate`). On
     // single-owner personal vaults the author resolves to the owner's Admin → no-op.
-    crate::modules::policy::write_accept(
-        &state,
-        auth.tenant_id(),
-        auth.device_ed25519(),
-        &items,
-        !validate,
-    )
-    .await?;
+    crate::modules::policy::write_accept(&state, auth.device_ed25519(), &items, !validate).await?;
 
     let idem = match headers.get("idempotency-key") {
         // Cap the client-chosen key so it can't write oversize idempotency rows
-        // (mirrors the tenant-id length guard); 128 bytes covers any UUID/hash.
+        // (bounds the client-chosen key like the other id guards); 128 bytes covers any UUID/hash.
         Some(v) if v.as_bytes().len() > 128 => {
             return Err(AppError::malformed(
                 "idempotency-key too long (max 128 bytes)",
@@ -133,23 +130,16 @@ async fn push(
         None => None,
     };
     // Bind the idempotency request hash to the authenticated principal (device
-    // pubkey): the idem lookup is tenant+key only, so without this a key
-    // collision across accounts/devices in a tenant could replay ANOTHER
-    // principal's stored response. Same principal+body still hashes stable →
-    // legitimate retries stay idempotent.
+    // pubkey): the idem lookup is key-only, so without this a key collision across
+    // accounts/devices could replay ANOTHER principal's stored response. Same
+    // principal+body still hashes stable → legitimate retries stay idempotent.
     let mut hin = Vec::with_capacity(auth.device_ed25519().len() + body.len());
     hin.extend_from_slice(auth.device_ed25519());
     hin.extend_from_slice(&body);
     let req_hash = ids::sha256(&hin);
     let res = state
         .store
-        .push_objects(
-            auth.tenant_id(),
-            idem.as_deref(),
-            &req_hash,
-            items,
-            state.now(),
-        )
+        .push_objects(idem.as_deref(), &req_hash, items, state.now())
         .await?;
 
     metrics::counter!("unissh_push_objects_total").increment(res.server_seq.len() as u64);
@@ -192,13 +182,7 @@ async fn delta(
     // Instance-admin is NOT a bypass (delta does not consult is_instance_admin).
     let rows = state
         .store
-        .delta_since(
-            auth.tenant_id(),
-            cursor,
-            limit,
-            auth.device_ed25519(),
-            state.now(),
-        )
+        .delta_since(cursor, limit, auth.device_ed25519(), state.now())
         .await?;
     let (has_more, next_cursor) =
         crate::http::page(&rows, limit as usize, cursor, |r| r.server_seq);
@@ -223,7 +207,7 @@ struct VersionResp {
 }
 
 /// `GET /v1/sync/version` → report_version (§5.1): the max assigned server_seq.
-async fn version(auth: AuthCtx, State(state): State<AppState>) -> AppResult<Json<VersionResp>> {
-    let v = state.store.report_version(auth.tenant_id()).await?;
+async fn version(_auth: AuthCtx, State(state): State<AppState>) -> AppResult<Json<VersionResp>> {
+    let v = state.store.report_version().await?;
     Ok(Json(VersionResp { report_version: v }))
 }

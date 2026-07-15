@@ -18,8 +18,6 @@ const MAX_429_RETRIES: u32 = 2;
 /// Cap a server-suggested `Retry-After` so a hostile/buggy value can't hang the UI.
 const MAX_RETRY_AFTER_SECS: u64 = 5;
 
-pub const TENANT_HEADER: &str = "UniSSH-Tenant";
-
 /// Process-global blocking HTTP client (connection pool reuse). Initialised lazily
 /// on first use — which always happens inside `spawn_blocking`, so the inner
 /// current-thread runtime is never created from within Tauri's async runtime.
@@ -116,28 +114,9 @@ pub fn validate_base_url(base_url: &str) -> ApiResult<()> {
     ))
 }
 
-#[cfg(test)]
-mod base_url_tests {
-    use super::validate_base_url;
-
-    #[test]
-    fn https_ok_http_loopback_ok_http_remote_rejected() {
-        assert!(validate_base_url("https://cloud.example.com").is_ok());
-        assert!(validate_base_url("https://cloud.example.com:8443/").is_ok());
-        assert!(validate_base_url("http://127.0.0.1:8443").is_ok());
-        assert!(validate_base_url("http://localhost").is_ok());
-        assert!(validate_base_url("http://[::1]:8443").is_ok());
-        // the dangerous cases: plaintext to a real host / non-http schemes
-        assert!(validate_base_url("http://cloud.example.com").is_err());
-        assert!(validate_base_url("ftp://cloud.example.com").is_err());
-        assert!(validate_base_url("cloud.example.com").is_err());
-        assert!(validate_base_url("https://").is_err());
-    }
-}
-
-/// Attach the tenant header (+ optional Bearer) to a request builder.
-pub fn headers(rb: RequestBuilder, tenant_b64: &str, bearer: Option<&str>) -> RequestBuilder {
-    let rb = rb.header(TENANT_HEADER, tenant_b64);
+/// Attach an optional Bearer to a request builder. The instance is addressed by
+/// its base URL alone — there is no tenant header any more.
+pub fn headers(rb: RequestBuilder, bearer: Option<&str>) -> RequestBuilder {
     match bearer {
         Some(tok) => rb.header(reqwest::header::AUTHORIZATION, format!("Bearer {tok}")),
         None => rb,
@@ -245,4 +224,23 @@ pub fn ji64(v: &Value, key: &str) -> ApiResult<i64> {
     v.get(key)
         .and_then(|x| x.as_i64())
         .ok_or_else(|| missing(key))
+}
+
+#[cfg(test)]
+mod base_url_tests {
+    use super::validate_base_url;
+
+    #[test]
+    fn https_ok_http_loopback_ok_http_remote_rejected() {
+        assert!(validate_base_url("https://cloud.example.com").is_ok());
+        assert!(validate_base_url("https://cloud.example.com:8443/").is_ok());
+        assert!(validate_base_url("http://127.0.0.1:8443").is_ok());
+        assert!(validate_base_url("http://localhost").is_ok());
+        assert!(validate_base_url("http://[::1]:8443").is_ok());
+        // the dangerous cases: plaintext to a real host / non-http schemes
+        assert!(validate_base_url("http://cloud.example.com").is_err());
+        assert!(validate_base_url("ftp://cloud.example.com").is_err());
+        assert!(validate_base_url("cloud.example.com").is_err());
+        assert!(validate_base_url("https://").is_err());
+    }
 }

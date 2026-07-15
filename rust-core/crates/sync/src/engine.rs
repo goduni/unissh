@@ -758,19 +758,27 @@ pub fn sync_push(
 
     // Only DIRTY objects of vaults bound to target_tenant (the 1:1 binding is already in
     // the query: `sync_tenant = target_tenant`). Local/foreign vaults do not get in.
-    // An empty target_tenant will not match anything → no-op (safeguard). Manifests go
-    // before grants (a grant references its epoch's manifest on receipt).
-    for v in storage.list_dirty_bound_vaults(target_tenant)? {
-        objects.push(SyncObject::Vault(v));
-    }
-    for it in storage.list_dirty_bound_items(target_tenant)? {
-        objects.push(SyncObject::Item(it));
-    }
+    // An empty target_tenant will not match anything → no-op (safeguard).
+    //
+    // DEPENDENCY ORDER (critical): the receiver verifies each object's authority against
+    // the membership manifest chain, and a rejected object ADVANCES THE CURSOR (a
+    // dependency arriving later is never retried). So a dependency MUST be pushed before
+    // its dependents, in the same batch — the server assigns server_seq in push order and
+    // the pull processes in that order. Manifests first (an item/record authored at epoch
+    // N needs the epoch-N manifest to verify), then the vault record, then grants (each
+    // references its epoch's manifest), then items. Previously items preceded manifests, so
+    // a cross-account member's items were rejected on first pull and silently dropped.
     for m in storage.list_dirty_bound_manifests(target_tenant)? {
         objects.push(SyncObject::MembershipManifest(m));
     }
+    for v in storage.list_dirty_bound_vaults(target_tenant)? {
+        objects.push(SyncObject::Vault(v));
+    }
     for g in storage.list_dirty_bound_grants(target_tenant)? {
         objects.push(SyncObject::MembershipGrant(g));
+    }
+    for it in storage.list_dirty_bound_items(target_tenant)? {
+        objects.push(SyncObject::Item(it));
     }
 
     // A3: account-state is broadcast to EVERY server, so it is not covered by

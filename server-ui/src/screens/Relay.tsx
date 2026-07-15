@@ -2,12 +2,10 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import type { KeysetGen, RelayChannel } from "../api/types";
-import { useTenant } from "../store/tenant";
 import { useAsync } from "../util/useAsync";
 import { truncId } from "../util/bytes";
 import { fmtRelative } from "../util/format";
 import { DataTable, type Column } from "../ui/DataTable";
-import { KeysetGate } from "../ui/overlays";
 import { Card, StateBadge, TextInput, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
@@ -16,23 +14,17 @@ export function Relay() {
   const { t } = useTranslation();
   return (
     <Screen title={t("screen.relay.title")} sub={t("screen.relay.sub")} zk>
-      <KeysetGate>
-        <RelayBody />
-      </KeysetGate>
+      <RelayBody />
     </Screen>
   );
 }
 
 function RelayBody() {
   const { t } = useTranslation();
-  const activeTenantId = useTenant((s) => s.activeTenantId);
   const [acc, setAcc] = useState("");
 
-  const relay = useAsync(() => api.admin.relay(), [activeTenantId]);
-  const keysets = useAsync(
-    () => api.admin.keysets(acc || undefined),
-    [activeTenantId, acc],
-  );
+  const relay = useAsync(() => api.admin.relay(), []);
+  const keysets = useAsync(() => api.admin.keysets(acc || undefined), [acc]);
 
   const channelColumns: Column<RelayChannel>[] = [
     {

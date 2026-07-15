@@ -23,7 +23,11 @@ fn log_filter_from_env() -> (log::LevelFilter, Vec<(String, log::LevelFilter)>) 
         .unwrap_or_default();
     let mut global = log::LevelFilter::Info;
     let mut overrides = Vec::new();
-    for part in directive.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+    for part in directive
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if let Some((module, level)) = part.split_once('=') {
             let module = module.trim();
             if let (false, Ok(lf)) = (module.is_empty(), level.trim().parse::<log::LevelFilter>()) {
@@ -258,16 +262,18 @@ pub fn run() {
             keychain::keychain_delete_secret_key,
             // cloud server — identity / session / devices
             cloud::commands::server_status,
+            cloud::commands::server_instance_info,
             cloud::commands::server_list,
             cloud::commands::server_set_active,
             cloud::commands::server_remove,
-            cloud::commands::server_register,
-            cloud::commands::server_bootstrap,
+            cloud::commands::server_join,
+            cloud::commands::server_claim,
+            cloud::commands::server_oidc_login,
             cloud::commands::server_login,
             cloud::commands::server_refresh_session,
             cloud::commands::server_logout,
             cloud::commands::server_disconnect,
-            cloud::commands::server_invite_redeem_preview,
+            cloud::commands::server_join_preview,
             cloud::commands::server_device_add,
             cloud::commands::server_list_devices,
             cloud::commands::server_device_revoke,
@@ -276,6 +282,7 @@ pub fn run() {
             cloud::commands::server_create_cloud_vault,
             cloud::commands::server_bind_unbound_cloud_vaults,
             cloud::commands::server_bind_cloud_vault,
+            cloud::commands::server_unbind_cloud_vault,
             cloud::commands::server_sync_now,
             cloud::commands::server_repull,
             cloud::commands::server_restore_deleted_vaults,
@@ -291,9 +298,21 @@ pub fn run() {
             cloud::commands::get_personal_vault,
             cloud::commands::get_account_default_username,
             cloud::commands::server_rotate_vk,
+            // cloud spaces / directory / pending / attestations / invites (server-v2)
+            cloud::commands::server_invite,
+            cloud::commands::server_list_spaces,
+            cloud::commands::server_create_space,
+            cloud::commands::server_add_space_member,
+            cloud::commands::server_directory,
+            cloud::commands::server_pending,
+            cloud::commands::server_attestations_put,
+            cloud::commands::server_attestations_list,
             // cloud devices / onboarding (Path A keyset escrow, Path B PAKE relay)
             cloud::commands::server_keyset_push,
             cloud::commands::server_keyset_pull_and_unlock,
+            cloud::commands::server_escrow_params,
+            cloud::commands::server_escrow_fetch_and_unlock,
+            cloud::commands::server_import_keyset_and_unlock,
             cloud::commands::server_onboard_initiate,
             cloud::commands::server_onboard_complete,
             cloud::commands::server_onboard_join,

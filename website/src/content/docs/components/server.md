@@ -11,38 +11,52 @@ tokio · **axum 0.8** · **sqlx 0.9** (**SQLite** default, **Postgres** for scal
 
 By design the server performs **no payload crypto** — only TLS and Ed25519 signature verification for auth, registration, and (defense-in-depth) record validation.
 
-## Identity, accounts, and devices
+## Identity, accounts, and devices — one account, many spaces
+
+One server is a single **instance** that hosts many **spaces** (teams). A person has **one account** across every space they belong to — spaces are groupings, **not** identity boundaries — and a shared **directory** spans the spaces.
 
 ```
-tenant ─┬─ account "Vasya"  ── canonical keyset (ed25519 = MEMBER-ID, x25519)
-        │     ├─ device A (laptop)   ┐ share the same keyset
-        │     └─ device B (phone)    ┘ (one identity, many devices)
-        ├─ account "John"   ── keyset …
-        └─ account "Igor"   ── keyset …
+instance ─┬─ space "Backend"   ─┬─ member: Alice, John
+          │                     └─ …
+          ├─ space "Security"   ─┬─ member: Alice, Igor
+          │                     └─ …
+          └─ directory: every account on the instance
+
+account "Alice" ── canonical keyset (ed25519 = MEMBER-ID, x25519)
+      ├─ device A (laptop)   ┐ share the same keyset
+      └─ device B (phone)    ┘ (one identity, many devices, many spaces)
 ```
 
 - An **account = one keyset identity.** Its **Ed25519 public key is the canonical member-id** — the thing vault grants and membership are keyed on. The server holds only the two **public** keys; the private keyset never leaves the device.
-- **Devices of an account share that keyset** (so granting "Vasya" once works on all his devices). Each device has its own `device_id` for sessions and revocation.
+- **Devices of an account share that keyset** (so granting "Alice" once works on all her devices, in every space). Each device has its own `device_id` for sessions and revocation.
 - **Human identifiers** (`display_name`, `handle`) live on the account and are **server-visible metadata**. For privacy-sensitive deployments, use a pseudonym.
 
-Keep the **two "admin" concepts** distinct:
+Keep the **two authority planes** distinct:
 
-- **Instance-admin** (`is_admin`) — *server-trusted* authority for invites, audit, device-revoke, and publishing grants. The genesis admin cannot be demoted; the last admin cannot be removed (anti-lockout).
-- **Vault role** (viewer / editor / **admin**) — *cryptographic*, living in the signed manifest + grant; controls who can decrypt/write a vault.
+- **Server-trusted roles** — **owner** (the first user to *claim* the instance with its one-time setup code; runs ops and appoints space admins), **space-admin**, and **member**. This is *server-trusted* authority over invites, spaces, audit, device-revoke, and publishing grants. The owner cannot be removed while last; the last space-admin cannot be removed (anti-lockout).
+- **Vault role** (viewer / editor / **admin**) — *cryptographic*, living in the signed manifest + grant; controls who can decrypt/write a vault. Being an instance owner grants no vault key; holding a vault-admin grant confers no server-side privilege.
 
-The full client flows (first device, add a sibling device, admin team management) are in the repository's `server/CLIENT.md`.
+Onboarding is by a space-scoped, revocable **invite link** (`/v1/join`) or **SSO (OIDC)**; a fresh device recovers its keyset by **escrow sign-in** (handle + password + Secret Key) or **QR-approve** from an already-trusted device. The full client flows (claim, first device, add a sibling device, team management) are in the repository's `server/CLIENT.md`.
 
 ## API surface (`/v1`, JSON over TLS)
 
-All crypto blobs are base64 (STANDARD). `UniSSH-Tenant: <base64(tenant_id)>` is required on `/v1` routes (except bootstrap-time); `Authorization: Bearer` on private routes; mutating routes accept an `Idempotency-Key`.
+All crypto blobs are base64 (STANDARD). **One server = one instance — there is no tenant header.** `Authorization: Bearer` gates private routes; the setup/onboarding routes (`/v1/claim`, `/v1/join`, `/v1/escrow/*`, `/v1/oidc/callback`) are **public** (the credential — setup code / invite token / password proof / id_token — is in the body); mutating routes accept an `Idempotency-Key`.
 
-### Identity / auth
+### Instance / setup / onboarding
 
-`POST /v1/bootstrap`, `/v1/register`, `/v1/invite`, `/v1/invite/redeem`, `/v1/auth/challenge`, `/v1/auth/verify`, `/v1/session/{refresh,logout,device-revoke}`, `GET|PUT /v1/keyset`, and the device-to-device PAKE relay `/v1/relay/{open,msg1,msg2,msg3}` + `GET /v1/relay/poll`.
+`GET /v1/instance` (public: claimed-flag, instance-id, enabled auth methods, and — when OIDC is on — the issuer + client_id a browser needs), `POST /v1/claim` (public: the **first user** claims the unclaimed instance with the **setup code** printed to the log → becomes the **owner**). Onboarding: `POST /v1/invite` (owner / space-admin mints a one-time, space-scoped invite link), `POST /v1/invite/revoke` (cancel a still-pending invite), `POST /v1/join/preview` + `POST /v1/join` (public: redeem an invite → a new account bound to the invited spaces), `POST /v1/oidc/callback` (public: **SSO** — verify the IdP id_token against the JWKS, map IdP groups → spaces, bind the account's pubkeys via the OIDC nonce; SSO never yields vault keys, and group→space is reconciled on every login).
 
-### Accounts / devices / admin
+### Auth / escrow
 
-`POST /v1/devices/add` (a sibling device sharing the keyset), `GET /v1/accounts` (admin: handles, display names, member-ids, device counts), `POST /v1/admin/set` (instance-admin promote/demote), `POST /v1/account/profile`.
+`POST /v1/auth/{challenge,verify}` (Ed25519 challenge-response), `POST /v1/session/{refresh,logout,device-revoke}`, `GET|PUT /v1/keyset`, `GET /v1/escrow/params` + `POST /v1/escrow/fetch` (public: a fresh device re-derives `K_auth` from handle + password and pulls its **encrypted** keyset blob — the server stores only `sha256(K_auth)`, never the decryption key; **no `.keyset` file**), and the device-to-device relay `/v1/relay/{open,msg1,msg2,msg3}` + `GET /v1/relay/poll` (QR-approve device add).
+
+### Accounts / devices
+
+`POST /v1/devices/add` (a sibling device sharing the keyset), `GET /v1/devices`, `GET /v1/accounts` (admin: handles, display names, member-ids, device counts), `POST /v1/owner/set` (owner grant/revoke, server-trusted, anti-lockout), `POST /v1/account/profile`.
+
+### Spaces / directory
+
+`POST|GET /v1/spaces` (create / list-my-memberships), `POST|GET /v1/spaces/members` (add / roster), `POST /v1/spaces/members/remove`, `POST /v1/spaces/members/role`, `GET /v1/directory` (the member-visible roster).
 
 ### Sync
 
@@ -50,7 +64,7 @@ All crypto blobs are base64 (STANDARD). `UniSSH-Tenant: <base64(tenant_id)>` is 
 
 ### Vaults / policy
 
-`POST /v1/vaults/claim`, `POST /v1/grants/publish` (publish a new-epoch manifest + per-member grants — membership, rotation, or revoke), `GET /v1/grants`.
+`POST /v1/vaults/claim`, `POST /v1/grants/publish` (publish a new-epoch manifest + per-member grants — membership, rotation, or revoke), `GET /v1/grants`, `GET /v1/pending` (a vault-admin's crypto to-do queue: the grant/revoke bindings the calling keyset must fulfil).
 
 ### Audit
 
@@ -58,18 +72,18 @@ All crypto blobs are base64 (STANDARD). `UniSSH-Tenant: <base64(tenant_id)>` is 
 
 ### Admin / ops (for the admin panel)
 
-A Bearer-admin, per-tenant read surface plus lifecycle controls, deliberately **suspended-gate-exempt** so a suspended tenant stays recoverable:
+A Bearer-admin (owner / space-admin), per-instance read surface plus lifecycle controls, deliberately **suspended-gate-exempt** so a suspended account stays recoverable:
 
-`GET /v1/admin/{overview,devices,sessions,invites,vaults,vault,objects,relay,keysets,config,migrations}` and `POST /v1/admin/{tenant/status,account/status,session/revoke,invite/revoke,seq-bump}`.
+`GET /v1/admin/{overview,devices,sessions,invites,vaults,vault,objects,relay,keysets,config,metrics,health,migrations,instance}`, `GET /v1/admin/audit/verify`, and `POST /v1/admin/{account/status,session/revoke,seq-bump}`.
 
-These are **read-projections of open metadata** plus lifecycle controls; they **never** expose ciphertext (object bytes, keyset bytes, or relay messages). `config` is read-only with secrets masked. Account-disable is enforced in the auth path (existing sessions stop) with genesis/last-admin anti-lockout.
+These are **read-projections of open metadata** plus lifecycle controls; they **never** expose ciphertext (object bytes, keyset bytes, or relay messages). `config` reads the effective config with secrets masked (and `PUT`s the live-editable subset). Account-disable is enforced in the auth path (existing sessions stop) with owner / last-admin anti-lockout.
 
 ### Service
 
 `GET /healthz`, `/readyz`, `/metrics`, `/v1/version`.
 
 :::note[Ops vs. admin]
-Cross-tenant infrastructure operations (list tenants, suspend, `seq-bump`) sit on a separate `/v1/ops/*` surface gated by a static `X-UniSSH-Ops-Token`. That is server-trusted infrastructure access — **not** a keyset, and never decryption. See [Server configuration](../../operations/configuration/) and [Admin panel](../server-ui/).
+An **optional break-glass** infrastructure surface (`GET /v1/ops/{overview,instance}`, `POST /v1/ops/seq-bump`) sits behind a static `X-UniSSH-Ops-Token` and is **off by default** (an empty token disables it). That is server-trusted infrastructure access — **not** a keyset, and never decryption. It is *not* how the admin panel normally signs in (the panel authenticates by escrow or SSO). See [Server configuration](../../operations/configuration/) and [Admin panel](../server-ui/).
 :::
 
 ## Build, run, and verification

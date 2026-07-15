@@ -419,9 +419,14 @@ impl From<ffi::IdentityBinding> for IdentityBinding {
 pub enum BindingResolution {
     Unbound,
     #[serde(rename_all = "camelCase")]
-    Matched { identity_item_id: String },
+    Matched {
+        identity_item_id: String,
+    },
     #[serde(rename_all = "camelCase")]
-    Redirected { pinned: String, current: String },
+    Redirected {
+        pinned: String,
+        current: String,
+    },
 }
 impl From<ffi::BindingResolution> for BindingResolution {
     fn from(r: ffi::BindingResolution) -> Self {
@@ -485,9 +490,11 @@ pub struct VaultInfo {
     /// Local vault (offline only) or Cloud vault (syncs with the server). Drives
     /// the Local/Cloud badge and gates cloud-only operations in the UI.
     pub sync_target: SyncTarget,
-    /// For a cloud vault, the `tenant_id` (base64) of the server it is bound 1:1
-    /// to. `None` for local vaults and not-yet-bound legacy cloud vaults. Lets the
-    /// UI show which linked server a cloud vault syncs with.
+    /// For a cloud vault, the `space_id` (base64) of the server Space it is bound 1:1
+    /// to. `None` for local vaults and not-yet-bound legacy cloud vaults. Lets the UI
+    /// show which linked server + Space a cloud vault syncs with. NOTE: the field name
+    /// `sync_tenant` is deliberately frozen — only its meaning moved (tenant → space)
+    /// under the instance+space model; see `types.ts` `syncTenant` for the same note.
     pub sync_tenant: Option<String>,
 }
 impl From<ffi::VaultInfo> for VaultInfo {
@@ -629,6 +636,113 @@ pub struct DeviceInfo {
     pub active_sessions: i64,
 }
 
+/// Public, session-less probe of a server instance (`GET /v1/instance`). Drives the
+/// Add-server flow's branch: `!claimed` → setup-code (claim); claimed → invite/sign-in.
+/// `name` is flattened to `""` when the instance is unclaimed/unnamed (the frontend
+/// `InstanceInfo.name` is a plain string), unlike the server-facing `Option` form.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceInfoDto {
+    pub claimed: bool,
+    pub name: String,
+    pub version: String,
+    pub instance_id: String,
+    pub auth: Vec<String>,
+    /// IdP hints for "Sign in with SSO" — present iff `auth` contains `oidc`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<OidcInfoDto>,
+}
+
+/// Public OIDC hints (issuer + client_id) the browser-flow "Sign in with SSO" needs.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OidcInfoDto {
+    pub issuer: String,
+    pub client_id: String,
+}
+
+// ---------- spaces / directory / pending / invites (server-v2) ----------
+
+/// One space the caller is a member of, from `GET /v1/spaces`. `role` is the
+/// caller's server-trusted role in that space (`admin`|`member`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceInfo {
+    pub space_id: String,
+    pub name: String,
+    pub role: String,
+}
+
+/// A freshly-minted invite from `POST /v1/invite`. `token` is returned exactly
+/// once (only its hash is stored server-side); `url` is the shareable join link
+/// when the server has a `public_url` configured, else `None`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InviteInfo {
+    pub invite_id: String,
+    pub token: String,
+    pub url: Option<String>,
+    pub expires_at: i64,
+}
+
+/// One person in the shared directory (`GET /v1/directory`). Pubkeys are hex
+/// (converted from the server's base64) so they feed `server_add_member` /
+/// `server_add_space_member` directly, matching [`AccountInfo`]'s convention.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryEntry {
+    pub account_id: String,
+    pub handle: Option<String>,
+    pub display_name: Option<String>,
+    pub ed25519_pub_hex: String,
+    pub x25519_pub_hex: String,
+    pub status: String,
+}
+
+/// One outstanding crypto action a vault-admin must fulfil (`GET /v1/pending`):
+/// a `grant` or `revoke` for `account_id` on `vault_id`. `vault_id_hex` and the
+/// target pubkeys are hex (from the server's base64) so they feed `server_add_member`
+/// / `server_rotate_vk`; the server ids (`action_id`, `account_id`) and the opaque
+/// binding `proof` stay base64 as the server sends them.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingAction {
+    pub action_id: String,
+    pub kind: String,
+    pub vault_id_hex: String,
+    pub account_id: String,
+    pub ed25519_pub_hex: Option<String>,
+    pub x25519_pub_hex: Option<String>,
+    pub crypto_role: Option<i64>,
+    pub source: String,
+    pub proof: Option<String>,
+    pub created_at: i64,
+}
+
+/// One key-binding attestation about an account (`GET /v1/attestations`). The
+/// `blob` + `signature` are opaque base64 the CLIENT verifies (the server never
+/// interprets them); `attestor_pubkey` is the attesting device's Ed25519 (base64).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttestationInfo {
+    pub attestor_pubkey: String,
+    pub blob: String,
+    pub signature: String,
+    pub created_at: i64,
+}
+
+/// The Argon2id params for keyless-escrow `K_auth` re-derivation (`GET /v1/escrow/params`).
+/// `argon_salt` is base64. NOTE: for an unknown/unenrolled handle the server returns a
+/// shaped decoy of the same form — this is NOT an existence oracle.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EscrowParamsInfo {
+    pub argon_salt: String,
+    pub argon_mem_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
+}
+
 // ---------- device-to-device onboarding (Path B) ----------
 
 /// Everything a new device needs to join, produced by the existing device. It is
@@ -638,7 +752,10 @@ pub struct DeviceInfo {
 #[serde(rename_all = "camelCase")]
 pub struct PairingPayload {
     pub base_url: String,
-    pub tenant_id: String,
+    /// Opaque server-instance id (base64) — used to key the new device's link.
+    pub instance_id: String,
+    /// Cloud-vault binding label (space id, base64) the new device inherits.
+    pub space_id: String,
     pub account_id: String,
     /// The new device's id, pre-created on the server by the existing device.
     pub device_id: String,

@@ -18,8 +18,15 @@ import type {
   ExecEvent,
   GroupTargetPlan,
   HostImportReport,
+  InstanceInfo,
   InstanceStatus,
-  InvitePreview,
+  InviteInfo,
+  JoinPreview,
+  SpaceInfo,
+  DirectoryEntry,
+  PendingAction,
+  AttestationInfo,
+  EscrowParamsInfo,
   ItemInfo,
   JumpHost,
   KnownHostInfo,
@@ -506,50 +513,64 @@ export const keychainDeleteSecretKey = () => invoke<void>("keychain_delete_secre
 // optional `serverId` and default to the active server when it's omitted.
 export const serverStatus = (serverId?: string) =>
   invoke<ServerStatus>("server_status", { serverId: serverId ?? null });
+/** Session-less probe of a server instance at `baseUrl`: its name, whether it has
+ *  been claimed, its instance id, and advertised sign-in methods. Drives the
+ *  Add-server flow's branch (setup-code vs invite/sign-in). PUBLIC — no session. */
+export const instanceInfo = (baseUrl: string) =>
+  invoke<InstanceInfo>("server_instance_info", { baseUrl });
 export const serverList = () => invoke<ServerList>("server_list");
 export const serverSetActive = (serverId: string) =>
   invoke<ServerList>("server_set_active", { serverId });
 export const serverRemove = (serverId: string) =>
   invoke<ServerList>("server_remove", { serverId });
-export const serverRegister = (
+/** Join an instance via a single-link invite `inviteToken`. The instance is
+ *  addressed by `baseUrl` (no tenant id on the wire any more); the granted spaces
+ *  come back inside the resulting ServerStatus' link. Joiners are never owners. */
+export const serverJoin = (
   baseUrl: string,
-  tenantId: string,
   inviteToken: string,
   opts: { displayName?: string; handle?: string } = {},
 ) =>
-  invoke<ServerStatus>("server_register", {
+  invoke<ServerStatus>("server_join", {
     baseUrl,
-    tenantId,
     inviteToken,
     displayName: opts.displayName ?? null,
     handle: opts.handle ?? null,
   });
-/** Create your OWN Space (tenant) on a server and become its owner — mints a fresh
- *  tenant id client-side. Use for a personal Space (no second server needed if the
- *  host is multi-tenant). Rejects (403) if the server disallows self-serve bootstrap. */
-export const serverBootstrap = (
+/** Claim an UNCLAIMED instance and become its owner. The `setupCode` (printed by
+ *  the server on first boot) authorizes the single-winner claim; the server creates
+ *  the owner account + device + a first Space and returns their ids. A claimed
+ *  instance returns 409. */
+export const serverClaim = (
   baseUrl: string,
-  opts: { spaceName?: string; handle?: string; bootstrapToken?: string } = {},
+  opts: { setupCode: string; displayName?: string; handle?: string; spaceName?: string },
 ) =>
-  invoke<ServerStatus>("server_bootstrap", {
+  invoke<ServerStatus>("server_claim", {
     baseUrl,
+    setupCode: opts.setupCode,
     spaceName: opts.spaceName ?? null,
     handle: opts.handle ?? null,
-    bootstrapToken: opts.bootstrapToken ?? null,
+    displayName: opts.displayName ?? null,
   });
 export const serverLogin = (serverId?: string) =>
   invoke<ServerStatus>("server_login", { serverId: serverId ?? null });
+/** Sign in with SSO (OIDC browser flow). Opens the system browser to the instance's
+ *  IdP, catches the loopback redirect, exchanges the code for an id_token, and runs
+ *  `POST /v1/oidc/callback` (nonce-bound to the local keyset). Gated on the probed
+ *  `instanceInfo().auth.includes("oidc")`. Requires the local keyset to be unlocked.
+ *  NOTE: the browser↔IdP round-trip needs a real IdP + browser (manual test). */
+export const serverOidcLogin = (baseUrl: string) =>
+  invoke<ServerStatus>("server_oidc_login", { baseUrl });
 export const serverRefreshSession = (serverId?: string) =>
   invoke<ServerStatus>("server_refresh_session", { serverId: serverId ?? null });
 export const serverLogout = (serverId?: string) =>
   invoke<ServerStatus>("server_logout", { serverId: serverId ?? null });
 export const serverDisconnect = (serverId?: string) =>
   invoke<ServerList>("server_disconnect", { serverId: serverId ?? null });
-export const serverInviteRedeemPreview = (
-  baseUrl: string,
-  tenantId: string,
-  inviteToken: string,
-) => invoke<InvitePreview>("server_invite_redeem_preview", { baseUrl, tenantId, inviteToken });
+/** Preview an invite before joining (does not consume it): the instance name and
+ *  the spaces (with roles) it grants. Stateless — no session. */
+export const serverJoinPreview = (baseUrl: string, token: string) =>
+  invoke<JoinPreview>("server_join_preview", { baseUrl, token });
 export const serverDeviceAdd = (serverId?: string) =>
   invoke<string>("server_device_add", { serverId: serverId ?? null });
 export const serverListDevices = (serverId?: string) =>
@@ -568,16 +589,27 @@ export const serverAccountProfile = (
   });
 
 // ── cloud vaults + sync ────────────────────────────────────────
-// Bound 1:1 to a server (defaults to the active one) by its tenantId.
-export const serverCreateCloudVault = (name: string, serverId?: string) =>
-  invoke<string>("server_create_cloud_vault", { serverId: serverId ?? null, name });
+// Bound 1:1 to a server (defaults to the active one) by a space id. `spaceId` picks
+// the bound space (an existing space you admin, or one just created); omit it to bind
+// to the link's primary space.
+export const serverCreateCloudVault = (name: string, serverId?: string, spaceId?: string) =>
+  invoke<string>("server_create_cloud_vault", {
+    serverId: serverId ?? null,
+    name,
+    spaceId: spaceId ?? null,
+  });
 // One-time migration: bind legacy unbound cloud vaults to a server (default active).
 export const serverBindUnboundCloudVaults = (serverId?: string) =>
   invoke<number>("server_bind_unbound_cloud_vaults", { serverId: serverId ?? null });
-// Bind ONE unbound cloud vault (hex id) to a server (default active) — reclaim an
-// orphaned/never-bound vault manually.
+// Bind ONE cloud vault (hex id) to a server (default active). Reclaims an
+// orphaned/never-bound vault, OR moves an already-bound vault to a different
+// server (the label is overwritten; the vault re-pushes to the new server).
 export const serverBindCloudVault = (vaultId: string, serverId?: string) =>
   invoke<void>("server_bind_cloud_vault", { vaultId, serverId: serverId ?? null });
+// Unbind ONE cloud vault (hex id) from its server — stops it syncing. The vault +
+// its data stay on this device; any server-side copy is left as-is.
+export const serverUnbindCloudVault = (vaultId: string) =>
+  invoke<boolean>("server_unbind_cloud_vault", { vaultId });
 export const serverSyncNow = (serverId?: string) =>
   invoke<SyncReport>("server_sync_now", { serverId: serverId ?? null });
 /** Full re-pull: reset the pull cursor then sync — recovers vaults that an
@@ -616,9 +648,93 @@ export const getAccountDefaultUsername = () =>
 export const serverRotateVk = (vaultId: string, remaining: RemainingMember[]) =>
   invoke<number>("server_rotate_vk", { vaultId, remaining });
 
+// ── cloud spaces / directory / pending / attestations (server-v2) ──
+// Each command resolves its Bearer from the server link (defaults to the active
+// server), like the sibling identity commands — so they take an optional serverId.
+/** Mint a one-link invite for a SINGLE space intent (`spaceId` at `role`) on a
+ *  server (defaults to active). Caller must be an admin of that space. `ttlSeconds`
+ *  optionally bounds the invite lifetime. The token is shown once (only its hash is
+ *  stored server-side). */
+export const serverInvite = (
+  spaceId: string,
+  role: string,
+  ttlSeconds?: number,
+  serverId?: string,
+) =>
+  invoke<InviteInfo>("server_invite", {
+    spaceId,
+    role,
+    ttlSeconds: ttlSeconds ?? null,
+    serverId: serverId ?? null,
+  });
+/** The caller's own spaces (with roles) on a server (defaults to active). */
+export const serverListSpaces = (serverId?: string) =>
+  invoke<SpaceInfo[]>("server_list_spaces", { serverId: serverId ?? null });
+/** Create a Space (instance owner) on a server (defaults to active); the creator
+ *  becomes its admin. Returns the new space id (base64). */
+export const serverCreateSpace = (name: string, serverId?: string) =>
+  invoke<string>("server_create_space", { name, serverId: serverId ?? null });
+/** Add (idempotent) an account to a space at a role (space-admin) on a server
+ *  (defaults to active). */
+export const serverAddSpaceMember = (
+  spaceId: string,
+  accountId: string,
+  role: string,
+  serverId?: string,
+) =>
+  invoke<void>("server_add_space_member", {
+    spaceId,
+    accountId,
+    role,
+    serverId: serverId ?? null,
+  });
+/** The shared people directory on a server (defaults to active): handles + hex
+ *  canonical keys, ready to feed serverAddMember / serverAddSpaceMember. */
+export const serverDirectory = (serverId?: string) =>
+  invoke<DirectoryEntry[]>("server_directory", { serverId: serverId ?? null });
+/** The caller's outstanding vault-admin crypto actions (grant/revoke) on a server
+ *  (defaults to active). Fulfil each via serverAddMember / serverRotateVk. */
+export const serverPending = (serverId?: string) =>
+  invoke<PendingAction[]>("server_pending", { serverId: serverId ?? null });
+/** Publish an OPAQUE key-binding attestation about an account (space-admin) on a
+ *  server (defaults to active). `blob`/`signature` are base64, produced+verified by
+ *  clients (the server stores them verbatim). */
+export const serverAttestationsPut = (
+  accountId: string,
+  blob: string,
+  signature: string,
+  serverId?: string,
+) =>
+  invoke<void>("server_attestations_put", {
+    accountId,
+    blob,
+    signature,
+    serverId: serverId ?? null,
+  });
+/** Every attestation about an account on a server (defaults to active). Opaque
+ *  blob+signature (base64); the caller verifies signatures. */
+export const serverAttestationsList = (accountId: string, serverId?: string) =>
+  invoke<AttestationInfo[]>("server_attestations_list", {
+    accountId,
+    serverId: serverId ?? null,
+  });
+
 // ── cloud devices / onboarding ─────────────────────────────────
-export const serverKeysetPush = (serverId?: string) =>
-  invoke<number>("server_keyset_push", { serverId: serverId ?? null });
+/** Escrow this device's (already-encrypted) keyset to a server (defaults to active)
+ *  AND arm keyless-escrow sign-in: the escrow K_auth is derived ONCE from the SAME
+ *  `password` + `secretKeyHex` that wraps the uploaded blob, so a later
+ *  serverEscrowFetchAndUnlock re-derives an identical K_auth. `password` is null for
+ *  passwordless/SSO accounts. Returns the stored generation. */
+export const serverKeysetPush = (
+  password: string | null,
+  secretKeyHex: string,
+  serverId?: string,
+) =>
+  invoke<number>("server_keyset_push", {
+    password,
+    secretKeyHex,
+    serverId: serverId ?? null,
+  });
 export const serverKeysetPullAndUnlock = (
   password: string | null,
   secretKeyHex: string,
@@ -629,6 +745,48 @@ export const serverKeysetPullAndUnlock = (
     secretKeyHex,
     serverId: serverId ?? null,
   });
+/** Fetch the escrow Argon2id params for a `handle` from a server (PUBLIC — no
+ *  session). NOTE: a 200 is NOT proof the handle exists (shaped decoy for unknown
+ *  handles), so callers must not treat this as an existence oracle. */
+export const serverEscrowParams = (baseUrl: string, handle: string) =>
+  invoke<EscrowParamsInfo>("server_escrow_params", { baseUrl, handle });
+/** Sign in with an existing identity via a server's ESCROW (PUBLIC — no session): by
+ *  handle, recover + unlock the keyset, self-enroll THIS device, authenticate, and
+ *  persist the link. `password` is null for passwordless/SSO accounts; `secretKeyHex`
+ *  is the account Secret Key (Emergency Kit). A wrong password/key surfaces as the
+ *  server's 403. Returns the resulting linked-server status (mirrors claim/join). */
+export const serverEscrowFetchAndUnlock = (
+  baseUrl: string,
+  handle: string,
+  password: string | null,
+  secretKeyHex: string,
+) =>
+  invoke<ServerStatus>("server_escrow_fetch_and_unlock", {
+    baseUrl,
+    handle,
+    password,
+    secretKeyHex,
+  });
+/** Restore this device's identity OFFLINE from an Emergency-Kit keyset FILE (`identity.kit`
+ *  — the raw EncryptedKeyset bytes), then self-enroll THIS device and sign in (PUBLIC — no
+ *  session): the escrow tail with the blob sourced from a file instead of the server's escrow.
+ *  `password` is null for passwordless/SSO accounts; `secretKeyHex` is the account Secret Key
+ *  (also in the Emergency Kit). No prior link/session needed — a brand-new device holding only
+ *  the kit file + Secret Key can recover. Returns the resulting linked-server status (mirrors
+ *  the escrow path). Zero-knowledge: password / Secret Key / bytes go straight to the Rust
+ *  command (only the core FFI sees them); never logged. */
+export const serverImportKeysetAndUnlock = (
+  baseUrl: string,
+  keysetBytes: number[],
+  password: string | null,
+  secretKeyHex: string,
+) =>
+  invoke<ServerStatus>("server_import_keyset_and_unlock", {
+    baseUrl,
+    keysetBlob: keysetBytes,
+    password,
+    secretKeyHex,
+  });
 export const serverOnboardInitiate = (serverId?: string) =>
   invoke<PairingPayload>("server_onboard_initiate", { serverId: serverId ?? null });
 export const serverOnboardComplete = (channelId: string, oobCode: string, serverId?: string) =>
@@ -636,7 +794,8 @@ export const serverOnboardComplete = (channelId: string, oobCode: string, server
 export const serverOnboardJoin = (payload: PairingPayload, password: string | null) =>
   invoke<ServerStatus>("server_onboard_join", {
     baseUrl: payload.baseUrl,
-    tenantId: payload.tenantId,
+    instanceId: payload.instanceId,
+    spaceId: payload.spaceId,
     accountId: payload.accountId,
     deviceId: payload.deviceId,
     channelId: payload.channelId,

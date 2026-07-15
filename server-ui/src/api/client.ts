@@ -1,34 +1,44 @@
 import { ApiError, errorFromResponse } from "./errors";
 import type {
-  AccountLookupResp,
   AccountsResp,
   AdminOverview,
+  AttestationsResp,
   AuditResp,
   AuditVerify,
   AuthChallenge,
-  BootstrapResp,
+  ClaimReq,
+  ClaimResp,
   ConfigPutReq,
   ConfigPutResp,
   ConfigResp,
+  CreateSpaceResp,
+  DeviceSelfEnrollReq,
+  DeviceSelfEnrollResp,
   DevicesResp,
-  EnrollGrantsResp,
-  EnrollIssueResp,
+  DirectoryResp,
+  EscrowFetchResp,
+  EscrowParams,
   GrantsResp,
   HealthInfo,
+  InstanceGeneration,
   InstanceInfo,
+  InviteIssueReq,
   InviteIssueResp,
   InvitesResp,
+  KeysetPutReq,
+  KeysetPutResp,
   KeysetsResp,
   MetricsRaw,
   MetricsSummary,
   MigrationsResp,
   ObjectsResp,
-  OpsOverview,
-  OpsSeqBumpResp,
-  OpsTenantsResp,
+  OidcCallbackReq,
+  OidcCallbackResp,
+  PendingResp,
   RelayResp,
   SeqBumpResp,
   SessionsResp,
+  SpacesResp,
   VaultRow,
   VaultsResp,
   VerifyResp,
@@ -38,24 +48,15 @@ import type {
 /** Auth/context resolved per-request from the stores (non-reactive read). */
 export interface AuthContext {
   instanceUrl: string;
-  opsToken: string | null;
-  /** Admin Bearer access token (base64) from the keyset session. */
+  /** Bearer access token (base64) from the keyset session. */
   bearer: string | null;
-  /** Active tenant id (already base64) for the UniSSH-Tenant header. */
-  tenantId: string | null;
 }
 
 interface CallOpts {
   method?: "GET" | "POST" | "PUT";
   body?: unknown;
-  /** Send UniSSH-Tenant header. */
-  tenant?: boolean;
-  /** Override the tenant id for this call (bootstrap a new tenant). */
-  tenantId?: string;
   /** Send Authorization: Bearer header. */
   bearer?: boolean;
-  /** Send X-UniSSH-Ops-Token header. */
-  ops?: boolean;
   /** Attach an Idempotency-Key (mutations). */
   idem?: boolean;
   query?: Record<string, string | number | undefined | null>;
@@ -81,11 +82,10 @@ function qs(query?: CallOpts["query"]): string {
 export function createClient(
   getAuth: () => AuthContext,
   refresh?: () => Promise<boolean>,
-  /** Called when an auth tier is rejected by the server and can't be recovered:
-   *  "keyset" = admin Bearer 401 that refresh couldn't rotate; "ops" = the ops
-   *  token was rejected. Lets the app lock/return-to-login instead of leaving a
-   *  green badge that lies while every screen 401s. */
-  onAuthLost?: (scope: "keyset" | "ops") => void,
+  /** Called when the keyset Bearer is rejected by the server and refresh couldn't
+   *  rotate it. Lets the app lock instead of leaving a green badge that lies while
+   *  every screen 401s. */
+  onAuthLost?: (scope: "keyset") => void,
 ) {
   // Dedupe concurrent refreshes: when the access token lapses, many in-flight admin
   // calls 401 at the same instant. A single shared refresh avoids firing N parallel
@@ -108,18 +108,9 @@ export function createClient(
     const url = base + path + qs(opts.query);
     const headers: Record<string, string> = { Accept: "application/json" };
 
-    if (opts.tenant) {
-      const tid = opts.tenantId ?? auth.tenantId;
-      if (!tid) throw new ApiError("malformed", "no active tenant", 0);
-      headers["UniSSH-Tenant"] = tid;
-    }
     if (opts.bearer) {
       if (!auth.bearer) throw new ApiError("unauthenticated", "keyset locked", 401);
       headers["Authorization"] = `Bearer ${auth.bearer}`;
-    }
-    if (opts.ops) {
-      if (!auth.opsToken) throw new ApiError("forbidden", "ops token not set", 403);
-      headers["X-UniSSH-Ops-Token"] = auth.opsToken;
     }
     if (opts.idem) headers["Idempotency-Key"] = uuid();
 
@@ -141,13 +132,9 @@ export function createClient(
       if (res.status === 401 && opts.bearer && !retried) {
         const ok = await refreshOnce();
         if (ok) return call<T>(path, opts, true);
-        // Refresh failed (session revoked, device removed, tenant changed): the
-        // keyset session is dead. Signal it so the UI auto-locks and says so.
+        // Refresh failed (session revoked, device removed): the keyset session is
+        // dead. Signal it so the UI auto-locks and says so.
         onAuthLost?.("keyset");
-      } else if (opts.ops && (res.status === 401 || res.status === 403)) {
-        // The ops token itself was rejected (rotated in config, ops disabled) —
-        // the whole panel is unauthenticated; bounce to login.
-        onAuthLost?.("ops");
       }
       throw await errorFromResponse(res);
     }
@@ -172,107 +159,61 @@ export function createClient(
       }
     },
 
-    // ── ops (X-UniSSH-Ops-Token) ──
-    ops: {
-      tenants: () => call<OpsTenantsResp>("/v1/ops/tenants", { ops: true }),
-      overview: () => call<OpsOverview>("/v1/ops/overview", { ops: true }),
-      instance: () => call<InstanceInfo>("/v1/ops/instance", { ops: true }),
-      tenantStatus: (tenant_id: string, suspended: boolean) =>
-        call<void>("/v1/ops/tenant/status", {
-          method: "POST",
-          ops: true,
-          idem: true,
-          body: { tenant_id, suspended },
-        }),
-      tenantProfile: (tenant_id: string, display_name: string) =>
-        call<void>("/v1/ops/tenant/profile", {
-          method: "POST",
-          ops: true,
-          idem: true,
-          body: { tenant_id, display_name },
-        }),
-      account: (handle: string) =>
-        call<AccountLookupResp>("/v1/ops/account", { ops: true, query: { handle } }),
-      seqBump: (req: { tenant_id?: string; by?: number; to?: number }) =>
-        call<OpsSeqBumpResp>("/v1/ops/seq-bump", {
-          method: "POST",
-          ops: true,
-          idem: true,
-          body: req,
-        }),
-      enrollGrants: () => call<EnrollGrantsResp>("/v1/ops/enroll", { ops: true }),
-      enrollCreate: (label: string, tier?: string, ttl_seconds?: number) =>
-        call<EnrollIssueResp>("/v1/ops/enroll/create", {
-          method: "POST",
-          ops: true,
-          idem: true,
-          body: { label, tier, ttl_seconds },
-        }),
-      enrollRevoke: (grant_id: string) =>
-        call<void>("/v1/ops/enroll/revoke", {
-          method: "POST",
-          ops: true,
-          idem: true,
-          body: { grant_id },
-        }),
-    },
+    // ── instance identity + claim (public) ──
+    instance: () => call<InstanceInfo>("/v1/instance"),
+    claim: (req: ClaimReq) =>
+      call<ClaimResp>("/v1/claim", { method: "POST", body: req }),
+    // ── SSO (public: the IdP-signed id_token is the credential; no bearer) ──
+    oidcCallback: (req: OidcCallbackReq) =>
+      call<OidcCallbackResp>("/v1/oidc/callback", { method: "POST", body: req }),
 
-    // ── admin (UniSSH-Tenant + Bearer) ──
+    // ── escrow sign-in (public: fresh-device keyset recovery) ──
+    escrowParams: (handle: string) =>
+      call<EscrowParams>("/v1/escrow/params", { query: { handle } }),
+    escrowFetch: (handle: string, k_auth: string) =>
+      call<EscrowFetchResp>("/v1/escrow/fetch", {
+        method: "POST",
+        body: { handle, k_auth },
+      }),
+    // Enroll a device for an escrow-recovered keyset on a fresh browser (public: the
+    // self-signed registration is the credential). Lets escrow sign-in complete on a
+    // browser that never claimed here — no session/Bearer needed to add the device.
+    deviceSelfEnroll: (req: DeviceSelfEnrollReq) =>
+      call<DeviceSelfEnrollResp>("/v1/devices/self-enroll", { method: "POST", body: req }),
+
+    // ── admin (Bearer + is_owner, OwnerCtx-gated) ──
     admin: {
-      overview: () =>
-        call<AdminOverview>("/v1/admin/overview", { tenant: true, bearer: true }),
+      overview: () => call<AdminOverview>("/v1/admin/overview", { bearer: true }),
       instance: () =>
-        call<InstanceInfo>("/v1/admin/instance", { tenant: true, bearer: true }),
-      tenantStatus: (suspended: boolean) =>
-        call<void>("/v1/admin/tenant/status", {
-          method: "POST",
-          tenant: true,
-          bearer: true,
-          idem: true,
-          body: { suspended },
-        }),
+        call<InstanceGeneration>("/v1/admin/instance", { bearer: true }),
       accountStatus: (account_id: string, disabled: boolean) =>
         call<void>("/v1/admin/account/status", {
           method: "POST",
-          tenant: true,
           bearer: true,
           idem: true,
           body: { account_id, disabled },
         }),
       devices: (account_id?: string) =>
         call<DevicesResp>("/v1/admin/devices", {
-          tenant: true,
           bearer: true,
           query: { account_id },
         }),
       sessions: (account_id?: string) =>
         call<SessionsResp>("/v1/admin/sessions", {
-          tenant: true,
           bearer: true,
           query: { account_id },
         }),
       sessionRevoke: (session_id: string) =>
         call<void>("/v1/admin/session/revoke", {
           method: "POST",
-          tenant: true,
           bearer: true,
           idem: true,
           body: { session_id },
         }),
-      invites: () =>
-        call<InvitesResp>("/v1/admin/invites", { tenant: true, bearer: true }),
-      inviteRevoke: (invite_id: string) =>
-        call<void>("/v1/admin/invite/revoke", {
-          method: "POST",
-          tenant: true,
-          bearer: true,
-          idem: true,
-          body: { invite_id },
-        }),
-      vaults: () => call<VaultsResp>("/v1/admin/vaults", { tenant: true, bearer: true }),
+      invites: () => call<InvitesResp>("/v1/admin/invites", { bearer: true }),
+      vaults: () => call<VaultsResp>("/v1/admin/vaults", { bearer: true }),
       vault: (vault_id: string) =>
         call<VaultRow>("/v1/admin/vault", {
-          tenant: true,
           bearer: true,
           query: { vault_id },
         }),
@@ -283,81 +224,67 @@ export function createClient(
         limit?: number;
       }) =>
         call<ObjectsResp>("/v1/admin/objects", {
-          tenant: true,
           bearer: true,
           query: q,
         }),
-      relay: () => call<RelayResp>("/v1/admin/relay", { tenant: true, bearer: true }),
+      relay: () => call<RelayResp>("/v1/admin/relay", { bearer: true }),
       keysets: (account_id?: string) =>
         call<KeysetsResp>("/v1/admin/keysets", {
-          tenant: true,
           bearer: true,
           query: { account_id },
         }),
-      config: () => call<ConfigResp>("/v1/admin/config", { tenant: true, bearer: true }),
+      config: () => call<ConfigResp>("/v1/admin/config", { bearer: true }),
       configPut: (body: ConfigPutReq) =>
         call<ConfigPutResp>("/v1/admin/config", {
           method: "PUT",
-          tenant: true,
           bearer: true,
           idem: true,
           body,
         }),
-      metrics: () => call<MetricsRaw>("/v1/admin/metrics", { tenant: true, bearer: true }),
+      metrics: () => call<MetricsRaw>("/v1/admin/metrics", { bearer: true }),
       metricsSummary: () =>
-        call<MetricsSummary>("/v1/admin/metrics/summary", { tenant: true, bearer: true }),
-      health: () => call<HealthInfo>("/v1/admin/health", { tenant: true, bearer: true }),
+        call<MetricsSummary>("/v1/admin/metrics/summary", { bearer: true }),
+      health: () => call<HealthInfo>("/v1/admin/health", { bearer: true }),
       seqBump: (req: { by?: number; to?: number }) =>
         call<SeqBumpResp>("/v1/admin/seq-bump", {
           method: "POST",
-          tenant: true,
           bearer: true,
           idem: true,
           body: req,
         }),
       migrations: () =>
-        call<MigrationsResp>("/v1/admin/migrations", { tenant: true, bearer: true }),
+        call<MigrationsResp>("/v1/admin/migrations", { bearer: true }),
       auditVerify: () =>
-        call<AuditVerify>("/v1/admin/audit/verify", { tenant: true, bearer: true }),
+        call<AuditVerify>("/v1/admin/audit/verify", { bearer: true }),
     },
 
-    // ── identity (tenant + bearer, crypto flows) ──
+    // ── identity (Bearer: crypto + directory flows) ──
     identity: {
-      accounts: () =>
-        call<AccountsResp>("/v1/accounts", { tenant: true, bearer: true }),
-      adminSet: (account_id: string, is_admin: boolean) =>
-        call<void>("/v1/admin/set", {
-          method: "POST",
-          tenant: true,
-          bearer: true,
-          idem: true,
-          body: { account_id, is_admin },
-        }),
+      accounts: () => call<AccountsResp>("/v1/accounts", { bearer: true }),
       deviceRevoke: (device_id: string) =>
         call<void>("/v1/session/device-revoke", {
           method: "POST",
-          tenant: true,
           bearer: true,
           idem: true,
           body: { device_id },
         }),
-      issueInvite: (role: string, scope: string | undefined, ttl_seconds: number | undefined) =>
+      // v2: an invite carries per-space intents (join `space_id` at server-trusted
+      // role member|admin) + optional selective vault intents. The caller must admin
+      // every space it invites into (server enforces).
+      issueInvite: (req: InviteIssueReq) =>
         call<InviteIssueResp>("/v1/invite", {
           method: "POST",
-          tenant: true,
           bearer: true,
           idem: true,
-          body: { role, scope, ttl_seconds },
+          body: req,
         }),
       audit: (since_seq?: number, limit?: number) =>
         call<AuditResp>("/v1/audit", {
-          tenant: true,
           bearer: true,
           query: { since_seq, limit },
         }),
       grants: (vault_id: string, key_epoch?: number) =>
         call<GrantsResp>("/v1/grants", {
-          tenant: true,
           bearer: true,
           query: { vault_id, key_epoch },
         }),
@@ -369,40 +296,77 @@ export function createClient(
       }) =>
         call<{ new_epoch: number; server_seq: number[] }>("/v1/grants/publish", {
           method: "POST",
-          tenant: true,
           bearer: true,
           idem: true,
           body,
         }),
+      // ── keyset (Path A publish; optional escrow enrollment) ──
+      keysetPut: (body: KeysetPutReq) =>
+        call<KeysetPutResp>("/v1/keyset", {
+          method: "PUT",
+          bearer: true,
+          idem: true,
+          body,
+        }),
+      // ── shared directory + vault-admin pending queue ──
+      directory: () => call<DirectoryResp>("/v1/directory", { bearer: true }),
+      pending: () => call<PendingResp>("/v1/pending", { bearer: true }),
       // ── auth (keyset unlock: challenge → sign → verify) ──
       challenge: (account_id: string, device_id: string, key_id: string) =>
         call<AuthChallenge>("/v1/auth/challenge", {
           method: "POST",
-          tenant: true,
           body: { account_id, device_id, key_id },
         }),
       verify: (challenge: AuthChallenge, signature: string) =>
         call<VerifyResp>("/v1/auth/verify", {
           method: "POST",
-          tenant: true,
           body: { challenge, signature },
         }),
-      bootstrap: (
-        tenantId: string,
-        body: {
-          registration_payload: string;
-          registration_signature: string;
-          tier?: string;
-          display_name?: string;
-          handle?: string;
-          tenant_bootstrap_token?: string;
-        },
-      ) =>
-        call<BootstrapResp>("/v1/bootstrap", {
+    },
+
+    // ── spaces (server-trusted groupings) ──
+    spaces: {
+      list: () => call<SpacesResp>("/v1/spaces", { bearer: true }),
+      create: (name: string) =>
+        call<CreateSpaceResp>("/v1/spaces", {
           method: "POST",
-          tenant: true,
-          tenantId,
-          body,
+          bearer: true,
+          idem: true,
+          body: { name },
+        }),
+      addMember: (space_id: string, account_id: string, role: string) =>
+        call<void>("/v1/spaces/members", {
+          method: "POST",
+          bearer: true,
+          idem: true,
+          body: { space_id, account_id, role },
+        }),
+    },
+
+    // ── key-binding attestations ──
+    attestations: {
+      put: (account_id: string, blob: string, signature: string) =>
+        call<void>("/v1/attestations", {
+          method: "POST",
+          bearer: true,
+          idem: true,
+          body: { account_id, blob, signature },
+        }),
+      list: (account_id: string) =>
+        call<AttestationsResp>("/v1/attestations", {
+          bearer: true,
+          query: { account_id },
+        }),
+    },
+
+    // ── instance-owner management (replaces admin/set) ──
+    owner: {
+      set: (account_id: string, is_owner: boolean) =>
+        call<void>("/v1/owner/set", {
+          method: "POST",
+          bearer: true,
+          idem: true,
+          body: { account_id, is_owner },
         }),
     },
   };
