@@ -175,6 +175,7 @@ export const en = {
     moveConfirm: "Move",
     topoDesc:
       "Each cloud vault syncs to one server; local vaults stay on this device. Vaults are grouped under the server they belong to.",
+    srvAccount: "Your account on this server",
     srvConnected: "Connected",
     srvSignedOut: "Signed out",
     srvActive: "Active",

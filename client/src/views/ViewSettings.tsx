@@ -1354,6 +1354,21 @@ function SettingsVaults() {
             style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" }}
           >
             <span style={{ fontSize: 14, fontWeight: 700 }}>{serverShortLabel(s)}</span>
+            {s.handle && (
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: p.txt3,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+                title={t("vault.srvAccount")}
+              >
+                <Icon name="fingerprint" size={11} color={p.txt3} />
+                {s.handle}
+              </span>
+            )}
             <span
               style={{
                 width: 7,
