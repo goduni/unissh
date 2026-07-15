@@ -11,6 +11,7 @@ import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, 
 import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
 import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
+import { useNarrow } from "@/store/responsive";
 import { useCtx } from "@/store/ctx";
 import * as api from "@/bridge/api";
 import { profileAuthKind, apiErrorMessage } from "@/bridge/types";
@@ -1105,6 +1106,9 @@ export function ViewHosts() {
   const [sel, setSel] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(hosts[0]?.profileId ?? null);
   const [rail, setRail] = useState<RailTab>("detail");
+  // On a narrow window the fixed-width detail rail would squish the list to a sliver,
+  // so render it as a full-width overlay over the list instead of a side column.
+  const narrow = useNarrow();
   // Collapse toolbar button labels to icons when the main area is too narrow
   // (e.g. rail open + sidebar expanded) so buttons never slide under the rail.
   const mainRef = useRef<HTMLDivElement | null>(null);
@@ -1257,7 +1261,9 @@ export function ViewHosts() {
             position: "relative",
             display: "flex",
             alignItems: "center",
+            flexWrap: "wrap",
             gap: 12,
+            rowGap: 10,
             padding: "24px 22px 14px",
           }}
         >
@@ -1780,21 +1786,22 @@ export function ViewHosts() {
         )}
       </div>
 
-      {/* right rail */}
+      {/* right rail — a fixed-width side column normally; a full-width overlay over
+          the list when the window is too narrow to show both side by side */}
       {railOpen && (
         <div
           style={{
-            width: railW,
             flexShrink: 0,
-            position: "relative",
             background: p.bg0,
-            borderLeft: `1px solid ${p.line}`,
             display: "flex",
             flexDirection: "column",
             padding: 14,
+            ...(narrow
+              ? { position: "absolute", inset: 0, width: "100%", zIndex: 6 }
+              : { width: railW, position: "relative", borderLeft: `1px solid ${p.line}` }),
           }}
         >
-          <ResizeHandle side="left" onDrag={resizeRail} />
+          {!narrow && <ResizeHandle side="left" onDrag={resizeRail} />}
           <div
             style={{
               display: "flex",

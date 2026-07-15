@@ -3530,6 +3530,12 @@ export function ViewSettings() {
   const { t } = useTranslation();
   const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
   const [tab, setTab] = useState<TabId>("appearance");
+  // Reset the content scroll when switching tabs — otherwise a tab scrolled halfway
+  // down leaves the next tab opening mid-content instead of at its top.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [tab]);
   const title = tDyn(SETTINGS_TABS.find((tb) => tb.id === tab)?.labelKey ?? "");
 
   return (
@@ -3598,7 +3604,7 @@ export function ViewSettings() {
           );
         })}
       </div>
-      <div style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
+      <div ref={scrollRef} style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
         <div
           style={{
             maxWidth: 720,
