@@ -10,7 +10,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
 import { useApp } from "@/store/app";
-import { useIsMobile } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
@@ -171,6 +171,7 @@ function ImportPreviewBody() {
   const { t } = useTranslation();
   const p = usePalette();
   const isMobile = useIsMobile();
+  const narrow = useNarrow();
   const importing = useApp((s) => s.importing);
   const setImporting = useApp((s) => s.setImporting);
 
@@ -646,10 +647,11 @@ function ImportPreviewBody() {
                         style={{
                           fontSize: 14,
                           fontWeight: 700,
-                          minWidth: isMobile ? 0 : undefined,
-                          overflow: isMobile ? "hidden" : undefined,
-                          textOverflow: isMobile ? "ellipsis" : undefined,
-                          whiteSpace: isMobile ? "nowrap" : undefined,
+                          // ellipsize unconditionally: long host aliases/FQDNs spill on desktop too
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
                         }}
                       >
                         {h.host}
@@ -684,9 +686,10 @@ function ImportPreviewBody() {
                         fontFamily: MONO,
                         fontSize: 11.5,
                         color: p.txt3,
-                        overflow: isMobile ? "hidden" : undefined,
-                        textOverflow: isMobile ? "ellipsis" : undefined,
-                        whiteSpace: isMobile ? "nowrap" : undefined,
+                        // ellipsize unconditionally: user@host:port spills on desktop for long FQDNs
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
                       }}
                     >
                       {h.user || "?"}@{h.hostname || h.host}:{h.port}
@@ -701,8 +704,8 @@ function ImportPreviewBody() {
         <div
           style={{
             display: "flex",
-            alignItems: isMobile ? "stretch" : "center",
-            flexDirection: isMobile ? "column" : undefined,
+            alignItems: narrow ? "stretch" : "center",
+            flexDirection: narrow ? "column" : undefined,
             gap: 10,
             padding: "14px 22px",
             borderTop: `1px solid ${p.line}`,
@@ -716,10 +719,10 @@ function ImportPreviewBody() {
               values={{ count, total: rows.length }}
             />
           </span>
-          {!isMobile && <div style={{ flex: 1 }} />}
+          {!narrow && <div style={{ flex: 1 }} />}
           <Btn
             variant="ghost"
-            full={isMobile}
+            full={narrow}
             style={isMobile ? { minHeight: 44 } : undefined}
             onClick={close}
           >
@@ -727,7 +730,7 @@ function ImportPreviewBody() {
           </Btn>
           <Btn
             icon="download"
-            full={isMobile}
+            full={narrow}
             onClick={doImport}
             disabled={!count || busy}
             style={{

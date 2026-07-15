@@ -11,6 +11,26 @@ export function useIsMobile(): boolean {
   return useApp((s) => s.device === "mobile");
 }
 
+/** True when the LAYOUT is narrow — the phone shell OR a desktop window shrunk
+ *  below `bp`. `useIsMobile()` only tracks the boot/preview device flag, so on a
+ *  resizable desktop window it never fires; label+control rows that should stack
+ *  (Settings, two-up modal bodies) must gate on this instead so narrowing the
+ *  window actually triggers the column fallback. Default 720px ≈ the width below
+ *  which a two-column label/control row starts to crowd. */
+export function useNarrow(bp = 720): boolean {
+  const mobile = useApp((s) => s.device === "mobile");
+  const [narrow, setNarrow] = useState(
+    typeof window !== "undefined" ? window.innerWidth < bp : false,
+  );
+  useEffect(() => {
+    const on = () => setNarrow(window.innerWidth < bp);
+    on();
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, [bp]);
+  return mobile || narrow;
+}
+
 /** True when the viewport is in landscape (wider than tall). On a phone this is
  *  the cramped case — the fixed header + tab bar leave little content height — so
  *  the shell compacts its chrome. */

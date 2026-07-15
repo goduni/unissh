@@ -10,7 +10,7 @@ import { Btn, Icon, Toggle, StatusDot } from "@/components/primitives";
 import { HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import { useIsMobile } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage } from "@/bridge/types";
 import type { ActiveTunnel, TunnelType } from "@/store/app";
@@ -34,6 +34,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
   const p = usePalette();
   const ctx = useCtx();
   const isMobile = useIsMobile();
+  const narrow = useNarrow();
   const m = TYPE_META[tun.type];
 
   const turnOff = async () => {
@@ -52,8 +53,8 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
     <HairlineRow
       first={first}
       style={{
-        flexWrap: isMobile ? "wrap" : "nowrap",
-        gap: isMobile ? "10px 12px" : 16,
+        flexWrap: narrow ? "wrap" : "nowrap",
+        gap: narrow ? "10px 12px" : 16,
         padding: "14px 16px",
         opacity: tun.on ? 1 : 0.7,
       }}
@@ -72,13 +73,25 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
           fontSize: 15,
           color: p.txt2,
           flexShrink: 0,
-          ...(isMobile ? { order: 0 } : null),
+          ...(narrow ? { order: 0 } : null),
         }}
       >
         {m.letter}
       </span>
-      <div style={{ ...(isMobile ? { flex: 1, minWidth: 0, order: 1 } : { width: 150, flexShrink: 0 }) }}>
-        <div style={{ fontSize: 14.5, fontWeight: 700 }}>{tun.label}</div>
+      <div style={{ ...(narrow ? { flex: 1, minWidth: 0, order: 1 } : { width: 150, flexShrink: 0 }) }}>
+        {/* Ellipsize a long label so it can't spill into the route column. */}
+        <div
+          style={{
+            fontSize: 14.5,
+            fontWeight: 700,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            minWidth: 0,
+          }}
+        >
+          {tun.label}
+        </div>
         <div style={{ fontSize: 11.5, color: p.txt3 }}>{tDyn(m.nameKey)}</div>
       </div>
       <div
@@ -86,12 +99,12 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
           flex: 1,
           display: "flex",
           alignItems: "center",
-          flexWrap: isMobile ? "wrap" : "nowrap",
+          flexWrap: narrow ? "wrap" : "nowrap",
           gap: 10,
           fontFamily: MONO,
           fontSize: 12.5,
           minWidth: 0,
-          ...(isMobile ? { order: 4, flexBasis: "100%" } : null),
+          ...(narrow ? { order: 4, flexBasis: "100%" } : null),
         }}
       >
         <span
@@ -129,7 +142,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
           whiteSpace: "nowrap",
           // minWidth (not a hard width) so a longer-language status word grows the
           // column instead of spilling out of it.
-          ...(isMobile ? { width: "auto", order: 2, flexShrink: 0 } : { minWidth: 80, flexShrink: 0 }),
+          ...(narrow ? { width: "auto", order: 2, flexShrink: 0 } : { minWidth: 80, flexShrink: 0 }),
         }}
       >
         <StatusDot
@@ -140,7 +153,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
       </span>
       {/* OFF means destroyed: the core closed the tunnel and re-enabling means
           re-opening via the modal, so the off switch is inert (aria-disabled). */}
-      <span style={{ display: "inline-flex", flexShrink: 0, ...(isMobile ? { order: 3 } : null) }}>
+      <span style={{ display: "inline-flex", flexShrink: 0, ...(narrow ? { order: 3 } : null) }}>
         <Toggle
           checked={tun.on}
           disabled={!tun.on}
@@ -180,7 +193,9 @@ export function ViewTunnels() {
         style={{
           display: "flex",
           alignItems: "center",
-          flexWrap: isMobile ? "wrap" : "nowrap",
+          // Always wrap so the "Новый туннель" action isn't clipped in a narrow window.
+          flexWrap: "wrap",
+          rowGap: 8,
           gap: 10,
           padding: isMobile ? "16px 16px 12px" : "16px 22px 12px",
         }}

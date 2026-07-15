@@ -228,11 +228,12 @@ function HostKeyMismatchCard({
               {mismatch.fingerprint || "—"}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          {/* Wrap the footer + let the danger label wrap so the full security review action stays readable in a narrow split pane. */}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
             <Btn variant="ghost" size="sm" onClick={onReject}>
               {t("known.reject")}
             </Btn>
-            <Btn variant="danger" size="sm" icon="fingerprint" onClick={review}>
+            <Btn variant="danger" size="sm" icon="fingerprint" wrap onClick={review}>
               {t("known.review")}
             </Btn>
           </div>
@@ -1418,7 +1419,16 @@ export function ViewTerminal() {
             srLabel={focusedPane?.status}
           />
           {focusedPane?.profile && (
-            <span style={{ color: p.txt2 }}>
+            // Ellipsize the host so a long user@host token can't push the theme/settings control off the fixed-height bar.
+            <span
+              style={{
+                color: p.txt2,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
               {focusedPane.profile.user
                 ? `${focusedPane.profile.user}@${focusedPane.profile.host}`
                 : focusedPane.profile.host}
@@ -1447,7 +1457,15 @@ export function ViewTerminal() {
           <div style={{ flex: 1 }} />
           <span
             onClick={() => ctx.go("settings")}
-            style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer" }}
+            // Keep the rightmost theme control intact; the host span ellipsizes first.
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
             title={t("terminal.themeTitle")}
           >
             {t("terminal.theme", { name: termTheme.name })}

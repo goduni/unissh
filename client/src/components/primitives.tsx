@@ -187,9 +187,21 @@ export function StatusDot({
     );
   }
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}>
       {dot}
-      <span style={{ color: c, fontWeight: 600 }}>{label}</span>
+      <span
+        style={{
+          color: c,
+          fontWeight: 600,
+          // A two-word RU status ("ошибка подключения") must not wrap to a second
+          // line in a fixed-height status bar; ellipsize if the row is truly tight.
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {label}
+      </span>
     </span>
   );
 }
@@ -251,10 +263,16 @@ export function VaultBadge({
         padding: 0,
         lineHeight: 1.5,
         whiteSpace: "nowrap",
+        // As a flex child (sidebar switcher, switcher dropdown rows) the badge must
+        // be able to shrink so a long server domain truncates instead of spilling.
+        minWidth: 0,
+        overflow: "hidden",
       }}
     >
       <Icon name={cloud ? "cloud" : "drive"} size={size} color={c} stroke={1.7} />
-      {label}
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+        {label}
+      </span>
     </span>
   );
 }
@@ -332,6 +350,7 @@ export function Btn({
   variant = "primary",
   size = "md",
   full,
+  wrap,
   onClick,
   style,
   disabled,
@@ -346,6 +365,11 @@ export function Btn({
   variant?: BtnVariant;
   size?: BtnSize;
   full?: boolean;
+  /** Allow the label to wrap to multiple lines instead of ellipsizing. Use for
+   *  security/critical actions in narrow containers where the full text must stay
+   *  readable (host-key mismatch, changed-key review). Off by default (nowrap +
+   *  ellipsis), which is right for ordinary buttons. */
+  wrap?: boolean;
   onClick?: (e: React.MouseEvent) => void;
   style?: CSSProperties;
   disabled?: boolean;
@@ -408,9 +432,14 @@ export function Btn({
         borderRadius: 10,
         cursor: disabled ? "default" : "pointer",
         width: full ? "100%" : "auto",
+        // Let the button shrink as a flex child so a long (RU) label ellipsizes
+        // inside its own box instead of spilling over neighbours or being clipped
+        // by an ancestor's overflow:hidden. The icon keeps its width (Icon sets
+        // flexShrink:0); only the label span truncates.
+        minWidth: 0,
         opacity: disabled ? 0.5 : 1,
         transition: "filter .15s, transform .1s",
-        whiteSpace: "nowrap",
+        whiteSpace: wrap ? "normal" : "nowrap",
         ...variants[variant],
         ...style,
       }}
@@ -422,7 +451,17 @@ export function Btn({
       }}
     >
       {icon && <Icon name={icon} size={fs} stroke={1.9} />}
-      {children}
+      {children != null && (
+        <span
+          style={
+            wrap
+              ? { minWidth: 0 }
+              : { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }
+          }
+        >
+          {children}
+        </span>
+      )}
     </button>
   );
 }
@@ -536,6 +575,9 @@ export function Segmented<T extends string>({
     <div
       style={{
         display: "inline-flex",
+        // Wrap options to a second row rather than overflow horizontally when the
+        // (longer, RU) labels don't fit the available width. No-op when they fit.
+        flexWrap: "wrap",
         background: p.bg2,
         border: `1px solid ${p.line}`,
         borderRadius: 9,

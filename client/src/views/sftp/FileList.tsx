@@ -2,7 +2,7 @@
 // row, and the filtered/sorted entries. Owns sort/selection-click interpretation
 // and the empty/loading/error states; delegates the actual actions to the pane.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { UI } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
@@ -59,10 +59,26 @@ export function FileList({
   const isMobile = useIsMobile();
   const { t } = useTranslation();
 
+  // Per-pane width: side-by-side panes get narrow independently of the window, so
+  // drop the fixed metadata columns before they crowd the name / overflow the row —
+  // modified (widest, RU dates) first, then perms. Keeps header + rows in sync since
+  // both derive from showModified/showPerms.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [paneW, setPaneW] = useState(0);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((ents) => {
+      for (const e of ents) setPaneW(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const hasMtime = useMemo(() => entries.some((e) => e.mtime != null), [entries]);
   const hasPerms = useMemo(() => entries.some((e) => e.mode != null), [entries]);
-  const showModified = hasMtime && !isMobile;
-  const showPerms = hasPerms && !isMobile;
+  const showModified = hasMtime && !isMobile && !(paneW > 0 && paneW < 400);
+  const showPerms = hasPerms && !isMobile && !(paneW > 0 && paneW < 320);
 
   const display = useMemo(() => displayEntries(entries, filter, sort), [entries, filter, sort]);
 
@@ -176,7 +192,7 @@ export function FileList({
   }
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+    <div ref={rootRef} style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
       <div
         tabIndex={0}
         role="listbox"

@@ -181,7 +181,8 @@ export function PaneSlot({
           borderBottom: `1px solid ${p.line}`,
         }}
       >
-        <div style={{ position: "relative", flex: 1, display: "flex", alignItems: "center" }}>
+        {/* minWidth:0 so the search box can shrink instead of pushing the toolbar icons off the pane */}
+        <div style={{ position: "relative", flex: 1, minWidth: 0, display: "flex", alignItems: "center" }}>
           <Icon name="search" size={13} color={p.txt3} />
           <input
             value={slot.filter}
@@ -190,6 +191,7 @@ export function PaneSlot({
             {...NO_AUTOCORRECT}
             style={{
               flex: 1,
+              minWidth: 0, // let the input shrink below its intrinsic width in a narrow pane
               marginLeft: 6,
               border: "none",
               background: "transparent",
