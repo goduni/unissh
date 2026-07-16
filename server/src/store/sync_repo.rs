@@ -26,6 +26,21 @@ struct VaultOwner {
     owner_pubkey: Vec<u8>,
     latest_version: i64,
     latest_epoch: i64,
+    sync_target: i64,
+    cache_policy: i64,
+    tombstone: i64,
+}
+
+/// One row of the member-facing vault catalog ([`Store::list_accessible_vaults`]).
+#[derive(FromRow, Debug)]
+pub struct AccessibleVault {
+    pub vault_id: Vec<u8>,
+    pub latest_version: i64,
+    pub latest_epoch: i64,
+    pub tombstone: i64,
+    /// Bytes of the latest Vault (tag-1) record — the client decrypts the name for
+    /// display. `None` only in the degenerate case of a vault row with no tag-1 object.
+    pub record_bytes: Option<Vec<u8>>,
 }
 
 fn opt_u64(o: Option<u64>) -> AppResult<Val> {
@@ -116,6 +131,74 @@ impl Store {
                 Val::b(member),
                 Val::I(now),
                 Val::b(member),
+                Val::I(limit),
+            ],
+        )
+        .await
+    }
+
+    /// Catalog (member-facing): every vault the `member` can access — owner OR an
+    /// active grant on the vault's LATEST manifest epoch — with its metadata and the
+    /// bytes of the latest Vault (tag-1) record (so the client can decrypt the name
+    /// for display without a full pull). Same access predicate as [`Self::delta_since`],
+    /// but enumerated over `vaults` rather than the object stream. Tombstoned vaults are
+    /// included (the client decides whether to show them). Independent of any cursor.
+    pub async fn list_accessible_vaults(
+        &self,
+        member: &[u8],
+        now: i64,
+    ) -> AppResult<Vec<AccessibleVault>> {
+        self.fetch_all_as::<AccessibleVault>(
+            "SELECT v.vault_id, v.latest_version, v.latest_epoch, v.tombstone, \
+                    (SELECT o.object_bytes FROM objects o \
+                       WHERE o.vault_id = v.vault_id AND o.object_tag = 1 \
+                       ORDER BY o.obj_version DESC, o.server_seq DESC LIMIT 1) AS record_bytes \
+             FROM vaults v \
+             WHERE v.owner_pubkey = ? \
+                OR EXISTS (SELECT 1 FROM membership_grants g \
+                           WHERE g.vault_id = v.vault_id \
+                             AND g.member_pubkey = ? AND g.revoked = 0 \
+                             AND (g.not_after IS NULL OR g.not_after > ?) \
+                             AND g.key_epoch = (SELECT MAX(m.key_epoch) FROM membership_manifests m \
+                                                WHERE m.vault_id = v.vault_id)) \
+             ORDER BY v.created_at ASC, v.vault_id ASC",
+            vec![Val::b(member), Val::b(member), Val::I(now)],
+        )
+        .await
+    }
+
+    /// Targeted single-vault delta: like [`Self::delta_since`] but restricted to ONE
+    /// `vault_id` (the caller must still pass the same owner/grant membership check).
+    /// Used by "Pull this vault" — the client applies these objects WITHOUT advancing
+    /// its per-tenant pull cursor, so it does not skip other vaults' objects.
+    pub async fn delta_since_vault(
+        &self,
+        cursor: i64,
+        limit: i64,
+        member: &[u8],
+        now: i64,
+        vault_id: &[u8],
+    ) -> AppResult<Vec<DeltaRow>> {
+        self.fetch_all_as::<DeltaRow>(
+            "SELECT server_seq, object_bytes FROM objects \
+             WHERE server_seq > ? AND objects.vault_id = ? \
+               AND ( \
+                 EXISTS (SELECT 1 FROM vaults v \
+                         WHERE v.vault_id = objects.vault_id AND v.owner_pubkey = ?) \
+                 OR EXISTS (SELECT 1 FROM membership_grants g \
+                            WHERE g.vault_id = objects.vault_id \
+                              AND g.member_pubkey = ? AND g.revoked = 0 \
+                              AND (g.not_after IS NULL OR g.not_after > ?) \
+                              AND g.key_epoch = (SELECT MAX(m.key_epoch) FROM membership_manifests m \
+                                                 WHERE m.vault_id = objects.vault_id)) \
+               ) \
+             ORDER BY server_seq ASC LIMIT ?",
+            vec![
+                Val::I(cursor),
+                Val::b(vault_id),
+                Val::b(member),
+                Val::b(member),
+                Val::I(now),
                 Val::I(limit),
             ],
         )
@@ -288,8 +371,8 @@ pub(crate) async fn materialize(
 
             let existing = tx
                 .fetch_optional_as::<VaultOwner>(
-                    "SELECT owner_pubkey, latest_version, latest_epoch FROM vaults \
-                     WHERE vault_id = ?",
+                    "SELECT owner_pubkey, latest_version, latest_epoch, sync_target, \
+                     cache_policy, tombstone FROM vaults WHERE vault_id = ?",
                     vec![Val::b(vault_id.clone())],
                 )
                 .await?;
@@ -338,6 +421,16 @@ pub(crate) async fn materialize(
                     }
                     let nv = row.latest_version.max(version);
                     let ne = row.latest_epoch.max(epoch);
+                    // LWW: only a strictly-newer record decides the snapshot fields
+                    // (sync_target / cache_policy / tombstone). A stale or replayed push
+                    // at a lower-or-equal version keeps the stored snapshot — otherwise an
+                    // old delete would tombstone a live vault (mass-tombstone incident).
+                    // version/epoch stay monotonic (max) regardless.
+                    let (st, cp, tomb) = if version > row.latest_version {
+                        (st, cp, tomb)
+                    } else {
+                        (row.sync_target, row.cache_policy, row.tombstone)
+                    };
                     tx.exec(
                         "UPDATE vaults SET latest_version = ?, latest_epoch = ?, sync_target = ?, \
                          cache_policy = ?, tombstone = ? WHERE vault_id = ?",
