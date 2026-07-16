@@ -102,7 +102,7 @@ export function Modal({
               justifyContent: "center",
             }}
           >
-            <Icon name={icon} size={18} color={iconColor || p.accent} />
+            <Icon name={icon} size={18} color={iconColor || p.accentText} />
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3 }}>{title}</div>
