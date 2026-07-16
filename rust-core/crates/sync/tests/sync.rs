@@ -5,8 +5,8 @@ use unissh_crypto::KdfParams;
 use unissh_keychain::{create_account, UnlockedKeyset};
 use unissh_storage::{Storage, SyncTarget};
 use unissh_sync::{
-    apply_pulled_objects, pull_cursor_key, sync_pull, sync_push, InMemoryTransport, RejectReason,
-    SyncContext, SyncObject, SyncTransport,
+    apply_pulled_objects, pull_cursor_key, reset_pull_cursor, sync_pull, sync_push,
+    InMemoryTransport, RejectReason, SyncContext, SyncObject, SyncTransport,
 };
 use unissh_vault::{sign_account_state, Vault};
 
@@ -131,6 +131,50 @@ fn pulled_vault_is_born_bound_to_source_tenant() {
         v.sync_tenant,
         b"oracle-tenant".to_vec(),
         "a pulled vault is born bound to the tenant it was pulled from"
+    );
+}
+
+#[test]
+fn repull_binds_a_vault_that_landed_unbound() {
+    // The user-visible bug: a vault pulled by a client from BEFORE born-bound landed
+    // with an empty sync_tenant and reads as "no server" forever — and "Pull from
+    // server" does not heal it.
+    //
+    // Why: `sync_tenant` is deliberately excluded from `vault_content_eq` (so a
+    // re-pull stays idempotent), which means an UNBOUND local vault is "content
+    // equal" to its bound server copy. The equal-version check therefore returns
+    // early, before the born-bound stamp — so the one action a user has to fix this
+    // is precisely the action that can never fix it.
+    let (sa, ka) = account(&[1u8; 32]);
+    seed_vault(&sa, &ka);
+    let mut t = InMemoryTransport::new();
+    sync_push(&mut t, &sa, TENANT).unwrap();
+
+    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
+
+    // Reproduce the state: same vault, same version, sync_tenant empty. This is not
+    // a contrivance — it is what a pre-born-bound client left behind, and what
+    // `clear_binding_for_tenant` does today when a server is removed. The routing
+    // label is not part of the signature, so this changes no version.
+    sb.set_vault_tenant(b"vault-1", b"").unwrap();
+    assert!(
+        sb.get_vault(b"vault-1")
+            .unwrap()
+            .unwrap()
+            .sync_tenant
+            .is_empty(),
+        "precondition: the local vault is unbound"
+    );
+
+    // "Pull from server" — a full re-pull from a reset cursor.
+    reset_pull_cursor(&sb, &ctx(&ka).tenant).unwrap();
+    sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
+
+    assert_eq!(
+        sb.get_vault(b"vault-1").unwrap().unwrap().sync_tenant,
+        b"oracle-tenant".to_vec(),
+        "a re-pull must bind a vault that landed unbound — it is the only lever the user has"
     );
 }
 

@@ -354,6 +354,21 @@ fn process_vault(
     }
     // (4) equal-version conflict-check, then LWW merge.
     if let Some(local) = storage.get_vault(&v.vault_id)? {
+        // Heal the routing label BEFORE any of the version arms below, because every
+        // one of them can return without writing — and the label is not content, so
+        // none of them would ever carry it.
+        //
+        // A vault that arrived in THIS tenant's delta and passed authority (3) is,
+        // by construction, bound to this tenant; if the local copy has no label, it
+        // predates born-bound (or a server was removed and cleared it). Such a vault
+        // is *content-equal* to the server's — `sync_tenant` is deliberately outside
+        // `vault_content_eq` to keep re-pull idempotent — so the equal-version arm
+        // returns early and the stamp below is unreachable for exactly the vaults
+        // that need it. The vault then reads "no server" forever and the one lever
+        // the user has, "Pull from server", is the one that cannot work.
+        if local.sync_tenant.is_empty() && !ctx.tenant.is_empty() {
+            storage.adopt_pulled_binding(&v.vault_id, &ctx.tenant)?;
+        }
         if local.version == v.version {
             if vault_content_eq(&local, v) {
                 return Ok(()); // idempotent re-pull

@@ -276,6 +276,27 @@ impl Storage {
         Ok(())
     }
 
+    /// Record that a vault BELONGS to `tenant` — for a vault that came FROM it.
+    ///
+    /// Same routing-label `UPDATE` as [`Self::set_vault_tenant`] and, like it, no
+    /// version or signature changes. It differs in one way, and that is the whole
+    /// point: it does NOT dirty the vault. `set_vault_tenant` binds a vault to a
+    /// server it has never been on, so a full push has to follow. A vault that was
+    /// just pulled is already on that server, byte for byte — dirtying it would push
+    /// a copy back at the version it just arrived at, which is exactly the pointless
+    /// round trip the born-bound work exists to prevent.
+    ///
+    /// Only for a binding the caller can PROVE from the sync itself (the record
+    /// arrived in that tenant's delta and passed authority). Never infer a binding.
+    pub fn adopt_pulled_binding(&self, vault_id: &[u8], tenant: &[u8]) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE vaults SET sync_tenant = ?1
+             WHERE vault_id = ?2 AND sync_target = ?3 AND length(sync_tenant) = 0",
+            params![tenant, vault_id, SyncTarget::Cloud.to_i64()],
+        )?;
+        Ok(())
+    }
+
     /// Unbind all cloud vaults bound to `tenant` (e.g. when a server is
     /// removed): they become unbound and can be bound again. A direct `UPDATE`
     /// of the routing label — the version/signature do not change. Returns the
