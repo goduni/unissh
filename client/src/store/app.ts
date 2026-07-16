@@ -308,6 +308,12 @@ interface AppStore {
   shortcuts: boolean;
   confirm: ConfirmData | null;
   navGuard: (() => NavGuardSpec | null) | null;
+  /** A view that has opened a full-screen layer of its OWN — one the shell's
+   *  frame stack knows nothing about, like the Hosts detail rail — registers a
+   *  dismisser here. Returns true if it consumed the back. Without it the phone's
+   *  two natural exits both dead-end: the edge-swipe only arms for a real frame,
+   *  and re-tapping the already-active tab is a no-op React discards. */
+  backHandler: (() => boolean) | null;
   connecting: ConnectionProfile | null;
 
   // ── actions ──
@@ -317,6 +323,10 @@ interface AppStore {
   /** Register (or clear, with null) a guard the router consults before leaving the
    *  current view. Views set this on mount and clear it on unmount. */
   setNavGuard: (g: (() => NavGuardSpec | null) | null) => void;
+  /** Register (or clear, with null) the back dismisser above. */
+  setBackHandler: (h: (() => boolean) | null) => void;
+  /** Ask the current view to dismiss its own layer. True if it did. */
+  runBack: () => boolean;
   /** Pin a host-key mismatch for review: stashes it in `pendingMismatch` and
    *  navigates to the Known-hosts view. Shared by every review entry point. */
   reviewMismatch: (m: PendingMismatch) => void;
@@ -608,6 +618,7 @@ export const useApp = create<AppStore>((set, get) => ({
   shortcuts: false,
   confirm: null,
   navGuard: null,
+  backHandler: null,
   connecting: null,
 
   boot: async () => {
@@ -707,6 +718,8 @@ export const useApp = create<AppStore>((set, get) => ({
     guardedNav(get, nav);
   },
   setNavGuard: (g) => set({ navGuard: g }),
+  setBackHandler: (h) => set({ backHandler: h }),
+  runBack: () => get().backHandler?.() ?? false,
   reviewMismatch: (m) => {
     set((s) => ({ pendingMismatch: m, route: "known", routeSeq: s.routeSeq + 1 }));
   },
