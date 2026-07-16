@@ -6,12 +6,12 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
-import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot } from "@/components/primitives";
+import { MONO, RADIUS, SIZE, SPACE, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
+import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot, Spinner, NO_AUTOCORRECT } from "@/components/primitives";
 import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
 import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
-import { useNarrow } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useCtx } from "@/store/ctx";
 import * as api from "@/bridge/api";
 import { profileAuthKind, apiErrorMessage } from "@/bridge/types";
@@ -61,6 +61,10 @@ function HostCard({
 }) {
   const p = usePalette();
   const { t, i18n } = useTranslation();
+  // Hover is a property of the POINTER, not of the width: a 700px desktop window
+  // still has a mouse, and keying this off useNarrow() made it lose its hover
+  // affordances for no reason. Only a real touch shell needs them laid out.
+  const touch = useIsMobile();
   const [hover, setHover] = useState(false);
   // Hover-only affordances (checkbox, Connect) also appear while the card or
   // anything inside it holds keyboard focus, so they stay reachable by Tab.
@@ -95,9 +99,18 @@ function HostCard({
         aria-label={t("hosts.selectHostLabel", { label: h.label })}
         style={{
           position: "absolute",
-          top: 12,
-          right: 12,
-          display: show || selected ? "inline-flex" : "none",
+          // Touch has no hover, so gating on it meant no host could EVER be
+          // selected on a phone — and with it, no bulk delete/tag/group. It is
+          // always shown there.
+          // The offsets go negative because Checkbox floors its button at the tap
+          // minimum on touch: the drawn 20px box centres inside 44, so laying the
+          // BUTTON out at 12/12 would put the visible box at 24/24 with a hit area
+          // over the name and address. Pull the button back by half the slack so
+          // the box lands where it did.
+          top: touch ? 12 - (SIZE.tapMin - 20) / 2 : 12,
+          right: touch ? 12 - (SIZE.tapMin - 20) / 2 : 12,
+          justifyContent: "center",
+          display: touch || show || selected ? "inline-flex" : "none",
           zIndex: 2,
         }}
       />
@@ -144,50 +157,106 @@ function HostCard({
         {h.user ? `${h.user}@${h.host}` : h.host}
       </div>
 
-      {/* L3 — status · auth (one mono line; colour only on meaning). Fades on hover
-          so the hover Connect button never sits over the text. */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 7,
-          fontFamily: MONO,
-          fontSize: 11.5,
-          color: p.txt3,
-          marginTop: 16,
-          opacity: show ? 0 : 1,
-          transition: "opacity .12s ease",
-          // keep it one line: long RU auth ("Спросить при подключении") must ellipsize,
-          // not wrap to a 2nd line and change the card height.
-          minWidth: 0,
-          overflow: "hidden",
-        }}
-      >
-        {session ? (
-          <>
-            <span style={{ color: p.green }}>{t("hosts.session")}</span>
-            <span style={{ opacity: 0.4 }}>·</span>
-          </>
-        ) : lc ? (
-          <>
-            <span>{fmtRelative(lc, i18n.language)}</span>
-            <span style={{ opacity: 0.4 }}>·</span>
-          </>
-        ) : null}
-        <span
+      {/* L3 — status · auth (one mono line; colour only on meaning).
+          Desktop: fades on hover so the hover Connect never sits over the text.
+          Touch: hover never fires, so the actions ride this row instead and the
+          meta shares the width with them rather than fading for nothing. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: touch ? 12 : 16, minWidth: 0 }}>
+        <div
           style={{
-            color: authWarn ? p.amber : p.txt3,
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            fontFamily: MONO,
+            fontSize: 11.5,
+            color: p.txt3,
+            opacity: !touch && show ? 0 : 1,
+            transition: "opacity .12s ease",
+            // keep it one line: long RU auth ("Спросить при подключении") must ellipsize,
+            // not wrap to a 2nd line and change the card height.
             minWidth: 0,
             overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
           }}
         >
-          {authLabel}
-        </span>
+          {/* The leading datum gets the same nowrap/ellipsis/minWidth triad as the
+              auth label. Only the auth span had it, so once the actions moved onto
+              this row the relative time couldn't shrink, froze at its min-content,
+              and wrapped the row to two lines — the exact failure the comment above
+              says it is preventing. It also yields FIRST: if the row gets truly
+              tight, "2h ago" disappearing is survivable, "Password" disappearing is
+              not. */}
+          {session ? (
+            <>
+              <span style={{ color: p.green, flexShrink: 0 }}>{t("hosts.session")}</span>
+              <span style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+            </>
+          ) : lc ? (
+            <>
+              <span
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {fmtRelative(lc, i18n.language)}
+              </span>
+              <span style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+            </>
+          ) : null}
+          <span
+            style={{
+              color: authWarn ? p.amber : p.txt3,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {authLabel}
+          </span>
+        </div>
+
+        {/* Touch: Connect straight off the card, as on the desktop. Without this a
+            phone had to open the detail screen to reach it — the desktop's own
+            double-click and hover-Connect are both unreachable by a finger. */}
+        {touch && (
+          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+            <Btn
+              size="md"
+              variant="ghost"
+              icon="folders"
+              aria-label={t("hosts.openSftp")}
+              style={{ minHeight: SIZE.tapMin, minWidth: SIZE.tapMin, justifyContent: "center" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSftp();
+              }}
+            />
+            <Btn
+              size="md"
+              variant="outline"
+              icon="terminal"
+              style={{
+                minHeight: SIZE.tapMin,
+                border: `1px solid ${p.accent}`,
+                color: p.accentText,
+                fontWeight: 700,
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onConnect();
+              }}
+            >
+              {t("hosts.connect")}
+            </Btn>
+          </div>
+        )}
       </div>
 
-      {show && (
+      {!touch && show && (
         <div
           style={{ position: "absolute", right: 12, bottom: 11, zIndex: 3, display: "flex", gap: 6 }}
         >
@@ -205,7 +274,7 @@ function HostCard({
             size="sm"
             variant="outline"
             icon="terminal"
-            style={{ border: `1px solid ${p.accent}`, color: p.accent, fontWeight: 700 }}
+            style={{ border: `1px solid ${p.accent}`, color: p.accentText, fontWeight: 700 }}
             onClick={(e) => {
               e.stopPropagation();
               onConnect();
@@ -341,7 +410,7 @@ function HostRow({
             size="sm"
             variant="outline"
             icon="terminal"
-            style={{ border: `1px solid ${p.accent}`, color: p.accent, fontWeight: 700 }}
+            style={{ border: `1px solid ${p.accent}`, color: p.accentText, fontWeight: 700 }}
             onClick={(e) => {
               e.stopPropagation();
               onConnect();
@@ -447,7 +516,10 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 3 }}>
+      {/* Wraps: on touch the three IconBtns below claim a 44px hit box each, which
+          pushes this row past a phone's width. Better the actions drop to a second
+          line than the delete button sit off-screen. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 3, flexWrap: "wrap" }}>
         <span
           style={{
             width: 10,
@@ -524,7 +596,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         <Btn
           variant="outline"
           icon="terminal"
-          style={{ flex: 1, border: `1px solid ${p.accent}`, color: p.accent, fontWeight: 700 }}
+          style={{ flex: 1, border: `1px solid ${p.accent}`, color: p.accentText, fontWeight: 700 }}
           onClick={() => ctx.connect(h)}
         >
           {t("hosts.connect")}
@@ -788,7 +860,7 @@ function SessionsRail() {
         <div style={{ flex: 1, height: 1, background: p.line }} />
         <button
           onClick={() => ctx.go("tunnels")}
-          style={{ ...BTN_RESET, fontSize: 11, color: p.accent, cursor: "pointer" }}
+          style={{ ...BTN_RESET, fontSize: 11, color: p.accentText, cursor: "pointer" }}
         >
           {tr("common.all")} →
         </button>
@@ -1099,7 +1171,51 @@ export function ViewHosts() {
       /* ignore */
     }
   };
+  // In-list text filter. The desktop reaches hosts through ⌘K, but the palette
+  // CONNECTS on Enter — it's a launcher, not a filter — so on a phone, where ⌘K
+  // needs hardware anyway, "find the host called prod-db and look at it before
+  // touching it" had no non-destructive answer at all.
+  const [query, setQuery] = useState("");
+  const loading = useApp((s) => s.loading);
+  const reloadVault = useApp((s) => s.reloadVault);
   const [sortOpen, setSortOpen] = useState(false);
+
+  // Pull-to-refresh. One gesture on the device most likely to be on a flaky link;
+  // the alternative is three taps through the command palette.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const pullStart = useRef<number | null>(null);
+  const [pull, setPull] = useState(0);
+  // Mirrors pullStart.current for RENDER. Reading a ref during render makes the
+  // output depend on untracked mutable state — it happened to work only because
+  // every mutation sat next to a setPull.
+  const [pulling, setPulling] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const onPullStart = (e: React.TouchEvent) => {
+    pullStart.current =
+      (listRef.current?.scrollTop ?? 0) <= 0 && !refreshing ? e.touches[0].clientY : null;
+    setPulling(pullStart.current != null);
+  };
+  const onPullMove = (e: React.TouchEvent) => {
+    if (pullStart.current == null) return;
+    const dy = e.touches[0].clientY - pullStart.current;
+    setPull(dy > 0 ? Math.min(dy * 0.5, 80) : 0);
+  };
+  const onPullEnd = async () => {
+    if (pullStart.current == null) return;
+    pullStart.current = null;
+    setPulling(false);
+    if (pull > 56 && !refreshing) {
+      setRefreshing(true);
+      setPull(44);
+      try {
+        await reloadVault();
+      } catch {
+        /* errors surface via toast in the store */
+      }
+      setRefreshing(false);
+    }
+    setPull(0);
+  };
   const sortRef = useRef<HTMLDivElement | null>(null);
   // same dropdown contract as BulkActionsMenu: outside click / Escape / arrows
   useMenu(sortOpen, () => setSortOpen(false), sortRef);
@@ -1110,7 +1226,13 @@ export function ViewHosts() {
   // room for both side by side, so render it as a full-width overlay instead. Trigger
   // on the CONTENT width (window minus sidebar), not the raw window: a wide sidebar can
   // starve the row while the window is still wide, so useNarrow alone would miss it.
+  // Two different questions, and conflating them is what broke the desktop:
+  //   narrow — how much WIDTH is there? (gutters, type scale, rail positioning)
+  //   touch  — is there a finger instead of a pointer? (no hover, thumb reach,
+  //            detail as a pushed screen, no dense table)
+  // A 719px desktop window is narrow but NOT touch.
   const narrow = useNarrow();
+  const touch = useIsMobile();
   const rowRef = useRef<HTMLDivElement | null>(null);
   const [rowW, setRowW] = useState(0);
   useEffect(() => {
@@ -1123,6 +1245,13 @@ export function ViewHosts() {
     return () => ro.disconnect();
   }, []);
   const railOverlay = narrow || (rowW > 0 && rowW < 640);
+  // 22px of inset either side is a fifth of a phone screen; narrow buys it back.
+  const gutter = narrow ? SPACE.gutterNarrow : SPACE.gutter;
+  // The list layout is a TABLE — fixed status/auth/action columns beside the
+  // name and address. That's a density affordance for a wide screen; squeezed
+  // into a phone it just clips. Narrow always gets cards, and the layout toggle
+  // hides rather than offering a choice that renders broken.
+  const layout = touch ? "cards" : hostsLayout;
   // Collapse toolbar button labels to icons when the main area is too narrow
   // (e.g. rail open + sidebar expanded) so buttons never slide under the rail.
   const mainRef = useRef<HTMLDivElement | null>(null);
@@ -1143,6 +1272,12 @@ export function ViewHosts() {
       return true;
     }
   });
+  // When the rail overlays (a phone, or a window too narrow for two columns) it
+  // stops being a side column and becomes a pushed detail screen: it opens when a
+  // host is chosen and closes on back. The desktop's persisted open flag must not
+  // drive it — defaulting to "open" would cover the whole list at launch, so a
+  // phone would boot into a host detail with no visible way back to the list.
+  const [railPushed, setRailPushed] = useState(false);
   const [railW, setRailW] = useState(() => {
     try {
       const v = parseInt(localStorage.getItem("unissh.hostRailW") || "264", 10);
@@ -1196,7 +1331,16 @@ export function ViewHosts() {
   }, [hosts, groups, hostFilter]);
 
   const shown = useMemo(() => {
-    const arr = [...filtered];
+    const q = query.trim().toLowerCase();
+    let arr = [...filtered];
+    if (q)
+      arr = arr.filter(
+        (h) =>
+          h.label.toLowerCase().includes(q) ||
+          h.host.toLowerCase().includes(q) ||
+          h.user.toLowerCase().includes(q) ||
+          h.tags.some((tag) => tag.toLowerCase().includes(q)),
+      );
     if (sort === "name") arr.sort((a, b) => a.label.localeCompare(b.label));
     else if (sort === "connected")
       // most-recently-connected first; never-connected hosts sink to the bottom,
@@ -1209,7 +1353,7 @@ export function ViewHosts() {
     // "added" keeps store order (most recently saved last); show newest first
     else arr.reverse();
     return arr;
-  }, [filtered, sort, lastConnected]);
+  }, [filtered, sort, query, lastConnected]);
 
   const sessions = useMemo(
     () => hosts.filter((h) => activeIds.has(h.profileId)).length,
@@ -1228,9 +1372,47 @@ export function ViewHosts() {
     setRail("detail");
     // Always reveal the rail — otherwise clicking a host does nothing visible
     // once the rail has been collapsed (the collapsed state is persisted).
-    if (!railOpen) toggleRail(true);
+    if (touch) setRailPushed(true);
+    else if (!railOpen) toggleRail(true);
   };
+  /** Is the rail on screen? Side-column mode uses the persisted flag; overlay mode
+   *  uses the transient push, so the list is what you land on. */
+  // Only a touch shell turns the rail into a pushed screen. On the desktop it
+  // stays the persisted side column — which merely becomes a full-width overlay
+  // when the row is too tight for two columns. Keying `railShown` off
+  // railOverlay made an OPEN rail vanish on any desktop window whose content row
+  // fell under 640px, with the show-rail button hidden at the same moment.
+  const railShown = touch ? railPushed : railOpen;
+  const closeRail = () => (touch ? setRailPushed(false) : toggleRail(false));
   const detail = hosts.find((x) => x.profileId === open) || hosts[0];
+
+  // If the host you're looking at is deleted, leave the detail screen. In overlay
+  // mode the rail IS the screen and `detail` falls back to hosts[0] — so without
+  // this you'd delete one host and be left staring at a different host's detail,
+  // with a Connect button on it, and no sign anything changed.
+  useEffect(() => {
+    if (!touch || !railPushed) return;
+    if (open && !hosts.some((x) => x.profileId === open)) setRailPushed(false);
+  }, [hosts, open, touch, railPushed]);
+
+  // The detail rail is a full-screen layer the shell's frame stack knows nothing
+  // about, so the shell's back gesture can't see it: the edge-swipe only arms for a
+  // real frame, and re-tapping the already-active Hosts tab is a no-op. Claim the
+  // shell's back while it's up, so both work — otherwise the only exit is a 44px
+  // chevron in the one corner a thumb can't reach.
+  const setBackHandler = useApp((s) => s.setBackHandler);
+  useEffect(() => {
+    if (!touch || !railPushed) return;
+    const handler = () => {
+      setRailPushed(false);
+      return true;
+    };
+    setBackHandler(handler);
+    return () => {
+      // Only relinquish if it's still ours — a later view may have taken over.
+      if (useApp.getState().backHandler === handler) setBackHandler(null);
+    };
+  }, [touch, railPushed, setBackHandler]);
 
   const segBtn = (icon: "grid" | "list", val: "cards" | "list") => (
     <button
@@ -1278,15 +1460,19 @@ export function ViewHosts() {
             flexWrap: "wrap",
             gap: 12,
             rowGap: 10,
-            padding: "24px 22px 14px",
+            padding: `24px ${gutter}px 14px`,
           }}
         >
           {/* Title + count share one baseline (reference .head); the outer row stays
               center-aligned so the toolbar buttons don't ride the text baseline. */}
           <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
-            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
-              {t("hosts.title")}
-            </h1>
+            {/* The tab bar already says "Hosts" one row below. Repeating it in a
+                28px h1 under a 62px top bar is three headers for one screen. */}
+            {!touch && (
+              <h1 style={{ margin: 0, fontSize: narrow ? 24 : 28, fontWeight: 800, letterSpacing: -0.7 }}>
+                {t("hosts.title")}
+              </h1>
+            )}
             <span
               style={{
                 fontFamily: MONO,
@@ -1304,13 +1490,18 @@ export function ViewHosts() {
               filled primary here becomes a glaring near-white block in dark mode. */}
           <button
             title={t("hosts.importSshConfig")}
+            aria-label={t("hosts.importSshConfig")}
             onClick={() => ctx.openImport()}
             style={{
               ...BTN_RESET,
               display: "flex",
               alignItems: "center",
+              justifyContent: "center",
               gap: 5,
-              height: 30,
+              // `tight` collapses this to an icon on any phone, so 30px would
+              // leave a 14px target.
+              height: touch ? SIZE.tapMin : 30,
+              minWidth: touch ? SIZE.tapMin : undefined,
               fontSize: 13,
               fontWeight: 600,
               color: p.txt3,
@@ -1320,21 +1511,27 @@ export function ViewHosts() {
             <Icon name="download" size={14} />
             {!tight && t("hosts.importSshConfig")}
           </button>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              height: 30,
-              background: "transparent",
-              border: `1px solid ${p.line}`,
-              borderRadius: 8,
-              padding: 1,
-              gap: 2,
-            }}
-          >
-            {segBtn("grid", "cards")}
-            {segBtn("list", "list")}
-          </div>
+          {/* Hidden on narrow: the list half of this toggle can't render there
+              (see `layout`), and a control whose two states look identical is worse
+              than no control. The stored preference is untouched — it comes back
+              the moment there's width for it. */}
+          {!touch && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                height: 30,
+                background: "transparent",
+                border: `1px solid ${p.line}`,
+                borderRadius: RADIUS.chip,
+                padding: 1,
+                gap: 2,
+              }}
+            >
+              {segBtn("grid", "cards")}
+              {segBtn("list", "list")}
+            </div>
+          )}
           <div ref={sortRef} style={{ position: "relative" }}>
             <button
               onClick={() => setSortOpen((v) => !v)}
@@ -1346,9 +1543,9 @@ export function ViewHosts() {
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
-                height: 30,
-                padding: "0 10px",
-                borderRadius: 8,
+                height: touch ? SIZE.tapMin : 30,
+                padding: touch ? "0 12px" : "0 10px",
+                borderRadius: RADIUS.chip,
                 // No grey fill — just the frame. Open state reads via a stronger
                 // hairline + darker label instead of a bg tint.
                 border: `1px solid ${sortOpen ? p.line2 : p.line}`,
@@ -1427,25 +1624,31 @@ export function ViewHosts() {
               </div>
             )}
           </div>
-          <button
-            title={t("hosts.newHost")}
-            onClick={() => ctx.onNewHost()}
-            style={{
-              ...BTN_RESET,
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-              height: 30,
-              fontSize: 13,
-              fontWeight: 700,
-              color: p.accent,
-              cursor: "pointer",
-            }}
-          >
-            <Icon name="plus" size={15} />
-            {!tight && t("hosts.newHost")}
-          </button>
-          {!railOpen && (
+          {/* Narrow gets the FAB below instead: the primary action belongs in the
+              thumb zone, not in the one corner of a phone a thumb can't reach. */}
+          {!touch && (
+            <button
+              title={t("hosts.newHost")}
+              onClick={() => ctx.onNewHost()}
+              style={{
+                ...BTN_RESET,
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                height: 30,
+                fontSize: 13,
+                fontWeight: 700,
+                color: p.accentText,
+                cursor: "pointer",
+              }}
+            >
+              <Icon name="plus" size={15} />
+              {!tight && t("hosts.newHost")}
+            </button>
+          )}
+          {/* Overlay mode has no "show the rail" affordance: the rail is a detail
+              screen there, and you get to it by choosing a host. */}
+          {!touch && !railOpen && (
             <button
               title={t("common.show")}
               aria-label={t("common.show")}
@@ -1468,14 +1671,85 @@ export function ViewHosts() {
           )}
         </div>
 
+        {/* Touch: a real filter box. The desktop has ⌘K in the title bar for this,
+            which needs a keyboard AND connects rather than filters. */}
+        {touch && (
+          <div style={{ padding: `0 ${gutter}px 10px` }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                height: SIZE.tapMin,
+                padding: "0 6px 0 12px",
+                borderRadius: RADIUS.ctl,
+                background: p.bg2,
+                border: `1px solid ${p.line}`,
+              }}
+            >
+              <Icon name="search" size={17} color={p.txt3} />
+              <input
+                {...NO_AUTOCORRECT}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("hosts.searchPlaceholder")}
+                aria-label={t("hosts.searchPlaceholder")}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  height: "100%",
+                  border: "none",
+                  outline: "none",
+                  background: "transparent",
+                  color: p.txt,
+                  fontFamily: UI,
+                  // 16px or iOS zooms the whole page on focus.
+                  fontSize: 16,
+                }}
+              />
+              {query && (
+                <button
+                  onClick={() => setQuery("")}
+                  aria-label={t("common.clear")}
+                  style={{
+                    width: SIZE.tapMin,
+                    height: SIZE.tapMin,
+                    flexShrink: 0,
+                    border: "none",
+                    background: "transparent",
+                    color: p.txt3,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Icon name="x" size={16} />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div
           style={{
             position: "relative",
             display: "flex",
             gap: 14,
-            padding: "0 22px 10px",
+            padding: `0 ${gutter}px 10px`,
             alignItems: "center",
-            flexWrap: "wrap",
+            // Touch adds group chips to the tag chips, which would wrap this strip
+            // into three rows of a screen that has none to spare — scroll instead,
+            // as the phone list always did.
+            ...(touch
+              ? {
+                  flexWrap: "nowrap" as const,
+                  overflowX: "auto" as const,
+                  overscrollBehaviorX: "contain" as const,
+                  WebkitOverflowScrolling: "touch" as const,
+                  scrollbarWidth: "none" as const,
+                }
+              : { flexWrap: "wrap" as const }),
           }}
         >
           {activeGroup && (
@@ -1487,6 +1761,10 @@ export function ViewHosts() {
                 fontSize: 13,
                 fontWeight: 700,
                 color: p.txt,
+                // The strip scrolls rather than wraps on touch; without this the
+                // scope token squashes to one word per line instead.
+                flexShrink: 0,
+                whiteSpace: "nowrap",
               }}
             >
               {activeGroup.label}
@@ -1507,6 +1785,47 @@ export function ViewHosts() {
               </button>
             </span>
           )}
+          {/* Touch: group chips. On the desktop the Sidebar owns group scoping
+              (Shell's NavGroup → goFiltered(groupId)) — and the mobile shell has no
+              sidebar, so without these a 5-group vault simply cannot be scoped by
+              group on a phone, and the activeGroup token above is unreachable. */}
+          {touch &&
+            groups.map((g) => {
+              const on = hostFilter === g.groupId;
+              return (
+                <button
+                  key={g.groupId}
+                  onClick={() => setHostFilter(g.groupId)}
+                  aria-pressed={on}
+                  style={{
+                    flexShrink: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    minHeight: SIZE.tapMin,
+                    fontFamily: UI,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    padding: "2px 1px 5px",
+                    border: "none",
+                    borderRadius: 0,
+                    borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
+                    background: "transparent",
+                    color: on ? p.txt : p.txt3,
+                  }}
+                >
+                  <Icon name="folder" size={13} color={on ? p.txt2 : p.txt3} />
+                  {g.label}
+                </button>
+              );
+            })}
+          {touch && groups.length > 0 && (
+            <span
+              aria-hidden
+              style={{ flexShrink: 0, alignSelf: "stretch", width: 1, margin: "5px 0", background: p.line }}
+            />
+          )}
           {[HOST_FILTER_ALL, ...tagSet].map((tag) => {
             const isAll = tag === HOST_FILTER_ALL;
             const on = hostFilter === tag;
@@ -1521,6 +1840,8 @@ export function ViewHosts() {
                   fontWeight: 600,
                   cursor: "pointer",
                   padding: "2px 1px 5px",
+                  minHeight: touch ? SIZE.tapMin : undefined,
+                  flexShrink: 0,
                   border: "none",
                   borderRadius: 0,
                   borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
@@ -1542,6 +1863,8 @@ export function ViewHosts() {
                 fontWeight: 600,
                 cursor: "pointer",
                 padding: "2px 1px 5px",
+                minHeight: touch ? SIZE.tapMin : undefined,
+                flexShrink: 0,
                 border: "none",
                 borderRadius: 0,
                 borderBottom: `2px solid ${hostFilter === "__untagged" ? p.accent : "transparent"}`,
@@ -1560,6 +1883,11 @@ export function ViewHosts() {
                 fontSize: 12.5,
                 fontWeight: 600,
                 cursor: "pointer",
+                // Same as the chips beside it: this strip scrolls rather than wraps
+                // on touch, so an item that can shrink wraps to three lines instead.
+                flexShrink: 0,
+                whiteSpace: "nowrap",
+                minHeight: touch ? SIZE.tapMin : undefined,
                 padding: 0,
                 border: "none",
                 background: "transparent",
@@ -1573,8 +1901,56 @@ export function ViewHosts() {
           )}
         </div>
 
-        <div style={{ position: "relative", flex: 1, overflow: "auto", padding: "6px 22px 76px" }}>
-          {hosts.length === 0 ? (
+        <div
+          ref={listRef}
+          onTouchStart={touch ? onPullStart : undefined}
+          onTouchMove={touch ? onPullMove : undefined}
+          onTouchEnd={touch ? onPullEnd : undefined}
+          style={{
+            position: "relative",
+            flex: 1,
+            overflow: "auto",
+            // Without this the WebView rubber-bands this scroller at scrollTop 0 at
+            // the same time as the pull transform, and the content travels twice
+            // as far as the finger. (html/body's overscroll-behavior does not
+            // cascade into an inner scroller.)
+            overscrollBehaviorY: "contain",
+            padding: `6px ${gutter}px 76px`,
+            transform: pull ? `translateY(${pull}px)` : undefined,
+            transition: pulling ? "none" : "transform .2s",
+          }}
+        >
+          {/* Pull-to-refresh spinner, revealed by the drag above the list. */}
+          {touch && pull > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                top: -34,
+                left: 0,
+                right: 0,
+                display: "flex",
+                justifyContent: "center",
+                opacity: Math.min(1, pull / 56),
+              }}
+            >
+              <Spinner size={18} />
+            </div>
+          )}
+          {loading && hosts.length === 0 ? (
+            // The vault is still loading — NOT empty. Branching on hosts.length
+            // alone flashed "This vault is empty / Create a host" on every unlock
+            // while reloadVault was still in flight.
+            <div
+              style={{
+                height: "60%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Spinner size={22} />
+            </div>
+          ) : hosts.length === 0 ? (
             <div
               style={{
                 height: "80%",
@@ -1639,12 +2015,18 @@ export function ViewHosts() {
                 {t("hosts.resetFilter")}
               </Btn>
             </div>
-          ) : hostsLayout === "cards" ? (
+          ) : layout === "cards" ? (
             <div
               className="uh-stagger"
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(248px, 1fr))",
+                // One column on touch, at any width. auto-fill inverts on a phone:
+                // more width means more columns, so a 248px track appears in
+                // landscape and squeezes the card's meta line — the auth label, the
+                // security-relevant datum — down to nothing. The card also carries
+                // permanent Connect/SFTP buttons there, which a 248px track cannot
+                // hold alongside anything readable.
+                gridTemplateColumns: touch ? "1fr" : "repeat(auto-fill, minmax(248px, 1fr))",
                 gap: 12,
               }}
             >
@@ -1685,8 +2067,8 @@ export function ViewHosts() {
           <div
             style={{
               position: "absolute",
-              left: 22,
-              right: 22,
+              left: gutter,
+              right: gutter,
               bottom: 16,
               // minHeight (not height) + wrap: in RU the destructive Delete + clear-✕
               // can't fit one row inside overflow:hidden main — let them wrap, don't clip.
@@ -1798,11 +2180,40 @@ export function ViewHosts() {
             </button>
           </div>
         )}
+
+        {/* Narrow: the primary action as a thumb-zone FAB. Hidden while the detail
+            rail is up — it belongs to the list, and it would sit over the rail's
+            own Connect. The list reserves 76px of bottom padding for it. */}
+        {touch && !railShown && !sel.length && (
+          <button
+            onClick={() => ctx.onNewHost()}
+            aria-label={t("hosts.newHost")}
+            style={{
+              position: "absolute",
+              right: 18,
+              bottom: 20,
+              width: 56,
+              height: 56,
+              borderRadius: RADIUS.menu,
+              background: p.accent,
+              border: "none",
+              color: p.accentInk ?? "#fff",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: p.shadow,
+              zIndex: 5,
+            }}
+          >
+            <Icon name="plus" size={26} stroke={2.2} />
+          </button>
+        )}
       </div>
 
       {/* right rail — a fixed-width side column normally; a full-width overlay over
           the list when the window is too narrow to show both side by side */}
-      {railOpen && (
+      {railShown && (
         <div
           style={{
             flexShrink: 0,
@@ -1836,14 +2247,16 @@ export function ViewHosts() {
               ]}
             />
             <button
-              title={t("common.hide")}
-              aria-label={t("common.hide")}
-              onClick={() => toggleRail(false)}
+              title={touch ? t("common.back") : t("common.hide")}
+              aria-label={touch ? t("common.back") : t("common.hide")}
+              onClick={closeRail}
               style={{
-                width: 30,
-                height: 30,
+                // In overlay mode this is the only way back to the list, so it has
+                // to clear the touch minimum rather than the desktop's 30px.
+                width: touch ? SIZE.tapMin : 30,
+                height: touch ? SIZE.tapMin : 30,
                 flexShrink: 0,
-                borderRadius: 8,
+                borderRadius: RADIUS.chip,
                 border: "none",
                 background: "transparent",
                 color: p.txt3,
@@ -1853,7 +2266,7 @@ export function ViewHosts() {
                 justifyContent: "center",
               }}
             >
-              <Icon name="cr" size={15} />
+              <Icon name={touch ? "cl" : "cr"} size={touch ? 20 : 15} />
             </button>
           </div>
           <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
