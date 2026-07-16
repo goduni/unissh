@@ -1121,7 +1121,17 @@ function SettingsVaults() {
   // ── one vault row ─────────────────────────────────────────────
   const vaultRow = (v: VaultInfo, kind: "server" | "local" | "unbound") => {
     const isCurrent = v.vaultId === vaultId;
-    const canBind = kind !== "local" && owned(v); // owner-only binding + drag
+    // Binding is owner-only for a vault that IS bound (isOwnedCloud reads the admin
+    // role from its bound Space). But a genuinely UNBOUND cloud vault (empty
+    // syncTenant) has no Space to read a role from — isOwnedCloud returns false
+    // precisely because syncTenant is empty, which would leave it unbindable forever
+    // (a catch-22). A cloud vault with no binding at all is yours to bind, so allow it.
+    const canBind =
+      kind === "local"
+        ? false
+        : !v.syncTenant
+          ? v.syncTarget === "cloud"
+          : owned(v); // owner-only binding + drag
     const isMember = kind === "server" && !owned(v);
     // Rename + delete are owner-only in core (require_owner → AuthorityInvalid for a
     // member), so don't offer them on a shared vault you don't own. Verify + purge are
