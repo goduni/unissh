@@ -7,39 +7,101 @@ interface Props {
   securityHref: string;
   quickstartHref: string;
   githubHref: string;
+  /** The real star count. Measured, not invented — see index.astro. */
+  stars: string;
 }
 
-const { docsHref, archHref, securityHref, quickstartHref, githubHref } = Astro.props;
+const { docsHref, archHref, securityHref, quickstartHref, githubHref, stars } = Astro.props;
 ---
 
 <header class="site-header" id="site-header">
-  <div class="wrap site-header__inner">
-    <a class="brand" href="#top" aria-label="UniSSH home">
-      <span class="brand__glyph" aria-hidden="true">›_</span>
-      <span class="brand__name">Uni<span class="accent">SSH</span></span>
+  <div class="site-header__inner">
+    <a class="brand" href="#top" aria-label="unissh home">
+      <span class="brand__glyph" aria-hidden="true">&gt;_</span>
+      <span class="brand__name">unissh</span>
     </a>
 
-    <nav class="site-nav" aria-label="Primary">
-      <a class="site-nav__link" href={docsHref}>Docs</a>
-      <a class="site-nav__link" href={archHref}>Architecture</a>
-      <a class="site-nav__link" href={securityHref}>Security</a>
-      <a class="site-nav__link" href={githubHref} rel="noopener">GitHub</a>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <a href="#features">Features</a>
+      <a href="#sync-server">Sync Server</a>
+      <a href={securityHref}>Security</a>
+      <a href={githubHref} rel="noopener">Open Source</a>
+      <a href={docsHref}>Docs</a>
+      <a href={archHref}>Architecture</a>
     </nav>
 
     <div class="site-header__actions">
-      <a class="icon-link" href={githubHref} rel="noopener" aria-label="UniSSH on GitHub">
-        <Icon name="github" size={18} />
+      <a class="gh-link" href={githubHref} rel="noopener">
+        <Icon name="github" size={17} />
+        Star on GitHub
+        <span class="gh-count">{stars}</span>
       </a>
-      <a class="btn btn-primary" href={quickstartHref}>Get started</a>
+      <a class="btn btn-primary" href={quickstartHref}>Download</a>
+      <button class="burger" type="button" aria-label="Menu" aria-expanded="false" aria-controls="site-nav" id="burger">
+        <Icon name="menu" size={17} stroke={2} />
+      </button>
     </div>
   </div>
 </header>
 
 <script>
-  const header = document.getElementById('site-header');
-  if (header) {
-    const onScroll = () => header.classList.toggle('is-scrolled', window.scrollY > 8);
-    onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-  }
+  // The phone nav is a disclosure, not a route: reveal the same links
+  // in place rather than shipping an overlay nobody asked for.
+  const burger = document.getElementById('burger');
+  const nav = document.getElementById('site-nav');
+  burger?.addEventListener('click', () => {
+    const open = burger.getAttribute('aria-expanded') === 'true';
+    burger.setAttribute('aria-expanded', String(!open));
+    nav?.classList.toggle('is-open', !open);
+  });
 </script>
+
+<style>
+  /* Disclosure state for the phone nav. The desktop rule in landing.css
+     takes over from 1080px up, where the burger is gone anyway. */
+  .site-nav.is-open {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    top: 78px;
+    z-index: 30;
+    padding: 8px;
+    border: 1px solid var(--uh-line2);
+    border-radius: 16px;
+    background: rgba(14, 17, 29, 0.96);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: var(--uh-shadow-card);
+  }
+  .site-nav.is-open a {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: 10px;
+    font-size: 15px;
+    color: var(--site-ink2);
+  }
+  .site-nav.is-open a:hover {
+    background: var(--uh-bg2);
+    color: var(--site-ink);
+  }
+  @media (min-width: 1080px) {
+    .site-nav.is-open {
+      position: static;
+      flex-direction: row;
+      padding: 0;
+      border: 0;
+      background: none;
+      box-shadow: none;
+      backdrop-filter: none;
+    }
+    .site-nav.is-open a {
+      min-height: 0;
+      padding: 0;
+    }
+  }
+</style>

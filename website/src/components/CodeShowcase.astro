@@ -26,16 +26,19 @@ cargo build --release
 ./target/release/unissh-server --config config.toml`;
 ---
 
-<section class="code-show" id="cli" aria-labelledby="cli-head">
+<section class="section" id="cli" aria-labelledby="cli-head">
   <div class="wrap">
-    <div class="section-head reveal">
-      <span class="eyebrow">FROM ZERO TO EXEC</span>
-      <h2 id="cli-head">Start <span class="grad-text">local</span>, scale to <span class="grad-text-2">self-hosted</span></h2>
-      <p>The same core that runs on your laptop powers the sync server you deploy.</p>
+    <div class="section-head">
+      <span class="eyebrow"><i>06</i> · from zero to exec</span>
+      <h2 id="cli-head">Start <span class="grad-text">local</span>, scale to self-hosted</h2>
+      <p>
+        No server required to begin: a local vault works on its own. The same core that runs
+        on your laptop powers the sync server when you want one.
+      </p>
     </div>
 
     <div class="code-grid">
-      <div class="code-panel reveal" data-copy={localFlow}>
+      <div class="code-panel" data-copy={localFlow}>
         <div class="code-panel__head">
           <span class="code-panel__title">
             <Icon name="terminal" size={15} stroke={1.8} /> rust-core · local flow
@@ -47,7 +50,7 @@ cargo build --release
         <pre class="code-panel__body"><code>{localFlow}</code></pre>
       </div>
 
-      <div class="code-panel reveal" data-copy={serverFlow}>
+      <div class="code-panel" data-copy={serverFlow}>
         <div class="code-panel__head">
           <span class="code-panel__title">
             <Icon name="server" size={15} stroke={1.8} /> server · bring-up
@@ -60,10 +63,7 @@ cargo build --release
       </div>
     </div>
 
-    <p class="code-show__caption">
-      Works fully locally with a local vault.
-      <span class="mono-tag is-green">no server required</span>
-    </p>
+    <p class="code-show__caption">Works fully locally with a local vault — no server required.</p>
   </div>
 </section>
 

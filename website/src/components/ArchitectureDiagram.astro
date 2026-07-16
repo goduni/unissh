@@ -6,6 +6,7 @@ interface Props {
 }
 const { archHref } = Astro.props;
 
+/** rust-core/crates/* — nine of them. Verified against the workspace. */
 const crates = [
   'crypto',
   'keychain',
@@ -19,118 +20,43 @@ const crates = [
 ];
 
 const nodes = [
-  {
-    tint: 'is-accent',
-    icon: 'terminal',
-    name: 'client',
-    role: 'Tauri 2 + React',
-    dep: 'unissh-ffi path dep',
-  },
-  {
-    tint: 'is-green',
-    icon: 'server',
-    name: 'server',
-    role: 'axum + sqlx',
-    dep: 'control plane',
-  },
-  {
-    tint: 'is-purple',
-    icon: 'globe',
-    name: 'server-ui',
-    role: 'React + crypto-wasm',
-    dep: 'admin panel',
-  },
+  { icon: 'terminal', name: 'client', role: 'Tauri 2 + React', dep: 'unissh-ffi path dep' },
+  { icon: 'server', name: 'server', role: 'axum + sqlx', dep: 'SQLite or Postgres' },
+  { icon: 'globe', name: 'server-ui', role: 'React + crypto-wasm', dep: 'admin panel' },
 ];
 ---
 
-<section class="arch section--mesh" id="architecture" aria-labelledby="arch-head">
+<section class="section" id="sync-server" aria-labelledby="arch-head">
   <div class="wrap">
-    <div class="section-head reveal">
-      <span class="eyebrow">ARCHITECTURE AT A GLANCE</span>
+    <div class="section-head">
+      <span class="eyebrow"><i>05</i> · architecture</span>
       <h2 id="arch-head">One core feeds <span class="grad-text">three consumers</span></h2>
       <p>
-        A nine-crate Cargo workspace is the shared foundation. The client, server and
-        admin panel all build on it — never reinventing the crypto.
+        A nine-crate Cargo workspace is the shared foundation. The client, the sync server
+        and the admin panel all build on it — none of them reinvents the crypto.
       </p>
     </div>
 
-    <div class="arch__diagram reveal">
-      <div class="arch__graph">
-        <!-- Connector layer: gradient lines from hub to each node, with an
-             optional animated "flow" dash gated by prefers-reduced-motion. -->
-        <svg
-          class="arch__wires"
-          viewBox="0 0 1000 360"
-          preserveAspectRatio="none"
-          aria-hidden="true"
-        >
-          <defs>
-            <linearGradient id="wire-accent" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stop-color="#5b8cff" stop-opacity="0.15" />
-              <stop offset="100%" stop-color="#7aa2ff" stop-opacity="0.85" />
-            </linearGradient>
-            <linearGradient id="wire-green" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stop-color="#5b8cff" stop-opacity="0.15" />
-              <stop offset="100%" stop-color="#3ad29f" stop-opacity="0.85" />
-            </linearGradient>
-            <linearGradient id="wire-purple" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stop-color="#5b8cff" stop-opacity="0.15" />
-              <stop offset="100%" stop-color="#b98cff" stop-opacity="0.85" />
-            </linearGradient>
-          </defs>
-
-          <!-- top: client -->
-          <path class="wire" d="M 360 180 C 560 180 560 60 760 60" stroke="url(#wire-accent)" />
-          <path class="wire wire--flow flow-accent" d="M 360 180 C 560 180 560 60 760 60" />
-          <!-- middle: server -->
-          <path class="wire" d="M 360 180 L 760 180" stroke="url(#wire-green)" />
-          <path class="wire wire--flow flow-green" d="M 360 180 L 760 180" />
-          <!-- bottom: server-ui -->
-          <path class="wire" d="M 360 180 C 560 180 560 300 760 300" stroke="url(#wire-purple)" />
-          <path class="wire wire--flow flow-purple" d="M 360 180 C 560 180 560 300 760 300" />
-        </svg>
-
-        <!-- Central hub: glowing accent core card -->
-        <div class="arch__hub-cell">
-          <div class="arch__core">
-            <div class="arch__core-badge">
-              <Icon name="layers" size={18} stroke={1.8} />
+    <div class="arch-grid">
+      {
+        nodes.map((n) => (
+          <div class="arch-node">
+            <div class="arch-node__icon" aria-hidden="true">
+              <Icon name={n.icon} size={19} stroke={1.8} />
             </div>
-            <h3>rust-core</h3>
-            <p>9-crate Cargo workspace</p>
-            <div class="arch__crates">
-              {crates.map((c) => <span class="crate-chip">{c}</span>)}
-            </div>
+            <div class="arch-node__name">{n.name}</div>
+            <div class="arch-node__role">{n.role}</div>
+            <div class="arch-node__dep">{n.dep}</div>
           </div>
-        </div>
-
-        <!-- Consumer nodes: glassmorphic, tinted, glowing -->
-        <div class="arch__nodes">
-          {
-            nodes.map((n) => (
-              <div class={`arch__node ${n.tint}`}>
-                <span class="arch__node-icon" aria-hidden="true">
-                  <Icon name={n.icon} size={18} stroke={1.8} />
-                </span>
-                <div class="arch__node-text">
-                  <h4>{n.name}</h4>
-                  <p class="arch__node-role">{n.role}</p>
-                  <p class="arch__node-dep">{n.dep}</p>
-                </div>
-              </div>
-            ))
-          }
-        </div>
-      </div>
-
-      <p class="arch__caption">
-        <strong>The backend is a control plane, not a data plane.</strong> SSH traffic flows
-        client&nbsp;&rarr;&nbsp;server directly or via your own bastion (ProxyJump) — never
-        through the backend.
-      </p>
-      <p class="arch__link">
-        <a class="arch__link-a" href={archHref}>Read the architecture docs <span aria-hidden="true">&rarr;</span></a>
-      </p>
+        ))
+      }
     </div>
+
+    <div class="crates-head">rust-core · 9 crates</div>
+    <div class="crates">{crates.map((c) => <span class="crate">{c}</span>)}</div>
+
+    <p class="arch__foot">
+      <a href={archHref}>Read the system overview &rarr;</a>
+    </p>
   </div>
 </section>

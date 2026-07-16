@@ -2,38 +2,43 @@
 import Icon from './Icon.astro';
 
 interface Props {
-  clientHref: string;
+  buildHref: string;
   deployHref: string;
   githubHref: string;
+  releasesHref: string;
 }
-const { clientHref, deployHref, githubHref } = Astro.props;
+const { buildHref, deployHref, githubHref, releasesHref } = Astro.props;
 ---
 
 <section class="download" id="download" aria-labelledby="download-head">
   <div class="wrap">
-    <div class="download__card reveal">
-      <span class="eyebrow">RUN IT YOURSELF</span>
-      <h2 id="download-head" style="margin-top:16px;">
-        Your servers. Your keys. <span class="grad-text">Your infrastructure.</span>
-      </h2>
-      <p>
-        Build the desktop and mobile client, or deploy the zero-knowledge server with a
-        single Docker Compose command. Everything is open source.
-      </p>
+    <span class="eyebrow"><i>04</i> · run it</span>
+    <h2 id="download-head">Your servers. Your keys. <span class="grad-text">Your box.</span></h2>
+    <p>
+      Download a build, or compile it yourself. The sync server ships in the same repo and
+      comes up with one compose file. Everything is open source.
+    </p>
 
-      <div class="download__cta">
-        <a class="btn btn-primary btn-lg" href={clientHref}>
-          <Icon name="download" size={18} stroke={1.8} /> Build the client
-        </a>
-        <a class="btn btn-ghost btn-lg" href={deployHref}>
-          <Icon name="server" size={18} stroke={1.8} /> Deploy the server
-        </a>
-        <a class="btn btn-ghost btn-lg" href={githubHref} rel="noopener">
-          <Icon name="github" size={18} /> Browse the source
-        </a>
-      </div>
-
-      <p class="download__note">Dual-licensed · MIT OR Apache-2.0</p>
+    <div class="download__cta">
+      <a class="btn btn-primary btn-lg" href={releasesHref} rel="noopener">
+        <Icon name="download" size={18} stroke={1.8} /> Download
+      </a>
+      <a class="btn btn-ghost btn-lg" href={buildHref}>Build from source</a>
+      <a class="btn btn-ghost btn-lg" href={deployHref}>
+        <Icon name="server" size={18} stroke={1.8} /> Deploy the server
+      </a>
     </div>
+
+    <!-- Releases are real: client.yml bundles via tauri-action and attaches
+         SHA256SUMS + a provenance attestation. They are also UNSIGNED — the
+         workflow has no APPLE_* identity and no Windows code-signing cert
+         (client.yml:10), so macOS will warn on first open. Say so here rather
+         than let the download surprise someone. -->
+    <p class="download__note">
+      macOS · Windows · Linux · iOS · Android<br />
+      builds are unsigned — macOS Gatekeeper will ask before the first launch<br />
+      every release carries SHA256SUMS + a build provenance attestation<br />
+      <a href={githubHref} rel="noopener" style="color:var(--site-violet-lite)">MIT OR Apache-2.0</a>
+    </p>
   </div>
 </section>

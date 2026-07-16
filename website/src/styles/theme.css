@@ -1,8 +1,21 @@
 /* ============================================================
-   UniSSH design tokens
-   Ported verbatim from the apps (client/src/theme/tokens.ts ==
-   server-ui/src/theme/tokens.ts, DARK palette) so the site
-   matches the product 1:1.
+   UniSSH — design tokens.
+
+   The --uh-* values mirror the product's NEBULA family, dark mode
+   (client/src/theme/tokens.ts → DARK, spread with ACCENTS.blue by
+   buildPalette). They are kept in sync by hand; this file is NOT
+   generated, and it is NOT the app's default look:
+
+     The app's default family is `mono` (near-white ink accent),
+     not `nebula` (blue). ThemeProvider's v2→v3 migration flips an
+     unset/`nebula` family to `mono`. The site deliberately shows
+     the Nebula family, which the product ships but the user opts
+     into. If the client's default family changes, revisit this.
+
+   The --site-* values are brand-surface only. They exist here and
+   nowhere in the product: the marketing ground, the nebula sky and
+   the violet→blue gradient are the site's own voice. PRODUCT.md
+   scopes the website as a `brand` surface, so this is intentional.
    ============================================================ */
 
 /* Fonts (self-hosted via @fontsource). */
@@ -10,71 +23,94 @@
 @import '@fontsource/hanken-grotesk/500.css';
 @import '@fontsource/hanken-grotesk/600.css';
 @import '@fontsource/hanken-grotesk/700.css';
-@import '@fontsource/hanken-grotesk/800.css';
 @import '@fontsource/jetbrains-mono/400.css';
 @import '@fontsource/jetbrains-mono/500.css';
 @import '@fontsource/jetbrains-mono/600.css';
-@import '@fontsource/jetbrains-mono/700.css';
 
 :root {
-  /* ---- Surfaces ---- */
-  --uh-desk: #08090d; /* page background */
-  --uh-bg0: #0c0e14; /* deepest panel */
-  --uh-bg1: #10131c; /* surface */
-  --uh-bg2: #161a26; /* raised surface / row hover */
-  --uh-bg3: #1b2030; /* elevated / nav hover */
-  --uh-bg4: #232a3d; /* highest surface */
+  /* ---- Product surfaces (tokens.ts DARK) ---- */
+  --uh-desk: #08090d;
+  --uh-bg0: #0c0e14;
+  --uh-bg1: #10131c;
+  --uh-bg2: #161a26;
+  --uh-bg3: #1b2030;
+  --uh-bg4: #232a3d;
 
-  /* ---- Text ---- */
-  --uh-txt: #eef0f7; /* primary */
-  --uh-txt2: #9aa1b8; /* secondary */
-  --uh-txt3: #646c85; /* muted */
+  /* ---- Product text ----
+     txt3 is #8b93ac, NOT #646c85. The client deleted #646c85 for
+     failing WCAG (~3.4:1 on bg0); this file shipped it anyway and
+     leaked it into the Starlight chrome via --sl-color-gray-3.
+     Do not "restore" it. */
+  --uh-txt: #eef0f7;
+  --uh-txt2: #9aa1b8;
+  --uh-txt3: #8b93ac;
 
-  /* ---- Accent (brand blue) ---- */
+  /* ---- Product accent (nebula / ACCENTS.blue) ---- */
   --uh-accent: #5b8cff;
-  --uh-accent2: #7aa2ff; /* lighter blue, gradient pair */
+  --uh-accent2: #7aa2ff;
   --uh-accent-soft: rgba(91, 140, 255, 0.15);
   --uh-accent-line: rgba(91, 140, 255, 0.4);
   --uh-glow: rgba(91, 140, 255, 0.22);
+  /* accentInk: white on #5b8cff is 3.16:1 and fails AA, so the app
+     puts bg0 on the accent instead (buildPalette's dark branch). */
+  --uh-accent-ink: #0c0e14;
 
-  /* ---- Status / secondary ---- */
-  --uh-green: #3ad29f; /* encrypted / online */
-  --uh-amber: #ffb454; /* warnings */
-  --uh-red: #ff6b80; /* danger */
-  --uh-purple: #b98cff; /* secondary accent */
+  /* ---- Product status / secondary ---- */
+  --uh-green: #3ad29f;
+  --uh-amber: #ffb454;
+  --uh-red: #ff6b80;
+  --uh-purple: #b98cff;
 
-  /* ---- Borders ---- */
-  --uh-line: rgba(255, 255, 255, 0.07); /* hairline */
-  --uh-line2: rgba(255, 255, 255, 0.13); /* stronger */
+  /* ---- Product borders ---- */
+  --uh-line: rgba(255, 255, 255, 0.07);
+  --uh-line2: rgba(255, 255, 255, 0.13);
 
-  /* ---- Terminal (Nebula theme) ---- */
+  /* ---- Terminal theme "UniSSH Nebula" (tokens.ts TERM_THEMES) ---- */
   --uh-term-bg: #0c0e16;
   --uh-term-fg: #d8def2;
+  --uh-term-dim: #565d78;
+  --uh-term-green: #3ad29f;
+  --uh-term-blue: #5b8cff;
+  --uh-term-purple: #b98cff;
   --uh-term-cyan: #57c7ff;
+  --uh-term-red: #ff6b8b;
+  --uh-term-yellow: #ffcf6b;
 
   /* ---- Fonts ---- */
   --uh-font-ui: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
   --uh-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
 
-  /* ---- Shadows / effects ---- */
+  /* ---- Shadows ---- */
   --uh-shadow-card: 0 24px 70px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  --uh-glow-cta: 0 0 0 1px rgba(91, 140, 255, 0.4), 0 8px 30px -6px rgba(91, 140, 255, 0.45);
-  --uh-grad-accent: linear-gradient(90deg, #5b8cff, #7aa2ff);
-  --uh-grad-accent2: linear-gradient(90deg, #5b8cff, #b98cff);
+
+  /* ============================================================
+     Brand surface — site only.
+     ============================================================ */
+  --site-ground: #070911;
+  --site-ink: #ffffff;
+  --site-ink2: #9aa3c4; /* 7.96:1 on ground */
+  --site-ink3: #767f9e; /* 5.02:1 on ground */
+  --site-violet: #8b5cf6;
+  --site-violet-lite: #a78bfa; /* 7.31:1 on ground */
+  --site-blue: #5b8cff;
+
+  /* Text/brand gradient — lives on the dark ground, AA-clear there. */
+  --site-grad: linear-gradient(100deg, #8b5cf6 0%, #5b8cff 100%);
+  /* Button gradient — WHITE sits on this, so every stop must clear
+     4.5:1. The brighter --site-grad fails (4.23 / 3.16); this pair's
+     worst point is 5.17. Never swap one for the other. */
+  --site-grad-btn: linear-gradient(100deg, #7c3aed 0%, #2563eb 100%);
 }
 
 /* ============================================================
-   Starlight brand overrides (dark theme).
-   Map Starlight's design tokens onto the product palette.
+   Starlight brand overrides (dark).
    ============================================================ */
 :root,
 :root[data-theme='dark'] {
-  /* Accent ramp. */
   --sl-color-accent-low: #1b2030;
   --sl-color-accent: var(--uh-accent);
   --sl-color-accent-high: var(--uh-accent2);
 
-  /* Greys / surfaces. */
   --sl-color-white: var(--uh-txt);
   --sl-color-gray-1: #d7dbe8;
   --sl-color-gray-2: var(--uh-txt2);
@@ -94,18 +130,15 @@
   --sl-color-text: var(--uh-txt);
   --sl-color-text-accent: var(--uh-accent2);
 
-  /* Fonts. */
   --sl-font: var(--uh-font-ui);
   --sl-font-mono: var(--uh-font-mono);
 }
 
-/* Match the Tauri window / app desk color exactly. */
 html,
 body {
   background-color: var(--uh-desk);
 }
 
-/* Eyebrow / mono accents use JetBrains Mono. */
 code,
 kbd,
 pre,
@@ -113,19 +146,16 @@ samp {
   font-family: var(--uh-font-mono);
 }
 
-/* Hover affordance ported from the apps' global.css .hoverable. */
 .sl-link-card,
 .card {
   transition: border-color 0.12s ease;
 }
 
-/* Focus ring (accessibility, from the apps). */
 :where(a, button, input, select, textarea, summary):focus-visible {
   outline: 2px solid var(--uh-accent);
   outline-offset: 2px;
 }
 
-/* Reduced motion: honor user preference (apps already gate this). */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
