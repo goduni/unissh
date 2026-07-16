@@ -160,6 +160,122 @@ async fn claim_rule_conflict_over_http() {
     assert_eq!(r2.status(), 409, "different owner → claim-rule conflict");
 }
 
+/// A Cloud vault owned by `author` (its author_pubkey), base64 for a push body.
+fn owned_vault_b64(author: &[u8], vault_id: &[u8], version: u64) -> String {
+    ids::b64(
+        &SyncObject::Vault(VaultRecord {
+            vault_id: vault_id.to_vec(),
+            sync_target: SyncTarget::Cloud,
+            name_blob: vec![1, 2, 3],
+            wrapped_vk: vec![4, 5, 6],
+            version,
+            tombstone: false,
+            signature: vec![9u8; 67],
+            author_pubkey: author.to_vec(),
+            key_epoch: 1,
+            cache_policy: CachePolicy::OfflineAllowed,
+            sync_tenant: Vec::new(),
+        })
+        .to_bytes()
+        .unwrap(),
+    )
+}
+
+/// Phase 4: `GET /v1/vaults` catalog lists only the caller's accessible vaults, with
+/// the latest record bytes; a different device sees none of them.
+#[tokio::test]
+async fn vault_catalog_lists_only_callers_vaults() {
+    let app = spawn().await;
+    let s = app.seed_session("personal").await;
+    let bearer = format!("Bearer {}", s.access_token_b64);
+
+    // A Cloud vault owned by the caller (author == caller device key).
+    let r = app
+        .client
+        .post(format!("{}/v1/sync/push", app.base))
+        .header("Authorization", &bearer)
+        .json(&json!({ "objects": [owned_vault_b64(&s.ed25519_pub, b"vault-cat", 1)] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let cat: serde_json::Value = app
+        .client
+        .get(format!("{}/v1/vaults", app.base))
+        .header("Authorization", &bearer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let vaults = cat["vaults"].as_array().unwrap();
+    assert_eq!(vaults.len(), 1, "caller sees exactly their one vault");
+    // hex of b"vault-cat"
+    assert_eq!(vaults[0]["vault_id"], "7661756c742d636174");
+    assert_eq!(vaults[0]["latest_version"], 1);
+    assert_eq!(vaults[0]["tombstone"], false);
+    assert!(
+        vaults[0]["record"].is_string(),
+        "the latest record bytes are included for name display"
+    );
+
+    // A different device (different key) sees nothing.
+    let s2 = app.seed_session("personal").await;
+    let cat2: serde_json::Value = app
+        .client
+        .get(format!("{}/v1/vaults", app.base))
+        .header("Authorization", format!("Bearer {}", s2.access_token_b64))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        cat2["vaults"].as_array().unwrap().len(),
+        0,
+        "a different account sees none of the caller's vaults"
+    );
+}
+
+/// Phase 4: `GET /v1/sync/delta?vault=<hex>` restricts the delta to that one vault.
+#[tokio::test]
+async fn delta_vault_filter_returns_only_that_vault() {
+    let app = spawn().await;
+    let s = app.seed_session("personal").await;
+    let bearer = format!("Bearer {}", s.access_token_b64);
+
+    // Two owned vaults: b"va" (hex 7661) and b"vb" (hex 7662).
+    app.client
+        .post(format!("{}/v1/sync/push", app.base))
+        .header("Authorization", &bearer)
+        .json(&json!({ "objects": [
+            owned_vault_b64(&s.ed25519_pub, b"va", 1),
+            owned_vault_b64(&s.ed25519_pub, b"vb", 1),
+        ] }))
+        .send()
+        .await
+        .unwrap();
+
+    let d: serde_json::Value = app
+        .client
+        .get(format!("{}/v1/sync/delta?cursor=0&vault=7661", app.base))
+        .header("Authorization", &bearer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        d["items"].as_array().unwrap().len(),
+        1,
+        "the vault filter returns only va's object, not vb's"
+    );
+}
+
 #[tokio::test]
 async fn rate_limit_429() {
     let app = spawn_with(|c| {

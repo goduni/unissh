@@ -152,6 +152,10 @@ async fn push(
 struct DeltaQuery {
     cursor: Option<i64>,
     limit: Option<i64>,
+    /// Optional hex `vault_id`: restrict the delta to a SINGLE vault (targeted "pull
+    /// this vault"). Membership is still enforced for that vault. The client applies
+    /// the result without advancing its per-tenant cursor.
+    vault: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -180,10 +184,23 @@ async fn delta(
 
     // A1: membership-scoped — a device sees only vaults where it is owner/member.
     // Instance-admin is NOT a bypass (delta does not consult is_instance_admin).
-    let rows = state
-        .store
-        .delta_since(cursor, limit, auth.device_ed25519(), state.now())
-        .await?;
+    // With `?vault=<hex>`, the same scope is applied but restricted to one vault.
+    let rows = match q.vault.as_deref() {
+        Some(vhex) => {
+            let vid = hex::decode(vhex.trim())
+                .map_err(|_| AppError::malformed("invalid vault id (expected hex)"))?;
+            state
+                .store
+                .delta_since_vault(cursor, limit, auth.device_ed25519(), state.now(), &vid)
+                .await?
+        }
+        None => {
+            state
+                .store
+                .delta_since(cursor, limit, auth.device_ed25519(), state.now())
+                .await?
+        }
+    };
     let (has_more, next_cursor) =
         crate::http::page(&rows, limit as usize, cursor, |r| r.server_seq);
     let items = rows

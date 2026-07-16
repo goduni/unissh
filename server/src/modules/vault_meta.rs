@@ -6,12 +6,55 @@ use crate::http::extract::AuthCtx;
 use crate::ids;
 use crate::state::AppState;
 use axum::extract::State;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/v1/vaults/claim", post(claim))
+    Router::new()
+        .route("/v1/vaults", get(list_vaults))
+        .route("/v1/vaults/claim", post(claim))
+}
+
+#[derive(Serialize)]
+struct CatalogVault {
+    /// hex vault_id — the client works in hex vault ids (bind / `?vault=` / local rows).
+    vault_id: String,
+    latest_version: i64,
+    latest_epoch: i64,
+    tombstone: bool,
+    /// base64 of the latest Vault (tag-1) record (opaque bytes) — reserved for name
+    /// preview. Absent only for the degenerate vault-with-no-record case.
+    record: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CatalogResp {
+    vaults: Vec<CatalogVault>,
+}
+
+/// `GET /v1/vaults` — the member-facing catalog: every vault this caller can access
+/// (owned + granted), independent of any sync cursor. Membership-scoped exactly like
+/// `/v1/sync/delta` (owner OR active grant on the latest epoch); instance-admin is NOT
+/// a bypass. Lets the client show "vaults available on this server" and pull a specific
+/// one, instead of blindly re-walking the whole delta.
+async fn list_vaults(auth: AuthCtx, State(state): State<AppState>) -> AppResult<Json<CatalogResp>> {
+    let rows = state
+        .store
+        .list_accessible_vaults(auth.device_ed25519(), state.now())
+        .await?;
+    let vaults = rows
+        .into_iter()
+        .map(|v| CatalogVault {
+            vault_id: hex::encode(&v.vault_id),
+            latest_version: v.latest_version,
+            latest_epoch: v.latest_epoch,
+            tombstone: v.tombstone != 0,
+            record: v.record_bytes.as_deref().map(ids::b64),
+        })
+        .collect();
+    metrics::counter!("unissh_vault_catalog_requests_total").increment(1);
+    Ok(Json(CatalogResp { vaults }))
 }
 
 #[derive(Deserialize)]

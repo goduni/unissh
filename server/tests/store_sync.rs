@@ -26,19 +26,43 @@ fn audit(tag: u8) -> SyncObject {
 }
 
 fn vault(owner: u8, version: u64) -> SyncObject {
+    vault_tomb(owner, version, false)
+}
+
+fn vault_tomb(owner: u8, version: u64, tombstone: bool) -> SyncObject {
     SyncObject::Vault(VaultRecord {
         vault_id: b"vault-1".to_vec(),
         sync_target: SyncTarget::Cloud,
         name_blob: vec![1, 2, 3],
         wrapped_vk: vec![4, 5, 6],
         version,
-        tombstone: false,
+        tombstone,
         signature: vec![9u8; 67],
         author_pubkey: vec![owner; 32],
         key_epoch: 1,
         cache_policy: CachePolicy::OfflineAllowed,
         sync_tenant: Vec::new(),
     })
+}
+
+async fn vault_tombstone_flag(s: &Store, vault_id: &[u8]) -> i64 {
+    s.fetch_scalar_i64(
+        "SELECT tombstone FROM vaults WHERE vault_id = ?",
+        vec![Val::b(vault_id.to_vec())],
+    )
+    .await
+    .unwrap()
+    .unwrap()
+}
+
+async fn vault_latest_version(s: &Store, vault_id: &[u8]) -> i64 {
+    s.fetch_scalar_i64(
+        "SELECT latest_version FROM vaults WHERE vault_id = ?",
+        vec![Val::b(vault_id.to_vec())],
+    )
+    .await
+    .unwrap()
+    .unwrap()
 }
 
 async fn fresh_store() -> Store {
@@ -218,6 +242,55 @@ async fn vault_claim_rule_owner_immutable() {
         .await
         .unwrap_err();
     assert_eq!(err.code, unissh_server::ErrorCode::Conflict);
+}
+
+/// Regression: a STALE (lower-version) Vault push carrying `tombstone=1` must NOT
+/// flip a live, higher-version vault to tombstoned. Only the winning (highest-
+/// version) record decides the snapshot fields — otherwise a replayed/old delete
+/// nukes an active vault (root cause of the mass-tombstone incident).
+#[tokio::test]
+async fn stale_vault_push_does_not_tombstone_live_vault() {
+    let s = fresh_store().await;
+
+    // Live vault at version 2, not tombstoned.
+    s.push_objects(None, b"v2", vec![push_obj(vault_tomb(0xAA, 2, false))], 100)
+        .await
+        .unwrap();
+    // A replayed OLD delete: version 1 (stale, < 2), tombstone=1.
+    s.push_objects(None, b"v1t", vec![push_obj(vault_tomb(0xAA, 1, true))], 101)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        vault_tombstone_flag(&s, b"vault-1").await,
+        0,
+        "a stale lower-version push must not tombstone a newer live vault"
+    );
+    assert_eq!(
+        vault_latest_version(&s, b"vault-1").await,
+        2,
+        "latest_version stays at the max (2), not regressed to the stale 1"
+    );
+}
+
+/// The dual: a genuinely NEWER delete (higher version) still tombstones the vault.
+#[tokio::test]
+async fn newer_vault_push_applies_tombstone() {
+    let s = fresh_store().await;
+
+    s.push_objects(None, b"v1", vec![push_obj(vault_tomb(0xAA, 1, false))], 100)
+        .await
+        .unwrap();
+    // A genuine delete at v2 (newer) → wins → tombstones.
+    s.push_objects(None, b"v2t", vec![push_obj(vault_tomb(0xAA, 2, true))], 101)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        vault_tombstone_flag(&s, b"vault-1").await,
+        1,
+        "a newer-version delete tombstones the vault"
+    );
 }
 
 // --- A1: delta membership filter ---
@@ -696,5 +769,107 @@ async fn account_state_older_versions_compacted() {
         account_state_row_count(&s, &other).await,
         1,
         "compaction is scoped by author_pubkey"
+    );
+}
+
+// --- Phase 4: member-facing vault catalog + targeted per-vault delta ---
+
+/// The catalog lists exactly the vaults a caller can access: their owned vaults +
+/// vaults where they hold an active grant; never a stranger's. Each row carries the
+/// latest Vault (tag-1) record bytes for name display.
+#[tokio::test]
+async fn list_accessible_vaults_scopes_by_membership() {
+    let s = fresh_store().await;
+    let owner = [0x11u8; 32];
+    let member = [0x33u8; 32];
+    let stranger = [0x99u8; 32];
+
+    // vault-1: owner's, shared with `member` (manifest@1 + grant@1).
+    s.push_objects(
+        None,
+        b"a",
+        vec![
+            push_obj(vault_owned(b"vault-1", &owner)),
+            push_obj(manifest(b"vault-1", 1, &owner)),
+            push_obj(grant(b"vault-1", &member, 1, &owner)),
+        ],
+        100,
+    )
+    .await
+    .unwrap();
+    // vault-2: owner-only.
+    s.push_objects(
+        None,
+        b"b",
+        vec![push_obj(vault_owned(b"vault-2", &owner))],
+        100,
+    )
+    .await
+    .unwrap();
+
+    // Owner sees both, each with record bytes.
+    let o = s.list_accessible_vaults(&owner, 200).await.unwrap();
+    assert_eq!(o.len(), 2, "owner sees both of their vaults");
+    assert!(
+        o.iter()
+            .all(|v| v.record_bytes.as_ref().is_some_and(|b| !b.is_empty())),
+        "each catalog row carries the latest tag-1 record bytes"
+    );
+
+    // Member sees only the granted vault-1.
+    let m = s.list_accessible_vaults(&member, 200).await.unwrap();
+    assert_eq!(
+        m.iter().map(|v| v.vault_id.clone()).collect::<Vec<_>>(),
+        vec![b"vault-1".to_vec()],
+        "a member sees only the vault they were granted"
+    );
+
+    // Stranger sees nothing.
+    assert_eq!(
+        s.list_accessible_vaults(&stranger, 200)
+            .await
+            .unwrap()
+            .len(),
+        0,
+        "a stranger sees no vaults"
+    );
+}
+
+/// Targeted delta returns ONLY the requested vault's objects, and only to a caller
+/// who can access it.
+#[tokio::test]
+async fn delta_since_vault_filters_to_one_vault() {
+    let s = fresh_store().await;
+    let owner = [0x11u8; 32];
+
+    s.push_objects(
+        None,
+        b"a",
+        vec![
+            push_obj(vault_owned(b"vault-1", &owner)),
+            push_obj(item_in_vault(b"vault-1", b"i1")),
+            push_obj(vault_owned(b"vault-2", &owner)),
+            push_obj(item_in_vault(b"vault-2", b"i2")),
+        ],
+        100,
+    )
+    .await
+    .unwrap();
+
+    // Only vault-1's objects (its Vault record + item), not vault-2's.
+    let rows = s
+        .delta_since_vault(0, 100, &owner, 200, b"vault-1")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2, "vault-1 record + item only");
+
+    // A stranger gets nothing even when naming a specific vault.
+    assert_eq!(
+        s.delta_since_vault(0, 100, &[0x99u8; 32], 200, b"vault-1")
+            .await
+            .unwrap()
+            .len(),
+        0,
+        "targeted delta still enforces membership"
     );
 }
