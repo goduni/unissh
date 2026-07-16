@@ -550,6 +550,7 @@ export const ru = {
     "tabsLabel": "Основное",
     "tabHosts": "Хосты",
     "more": {
+      "lockDesc": "Снова спросить мастер-пароль",
       "sftpDesc": "Передача файлов",
       "tunnelsDesc": "-L / -R / -D",
       "knownDesc": "TOFU",

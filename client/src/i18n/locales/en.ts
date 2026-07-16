@@ -516,6 +516,7 @@ export const en = {
     "tabsLabel": "Main",
     "tabHosts": "Hosts",
     "more": {
+      "lockDesc": "Require the master password again",
       "sftpDesc": "File transfer",
       "tunnelsDesc": "-L / -R / -D",
       "knownDesc": "TOFU",
