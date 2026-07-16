@@ -16,6 +16,10 @@
  * Palette: the NEBULA family (tokens.ts DARK + ACCENTS.blue). Note the
  * app's *default* family is mono — see the note in theme.css.
  *
+ * Both renderings are role="img" with the whole mock aria-hidden: it is a
+ * picture of the product, not operable chrome. Without the aria-hidden a
+ * screen reader walks the fake transcript and reads all 19 key labels.
+ *
  * Deliberately absent, because the app has none of them: a right-hand
  * "Sync" panel (sync state is the SyncBadge in the vault card), a
  * latency/ping readout (ViewHosts.tsx:4-5), a port on host rows, and
@@ -31,12 +35,12 @@
      ============================================================ -->
 
 <!-- ============ DESKTOP (>=1180px) ============ -->
-<div class="uapp uapp--desk">
+<div class="uapp uapp--desk" role="img" aria-label="A screenshot of the unissh desktop client on the Terminal screen: a sidebar of hosts and operations, three open sessions, and a live shell running neofetch on prod-web-01.">
   <!-- native macOS titlebar: tauri decorations:true, the OS draws these -->
-  <div class="uapp__native"><span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span></div>
+  <div class="uapp__native" aria-hidden="true"><span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span></div>
 
   <!-- App.tsx:352-406 — 44px in-app toolbar -->
-  <div class="uapp__bar">
+  <div class="uapp__bar" aria-hidden="true">
     <span class="ulogo">
       <i class="ulogo__mark">›_</i><span class="ulogo__wm">Uni<em>SSH</em></span>
     </span>
@@ -55,7 +59,7 @@
     </span>
   </div>
 
-  <div class="uapp__body">
+  <div class="uapp__body" aria-hidden="true">
     <!-- Shell.tsx:760-899 — 220px sidebar -->
     <aside class="unav">
       <div class="unav__grp">Hosts <span class="unav__ga"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg></span></div>
@@ -157,9 +161,9 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
 </div>
 
 <!-- ============ MOBILE (<1180px) — the real mobile shell ============ -->
-<div class="uapp uapp--phone">
+<div class="uapp uapp--phone" role="img" aria-label="A screenshot of the unissh mobile client on the Terminal screen: the vault switcher, three open sessions, a live shell, and the on-screen key row above the four bottom tabs.">
   <!-- MobileApp.tsx:77-204 — top bar: vault pill + a single search button -->
-  <div class="mtop">
+  <div class="mtop" aria-hidden="true">
     <span class="mvault">
       <span class="uavx">i</span>
       <span class="uvault__t">
@@ -176,13 +180,13 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
   </div>
 
   <!-- MobileApp.tsx:375-435 — session switcher, only when >1 tab -->
-  <div class="msw">
+  <div class="msw" aria-hidden="true">
     <span class="msw__i is-on"><i class="udot"></i>prod-web-01<span class="msw__x">✕</span></span>
     <span class="msw__i"><i class="udot udot--ring"></i>staging-db<span class="msw__x">✕</span></span>
     <span class="msw__i"><i class="udot"></i>bastion<span class="msw__x">✕</span></span>
   </div>
 
-  <div class="upty upty--m">
+  <div class="upty upty--m" aria-hidden="true">
     <div><span class="c-g">ubuntu</span><span class="c-f">@</span><span class="c-p">prod-web-01</span><span class="c-f">:~$</span> uptime -p</div>
     <div class="c-f">up 2 days, 4 hours, 12 minutes</div>
     <div><span class="c-g">ubuntu</span><span class="c-f">@</span><span class="c-p">prod-web-01</span><span class="c-f">:~$</span> systemctl is-active nginx</div>
@@ -191,12 +195,12 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
   </div>
 
   <!-- MobileApp.tsx:273-293 — KEY_SEQ, the 19 real keys, in order -->
-  <div class="mkeys">
+  <div class="mkeys" aria-hidden="true">
     <span class="mkey">esc</span><span class="mkey">tab</span><span class="mkey">^C</span><span class="mkey">^D</span><span class="mkey">^Z</span><span class="mkey">^L</span><span class="mkey">^R</span><span class="mkey">^A</span><span class="mkey">^E</span><span class="mkey">^W</span><span class="mkey">^U</span><span class="mkey">|</span><span class="mkey">~</span><span class="mkey">/</span><span class="mkey">-</span><span class="mkey">←</span><span class="mkey">↓</span><span class="mkey">↑</span><span class="mkey">→</span>
   </div>
 
   <!-- MobileApp.tsx:679-763 — 4 tabs, active = ink label + 2px accent tick -->
-  <div class="mtabs">
+  <div class="mtabs" aria-hidden="true">
     <span class="mtab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>Hosts</span>
     <span class="mtab is-on"><i class="mtab__tick"></i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5M12 19h8"/></svg>Terminal</span>
     <span class="mtab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>Run</span>
@@ -339,7 +343,14 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
 .upty__pr{ margin-top:12px; }
 .upal{ display:flex; margin-top:9px; }
 .upal i{ width:19px; height:11px; display:block; }
-.caret{ display:inline-block; width:6px; height:13px; background:var(--t-fg); vertical-align:-2px; animation:bl 1.1s step-end infinite; }
+.caret{
+  display:inline-block; width:6px; height:13px; background:var(--t-fg);
+  vertical-align:-2px; animation:caret-blink 1.1s step-end infinite;
+}
+/* This lived in the prototype page's <style> and did not travel with the
+   markup, so the caret sat still. Keep it next to its only consumer.
+   Reduced motion is handled globally in theme.css. */
+@keyframes caret-blink{ 50%{ opacity:0; } }
 
 /* ViewTerminal.tsx:1443-1530 — 30px status bar */
 .ustat{
