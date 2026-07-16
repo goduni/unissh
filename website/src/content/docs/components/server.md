@@ -9,7 +9,7 @@ The UniSSH server is a **self-hostable, zero-knowledge control plane**: an untru
 
 tokio · **axum 0.8** · **sqlx 0.9** (**SQLite** default, **Postgres** for scale) · rustls (**TLS 1.3**) · `ed25519-dalek` (`verify_strict`, the same library as the core) · figment (layered config) · tracing + **Prometheus** metrics.
 
-By design the server performs **no payload crypto** — only TLS and Ed25519 signature verification for auth, registration, and (defense-in-depth) record validation.
+By design the server performs **no payload crypto** — only Ed25519 signature verification for auth, keyset registration and (defense-in-depth) record validation. In-process TLS is optional and **off by default**; the expected deployment terminates TLS at a reverse proxy (see [Server configuration](../../operations/configuration/)).
 
 ## Identity, accounts, and devices — one account, many spaces
 

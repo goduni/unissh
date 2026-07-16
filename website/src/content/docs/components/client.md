@@ -5,7 +5,7 @@ description: The UniSSH cross-platform client — a Tauri 2 + React app wrapping
 
 The UniSSH client is a cross-platform SSH client (macOS / iOS / Linux / Windows / Android) built on **Tauri v2** with a **React 18 + TypeScript** frontend and a **Rust backend** that wraps the existing core (`rust-core`, crate `unissh-ffi`) directly as a path dependency.
 
-The UI is dark-first and premium-technological — Hanken Grotesk + JetBrains Mono, five accent colors, dark/light/auto app themes, seven terminal themes, a desktop three-panel shell, and a native mobile shell.
+The UI is dark-first and premium-technological — Hanken Grotesk + JetBrains Mono, three theme families (**mono** is the default; **nebula** and **candy** are opt-in), five accent presets, light/dark/auto modes with an AA-verified twin each, **nine** terminal themes (two of them light), a desktop shell and a purpose-built mobile shell.
 
 ## Architecture
 
@@ -16,8 +16,9 @@ src/                      React + TS frontend
   shell/      Shell.tsx (title bar, sidebar ↔ icon rail, vault switcher, nav)
   bridge/     types.ts (DTO mirrors) + api.ts (typed invoke wrappers per command)
   store/      zustand: route/vault/data/terminals/tunnels/overlays, ctx, toast
-  views/      ViewHosts, ViewTerminal (real xterm.js), ViewFleet, ViewBroadcast,
-              ViewSftp, ViewTunnels, ViewKnown, ViewAgent, ViewSecrets, ViewSettings
+  views/      ViewHosts, ViewTerminal (real xterm.js), ViewRun (mounts ViewFleet
+              and ViewBroadcast as two modes of one screen), ViewSftp, ViewTunnels,
+              ViewKnown, ViewAgent, ViewSecrets, ViewSettings
   overlays/   Entry (onboarding/kit/unlock), Modals, CommandPalette, ImportPreview, …
   mobile/     MobileApp.tsx (bottom tabs, push stack, sheets, FAB)
 
