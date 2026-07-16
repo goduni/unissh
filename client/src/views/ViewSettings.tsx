@@ -1018,16 +1018,27 @@ function SettingsVaults() {
   // server that isn't linked here. They don't sync until (re)bound.
   const unboundVaults = cloudVaults.filter((v) => vaultServer(v, servers) == null);
 
-  // Bind an unbound vault immediately (no prior server → no old copy to warn about).
-  const bindTo = (v: VaultInfo, serverId: string) =>
-    api
-      .serverBindCloudVault(v.vaultId, serverId)
-      .then(() => {
-        void reload();
-        setPickerVault(null);
-        toast(t("vault.boundDone"), "ok");
-      })
-      .catch(errToast);
+  // Bind an unbound vault to a server AND push it right away, so it lands on the
+  // server immediately instead of waiting for the next sync. The bind is a local
+  // label change (always succeeds); the follow-up sync is best-effort — with no
+  // session the vault is bound and will sync later.
+  const bindTo = async (v: VaultInfo, serverId: string) => {
+    try {
+      await api.serverBindCloudVault(v.vaultId, serverId);
+    } catch (e) {
+      errToast(e);
+      return;
+    }
+    setPickerVault(null);
+    setBindSel(null);
+    try {
+      await api.serverSyncNow(serverId);
+    } catch {
+      /* bound; the push happens on the next sync */
+    }
+    void reload();
+    toast(t("vault.boundDone"), "ok");
+  };
 
   // (Re)bind a vault to `s`. A MOVE (it was already bound to a linked server) is
   // confirmed first and we're explicit that the OLD server keeps its (encrypted)
@@ -1046,8 +1057,11 @@ function SettingsVaults() {
       onConfirm: async () => {
         await guard(async () => {
           await api.serverBindCloudVault(v.vaultId, s.serverId!);
+          // Push to the new server right away (best-effort — bound regardless).
+          await api.serverSyncNow(s.serverId!).catch(() => {});
           await reload();
           setPickerVault(null);
+          setBindSel(null);
           toast(t("vault.moveDone"), "ok");
         });
       },
