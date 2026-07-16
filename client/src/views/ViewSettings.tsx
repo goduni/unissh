@@ -9,6 +9,7 @@ import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { ACCENT_KEYS, ACCENTS, MONO, UI, rgba } from "@/theme/tokens";
 import type { AppThemeFamily, Density, HostsLayout, Mode, Palette, TermTheme } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, Segmented, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
+import { ServerVaultsSection } from "./ServerVaultsSection";
 import type { IconName } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -3444,6 +3445,8 @@ function SettingsCloud() {
           {t("serverCloud.signInAgain")}
         </Btn>
       </div>
+
+      <ServerVaultsSection serverId={s.serverId} hasSession={s.hasSession} />
 
       {syncStatus.lastReport && (
         <div style={{ fontSize: 12, color: p.txt3, marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>

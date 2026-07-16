@@ -757,6 +757,91 @@ pub async fn server_restore_deleted_vaults(
     Ok(restored)
 }
 
+// ---------- per-vault catalog / pull / adopt (Phase 4) ----------
+
+/// List the vaults available on a server (defaults to active) that this caller can
+/// access, each enriched with local state (is it already on this device, is it bound).
+/// Lets the picker offer Pull / Push / in-sync per vault. Requires a session.
+#[tauri::command]
+pub async fn server_list_vaults(
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::ServerVault>> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    let core = state.core.clone();
+    blocking_api(move || {
+        let transport = HttpSyncTransport::new(cfg.base_url, access);
+        let catalog = transport.list_vaults().map_err(ApiError::from)?;
+        let locals = core.list_vaults().map_err(ApiError::from)?;
+        let out = catalog
+            .into_iter()
+            .map(|c| {
+                // Local vault ids are hex too (create_cloud_vault returns hex).
+                let local = locals
+                    .iter()
+                    .find(|l| l.vault_id.eq_ignore_ascii_case(&c.vault_id));
+                dto::ServerVault {
+                    vault_id: c.vault_id,
+                    latest_version: c.latest_version,
+                    tombstone: c.tombstone,
+                    is_local: local.is_some(),
+                    bound: local.is_some_and(|l| l.sync_tenant.is_some()),
+                    local_name: local.map(|l| l.name.clone()),
+                }
+            })
+            .collect();
+        Ok(out)
+    })
+    .await
+}
+
+/// **Pull ONE vault** (by hex id) from a server (defaults to active) onto this device:
+/// targeted fetch of just that vault's objects + verify-before-apply, WITHOUT advancing
+/// the pull cursor. Requires a session.
+#[tauri::command]
+pub async fn server_pull_vault(
+    vault_id: String,
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::SyncReport> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    let core = state.core.clone();
+    let report = blocking_api(move || {
+        let space = cfg.space_id.clone();
+        let transport = HttpSyncTransport::new(cfg.base_url, access);
+        let objects = transport.delta_for_vault(&vault_id);
+        core.apply_pulled_vault(space, objects)
+            .map_err(ApiError::from)
+    })
+    .await?;
+    Ok(report.into())
+}
+
+/// **Adopt a LOCAL vault onto a server** (Push; defaults to active): bind the vault to
+/// the server's space, then sync so it uploads. Requires a session.
+#[tauri::command]
+pub async fn server_adopt_vault(
+    vault_id: String,
+    server_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::SyncReport> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    let core = state.core.clone();
+    let report = blocking_api(move || {
+        let space = cfg.space_id.clone();
+        core.bind_cloud_vault(vault_id, space.clone())
+            .map_err(ApiError::from)?;
+        let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
+            Arc::new(HttpSyncTransport::new(cfg.base_url, access));
+        core.sync_now(transport, space).map_err(ApiError::from)
+    })
+    .await?;
+    Ok(report.into())
+}
+
 // ---------- membership / sharing ----------
 //
 // add_member / rotate_vk / confirm_member_pin / list_members / member_fingerprint

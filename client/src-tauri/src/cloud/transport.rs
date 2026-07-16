@@ -34,9 +34,94 @@ pub struct HttpSyncTransport {
     bearer: String,
 }
 
+/// One entry of the server vault catalog (`GET /v1/vaults`).
+pub struct CatalogEntry {
+    /// hex vault_id.
+    pub vault_id: String,
+    pub latest_version: i64,
+    pub tombstone: bool,
+}
+
 impl HttpSyncTransport {
     pub fn new(base_url: String, bearer: String) -> Self {
         HttpSyncTransport { base_url, bearer }
+    }
+
+    /// `GET /v1/vaults` — the member-facing catalog of vaults this caller can access.
+    /// Unlike the sync flow this is a plain read (not part of the untrusted-transport
+    /// verify loop); a non-2xx is surfaced as an error so the UI can report it.
+    pub fn list_vaults(&self) -> Result<Vec<CatalogEntry>, FfiError> {
+        let http = client::http();
+        let resp = client::headers(
+            http.get(client::url(&self.base_url, "/v1/vaults")),
+            Some(&self.bearer),
+        )
+        .send()
+        .map_err(|e| FfiError::Other {
+            msg: format!("list vaults: {e}"),
+        })?;
+        if !resp.status().is_success() {
+            return Err(FfiError::Other {
+                msg: format!("list vaults: http {}", resp.status().as_u16()),
+            });
+        }
+        let v: Value = resp.json().map_err(|e| FfiError::Other {
+            msg: format!("list vaults: bad JSON: {e}"),
+        })?;
+        let mut out = Vec::new();
+        if let Some(arr) = v["vaults"].as_array() {
+            for it in arr {
+                if let Some(vid) = it["vault_id"].as_str() {
+                    out.push(CatalogEntry {
+                        vault_id: vid.to_string(),
+                        latest_version: it["latest_version"].as_i64().unwrap_or(0),
+                        tombstone: it["tombstone"].as_bool().unwrap_or(false),
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// `GET /v1/sync/delta?vault=<hex>` — the raw object blobs for ONE vault (paginated).
+    /// Best-effort like `delta_since`: on any transport error it returns what it has;
+    /// the core re-verifies every object before applying.
+    pub fn delta_for_vault(&self, vault_id_hex: &str) -> Vec<Vec<u8>> {
+        let http = client::http();
+        let mut out = Vec::new();
+        let mut cur: u64 = 0;
+        loop {
+            let path =
+                format!("/v1/sync/delta?cursor={cur}&limit={DELTA_LIMIT}&vault={vault_id_hex}");
+            let resp = match client::headers(
+                http.get(client::url(&self.base_url, &path)),
+                Some(&self.bearer),
+            )
+            .send()
+            {
+                Ok(r) if r.status().is_success() => r,
+                _ => break,
+            };
+            let v: Value = match resp.json() {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            if let Some(items) = v["items"].as_array() {
+                for item in items {
+                    if let Some(obj_b64) = item["object"].as_str() {
+                        if let Ok(bytes) = client::unb64(obj_b64) {
+                            out.push(bytes);
+                        }
+                    }
+                }
+            }
+            if v["has_more"].as_bool().unwrap_or(false) {
+                cur = v["next_cursor"].as_u64().unwrap_or(cur);
+            } else {
+                break;
+            }
+        }
+        out
     }
 }
 

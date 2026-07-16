@@ -286,6 +286,9 @@ pub fn run() {
             cloud::commands::server_sync_now,
             cloud::commands::server_repull,
             cloud::commands::server_restore_deleted_vaults,
+            cloud::commands::server_list_vaults,
+            cloud::commands::server_pull_vault,
+            cloud::commands::server_adopt_vault,
             // cloud membership / sharing
             cloud::commands::server_list_accounts,
             cloud::commands::server_add_member,

@@ -42,8 +42,8 @@ mod object;
 mod transport;
 
 pub use engine::{
-    pull_cursor_key, push_cursor_key, reset_pull_cursor, sync_pull, sync_push, Conflict,
-    PushReport, RejectReason, Rejected, SyncContext, SyncReport,
+    apply_pulled_objects, pull_cursor_key, push_cursor_key, reset_pull_cursor, sync_pull,
+    sync_push, Conflict, PushReport, RejectReason, Rejected, SyncContext, SyncReport,
 };
 pub use error::SyncError;
 pub use object::{AccountStateObject, AuditObject, ObjectTag, SyncObject};
