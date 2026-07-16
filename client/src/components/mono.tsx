@@ -113,7 +113,7 @@ export function FactRow({
         gap: 12,
         padding: "10px 0",
         borderTop: first ? undefined : `1px solid ${p.line}`,
-        fontSize: 12.5,
+        fontSize: 13,
       }}
     >
       <span style={{ color: p.txt3, flexShrink: 0 }}>{label}</span>
@@ -149,7 +149,7 @@ export function MetaChip({
         display: "inline-flex",
         alignItems: "center",
         gap: 5,
-        fontSize: 11.5,
+        fontSize: 12,
         fontWeight: 600,
         color: c,
         fontFamily: mono ? MONO : UI,
@@ -273,7 +273,7 @@ export function UnderlineTabs<T extends string>({
               display: "inline-flex",
               alignItems: "center",
               gap: 7,
-              fontSize: 13.5,
+              fontSize: 13,
               fontWeight: on ? 700 : 600,
               color: on ? p.txt : p.txt3,
               cursor: "pointer",

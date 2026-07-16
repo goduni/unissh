@@ -83,7 +83,7 @@ function LockWarnBanner({ sec, onStay }: { sec: number; onStay: () => void }) {
       }}
     >
       <Icon name="lock" size={15} color={p.amber} />
-      <span style={{ fontSize: 12.5, color: p.txt }}>{t("autolock.warn", { sec })}</span>
+      <span style={{ fontSize: 13, color: p.txt }}>{t("autolock.warn", { sec })}</span>
       <button
         onClick={onStay}
         style={{

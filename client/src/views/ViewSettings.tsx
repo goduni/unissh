@@ -88,7 +88,7 @@ function SettingRow({
     >
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 700 }}>{title}</div>
-        {desc && <div style={{ fontSize: 12.5, color: p.txt3, marginTop: 2 }}>{desc}</div>}
+        {desc && <div style={{ fontSize: 13, color: p.txt3, marginTop: 2 }}>{desc}</div>}
       </div>
       {children}
     </div>
@@ -119,11 +119,11 @@ function inputStyle(p: Palette, mono?: boolean): React.CSSProperties {
     boxSizing: "border-box",
     padding: "9px 12px",
     fontFamily: mono ? MONO : UI,
-    fontSize: 13.5,
+    fontSize: 13,
     color: p.txt,
     background: p.bg0,
     border: `1px solid ${p.line2}`,
-    borderRadius: 9,
+    borderRadius: 8,
     outline: "none",
   };
 }
@@ -388,7 +388,7 @@ function SettingsAppearance() {
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 3 }}>
               {t("settings.termThemeTitle")}
             </div>
-            <div style={{ fontSize: 12.5, color: p.txt3 }}>{t("settings.termThemeDesc")}</div>
+            <div style={{ fontSize: 13, color: p.txt3 }}>{t("settings.termThemeDesc")}</div>
           </div>
           <Btn variant="ghost" size="sm" icon="refresh" onClick={resetTermTheme}>
             {t("settings.termResetDefault")}
@@ -414,7 +414,7 @@ function SettingsAppearance() {
                     width: "100%",
                     textAlign: "left",
                     padding: 0,
-                    borderRadius: 11,
+                    borderRadius: 12,
                     overflow: "hidden",
                     cursor: "pointer",
                     border: `1px solid ${active ? p.accentLine : p.line}`,
@@ -443,7 +443,7 @@ function SettingsAppearance() {
                       background: "rgba(0,0,0,0.25)",
                     }}
                   >
-                    <span style={{ fontSize: 11.5, fontWeight: 700, color: "#fff", flex: 1 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#fff", flex: 1 }}>
                       {th.name}
                     </span>
                     {active && <Icon name="check" size={13} color="#fff" />}
@@ -474,7 +474,7 @@ function SettingsAppearance() {
               alignItems: "center",
               justifyContent: "center",
               gap: 6,
-              borderRadius: 11,
+              borderRadius: 12,
               cursor: "pointer",
               border: `1px solid ${p.line}`,
               background: "transparent",
@@ -647,7 +647,7 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
       style={{
         marginTop: 12,
         padding: 16,
-        borderRadius: 13,
+        borderRadius: 12,
         border: `1px solid ${p.line2}`,
         background: p.bg1,
         display: "flex",
@@ -655,7 +655,7 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
         gap: 11,
       }}
     >
-      <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t("settings.changeMasterPw")}</div>
+      <div style={{ fontSize: 13, fontWeight: 700 }}>{t("settings.changeMasterPw")}</div>
       <input
         {...NO_AUTOCORRECT}
         type="password"
@@ -770,11 +770,11 @@ function SettingsSecurity() {
           borderTop: `1px solid ${p.line}`,
         }}
       >
-        <div style={{ fontSize: 13.5, fontWeight: 700, color: p.red, marginBottom: 4 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: p.red, marginBottom: 4 }}>
           {t("settings.dangerZone")}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ flex: 1, fontSize: 12.5, color: p.txt2 }}>
+          <div style={{ flex: 1, fontSize: 13, color: p.txt2 }}>
             {t("settings.dangerZoneDesc")}
           </div>
           <Btn
@@ -813,7 +813,7 @@ function AboutRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
         style={{
           flex: 1,
           minWidth: 0,
-          fontSize: 13.5,
+          fontSize: 13,
           color: p.txt,
           fontFamily: mono ? MONO : UI,
           wordBreak: isMobile ? "break-all" : undefined,
@@ -954,7 +954,7 @@ function SettingsAbout() {
           <Icon name="terminal" size={26} color={p.accentInk} stroke={2} />
         </span>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.4 }}>UniSSH</div>
+          <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.4 }}>UniSSH</div>
           <div style={{ fontSize: 13, color: p.txt3 }}>{t("settings.tagline")}</div>
         </div>
       </div>
@@ -1207,7 +1207,7 @@ function SettingsVaults() {
             flexWrap: "wrap",
           }}
         >
-          <span style={{ fontSize: 13.5, fontWeight: 650 }}>{v.name}</span>
+          <span style={{ fontSize: 13, fontWeight: 650 }}>{v.name}</span>
           {isCurrent && <Tag>{t("vault.current")}</Tag>}
           {kind === "local" && <VaultBadge target="local" label={t("vault.local")} />}
           {isMember && (
@@ -1378,7 +1378,7 @@ function SettingsVaults() {
             {s.handle && (
               <span
                 style={{
-                  fontSize: 11.5,
+                  fontSize: 12,
                   color: p.txt3,
                   display: "inline-flex",
                   alignItems: "center",
@@ -1399,7 +1399,7 @@ function SettingsVaults() {
                 opacity: s.hasSession ? 1 : 0.5,
               }}
             />
-            <span style={{ fontSize: 11.5, color: p.txt3 }}>
+            <span style={{ fontSize: 12, color: p.txt3 }}>
               {s.hasSession ? t("vault.srvConnected") : t("vault.srvSignedOut")}
             </span>
             {isActive && <Tag>{t("vault.srvActive")}</Tag>}
@@ -1413,7 +1413,7 @@ function SettingsVaults() {
         </div>
         {groupBox(
           vs.length === 0 ? (
-            <div style={{ padding: "14px 15px", fontSize: 12.5, color: p.txt3 }}>
+            <div style={{ padding: "14px 15px", fontSize: 13, color: p.txt3 }}>
               {dragging ? t("vault.dropHere") : t("vault.emptyServer")}
             </div>
           ) : (
@@ -1430,7 +1430,7 @@ function SettingsVaults() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 9px" }}>
         {groupIcon("home", p.txt3, p.line)}
         <span style={{ fontSize: 14, fontWeight: 700 }}>{t("vault.grpLocal")}</span>
-        <span style={{ fontSize: 11.5, color: p.txt3 }}>· {t("vault.grpLocalHint")}</span>
+        <span style={{ fontSize: 12, color: p.txt3 }}>· {t("vault.grpLocalHint")}</span>
       </div>
       {groupBox(localVaults.map((v) => vaultRow(v, "local")))}
     </div>
@@ -1443,7 +1443,7 @@ function SettingsVaults() {
         <span style={{ fontSize: 14, fontWeight: 700, color: p.amber }}>
           {t("vault.grpUnbound")}
         </span>
-        <span style={{ fontSize: 11.5, color: p.amber, opacity: 0.85 }}>
+        <span style={{ fontSize: 12, color: p.amber, opacity: 0.85 }}>
           · {t("vault.grpUnboundHint")}
         </span>
       </div>
@@ -1454,7 +1454,7 @@ function SettingsVaults() {
   return (
     <>
       <SectionLabel first>{t("vault.manage")}</SectionLabel>
-      <div style={{ fontSize: 12.5, color: p.txt3, margin: "6px 0 18px", maxWidth: 560 }}>
+      <div style={{ fontSize: 13, color: p.txt3, margin: "6px 0 18px", maxWidth: 560 }}>
         {t("vault.topoDesc")}
       </div>
 
@@ -1526,7 +1526,7 @@ function SettingsVaults() {
                       }}
                     >
                       <Icon name="cloud" size={16} color={active ? p.accentText : p.txt3} />
-                      <span style={{ flex: 1, fontSize: 13.5 }}>{serverShortLabel(s)}</span>
+                      <span style={{ flex: 1, fontSize: 13 }}>{serverShortLabel(s)}</span>
                       {active && <Icon name="check" size={15} color={p.accentText} />}
                     </button>
                   );
@@ -1562,7 +1562,7 @@ function CloudInfoRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) 
         style={{
           flex: 1,
           minWidth: 0,
-          fontSize: 13.5,
+          fontSize: 13,
           color: p.txt,
           fontFamily: mono ? MONO : UI,
           wordBreak: "break-all",
@@ -1889,7 +1889,7 @@ function CloudConnectForm({
             placeholder={t("serverCloud.baseUrlPlaceholder")}
             mono
           />
-          <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
             {t("serverCloud.baseUrlHint")}
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -1921,7 +1921,7 @@ function CloudConnectForm({
         >
           <Icon name="server" size={18} style={{ color: p.accentText, flexShrink: 0 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: p.txt }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: p.txt }}>
               {info.name || baseUrl.trim()}
             </div>
             <div
@@ -1940,7 +1940,7 @@ function CloudConnectForm({
           </div>
           <span
             style={{
-              fontSize: 10.5,
+              fontSize: 11,
               fontWeight: 700,
               letterSpacing: 0.4,
               textTransform: "uppercase",
@@ -1961,7 +1961,7 @@ function CloudConnectForm({
         {!info.claimed ? (
           // Unclaimed → set up as owner with the printed setup code.
           <>
-            <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
               {t("serverCloud.setupCodeHint")}
             </div>
             <ConnectField
@@ -2028,7 +2028,7 @@ function CloudConnectForm({
 
             {branch === "invite" ? (
               <>
-                <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
                   {t("serverCloud.inviteLinkHint")}
                 </div>
                 <ConnectField
@@ -2059,7 +2059,7 @@ function CloudConnectForm({
                     }}
                   >
                     {preview.instanceName && (
-                      <div style={{ fontSize: 12.5, fontWeight: 700, color: p.txt }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: p.txt }}>
                         {preview.instanceName}
                       </div>
                     )}
@@ -2075,7 +2075,7 @@ function CloudConnectForm({
                             display: "flex",
                             alignItems: "center",
                             gap: 8,
-                            fontSize: 12.5,
+                            fontSize: 13,
                             color: p.txt2,
                           }}
                         >
@@ -2108,7 +2108,7 @@ function CloudConnectForm({
               </>
             ) : branch === "identity" ? (
               <>
-                <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
                   {t("serverCloud.identityHint")}
                 </div>
                 <ConnectField
@@ -2145,7 +2145,7 @@ function CloudConnectForm({
               </>
             ) : branch === "kit" ? (
               <>
-                <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
                   {t("serverCloud.kitHint")}
                 </div>
                 <div>
@@ -2166,7 +2166,7 @@ function CloudConnectForm({
                       style={{
                         flex: 1,
                         minWidth: 0,
-                        fontSize: 12.5,
+                        fontSize: 13,
                         fontFamily: MONO,
                         color: kitFileName ? p.txt2 : p.txt3,
                         overflow: "hidden",
@@ -2204,7 +2204,7 @@ function CloudConnectForm({
                 {/* Reconnect the local keyset — only for an already-linked instance. */}
                 {alreadyLinked && (
                   <>
-                    <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
                       {t("serverCloud.signInHint")}
                     </div>
                     <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -2224,7 +2224,7 @@ function CloudConnectForm({
                           alignItems: "center",
                           gap: 10,
                           color: p.txt3,
-                          fontSize: 11.5,
+                          fontSize: 12,
                           textTransform: "uppercase",
                           letterSpacing: 0.4,
                           margin: "2px 0",
@@ -2235,7 +2235,7 @@ function CloudConnectForm({
                         <span style={{ flex: 1, height: 1, background: p.line2 }} />
                       </div>
                     )}
-                    <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
                       {t("serverCloud.ssoHint")}
                     </div>
                     <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -2326,7 +2326,7 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                 <span
                   style={{
-                    fontSize: 12.5,
+                    fontSize: 13,
                     fontFamily: MONO,
                     color: p.txt,
                     overflow: "hidden",
@@ -2430,7 +2430,7 @@ function PairingCard({ onClose }: { onClose: () => void }) {
       style={{
         marginTop: 12,
         padding: 16,
-        borderRadius: 13,
+        borderRadius: 12,
         border: `1px solid ${p.line2}`,
         background: p.bg1,
         display: "flex",
@@ -2438,8 +2438,8 @@ function PairingCard({ onClose }: { onClose: () => void }) {
         gap: 11,
       }}
     >
-      <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t("serverCloud.pairingTitle")}</div>
-      <div style={{ fontSize: 12.5, color: p.txt3 }}>{t("serverCloud.pairingHint")}</div>
+      <div style={{ fontSize: 13, fontWeight: 700 }}>{t("serverCloud.pairingTitle")}</div>
+      <div style={{ fontSize: 13, color: p.txt3 }}>{t("serverCloud.pairingHint")}</div>
       <textarea
         readOnly
         value={payloadText}
@@ -2449,7 +2449,7 @@ function PairingCard({ onClose }: { onClose: () => void }) {
           minHeight: 132,
           resize: "vertical",
           padding: 12,
-          borderRadius: 9,
+          borderRadius: 8,
           background: p.bg0,
           border: `1px solid ${p.line2}`,
           outline: "none",
@@ -2462,13 +2462,13 @@ function PairingCard({ onClose }: { onClose: () => void }) {
       />
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         {waiting && (
-          <span style={{ display: "flex", alignItems: "center", gap: 8, color: p.txt2, fontSize: 12.5 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 8, color: p.txt2, fontSize: 13 }}>
             <Spinner size={14} />
             {t("serverCloud.pairingWaiting")}
           </span>
         )}
         {done && (
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: p.green, fontSize: 12.5 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: p.green, fontSize: 13 }}>
             <Icon name="check" size={14} color={p.green} />
             {t("serverCloud.pairingDone")}
           </span>
@@ -2512,7 +2512,7 @@ function CloudProfileForm({ status, onClose }: { status: ServerStatus; onClose: 
       style={{
         marginTop: 12,
         padding: 16,
-        borderRadius: 13,
+        borderRadius: 12,
         border: `1px solid ${p.line2}`,
         background: p.bg1,
         display: "flex",
@@ -2520,7 +2520,7 @@ function CloudProfileForm({ status, onClose }: { status: ServerStatus; onClose: 
         gap: 11,
       }}
     >
-      <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t("serverCloud.editProfile")}</div>
+      <div style={{ fontSize: 13, fontWeight: 700 }}>{t("serverCloud.editProfile")}</div>
       <input
         {...NO_AUTOCORRECT}
         value={displayName}
@@ -2607,7 +2607,7 @@ function ArmEscrowForm({
       style={{
         marginTop: 12,
         padding: 16,
-        borderRadius: 13,
+        borderRadius: 12,
         border: `1px solid ${p.line2}`,
         background: p.bg1,
         display: "flex",
@@ -2615,8 +2615,8 @@ function ArmEscrowForm({
         gap: 11,
       }}
     >
-      <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t("serverCloud.armEscrowFormTitle")}</div>
-      <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 13, fontWeight: 700 }}>{t("serverCloud.armEscrowFormTitle")}</div>
+      <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
         {t("serverCloud.armEscrowHint")}
       </div>
       {usesPassword && (
@@ -2688,11 +2688,11 @@ function CloudAuditLog() {
         </Btn>
       </SettingRow>
       {forbidden ? (
-        <div style={{ fontSize: 12.5, color: p.txt3, padding: "10px 0" }}>
+        <div style={{ fontSize: 13, color: p.txt3, padding: "10px 0" }}>
           {t("serverCloud.auditForbidden")}
         </div>
       ) : loaded && entries.length === 0 ? (
-        <div style={{ fontSize: 12.5, color: p.txt3, padding: "10px 0" }}>
+        <div style={{ fontSize: 13, color: p.txt3, padding: "10px 0" }}>
           {t("serverCloud.auditEmpty")}
         </div>
       ) : (
@@ -2726,7 +2726,7 @@ function CloudAuditLog() {
                   flexDirection: "column",
                   gap: 3,
                   padding: "10px 0",
-                  fontSize: 12.5,
+                  fontSize: 13,
                   borderBottom: `1px solid ${p.line}`,
                 }}
               >
@@ -2755,7 +2755,7 @@ function CloudAuditLog() {
                   display: "flex",
                   gap: 10,
                   padding: "8px 0",
-                  fontSize: 12.5,
+                  fontSize: 13,
                   borderBottom: `1px solid ${p.line}`,
                 }}
               >
@@ -2922,11 +2922,11 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
   return (
     <>
       <SectionLabel>{t("serverCloud.members")}</SectionLabel>
-      <div style={{ fontSize: 12.5, color: p.txt3, margin: "6px 0 8px" }}>
+      <div style={{ fontSize: 13, color: p.txt3, margin: "6px 0 8px" }}>
         {t("serverCloud.membersDesc")}
       </div>
       {members.length === 0 ? (
-        <div style={{ fontSize: 12.5, color: p.txt3, padding: "8px 0" }}>
+        <div style={{ fontSize: 13, color: p.txt3, padding: "8px 0" }}>
           {t("serverCloud.membersEmpty")}
         </div>
       ) : (
@@ -2945,7 +2945,7 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div
                 style={{
-                  fontSize: 12.5,
+                  fontSize: 13,
                   fontFamily: MONO,
                   color: p.txt,
                   overflow: "hidden",
@@ -2976,7 +2976,7 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
           style={{
             marginTop: 12,
             padding: 16,
-            borderRadius: 13,
+            borderRadius: 12,
             border: `1px solid ${p.line2}`,
             background: p.bg1,
             display: "flex",
@@ -2984,7 +2984,7 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
             gap: 11,
           }}
         >
-          <div style={{ fontSize: 13.5, fontWeight: 700 }}>{t("serverCloud.addMember")}</div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>{t("serverCloud.addMember")}</div>
           {accounts.length > 0 && (
             <select
               onChange={(e) => pickAccount(e.target.value)}
@@ -3129,7 +3129,7 @@ function CloudServersList({
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
-                    fontSize: 13.5,
+                    fontSize: 13,
                     fontWeight: 600,
                     color: p.txt,
                     minWidth: 0, // let the ellipsis label span actually truncate
@@ -3429,14 +3429,14 @@ function SettingsCloud() {
               display: "flex",
               alignItems: "center",
               gap: 8,
-              fontSize: 13.5,
+              fontSize: 13,
               fontWeight: 700,
             }}
           >
             <Icon name="shieldcheck" size={16} color={p.accentText} />
             {t("serverCloud.armEscrowPromptTitle")}
           </div>
-          <div style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5, marginTop: 4 }}>
+          <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5, marginTop: 4 }}>
             {t("serverCloud.armEscrowPromptBody")}
           </div>
           <ArmEscrowForm
@@ -3454,7 +3454,7 @@ function SettingsCloud() {
             display: "inline-flex",
             alignItems: "center",
             gap: 6,
-            fontSize: 12.5,
+            fontSize: 13,
             fontWeight: 600,
             color: s.hasSession ? p.green : p.amber,
           }}
@@ -3568,7 +3568,7 @@ function SettingsCloud() {
       ) : (
         <>
           <SectionLabel>{t("serverCloud.sectionVault")}</SectionLabel>
-          <div style={{ fontSize: 12.5, color: p.txt3, padding: "8px 0" }}>
+          <div style={{ fontSize: 13, color: p.txt3, padding: "8px 0" }}>
             {t("serverCloud.noCloudVault")}
           </div>
         </>
@@ -3638,7 +3638,7 @@ export function ViewSettings() {
       >
         {!isMobile && (
           <h1
-            style={{ margin: "0 0 14px 10px", fontSize: 20, fontWeight: 800, letterSpacing: -0.5 }}
+            style={{ margin: "0 0 14px 10px", fontSize: 19, fontWeight: 800, letterSpacing: -0.5 }}
           >
             {t("settings.heading")}
           </h1>
@@ -3654,7 +3654,7 @@ export function ViewSettings() {
                 alignItems: "center",
                 gap: 10,
                 padding: isMobile ? "10px 14px" : "9px 11px",
-                borderRadius: 9,
+                borderRadius: 8,
                 cursor: "pointer",
                 textAlign: "left",
                 border: "1px solid transparent",
@@ -3666,7 +3666,7 @@ export function ViewSettings() {
                     : `inset 2px 0 0 ${p.accent}`
                   : "none",
                 fontFamily: UI,
-                fontSize: 13.5,
+                fontSize: 13,
                 fontWeight: on ? 700 : 500,
                 whiteSpace: isMobile ? "nowrap" : undefined,
                 flexShrink: isMobile ? 0 : undefined,
@@ -3687,7 +3687,7 @@ export function ViewSettings() {
             boxSizing: "border-box",
           }}
         >
-          <h2 style={{ margin: "0 0 6px", fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>
+          <h2 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>
             {title}
           </h2>
           <div style={{ height: 8 }} />

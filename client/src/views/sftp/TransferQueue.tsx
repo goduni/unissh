@@ -76,14 +76,14 @@ function QueueRow({ t }: { t: Transfer }) {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
         <Icon name={dirIcon(t)} size={13} color={t.state === "done" ? p.green : t.state === "error" ? p.red : p.accentText} />
-        <span style={{ fontFamily: MONO, fontSize: 11.5, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <span style={{ fontFamily: MONO, fontSize: 12, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {t.label}
           {t.kind === "dir" && t.filesTotal > 0 ? ` (${t.filesDone}/${t.filesTotal})` : ""}
         </span>
         <span
           style={{
             fontFamily: MONO,
-            fontSize: 10.5,
+            fontSize: 11,
             color: t.state === "done" ? p.green : p.txt3,
             // ellipsis so a long RU active status ("42% · 1,2 МБ/с · осталось 0:12") can't wrap
             minWidth: 0,
@@ -127,7 +127,7 @@ function QueueRow({ t }: { t: Transfer }) {
           alignItems: "center",
           gap: 5,
           fontFamily: UI,
-          fontSize: 10.5,
+          fontSize: 11,
           color: p.txt3,
           marginBottom: 7,
           whiteSpace: "nowrap",
@@ -139,13 +139,13 @@ function QueueRow({ t }: { t: Transfer }) {
         <span aria-hidden style={{ flexShrink: 0, color: p.txt3 }}>→</span>
         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{legLabel(t.to)}</span>
       </div>
-      <div style={{ height: 5, borderRadius: 3, background: p.bg4, overflow: "hidden" }}>
+      <div style={{ height: 5, borderRadius: 6, background: p.bg4, overflow: "hidden" }}>
         {/* scaleX, not width: transform animates off the layout path */}
         <div
           style={{
             height: "100%",
             width: "100%",
-            borderRadius: 3,
+            borderRadius: 6,
             background: barColor,
             transform: `scaleX(${pct / 100})`,
             transformOrigin: "left",
@@ -159,7 +159,7 @@ function QueueRow({ t }: { t: Transfer }) {
           title={t.error}
           style={{
             fontFamily: MONO,
-            fontSize: 10.5,
+            fontSize: 11,
             lineHeight: 1.35,
             color: p.red,
             marginTop: 6,
@@ -199,7 +199,7 @@ function QueueBody({ transfers }: { transfers: Transfer[] }) {
       {/* flexWrap so the pauseAll/cancelAll/clear labels wrap instead of overflowing a narrow panel */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, rowGap: 6, flexWrap: "wrap", marginBottom: 10 }}>
         <Icon name="arrows" size={15} color={p.txt2} />
-        <span style={{ fontSize: 12.5, fontWeight: 700 }}>{t("sftp.queue.title")}</span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>{t("sftp.queue.title")}</span>
         <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
           {t("sftp.queue.overall", {
             count: transfers.length,
@@ -252,10 +252,10 @@ function qbtn(p: ReturnType<typeof usePalette>): React.CSSProperties {
   return {
     background: p.bg2,
     border: `1px solid ${p.line}`,
-    borderRadius: 7,
+    borderRadius: 8,
     padding: "4px 9px",
     cursor: "pointer",
-    fontSize: 11.5,
+    fontSize: 12,
     color: p.txt2,
     fontFamily: UI,
   };
@@ -304,8 +304,8 @@ export function TransferQueue() {
           }}
         >
           <Icon name="arrows" size={15} color={p.accentText} />
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: p.txt }}>{t("sftp.queue.title")}</span>
-          <div style={{ flex: 1, height: 5, borderRadius: 3, background: p.bg4, overflow: "hidden" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: p.txt }}>{t("sftp.queue.title")}</span>
+          <div style={{ flex: 1, height: 5, borderRadius: 6, background: p.bg4, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${Math.round(agg.ratio * 100)}%`, background: p.accent }} />
           </div>
           <Icon name="cd" size={13} color={p.txt3} />

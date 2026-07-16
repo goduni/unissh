@@ -171,12 +171,12 @@ export function FileList({
         <Icon name="alert" size={22} color={p.red} />
         <div style={{ fontSize: 13, color: p.txt2 }}>{t("sftp.loadFailed")}</div>
         {error && (
-          <div style={{ fontSize: 11.5, color: p.txt3, maxWidth: 300, wordBreak: "break-word" }}>{error}</div>
+          <div style={{ fontSize: 12, color: p.txt3, maxWidth: 300, wordBreak: "break-word" }}>{error}</div>
         )}
         <button
           onClick={onRetry}
           style={{
-            fontSize: 12.5,
+            fontSize: 13,
             color: p.accentText,
             background: "transparent",
             border: `1px solid ${p.accentLine}`,
@@ -239,15 +239,15 @@ export function FileList({
                 style={{
                   height: isMobile ? 44 : 30,
                   margin: "0 4px",
-                  borderRadius: 7,
+                  borderRadius: 8,
                   display: "flex",
                   alignItems: "center",
                   padding: "0 10px",
                   gap: 9,
                 }}
               >
-                <div style={{ width: 14, height: 14, borderRadius: 4, background: p.bg2 }} />
-                <div style={{ flex: 1, height: 9, borderRadius: 4, background: p.bg2, maxWidth: 120 + i * 18 }} />
+                <div style={{ width: 14, height: 14, borderRadius: 6, background: p.bg2 }} />
+                <div style={{ flex: 1, height: 9, borderRadius: 6, background: p.bg2, maxWidth: 120 + i * 18 }} />
               </div>
             ))
           : display.map((e, idx) => (
@@ -284,7 +284,7 @@ export function FileList({
             }}
           >
             <Icon name={filter.trim() ? "search" : "folderOpen"} size={20} color={p.txt3} />
-            <span style={{ fontSize: 12.5 }}>
+            <span style={{ fontSize: 13 }}>
               {filter.trim() && entries.length > 0 ? t("sftp.noMatches", { q: filter.trim() }) : t("sftp.empty")}
             </span>
           </div>

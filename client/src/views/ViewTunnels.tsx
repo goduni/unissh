@@ -70,7 +70,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
           justifyContent: "center",
           fontFamily: MONO,
           fontWeight: 700,
-          fontSize: 15,
+          fontSize: 16,
           color: p.txt2,
           flexShrink: 0,
           ...(narrow ? { order: 0 } : null),
@@ -82,7 +82,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
         {/* Ellipsize a long label so it can't spill into the route column. */}
         <div
           style={{
-            fontSize: 14.5,
+            fontSize: 14,
             fontWeight: 700,
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -92,7 +92,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
         >
           {tun.label}
         </div>
-        <div style={{ fontSize: 11.5, color: p.txt3 }}>{tDyn(m.nameKey)}</div>
+        <div style={{ fontSize: 12, color: p.txt3 }}>{tDyn(m.nameKey)}</div>
       </div>
       <div
         style={{
@@ -102,7 +102,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
           flexWrap: narrow ? "wrap" : "nowrap",
           gap: 10,
           fontFamily: MONO,
-          fontSize: 12.5,
+          fontSize: 13,
           minWidth: 0,
           ...(narrow ? { order: 4, flexBasis: "100%" } : null),
         }}
@@ -122,7 +122,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
           <span
             style={{
               color: p.txt3,
-              fontSize: 11.5,
+              fontSize: 12,
               display: "flex",
               alignItems: "center",
               gap: 4,
@@ -138,7 +138,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
         style={{
           display: "inline-flex",
           justifyContent: "flex-end",
-          fontSize: 11.5,
+          fontSize: 12,
           whiteSpace: "nowrap",
           // minWidth (not a hard width) so a longer-language status word grows the
           // column instead of spilling out of it.
@@ -277,10 +277,10 @@ export function ViewTunnels() {
             gap: 8,
             marginTop: 4,
             padding: 14,
-            borderRadius: 13,
+            borderRadius: 12,
             border: `1px solid ${p.line}`,
             color: p.txt3,
-            fontSize: 12.5,
+            fontSize: 13,
           }}
         >
           <Icon name="alert" size={15} color={p.txt3} style={{ flexShrink: 0 }} />

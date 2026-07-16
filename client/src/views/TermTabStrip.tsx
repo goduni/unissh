@@ -240,7 +240,7 @@ export function TermTabStrip({
                     borderRadius: 6,
                     color: p.txt,
                     fontFamily: MONO,
-                    fontSize: 12.5,
+                    fontSize: 13,
                     padding: "2px 6px",
                     outline: "none",
                   }}
@@ -249,7 +249,7 @@ export function TermTabStrip({
                 <span
                   style={{
                     fontFamily: MONO,
-                    fontSize: 12.5,
+                    fontSize: 13,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -266,11 +266,11 @@ export function TermTabStrip({
                   title={t("terminal.tab.paneCount", { n: panes })}
                   style={{
                     flexShrink: 0,
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: 700,
                     lineHeight: 1,
                     padding: "2px 4px",
-                    borderRadius: 5,
+                    borderRadius: 6,
                     color: p.txt3,
                     background: p.bg2,
                   }}

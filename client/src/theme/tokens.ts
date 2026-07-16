@@ -14,21 +14,61 @@ export const MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace";
 // mono system actually uses. Reach for the primitives (Card, Btn, HairlineRow)
 // first — they consume these; the tokens are for geometry outside a primitive.
 
-/** Corner radii. The card twin is density-aware: the compact end of the SPACING
- *  axis tightens the radius with the padding (see mono.Card). */
+/** Corner radii — a SCALE, not a continuum. The app had seventeen of these across
+ *  211 sites (0,2,3,4,5,6,7,8,9,10,11,12,13,14,16,18,20): 8 and 9 both appeared
+ *  ~40 times for near-identical roles, and 10/11/12/13 split four ways inside four
+ *  pixels. None of that reads as a decision — it reads as noise. Eight steps, each
+ *  with a role.
+ *
+ *  The card twin is density-aware: the compact end of the SPACING axis tightens the
+ *  radius with the padding (see mono.Card). */
 export const RADIUS = {
-  card: 16,
-  cardCompact: 11,
-  /** Popovers and dropdown menus. */
-  menu: 12,
-  /** Buttons. */
-  ctl: 10,
-  /** Inputs and segmented controls. */
-  input: 9,
-  /** Icon buttons, chips, menu rows. */
-  chip: 8,
+  /** Full-bleed rows / anything that must not round. */
+  none: 0,
   /** The active-state tick / underline bar. */
   tick: 2,
+  /** Tags and the smallest chips. */
+  tag: 6,
+  /** Icon buttons, menu rows, inputs, segmented controls. */
+  chip: 8,
+  /** Buttons. */
+  ctl: 10,
+  /** Popovers, dropdown menus, and the compact card. */
+  menu: 12,
+  cardCompact: 12,
+  /** Cards and sheets. */
+  card: 16,
+  /** Modals — the only thing large enough to earn a larger corner. */
+  modal: 20,
+} as const;
+
+/** Type scale. Twenty sizes lived here across ~480 sites, nine of them inside the
+ *  10–14.5 band: 12 / 12.5 / 13 / 13.5 all carried the same secondary-label role,
+ *  271 times, inside a pixel and a half. Half a pixel is not a decision anyone can
+ *  read — but four of them mean two identical labels never quite agree, and that
+ *  reads as an app assembled from parts. Integers only, one role each.
+ *
+ *  Steps land at ~1.08–1.2, which is the product register's range: this UI has far
+ *  more type elements than a marketing page, so exaggerated contrast is noise. */
+export const TEXT = {
+  /** Badges, status words, the densest mono meta. */
+  micro: 11,
+  /** Secondary labels, table cells, chips. */
+  small: 12,
+  /** The base. Buttons, rows, most body copy in the app. */
+  base: 13,
+  /** Emphasised body — a row's primary name. */
+  body: 14,
+  /** Prominent single-line text: empty-state titles, a frame's header, the command
+   *  input. (Inputs are force-floored at 16 on coarse pointers anyway — anything
+   *  smaller makes iOS zoom the page on focus. See theme.css.) */
+  lead: 16,
+  /** Section heading. */
+  h3: 19,
+  /** View heading, narrow. */
+  h2: 24,
+  /** View heading. */
+  h1: 28,
 } as const;
 
 /** Layout insets. */

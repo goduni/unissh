@@ -457,7 +457,7 @@ export function ViewSftp() {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: isMobile ? "14px 14px 10px" : "16px 22px 12px" }}>
         <Icon name="folders" size={20} color={p.accentText} />
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>SFTP</h1>
+        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>SFTP</h1>
       </div>
 
       <div

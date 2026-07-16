@@ -152,7 +152,7 @@ function RevealField({
         gap: 8,
         height: 34,
         padding: "0 6px 0 12px",
-        borderRadius: 9,
+        borderRadius: 8,
         background: p.bg0,
         border: `1px solid ${p.line}`,
       }}
@@ -178,7 +178,7 @@ function RevealField({
         style={{
           width: 28,
           height: 26,
-          borderRadius: 7,
+          borderRadius: 8,
           border: "none",
           background: "transparent",
           color: p.txt3,
@@ -197,7 +197,7 @@ function RevealField({
         style={{
           width: 28,
           height: 26,
-          borderRadius: 7,
+          borderRadius: 8,
           border: "none",
           background: copied ? p.accentSoft : "transparent",
           color: copied ? p.accentText : p.txt3,
@@ -344,7 +344,7 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
           style={{
             width: 40,
             height: 40,
-            borderRadius: 11,
+            borderRadius: 12,
             background: p.bg3,
             border: `1px solid ${p.line}`,
             display: "flex",
@@ -460,7 +460,7 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
           justifyContent: "center",
           gap: 8,
           padding: 13,
-          borderRadius: 13,
+          borderRadius: 12,
           border: `1px dashed ${p.line2}`,
           background: "transparent",
           color: p.txt2,
@@ -527,7 +527,7 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
           justifyContent: "center",
           gap: 8,
           padding: 15,
-          borderRadius: 13,
+          borderRadius: 12,
           border: `1px dashed ${p.line2}`,
           background: "transparent",
           color: p.txt2,
@@ -542,13 +542,13 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
     );
   }
   return (
-    <div style={{ padding: 15, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
+    <div style={{ padding: 15, borderRadius: 12, background: p.bg1, border: `1px solid ${p.line}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <span
           style={{
             width: 34,
             height: 34,
-            borderRadius: 9,
+            borderRadius: 8,
             background: p.bg3,
             border: `1px solid ${p.line}`,
             display: "flex",
@@ -570,7 +570,7 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
             minWidth: 0,
             height: 34,
             padding: "0 10px",
-            borderRadius: 9,
+            borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg0,
             color: p.txt,
@@ -588,7 +588,7 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
           width: "100%",
           height: 34,
           padding: "0 12px",
-          borderRadius: 9,
+          borderRadius: 8,
           border: `1px solid ${p.line}`,
           background: p.bg0,
           color: p.txt,
@@ -666,7 +666,7 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           style={{
             width: 34,
             height: 34,
-            borderRadius: 9,
+            borderRadius: 8,
             background: p.bg3,
             border: `1px solid ${p.line}`,
             display: "flex",
@@ -737,7 +737,7 @@ function PasswordCard({ item }: { item: ItemInfo }) {
             width: "100%",
             height: 34,
             padding: "0 12px",
-            borderRadius: 9,
+            borderRadius: 8,
             border: `1px solid ${p.line2}`,
             background: p.bg0,
             color: p.txt,
@@ -868,7 +868,7 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
     <HairlineRow first={first} style={{ flexDirection: "column", alignItems: "stretch", gap: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
         <Icon name="note" size={16} color={p.txt2} />
-        <span style={{ fontSize: 14.5, fontWeight: 700 }}>{item.itemId}</span>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>{item.itemId}</span>
         <div style={{ flex: 1 }} />
         <button
           onClick={editing ? saveEdit : startEdit}
@@ -939,12 +939,12 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
             width: "100%",
             resize: "vertical",
             fontFamily: MONO,
-            fontSize: 12.5,
+            fontSize: 13,
             color: p.txt,
             lineHeight: 1.7,
             background: p.bg0,
             border: `1px solid ${p.line2}`,
-            borderRadius: 9,
+            borderRadius: 8,
             padding: 10,
           }}
         />
@@ -961,7 +961,7 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
             color: p.txt3,
             cursor: "pointer",
             fontFamily: UI,
-            fontSize: 12.5,
+            fontSize: 13,
           }}
         >
           <Icon name="eye" size={14} />
@@ -984,7 +984,7 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
                 padding: 0,
                 color: p.txt3,
                 fontFamily: UI,
-                fontSize: 12.5,
+                fontSize: 13,
                 cursor: "pointer",
               }}
             >
@@ -1017,7 +1017,7 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
             style={{
               margin: 0,
               fontFamily: MONO,
-              fontSize: 12.5,
+              fontSize: 13,
               color: p.txt2,
               lineHeight: 1.7,
               whiteSpace: "pre-wrap",
@@ -1079,7 +1079,7 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
           justifyContent: "center",
           gap: 8,
           padding: 16,
-          borderRadius: 13,
+          borderRadius: 12,
           border: `1px dashed ${p.line2}`,
           background: "transparent",
           color: p.txt2,
@@ -1094,7 +1094,7 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
     );
   }
   return (
-    <div style={{ padding: 16, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
+    <div style={{ padding: 16, borderRadius: 12, background: p.bg1, border: `1px solid ${p.line}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
         <Icon name="note" size={16} color={p.txt2} />
         <input
@@ -1108,7 +1108,7 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
             minWidth: 0,
             height: 32,
             padding: "0 10px",
-            borderRadius: 9,
+            borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg0,
             color: p.txt,
@@ -1127,12 +1127,12 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
           width: "100%",
           resize: "vertical",
           fontFamily: MONO,
-          fontSize: 12.5,
+          fontSize: 13,
           color: p.txt,
           lineHeight: 1.7,
           background: p.bg0,
           border: `1px solid ${p.line2}`,
-          borderRadius: 9,
+          borderRadius: 8,
           padding: 10,
           marginBottom: 10,
         }}
@@ -1170,7 +1170,7 @@ const selectStyle = (p: ReturnType<typeof usePalette>) => ({
   width: "100%",
   height: 34,
   padding: "0 10px",
-  borderRadius: 9,
+  borderRadius: 8,
   border: `1px solid ${p.line}`,
   background: p.bg0,
   color: p.txt,
@@ -1286,7 +1286,7 @@ function NewIdentityCard({
           justifyContent: "center",
           gap: 8,
           padding: 15,
-          borderRadius: 13,
+          borderRadius: 12,
           border: `1px dashed ${p.line2}`,
           background: "transparent",
           color: p.txt2,
@@ -1301,13 +1301,13 @@ function NewIdentityCard({
     );
   }
   return (
-    <div style={{ padding: 15, borderRadius: 13, background: p.bg1, border: `1px solid ${p.line}` }}>
+    <div style={{ padding: 15, borderRadius: 12, background: p.bg1, border: `1px solid ${p.line}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <span
           style={{
             width: 34,
             height: 34,
-            borderRadius: 9,
+            borderRadius: 8,
             background: p.bg3,
             border: `1px solid ${p.line}`,
             display: "flex",
@@ -1329,7 +1329,7 @@ function NewIdentityCard({
             minWidth: 0,
             height: 34,
             padding: "0 10px",
-            borderRadius: 9,
+            borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg0,
             color: p.txt,
@@ -1347,7 +1347,7 @@ function NewIdentityCard({
           width: "100%",
           height: 34,
           padding: "0 12px",
-          borderRadius: 9,
+          borderRadius: 8,
           border: `1px solid ${p.line}`,
           background: p.bg0,
           color: p.txt,
@@ -1466,7 +1466,7 @@ function IdentityCard({
           style={{
             width: 34,
             height: 34,
-            borderRadius: 9,
+            borderRadius: 8,
             background: p.bg3,
             border: `1px solid ${p.line}`,
             display: "flex",
@@ -1546,7 +1546,7 @@ function IdentityCard({
               width: "100%",
               height: 34,
               padding: "0 12px",
-              borderRadius: 9,
+              borderRadius: 8,
               border: `1px solid ${p.line2}`,
               background: p.bg0,
               color: p.txt,
@@ -1615,7 +1615,7 @@ function IdentityVaultSwitcher({
         onClick={() => setOpen(!open)}
         style={{
           padding: "9px 11px",
-          borderRadius: 11,
+          borderRadius: 12,
           background: p.bg1,
           border: `1px solid ${open ? p.accentLine : p.line}`,
           display: "flex",
@@ -1628,7 +1628,7 @@ function IdentityVaultSwitcher({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
-              fontSize: 13.5,
+              fontSize: 13,
               fontWeight: 700,
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -1815,9 +1815,9 @@ function IdentitiesTab({
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Icon name="fingerprint" size={16} color={p.txt2} />
-          <span style={{ fontSize: 13.5, fontWeight: 700 }}>{t("secrets.noIdentityVaultTitle")}</span>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>{t("secrets.noIdentityVaultTitle")}</span>
         </div>
-        <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.55, maxWidth: 470 }}>
+        <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.55, maxWidth: 470 }}>
           {t("secrets.noIdentityVaultHint")}
         </div>
         <Btn icon="plus" onClick={newVault}>
@@ -1841,7 +1841,7 @@ function IdentitiesTab({
         onCreate={newVault}
       />
       {identities.length === 0 && (
-        <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.5, padding: "0 2px" }}>
+        <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5, padding: "0 2px" }}>
           {t("secrets.vaultEmptyHint")}
         </div>
       )}
@@ -1955,7 +1955,7 @@ export function ViewSecrets() {
           padding: isMobile ? "14px 14px 10px" : "16px 22px 12px",
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: -0.7 }}>{t("secrets.title")}</h1>
+        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, letterSpacing: -0.7 }}>{t("secrets.title")}</h1>
         <TabBar tab={tab} setTab={setTab} counts={counts} isMobile={isMobile} />
         <div style={{ flex: 1 }} />
         <Btn icon="plus" size="sm" onClick={onPrimary}>
