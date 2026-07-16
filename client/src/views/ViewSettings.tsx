@@ -1525,9 +1525,9 @@ function SettingsVaults() {
                         color: p.txt,
                       }}
                     >
-                      <Icon name="cloud" size={16} color={active ? p.accent : p.txt3} />
+                      <Icon name="cloud" size={16} color={active ? p.accentText : p.txt3} />
                       <span style={{ flex: 1, fontSize: 13.5 }}>{serverShortLabel(s)}</span>
-                      {active && <Icon name="check" size={15} color={p.accent} />}
+                      {active && <Icon name="check" size={15} color={p.accentText} />}
                     </button>
                   );
                 })}
@@ -1919,7 +1919,7 @@ function CloudConnectForm({
             background: p.bg1,
           }}
         >
-          <Icon name="server" size={18} style={{ color: p.accent, flexShrink: 0 }} />
+          <Icon name="server" size={18} style={{ color: p.accentText, flexShrink: 0 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13.5, fontWeight: 700, color: p.txt }}>
               {info.name || baseUrl.trim()}
@@ -2321,7 +2321,7 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
               opacity: revoked ? 0.55 : 1,
             }}
           >
-            <Icon name="server" size={16} color={isCurrent ? p.accent : p.txt3} />
+            <Icon name="server" size={16} color={isCurrent ? p.accentText : p.txt3} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                 <span
@@ -3121,7 +3121,7 @@ function CloudServersList({
               <Icon
                 name="cloud"
                 size={18}
-                style={{ color: isActive ? p.accent : p.txt3, flexShrink: 0 }}
+                style={{ color: isActive ? p.accentText : p.txt3, flexShrink: 0 }}
               />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
@@ -3433,7 +3433,7 @@ function SettingsCloud() {
               fontWeight: 700,
             }}
           >
-            <Icon name="shieldcheck" size={16} color={p.accent} />
+            <Icon name="shieldcheck" size={16} color={p.accentText} />
             {t("serverCloud.armEscrowPromptTitle")}
           </div>
           <div style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5, marginTop: 4 }}>

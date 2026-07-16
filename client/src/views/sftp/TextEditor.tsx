@@ -138,7 +138,7 @@ export function TextEditor({
           background: p.bg1,
         }}
       >
-        <Icon name="note" size={16} color={p.accent} />
+        <Icon name="note" size={16} color={p.accentText} />
         <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {name}
           {dirty ? " •" : ""}

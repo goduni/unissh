@@ -75,7 +75,7 @@ function QueueRow({ t }: { t: Transfer }) {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
-        <Icon name={dirIcon(t)} size={13} color={t.state === "done" ? p.green : t.state === "error" ? p.red : p.accent} />
+        <Icon name={dirIcon(t)} size={13} color={t.state === "done" ? p.green : t.state === "error" ? p.red : p.accentText} />
         <span style={{ fontFamily: MONO, fontSize: 11.5, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {t.label}
           {t.kind === "dir" && t.filesTotal > 0 ? ` (${t.filesDone}/${t.filesTotal})` : ""}
@@ -303,7 +303,7 @@ export function TransferQueue() {
             cursor: "pointer",
           }}
         >
-          <Icon name="arrows" size={15} color={p.accent} />
+          <Icon name="arrows" size={15} color={p.accentText} />
           <span style={{ fontSize: 12.5, fontWeight: 700, color: p.txt }}>{t("sftp.queue.title")}</span>
           <div style={{ flex: 1, height: 5, borderRadius: 3, background: p.bg4, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${Math.round(agg.ratio * 100)}%`, background: p.accent }} />

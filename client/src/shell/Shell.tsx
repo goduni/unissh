@@ -565,7 +565,7 @@ function VaultSwitcher() {
               </span>
               <VaultBadge target={x.syncTarget} label={badgeLabel(x)} size={11} />
               {unboundCloud(x) && <Icon name="alert" size={11} color={p.amber} />}
-              {x.vaultId === vaultId && <Icon name="check" size={14} color={p.accent} />}
+              {x.vaultId === vaultId && <Icon name="check" size={14} color={p.accentText} />}
             </button>
           ))}
           <div style={{ height: 1, background: p.line, margin: "6px 4px" }} />
@@ -643,7 +643,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
         position: "relative",
         border: "1px solid transparent",
         background: "transparent",
-        color: route === r ? p.accent : p.txt3,
+        color: route === r ? p.accentText : p.txt3,
         boxShadow: route === r ? `inset 2px 0 0 ${p.accent}` : "none",
         display: "flex",
         alignItems: "center",

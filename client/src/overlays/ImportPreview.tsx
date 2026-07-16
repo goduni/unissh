@@ -530,7 +530,7 @@ function ImportPreviewBody() {
             style={{
               fontSize: 12,
               fontWeight: 600,
-              color: p.accent,
+              color: p.accentText,
               background: "none",
               border: "none",
               cursor: "pointer",

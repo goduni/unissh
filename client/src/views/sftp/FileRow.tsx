@@ -79,7 +79,7 @@ export function FileRow({
   const showRowMenu = isMobile && !isUp && !!onContextAt;
   const isLink = !isDir && ((entry.mode ?? 0) & 0o170000) === 0o120000;
   const icon: IconName = isUp ? "cl" : isDir ? "folder" : isLink ? "link" : "file";
-  const color = isDir ? p.accent : p.txt3;
+  const color = isDir ? p.accentText : p.txt3;
 
   return (
     <div
@@ -222,7 +222,7 @@ export function FileRow({
             justifyContent: "center",
           }}
         >
-          <Icon name={actionIcon} size={13} color={p.accent} />
+          <Icon name={actionIcon} size={13} color={p.accentText} />
         </button>
       )}
       {showRowMenu && (

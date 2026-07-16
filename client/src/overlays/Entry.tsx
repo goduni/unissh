@@ -346,7 +346,7 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
         }}
       >
         {t("onboarding.haveAccount")}{" "}
-        <span style={{ color: p.accent, fontWeight: 600 }}>{t("onboarding.connectDevice")}</span>
+        <span style={{ color: p.accentText, fontWeight: 600 }}>{t("onboarding.connectDevice")}</span>
       </button>
     </Modal>
   );
@@ -755,7 +755,7 @@ function Unlock() {
           fontFamily: UI,
           fontSize: 12.5,
           fontWeight: 600,
-          color: p.accent,
+          color: p.accentText,
           textAlign: "center",
         }}
       >

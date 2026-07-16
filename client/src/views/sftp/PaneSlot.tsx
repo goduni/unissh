@@ -235,7 +235,7 @@ export function PaneSlot({
           size={isMobile ? 40 : 26}
           title={t("common.refresh")}
           onClick={slot.refresh}
-          color={slot.loading ? p.accent : undefined}
+          color={slot.loading ? p.accentText : undefined}
         />
       </div>
 

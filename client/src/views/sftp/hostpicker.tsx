@@ -121,7 +121,7 @@ export function HostMenu({
             borderRadius: 8,
             border: "1px solid transparent",
             background: "transparent",
-            color: p.accent,
+            color: p.accentText,
             cursor: "pointer",
             textAlign: "left",
             fontSize: 13,
@@ -129,7 +129,7 @@ export function HostMenu({
           onMouseEnter={(e) => (e.currentTarget.style.background = p.bg2)}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
-          <Icon name="plus" size={15} color={p.accent} />
+          <Icon name="plus" size={15} color={p.accentText} />
           {t("sftp.addHost")}
         </button>
       )}
