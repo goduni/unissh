@@ -177,7 +177,7 @@ export function FileList({
           onClick={onRetry}
           style={{
             fontSize: 12.5,
-            color: p.accent,
+            color: p.accentText,
             background: "transparent",
             border: `1px solid ${p.accentLine}`,
             borderRadius: 8,

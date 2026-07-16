@@ -139,7 +139,7 @@ export function ViewKnown() {
           flexWrap: isMobile ? "wrap" : "nowrap",
         }}
       >
-        <Icon name="shieldcheck" size={20} color={p.accent} />
+        <Icon name="shieldcheck" size={20} color={p.accentText} />
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
           {t("nav.known")}
         </h1>

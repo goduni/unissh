@@ -872,7 +872,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                               whiteSpace: "nowrap",
                             }}
                           >
-                            <Icon name="key" size={13} color={p.accent} />
+                            <Icon name="key" size={13} color={p.accentText} />
                             {newKeyFileName}
                           </span>
                         )}
@@ -972,7 +972,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                       {sharedVaultDefault && (
                         <div
-                          style={{ fontSize: 12, color: p.accent, fontWeight: 600, padding: "2px 2px" }}
+                          style={{ fontSize: 12, color: p.accentText, fontWeight: 600, padding: "2px 2px" }}
                         >
                           {t("modals.host.sharedVaultPersonalHint")}
                         </div>
@@ -2582,7 +2582,7 @@ function CopyKeyToServerModal({
         <button
           type="button"
           onClick={selectAll}
-          style={{ ...BTN_RESET, fontFamily: UI, fontSize: 12, color: p.accent, cursor: "pointer" }}
+          style={{ ...BTN_RESET, fontFamily: UI, fontSize: 12, color: p.accentText, cursor: "pointer" }}
         >
           {t("modals.copyKey.selectAll")}
         </button>

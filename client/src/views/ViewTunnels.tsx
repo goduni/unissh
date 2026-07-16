@@ -200,7 +200,7 @@ export function ViewTunnels() {
           padding: isMobile ? "16px 16px 12px" : "16px 22px 12px",
         }}
       >
-        <Icon name="branch" size={20} color={p.accent} />
+        <Icon name="branch" size={20} color={p.accentText} />
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>{t("nav.tunnels")}</h1>
         <span
           style={{

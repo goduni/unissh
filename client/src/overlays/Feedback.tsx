@@ -20,7 +20,7 @@ const TOAST_META: Record<ToastKind, { icon: IconName; color: (p: ReturnType<type
   ok: { icon: "check", color: (p) => p.green },
   err: { icon: "x", color: (p) => p.red },
   warn: { icon: "alert", color: (p) => p.amber },
-  info: { icon: "bolt", color: (p) => p.accent },
+  info: { icon: "bolt", color: (p) => p.accentText },
 };
 
 let toastSeq = 0;
@@ -275,7 +275,7 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: data.danger ? p.red : p.accent,
+              color: data.danger ? p.red : p.accentText,
             }}
           >
             <Icon name={(data.icon as IconName) || (data.danger ? "alert" : "shield")} size={18} />

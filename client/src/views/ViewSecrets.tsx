@@ -200,7 +200,7 @@ function RevealField({
           borderRadius: 7,
           border: "none",
           background: copied ? p.accentSoft : "transparent",
-          color: copied ? p.accent : p.txt3,
+          color: copied ? p.accentText : p.txt3,
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
@@ -400,7 +400,7 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
             ...actBtn,
             border: `1px solid ${p.line}`,
             background: copied ? p.accentSoft : p.bg2,
-            color: copied ? p.accent : p.txt3,
+            color: copied ? p.accentText : p.txt3,
             cursor: openssh ? "pointer" : "default",
             opacity: openssh ? 1 : 0.5,
           }}
@@ -695,7 +695,7 @@ function PasswordCard({ item }: { item: ItemInfo }) {
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
-            color: editing ? p.accent : p.txt3,
+            color: editing ? p.accentText : p.txt3,
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -880,7 +880,7 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
-            color: editing ? p.accent : p.txt3,
+            color: editing ? p.accentText : p.txt3,
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -899,7 +899,7 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: copied ? p.accentSoft : p.bg2,
-            color: copied ? p.accent : p.txt3,
+            color: copied ? p.accentText : p.txt3,
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -1503,7 +1503,7 @@ function IdentityCard({
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
-            color: editing ? p.accent : p.txt3,
+            color: editing ? p.accentText : p.txt3,
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -1697,7 +1697,7 @@ function IdentityVaultSwitcher({
                   {x.name}
                 </span>
                 <VaultBadge target={x.syncTarget} label={badgeLabel(x)} size={11} />
-                {x.vaultId === cur.vaultId && <Icon name="check" size={14} color={p.accent} />}
+                {x.vaultId === cur.vaultId && <Icon name="check" size={14} color={p.accentText} />}
               </div>
             ))}
             <div style={{ height: 1, background: p.line, margin: "6px 4px" }} />
@@ -1706,7 +1706,7 @@ function IdentityVaultSwitcher({
                 onCreate();
                 setOpen(false);
               }}
-              style={{ ...row("transparent"), color: p.accent }}
+              style={{ ...row("transparent"), color: p.accentText }}
               onMouseEnter={(e) => (e.currentTarget.style.background = p.bg2)}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
@@ -1721,7 +1721,7 @@ function IdentityVaultSwitcher({
                   justifyContent: "center",
                 }}
               >
-                <Icon name="plus" size={13} color={p.accent} />
+                <Icon name="plus" size={13} color={p.accentText} />
               </span>
               <span style={{ fontSize: 13, fontWeight: 600 }}>{t("secrets.newIdentityVault")}</span>
             </div>
