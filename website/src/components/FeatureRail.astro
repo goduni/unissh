@@ -1,0 +1,56 @@
+---
+import Icon from './Icon.astro';
+
+interface Props {
+  side: 'l' | 'r';
+}
+const { side } = Astro.props;
+
+/** The four blocks that flank the app window. Second word carries the accent. */
+const RAILS = {
+  l: [
+    {
+      icon: 'target',
+      head: 'Built-in',
+      accent: 'Sync Server',
+      body: 'Sync your hosts, settings, snippets and more across all your devices.',
+    },
+    {
+      icon: 'lock',
+      head: 'Secure by',
+      accent: 'Default',
+      body: 'End-to-end encryption, SSH key management, and modern security practices.',
+    },
+  ],
+  r: [
+    {
+      icon: 'code',
+      head: 'Developer',
+      accent: 'Friendly',
+      body: 'Real PTYs, a command palette, snippets and fleet-wide exec.',
+    },
+    {
+      icon: 'heart',
+      head: '',
+      accent: 'Open Source',
+      body: 'Transparent, community driven and built for everyone.',
+    },
+  ],
+} as const;
+
+const items = RAILS[side];
+---
+
+<div class={`feats feats--${side}`}>
+  {
+    items.map((f) => (
+      <div class="feat">
+        <div class="feat__icon" aria-hidden="true">
+          <Icon name={f.icon} size={21} stroke={1.8} />
+        </div>
+        <h3>{f.head ? `${f.head} ` : ''}<em>{f.accent}</em></h3>
+        <p>{f.body}</p>
+      </div>
+    ))
+  }
+</div>

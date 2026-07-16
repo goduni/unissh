@@ -2,8 +2,10 @@
 import '../styles/theme.css';
 import '../styles/landing.css';
 
+import Icon from '../components/Icon.astro';
 import SiteHeader from '../components/SiteHeader.astro';
-import HeroVisual from '../components/HeroVisual.astro';
+import AppWindow from '../components/AppWindow.astro';
+import FeatureRail from '../components/FeatureRail.astro';
 import TrustStrip from '../components/TrustStrip.astro';
 import FeatureGrid from '../components/FeatureGrid.astro';
 import ArchitectureDiagram from '../components/ArchitectureDiagram.astro';
@@ -22,7 +24,6 @@ const quickstartHref = withBase('overview/quickstart/');
 const archHref = withBase('architecture/system-overview/');
 const securityHref = withBase('architecture/zero-knowledge-model/');
 const cratesHref = withBase('components/crates/');
-const clientDocHref = withBase('components/client/');
 const serverDocHref = withBase('components/server/');
 const deployHref = withBase('operations/deploy/');
 const buildHref = withBase('operations/build/');
@@ -31,9 +32,14 @@ const buildHref = withBase('operations/build/');
 const githubHref = 'https://github.com/goduni/unissh';
 const githubReleases = 'https://github.com/goduni/unissh/releases';
 
-const title = 'UniSSH — the SSH client that never trusts the server';
+// The real star count, checked by hand against the GitHub API.
+// It is a small number and that is fine — an invented one would be a lie
+// on the most trust-sensitive page we own. Bump it when it moves.
+const stars = '8';
+
+const title = 'unissh — a modern and secure, fully open-source SSH client';
 const description =
-  'Open-source, self-hosted, zero-knowledge SSH client with end-to-end encrypted secret vaults, fleet and broadcast ops, real terminals, SFTP and tunnels — backed by a self-hostable zero-knowledge server that only ever stores ciphertext.';
+  'A modern and secure, fully open-source SSH client with a built-in sync server. End-to-end encrypted vaults, real terminals, SFTP and tunnels — synced through a server you run yourself, which only ever stores ciphertext.';
 const canonical = `${import.meta.env.SITE ?? ''}${base}`;
 ---
 
@@ -45,7 +51,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
     <link rel="icon" href={withBase('favicon.svg')} type="image/svg+xml" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#08090d" />
+    <meta name="theme-color" content="#070911" />
     <link rel="canonical" href={canonical} />
 
     <!-- Open Graph -->
@@ -60,109 +66,109 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
 
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <div class="backdrop" aria-hidden="true"></div>
 
-    <SiteHeader
-      docsHref={overviewHref}
-      archHref={archHref}
-      securityHref={securityHref}
-      quickstartHref={quickstartHref}
-      githubHref={githubHref}
-    />
+    <div class="sky" aria-hidden="true">
+      <div class="sky__neb sky__neb--violet"></div>
+      <div class="sky__neb sky__neb--indigo"></div>
+      <div class="sky__neb sky__neb--teal"></div>
+      <div class="sky__stars" id="stars"></div>
+      <div class="sky__arc-glow"></div>
+      <div class="sky__arc"></div>
+    </div>
 
-    <main id="main">
-      <span id="top"></span>
+    <div class="page">
+      <SiteHeader
+        docsHref={overviewHref}
+        archHref={archHref}
+        securityHref={securityHref}
+        quickstartHref={githubReleases}
+        githubHref={githubHref}
+        stars={stars}
+      />
 
-      <!-- Hero -->
-      <section class="hero" aria-labelledby="hero-head">
-        <div class="wrap hero__grid">
-          <div class="hero__copy reveal">
-            <span class="eyebrow">OPEN-SOURCE · SELF-HOSTED · ZERO-KNOWLEDGE</span>
-            <h1 id="hero-head">
-              The SSH client that <span class="grad-text">never trusts the server.</span>
-            </h1>
-            <p class="hero__subhead">
-              End-to-end encrypted secret vaults, fleet and broadcast ops, real terminals,
-              SFTP and tunnels — backed by a self-hostable zero-knowledge server that only
-              ever stores ciphertext.
-            </p>
-            <div class="hero__cta">
-              <a class="btn btn-primary btn-lg" href={quickstartHref}>Get started</a>
-              <a class="btn btn-ghost btn-lg" href={overviewHref}>Read the docs</a>
-            </div>
-            <div class="hero__meta">
-              <span><span class="dot is-green" aria-hidden="true"></span> 9-crate Rust core</span>
-              <span><span class="dot is-green" aria-hidden="true"></span> Tauri 2 desktop + mobile</span>
-              <span><span class="dot is-green" aria-hidden="true"></span> MIT OR Apache-2.0</span>
-            </div>
+      <main id="main">
+        <span id="top"></span>
+
+        <section class="hero" aria-labelledby="hero-head">
+          <h1 id="hero-head">
+            <span class="grad-text">unissh</span> — a modern and secure, fully open-source SSH
+            client with a built-in sync server
+          </h1>
+          <p class="hero__subhead">
+            Cross-platform. Secure by default. Sync everywhere.<br />
+            Designed for developers and teams that demand more.
+          </p>
+          <div class="hero__cta">
+            <a class="btn btn-primary btn-lg" href={githubReleases} rel="noopener">
+              <Icon name="download" size={17} stroke={1.8} /> Download
+            </a>
+            <a class="btn btn-ghost btn-lg" href="#features">
+              Explore Features <Icon name="arrowright" size={15} stroke={2} />
+            </a>
           </div>
-
-          <div class="reveal">
-            <HeroVisual />
+          <div class="hero__meta">
+            <span><Icon name="lock" size={16} stroke={1.8} /> End-to-end encrypted</span>
+            <span><Icon name="refresh" size={16} stroke={1.8} /> Real-time sync</span>
+            <span><Icon name="code" size={16} stroke={1.8} /> 100% open-source</span>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <TrustStrip />
-      <FeatureGrid />
-      <ArchitectureDiagram archHref={archHref} />
-      <CodeShowcase />
-      <SecurityStrip securityHref={securityHref} />
-      <DownloadCTA clientHref={buildHref} deployHref={deployHref} githubHref={githubHref} />
-    </main>
+        <section class="stage" aria-label="The unissh client">
+          <FeatureRail side="l" />
+          <div class="appwrap"><AppWindow /></div>
+          <FeatureRail side="r" />
+        </section>
 
-    <SiteFooter
-      links={{
-        overview: overviewHref,
-        quickstart: quickstartHref,
-        install: installHref,
-        arch: archHref,
-        security: securityHref,
-        crates: cratesHref,
-        server: serverDocHref,
-        deploy: deployHref,
-        github: githubHref,
-        githubReleases: githubReleases,
-      }}
-    />
+        <TrustStrip />
+        <FeatureGrid />
+        <ArchitectureDiagram archHref={archHref} />
+        <CodeShowcase />
+        <SecurityStrip securityHref={securityHref} />
+        <DownloadCTA
+          buildHref={buildHref}
+          deployHref={deployHref}
+          githubHref={githubHref}
+          releasesHref={githubReleases}
+        />
+      </main>
+
+      <SiteFooter
+        links={{
+          overview: overviewHref,
+          quickstart: quickstartHref,
+          install: installHref,
+          arch: archHref,
+          security: securityHref,
+          crates: cratesHref,
+          server: serverDocHref,
+          deploy: deployHref,
+          github: githubHref,
+          githubReleases: githubReleases,
+        }}
+      />
+    </div>
 
     <script>
-      // Scroll-reveal via IntersectionObserver, gated by reduced-motion.
-      const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const els = document.querySelectorAll<HTMLElement>('.reveal');
-      if (prefersReduced || !('IntersectionObserver' in window)) {
-        els.forEach((el) => el.classList.add('is-visible'));
-      } else {
-        const io = new IntersectionObserver(
-          (entries) => {
-            for (const e of entries) {
-              if (e.isIntersecting) {
-                e.target.classList.add('is-visible');
-                io.unobserve(e.target);
-              }
-            }
-          },
-          { rootMargin: '0px 0px -8% 0px', threshold: 0.08 }
-        );
-        els.forEach((el) => io.observe(el));
+      // Deterministic starfield: the same sky on every load, and on every
+      // machine. A seeded LCG, not Math.random — a hero that reshuffles
+      // itself between two people looking at it is a bug, not a feature.
+      const host = document.getElementById('stars');
+      if (host) {
+        let seed = 20260716;
+        const rnd = () => {
+          seed = (seed * 1664525 + 1013904223) % 4294967296;
+          return seed / 4294967296;
+        };
+        let html = '';
+        for (let i = 0; i < 110; i++) {
+          const x = (rnd() * 100).toFixed(2);
+          const y = (rnd() * 96).toFixed(2);
+          const o = (0.18 + rnd() * 0.62).toFixed(2);
+          const s = rnd() < 0.15 ? 3 : 2;
+          html += `<i style="left:${x}%;top:${y}%;opacity:${o};width:${s}px;height:${s}px"></i>`;
+        }
+        host.innerHTML = html;
       }
     </script>
-
-    <style>
-      .skip-link {
-        position: absolute;
-        left: -9999px;
-        top: 0;
-        z-index: 100;
-        padding: 10px 16px;
-        border-radius: 0 0 10px 0;
-        background: var(--uh-accent);
-        color: #0a0c12;
-        font-weight: 600;
-      }
-      .skip-link:focus {
-        left: 0;
-      }
-    </style>
   </body>
 </html>

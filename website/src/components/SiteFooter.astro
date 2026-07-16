@@ -19,19 +19,20 @@ const columns = [
   {
     title: 'Product',
     items: [
-      { label: 'Overview', href: links.overview },
       { label: 'Features', href: '#features' },
+      { label: 'Sync server', href: '#sync-server' },
+      { label: 'Security model', href: '#security' },
       { label: 'Download', href: '#download' },
     ],
   },
   {
     title: 'Docs',
     items: [
+      { label: 'What is unissh', href: links.overview },
       { label: 'Quickstart', href: links.quickstart },
+      { label: 'Install', href: links.install },
       { label: 'Architecture', href: links.arch },
-      { label: 'Security', href: links.security },
       { label: 'Crate reference', href: links.crates },
-      { label: 'Operations', href: links.deploy },
     ],
   },
   {
@@ -39,7 +40,8 @@ const columns = [
     items: [
       { label: 'GitHub', href: links.github },
       { label: 'Releases', href: links.githubReleases },
-      { label: 'License (MIT OR Apache-2.0)', href: links.github },
+      { label: 'Deploy the server', href: links.deploy },
+      { label: 'Server & API', href: links.server },
     ],
   },
 ];
@@ -49,11 +51,11 @@ const columns = [
   <div class="wrap">
     <div class="footer__top">
       <div class="footer__brand">
-        <a class="brand" href="#top" aria-label="UniSSH home">
-          <span class="brand__glyph" aria-hidden="true">›_</span>
-          <span class="brand__name">Uni<span class="accent">SSH</span></span>
+        <a class="brand" href="#top" aria-label="unissh home">
+          <span class="brand__glyph" aria-hidden="true">&gt;_</span>
+          <span class="brand__name">unissh</span>
         </a>
-        <p>The SSH client that never trusts the server.</p>
+        <p>A modern, fully open-source SSH client with a built-in sync server.</p>
       </div>
 
       {
@@ -75,8 +77,8 @@ const columns = [
     </div>
 
     <div class="footer__bottom">
-      <p>Open-source, self-hosted, zero-knowledge.</p>
-      <p>MIT OR Apache-2.0</p>
+      <p>MIT OR Apache-2.0 · no company · your server</p>
+      <p>Open-source, self-hosted, zero-knowledge</p>
     </div>
   </div>
 </footer>
