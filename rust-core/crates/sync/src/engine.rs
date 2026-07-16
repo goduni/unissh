@@ -203,6 +203,27 @@ pub fn sync_pull(
     Ok(report)
 }
 
+/// Apply an already-fetched, targeted set of pulled objects (e.g. ONE vault fetched
+/// out-of-band via `?vault=<id>`) through the SAME verify-before-apply path as
+/// [`sync_pull`], but WITHOUT touching the per-tenant pull cursor. Used by "Pull this
+/// vault": the caller fetches just that vault's objects and applies them here, so the
+/// global cursor does not advance and other vaults' not-yet-pulled objects are not
+/// skipped. Vault records still materialize born-bound to `ctx.tenant`.
+pub fn apply_pulled_objects(
+    storage: &Storage,
+    ctx: &SyncContext,
+    mut objects: Vec<(u64, SyncObject)>,
+) -> Result<SyncReport, SyncError> {
+    // Same self-imposed total order as sync_pull (server_seq ASC, bytes tie-break) —
+    // we do not trust the caller's order.
+    objects.sort_by_cached_key(|(seq, obj)| (*seq, obj.to_bytes().unwrap_or_default()));
+    let mut report = SyncReport::default();
+    for (seq, obj) in objects {
+        process_object(storage, ctx, &obj, seq, &mut report)?;
+    }
+    Ok(report)
+}
+
 /// Raises the cursor to `to` (forward only), persists it. A decrease → error.
 fn advance_cursor(
     storage: &Storage,
@@ -345,7 +366,18 @@ fn process_vault(
             return Ok(()); // do NOT overwrite
         }
     }
-    if put_lww(|| storage.put_vault(v))? {
+    // A vault pulled from `ctx.tenant`'s space is, by construction, bound to that
+    // tenant. Stamp the local routing label so it materializes born-bound —
+    // otherwise it lands unbound (the wire format omits sync_tenant, object.rs),
+    // the legacy auto-bind rebinds + re-dirties it, and it re-pushes as a
+    // server-side duplicate (mass-duplication incident). `sync_tenant` is not part
+    // of `vault_content_eq`, so this does not disturb the equal-version idempotent
+    // re-pull check above.
+    let bound = VaultRecord {
+        sync_tenant: ctx.tenant.clone(),
+        ..v.clone()
+    };
+    if put_lww(|| storage.put_vault(&bound))? {
         report.applied += 1;
     } else {
         report.skipped_stale += 1;

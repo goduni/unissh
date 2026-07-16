@@ -5,8 +5,8 @@ use unissh_crypto::KdfParams;
 use unissh_keychain::{create_account, UnlockedKeyset};
 use unissh_storage::{Storage, SyncTarget};
 use unissh_sync::{
-    pull_cursor_key, sync_pull, sync_push, InMemoryTransport, RejectReason, SyncContext,
-    SyncObject, SyncTransport,
+    apply_pulled_objects, pull_cursor_key, sync_pull, sync_push, InMemoryTransport, RejectReason,
+    SyncContext, SyncObject, SyncTransport,
 };
 use unissh_vault::{sign_account_state, Vault};
 
@@ -112,6 +112,66 @@ fn dirty_tracking_pushes_only_changes() {
 }
 
 #[test]
+fn pulled_vault_is_born_bound_to_source_tenant() {
+    // A vault pulled from a tenant's space is, by construction, bound to that
+    // tenant. It must materialize born-bound (sync_tenant = ctx.tenant), not
+    // unbound — otherwise it looks like a legacy unbound vault, the auto-bind
+    // rebinds + re-dirties it, and it re-pushes as a server-side duplicate
+    // (root cause of the mass-duplication incident).
+    let (sa, ka) = account(&[1u8; 32]);
+    seed_vault(&sa, &ka);
+    let mut t = InMemoryTransport::new();
+    sync_push(&mut t, &sa, TENANT).unwrap();
+
+    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
+
+    let v = sb.get_vault(b"vault-1").unwrap().unwrap();
+    assert_eq!(
+        v.sync_tenant,
+        b"oracle-tenant".to_vec(),
+        "a pulled vault is born bound to the tenant it was pulled from"
+    );
+}
+
+#[test]
+fn apply_pulled_objects_materializes_without_advancing_cursor() {
+    // "Pull this vault": objects fetched out-of-band (via ?vault=<id>) are applied
+    // through the same verify-before-apply path, materialize born-bound, and DO NOT
+    // advance the per-tenant pull cursor.
+    let (sa, ka) = account(&[1u8; 32]);
+    seed_vault(&sa, &ka);
+    let mut t = InMemoryTransport::new();
+    sync_push(&mut t, &sa, TENANT).unwrap();
+
+    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    let objs = t.delta_since(0); // Vec<(u64, SyncObject)> — the vault's objects
+    let report = apply_pulled_objects(&sb, &ctx(&ka), objs).unwrap();
+
+    assert!(
+        report.applied >= 2,
+        "vault + item applied, applied={}",
+        report.applied
+    );
+    let v = sb.get_vault(b"vault-1").unwrap().unwrap();
+    assert_eq!(
+        v.sync_tenant,
+        b"oracle-tenant".to_vec(),
+        "targeted apply materializes born-bound too"
+    );
+    assert_eq!(sb.list_items(b"vault-1").unwrap().len(), 1);
+
+    // The per-tenant pull cursor must be untouched.
+    assert_eq!(
+        sb.get_sync_cursor(&pull_cursor_key(b"oracle-tenant"))
+            .unwrap()
+            .unwrap_or(0),
+        0,
+        "a targeted apply must not advance the pull cursor"
+    );
+}
+
+#[test]
 fn pulled_objects_are_not_re_pushed() {
     // Objects applied by sync_pull go through low-level put_* (not the vault layer),
     // so they never get marked dirty and are never bounced back to the server.
@@ -123,9 +183,12 @@ fn pulled_objects_are_not_re_pushed() {
     let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
     let r = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
     assert!(r.applied >= 2, "B receives vault + item");
-    sb.bind_unbound_cloud_vaults(TENANT).unwrap(); // pulled vault lands unbound
+    // The pulled vault is born bound to the tenant it came from (no manual
+    // bind_unbound_cloud_vaults needed). Pushing back to that SAME tenant sends
+    // nothing, because pulled objects go through low-level put_* and are never
+    // marked dirty.
     assert_eq!(
-        sync_push(&mut t, &sb, TENANT).unwrap().pushed,
+        sync_push(&mut t, &sb, b"oracle-tenant").unwrap().pushed,
         0,
         "pulled objects are not dirty → nothing to push back"
     );

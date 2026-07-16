@@ -114,6 +114,21 @@ export interface VaultInfo {
   syncTenant: string | null;
 }
 
+/** One vault the caller can access on a server (`GET /v1/vaults`), enriched with this
+ *  device's local state so the picker can offer Pull / Push / in-sync per vault. */
+export interface ServerVault {
+  /** hex vault_id. */
+  vaultId: string;
+  latestVersion: number;
+  tombstone: boolean;
+  /** Already present locally on this device. */
+  isLocal: boolean;
+  /** The local copy is bound to a server. */
+  bound: boolean;
+  /** The local vault's name if present locally, else null (pull to load it). */
+  localName: string | null;
+}
+
 // ── vault integrity / maintenance ──────────────────────────────
 export type IntegrityFailureKind = "signatureInvalid" | "authorMismatch" | "malformed";
 

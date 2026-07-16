@@ -2208,6 +2208,41 @@ impl Core {
         })
     }
 
+    /// **Pull ONE vault** (server-tz): apply an already-fetched, targeted set of objects
+    /// for a single vault (the caller fetched them via `GET /v1/sync/delta?vault=<id>`)
+    /// through the same verify-before-apply path as `sync_now`'s pull — born-bound to
+    /// `tenant_b64` — WITHOUT advancing the per-tenant pull cursor (so a later full sync
+    /// still walks the whole delta and no other vault's objects are skipped). `objects`
+    /// are the raw delta object blobs; any that fail to parse are skipped, exactly as the
+    /// untrusted-transport pull path does. Returns the pull-side counts. Requires unlock.
+    pub fn apply_pulled_vault(
+        &self,
+        tenant_b64: String,
+        objects: Vec<Vec<u8>>,
+    ) -> Result<FfiSyncReport, FfiError> {
+        self.with_state_mut(|state| {
+            let genesis_owner = state.keyset.signing.verifying.to_bytes().to_vec();
+            let ctx = SyncContext {
+                genesis_owner,
+                tenant: tenant_b64.as_bytes().to_vec(),
+            };
+            let parsed: Vec<(u64, SyncObject)> = objects
+                .iter()
+                .enumerate()
+                .filter_map(|(i, b)| SyncObject::from_bytes(b).ok().map(|o| (i as u64 + 1, o)))
+                .collect();
+            let report = unissh_sync::apply_pulled_objects(&state.storage, &ctx, parsed)
+                .map_err(map_sync_err)?;
+            Ok(FfiSyncReport {
+                applied: report.applied,
+                skipped_stale: report.skipped_stale,
+                conflicts: report.conflicts.len() as u32,
+                rejected: report.rejected.len() as u32,
+                pushed: 0,
+            })
+        })
+    }
+
     /// Resets the tenant's pull cursor → the next `sync_now` re-reads the ENTIRE
     /// server history (a full re-pull) rather than an increment from the last seq. Needed
     /// when objects were already processed under a PREVIOUS authority context and rejected

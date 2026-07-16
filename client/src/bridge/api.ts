@@ -48,6 +48,7 @@ import type {
   SftpFileStat,
   LocalEntry,
   SshExecResult,
+  ServerVault,
   SyncReport,
   TermEvent,
   VaultInfo,
@@ -620,6 +621,16 @@ export const serverRepull = (serverId?: string) =>
  *  local tombstone that shadows the server copy, then re-pull). Returns the count. */
 export const serverRestoreDeletedVaults = (serverId?: string) =>
   invoke<number>("server_restore_deleted_vaults", { serverId: serverId ?? null });
+/** List vaults available on a server (default active) that this account can access,
+ *  each enriched with local state (isLocal / bound / localName). */
+export const serverListVaults = (serverId?: string) =>
+  invoke<ServerVault[]>("server_list_vaults", { serverId: serverId ?? null });
+/** Pull ONE vault (hex id) from a server onto this device (targeted; no cursor bump). */
+export const serverPullVault = (vaultId: string, serverId?: string) =>
+  invoke<SyncReport>("server_pull_vault", { vaultId, serverId: serverId ?? null });
+/** Adopt a LOCAL vault (hex id) onto a server = bind + sync (Push). */
+export const serverAdoptVault = (vaultId: string, serverId?: string) =>
+  invoke<SyncReport>("server_adopt_vault", { vaultId, serverId: serverId ?? null });
 
 // ── cloud membership / sharing ─────────────────────────────────
 export const serverListAccounts = (serverId?: string) =>

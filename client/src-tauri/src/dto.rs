@@ -545,6 +545,23 @@ impl From<ffi::FfiSyncReport> for SyncReport {
     }
 }
 
+/// One row of the server-side vault catalog (`GET /v1/vaults`), enriched with this
+/// device's local state so the picker can offer Pull / Push / in-sync per vault.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerVault {
+    /// hex vault_id.
+    pub vault_id: String,
+    pub latest_version: i64,
+    pub tombstone: bool,
+    /// This vault already exists locally on this device.
+    pub is_local: bool,
+    /// The local copy is bound to a server (has a sync tenant).
+    pub bound: bool,
+    /// The local vault's name, if present locally (else `None` — pull to load it).
+    pub local_name: Option<String>,
+}
+
 // ---------- membership / sharing ----------
 
 /// Cryptographic vault role (mirror of `ffi::FfiMemberRole`). Used both as input
