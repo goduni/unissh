@@ -13,7 +13,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, rgba, termToXterm } from "@/theme/tokens";
-import { Btn, Icon, NO_AUTOCORRECT, StatusDot } from "@/components/primitives";
+import { Btn, Icon, NO_AUTOCORRECT, StatusDot, type IconName } from "@/components/primitives";
 import { ReconnectBanner } from "@/components/ReconnectBanner";
 import { useTranslation, Trans } from "@/i18n";
 import { useApp, type PendingMismatch, type TerminalPaneState, type TermLayout } from "@/store/app";
@@ -837,6 +837,22 @@ function TerminalPane({
     term.focus();
   };
 
+  // Touch long-press → the same context menu right-click opens. xterm draws to a
+  // canvas and a WebView never synthesizes `contextmenu` from a long press, so
+  // without this Copy/Paste is unreachable on a phone — i.e. you cannot paste a
+  // command into your own shell. Same shape as views/sftp/FileRow.
+  const lpTimer = useRef<number | null>(null);
+  const lpFired = useRef(false);
+  const lpStart = useRef<{ x: number; y: number } | null>(null);
+  const clearLp = () => {
+    if (lpTimer.current != null) {
+      window.clearTimeout(lpTimer.current);
+      lpTimer.current = null;
+    }
+  };
+  // A press held across an unmount would fire into a dead pane.
+  useEffect(() => () => clearLp(), []);
+
   return (
     <div
       onMouseDown={() => {
@@ -859,6 +875,34 @@ function TerminalPane({
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY, hasSel: !!xtermRef.current?.getSelection() });
       }}
+      onTouchStart={(e) => {
+        const tt = e.touches[0];
+        if (!tt) return;
+        lpFired.current = false;
+        lpStart.current = { x: tt.clientX, y: tt.clientY };
+        const { x, y } = lpStart.current;
+        clearLp();
+        lpTimer.current = window.setTimeout(() => {
+          lpFired.current = true;
+          navigator.vibrate?.(10);
+          // A long press is also a deliberate "work on this pane" signal.
+          if (!focused) setActivePane(tabId, pane.id);
+          setMenu({ x, y, hasSel: !!xtermRef.current?.getSelection() });
+        }, 450);
+      }}
+      onTouchMove={(e) => {
+        const s = lpStart.current;
+        const tt = e.touches[0];
+        if (!s || !tt) return;
+        // Tolerate jitter; only a real drag/scroll cancels the press.
+        if (Math.hypot(tt.clientX - s.x, tt.clientY - s.y) > 10) clearLp();
+      }}
+      onTouchEnd={(e) => {
+        clearLp();
+        // Swallow the synthetic click/selection that would follow the press.
+        if (lpFired.current) e.preventDefault();
+      }}
+      onTouchCancel={clearLp}
     >
       <div ref={hostRef} style={{ width: "100%", height: "100%" }} />
       {/* Split panes get an explicit ✕ on hover so closing one is discoverable
@@ -1016,6 +1060,17 @@ function TerminalPane({
               disabled: !menu.hasSel,
               onClick: copySelection,
             },
+            // Touch has no way to drag out a selection over the xterm canvas, so
+            // without this Copy above could never become enabled on a phone.
+            ...(isMobile
+              ? [
+                  {
+                    icon: "list" as IconName,
+                    label: t("terminal.menu.selectAll"),
+                    onClick: () => xtermRef.current?.selectAll(),
+                  },
+                ]
+              : []),
             { icon: "clipboard", label: t("terminal.menu.paste"), onClick: () => void pasteClipboard() },
             { icon: "grid", label: t("terminal.menu.splitRight"), onClick: () => splitPane(tabId, pane.id, "row") },
             { icon: "list", label: t("terminal.menu.splitDown"), onClick: () => splitPane(tabId, pane.id, "col") },
@@ -1321,7 +1376,7 @@ export function ViewTerminal() {
             <div style={{ fontSize: 14 }}>{t("terminal.noSessions")}</div>
             <div
               onClick={() => ctx.go("hosts")}
-              style={{ fontSize: 13, color: p.accent, cursor: "pointer" }}
+              style={{ fontSize: 13, color: p.accentText, cursor: "pointer" }}
             >
               {t("terminal.openHost")}
             </div>
