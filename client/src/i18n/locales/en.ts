@@ -393,6 +393,7 @@ export const en = {
   },
   hosts: {
     "title": "Hosts",
+    "searchPlaceholder": "Filter by name, address or tag",
     "connect": "Connect",
     "newHost": "New host",
     "linkIdentity": "Link identity",
@@ -509,51 +510,17 @@ export const en = {
     }
   },
   mobile: {
-    "keyVerified": "Key verified",
-    "notConnectedTofu": "Not yet connected (TOFU)",
     "vault": "Vault",
     "vaultLower": "vault",
     "noVaults": "No vaults",
-    "session": "session",
+    "tabsLabel": "Main",
     "tabHosts": "Hosts",
-    "searchHosts": "Search hosts…",
-    "groups": "Groups",
-    "untagged": "untagged",
-    "shownOf": "{{shown}} of {{total}}",
-    "noHostsYet": "No hosts yet",
-    "nothingFound": "Nothing found",
-    "sortTitle": "Sort",
-    "sort": {
-      "name": "Name",
-      "connected": "Last connected",
-      "added": "Recently added"
-    },
-    "authKey": "SSH key",
-    "authPassword": "Password",
-    "authPrompt": "Ask on connect",
-    "openSession": "Open session",
-    "sessionActive": "session active",
-    "sessionNow": "running now",
-    "sessionNone": "none",
-    "tofuNote": "Host key is pinned on first connect (TOFU)",
-    "detail": {
-      "host": "Host",
-      "port": "Port",
-      "user": "User",
-      "session": "Session",
-      "auth": "Auth",
-      "proxyJump": "ProxyJump",
-      "tags": "Tags"
-    },
     "more": {
-      "broadcastDesc": "Synchronized input",
       "sftpDesc": "File transfer",
       "tunnelsDesc": "-L / -R / -D",
       "knownDesc": "TOFU",
       "secrets": "Secrets",
       "secretsDesc": "Keys · passwords · notes",
-      "appearance": "Appearance",
-      "appearanceDesc": "Themes and accent",
       "settingsDesc": "Appearance · security · cloud · about"
     }
   },
@@ -1133,6 +1100,7 @@ export const en = {
     },
     "menu": {
       "copy": "Copy",
+      "selectAll": "Select all",
       "paste": "Paste",
       "splitRight": "Split right",
       "splitDown": "Split down",

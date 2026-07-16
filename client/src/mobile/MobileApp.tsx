@@ -1,63 +1,79 @@
-// MobileApp — native mobile shell for UniSSH. Full-viewport (no desktop phone
-// bezel), safe-area aware, bottom tab bar + a local push stack with edge-swipe
-// back. Pixel-faithful to the prototype mobile-*.jsx, wired to the real store,
-// bridge api, and the desktop ViewX named exports.
+// MobileApp — the phone SHELL, and only the shell: a safe-area-aware frame, a
+// bottom tab bar, a push stack with edge-swipe back, the vault sheet, and the
+// terminal's on-screen key row. The screens themselves are the desktop views.
+//
+// It used to also carry its own hosts list, host card and host detail — ~780 lines
+// re-implementing ViewHosts, which is where every desktop/mobile divergence came
+// from (a shadowed card against the system's flat one, its own radius scale, its
+// own auth labels, no density, no bulk select). Those are gone: the hosts tab
+// renders ViewHosts, which adapts itself via useNarrow() like its siblings. What
+// remains here is what a phone genuinely needs and a desktop genuinely doesn't.
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { Icon, NO_AUTOCORRECT, Spinner, StatusDot, Btn, type IconName } from "@/components/primitives";
-import { FlatAvatar, MetaChip } from "@/components/mono";
+import { Icon, Btn, VaultBadge, type IconName } from "@/components/primitives";
+import { FlatAvatar, SyncBadge } from "@/components/mono";
+import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { BottomSheet } from "@/components/Modal";
-import { MONO, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
-import { useApp, HOST_FILTER_ALL } from "@/store/app";
+import { MONO, RADIUS, SIZE, UI } from "@/theme/tokens";
+import { useApp } from "@/store/app";
 import { useKeyboardInset, useLandscape } from "@/store/responsive";
 import { useTranslation, tDyn } from "@/i18n";
 import { useCtx } from "@/store/ctx";
 import { guard } from "@/store/action";
-import { profileAuthKind } from "@/bridge/types";
-import type { ConnectionProfile, ServerGroup, VaultInfo } from "@/bridge/types";
+import type { VaultInfo } from "@/bridge/types";
 import * as api from "@/bridge/api";
 
 import { ViewTerminal } from "@/views/ViewTerminal";
 import { ReconnectBanner } from "@/components/ReconnectBanner";
-import { ViewFleet } from "@/views/ViewFleet";
-import { ViewBroadcast } from "@/views/ViewBroadcast";
+import { ViewHosts } from "@/views/ViewHosts";
+import { ViewRun } from "@/views/ViewRun";
 import { ViewSftp } from "@/views/sftp/ViewSftp";
 import { ViewTunnels } from "@/views/ViewTunnels";
 import { ViewKnown } from "@/views/ViewKnown";
 import { ViewSecrets } from "@/views/ViewSecrets";
 import { ViewSettings } from "@/views/ViewSettings";
 
-// ── helpers ────────────────────────────────────────────────────
-/** Set of profileIds that have a live (online) terminal — the only honest
- *  notion of a host being "active". */
-function useActiveIds(): Set<string> {
-  const terminals = useApp((s) => s.terminals);
-  return useMemo(
-    () =>
-      new Set(
-        terminals
-          .flatMap((t) => t.panes)
-          .filter((pp) => pp.status === "online" && pp.profile)
-          .map((pp) => pp.profile!.profileId),
-      ),
-    [terminals],
-  );
-}
-
 // ── stack frames ───────────────────────────────────────────────
+// There is deliberately no "host" frame: the hosts tab renders the desktop
+// ViewHosts, which owns host detail itself (as a full-width overlay once the
+// layout is narrow). A second, mobile-only host screen is exactly the fork that
+// let this shell drift away from the desktop in the first place.
 type Frame =
-  | { type: "host"; id: string }
-  | { type: "broadcast" }
   | { type: "sftp" }
   | { type: "tunnels" }
   | { type: "known" }
   | { type: "secrets" }
   | { type: "settings" };
 
-type TabId = "hosts" | "terminal" | "fleet" | "more";
+type TabId = "hosts" | "terminal" | "run" | "more";
 
-// ── top bar (vault pill + lock) ────────────────────────────────
+/** Where a store route lands on this shell. The desktop router is the app's real
+ *  navigation model — every reused view calls ctx.go() — so the shell mirrors it
+ *  instead of honouring one hand-picked route and silently dropping the rest. */
+const ROUTE_TAB: Partial<Record<string, TabId>> = {
+  hosts: "hosts",
+  terminal: "terminal",
+  run: "run",
+  fleet: "run",
+  broadcast: "run",
+};
+const ROUTE_FRAME: Partial<Record<string, Frame["type"]>> = {
+  sftp: "sftp",
+  tunnels: "tunnels",
+  known: "known",
+  secrets: "secrets",
+  keys: "secrets",
+  passwords: "secrets",
+  identities: "secrets",
+  notes: "secrets",
+  settings: "settings",
+};
+
+// ── top bar (vault + trust state + search + lock) ───────────────
+// The phone's counterpart to the desktop TitleBar/VaultSwitcher, and it carries the
+// same three things: which vault you're in, whether it's actually synced, and the
+// way out (lock + search). It renders globally, above the tabs.
 function MTopBar({
   vault,
   onLock,
@@ -69,149 +85,121 @@ function MTopBar({
 }) {
   const p = usePalette();
   const { t } = useTranslation();
+  const ctx = useCtx();
+  const servers = useApp((s) => s.servers);
+  const syncStatus = useApp((s) => s.syncStatus);
+  // Landscape leaves ~244px of content height between this bar and the tab bar.
+  // Drop to a single line there and give the height back to the screen.
+  const land = useLandscape();
   const name = vault?.name ?? t("mobile.vault");
+  // Same rules as Shell's VaultSwitcher — a phone must not have its own opinion
+  // about what "synced" means.
+  const badgeLabel = (x: VaultInfo): string => {
+    if (x.syncTarget !== "cloud") return t("vault.local");
+    const loc = vaultLoc(x, servers);
+    if (loc.server) return loc.server;
+    const srv = vaultServer(x, servers);
+    return srv ? serverShortLabel(srv) : t("vault.badgeUnbound");
+  };
+  const unbound = vault != null && vault.syncTarget === "cloud" && vaultServer(vault, servers) == null;
+  const iconBtn: React.CSSProperties = {
+    width: SIZE.tapMin,
+    height: SIZE.tapMin,
+    flexShrink: 0,
+    borderRadius: RADIUS.menu,
+    background: p.bg2,
+    border: `1px solid ${p.line2}`,
+    color: p.txt2,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
   return (
-    <div style={{ flexShrink: 0, padding: "4px 16px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+    <div
+      style={{
+        flexShrink: 0,
+        padding: land ? "2px 16px 6px" : "4px 16px 12px",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
       <button
         onClick={onVaultTap}
+        aria-haspopup="menu"
         style={{
           display: "flex",
           alignItems: "center",
           gap: 9,
-          height: 40,
+          // Shrink before the search/lock buttons do, and cap at a share of the
+          // bar so the spacer beside it is a real gap and not a 0px fiction.
+          minWidth: 0,
+          flexShrink: 1,
+          maxWidth: "66%",
+          height: SIZE.tapMin,
           padding: "0 12px 0 7px",
-          borderRadius: 13,
+          borderRadius: RADIUS.menu,
           background: p.bg2,
           border: `1px solid ${p.line2}`,
           cursor: "pointer",
         }}
       >
         <FlatAvatar name={name} size={26} shape="square" />
-        <span style={{ fontSize: 15, fontWeight: 700, color: p.txt, lineHeight: 1 }}>{name}</span>
+        <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, minWidth: 0 }}>
+          <span
+            style={{
+              fontSize: 14,
+              fontWeight: 700,
+              color: p.txt,
+              lineHeight: 1,
+              // No fixed cap: it left width unused while the badges below decided
+              // the pill's size. Shrink with the column like everything else.
+              maxWidth: "100%",
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {name}
+          </span>
+          {/* Is this vault local or on a server, and is it up to date? Unanswerable
+              on a phone until now — on the device most likely to be on a flaky
+              network, and the first thing to check when a vault "won't appear". */}
+          {vault && !land && (
+            <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, overflow: "hidden" }}>
+              <VaultBadge target={vault.syncTarget} label={badgeLabel(vault)} size={10} />
+              {unbound && <Icon name="alert" size={10} color={p.amber} />}
+              {vault.syncTarget === "cloud" && !unbound && (
+                <SyncBadge
+                  state={syncStatus.syncing ? "syncing" : syncStatus.lastError ? "error" : "synced"}
+                  label={
+                    syncStatus.syncing
+                      ? t("shell.syncing")
+                      : syncStatus.lastError
+                        ? t("shell.syncError")
+                        : t("shell.synced")
+                  }
+                  title={syncStatus.lastError ?? undefined}
+                />
+              )}
+            </span>
+          )}
+        </span>
         <Icon name="cd" size={15} color={p.txt3} />
       </button>
       <div style={{ flex: 1 }} />
-      <button
-        onClick={onLock}
-        aria-label={t("shell.lockShort")}
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: 13,
-          background: p.bg2,
-          border: `1px solid ${p.line2}`,
-          color: p.txt2,
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
+      {/* The command palette is mounted on this shell but had no way to open it —
+          its only trigger was the desktop title bar and a hardware ⌘K. This is the
+          phone's search: hosts, secrets and actions, the same superset ⌘K gives. */}
+      <button onClick={ctx.openPalette} aria-label={t("shell.searchPlaceholder")} style={iconBtn}>
+        <Icon name="search" size={18} />
+      </button>
+      <button onClick={onLock} aria-label={t("shell.lockShort")} style={iconBtn}>
         <Icon name="lock" size={18} />
       </button>
     </div>
-  );
-}
-
-// ── host card ──────────────────────────────────────────────────
-function MHostCard({
-  h,
-  active,
-  onOpen,
-}: {
-  h: ConnectionProfile;
-  active: boolean;
-  onOpen: () => void;
-}) {
-  const p = usePalette();
-  const { t } = useTranslation();
-  const authKind = profileAuthKind(h.auth);
-  const authWarn = authKind === "password" || authKind === "ask";
-  const authLabel = tDyn(AUTH_LABEL_KEY[authKind]);
-  const jump = h.jumps.length > 0;
-  return (
-    <button
-      onClick={onOpen}
-      style={{
-        width: "100%",
-        textAlign: "left",
-        display: "flex",
-        alignItems: "center",
-        gap: 13,
-        padding: 22,
-        borderRadius: 18,
-        background: p.bg0,
-        border: "1px solid transparent",
-        boxShadow: p.shadow,
-        cursor: "pointer",
-      }}
-    >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {/* L1 — 7px status dot + name (dot keys off a live session; the paired
-            word on L3 carries the meaning so colour is never the sole carrier) */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              flexShrink: 0,
-              background: active ? p.green : p.line2,
-            }}
-          />
-          <span
-            style={{
-              fontSize: 16,
-              fontWeight: 700,
-              letterSpacing: "-0.2px",
-              color: p.txt,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              minWidth: 0,
-            }}
-          >
-            {h.label}
-          </span>
-          {jump && <Icon name="branch" size={13} color={p.txt3} stroke={1.8} />}
-        </div>
-        {/* L2 — address (mono, txt2) */}
-        <div
-          style={{
-            fontFamily: MONO,
-            fontSize: 11.5,
-            color: p.txt2,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            marginTop: 6,
-          }}
-        >
-          {h.user}@{h.host}
-        </div>
-        {/* L3 — status · auth (one mono line; colour only on meaning) */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 7,
-            fontFamily: MONO,
-            fontSize: 11.5,
-            color: p.txt3,
-            marginTop: 14,
-          }}
-        >
-          {active && (
-            <>
-              <span style={{ color: p.green }}>{t("hosts.session")}</span>
-              <span style={{ opacity: 0.4 }}>·</span>
-            </>
-          )}
-          <span style={{ color: authWarn ? p.amber : p.txt3 }}>{authLabel}</span>
-        </div>
-      </div>
-      <Icon name="cd" size={17} color={p.txt3} />
-    </button>
   );
 }
 
@@ -255,7 +243,7 @@ function MVaultSheet({ onClose }: { onClose: () => void }) {
                 <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>{x.name}</div>
                 <div style={{ fontSize: 12.5, color: p.txt3 }}>{on ? t("count.hosts", { count: hosts.length }) : t("mobile.vaultLower")}</div>
               </div>
-              {on && <Icon name="check" size={20} color={p.accent} />}
+              {on && <Icon name="check" size={20} color={p.accentText} />}
             </button>
           );
         })}
@@ -275,683 +263,6 @@ function MVaultSheet({ onClose }: { onClose: () => void }) {
         {t("vault.create")}
       </Btn>
     </BottomSheet>
-  );
-}
-
-// ── hosts tab ──────────────────────────────────────────────────
-type SortKey = "name" | "connected" | "added";
-const SORT_LABEL_KEY: Record<SortKey, string> = {
-  name: "mobile.sort.name",
-  connected: "mobile.sort.connected",
-  added: "mobile.sort.added",
-};
-
-// Same key + value set as the desktop list, so the chosen sort carries across the
-// desktop⇄mobile preview toggle. Kept in sync with ViewHosts' loadHostSort.
-const HOST_SORT_LS = "unissh.hostSort";
-const loadHostSort = (): SortKey => {
-  try {
-    const v = localStorage.getItem(HOST_SORT_LS);
-    return v === "name" || v === "connected" || v === "added" ? v : "name";
-  } catch {
-    return "name";
-  }
-};
-
-function MHosts({
-  vault,
-  onOpenHost,
-  onVaultTap,
-  onNewHost,
-}: {
-  vault: VaultInfo | null;
-  onOpenHost: (id: string) => void;
-  onVaultTap: () => void;
-  onNewHost: () => void;
-}) {
-  const p = usePalette();
-  const { t } = useTranslation();
-  const ctx = useCtx();
-  const hosts = useApp((s) => s.hosts);
-  const groups = useApp((s) => s.groups);
-  const hostFilter = useApp((s) => s.hostFilter);
-  const setHostFilter = useApp((s) => s.setHostFilter);
-  const onLock = useApp((s) => s.lockInstance);
-  const loading = useApp((s) => s.loading);
-  const reloadVault = useApp((s) => s.reloadVault);
-  const activeIds = useActiveIds();
-  const landscape = useLandscape();
-  const [sort, setSort] = useState<SortKey>(loadHostSort);
-  const lastConnected = useApp((s) => s.lastConnected);
-  const changeSort = (k: SortKey) => {
-    setSort(k);
-    try {
-      localStorage.setItem(HOST_SORT_LS, k);
-    } catch {
-      /* ignore */
-    }
-  };
-  const [sortSheet, setSortSheet] = useState(false);
-  const [query, setQuery] = useState("");
-
-  // pull-to-refresh on the hosts list
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const pullStart = useRef<number | null>(null);
-  const [pull, setPull] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
-  const onPullStart = (e: React.TouchEvent) => {
-    pullStart.current = (scrollRef.current?.scrollTop ?? 0) <= 0 && !refreshing ? e.touches[0].clientY : null;
-  };
-  const onPullMove = (e: React.TouchEvent) => {
-    if (pullStart.current == null) return;
-    const dy = e.touches[0].clientY - pullStart.current;
-    setPull(dy > 0 ? Math.min(dy * 0.5, 80) : 0);
-  };
-  const onPullEnd = async () => {
-    if (pullStart.current == null) return;
-    pullStart.current = null;
-    if (pull > 56 && !refreshing) {
-      setRefreshing(true);
-      setPull(44);
-      try {
-        await reloadVault();
-      } catch {
-        /* errors surface via toast in the store */
-      }
-      setRefreshing(false);
-    }
-    setPull(0);
-  };
-
-  const tags = useMemo(() => Array.from(new Set(hosts.flatMap((h) => h.tags))).slice(0, 6), [hosts]);
-
-  const filtered = useMemo(() => {
-    if (hostFilter === HOST_FILTER_ALL) return hosts;
-    if (hostFilter === "__untagged") return hosts.filter((x) => x.tags.length === 0);
-    const group = groups.find((g) => g.groupId === hostFilter);
-    return hosts.filter(
-      (x) => x.tags.includes(hostFilter) || (group?.memberIds.includes(x.profileId) ?? false),
-    );
-  }, [hosts, groups, hostFilter]);
-
-  const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let arr = [...filtered];
-    if (q)
-      arr = arr.filter(
-        (h) =>
-          h.label.toLowerCase().includes(q) ||
-          h.host.toLowerCase().includes(q) ||
-          h.user.toLowerCase().includes(q) ||
-          h.tags.some((tag) => tag.toLowerCase().includes(q)),
-      );
-    if (sort === "name") arr.sort((a, b) => a.label.localeCompare(b.label));
-    else if (sort === "connected")
-      // "Last connected": most-recent first, never-connected last, name tiebreak.
-      arr.sort((a, b) => {
-        const ta = lastConnected[a.profileId] ?? 0;
-        const tb = lastConnected[b.profileId] ?? 0;
-        return tb - ta || a.label.localeCompare(b.label);
-      });
-    else arr.reverse(); // "added": store order, newest last → newest first
-    return arr;
-  }, [filtered, sort, query, lastConnected]);
-
-  const sessions = useMemo(() => hosts.filter((h) => activeIds.has(h.profileId)).length, [hosts, activeIds]);
-
-  return (
-    <>
-      <MTopBar vault={vault} onLock={onLock} onVaultTap={onVaultTap} />
-      <div style={{ flexShrink: 0, padding: "0 16px 8px", display: "flex", alignItems: "baseline", gap: 9 }}>
-        <h1 style={{ margin: 0, fontSize: landscape ? 21 : 24, fontWeight: 800, letterSpacing: -0.6, color: p.txt }}>{t("mobile.tabHosts")}</h1>
-        <span style={{ fontFamily: MONO, fontSize: 13, color: p.txt3, whiteSpace: "nowrap" }}>
-          {t("count.hosts", { count: hosts.length })}
-          {sessions ? ` · ${t("count.sessions", { count: sessions })}` : ""}
-        </span>
-      </div>
-
-      <div style={{ flexShrink: 0, padding: "0 16px 10px", display: "flex", alignItems: "center", gap: 9 }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            flex: 1,
-            minWidth: 0,
-            height: 44,
-            padding: "0 12px 0 14px",
-            borderRadius: 13,
-            background: p.bg2,
-            border: `1px solid ${p.line}`,
-          }}
-        >
-          <Icon name="search" size={17} color={p.txt3} />
-          <input
-            {...NO_AUTOCORRECT}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t("mobile.searchHosts")}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              height: "100%",
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              color: p.txt,
-              fontFamily: UI,
-              fontSize: 16,
-            }}
-          />
-          {query && (
-            <button
-              onClick={() => setQuery("")}
-              aria-label={t("common.clear")}
-              style={{
-                width: 28,
-                height: 28,
-                flexShrink: 0,
-                borderRadius: 8,
-                border: "none",
-                background: "transparent",
-                color: p.txt3,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Icon name="x" size={15} />
-            </button>
-          )}
-        </div>
-        <button
-          onClick={() => setSortSheet(true)}
-          aria-label={t("mobile.sortTitle")}
-          title={t("mobile.sortTitle")}
-          style={{
-            flexShrink: 0,
-            width: 44,
-            height: 44,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            borderRadius: 13,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.txt2,
-            cursor: "pointer",
-          }}
-        >
-          <Icon name="arrows" size={18} color={p.txt3} />
-        </button>
-      </div>
-
-      {/* filters: groups + tags in one scrollable strip */}
-      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 7, padding: "0 16px 10px", overflowX: "auto" }}>
-        <button
-          onClick={() => ctx.openGroups()}
-          title={t("mobile.groups")}
-          aria-label={t("mobile.groups")}
-          style={{
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 44,
-            height: 44,
-            borderRadius: 12,
-            cursor: "pointer",
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.txt3,
-          }}
-        >
-          <Icon name="folders" size={16} />
-        </button>
-        {groups.map((g: ServerGroup) => {
-          const on = hostFilter === g.groupId;
-          return (
-            <button
-              key={g.groupId}
-              onClick={() => setHostFilter(g.groupId)}
-              style={{
-                flexShrink: 0,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                minHeight: 44,
-                fontFamily: UI,
-                fontSize: 13,
-                fontWeight: on ? 700 : 600,
-                cursor: "pointer",
-                padding: "0 4px",
-                border: "none",
-                borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
-                borderRadius: 0,
-                background: "transparent",
-                color: on ? p.txt : p.txt3,
-              }}
-            >
-              <Icon name="folder" size={13} color={on ? p.txt2 : p.txt3} />
-              {g.label}
-            </button>
-          );
-        })}
-        {groups.length > 0 && (
-          <span style={{ flexShrink: 0, alignSelf: "stretch", width: 1, margin: "5px 3px", background: p.line }} />
-        )}
-        {[HOST_FILTER_ALL, ...tags].map((tag) => {
-          const isAll = tag === HOST_FILTER_ALL;
-          const on = hostFilter === tag;
-          return (
-            <button
-              key={tag}
-              onClick={() => setHostFilter(tag)}
-              style={{
-                flexShrink: 0,
-                display: "inline-flex",
-                alignItems: "center",
-                minHeight: 44,
-                fontFamily: isAll ? UI : MONO,
-                fontSize: 13,
-                fontWeight: on ? 700 : 600,
-                cursor: "pointer",
-                padding: "0 4px",
-                border: "none",
-                borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
-                borderRadius: 0,
-                background: "transparent",
-                color: on ? p.txt : p.txt3,
-              }}
-            >
-              {isAll ? t("common.all") : "#" + tag}
-            </button>
-          );
-        })}
-        {hosts.some((x) => x.tags.length === 0) && (
-          <button
-            onClick={() => setHostFilter("__untagged")}
-            style={{
-              flexShrink: 0,
-              display: "inline-flex",
-              alignItems: "center",
-              minHeight: 44,
-              fontFamily: UI,
-              fontSize: 13,
-              fontWeight: hostFilter === "__untagged" ? 700 : 600,
-              cursor: "pointer",
-              padding: "0 4px",
-              border: "none",
-              borderBottom: `2px solid ${hostFilter === "__untagged" ? p.accent : "transparent"}`,
-              borderRadius: 0,
-              background: "transparent",
-              color: hostFilter === "__untagged" ? p.txt : p.txt3,
-            }}
-          >
-            {t("mobile.untagged")}
-          </button>
-        )}
-      </div>
-
-      <div style={{ flex: 1, position: "relative", minHeight: 0, display: "flex", flexDirection: "column" }}>
-        {/* pull-to-refresh spinner, revealed as the list is dragged down from the top */}
-        <div
-          style={{
-            position: "absolute",
-            top: 4,
-            left: 0,
-            right: 0,
-            display: "flex",
-            justifyContent: "center",
-            pointerEvents: "none",
-            zIndex: 1,
-            opacity: pull > 8 || refreshing ? 1 : 0,
-            transform: `translateY(${Math.max(0, pull - 26)}px)`,
-            transition: pullStart.current == null ? "opacity .2s" : "none",
-          }}
-        >
-          <Spinner size={20} />
-        </div>
-        <div
-          ref={scrollRef}
-          onTouchStart={onPullStart}
-          onTouchMove={onPullMove}
-          onTouchEnd={onPullEnd}
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            overscrollBehavior: "contain",
-            WebkitOverflowScrolling: "touch",
-            padding: "0 16px 16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-            transform: pull ? `translateY(${pull}px)` : "none",
-            transition: pullStart.current == null ? "transform .2s" : "none",
-          }}
-        >
-          {shown.map((h) => (
-            <MHostCard key={h.profileId} h={h} active={activeIds.has(h.profileId)} onOpen={() => onOpenHost(h.profileId)} />
-          ))}
-          {shown.length === 0 &&
-            (loading && hosts.length === 0 ? (
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "48px 0", color: p.txt3 }}>
-                <Spinner size={22} />
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "48px 0", color: p.txt3 }}>
-                <Icon name="server" size={34} color={p.txt3} />
-                <div style={{ fontSize: 14 }}>
-                  {hosts.length === 0 ? t("mobile.noHostsYet") : t("mobile.nothingFound")}
-                </div>
-              </div>
-            ))}
-          {/* clearance so the floating "+" never covers the last card */}
-          <div style={{ height: 76 }} />
-        </div>
-      </div>
-
-      <button
-        onClick={onNewHost}
-        aria-label={t("hosts.newHost")}
-        style={{
-          position: "absolute",
-          right: 18,
-          bottom: 20,
-          width: 56,
-          height: 56,
-          borderRadius: 12,
-          background: p.accent,
-          border: "none",
-          color: p.accentInk ?? "#fff",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          boxShadow: "0 8px 22px -12px rgba(0,0,0,0.6)",
-          zIndex: 5,
-        }}
-      >
-        <Icon name="plus" size={26} stroke={2.2} />
-      </button>
-
-      {sortSheet && (
-        <BottomSheet position="absolute" zIndex={40} onClose={() => setSortSheet(false)}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: p.txt3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>
-            {t("mobile.sortTitle")}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {(Object.keys(SORT_LABEL_KEY) as SortKey[]).map((k) => {
-              const on = sort === k;
-              return (
-                <button
-                  key={k}
-                  onClick={() => {
-                    changeSort(k);
-                    setSortSheet(false);
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    padding: 14,
-                    borderRadius: 14,
-                    background: on ? p.accentSoft : p.bg2,
-                    border: `1px solid ${on ? p.accentLine : p.line}`,
-                    cursor: "pointer",
-                  }}
-                >
-                  <Icon name={k === "name" ? "list" : k === "connected" ? "clock" : "plus"} size={18} color={on ? p.accent : p.txt3} />
-                  <span style={{ flex: 1, textAlign: "left", fontSize: 15, fontWeight: 600, color: on ? p.accent : p.txt }}>
-                    {tDyn(SORT_LABEL_KEY[k])}
-                  </span>
-                  {on && <Icon name="check" size={20} color={p.accent} />}
-                </button>
-              );
-            })}
-          </div>
-        </BottomSheet>
-      )}
-    </>
-  );
-}
-
-// ── host detail (push) ─────────────────────────────────────────
-function MHostDetail({
-  profile,
-  active,
-  onBack,
-  onConnect,
-  onSftp,
-}: {
-  profile: ConnectionProfile;
-  active: boolean;
-  onBack: () => void;
-  onConnect: () => void;
-  onSftp: () => void;
-}) {
-  const p = usePalette();
-  const { t } = useTranslation();
-  const ctx = useCtx();
-  const authKind = profileAuthKind(profile.auth);
-  const jump = profile.jumps[0];
-  // Real known-host state for this host — quiet "Key verified" + short fingerprint
-  // when a key is pinned, honest "not yet connected (TOFU)" otherwise. No fabrication.
-  const knownHosts = useApp((s) => s.knownHosts);
-  const known = knownHosts.find((k) => k.host === profile.host && k.port === profile.port);
-  const knownFp = useMemo(() => {
-    if (!known) return "";
-    const parts = known.key.trim().split(/\s+/);
-    const algo = parts[0] ?? "";
-    const blob = parts.slice(1).join("");
-    return blob ? `${algo} …${blob.slice(-16)}` : algo;
-  }, [known]);
-
-  const Row = ({ label, mono, children }: { label: string; mono?: boolean; children: React.ReactNode }) => (
-    <div style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "13px 0", borderBottom: `1px solid ${p.line}` }}>
-      <span style={{ width: 96, fontSize: 13.5, color: p.txt3, flexShrink: 0 }}>{label}</span>
-      <span
-        style={{
-          flex: 1,
-          fontSize: 14,
-          color: p.txt,
-          fontFamily: mono ? MONO : UI,
-          textAlign: "right",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {children}
-      </span>
-    </div>
-  );
-
-  const authLabel = authKind === "key" ? t("mobile.authKey") : authKind === "password" ? t("mobile.authPassword") : t("mobile.authPrompt");
-
-  return (
-    <>
-      <div style={{ flexShrink: 0, padding: "4px 12px 8px", display: "flex", alignItems: "center", gap: 4 }}>
-        <button
-          onClick={onBack}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 2,
-            padding: "8px 8px 8px 4px",
-            background: "none",
-            border: "none",
-            color: p.accent,
-            cursor: "pointer",
-            fontSize: 16,
-            fontWeight: 500,
-          }}
-        >
-          <Icon name="cl" size={22} />
-          {t("mobile.tabHosts")}
-        </button>
-        <div style={{ flex: 1 }} />
-        <button
-          onClick={() => ctx.openModal({ kind: "host", edit: profile })}
-          aria-label={t("common.edit")}
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 12,
-            background: p.bg2,
-            border: `1px solid ${p.line2}`,
-            color: p.txt2,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="pencil" size={18} />
-        </button>
-      </div>
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          overscrollBehavior: "contain",
-          WebkitOverflowScrolling: "touch",
-          padding: "0 16px 16px",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", padding: "8px 0 20px" }}>
-          <span
-            style={{
-              width: 72,
-              height: 72,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              position: "relative",
-              marginBottom: 12,
-            }}
-          >
-            <Icon name="server" size={32} color={p.txt2} stroke={1.6} />
-            {active && (
-              <span
-                style={{
-                  position: "absolute",
-                  bottom: 0,
-                  right: 0,
-                  background: p.bg0,
-                  borderRadius: "50%",
-                  padding: 3,
-                  display: "flex",
-                }}
-              >
-                <StatusDot status="online" size={12} srLabel={t("mobile.sessionNow")} />
-              </span>
-            )}
-          </span>
-          <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5, color: p.txt, textAlign: "center", wordBreak: "break-word" }}>{profile.label}</div>
-          <div style={{ fontFamily: MONO, fontSize: 13, color: active ? p.green : p.txt3, marginTop: 2, textAlign: "center", wordBreak: "break-all" }}>
-            {active ? t("mobile.sessionActive") : `${profile.user}@${profile.host}`}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
-          <button
-            onClick={onConnect}
-            style={{
-              flex: 1,
-              height: 50,
-              borderRadius: 12,
-              background: p.accent,
-              border: "none",
-              color: p.accentInk ?? "#fff",
-              cursor: "pointer",
-              fontSize: 16,
-              fontWeight: 700,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-            }}
-          >
-            <Icon name="terminal" size={19} />
-            {active ? t("mobile.openSession") : t("nav.terminal")}
-          </button>
-          <button
-            onClick={onSftp}
-            aria-label={t("nav.sftp")}
-            style={{
-              width: 50,
-              height: 50,
-              borderRadius: 12,
-              background: p.bg2,
-              border: `1px solid ${p.line2}`,
-              color: p.txt2,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Icon name="folders" size={20} />
-          </button>
-        </div>
-
-        <div>
-          <Row label={t("mobile.detail.host")} mono>
-            {profile.host}
-          </Row>
-          <Row label={t("mobile.detail.port")} mono>
-            {profile.port}
-          </Row>
-          <Row label={t("mobile.detail.user")} mono>
-            {profile.user}
-          </Row>
-          <Row label={t("mobile.detail.auth")}>
-            <span style={{ color: authKind === "password" || authKind === "ask" ? p.amber : p.txt }}>{authLabel}</span>
-          </Row>
-          {jump && (
-            <Row label={t("mobile.detail.proxyJump")} mono>
-              {jump.user}@{jump.host}
-            </Row>
-          )}
-          {profile.tags.length > 0 && (
-            <Row label={t("mobile.detail.tags")} mono>
-              {profile.tags.map((t) => `#${t}`).join(" ")}
-            </Row>
-          )}
-        </div>
-
-        <div style={{ padding: "13px 0" }}>
-          {known ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
-              <MetaChip icon="shieldcheck" tone="good">
-                {t("mobile.keyVerified")}
-              </MetaChip>
-              <span
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  fontFamily: MONO,
-                  fontSize: 12,
-                  color: p.txt3,
-                  textAlign: "right",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {knownFp}
-              </span>
-            </div>
-          ) : (
-            <MetaChip icon="shield" tone="neutral">
-              {t("mobile.notConnectedTofu")}
-            </MetaChip>
-          )}
-        </div>
-      </div>
-    </>
   );
 }
 
@@ -1066,38 +377,58 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
             const on = trm.id === active?.id;
             const tp = trm.panes.find((pp) => pp.id === trm.activePaneId) ?? trm.panes[0];
             return (
-              <button
+              // Two sibling buttons, not a <span onClick> nested inside a <button>:
+              // that isn't focusable, has no accessible name, and put a 16px target
+              // on an action that closes every pane's backend session.
+              <span
                 key={trm.id}
-                onClick={() => setActiveTerm(trm.id)}
                 style={{
                   flexShrink: 0,
                   display: "inline-flex",
                   alignItems: "center",
-                  gap: 7,
-                  padding: "6px 10px",
-                  minHeight: 36,
-                  border: "none",
                   borderBottom: `2px solid ${on ? p.txt2 : "transparent"}`,
-                  borderRadius: 0,
-                  background: "transparent",
-                  color: on ? p.txt : p.txt3,
-                  cursor: "pointer",
-                  fontSize: 12.5,
-                  fontFamily: MONO,
                 }}
               >
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: tp?.status === "online" ? p.green : tp?.status === "error" ? p.red : p.txt3 }} />
-                <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{trm.title}</span>
-                <span
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    closeTerminal(trm.id); // closes every pane's backend session
+                <button
+                  onClick={() => setActiveTerm(trm.id)}
+                  aria-current={on ? "page" : undefined}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 7,
+                    padding: "6px 4px 6px 10px",
+                    minHeight: SIZE.tapMin,
+                    border: "none",
+                    borderRadius: 0,
+                    background: "transparent",
+                    color: on ? p.txt : p.txt3,
+                    cursor: "pointer",
+                    fontSize: 12.5,
+                    fontFamily: MONO,
                   }}
-                  style={{ display: "inline-flex", opacity: 0.6, padding: 2 }}
+                >
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: tp?.status === "online" ? p.green : tp?.status === "error" ? p.red : p.txt3 }} />
+                  <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{trm.title}</span>
+                </button>
+                <button
+                  onClick={() => closeTerminal(trm.id)} // closes every pane's backend session
+                  aria-label={t("terminal.tab.close")}
+                  style={{
+                    width: SIZE.tapMin,
+                    height: SIZE.tapMin,
+                    flexShrink: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    border: "none",
+                    background: "transparent",
+                    color: p.txt3,
+                    cursor: "pointer",
+                  }}
                 >
                   <Icon name="x" size={12} />
-                </span>
-              </button>
+                </button>
+              </span>
             );
           })}
         </div>
@@ -1145,12 +476,13 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
 
 // ── more grid ──────────────────────────────────────────────────
 const MORE_ITEMS: {
-  type: Exclude<Frame["type"], "host">;
+  type: Frame["type"];
   icon: IconName;
   labelKey: string;
   descKey: string;
 }[] = [
-  { type: "broadcast", icon: "radio", labelKey: "nav.broadcast", descKey: "mobile.more.broadcastDesc" },
+  // Broadcast is not here: it's a mode of the Run tab, exactly as on the desktop,
+  // where the sidebar has neither "Broadcast" nor "Fleet" — only "Run".
   { type: "sftp", icon: "folders", labelKey: "nav.sftp", descKey: "mobile.more.sftpDesc" },
   { type: "tunnels", icon: "branch", labelKey: "nav.tunnels", descKey: "mobile.more.tunnelsDesc" },
   { type: "known", icon: "shieldcheck", labelKey: "nav.known", descKey: "mobile.more.knownDesc" },
@@ -1158,7 +490,7 @@ const MORE_ITEMS: {
   { type: "settings", icon: "sliders", labelKey: "nav.settings", descKey: "mobile.more.settingsDesc" },
 ];
 
-function MMore({ go }: { go: (t: Exclude<Frame["type"], "host">) => void }) {
+function MMore({ go }: { go: (t: Frame["type"]) => void }) {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
@@ -1258,20 +590,28 @@ function MWrapView({ label, onBack, children }: { label: string; onBack: () => v
       <div style={{ flexShrink: 0, padding: "4px 12px 8px", display: "flex", alignItems: "center", borderBottom: `1px solid ${p.line}` }}>
         <button
           onClick={onBack}
+          aria-label={t("common.back")}
           style={{
             display: "flex",
             alignItems: "center",
             gap: 2,
+            // 44 tall: this is the primary way out of every pushed frame.
             padding: "8px 8px 8px 4px",
+            minHeight: 44,
             background: "none",
             border: "none",
-            color: p.accent,
+            // Ink, not accent: accent-on-bg0 lands at ~3.1:1 in the light families
+            // and this is a text label, not the reserved tick.
+            color: p.txt,
             cursor: "pointer",
             fontSize: 16,
           }}
         >
           <Icon name="cl" size={22} />
-          {t("nav.more")}
+          {/* "Back", not "More": these frames are reached from More, from a host
+              card's SFTP button, from a fingerprint, and from a mismatch review —
+              naming one of those four was wrong three times out of four. */}
+          {t("common.back")}
         </button>
         <div style={{ flex: 1, textAlign: "center", fontSize: 15, fontWeight: 700, color: p.txt, marginRight: 44 }}>{label}</div>
       </div>
@@ -1281,32 +621,50 @@ function MWrapView({ label, onBack, children }: { label: string; onBack: () => v
 }
 
 // ── tab bar ────────────────────────────────────────────────────
+/** Tab-bar vertical padding. The active tick is pulled up by exactly this much to
+ *  sit flush against the bar's top hairline, so the two must stay in step. */
+const TAB_PAD_Y = 8;
+
+/** How near the left edge a touch must start to arm the back gesture.
+ *
+ *  There used to be an invisible 20px shield here that stopped nested horizontal
+ *  scrollers from stealing the touch — but the gesture arms at 28px, so the two
+ *  disagreed by 8px, and the shield ate every tap in the left band of every pushed
+ *  frame (Settings rows, SFTP filenames, part of the back chevron itself) to buy a
+ *  gesture that every one of those frames already offers as a back button. The
+ *  shield is gone: a rare swipe losing to a scroller is recoverable, a dead strip
+ *  down the side of every screen is not. */
+const EDGE_SWIPE_PX = 28;
+
 function MTabBar({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) {
   const p = usePalette();
   const { t } = useTranslation();
   const tabs: { id: TabId; icon: IconName; label: string }[] = [
     { id: "hosts", icon: "server", label: t("mobile.tabHosts") },
     { id: "terminal", icon: "terminal", label: t("nav.terminal") },
-    { id: "fleet", icon: "layers", label: t("nav.fleet") },
+    { id: "run", icon: "layers", label: t("nav.run") },
     { id: "more", icon: "grid", label: t("nav.more") },
   ];
   return (
-    <div
+    <nav
+      aria-label={t("mobile.tabsLabel")}
       style={{
         flexShrink: 0,
         display: "flex",
-        padding: "8px 8px calc(8px + env(safe-area-inset-bottom))",
+        padding: `${TAB_PAD_Y}px 8px calc(${TAB_PAD_Y}px + env(safe-area-inset-bottom))`,
         borderTop: `1px solid ${p.line}`,
         background: p.bg1,
       }}
     >
-      {tabs.map((t) => {
-        const active = tab === t.id;
+      {tabs.map((tb) => {
+        const active = tab === tb.id;
         return (
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+            key={tb.id}
+            onClick={() => setTab(tb.id)}
+            aria-current={active ? "page" : undefined}
             style={{
+              position: "relative",
               flex: 1,
               minWidth: 0,
               display: "flex",
@@ -1318,10 +676,30 @@ function MTabBar({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) {
               background: "none",
               border: "none",
               cursor: "pointer",
-              color: active ? p.accent : p.txt3,
+              // Accent is reserved for the tick (the sidebar's rule, Shell.tsx).
+              // An accent label here fails AA at 11px in the light families — and
+              // colour alone was carrying the active state, which weight at 11px
+              // cannot back up. Ink + the tick fixes contrast and the carrier.
+              color: active ? p.txt : p.txt3,
             }}
           >
-            <Icon name={t.icon} size={23} stroke={active ? 2 : 1.7} />
+            {/* The sidebar's accent tick sits flush at its outer edge; the tab
+                bar's outer edge is the top one, so the tick rides there. */}
+            {active && (
+              <span
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  top: -TAB_PAD_Y,
+                  left: 6,
+                  right: 6,
+                  height: 2,
+                  background: p.accent,
+                  borderRadius: RADIUS.tick,
+                }}
+              />
+            )}
+            <Icon name={tb.icon} size={23} stroke={active ? 2 : 1.7} />
             <span
               style={{
                 fontSize: 11,
@@ -1332,12 +710,12 @@ function MTabBar({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) {
                 textOverflow: "ellipsis",
               }}
             >
-              {t.label}
+              {tb.label}
             </span>
           </button>
         );
       })}
-    </div>
+    </nav>
   );
 }
 
@@ -1346,10 +724,8 @@ export function MobileApp() {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
-  const hosts = useApp((s) => s.hosts);
   const vaultId = useApp((s) => s.vaultId);
   const vaults = useApp((s) => s.vaults);
-  const activeIds = useActiveIds();
 
   const [tab, setTab] = useState<TabId>("hosts");
   const [stack, setStack] = useState<Frame[]>([]);
@@ -1360,9 +736,18 @@ export function MobileApp() {
   const vault = vaults.find((v) => v.vaultId === vaultId) ?? vaults[0] ?? null;
   const top = stack[stack.length - 1];
   const push = (f: Frame) => setStack((s) => [...s, f]);
+
+  const runBack = useApp((s) => s.runBack);
   const pop = () => setStack((s) => s.slice(0, -1));
 
   const switchTab = (t: TabId) => {
+    // Re-tapping the active tab pops it to root (the iOS convention) — and it is
+    // the obvious escape a user reaches for. setTab alone is a no-op React
+    // discards, which left the detail overlay up and the tab looking inert.
+    if (t === tab && !stack.length) {
+      runBack();
+      return;
+    }
     setStack([]);
     setTab(t);
   };
@@ -1372,35 +757,41 @@ export function MobileApp() {
     if (!top) setSw(null);
   }, [top]);
 
-  // pop a host-detail frame whose profile no longer exists (deleted via the edit
-  // modal), so the user isn't stranded on a blank screen.
-  useEffect(() => {
-    if (top?.type === "host" && !hosts.some((h) => h.profileId === top.id)) {
-      setStack((s) => s.slice(0, -1));
-    }
-  }, [top, hosts]);
-
-  // Desktop views navigate via store.route; this shell keeps its own stack.
-  // Honour the one cross-shell security navigation — the host-key mismatch
-  // "review" affordances call reviewMismatch()/go("known") — by pushing the same
-  // screen here, so the Verify & accept ceremony is reachable from mobile too.
-  // Subscribe to routeSeq (bumped on every navigation, even a repeat go("known"))
-  // rather than route, whose same-value set fires no update and would drop a
-  // second review request. The dedupe-if-already-on-top guard still stands.
+  // Mirror the store router into this shell's stack. Every reused desktop view
+  // navigates with ctx.go() — the command palette's nav items, the terminal status
+  // bar's theme link, a host-key mismatch's "review" — and this shell used to
+  // honour exactly one route ("known"), so all the others silently did nothing on a
+  // phone. Subscribe to routeSeq, not route: it bumps on every navigation, whereas
+  // a repeat go("known") sets the same value, fires no update, and would drop a
+  // second mismatch review.
   const routeSeq = useApp((s) => s.routeSeq);
+  // Skip the mount run. `route` outlives a lock, and this shell is remounted on
+  // every unlock (App gates it on `unlocked`), so mirroring on mount replayed the
+  // route you happened to be on BEFORE locking — landing you on a Terminal tab
+  // that lockInstance just emptied, or an SFTP frame with no session and no tab
+  // bar. A fresh shell starts on Hosts; only a real navigation should move it.
+  const mirrored = useRef(false);
   useEffect(() => {
-    if (useApp.getState().route === "known")
-      setStack((s) => (s[s.length - 1]?.type === "known" ? s : [...s, { type: "known" }]));
+    if (!mirrored.current) {
+      mirrored.current = true;
+      return;
+    }
+    const route = useApp.getState().route;
+    const asTab = ROUTE_TAB[route];
+    if (asTab) {
+      setStack([]);
+      setTab(asTab);
+      return;
+    }
+    const asFrame = ROUTE_FRAME[route];
+    if (asFrame) {
+      // Dedupe: re-navigating to the screen you're already on must not stack it.
+      setStack((s) => (s[s.length - 1]?.type === asFrame ? s : [...s, { type: asFrame }]));
+    }
   }, [routeSeq]);
 
-  const connectHost = (profile: ConnectionProfile) => {
-    ctx.connect(profile); // opens a terminal tab + switches store.route to terminal
-    setStack([]);
-    setTab("terminal");
-  };
-
-  // tabs hide the tab bar only when in a secondary (non-host) frame
-  const tabBarVisible = !top || top.type === "host";
+  // The tab bar belongs to the tabs; a pushed frame owns the whole screen.
+  const tabBarVisible = !top;
   // the terminal tab is rendered persistently (below), so it's "shown" only when
   // it's the active tab and no secondary frame is pushed on top of it
   const showTerminal = !top && tab === "terminal";
@@ -1408,30 +799,27 @@ export function MobileApp() {
   // frame is on top, only hidden (not unmounted) otherwise, so its panes / cwd /
   // selection survive leaving and returning — same reasoning as the terminal.
   const showSftp = !!top && top.type === "sftp";
+  // ViewRun holds live broadcast PTYs, so it belongs to the same set: unmounting
+  // it fires ViewBroadcast's cleanup, which closes every session it holds. It used
+  // to be re-created per tab, and ANY navigation destroyed the broadcast — a nav
+  // guard can't save it, because addTerminal/reviewMismatch/duplicateTerminal all
+  // move the route without consulting one. Keeping it mounted removes the hazard
+  // rather than asking the user to confirm it.
+  //
+  // LAZY, though: mounted on first visit, kept alive after. Mounting it at app
+  // launch means paying for a screen most sessions never open — ViewBroadcast's
+  // 520ms caret interval blinking on battery from boot — and it also breaks the
+  // two things that read state AT mount: ViewRun's entry mode and ViewFleet's
+  // carried selection, both of which would sample an empty app.
+  const showRun = !top && tab === "run";
+  const [runMounted, setRunMounted] = useState(false);
+  useEffect(() => {
+    if (showRun) setRunMounted(true);
+  }, [showRun]);
 
   let screen: React.ReactNode = null;
   if (top) {
     switch (top.type) {
-      case "host": {
-        const profile = hosts.find((h) => h.profileId === top.id);
-        screen = profile ? (
-          <MHostDetail
-            profile={profile}
-            active={activeIds.has(profile.profileId)}
-            onBack={pop}
-            onConnect={() => connectHost(profile)}
-            onSftp={() => push({ type: "sftp" })}
-          />
-        ) : null;
-        break;
-      }
-      case "broadcast":
-        screen = (
-          <MWrapView label={t("nav.broadcast")} onBack={pop}>
-            <ViewBroadcast />
-          </MWrapView>
-        );
-        break;
       case "sftp":
         // Rendered persistently below (display-toggled) so its state survives
         // leaving and returning — like the terminal. Nothing to render in-stack.
@@ -1468,25 +856,21 @@ export function MobileApp() {
   } else {
     switch (tab) {
       case "hosts":
+        // The desktop view itself. It already goes single-column and turns its
+        // detail rail into a full-screen overlay once useNarrow() fires, so the
+        // phone gets the real thing — density, hostsLayout, bulk select, the
+        // relative last-connected — instead of a look-alike that drifts.
         screen = (
-          <MHosts
-            vault={vault}
-            onOpenHost={(id) => push({ type: "host", id })}
-            onVaultTap={() => setVaultSheet(true)}
-            onNewHost={() => ctx.onNewHost()}
-          />
+          <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+            <ViewHosts />
+          </div>
         );
         break;
       // "terminal" is intentionally absent here — it's rendered persistently
       // below (display-toggled) so the live SSH session + scrollback survive a
       // tab switch, exactly like the always-mounted desktop ViewTerminal.
-      case "fleet":
-        screen = (
-          <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-            <ViewFleet />
-          </div>
-        );
-        break;
+      // "run" is intentionally absent here — like the terminal, it is rendered
+      // persistently below so its live broadcast survives navigation.
       case "more":
         screen = <MMore go={(t) => push({ type: t })} />;
         break;
@@ -1505,13 +889,27 @@ export function MobileApp() {
         paddingTop: "env(safe-area-inset-top)",
         paddingLeft: "env(safe-area-inset-left)",
         paddingRight: "env(safe-area-inset-right)",
-        paddingBottom: kbInset, // lift content above the software keyboard
+        // The bottom inset lives here, not on the tab bar: the bar hides on every
+        // pushed frame, so delegating it there ran Settings/Secrets/Known/Tunnels/
+        // SFTP right under the home indicator. The keyboard, when up, supersedes it.
+        paddingBottom: kbInset || "env(safe-area-inset-bottom)",
         overflow: "hidden",
       }}
     >
+      {/* On every tab, not just Hosts: the vault you're in and the way to LOCK are
+          not properties of the hosts list. The lock used to exist on 1 tab of 4 — on
+          the device most likely to be handed over, set down, or left on a table.
+          Pushed frames are excluded: MWrapView already gives them a header, and two
+          stacked headers on a phone is a worse answer than a lock one tap away. */}
+      {!top && <MTopBar vault={vault} onLock={ctx.onLock} onVaultTap={() => setVaultSheet(true)} />}
       <div
         onTouchStart={(e) => {
-          if (top && e.touches[0].clientX < 28) setSw({ x: e.touches[0].clientX, dx: 0 });
+          // Frames only. This gesture translates the container BELOW — which also
+          // holds the Hosts detail rail — so arming it there dragged the list
+          // sideways while the rail simply disappeared, attached to nothing. The
+          // rail's back is the tab-tap and its own chevron.
+          if (top && e.touches[0].clientX < EDGE_SWIPE_PX)
+            setSw({ x: e.touches[0].clientX, dx: 0 });
         }}
         onTouchMove={(e) => {
           if (sw) setSw((s) => (s ? { ...s, dx: Math.max(0, e.touches[0].clientX - s.x) } : s));
@@ -1531,7 +929,6 @@ export function MobileApp() {
           opacity: sw && sw.dx ? Math.max(0.5, 1 - sw.dx / 320) : 1,
         }}
       >
-        {top && <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 20, zIndex: 50 }} />}
         {screen}
         {/* The terminal stays mounted across tab switches (display-toggled): the
             backend session persists in the store, so unmounting MTerminal would
@@ -1547,6 +944,19 @@ export function MobileApp() {
           }}
         >
           <MTerminal onNeedHosts={() => switchTab("hosts")} />
+        </div>
+        {/* Run: mounted for the same reason as the terminal — it owns live
+            broadcast sessions. ViewRun itself dual-mounts Broadcast and Fleet so
+            switching MODE never tears them down either (spec A13). */}
+        <div
+          style={{
+            display: showRun ? "flex" : "none",
+            flexDirection: "column",
+            flex: 1,
+            minHeight: 0,
+          }}
+        >
+          {runMounted && <ViewRun />}
         </div>
         {/* ViewSftp also stays mounted (display-toggled) so panes/cwd/selection
             survive leaving the sftp frame, mirroring the terminal and desktop.
