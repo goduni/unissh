@@ -2185,9 +2185,17 @@ export function ViewHosts() {
           </div>
         )}
 
-        {/* Narrow: the primary action as a thumb-zone FAB. Hidden while the detail
+        {/* Touch: the primary action as a thumb-zone FAB. Hidden while the detail
             rail is up — it belongs to the list, and it would sit over the rail's
-            own Connect. The list reserves 76px of bottom padding for it. */}
+            own Connect. The list reserves 76px of bottom padding for it.
+
+            NOT a filled accent block. In the mono family the accent IS ink —
+            near-black in the light twin, near-WHITE in the dark one — so filling a
+            56px disc with it puts a glaring white blob over a near-black list and
+            drags every eye to it. The header's New host makes the same call for the
+            same reason ("a filled primary here becomes a glaring near-white block
+            in dark mode"); this is that rule at 56px. A FAB is primary by size and
+            position — alone, in the thumb zone — not by shouting. */}
         {touch && !railShown && !sel.length && (
           <button
             onClick={() => ctx.onNewHost()}
@@ -2199,9 +2207,9 @@ export function ViewHosts() {
               width: 56,
               height: 56,
               borderRadius: RADIUS.menu,
-              background: p.accent,
-              border: "none",
-              color: p.accentInk ?? "#fff",
+              background: p.bg2,
+              border: `1px solid ${p.line2}`,
+              color: p.txt,
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
