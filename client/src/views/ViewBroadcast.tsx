@@ -210,7 +210,15 @@ export function ViewBroadcast() {
   // Guard nav away from this view while any host is live: leaving unmounts the view
   // and tears the whole broadcast down, so route it through a confirm first. Cleared
   // on unmount (and re-registered whenever the live set changes) so it never goes stale.
+  //
+  // Desktop only, because the teardown is a property of the DESKTOP router: it swaps
+  // the whole view tree by route. The phone shell keeps this view mounted for the
+  // session (like the terminal), so nothing here is ever torn down by navigation —
+  // and a guard that fires anyway is worse than none: every ctx.go() would raise a
+  // danger-styled "this will close your sessions" confirm for a navigation that
+  // closes nothing, and confirming it clears the guard for good.
   useEffect(() => {
+    if (isMobile) return;
     const app = useApp.getState();
     app.setNavGuard(() =>
       opened.some((h) => h.status.connected)
@@ -222,7 +230,7 @@ export function ViewBroadcast() {
         : null,
     );
     return () => app.setNavGuard(null);
-  }, [opened, t]);
+  }, [opened, t, isMobile]);
 
   // A vault switch tears down this broadcast's backend session (store.setVault
   // closes every registered broadcast), so reset local state on a vault change so
@@ -426,7 +434,7 @@ export function ViewBroadcast() {
           flexWrap: "wrap",
         }}
       >
-        <Icon name="radio" size={20} color={p.accent} />
+        <Icon name="radio" size={20} color={p.accentText} />
         <h1
           style={{
             margin: 0,
@@ -607,7 +615,7 @@ export function ViewBroadcast() {
               flex: narrow ? undefined : 1,
             }}
           >
-          <Icon name="radio" size={17} color={p.accent} />
+          <Icon name="radio" size={17} color={p.accentText} />
           <div style={{ flex: 1, position: "relative", display: "flex", alignItems: "center" }}>
             <input
               ref={inputRef}
@@ -640,7 +648,7 @@ export function ViewBroadcast() {
                   pointerEvents: "none",
                   fontFamily: MONO,
                   fontSize: 15,
-                  color: p.accent,
+                  color: p.accentText,
                   opacity: caret ? 1 : 0,
                   left: `calc(${typed.length}ch)`,
                 }}
