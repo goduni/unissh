@@ -6,6 +6,45 @@
 export const UI = "'Hanken Grotesk', system-ui, -apple-system, sans-serif";
 export const MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace";
 
+// ── Geometry ───────────────────────────────────────────────────
+// Colour was the only tokenised axis here for a long time, and geometry paid for
+// it: the palette propagated to every surface automatically while every radius and
+// inset stayed a bare literal, so the mobile shell drifted to a 12–18 radius scale
+// against the desktop's 6–11 without anything to notice. These name the values the
+// mono system actually uses. Reach for the primitives (Card, Btn, HairlineRow)
+// first — they consume these; the tokens are for geometry outside a primitive.
+
+/** Corner radii. The card twin is density-aware: the compact end of the SPACING
+ *  axis tightens the radius with the padding (see mono.Card). */
+export const RADIUS = {
+  card: 16,
+  cardCompact: 11,
+  /** Popovers and dropdown menus. */
+  menu: 12,
+  /** Buttons. */
+  ctl: 10,
+  /** Inputs and segmented controls. */
+  input: 9,
+  /** Icon buttons, chips, menu rows. */
+  chip: 8,
+  /** The active-state tick / underline bar. */
+  tick: 2,
+} as const;
+
+/** Layout insets. */
+export const SPACE = {
+  /** A view's horizontal content gutter. */
+  gutter: 22,
+  /** The same gutter on a phone or a narrowed window, where 22 wastes scarce width. */
+  gutterNarrow: 16,
+} as const;
+
+export const SIZE = {
+  /** Minimum touch target. WCAG 2.5.5 asks 44x44 CSS px; Apple HIG and Material
+   *  agree. Anything interactive on a touch surface must clear this. */
+  tapMin: 44,
+} as const;
+
 export type Mode = "dark" | "light" | "auto";
 export type EffMode = "dark" | "light";
 export type AccentKey = "blue" | "green" | "violet" | "amber" | "rose";
@@ -31,6 +70,14 @@ export interface Palette {
   txt2: string;
   txt3: string;
   accent: string;
+  /** The accent at text weight: the same hue, darkened (light) or lightened (dark)
+   *  until it clears AA on EVERY surface tier (bg0..bg4). `accent` is a FILL
+   *  colour — it sizes buttons,
+   *  ticks and borders, where contrast rules don't apply — and it is near-ink in the
+   *  mono family but saturated in nebula/candy, so using it for a LABEL passes in the
+   *  default theme and quietly fails in the opt-in ones. Any accent-coloured text
+   *  must use this. Derived, never authored; see accentTextFor. */
+  accentText: string;
   accent2: string;
   accentSoft: string;
   accentLine: string;
@@ -57,8 +104,14 @@ export interface Palette {
   scrim?: string;
 }
 
+/** A palette as authored. `accentText` is DERIVED from the authored colours rather
+ *  than hand-picked, so retuning an accent or a surface can't silently drop it out
+ *  of AA. buildPalette / resolveAppPalette — the only ways the app obtains a
+ *  palette — add it; nothing else should construct a Palette by hand. */
+export type AuthoredPalette = Omit<Palette, "accentText">;
+
 // ── App palettes ───────────────────────────────────────────────
-export const DARK: Palette = {
+export const DARK: AuthoredPalette = {
   name: "dark",
   desk: "#08090d",
   bg0: "#0c0e14",
@@ -83,7 +136,7 @@ export const DARK: Palette = {
   shadow: "0 24px 70px -12px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05)",
 };
 
-export const LIGHT: Palette = {
+export const LIGHT: AuthoredPalette = {
   name: "light",
   desk: "#dfe2ea",
   bg0: "#ffffff",
@@ -111,7 +164,7 @@ export const LIGHT: Palette = {
 // ── Candy Holo — pink-dominant light hero + deep-plum dark twin ─
 // A "named" theme that owns its full surfaces (not just an accent). Light-terminal
 // ANSI and a couple of tokens are deepened for WCAG legibility on the pale pink.
-export const CANDY_LIGHT: Palette = {
+export const CANDY_LIGHT: AuthoredPalette = {
   name: "candy-light",
   desk: "#ffe3f4",
   bg0: "#fff2fb",
@@ -141,7 +194,7 @@ export const CANDY_LIGHT: Palette = {
   dangerInk: "#ffffff", // white clears AA on this red (5.21:1); the plum ink is 2.75:1
 };
 
-export const CANDY_DARK: Palette = {
+export const CANDY_DARK: AuthoredPalette = {
   name: "candy-dark",
   desk: "#180a1e",
   bg0: "#1e0f26",
@@ -175,7 +228,7 @@ export const CANDY_DARK: Palette = {
 // + a barely-elevated panel/hover/selected tier (bg2..bg4 within ~2% L of base) so
 // existing bgN consumers render flat. Every txt/semantic pair is AA-verified on
 // base AND elevated in both twins (scripts/mono-contrast golden check).
-export const MONO_LIGHT: Palette = {
+export const MONO_LIGHT: AuthoredPalette = {
   name: "mono-light",
   desk: "#e7e8ec",
   bg0: "#ffffff",
@@ -203,7 +256,7 @@ export const MONO_LIGHT: Palette = {
   scrim: "rgba(18,22,38,0.42)",
 };
 
-export const MONO_DARK: Palette = {
+export const MONO_DARK: AuthoredPalette = {
   name: "mono-dark",
   desk: "#08090c",
   bg0: "#0f1116",
@@ -358,6 +411,30 @@ export const ACCENTS_LIGHT: Record<AccentKey, AccentPreset> = {
 
 export const ACCENT_KEYS: AccentKey[] = ["blue", "green", "violet", "amber", "rose"];
 
+/** Walk the accent toward the ink end of its own hue until it clears AA as body
+ *  text on BOTH base surfaces, and return it unchanged when it already does — which
+ *  is the mono family, whose accent is ink by design. This is what lets a saturated
+ *  brand accent (candy's #ff2f9e is 3.41:1 on white) still label something without
+ *  either failing AA or being flattened to plain grey. */
+function accentTextFor(accent: string, surfaces: string[], mode: EffMode): string {
+  // EVERY surface tier, not just the base ones. bg3/bg4 are the hover/selected
+  // tiers — a highlighted row, the current item in a menu — which is exactly where
+  // an accent-coloured label or check glyph lands, and in the light twins they are
+  // the darkest of the ladder, so they are what actually fails: derived against
+  // bg0..bg2 alone, candy's accentText sat at 3.87:1 on bg4.
+  const ok = (c: string) => surfaces.every((s) => contrastRatio(c, s) >= 4.5);
+  let c = accent;
+  // 4% per step. `darken` scales R/G/B uniformly, which leaves HSV hue and
+  // saturation untouched — the walk deepens the colour without muddying it (candy
+  // #ff2f9e H328 S82 -> #b1216d H328 S81 in 9 steps). `lighten` does desaturate
+  // toward white, but no dark-mode accent ever iterates: they all pass at i=0.
+  for (let i = 0; i < 30 && !ok(c); i++) c = mode === "dark" ? lighten(c, 0.04) : darken(c, 0.04);
+  return c;
+}
+
+/** The surface tiers accent-coloured text/glyphs can sit on. */
+const surfacesOf = (p: AuthoredPalette): string[] => [p.bg0, p.bg1, p.bg2, p.bg3, p.bg4];
+
 export function buildPalette(mode: EffMode, accentKey: AccentKey = "blue"): Palette {
   const base = mode === "dark" ? DARK : LIGHT;
   const a = (mode === "dark" ? ACCENTS : ACCENTS_LIGHT)[accentKey] || ACCENTS.blue;
@@ -367,6 +444,7 @@ export function buildPalette(mode: EffMode, accentKey: AccentKey = "blue"): Pale
   return {
     ...base,
     accent: a.accent,
+    accentText: accentTextFor(a.accent, surfacesOf(base), mode),
     accent2: a.accent2,
     purple: a.purple,
     accentSoft: rgba(a.accent, softA),
@@ -385,7 +463,10 @@ export function buildPalette(mode: EffMode, accentKey: AccentKey = "blue"): Pale
 // Nebula keeps the base+accent machinery above; named themes ("candy") own a full
 // palette per effective mode. resolveAppPalette is the single entry point the
 // ThemeProvider uses instead of calling buildPalette directly.
-export const APP_THEMES: Record<Exclude<AppThemeFamily, "nebula">, { dark: Palette; light: Palette }> = {
+export const APP_THEMES: Record<
+  Exclude<AppThemeFamily, "nebula">,
+  { dark: AuthoredPalette; light: AuthoredPalette }
+> = {
   mono: { dark: MONO_DARK, light: MONO_LIGHT },
   candy: { dark: CANDY_DARK, light: CANDY_LIGHT },
 };
@@ -399,7 +480,9 @@ export function resolveAppPalette(
   // unrecognized family, so a corrupt/forward-incompatible persisted value can't
   // crash the whole app (same hardening buildPalette applies to a bad accent).
   const themed = family !== "nebula" ? APP_THEMES[family] : undefined;
-  return themed ? themed[mode] : buildPalette(mode, accentKey);
+  if (!themed) return buildPalette(mode, accentKey);
+  const base = themed[mode];
+  return { ...base, accentText: accentTextFor(base.accent, surfacesOf(base), mode) };
 }
 
 // Default terminal theme per (family, effective mode) — the linked default that a
