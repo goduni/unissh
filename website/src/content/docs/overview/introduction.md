@@ -28,7 +28,7 @@ Teams and engineers working from places with good infrastructure — their own b
 
 - **End-to-end encrypted vaults** holding SSH keys, host profiles, server passwords, encrypted notes, and host groups.
 - **Real terminals** — interactive PTY sessions backed by [`russh`](https://crates.io/crates/russh), streaming exec with separate stdout/stderr, and auto-reconnect.
-- **Fleet and broadcast ops** — multi-host exec with concurrency limits and per-host timeouts, runs by host group or tag, dry-run target resolution, broadcast (one input fanned out to N PTYs), and fleet file push over SFTP.
+- **Run a command across hosts** — one screen with two modes: multi-host exec with concurrency limits and per-host timeouts (by host group or tag, with dry-run target resolution), or broadcast — one input fanned out to N live PTYs. Plus fleet file push over SFTP. The core exposes fleet and broadcast as separate APIs; the client presents them as one destination.
 - **SFTP** with resumable transfers, progress, and cancellation.
 - **Tunnels** — local, remote, and dynamic (SOCKS5) forwards, including `ProxyJump` chains.
 - **A self-hostable zero-knowledge server** — a ciphertext store with device/team sync, membership/sharing/revocation (RBAC), and a tamper-evident audit log.

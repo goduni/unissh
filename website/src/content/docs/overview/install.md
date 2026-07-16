@@ -35,7 +35,7 @@ cargo test  --workspace      # core crates + the SSH integration tests
 
 ### server
 
-- Same Rust toolchain. The server performs **no payload crypto** — only TLS and Ed25519 signature verification — so its dependency surface is small.
+- Same Rust toolchain. The server performs **no payload crypto** — only Ed25519 signature verification — so its dependency surface is small. TLS is optional in-process (rustls) and off by default; terminate it at a reverse proxy instead.
 - Backed by **SQLite** by default; **Postgres** is optional for scale.
 
 See [Server configuration](../../operations/configuration/) and [Docker Compose deployment](../../operations/deploy/).
