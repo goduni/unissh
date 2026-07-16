@@ -670,7 +670,10 @@ export function Checkbox({
 }) {
   const p = usePalette();
   // Growing the drawn box (16 -> 22) does nothing for the target: the button's
-  // height IS the box's height. The hit area is what has to clear the minimum.
+  // height IS the box's height. The hit area is what has to clear the minimum —
+  // on BOTH axes: a label-less checkbox is only as wide as its box, so flooring
+  // the height alone leaves a 20x44 target and throws off any caller that centres
+  // it by offsetting half the slack.
   const touch = useIsMobile();
   return (
     <button
@@ -689,6 +692,7 @@ export function Checkbox({
         gap: 8,
         flexShrink: 0,
         minHeight: touch ? SIZE.tapMin : undefined,
+        minWidth: touch && !label ? SIZE.tapMin : undefined,
         ...style,
       }}
     >
