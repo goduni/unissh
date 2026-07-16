@@ -140,7 +140,7 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
             <div><span class="c-b">Terminal</span><span class="c-f">: unissh</span></div>
             <div><span class="c-b">CPU</span><span class="c-f">: Intel i7-10700K (16) @ 3.800GHz</span></div>
             <div><span class="c-b">Memory</span><span class="c-f">: 2456MiB / 15902MiB</span></div>
-            <div class="upal"><i style="background:#333541"></i><i style="background:#ff6b8b"></i><i style="background:#3ad29f"></i><i style="background:#ffcf6b"></i><i style="background:#5b8cff"></i><i style="background:#b98cff"></i><i style="background:#57c7ff"></i><i style="background:#d8def2"></i></div>
+            <div class="upal"><i style="background:#333541"></i><i style="background:var(--uh-term-red)"></i><i style="background:var(--uh-term-green)"></i><i style="background:var(--uh-term-yellow)"></i><i style="background:var(--uh-term-blue)"></i><i style="background:var(--uh-term-purple)"></i><i style="background:var(--uh-term-cyan)"></i><i style="background:var(--uh-term-fg)"></i></div>
             <div class="upal"><i style="background:#565d78"></i><i style="background:#ff8299"></i><i style="background:#5cd8ae"></i><i style="background:#ffd583"></i><i style="background:#75a0ff"></i><i style="background:#c49dff"></i><i style="background:#79d1ff"></i><i style="background:#ffffff"></i></div>
           </div>
         </div>
@@ -212,16 +212,12 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
 /* ============================================================
    REAL CLIENT — tokens.ts NEBULA dark (DARK base + ACCENTS.blue)
    ============================================================ */
+/* Palette comes from theme.css (--uh-*). This component used to carry its
+   own copy of the whole nebula palette plus the terminal theme, which meant
+   syncing tokens.ts touched theme.css and changed nothing here. One source. */
 .uapp{
-  --a-bg0:#0c0e14; --a-bg1:#10131c; --a-bg2:#161a26; --a-bg3:#1b2030; --a-bg4:#232a3d;
-  --a-line:rgba(255,255,255,0.07); --a-line2:rgba(255,255,255,0.13);
-  --a-txt:#eef0f7; --a-txt2:#9aa1b8; --a-txt3:#8b93ac;
-  --a-accent:#5b8cff; --a-accentText:#5b8cff; --a-green:#3ad29f; --a-amber:#ffb454;
-  /* terminal theme "UniSSH Nebula" — tokens.ts:362 */
-  --t-bg:#0c0e16; --t-fg:#d8def2; --t-dim:#565d78; --t-green:#3ad29f;
-  --t-blue:#5b8cff; --t-purple:#b98cff; --t-red:#ff6b8b;
-  border:1px solid var(--a-line); border-radius:13px; overflow:hidden;
-  background:var(--a-bg0); color:var(--a-txt);
+  border:1px solid var(--uh-line); border-radius:13px; overflow:hidden;
+  background:var(--uh-bg0); color:var(--uh-txt);
   box-shadow:0 50px 120px -40px rgba(0,0,0,.95);
   text-align:left;
 }
@@ -234,117 +230,117 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
 .uapp .i{ flex:none; }
 
 /* native macOS titlebar (tauri decorations:true — the OS draws the lights) */
-.uapp__native{ height:30px; display:flex; align-items:center; padding:0 12px; background:var(--a-bg1); }
+.uapp__native{ height:30px; display:flex; align-items:center; padding:0 12px; background:var(--uh-bg1); }
 .lights{ display:flex; gap:7px; }
 .lights i{ width:11px; height:11px; border-radius:50%; display:block; }
 
 /* App.tsx:352-406 — 44px in-app toolbar */
 .uapp__bar{
   height:44px; display:flex; align-items:center; gap:14px; padding:0 16px;
-  background:var(--a-bg1); border-top:1px solid var(--a-line); border-bottom:1px solid var(--a-line);
+  background:var(--uh-bg1); border-top:1px solid var(--uh-line); border-bottom:1px solid var(--uh-line);
 }
 .ulogo{ display:inline-flex; align-items:center; gap:9px; margin-left:4px; flex:none; }
 .ulogo__mark{
-  width:18px; height:18px; border-radius:5px; background:var(--a-accent);
+  width:18px; height:18px; border-radius:5px; background:var(--uh-accent);
   display:grid; place-items:center; font-family:var(--uh-font-mono); font-size:9px; font-weight:700;
   color:#fff; font-style:normal; letter-spacing:-.05em;
 }
 .ulogo__wm{ font-size:13.3px; font-weight:700; letter-spacing:-0.3px; }
-.ulogo__wm em{ font-style:normal; color:var(--a-accent); }
+.ulogo__wm em{ font-style:normal; color:var(--uh-accent); }
 .uapp__barmid{ flex:1; display:flex; justify-content:center; min-width:0; }
 .usearch{
   display:inline-flex; align-items:center; gap:8px; width:380px; max-width:40%;
-  height:30px; padding:0 12px; border-radius:8px; background:var(--a-bg2);
-  border:1px solid var(--a-line); color:var(--a-txt3); font-size:13px; white-space:nowrap; overflow:hidden;
+  height:30px; padding:0 12px; border-radius:8px; background:var(--uh-bg2);
+  border:1px solid var(--uh-line); color:var(--uh-txt3); font-size:13px; white-space:nowrap; overflow:hidden;
 }
 .usearch__kbd{
   margin-left:auto; font-family:var(--uh-font-mono); font-size:11px; padding:1px 6px;
-  border-radius:6px; background:var(--a-bg3); border:1px solid var(--a-line);
+  border-radius:6px; background:var(--uh-bg3); border:1px solid var(--uh-line);
 }
 .uapp__barright{ display:flex; align-items:center; gap:8px; flex:none; }
-.utib{ width:30px; height:30px; border-radius:8px; display:grid; place-items:center; color:var(--a-txt2); }
+.utib{ width:30px; height:30px; border-radius:8px; display:grid; place-items:center; color:var(--uh-txt2); }
 .uav{
   width:30px; height:30px; border-radius:50%; display:grid; place-items:center;
-  background:var(--a-bg3); border:1px solid var(--a-line); color:var(--a-txt2);
+  background:var(--uh-bg3); border:1px solid var(--uh-line); color:var(--uh-txt2);
   font-size:13px; font-weight:700;
 }
 .uapp__body{ display:grid; grid-template-columns:220px minmax(0,1fr); min-width:0; }
 
 /* Shell.tsx:760-899 — sidebar */
 .unav{
-  background:var(--a-bg0); border-right:1px solid var(--a-line);
+  background:var(--uh-bg0); border-right:1px solid var(--uh-line);
   padding:12px 0; display:flex; flex-direction:column; min-height:430px;
 }
 .unav__grp{
   display:flex; align-items:center; padding:12px 12px 5px 18px;
-  font-size:11px; font-weight:700; letter-spacing:.6px; color:var(--a-txt3); text-transform:uppercase;
+  font-size:11px; font-weight:700; letter-spacing:.6px; color:var(--uh-txt3); text-transform:uppercase;
 }
 .unav__ga{
   margin-left:auto; width:22px; height:22px; border-radius:6px; display:grid; place-items:center;
-  border:1px solid var(--a-line); background:var(--a-bg1); color:var(--a-txt3);
+  border:1px solid var(--uh-line); background:var(--uh-bg1); color:var(--uh-txt3);
 }
 /* Shell.tsx:271-333 — full-bleed row, no pill, active tick is inset 2.5px */
 .uni{
   height:32px; display:flex; align-items:center; gap:8px; padding:0 18px;
-  font-size:13px; font-weight:500; color:var(--a-txt2); border-radius:0;
+  font-size:13px; font-weight:500; color:var(--uh-txt2); border-radius:0;
 }
 .uni--sub{ padding:0 18px 0 30px; }
-.uni.is-on{ background:var(--a-bg2); color:var(--a-txt); font-weight:600; box-shadow:inset 2.5px 0 0 var(--a-accent); }
-.uni .i{ width:15px; height:15px; color:var(--a-txt3); }
-.uni.is-on .i{ color:var(--a-txt); }
+.uni.is-on{ background:var(--uh-bg2); color:var(--uh-txt); font-weight:600; box-shadow:inset 2.5px 0 0 var(--uh-accent); }
+.uni .i{ width:15px; height:15px; color:var(--uh-txt3); }
+.uni.is-on .i{ color:var(--uh-txt); }
 .uni__l{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.uni__c{ margin-left:auto; font-family:var(--uh-font-mono); font-size:11px; font-weight:600; color:var(--a-txt3); }
-.uni__dot{ width:6px; height:6px; border-radius:50%; background:var(--a-green); flex:none; margin-left:auto; }
+.uni__c{ margin-left:auto; font-family:var(--uh-font-mono); font-size:11px; font-weight:600; color:var(--uh-txt3); }
+.uni__dot{ width:6px; height:6px; border-radius:50%; background:var(--uh-green); flex:none; margin-left:auto; }
 .uni__dot + .uni__c{ margin-left:0; }
 .unav__sp{ flex:1; }
-.unav__foot{ margin-top:8px; border-top:1px solid var(--a-line); padding:10px 12px 0; }
+.unav__foot{ margin-top:8px; border-top:1px solid var(--uh-line); padding:10px 12px 0; }
 
 /* Shell.tsx:429-506 — vault switcher (SyncBadge lives here) */
 .uvault{
   width:100%; display:flex; align-items:center; gap:9px; padding:10px;
-  border-radius:10px; background:var(--a-bg1); border:1px solid var(--a-line); overflow:hidden;
+  border-radius:10px; background:var(--uh-bg1); border:1px solid var(--uh-line); overflow:hidden;
 }
 .uavx{
   width:26px; height:26px; border-radius:7px; display:grid; place-items:center; flex:none;
-  background:var(--a-bg3); border:1px solid var(--a-line); color:var(--a-txt2);
+  background:var(--uh-bg3); border:1px solid var(--uh-line); color:var(--uh-txt2);
   font-size:11px; font-weight:700; text-transform:uppercase;
 }
 .uvault__t{ min-width:0; flex:1; }
-.uvault__l1{ display:flex; align-items:center; gap:5px; font-size:13px; font-weight:700; color:var(--a-txt); }
-.uvault__l2{ display:flex; align-items:center; gap:6px; margin-top:2px; font-size:11px; color:var(--a-txt3); }
-.ubadge{ display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; color:var(--a-txt3); }
-.usync{ display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; color:var(--a-green); }
-.uvault__cd{ color:var(--a-txt3); flex:none; }
+.uvault__l1{ display:flex; align-items:center; gap:5px; font-size:13px; font-weight:700; color:var(--uh-txt); }
+.uvault__l2{ display:flex; align-items:center; gap:6px; margin-top:2px; font-size:11px; color:var(--uh-txt3); }
+.ubadge{ display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; color:var(--uh-txt3); }
+.usync{ display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; color:var(--uh-green); }
+.uvault__cd{ color:var(--uh-txt3); flex:none; }
 
 /* ViewTerminal.tsx — column */
-.uterm{ display:flex; flex-direction:column; background:var(--a-bg0); min-width:0; }
+.uterm{ display:flex; flex-direction:column; background:var(--uh-bg0); min-width:0; }
 /* TermTabStrip.tsx:36-345 */
-.utabs{ min-height:38px; display:flex; align-items:stretch; background:var(--a-bg0); border-bottom:1px solid var(--a-line); }
+.utabs{ min-height:38px; display:flex; align-items:stretch; background:var(--uh-bg0); border-bottom:1px solid var(--uh-line); }
 .utab{
   display:inline-flex; align-items:center; gap:8px; padding:0 12px; max-width:220px;
-  font-family:var(--uh-font-mono); font-size:13px; color:var(--a-txt3);
-  border-right:1px solid var(--a-line); border-bottom:2px solid transparent; overflow:hidden;
+  font-family:var(--uh-font-mono); font-size:13px; color:var(--uh-txt3);
+  border-right:1px solid var(--uh-line); border-bottom:2px solid transparent; overflow:hidden;
 }
-.utab.is-on{ background:var(--a-bg0); color:var(--a-txt); border-bottom-color:var(--a-accent); }
-.udot{ width:7px; height:7px; border-radius:50%; background:var(--a-green); flex:none; box-sizing:border-box; }
-.udot--ring{ background:transparent; border:1.5px solid var(--a-amber); }
+.utab.is-on{ background:var(--uh-bg0); color:var(--uh-txt); border-bottom-color:var(--uh-accent); }
+.udot{ width:7px; height:7px; border-radius:50%; background:var(--uh-green); flex:none; box-sizing:border-box; }
+.udot--ring{ background:transparent; border:1.5px solid var(--uh-amber); }
 .utab__x{ font-size:11px; opacity:.6; }
-.utab__pc{ font-size:11px; font-weight:700; padding:2px 4px; border-radius:6px; color:var(--a-txt3); background:var(--a-bg2); }
-.utab__plus{ width:38px; display:grid; place-items:center; color:var(--a-txt3); font-size:15px; }
+.utab__pc{ font-size:11px; font-weight:700; padding:2px 4px; border-radius:6px; color:var(--uh-txt3); background:var(--uh-bg2); }
+.utab__plus{ width:38px; display:grid; place-items:center; color:var(--uh-txt3); font-size:15px; }
 
 /* the PTY body — the ONLY surface the terminal theme paints */
-.upty{ flex:1; padding:14px 16px; background:var(--t-bg); font-family:var(--uh-font-mono); font-size:13.5px; line-height:1.6; color:var(--t-fg); min-width:0; }
+.upty{ flex:1; padding:14px 16px; background:var(--uh-term-bg); font-family:var(--uh-font-mono); font-size:13.5px; line-height:1.6; color:var(--uh-term-fg); min-width:0; }
 .upty--m{ font-size:14.5px; padding:14px 14px 16px; }
-.c-g{ color:var(--t-green); } .c-p{ color:var(--t-purple); } .c-b{ color:var(--t-blue); }
-.c-f{ color:var(--t-fg); } .c-d{ color:var(--t-dim); } .c-gr{ color:var(--t-green); }
+.c-g{ color:var(--uh-term-green); } .c-p{ color:var(--uh-term-purple); } .c-b{ color:var(--uh-term-blue); }
+.c-f{ color:var(--uh-term-fg); } .c-d{ color:var(--uh-term-dim); } .c-gr{ color:var(--uh-term-green); }
 .upty__row{ display:flex; gap:18px; margin-top:8px; }
-.upty__art{ color:var(--t-red); font-size:8.5px; line-height:1.15; white-space:pre; flex:none; margin:0; }
+.upty__art{ color:var(--uh-term-red); font-size:8.5px; line-height:1.15; white-space:pre; flex:none; margin:0; }
 .upty__info{ min-width:0; }
 .upty__pr{ margin-top:12px; }
 .upal{ display:flex; margin-top:9px; }
 .upal i{ width:19px; height:11px; display:block; }
 .caret{
-  display:inline-block; width:6px; height:13px; background:var(--t-fg);
+  display:inline-block; width:6px; height:13px; background:var(--uh-term-fg);
   vertical-align:-2px; animation:caret-blink 1.1s step-end infinite;
 }
 /* This lived in the prototype page's <style> and did not travel with the
@@ -355,60 +351,60 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
 /* ViewTerminal.tsx:1443-1530 — 30px status bar */
 .ustat{
   height:30px; flex:none; display:flex; align-items:center; gap:10px; padding:0 14px;
-  background:var(--a-bg0); border-top:1px solid var(--a-line);
-  font-family:var(--uh-font-mono); font-size:12px; color:var(--a-txt3);
+  background:var(--uh-bg0); border-top:1px solid var(--uh-line);
+  font-family:var(--uh-font-mono); font-size:12px; color:var(--uh-txt3);
 }
-.ustat__s{ display:inline-flex; align-items:center; gap:6px; color:var(--a-green); font-weight:600; }
-.ustat__h{ color:var(--a-txt2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ustat__b{ width:22px; height:22px; border-radius:6px; display:grid; place-items:center; color:var(--a-txt3); flex:none; }
+.ustat__s{ display:inline-flex; align-items:center; gap:6px; color:var(--uh-green); font-weight:600; }
+.ustat__h{ color:var(--uh-txt2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ustat__b{ width:22px; height:22px; border-radius:6px; display:grid; place-items:center; color:var(--uh-txt3); flex:none; }
 .ustat__sp{ flex:1; }
 .ustat__th{ display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
 
 /* ============ mobile shell ============ */
 /* MobileApp.tsx:77-204 — top bar */
-.mtop{ display:flex; align-items:center; padding:4px 16px 12px; background:var(--a-bg0); }
+.mtop{ display:flex; align-items:center; padding:4px 16px 12px; background:var(--uh-bg0); }
 .mvault{
   display:flex; align-items:center; gap:9px; min-height:44px; max-width:66%;
-  padding:0 12px 0 7px; border-radius:12px; background:var(--a-bg2); border:1px solid var(--a-line2);
+  padding:0 12px 0 7px; border-radius:12px; background:var(--uh-bg2); border:1px solid var(--uh-line2);
 }
 .mvault .uvault__l1{ font-size:14px; }
 .mtop__sp{ flex:1; }
-.mtop__btn{ width:44px; height:44px; display:grid; place-items:center; color:var(--a-txt2); flex:none; }
+.mtop__btn{ width:44px; height:44px; display:grid; place-items:center; color:var(--uh-txt2); flex:none; }
 /* MobileApp.tsx:375-435 — session switcher */
 .msw{
-  display:flex; gap:6px; padding:8px 12px; overflow-x:auto; background:var(--a-bg1);
-  border-bottom:1px solid var(--a-line); scrollbar-width:none;
+  display:flex; gap:6px; padding:8px 12px; overflow-x:auto; background:var(--uh-bg1);
+  border-bottom:1px solid var(--uh-line); scrollbar-width:none;
 }
 .msw::-webkit-scrollbar{ display:none; }
 .msw__i{
   display:inline-flex; align-items:center; gap:8px; min-height:44px; padding:6px 4px 6px 10px;
-  font-family:var(--uh-font-mono); font-size:13px; color:var(--a-txt3);
+  font-family:var(--uh-font-mono); font-size:13px; color:var(--uh-txt3);
   border-bottom:2px solid transparent; white-space:nowrap; flex:none;
 }
-.msw__i.is-on{ color:var(--a-txt); border-bottom-color:var(--a-txt2); }
+.msw__i.is-on{ color:var(--uh-txt); border-bottom-color:var(--uh-txt2); }
 .msw__x{ width:32px; text-align:center; font-size:11px; opacity:.6; }
 /* MobileApp.tsx:447-472 — key accessory row */
 .mkeys{
-  display:flex; gap:6px; padding:10px 12px; overflow-x:auto; background:var(--a-bg1);
-  border-top:1px solid var(--a-line); scrollbar-width:none; overscroll-behavior:contain;
+  display:flex; gap:6px; padding:10px 12px; overflow-x:auto; background:var(--uh-bg1);
+  border-top:1px solid var(--uh-line); scrollbar-width:none; overscroll-behavior:contain;
 }
 .mkeys::-webkit-scrollbar{ display:none; }
 .mkey{
   min-width:44px; height:44px; display:grid; place-items:center; padding:0 10px; flex:none;
-  border-radius:8px; background:var(--a-bg3); border:1px solid var(--a-line);
-  font-family:var(--uh-font-mono); font-size:13px; color:var(--a-txt2);
+  border-radius:8px; background:var(--uh-bg3); border:1px solid var(--uh-line);
+  font-family:var(--uh-font-mono); font-size:13px; color:var(--uh-txt2);
 }
 /* MobileApp.tsx:679-763 — bottom tab bar */
-.mtabs{ display:flex; padding:8px; background:var(--a-bg1); border-top:1px solid var(--a-line); }
+.mtabs{ display:flex; padding:8px; background:var(--uh-bg1); border-top:1px solid var(--uh-line); }
 .mtab{
   position:relative; flex:1; min-height:44px; display:flex; flex-direction:column;
   align-items:center; justify-content:center; gap:3px; padding:4px 2px;
-  font-size:11px; font-weight:500; color:var(--a-txt3);
+  font-size:11px; font-weight:500; color:var(--uh-txt3);
 }
 .mtab svg{ width:23px; height:23px; }
-.mtab.is-on{ color:var(--a-txt); font-weight:700; }
+.mtab.is-on{ color:var(--uh-txt); font-weight:700; }
 .mtab__tick{
   position:absolute; top:-8px; left:6px; right:6px; height:2px;
-  background:var(--a-accent); border-radius:2px;
+  background:var(--uh-accent); border-radius:2px;
 }
 </style>

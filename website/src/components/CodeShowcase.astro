@@ -1,4 +1,9 @@
 ---
+interface Props {
+  /** Section number. Owned by index.astro, which owns the order. */
+  n: string;
+}
+const { n } = Astro.props;
 import Icon from './Icon.astro';
 /**
  * Two-up monospace panels: left = rust-core local end-to-end flow,
@@ -29,7 +34,7 @@ cargo build --release
 <section class="section" id="cli" aria-labelledby="cli-head">
   <div class="wrap">
     <div class="section-head">
-      <span class="eyebrow"><i>04</i> · from zero to exec</span>
+      <span class="eyebrow"><i>{n}</i> · from zero to exec</span>
       <h2 id="cli-head">Start <span class="grad-text">local</span>, scale to self-hosted</h2>
       <p>
         No server required to begin: a local vault works on its own. The same core that runs

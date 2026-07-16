@@ -2,17 +2,19 @@
 import Icon from './Icon.astro';
 
 interface Props {
+  /** Section number. Owned by index.astro, which owns the order. */
+  n: string;
   buildHref: string;
   deployHref: string;
   githubHref: string;
   releasesHref: string;
 }
-const { buildHref, deployHref, githubHref, releasesHref } = Astro.props;
+const { buildHref, deployHref, githubHref, releasesHref, n } = Astro.props;
 ---
 
 <section class="download" id="download" aria-labelledby="download-head">
   <div class="wrap">
-    <span class="eyebrow"><i>06</i> · run it</span>
+    <span class="eyebrow"><i>{n}</i> · run it</span>
     <h2 id="download-head">Your servers. Your keys. <span class="grad-text">Your box.</span></h2>
     <p>
       Download a build, or compile it yourself. The sync server ships in the same repo and

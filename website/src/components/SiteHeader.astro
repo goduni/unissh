@@ -5,13 +5,14 @@ interface Props {
   docsHref: string;
   archHref: string;
   securityHref: string;
-  quickstartHref: string;
+  /** Where the header Download button goes. */
+  ctaHref: string;
   githubHref: string;
-  /** The real star count. Measured, not invented — see index.astro. */
-  stars: string;
+  /** Build-time star count, or null when it could not be read. */
+  stars: string | null;
 }
 
-const { docsHref, archHref, securityHref, quickstartHref, githubHref, stars } = Astro.props;
+const { docsHref, archHref, securityHref, ctaHref, githubHref, stars } = Astro.props;
 ---
 
 <header class="site-header" id="site-header">
@@ -34,9 +35,9 @@ const { docsHref, archHref, securityHref, quickstartHref, githubHref, stars } = 
       <a class="gh-link" href={githubHref} rel="noopener">
         <Icon name="github" size={17} />
         Star on GitHub
-        <span class="gh-count">{stars}</span>
+        {stars && <span class="gh-count">{stars}</span>}
       </a>
-      <a class="btn btn-primary" href={quickstartHref}>Download</a>
+      <a class="btn btn-primary" href={ctaHref}>Download</a>
       <button class="burger" type="button" aria-label="Menu" aria-expanded="false" aria-controls="site-nav" id="burger">
         <Icon name="menu" size={17} stroke={2} />
       </button>
@@ -45,14 +46,35 @@ const { docsHref, archHref, securityHref, quickstartHref, githubHref, stars } = 
 </header>
 
 <script>
-  // The phone nav is a disclosure, not a route: reveal the same links
-  // in place rather than shipping an overlay nobody asked for.
+  // The phone nav is a disclosure, not a route: reveal the same links in place
+  // rather than shipping an overlay nobody asked for. A disclosure has to be
+  // dismissible three ways or it is a trap — tapping a link left the panel
+  // sitting on top of the section it had just scrolled to.
   const burger = document.getElementById('burger');
   const nav = document.getElementById('site-nav');
-  burger?.addEventListener('click', () => {
-    const open = burger.getAttribute('aria-expanded') === 'true';
-    burger.setAttribute('aria-expanded', String(!open));
-    nav?.classList.toggle('is-open', !open);
+  const setOpen = (open: boolean) => {
+    burger?.setAttribute('aria-expanded', String(open));
+    nav?.classList.toggle('is-open', open);
+  };
+  burger?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(burger.getAttribute('aria-expanded') !== 'true');
+  });
+  // following one of its own links
+  nav?.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).closest('a')) setOpen(false);
+  });
+  // Escape, with focus handed back to the control that opened it
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && burger?.getAttribute('aria-expanded') === 'true') {
+      setOpen(false);
+      burger.focus();
+    }
+  });
+  // a tap anywhere else
+  document.addEventListener('click', (e) => {
+    if (burger?.getAttribute('aria-expanded') !== 'true') return;
+    if (!nav?.contains(e.target as Node)) setOpen(false);
   });
 </script>
 
