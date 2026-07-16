@@ -91,7 +91,7 @@ function HostTile({
         <span
           style={{
             fontFamily: MONO,
-            fontSize: 12.5,
+            fontSize: 13,
             fontWeight: 600,
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -102,7 +102,7 @@ function HostTile({
           {host.profile.label}
         </span>
         <div style={{ flex: 1 }} />
-        <span style={{ fontFamily: MONO, fontSize: 10.5, color: off ? p.txt3 : p.green }}>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: off ? p.txt3 : p.green }}>
           {off ? t("broadcast.offline") : t("broadcast.mirrored")}
         </span>
       </div>
@@ -636,7 +636,7 @@ export function ViewBroadcast() {
                 border: "none",
                 outline: "none",
                 fontFamily: MONO,
-                fontSize: 15,
+                fontSize: 16,
                 color: p.txt,
                 caretColor: "transparent",
               }}
@@ -647,7 +647,7 @@ export function ViewBroadcast() {
                   position: "absolute",
                   pointerEvents: "none",
                   fontFamily: MONO,
-                  fontSize: 15,
+                  fontSize: 16,
                   color: p.accentText,
                   opacity: caret ? 1 : 0,
                   left: `calc(${typed.length}ch)`,
@@ -659,7 +659,7 @@ export function ViewBroadcast() {
           </div>
           </div>
           {!narrow && (
-            <span style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: p.txt3 }}>
               Enter → {t("broadcast.toAllHosts")}
             </span>
           )}
@@ -680,7 +680,7 @@ export function ViewBroadcast() {
             alignItems: "center",
             gap: 8,
             marginTop: 9,
-            fontSize: 11.5,
+            fontSize: 12,
             color: p.txt3,
           }}
         >

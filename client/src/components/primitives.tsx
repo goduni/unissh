@@ -256,7 +256,7 @@ export function VaultBadge({
         display: "inline-flex",
         alignItems: "center",
         gap: 4,
-        fontSize: 10.5,
+        fontSize: 11,
         fontWeight: 600,
         color: c,
         background: "transparent",
@@ -607,7 +607,7 @@ export function Segmented<T extends string>({
         flexWrap: "wrap",
         background: p.bg2,
         border: `1px solid ${p.line}`,
-        borderRadius: RADIUS.input,
+        borderRadius: RADIUS.chip,
         padding: 2,
         gap: 2,
         opacity: disabled ? 0.5 : 1,
@@ -628,7 +628,7 @@ export function Segmented<T extends string>({
               fontSize: fs,
               fontWeight: 600,
               fontFamily: UI,
-              borderRadius: 7,
+              borderRadius: 8,
               cursor: disabled ? "default" : "pointer",
               border: "1px solid transparent",
               background: on ? p.bg4 : "transparent",
@@ -711,7 +711,7 @@ export function Checkbox({
         )}
       </span>
       {label != null && (
-        <span style={{ fontSize: 12.5, color: p.txt2, ...labelStyle }}>{label}</span>
+        <span style={{ fontSize: 13, color: p.txt2, ...labelStyle }}>{label}</span>
       )}
     </button>
   );
@@ -761,7 +761,7 @@ export function Toggle({
         style={{
           width: 44,
           height: 26,
-          borderRadius: 13,
+          borderRadius: 12,
           background: checked ? p.accent : p.bg4,
           position: "relative",
           transition: "background .18s",

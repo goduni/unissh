@@ -146,7 +146,7 @@ function HostCard({
       <div
         style={{
           fontFamily: MONO,
-          fontSize: 11.5,
+          fontSize: 12,
           color: p.txt2,
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -169,7 +169,7 @@ function HostCard({
             alignItems: "center",
             gap: 7,
             fontFamily: MONO,
-            fontSize: 11.5,
+            fontSize: 12,
             color: p.txt3,
             opacity: !touch && show ? 0 : 1,
             transition: "opacity .12s ease",
@@ -359,7 +359,7 @@ function HostRow({
         style={{
           width: 150,
           fontWeight: 600,
-          fontSize: 13.5,
+          fontSize: 13,
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -371,7 +371,7 @@ function HostRow({
       <span
         style={{
           fontFamily: MONO,
-          fontSize: 11.5,
+          fontSize: 12,
           color: p.txt3,
           flex: 1,
           minWidth: 0,
@@ -391,7 +391,7 @@ function HostRow({
       <span
         style={{
           fontFamily: MONO,
-          fontSize: 11.5,
+          fontSize: 12,
           color: p.txt3,
           width: 74,
           textAlign: "right",
@@ -584,7 +584,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       <div
         style={{
           fontFamily: MONO,
-          fontSize: 11.5,
+          fontSize: 12,
           color: session ? p.green : p.txt3,
           marginBottom: 14,
         }}
@@ -654,7 +654,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         <>
           <div
             style={{
-              fontSize: 10.5,
+              fontSize: 11,
               fontWeight: 700,
               letterSpacing: 0.6,
               color: p.txt3,
@@ -673,7 +673,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       )}
       <div
         style={{
-          fontSize: 10.5,
+          fontSize: 11,
           fontWeight: 700,
           letterSpacing: 0.6,
           color: p.txt3,
@@ -801,7 +801,7 @@ function SessionsRail() {
                 }}
               />
               <span style={{ fontSize: 13, fontWeight: 700 }}>{t.title}</span>
-              <span style={{ fontFamily: MONO, fontSize: 10.5, color: p.txt3 }}>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
                 {t.profile
                   ? t.profile.user
                     ? `${t.profile.user}@${t.profile.host}`
@@ -809,7 +809,7 @@ function SessionsRail() {
                   : "pty"}
               </span>
               <div style={{ flex: 1 }} />
-              <span style={{ fontFamily: MONO, fontSize: 10.5, color: p.txt3 }}>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
                 {t.status === "online" ? tr("hosts.online") : "…"}
               </span>
             </div>
@@ -822,7 +822,7 @@ function SessionsRail() {
                   border: `1px solid ${p.line}`,
                   padding: "8px 10px",
                   fontFamily: MONO,
-                  fontSize: 10.5,
+                  fontSize: 11,
                   lineHeight: 1.6,
                 }}
               >
@@ -848,7 +848,7 @@ function SessionsRail() {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
         <span
           style={{
-            fontSize: 10.5,
+            fontSize: 11,
             fontWeight: 700,
             letterSpacing: 0.6,
             color: p.txt3,
@@ -866,7 +866,7 @@ function SessionsRail() {
         </button>
       </div>
       {tunnels.length === 0 && (
-        <div style={{ fontSize: 11.5, color: p.txt3 }}>{tr("hosts.noOpenTunnels")}</div>
+        <div style={{ fontSize: 12, color: p.txt3 }}>{tr("hosts.noOpenTunnels")}</div>
       )}
       {tunnels.map((t, i) => (
         <div
@@ -890,7 +890,7 @@ function SessionsRail() {
           <Icon name="branch" size={15} color={p.txt3} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 600 }}>{t.label}</div>
-            <div style={{ fontSize: 10.5, color: p.txt3 }}>{t.route}</div>
+            <div style={{ fontSize: 11, color: p.txt3 }}>{t.route}</div>
           </div>
           {/* solid = forwarding, hollow = off — state isn't colour-only */}
           <span
@@ -997,7 +997,7 @@ function BulkActionsMenu({
   const sectionLabel = (label: string) => (
     <div
       style={{
-        fontSize: 10.5,
+        fontSize: 11,
         fontWeight: 700,
         letterSpacing: 0.6,
         textTransform: "uppercase",
@@ -1049,7 +1049,7 @@ function BulkActionsMenu({
             zIndex: 30,
             background: p.bg3,
             border: `1px solid ${p.line2}`,
-            borderRadius: 11,
+            borderRadius: 12,
             padding: 6,
             boxShadow: p.shadow,
             maxHeight: 340,
@@ -1057,7 +1057,7 @@ function BulkActionsMenu({
           }}
         >
           {empty && (
-            <div style={{ padding: "10px 10px", fontSize: 12.5, color: p.txt3 }}>
+            <div style={{ padding: "10px 10px", fontSize: 13, color: p.txt3 }}>
               {t("hosts.bulk.nothingToRemove")}
             </div>
           )}
@@ -1552,7 +1552,7 @@ export function ViewHosts() {
                 background: "transparent",
                 color: sortOpen ? p.txt : p.txt2,
                 cursor: "pointer",
-                fontSize: 12.5,
+                fontSize: 13,
                 fontWeight: 600,
               }}
             >
@@ -1575,7 +1575,7 @@ export function ViewHosts() {
                   zIndex: 30,
                   background: p.bg3,
                   border: `1px solid ${p.line2}`,
-                  borderRadius: 11,
+                  borderRadius: 12,
                   padding: 5,
                   boxShadow: p.shadow,
                   width: 220,
@@ -1880,7 +1880,7 @@ export function ViewHosts() {
               onClick={() => setSel(shown.map((x) => x.profileId))}
               style={{
                 marginLeft: 2,
-                fontSize: 12.5,
+                fontSize: 13,
                 fontWeight: 600,
                 cursor: "pointer",
                 // Same as the chips beside it: this strip scrolls rather than wraps
@@ -2073,7 +2073,7 @@ export function ViewHosts() {
               // minHeight (not height) + wrap: in RU the destructive Delete + clear-✕
               // can't fit one row inside overflow:hidden main — let them wrap, don't clip.
               minHeight: 52,
-              borderRadius: 13,
+              borderRadius: 12,
               background: p.bg0,
               border: `1px solid ${p.line2}`,
               boxShadow: p.shadow,

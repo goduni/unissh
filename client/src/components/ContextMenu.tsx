@@ -130,7 +130,7 @@ export function ContextMenu({
           minWidth: 190,
           background: p.bg1,
           border: `1px solid ${p.line2}`,
-          borderRadius: 11,
+          borderRadius: 12,
           boxShadow: p.shadow,
           padding: 5,
         }}

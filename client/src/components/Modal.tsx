@@ -76,7 +76,7 @@ export function Modal({
           overflow: "auto",
           background: p.bg1,
           border: `1px solid ${p.line2}`,
-          borderRadius: 18,
+          borderRadius: 16,
           boxShadow: p.shadow,
           outline: "none",
         }}
@@ -105,7 +105,7 @@ export function Modal({
             <Icon name={icon} size={18} color={iconColor || p.accentText} />
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3 }}>{title}</div>
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.3 }}>{title}</div>
             {subtitle != null && <div style={{ fontSize: 12, color: p.txt3 }}>{subtitle}</div>}
           </div>
           <button

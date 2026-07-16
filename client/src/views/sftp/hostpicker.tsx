@@ -80,7 +80,7 @@ export function HostMenu({
         overflow: "auto",
         background: p.bg1,
         border: `1px solid ${p.line2}`,
-        borderRadius: 11,
+        borderRadius: 12,
         boxShadow: p.shadow,
         padding: 5,
       }}
@@ -134,7 +134,7 @@ export function HostMenu({
         </button>
       )}
       {ql && filtered.length === 0 && hosts.length > 0 && (
-        <div style={{ padding: "8px 10px", fontSize: 12.5, color: p.txt3 }}>{t("sftp.noMatches", { q })}</div>
+        <div style={{ padding: "8px 10px", fontSize: 13, color: p.txt3 }}>{t("sftp.noMatches", { q })}</div>
       )}
       {filtered.map((h) => (
         <button

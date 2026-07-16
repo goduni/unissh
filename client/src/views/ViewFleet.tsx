@@ -111,7 +111,7 @@ const HostTile = React.memo(function HostTile({
       onClick={selectable ? (e) => toggle(e.shiftKey) : undefined}
       onKeyDown={selectable ? pressActivate(() => toggle(false)) : undefined}
       style={{
-        borderRadius: 13,
+        borderRadius: 12,
         background: selectable && checked ? p.bg2 : p.bg1,
         border: `1px solid ${p.line}`,
         boxShadow: selectable && checked ? `inset 0 0 0 1px ${p.line2}` : "none",
@@ -630,7 +630,7 @@ export function ViewFleet() {
         <div style={{ flex: 1 }} />
         {phase === "done" && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontFamily: MONO, fontSize: 12.5 }}>
+            <span style={{ fontFamily: MONO, fontSize: 13 }}>
               <span style={{ color: p.green }}>{t("fleet.okCount", { count: okCount })}</span> ·{" "}
               <span style={{ color: p.red }}>{t("fleet.failCount", { count: failCount })}</span>
             </span>
@@ -664,7 +664,7 @@ export function ViewFleet() {
             padding: `0 ${gutter}px 12px`,
           }}
         >
-          <span style={{ fontSize: 12.5, color: p.txt2, whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 13, color: p.txt2, whiteSpace: "nowrap" }}>
             {t("fleet.selectedOfTotal", {
               n: selectedRunnable.length,
               m: runnable.length,
@@ -688,7 +688,7 @@ export function ViewFleet() {
               minWidth: 180,
               height: 34,
               padding: "0 12px",
-              borderRadius: 9,
+              borderRadius: 8,
               background: p.bg1,
               border: `1px solid ${p.line2}`,
             }}
@@ -770,7 +770,7 @@ export function ViewFleet() {
             placeholder={t("fleet.commandPlaceholder")}
             style={{
               fontFamily: MONO,
-              fontSize: 15,
+              fontSize: 16,
               color: p.txt,
               // A real basis, not `flex: 1`. With a 0 basis this input's hypothetical
               // size is 0, so it contributes NOTHING to line-breaking: the row never

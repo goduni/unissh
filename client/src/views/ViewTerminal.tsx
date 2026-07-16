@@ -74,7 +74,7 @@ function PasswordGate({ onSubmit }: { onSubmit: (pw: string) => void }) {
         style={{
           background: p.bg1,
           border: `1px solid ${p.line2}`,
-          borderRadius: 14,
+          borderRadius: 16,
           padding: 20,
           width: "min(320px, calc(100vw - 32px))",
           boxShadow: p.shadow,
@@ -91,7 +91,7 @@ function PasswordGate({ onSubmit }: { onSubmit: (pw: string) => void }) {
           style={{
             width: "100%",
             padding: "10px 12px",
-            borderRadius: 9,
+            borderRadius: 8,
             border: `1px solid ${p.line2}`,
             background: p.bg0,
             color: p.txt,
@@ -165,7 +165,7 @@ function HostKeyMismatchCard({
       <div
         style={{
           width: "min(460px, 100%)",
-          borderRadius: 14,
+          borderRadius: 16,
           overflow: "hidden",
           background: p.bg1,
           border: `1px solid ${rgba(p.red, 0.55)}`,
@@ -198,14 +198,14 @@ function HostKeyMismatchCard({
             <Icon name="alert" size={18} color={p.red} />
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14.5, fontWeight: 800, color: p.red }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: p.red }}>
               {t("known.mismatchTitle")}
             </div>
             <div style={{ fontFamily: MONO, fontSize: 12, color: p.txt2 }}>{label}</div>
           </div>
         </div>
         <div style={{ padding: "13px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
             <Trans
               i18nKey="known.mismatchBody"
               values={{ host: mismatch.host }}
@@ -947,7 +947,7 @@ function TerminalPane({
             alignItems: "center",
             gap: 4,
             padding: "4px 5px 4px 8px",
-            borderRadius: 9,
+            borderRadius: 8,
             background: p.bg1,
             border: `1px solid ${p.line2}`,
             boxShadow: "0 6px 20px rgba(0,0,0,0.28)",
@@ -1455,7 +1455,7 @@ export function ViewTerminal() {
             gap: 10,
             padding: "0 14px",
             fontFamily: MONO,
-            fontSize: 11.5,
+            fontSize: 12,
             color: p.txt3,
           }}
         >

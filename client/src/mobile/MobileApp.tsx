@@ -232,7 +232,7 @@ function MVaultSheet({ onClose }: { onClose: () => void }) {
                 alignItems: "center",
                 gap: 12,
                 padding: 13,
-                borderRadius: 14,
+                borderRadius: 16,
                 background: on ? p.accentSoft : p.bg2,
                 border: `1px solid ${on ? p.accentLine : p.line}`,
                 cursor: "pointer",
@@ -241,7 +241,7 @@ function MVaultSheet({ onClose }: { onClose: () => void }) {
               <FlatAvatar name={x.name} size={36} shape="square" />
               <div style={{ flex: 1, textAlign: "left" }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>{x.name}</div>
-                <div style={{ fontSize: 12.5, color: p.txt3 }}>{on ? t("count.hosts", { count: hosts.length }) : t("mobile.vaultLower")}</div>
+                <div style={{ fontSize: 13, color: p.txt3 }}>{on ? t("count.hosts", { count: hosts.length }) : t("mobile.vaultLower")}</div>
               </div>
               {on && <Icon name="check" size={20} color={p.accentText} />}
             </button>
@@ -336,7 +336,7 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
         }}
       >
         <Icon name="terminal" size={40} color={p.txt3} />
-        <div style={{ fontSize: 15 }}>{t("terminal.noSessions")}</div>
+        <div style={{ fontSize: 16 }}>{t("terminal.noSessions")}</div>
         <button
           onClick={onNeedHosts}
           style={{
@@ -349,7 +349,7 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
             background: p.accent,
             border: "none",
             color: p.accentInk ?? "#fff",
-            fontSize: 15,
+            fontSize: 16,
             fontWeight: 700,
             cursor: "pointer",
           }}
@@ -403,7 +403,7 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
                     background: "transparent",
                     color: on ? p.txt : p.txt3,
                     cursor: "pointer",
-                    fontSize: 12.5,
+                    fontSize: 13,
                     fontFamily: MONO,
                   }}
                 >
@@ -453,7 +453,7 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
               flexShrink: 0,
               minWidth: 44,
               height: 44,
-              borderRadius: 9,
+              borderRadius: 8,
               background: p.bg3,
               border: `1px solid ${p.line}`,
               display: "flex",
@@ -613,7 +613,7 @@ function MWrapView({ label, onBack, children }: { label: string; onBack: () => v
               naming one of those four was wrong three times out of four. */}
           {t("common.back")}
         </button>
-        <div style={{ flex: 1, textAlign: "center", fontSize: 15, fontWeight: 700, color: p.txt, marginRight: 44 }}>{label}</div>
+        <div style={{ flex: 1, textAlign: "center", fontSize: 16, fontWeight: 700, color: p.txt, marginRight: 44 }}>{label}</div>
       </div>
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>{children}</div>
     </>
