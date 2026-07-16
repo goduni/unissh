@@ -1,4 +1,9 @@
 ---
+interface Props {
+  /** Section number. Owned by index.astro, which owns the order. */
+  n: string;
+}
+const { n } = Astro.props;
 /**
  * The zero-knowledge pillars.
  *
@@ -33,10 +38,10 @@ const pillars = [
 <section class="section" id="zero-knowledge" aria-labelledby="trust-lead">
   <div class="wrap">
     <div class="panel">
-      <span class="eyebrow"><i>01</i> · zero-knowledge</span>
-      <p class="trust__lead" id="trust-lead">
+      <span class="eyebrow"><i>{n}</i> · zero-knowledge</span>
+      <h2 class="trust__lead" id="trust-lead">
         A dump of the database gives you <span class="grad-text">ciphertext</span>.
-      </p>
+      </h2>
       <div class="trust__pillars">
         {
           pillars.map((p) => (

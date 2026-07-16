@@ -51,9 +51,9 @@
   --uh-accent-soft: rgba(91, 140, 255, 0.15);
   --uh-accent-line: rgba(91, 140, 255, 0.4);
   --uh-glow: rgba(91, 140, 255, 0.22);
-  /* accentInk: white on #5b8cff is 3.16:1 and fails AA, so the app
-     puts bg0 on the accent instead (buildPalette's dark branch). */
-  --uh-accent-ink: #0c0e14;
+  /* No accentInk here: nothing on the site puts text on an accent fill.
+     For the record, the app cannot use white on #5b8cff — 3.16:1, fails
+     AA — so buildPalette's dark branch puts bg0 on it instead. */
 
   /* ---- Product status / secondary ---- */
   --uh-green: #3ad29f;

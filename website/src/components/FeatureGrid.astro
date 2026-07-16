@@ -1,4 +1,9 @@
 ---
+interface Props {
+  /** Section number. Owned by index.astro, which owns the order. */
+  n: string;
+}
+const { n } = Astro.props;
 /**
  * What the client actually does.
  *
@@ -53,7 +58,7 @@ const features = [
 <section class="section" id="features" aria-labelledby="features-head">
   <div class="wrap">
     <div class="section-head">
-      <span class="eyebrow"><i>02</i> · the client</span>
+      <span class="eyebrow"><i>{n}</i> · the client</span>
       <h2 id="features-head">Everything you'd open a <span class="grad-text">terminal</span> for</h2>
       <p>
         One Rust core behind macOS, Windows, Linux, iOS and Android — so a host you add on

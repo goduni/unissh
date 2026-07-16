@@ -32,10 +32,23 @@ const buildHref = withBase('operations/build/');
 const githubHref = 'https://github.com/goduni/unissh';
 const githubReleases = 'https://github.com/goduni/unissh/releases';
 
-// The real star count, checked by hand against the GitHub API.
-// It is a small number and that is fine — an invented one would be a lie
-// on the most trust-sensitive page we own. Bump it when it moves.
-const stars = '8';
+// Star count, read at build time. A hardcoded number would go stale silently,
+// which is the same lie as an invented one, just slower. If the fetch fails
+// (offline build, rate limit) we render NO number rather than a wrong one —
+// the link still works, and absence is honest where a stale digit is not.
+let stars: string | null = null;
+try {
+  const res = await fetch('https://api.github.com/repos/goduni/unissh', {
+    headers: { Accept: 'application/vnd.github+json' },
+    signal: AbortSignal.timeout(5000),
+  });
+  if (res.ok) {
+    const n = (await res.json())?.stargazers_count;
+    if (typeof n === 'number') stars = n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  }
+} catch {
+  // leave stars null — the badge simply does not render
+}
 
 const title = 'unissh — a modern and secure, fully open-source SSH client';
 const description =
@@ -81,7 +94,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
         docsHref={overviewHref}
         archHref={archHref}
         securityHref={securityHref}
-        quickstartHref={githubReleases}
+        ctaHref={githubReleases}
         githubHref={githubHref}
         stars={stars}
       />
@@ -113,18 +126,23 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
           </div>
         </section>
 
-        <section class="stage" aria-label="The unissh client">
+        <section class="stage" aria-labelledby="stage-head">
+          <h2 id="stage-head" class="vh">The unissh client</h2>
           <FeatureRail side="l" />
           <div class="appwrap"><AppWindow /></div>
           <FeatureRail side="r" />
         </section>
 
-        <TrustStrip />
-        <FeatureGrid />
-        <ArchitectureDiagram archHref={archHref} />
-        <CodeShowcase />
-        <SecurityStrip securityHref={securityHref} />
+        {/* The eyebrow numbers claim a read order, so they are handed out
+            here — the one place that decides that order. Reordering these
+            lines renumbers the page; the two cannot drift apart. */}
+        <TrustStrip n="01" />
+        <FeatureGrid n="02" />
+        <ArchitectureDiagram n="03" archHref={archHref} />
+        <CodeShowcase n="04" />
+        <SecurityStrip n="05" securityHref={securityHref} />
         <DownloadCTA
+          n="06"
           buildHref={buildHref}
           deployHref={deployHref}
           githubHref={githubHref}
