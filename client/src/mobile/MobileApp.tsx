@@ -76,11 +76,9 @@ const ROUTE_FRAME: Partial<Record<string, Frame["type"]>> = {
 // way out (lock + search). It renders globally, above the tabs.
 function MTopBar({
   vault,
-  onLock,
   onVaultTap,
 }: {
   vault: VaultInfo | null;
-  onLock: () => void;
   onVaultTap: () => void;
 }) {
   const p = usePalette();
@@ -193,11 +191,13 @@ function MTopBar({
       {/* The command palette is mounted on this shell but had no way to open it —
           its only trigger was the desktop title bar and a hardware ⌘K. This is the
           phone's search: hosts, secrets and actions, the same superset ⌘K gives. */}
+      {/* Lock lives in More, not here. A phone locks itself — the OS does it, and
+          the app's idle auto-lock does it — so a permanent manual lock on the home
+          screen buys little and costs a 44px slot on the one row that has to hold
+          the vault, its sync state and search. In More it is two taps from every
+          tab instead of one tap from one. */}
       <button onClick={ctx.openPalette} aria-label={t("shell.searchPlaceholder")} style={iconBtn}>
         <Icon name="search" size={18} />
-      </button>
-      <button onClick={onLock} aria-label={t("shell.lockShort")} style={iconBtn}>
-        <Icon name="lock" size={18} />
       </button>
     </div>
   );
@@ -490,7 +490,7 @@ const MORE_ITEMS: {
   { type: "settings", icon: "sliders", labelKey: "nav.settings", descKey: "mobile.more.settingsDesc" },
 ];
 
-function MMore({ go }: { go: (t: Frame["type"]) => void }) {
+function MMore({ go, onLock }: { go: (t: Frame["type"]) => void; onLock: () => void }) {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
@@ -576,6 +576,46 @@ function MMore({ go }: { go: (t: Frame["type"]) => void }) {
           </div>
           <Icon name="cd" size={18} color={p.txt3} />
         </button>
+        {/* Lock. It used to sit permanently in the top bar, which is the one row
+            that has to carry the vault, its sync state and search — and a phone
+            already locks itself twice over (the OS, and the app's idle auto-lock).
+            More is where the actions that aren't destinations live (Import is right
+            above), and from here it's two taps from any tab. */}
+        <button
+          onClick={onLock}
+          style={{
+            width: "100%",
+            textAlign: "left",
+            display: "flex",
+            alignItems: "center",
+            gap: 13,
+            padding: "15px 4px",
+            background: "transparent",
+            border: "none",
+            borderTop: `1px solid ${p.line}`,
+            cursor: "pointer",
+          }}
+        >
+          <span
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: RADIUS.menu,
+              background: p.bg3,
+              border: `1px solid ${p.line}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Icon name="lock" size={20} color={p.txt2} />
+          </span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>{t("shell.lockShort")}</div>
+            <div style={{ fontSize: 13, color: p.txt3 }}>{t("mobile.more.lockDesc")}</div>
+          </div>
+        </button>
       </div>
     </>
   );
@@ -651,7 +691,10 @@ function MTabBar({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) {
       style={{
         flexShrink: 0,
         display: "flex",
-        padding: `${TAB_PAD_Y}px 8px calc(${TAB_PAD_Y}px + env(safe-area-inset-bottom))`,
+        // No safe-area inset here: the shell root reserves it once, for every
+        // screen. Adding it again parked the bar a home indicator above the
+        // ground with dead space underneath.
+        padding: `${TAB_PAD_Y}px 8px`,
         borderTop: `1px solid ${p.line}`,
         background: p.bg1,
       }}
@@ -872,7 +915,7 @@ export function MobileApp() {
       // "run" is intentionally absent here — like the terminal, it is rendered
       // persistently below so its live broadcast survives navigation.
       case "more":
-        screen = <MMore go={(t) => push({ type: t })} />;
+        screen = <MMore go={(t) => push({ type: t })} onLock={ctx.onLock} />;
         break;
     }
   }
@@ -901,7 +944,7 @@ export function MobileApp() {
           the device most likely to be handed over, set down, or left on a table.
           Pushed frames are excluded: MWrapView already gives them a header, and two
           stacked headers on a phone is a worse answer than a lock one tap away. */}
-      {!top && <MTopBar vault={vault} onLock={ctx.onLock} onVaultTap={() => setVaultSheet(true)} />}
+      {!top && <MTopBar vault={vault} onVaultTap={() => setVaultSheet(true)} />}
       <div
         onTouchStart={(e) => {
           // Frames only. This gesture translates the container BELOW — which also

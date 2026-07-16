@@ -1437,6 +1437,104 @@ export function ViewHosts() {
     </button>
   );
 
+  // The sort dropdown is the one header control a phone keeps. It renders in the
+  // toolbar on desktop and in the search row on touch, where the toolbar itself is
+  // gone — only one branch ever mounts, so the ref stays unambiguous.
+  const sortControl = (
+      <div ref={sortRef} style={{ position: "relative" }}>
+        <button
+          onClick={() => setSortOpen((v) => !v)}
+          title={t("hosts.sortTitle")}
+          aria-label={t("hosts.sortTitle")}
+          aria-haspopup="menu"
+          aria-expanded={sortOpen}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            height: touch ? SIZE.tapMin : 30,
+            padding: touch ? "0 12px" : "0 10px",
+            borderRadius: RADIUS.chip,
+            // No grey fill — just the frame. Open state reads via a stronger
+            // hairline + darker label instead of a bg tint.
+            border: `1px solid ${sortOpen ? p.line2 : p.line}`,
+            background: "transparent",
+            color: sortOpen ? p.txt : p.txt2,
+            cursor: "pointer",
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          <Icon
+            name={sort === "name" ? "list" : sort === "connected" ? "clock" : "plus"}
+            size={14}
+          />
+          {!tight && tDyn(`hosts.sort.${SORT_KEYS[sort]}`)}
+          <Icon name="cd" size={12} color={p.txt3} />
+        </button>
+        {sortOpen && (
+          <div
+            role="menu"
+            aria-label={t("hosts.sortTitle")}
+            style={{
+              position: "absolute",
+              top: "100%",
+              right: 0,
+              marginTop: 6,
+              zIndex: 30,
+              background: p.bg3,
+              border: `1px solid ${p.line2}`,
+              borderRadius: 12,
+              padding: 5,
+              boxShadow: p.shadow,
+              width: 220,
+            }}
+          >
+            {(Object.keys(SORT_KEYS) as SortKey[]).map((k) => (
+              <button
+                key={k}
+                role="menuitemradio"
+                aria-checked={sort === k}
+                tabIndex={-1}
+                onClick={() => {
+                  changeSort(k);
+                  setSortOpen(false);
+                }}
+                style={{
+                  ...BTN_RESET,
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 9,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: sort === k ? 700 : 500,
+                  color: sort === k ? p.txt : p.txt2,
+                  background: "transparent",
+                }}
+                onMouseEnter={(e) => {
+                  if (sort !== k) e.currentTarget.style.background = p.bg2;
+                }}
+                onMouseLeave={(e) => {
+                  if (sort !== k) e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <Icon
+                  name={k === "name" ? "list" : k === "connected" ? "clock" : "plus"}
+                  size={15}
+                  color={sort === k ? p.txt : p.txt3}
+                />
+                <span style={{ flex: 1 }}>{tDyn(`hosts.sort.${SORT_KEYS[k]}`)}</span>
+                {sort === k && <Icon name="check" size={14} color={p.txt} />}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+  );
+
   return (
     <div ref={rowRef} style={{ flex: 1, display: "flex", minWidth: 0 }}>
       {/* main */}
@@ -1452,6 +1550,7 @@ export function ViewHosts() {
           flexDirection: "column",
         }}
       >
+        {!touch && (
         <div
           style={{
             position: "relative",
@@ -1466,13 +1565,9 @@ export function ViewHosts() {
           {/* Title + count share one baseline (reference .head); the outer row stays
               center-aligned so the toolbar buttons don't ride the text baseline. */}
           <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
-            {/* The tab bar already says "Hosts" one row below. Repeating it in a
-                28px h1 under a 62px top bar is three headers for one screen. */}
-            {!touch && (
-              <h1 style={{ margin: 0, fontSize: narrow ? 24 : 28, fontWeight: 800, letterSpacing: -0.7 }}>
-                {t("hosts.title")}
-              </h1>
-            )}
+            <h1 style={{ margin: 0, fontSize: narrow ? 24 : 28, fontWeight: 800, letterSpacing: -0.7 }}>
+              {t("hosts.title")}
+            </h1>
             <span
               style={{
                 fontFamily: MONO,
@@ -1511,122 +1606,27 @@ export function ViewHosts() {
             <Icon name="download" size={14} />
             {!tight && t("hosts.importSshConfig")}
           </button>
-          {/* Hidden on narrow: the list half of this toggle can't render there
-              (see `layout`), and a control whose two states look identical is worse
-              than no control. The stored preference is untouched — it comes back
-              the moment there's width for it. */}
-          {!touch && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                height: 30,
-                background: "transparent",
-                border: `1px solid ${p.line}`,
-                borderRadius: RADIUS.chip,
-                padding: 1,
-                gap: 2,
-              }}
-            >
-              {segBtn("grid", "cards")}
-              {segBtn("list", "list")}
-            </div>
-          )}
-          <div ref={sortRef} style={{ position: "relative" }}>
-            <button
-              onClick={() => setSortOpen((v) => !v)}
-              title={t("hosts.sortTitle")}
-              aria-label={t("hosts.sortTitle")}
-              aria-haspopup="menu"
-              aria-expanded={sortOpen}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                height: touch ? SIZE.tapMin : 30,
-                padding: touch ? "0 12px" : "0 10px",
-                borderRadius: RADIUS.chip,
-                // No grey fill — just the frame. Open state reads via a stronger
-                // hairline + darker label instead of a bg tint.
-                border: `1px solid ${sortOpen ? p.line2 : p.line}`,
-                background: "transparent",
-                color: sortOpen ? p.txt : p.txt2,
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: 600,
-              }}
-            >
-              <Icon
-                name={sort === "name" ? "list" : sort === "connected" ? "clock" : "plus"}
-                size={14}
-              />
-              {!tight && tDyn(`hosts.sort.${SORT_KEYS[sort]}`)}
-              <Icon name="cd" size={12} color={p.txt3} />
-            </button>
-            {sortOpen && (
-              <div
-                role="menu"
-                aria-label={t("hosts.sortTitle")}
-                style={{
-                  position: "absolute",
-                  top: "100%",
-                  right: 0,
-                  marginTop: 6,
-                  zIndex: 30,
-                  background: p.bg3,
-                  border: `1px solid ${p.line2}`,
-                  borderRadius: 12,
-                  padding: 5,
-                  boxShadow: p.shadow,
-                  width: 220,
-                }}
-              >
-                {(Object.keys(SORT_KEYS) as SortKey[]).map((k) => (
-                  <button
-                    key={k}
-                    role="menuitemradio"
-                    aria-checked={sort === k}
-                    tabIndex={-1}
-                    onClick={() => {
-                      changeSort(k);
-                      setSortOpen(false);
-                    }}
-                    style={{
-                      ...BTN_RESET,
-                      width: "100%",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 9,
-                      padding: "8px 10px",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      fontSize: 13,
-                      fontWeight: sort === k ? 700 : 500,
-                      color: sort === k ? p.txt : p.txt2,
-                      background: "transparent",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (sort !== k) e.currentTarget.style.background = p.bg2;
-                    }}
-                    onMouseLeave={(e) => {
-                      if (sort !== k) e.currentTarget.style.background = "transparent";
-                    }}
-                  >
-                    <Icon
-                      name={k === "name" ? "list" : k === "connected" ? "clock" : "plus"}
-                      size={15}
-                      color={sort === k ? p.txt : p.txt3}
-                    />
-                    <span style={{ flex: 1 }}>{tDyn(`hosts.sort.${SORT_KEYS[k]}`)}</span>
-                    {sort === k && <Icon name="check" size={14} color={p.txt} />}
-                  </button>
-                ))}
-              </div>
-            )}
+          {/* The list half of this toggle can't render on touch (see `layout`), but
+              the whole toolbar is desktop-only anyway. */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              height: 30,
+              background: "transparent",
+              border: `1px solid ${p.line}`,
+              borderRadius: RADIUS.chip,
+              padding: 1,
+              gap: 2,
+            }}
+          >
+            {segBtn("grid", "cards")}
+            {segBtn("list", "list")}
           </div>
-          {/* Narrow gets the FAB below instead: the primary action belongs in the
+          {sortControl}
+          {/* Touch gets the FAB below instead: the primary action belongs in the
               thumb zone, not in the one corner of a phone a thumb can't reach. */}
-          {!touch && (
+          {(
             <button
               title={t("hosts.newHost")}
               onClick={() => ctx.onNewHost()}
@@ -1670,13 +1670,16 @@ export function ViewHosts() {
             </button>
           )}
         </div>
+        )}
 
         {/* Touch: a real filter box. The desktop has ⌘K in the title bar for this,
             which needs a keyboard AND connects rather than filters. */}
         {touch && (
-          <div style={{ padding: `0 ${gutter}px 10px` }}>
+          <div style={{ padding: `0 ${gutter}px 10px`, display: "flex", alignItems: "center", gap: 10 }}>
             <div
               style={{
+                flex: 1,
+                minWidth: 0,
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
@@ -1728,6 +1731,7 @@ export function ViewHosts() {
                 </button>
               )}
             </div>
+            {sortControl}
           </div>
         )}
 
