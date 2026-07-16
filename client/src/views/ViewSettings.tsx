@@ -10,6 +10,7 @@ import { ACCENT_KEYS, ACCENTS, MONO, UI, rgba } from "@/theme/tokens";
 import type { AppThemeFamily, Density, HostsLayout, Mode, Palette, TermTheme } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, Segmented, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
 import { ServerVaultsSection } from "./ServerVaultsSection";
+import { Modal } from "@/components/Modal";
 import type { IconName } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -983,6 +984,9 @@ function SettingsVaults() {
   // Inline "pick a server" popover for Bind / Move (the accessible path alongside
   // drag-and-drop): holds the vault id whose picker is open.
   const [pickerVault, setPickerVault] = useState<string | null>(null);
+  // Selected server id in the bind/move modal (which vault is being (re)homed is
+  // held by `pickerVault`).
+  const [bindSel, setBindSel] = useState<string | null>(null);
   // Drag-and-drop: `dragId` is the live source (a ref, read in dragover/drop without
   // forcing a re-render); `dragging`/`dragOver` drive the visual state only.
   const dragId = useRef<string | null>(null);
@@ -998,6 +1002,13 @@ function SettingsVaults() {
   // owner's ciphertext onto personal servers (it grants a member no new plaintext,
   // since they can already decrypt, but WHERE the vault syncs is the owner's call).
   const owned = (v: VaultInfo) => isOwnedCloud(v, servers);
+  // Bindable = a cloud vault you may (re)home to a server. A vault with NO binding
+  // at all (empty syncTenant) is yours to bind — isOwnedCloud can't read a role from
+  // a Space that doesn't exist yet, so binding must not require `owned` there (that
+  // was the catch-22 that left unbound vaults unbindable). A bound vault stays
+  // owner-only. Used by both the Bind affordance and the actual (re)bind action.
+  const canRehome = (v: VaultInfo) =>
+    v.syncTarget === "cloud" && (!v.syncTenant || owned(v));
 
   const cloudVaults = vaults.filter((v) => v.syncTarget === "cloud");
   const localVaults = vaults.filter((v) => v.syncTarget !== "cloud");
@@ -1022,7 +1033,7 @@ function SettingsVaults() {
   // confirmed first and we're explicit that the OLD server keeps its (encrypted)
   // copy — Move re-points syncing, it does NOT delete remotely.
   const rebindTo = (v: VaultInfo, s: ServerStatus) => {
-    if (!s.serverId || !owned(v)) return;
+    if (!s.serverId || !canRehome(v)) return;
     if (vaultServer(v, servers)?.serverId === s.serverId) return; // already there
     if (vaultServer(v, servers) == null) {
       void bindTo(v, s.serverId);
@@ -1121,23 +1132,12 @@ function SettingsVaults() {
   // ── one vault row ─────────────────────────────────────────────
   const vaultRow = (v: VaultInfo, kind: "server" | "local" | "unbound") => {
     const isCurrent = v.vaultId === vaultId;
-    // Binding is owner-only for a vault that IS bound (isOwnedCloud reads the admin
-    // role from its bound Space). But a genuinely UNBOUND cloud vault (empty
-    // syncTenant) has no Space to read a role from — isOwnedCloud returns false
-    // precisely because syncTenant is empty, which would leave it unbindable forever
-    // (a catch-22). A cloud vault with no binding at all is yours to bind, so allow it.
-    const canBind =
-      kind === "local"
-        ? false
-        : !v.syncTenant
-          ? v.syncTarget === "cloud"
-          : owned(v); // owner-only binding + drag
+    const canBind = kind !== "local" && canRehome(v); // owner-only for bound; open for unbound
     const isMember = kind === "server" && !owned(v);
     // Rename + delete are owner-only in core (require_owner → AuthorityInvalid for a
     // member), so don't offer them on a shared vault you don't own. Verify + purge are
     // local (a member can integrity-check and remove their own copy).
     const canEdit = kind === "local" || owned(v);
-    const picking = pickerVault === v.vaultId;
     const targets =
       kind === "server"
         ? servers.filter(
@@ -1218,45 +1218,24 @@ function SettingsVaults() {
           )}
         </div>
 
-        {canBind &&
-          (picking ? (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 11, color: p.txt3 }}>
-                {t(kind === "server" ? "vault.moveTo" : "vault.bindTo")}
-              </span>
-              {targets.map((s) => (
-                <Btn
-                  key={s.serverId!}
-                  variant="ghost"
-                  size="sm"
-                  icon="cloud"
-                  onClick={() => rebindTo(v, s)}
-                >
-                  {serverShortLabel(s)}
-                </Btn>
-              ))}
-              <Btn
-                variant="ghost"
-                size="sm"
-                icon="x"
-                title={t("common.cancel")}
-                onClick={() => setPickerVault(null)}
-              />
-            </span>
-          ) : (
-            <>
-              {targets.length > 0 && (
-                <Btn variant="ghost" size="sm" onClick={() => setPickerVault(v.vaultId)}>
-                  {t(kind === "server" ? "vault.move" : "vault.bind")}
-                </Btn>
-              )}
-              {kind === "server" && (
-                <Btn variant="ghost" size="sm" onClick={() => onUnbindVault(v)}>
-                  {t("vault.unbind")}
-                </Btn>
-              )}
-            </>
-          ))}
+        {canBind && targets.length > 0 && (
+          <Btn
+            variant="ghost"
+            size="sm"
+            icon="cloud"
+            onClick={() => {
+              setBindSel(targets.length === 1 ? (targets[0].serverId ?? null) : null);
+              setPickerVault(v.vaultId);
+            }}
+          >
+            {t(kind === "server" ? "vault.move" : "vault.bind")}
+          </Btn>
+        )}
+        {canBind && kind === "server" && (
+          <Btn variant="ghost" size="sm" onClick={() => onUnbindVault(v)}>
+            {t("vault.unbind")}
+          </Btn>
+        )}
 
         {canEdit && (
           <Btn
@@ -1474,6 +1453,74 @@ function SettingsVaults() {
           {t("vault.create")}
         </Btn>
       </div>
+
+      {pickerVault &&
+        (() => {
+          const v = vaults.find((x) => x.vaultId === pickerVault);
+          if (!v) return null;
+          const current = vaultServer(v, servers)?.serverId;
+          const isMove = current != null;
+          const opts = servers.filter((s) => s.serverId != null && s.serverId !== current);
+          const close = () => {
+            setPickerVault(null);
+            setBindSel(null);
+          };
+          return (
+            <Modal
+              icon="cloud"
+              title={t(isMove ? "vault.move" : "vault.bind")}
+              subtitle={v.name}
+              onClose={close}
+              w={420}
+              footer={
+                <>
+                  <Btn variant="ghost" onClick={close}>
+                    {t("common.cancel")}
+                  </Btn>
+                  <Btn
+                    variant="primary"
+                    disabled={!bindSel}
+                    onClick={() => {
+                      const s = opts.find((x) => x.serverId === bindSel);
+                      close();
+                      if (s) rebindTo(v, s);
+                    }}
+                  >
+                    {t(isMove ? "vault.move" : "vault.bind")}
+                  </Btn>
+                </>
+              }
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {opts.map((s) => {
+                  const active = bindSel === s.serverId;
+                  return (
+                    <button
+                      key={s.serverId!}
+                      onClick={() => setBindSel(s.serverId ?? null)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "12px 14px",
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        textAlign: "left",
+                        border: `1px solid ${active ? p.accent : p.line}`,
+                        background: active ? rgba(p.accent, 0.1) : p.bg2,
+                        color: p.txt,
+                      }}
+                    >
+                      <Icon name="cloud" size={16} color={active ? p.accent : p.txt3} />
+                      <span style={{ flex: 1, fontSize: 13.5 }}>{serverShortLabel(s)}</span>
+                      {active && <Icon name="check" size={15} color={p.accent} />}
+                    </button>
+                  );
+                })}
+              </div>
+            </Modal>
+          );
+        })()}
     </>
   );
 }
