@@ -8,11 +8,9 @@ interface Props {
   /** Where the header Download button goes. */
   ctaHref: string;
   githubHref: string;
-  /** Build-time star count, or null when it could not be read. */
-  stars: string | null;
 }
 
-const { docsHref, archHref, securityHref, ctaHref, githubHref, stars } = Astro.props;
+const { docsHref, archHref, securityHref, ctaHref, githubHref } = Astro.props;
 ---
 
 <header class="site-header" id="site-header">
@@ -32,10 +30,15 @@ const { docsHref, archHref, securityHref, ctaHref, githubHref, stars } = Astro.p
     </nav>
 
     <div class="site-header__actions">
+      <!-- No star count. A hardcoded one goes stale; a build-time one is the
+           same thing laundered through a fetch, because docs.yml only rebuilds
+           on pushes to website/** — the digit would refresh when we touch the
+           site, not when someone stars the repo. A client-side fetch would be
+           live, but it phones GitHub on every page load of a privacy tool.
+           The link is always accurate and needs no number. -->
       <a class="gh-link" href={githubHref} rel="noopener">
         <Icon name="github" size={17} />
         Star on GitHub
-        {stars && <span class="gh-count">{stars}</span>}
       </a>
       <a class="btn btn-primary" href={ctaHref}>Download</a>
       <button class="burger" type="button" aria-label="Menu" aria-expanded="false" aria-controls="site-nav" id="burger">

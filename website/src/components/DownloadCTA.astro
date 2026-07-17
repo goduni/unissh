@@ -10,6 +10,11 @@ interface Props {
   releasesHref: string;
 }
 const { buildHref, deployHref, githubHref, releasesHref, n } = Astro.props;
+// No typechecker runs on this repo (@astrojs/check is not installed), so the
+// Props interface is documentation, not enforcement — a missing or numeric `n`
+// rendered an empty/unpadded eyebrow and still exited 0. A frontmatter throw
+// is the one thing that actually fails `astro build`.
+if (!/^\d\d$/.test(n)) throw new Error(`DownloadCTA: n must be a zero-padded number like "01", got ${JSON.stringify(n)}`);
 ---
 
 <section class="download" id="download" aria-labelledby="download-head">
@@ -32,12 +37,18 @@ const { buildHref, deployHref, githubHref, releasesHref, n } = Astro.props;
     </div>
 
     <!-- Releases are real: client.yml bundles via tauri-action and attaches
-         SHA256SUMS + a provenance attestation. They are also UNSIGNED — the
-         workflow has no APPLE_* identity and no Windows code-signing cert
-         (client.yml:10), so macOS will warn on first open. Say so here rather
-         than let the download surprise someone. -->
+         SHA256SUMS + a provenance attestation. Two things this must not
+         overstate:
+           - the build matrix is ubuntu/windows/macos only (client.yml:44-52).
+             Mobile is deliberately out of scope — "there is no privacy-
+             preserving unsigned distributable for those stores/runtimes"
+             (client.yml:24-26). The client SUPPORTS five platforms; you can
+             DOWNLOAD three. Listing five under a Download button was a lie.
+           - builds are UNSIGNED (no APPLE_* identity, no Windows cert), so
+             macOS warns on first open. Say it here, not via Gatekeeper. -->
     <p class="download__note">
-      macOS · Windows · Linux · iOS · Android<br />
+      downloads: macOS · Windows · Linux<br />
+      iOS and Android are supported by the client but not distributed here — build them<br />
       builds are unsigned — macOS Gatekeeper will ask before the first launch<br />
       every release carries SHA256SUMS + a build provenance attestation<br />
       <a href={githubHref} rel="noopener" style="color:var(--site-violet-lite)">MIT OR Apache-2.0</a>

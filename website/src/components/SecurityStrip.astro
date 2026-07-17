@@ -7,6 +7,11 @@ interface Props {
   securityHref: string;
 }
 const { securityHref, n } = Astro.props;
+// No typechecker runs on this repo (@astrojs/check is not installed), so the
+// Props interface is documentation, not enforcement — a missing or numeric `n`
+// rendered an empty/unpadded eyebrow and still exited 0. A frontmatter throw
+// is the one thing that actually fails `astro build`.
+if (!/^\d\d$/.test(n)) throw new Error(`SecurityStrip: n must be a zero-padded number like "01", got ${JSON.stringify(n)}`);
 
 /**
  * The crypto claims. Every one of these was verified against the code
@@ -35,7 +40,7 @@ const claims = [
   <div class="wrap">
     <div class="panel">
       <span class="eyebrow"><i>{n}</i> · security model</span>
-      <div class="section-head" style="margin:0 0 4px;max-width:680px;text-align:left;">
+      <div class="section-head section-head--flush">
         <h2 id="security-head">We don't roll our own crypto</h2>
       </div>
 

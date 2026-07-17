@@ -4,6 +4,11 @@ interface Props {
   n: string;
 }
 const { n } = Astro.props;
+// No typechecker runs on this repo (@astrojs/check is not installed), so the
+// Props interface is documentation, not enforcement — a missing or numeric `n`
+// rendered an empty/unpadded eyebrow and still exited 0. A frontmatter throw
+// is the one thing that actually fails `astro build`.
+if (!/^\d\d$/.test(n)) throw new Error(`TrustStrip: n must be a zero-padded number like "01", got ${JSON.stringify(n)}`);
 /**
  * The zero-knowledge pillars.
  *
@@ -30,7 +35,7 @@ const pillars = [
   {
     n: '03',
     title: 'Honest about metadata',
-    body: 'Content, including item names, is always encrypted. The social graph, blob sizes and sync timings are visible to whoever runs the server — that is you — and they are documented, not hidden.',
+    body: 'Content, including item names, is always encrypted. Vault and item ids, versions, space membership, blob sizes and sync timings are visible to whoever operates the server — which on a team is not always you. All of it is written down in the threat model rather than glossed over.',
   },
 ];
 ---

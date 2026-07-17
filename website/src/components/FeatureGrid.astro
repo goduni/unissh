@@ -4,6 +4,11 @@ interface Props {
   n: string;
 }
 const { n } = Astro.props;
+// No typechecker runs on this repo (@astrojs/check is not installed), so the
+// Props interface is documentation, not enforcement — a missing or numeric `n`
+// rendered an empty/unpadded eyebrow and still exited 0. A frontmatter throw
+// is the one thing that actually fails `astro build`.
+if (!/^\d\d$/.test(n)) throw new Error(`FeatureGrid: n must be a zero-padded number like "01", got ${JSON.stringify(n)}`);
 /**
  * What the client actually does.
  *
@@ -62,7 +67,7 @@ const features = [
       <h2 id="features-head">Everything you'd open a <span class="grad-text">terminal</span> for</h2>
       <p>
         One Rust core behind macOS, Windows, Linux, iOS and Android — so a host you add on
-        the laptop is on the phone before you reach for it.
+        the laptop is waiting on the phone the moment it syncs.
       </p>
     </div>
 

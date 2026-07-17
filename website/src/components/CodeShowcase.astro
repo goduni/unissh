@@ -4,18 +4,31 @@ interface Props {
   n: string;
 }
 const { n } = Astro.props;
+// No typechecker runs on this repo (@astrojs/check is not installed), so the
+// Props interface is documentation, not enforcement — a missing or numeric `n`
+// rendered an empty/unpadded eyebrow and still exited 0. A frontmatter throw
+// is the one thing that actually fails `astro build`.
+if (!/^\d\d$/.test(n)) throw new Error(`CodeShowcase: n must be a zero-padded number like "01", got ${JSON.stringify(n)}`);
 import Icon from './Icon.astro';
 /**
- * Two-up monospace panels: left = rust-core local end-to-end flow,
- * right = server bring-up (Docker Compose). Both mirror the actual
- * READMEs. Copy-to-clipboard reads from data-copy on each panel.
+ * Two-up monospace panels: left = rust-core local end-to-end flow, right =
+ * server bring-up. Both mirror rust-core/README.md and deploy/. There is a
+ * copy button on each, so these have to RUN as printed: UnlockArgs.secret_key
+ * (cli/src/main.rs:501) is a required String flattened into create-vault,
+ * gen-key and exec — drop it and clap rejects the command.
  */
 
 const localFlow = `# Works fully locally — no server required.
 unissh init --password pw            # -> Secret Key (Emergency Kit)
-unissh create-vault --id default --name Default
-unissh gen-key --vault default --item id_ed25519
-unissh exec --vault default --item id_ed25519 \\
+export SK=<the Secret Key it printed>
+
+# Every command after init unlocks first, so it needs both.
+unissh create-vault --secret-key $SK --password pw \\
+  --id default --name Default
+unissh gen-key --secret-key $SK --password pw \\
+  --vault default --item id_ed25519
+unissh exec --secret-key $SK --password pw \\
+  --vault default --item id_ed25519 \\
   --host 10.0.0.5 --user deploy \\
   --jump bastion:22:admin:id_ed25519 \\
   --command "uname -a"`;
