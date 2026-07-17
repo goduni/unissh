@@ -278,15 +278,6 @@ a {
 .gh-link:hover {
   color: var(--site-ink);
 }
-.gh-count {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--site-ink2);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 7px;
-  padding: 1px 8px;
-  font-variant-numeric: tabular-nums;
-}
 .burger {
   display: grid;
   place-items: center;
@@ -492,6 +483,13 @@ a {
   font-weight: 700;
   letter-spacing: -0.03em;
   margin-top: 12px;
+}
+/* Inside a panel the head is already positioned by the panel — it only needs
+   its h2 rule, not the centring and the 44px gap. */
+.section-head--flush {
+  margin: 0 0 4px;
+  max-width: 680px;
+  text-align: left;
 }
 .section-head p {
   margin-top: 16px;
@@ -855,7 +853,7 @@ a {
   color: var(--site-ink3);
   max-width: 30ch;
 }
-.footer__col h4 {
+.footer__col h3 {
   font-family: var(--uh-font-mono);
   font-size: 11px;
   font-weight: 600;

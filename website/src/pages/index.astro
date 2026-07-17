@@ -32,24 +32,6 @@ const buildHref = withBase('operations/build/');
 const githubHref = 'https://github.com/goduni/unissh';
 const githubReleases = 'https://github.com/goduni/unissh/releases';
 
-// Star count, read at build time. A hardcoded number would go stale silently,
-// which is the same lie as an invented one, just slower. If the fetch fails
-// (offline build, rate limit) we render NO number rather than a wrong one —
-// the link still works, and absence is honest where a stale digit is not.
-let stars: string | null = null;
-try {
-  const res = await fetch('https://api.github.com/repos/goduni/unissh', {
-    headers: { Accept: 'application/vnd.github+json' },
-    signal: AbortSignal.timeout(5000),
-  });
-  if (res.ok) {
-    const n = (await res.json())?.stargazers_count;
-    if (typeof n === 'number') stars = n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-  }
-} catch {
-  // leave stars null — the badge simply does not render
-}
-
 const title = 'unissh — a modern and secure, fully open-source SSH client';
 const description =
   'A modern and secure, fully open-source SSH client with a built-in sync server. End-to-end encrypted vaults, real terminals, SFTP and tunnels — synced through a server you run yourself, which only ever stores ciphertext.';
@@ -96,7 +78,6 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
         securityHref={securityHref}
         ctaHref={githubReleases}
         githubHref={githubHref}
-        stars={stars}
       />
 
       <main id="main">
@@ -121,7 +102,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
           </div>
           <div class="hero__meta">
             <span><Icon name="lock" size={16} stroke={1.8} /> End-to-end encrypted</span>
-            <span><Icon name="refresh" size={16} stroke={1.8} /> Real-time sync</span>
+            <span><Icon name="refresh" size={16} stroke={1.8} /> Multi-device sync</span>
             <span><Icon name="code" size={16} stroke={1.8} /> 100% open-source</span>
           </div>
         </section>
@@ -156,7 +137,6 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
           quickstart: quickstartHref,
           install: installHref,
           arch: archHref,
-          security: securityHref,
           crates: cratesHref,
           server: serverDocHref,
           deploy: deployHref,
