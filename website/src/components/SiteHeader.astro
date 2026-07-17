@@ -61,7 +61,13 @@ const { docsHref, archHref, securityHref, ctaHref, githubHref } = Astro.props;
   };
   burger?.addEventListener('click', (e) => {
     e.stopPropagation();
-    setOpen(burger.getAttribute('aria-expanded') !== 'true');
+    const open = burger.getAttribute('aria-expanded') !== 'true';
+    setOpen(open);
+    // The panel renders below the burger but sits BEFORE it in the DOM, so
+    // Tab from the burger jumped past all six links to the hero CTA and they
+    // were only reachable by Shift+Tab. Moving focus into the panel is the
+    // disclosure pattern and it makes forward order match visual order.
+    if (open) nav?.querySelector('a')?.focus();
   });
   // following one of its own links
   nav?.addEventListener('click', (e) => {

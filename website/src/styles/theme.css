@@ -51,9 +51,14 @@
   --uh-accent-soft: rgba(91, 140, 255, 0.15);
   --uh-accent-line: rgba(91, 140, 255, 0.4);
   --uh-glow: rgba(91, 140, 255, 0.22);
-  /* No accentInk here: nothing on the site puts text on an accent fill.
-     For the record, the app cannot use white on #5b8cff — 3.16:1, fails
-     AA — so buildPalette's dark branch puts bg0 on it instead. */
+  /* No accentInk token here, because nothing on the site needs one: the only
+     white-on-accent is the app's own logo mark, mirrored in AppWindow, and
+     the app really does that (primitives.tsx Logo: background p.accent,
+     color #fff — 3.16:1). It is a logotype, which WCAG 1.4.3 exempts, so the
+     mock is faithful and correct. Where the app puts a LABEL on an accent
+     fill it uses accentInk (= bg0) instead, precisely because white fails
+     there. Don't "fix" the mock's logo to match this note; the note was
+     wrong before, not the mock. */
 
   /* ---- Product status / secondary ---- */
   --uh-green: #3ad29f;
@@ -96,16 +101,27 @@
 
   /* Text/brand gradient — lives on the dark ground, AA-clear there. */
   --site-grad: linear-gradient(100deg, #8b5cf6 0%, #5b8cff 100%);
-  /* Button gradient — WHITE sits on this, so every stop must clear
-     4.5:1. The brighter --site-grad fails (4.23 / 3.16); this pair's
-     worst point is 5.17. Never swap one for the other. */
+  /* Button gradient — for CONTROLS, where white sits on the fill and every
+     stop must clear 4.5:1. The brighter --site-grad fails there (4.23 /
+     3.16); this pair's worst point is 5.17. Don't use --site-grad on a
+     button. The brand mark (.brand__glyph) does carry white on --site-grad
+     at 3.74:1 — that is a logotype, exempt under 1.4.3, and deliberate. */
   --site-grad-btn: linear-gradient(100deg, #7c3aed 0%, #2563eb 100%);
 }
 
 /* ============================================================
-   Starlight brand overrides (dark).
+   Starlight brand overrides — DARK ONLY.
+
+   This block used to also match a bare `:root`. Starlight ships its theme
+   in a cascade layer and unlayered rules beat layered ones regardless of
+   specificity, so the bare selector forced these dark values even under
+   data-theme='light' — while every token NOT listed here (the aside tints,
+   for one) stayed light. Result: light-mode asides rendered #eef0f7 on
+   #fceac5, i.e. 1.04:1, on 13 of 20 pages, reachable by nothing more than
+   an OS light preference. Half-committing to dark was worse than either
+   choice. Scoped to dark; light mode now gets Starlight's own coherent
+   light theme.
    ============================================================ */
-:root,
 :root[data-theme='dark'] {
   --sl-color-accent-low: #1b2030;
   --sl-color-accent: var(--uh-accent);
@@ -134,8 +150,10 @@
   --sl-font-mono: var(--uh-font-mono);
 }
 
-html,
-body {
+/* Starlight paints its own ground per mode; the landing overrides this in
+   landing.css. Hard-coding the dark desk here re-broke light mode. */
+:root[data-theme='dark'] html,
+:root[data-theme='dark'] body {
   background-color: var(--uh-desk);
 }
 
