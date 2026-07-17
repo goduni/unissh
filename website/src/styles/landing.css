@@ -43,8 +43,7 @@ body {
 
 h1,
 h2,
-h3,
-h4 {
+h3 {
   margin: 0;
   line-height: 1.1;
   letter-spacing: -0.02em;
@@ -102,14 +101,30 @@ a {
 
 /* ============================================================
    The sky — nebula washes, a deterministic starfield and the
-   planet horizon. Fixed, so it parallaxes for free while scrolling.
+   planet horizon.
+
+   ABSOLUTE, not fixed, and deliberately finite. It used to be
+   `position: fixed` "so it parallaxes for free" — which meant the arc's
+   bright core sat in a permanent viewport band that every scrolled
+   element crossed. Measured against real composited pixels, that put 43
+   text samples under AA (worst 2.90:1): .feature p, .crate, .claim__desc,
+   .download__note, the footer. The tokens' own "7.96:1 on ground"
+   comments were true and irrelevant — the ground is not what the text
+   sat on. The sky now ends with the hero, and everything below it is on
+   flat --site-ground, which is what those numbers describe.
    ============================================================ */
 .sky {
-  position: fixed;
-  inset: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1500px;
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
+  /* no hard edge where it stops */
+  mask-image: linear-gradient(#000 72%, transparent 99%);
+  -webkit-mask-image: linear-gradient(#000 72%, transparent 99%);
 }
 .sky__stars {
   position: absolute;
@@ -498,7 +513,9 @@ a {
 }
 
 .panel {
-  background: rgba(14, 17, 29, 0.5);
+  /* opaque: a translucent panel over the sky was a second way the arc
+     reached body text */
+  background: var(--uh-bg0);
   border: 1px solid var(--uh-line);
   border-radius: 16px;
   padding: 26px 22px;
@@ -566,7 +583,7 @@ a {
   position: relative;
   border: 1px solid var(--uh-line);
   border-radius: 12px;
-  background: rgba(14, 17, 29, 0.55);
+  background: var(--uh-bg0);
   padding: 22px 20px 20px;
 }
 .feature::before {
@@ -731,7 +748,7 @@ a {
 .arch-node {
   border: 1px solid var(--uh-line);
   border-radius: 12px;
-  background: rgba(14, 17, 29, 0.55);
+  background: var(--uh-bg0);
   padding: 18px;
 }
 .arch-node__icon {

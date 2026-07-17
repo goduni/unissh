@@ -47,7 +47,7 @@
     <span class="uapp__barmid">
       <span class="usearch">
         <svg class="i" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>
-        Search hosts, commands, secrets…
+        <span class="usearch__t">Search hosts, commands, secrets…</span>
         <span class="usearch__kbd">⌘K</span>
       </span>
     </span>
@@ -248,13 +248,18 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
 .ulogo__wm{ font-size:13.3px; font-weight:700; letter-spacing:-0.3px; }
 .ulogo__wm em{ font-style:normal; color:var(--uh-accent); }
 .uapp__barmid{ flex:1; display:flex; justify-content:center; min-width:0; }
+/* was width:380px;max-width:40% with nowrap: intrinsic content (284px) never
+   fit the capped box (247px), so the ⌘K badge was pushed past the clip at
+   every width and never rendered once. Let it shrink, truncate the
+   placeholder, and keep the badge unshrinkable. */
 .usearch{
-  display:inline-flex; align-items:center; gap:8px; width:380px; max-width:40%;
+  display:inline-flex; align-items:center; gap:8px; flex:1; min-width:0; max-width:380px;
   height:30px; padding:0 12px; border-radius:8px; background:var(--uh-bg2);
-  border:1px solid var(--uh-line); color:var(--uh-txt3); font-size:13px; white-space:nowrap; overflow:hidden;
+  border:1px solid var(--uh-line); color:var(--uh-txt3); font-size:13px;
 }
+.usearch__t{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 .usearch__kbd{
-  margin-left:auto; font-family:var(--uh-font-mono); font-size:11px; padding:1px 6px;
+  margin-left:auto; flex:none; font-family:var(--uh-font-mono); font-size:11px; padding:1px 6px;
   border-radius:6px; background:var(--uh-bg3); border:1px solid var(--uh-line);
 }
 .uapp__barright{ display:flex; align-items:center; gap:8px; flex:none; }
@@ -371,8 +376,11 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
 .mtop__sp{ flex:1; }
 .mtop__btn{ width:44px; height:44px; display:grid; place-items:center; color:var(--uh-txt2); flex:none; }
 /* MobileApp.tsx:375-435 — session switcher */
+/* clip, not auto: Chromium makes scroll containers focusable, so these took
+   Tab while announcing nothing (they are aria-hidden inside a role="img").
+   A picture of an app does not scroll. */
 .msw{
-  display:flex; gap:6px; padding:8px 12px; overflow-x:auto; background:var(--uh-bg1);
+  display:flex; gap:6px; padding:8px 12px; overflow-x:clip; background:var(--uh-bg1);
   border-bottom:1px solid var(--uh-line); scrollbar-width:none;
 }
 .msw::-webkit-scrollbar{ display:none; }
@@ -385,7 +393,7 @@ ossyNMMMNyMMhsssssssssssssshmmmhssssso
 .msw__x{ width:32px; text-align:center; font-size:11px; opacity:.6; }
 /* MobileApp.tsx:447-472 — key accessory row */
 .mkeys{
-  display:flex; gap:6px; padding:10px 12px; overflow-x:auto; background:var(--uh-bg1);
+  display:flex; gap:6px; padding:10px 12px; overflow-x:clip; background:var(--uh-bg1);
   border-top:1px solid var(--uh-line); scrollbar-width:none; overscroll-behavior:contain;
 }
 .mkeys::-webkit-scrollbar{ display:none; }
