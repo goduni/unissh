@@ -21,12 +21,10 @@ const { docsHref, archHref, securityHref, ctaHref, githubHref } = Astro.props;
     </a>
 
     <nav class="site-nav" id="site-nav" aria-label="Primary">
-      <a href="#features">Features</a>
-      <a href="#sync-server">Sync Server</a>
-      <a href={securityHref}>Security</a>
-      <a href={githubHref} rel="noopener">Open Source</a>
       <a href={docsHref}>Docs</a>
       <a href={archHref}>Architecture</a>
+      <a href={securityHref}>Security</a>
+      <a href={githubHref} rel="noopener">Open Source</a>
     </nav>
 
     <div class="site-header__actions">
