@@ -4,9 +4,14 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
-  // Project page on GitHub Pages: https://goduni.github.io/unissh/
-  site: 'https://goduni.github.io',
-  base: '/unissh/',
+  // Served from the custom domain unissh.dev at the ROOT. GitHub Pages
+  // 301-redirects goduni.github.io/unissh/ -> unissh.dev/, so the site lives
+  // at the domain root, not under /unissh/. base MUST match that root or every
+  // /unissh/_astro/* asset 404s on the live domain (which is exactly what
+  // happened while this said base: '/unissh/'). public/CNAME pins the domain
+  // so an Actions deploy can't drop it.
+  site: 'https://unissh.dev',
+  base: '/',
   integrations: [
     starlight({
       title: 'UniSSH',
