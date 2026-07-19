@@ -5,6 +5,7 @@ interface Props {
     quickstart: string;
     install: string;
     arch: string;
+    security: string;
     crates: string;
     server: string;
     deploy: string;
@@ -18,10 +19,10 @@ const columns = [
   {
     title: 'Product',
     items: [
-      { label: 'Features', href: '#features' },
-      { label: 'Sync server', href: '#sync-server' },
-      { label: 'Security model', href: '#security' },
-      { label: 'Download', href: '#download' },
+      { label: 'Download', href: links.githubReleases },
+      { label: 'Security model', href: links.security },
+      { label: 'Sync server', href: links.server },
+      { label: 'Install', href: links.install },
     ],
   },
   {
@@ -29,7 +30,6 @@ const columns = [
     items: [
       { label: 'What is unissh', href: links.overview },
       { label: 'Quickstart', href: links.quickstart },
-      { label: 'Install', href: links.install },
       { label: 'Architecture', href: links.arch },
       { label: 'Crate reference', href: links.crates },
     ],
@@ -38,7 +38,6 @@ const columns = [
     title: 'Project',
     items: [
       { label: 'GitHub', href: links.github },
-      { label: 'Releases', href: links.githubReleases },
       { label: 'Deploy the server', href: links.deploy },
       { label: 'Server & API', href: links.server },
     ],

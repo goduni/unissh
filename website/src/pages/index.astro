@@ -6,15 +6,9 @@ import Icon from '../components/Icon.astro';
 import SiteHeader from '../components/SiteHeader.astro';
 import AppWindow from '../components/AppWindow.astro';
 import FeatureRail from '../components/FeatureRail.astro';
-import TrustStrip from '../components/TrustStrip.astro';
-import FeatureGrid from '../components/FeatureGrid.astro';
-import ArchitectureDiagram from '../components/ArchitectureDiagram.astro';
-import CodeShowcase from '../components/CodeShowcase.astro';
-import SecurityStrip from '../components/SecurityStrip.astro';
-import DownloadCTA from '../components/DownloadCTA.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 
-const base = import.meta.env.BASE_URL; // '/unissh/'
+const base = import.meta.env.BASE_URL; // '/' on the unissh.dev custom domain
 const withBase = (p: string) => `${base}${p.replace(/^\//, '')}`;
 
 // Internal doc links (base-aware).
@@ -26,15 +20,14 @@ const securityHref = withBase('architecture/zero-knowledge-model/');
 const cratesHref = withBase('components/crates/');
 const serverDocHref = withBase('components/server/');
 const deployHref = withBase('operations/deploy/');
-const buildHref = withBase('operations/build/');
 
 // External links.
 const githubHref = 'https://github.com/goduni/unissh';
 const githubReleases = 'https://github.com/goduni/unissh/releases';
 
-const title = 'unissh — a modern and secure, fully open-source SSH client';
+const title = 'unissh – a modern and secure, fully open-source SSH client';
 const description =
-  'A modern and secure, fully open-source SSH client with a built-in sync server. End-to-end encrypted vaults, real terminals, SFTP and tunnels — synced through a server you run yourself, which only ever stores ciphertext.';
+  'A modern and secure, fully open-source SSH client with a built-in sync server. End-to-end encrypted vaults, real terminals, SFTP and tunnels – synced through a server you run yourself, which only ever stores ciphertext.';
 const canonical = `${import.meta.env.SITE ?? ''}${base}`;
 ---
 
@@ -85,7 +78,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
 
         <section class="hero" aria-labelledby="hero-head">
           <h1 id="hero-head">
-            <span class="grad-text">unissh</span> — a modern and secure, fully open-source SSH
+            <span class="grad-text">unissh</span> – a modern and secure, fully open-source SSH
             client with a built-in sync server
           </h1>
           <p class="hero__subhead">
@@ -96,7 +89,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
             <a class="btn btn-primary btn-lg" href={githubReleases} rel="noopener">
               <Icon name="download" size={17} stroke={1.8} /> Download
             </a>
-            <a class="btn btn-ghost btn-lg" href="#features">
+            <a class="btn btn-ghost btn-lg" href={overviewHref}>
               Explore Features <Icon name="arrowright" size={15} stroke={2} />
             </a>
           </div>
@@ -113,22 +106,6 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
           <div class="appwrap"><AppWindow /></div>
           <FeatureRail side="r" />
         </section>
-
-        {/* The eyebrow numbers claim a read order, so they are handed out
-            here — the one place that decides that order. Reordering these
-            lines renumbers the page; the two cannot drift apart. */}
-        <TrustStrip n="01" />
-        <FeatureGrid n="02" />
-        <ArchitectureDiagram n="03" archHref={archHref} />
-        <CodeShowcase n="04" />
-        <SecurityStrip n="05" securityHref={securityHref} />
-        <DownloadCTA
-          n="06"
-          buildHref={buildHref}
-          deployHref={deployHref}
-          githubHref={githubHref}
-          releasesHref={githubReleases}
-        />
       </main>
 
       <SiteFooter
@@ -137,6 +114,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
           quickstart: quickstartHref,
           install: installHref,
           arch: archHref,
+          security: securityHref,
           crates: cratesHref,
           server: serverDocHref,
           deploy: deployHref,
