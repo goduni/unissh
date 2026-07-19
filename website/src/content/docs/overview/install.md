@@ -1,9 +1,43 @@
 ---
 title: Install & prerequisites
-description: Toolchain and system prerequisites for building UniSSH from source — core, server, client, and admin panel.
+description: Install the UniSSH desktop client from a release, or build any component from source — core, server, client, and admin panel.
 ---
 
-UniSSH builds from source. There is no installer; you compile the parts you need. This page lists the prerequisites per component. The [Quickstart](../quickstart/) then walks the local, no-server flow, and [Build from source](../../operations/build/) covers the `just` targets in detail.
+There are two ways in: download a desktop build from a release, or compile from source. Most people want the release. Building from source is for the server, the admin panel, mobile, an unlisted platform, or hacking on the code — and the rest of this page covers the prerequisites for that.
+
+## Install from a release
+
+The [latest release](https://github.com/goduni/unissh/releases/latest) carries desktop bundles built and published by CI ([`client.yml`](https://github.com/goduni/unissh/blob/main/.github/workflows/client.yml)):
+
+| Platform | Download |
+| --- | --- |
+| **macOS** (Apple Silicon) | `.dmg` |
+| **Windows** (x64) | `.msi`, or the `.exe` (NSIS) installer |
+| **Linux** (x64) | `.deb`, `.rpm`, or `.AppImage` |
+
+The `.AppImage` is self-contained: `chmod +x` it and run.
+
+:::caution
+**Builds are unsigned.** The release workflow ships no Apple Developer identity and no Windows code-signing certificate, so macOS Gatekeeper and Windows SmartScreen will warn on first launch. This is deliberate — see the workflow's own note — but it means the binaries are not notarized. If that is a dealbreaker, build from source.
+:::
+
+Intel Macs, ARM Linux, ARM Windows, and both mobile platforms are **not** in the release matrix — build those from source.
+
+### Verify what you downloaded
+
+Every release attaches `SHA256SUMS` and a build-provenance attestation.
+
+```bash
+# checksum
+sha256sum -c SHA256SUMS --ignore-missing
+
+# provenance — proves the artifact was built by this repo's CI, not forged
+gh attestation verify UniSSH_0.1.0_amd64.AppImage --repo goduni/unissh
+```
+
+## Building from source
+
+Everything below is for compiling a component yourself. The [Quickstart](../quickstart/) then walks the local, no-server flow, and [Build from source](../../operations/build/) covers the `just` targets in detail.
 
 ## Top-level toolchain
 
