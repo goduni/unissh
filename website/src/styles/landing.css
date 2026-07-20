@@ -26,7 +26,14 @@ html {
 html,
 body {
   max-width: 100%;
-  overflow-x: hidden;
+  /* clip, not hidden. `overflow-x: hidden` forces overflow-y to compute to
+     `auto`, turning BOTH html and body into vertical scroll containers. The
+     1500px .sky makes body ~14px taller than its content, so a wheel gesture
+     was consumed scrolling body those few pixels before the page (html)
+     moved — you had to scroll twice. `overflow-x: clip` leaves overflow-y as
+     `clip` (not a scroll container), so the viewport is the only scroller,
+     while horizontal overflow is still clipped. */
+  overflow-x: clip;
 }
 
 body {
