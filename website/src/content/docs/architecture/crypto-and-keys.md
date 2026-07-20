@@ -39,7 +39,7 @@ Secret Key ──────────┘                                    
 | Signatures | **Ed25519** (`verify_strict`) | `ed25519-dalek` |
 | Content digest for signing | SHA-256 | `sha2` |
 
-AES-256-GCM is available as a FIPS/compliance option. Every encrypted/signed blob is **versioned** (a format-version byte + a 2-byte algorithm id) for **crypto agility**, and a hybrid X25519 + ML-KEM wrap (post-quantum) is reserved in the registry — the format is laid down now, the algorithm is future work.
+AES-256-GCM is **reserved** in the registry as a FIPS/compliance option — the id is allocated, but the algorithm is not yet implemented (there is no `aes-gcm` dependency). Every encrypted/signed blob is **versioned** (a format-version byte + a 2-byte algorithm id) for **crypto agility**, and a hybrid X25519 + ML-KEM wrap (post-quantum) is likewise reserved in the registry — the format is laid down now, the algorithm is future work.
 
 ## Blob formats
 

@@ -34,7 +34,7 @@ Dependencies run bottom-up; upper crates reuse lower ones. Each crate ships its 
 
 ## What the core can do today
 
-Milestone 1's Definition of Done is **complete** — all seven foundational crates in one workspace, an end-to-end local scenario working with no server and no UI, the CLI harness in place, the FFI boundary published (Swift bindings) and proven not to leak plaintext keys, and blob formats laid down for future sync. On top of that, the core has been extended with local, sync-ready features (no server, network, or new crypto):
+Milestone 1's Definition of Done is **complete** — all seven foundational crates in one workspace, an end-to-end local scenario working with no server and no UI, the CLI harness in place, the FFI boundary in place (UniFFI Swift/Kotlin bindings generated on demand) and proven not to leak plaintext keys, and blob formats laid down for future sync. On top of that, the core has been extended with local, sync-ready features (no server, network, or new crypto):
 
 - **Secrets in the vault:** SSH keys (generate/import) and user certificates, connection profiles ("hosts"), **server passwords**, **encrypted notes**, and nested **host groups**. Password/note **reveal** is strictly type-gated — you cannot extract a private key through it.
 - **Secret version history** — past versions of a password/note are archived (per-item retention), any version can be revealed, and history is purged on deletion.
@@ -53,7 +53,7 @@ No custom crypto is written. Secrets are zeroized; plaintext private keys are ne
 
 ## Releases
 
-CI runs on every push/PR (rustfmt, clippy, tests on Linux + macOS, cargo-deny). A `vX.Y.Z` tag triggers a release: the `unissh` CLI binary for Linux x86_64 and macOS arm64, plus **`UniSSHCore.xcframework`** (UniFFI bindings for the macOS UI). See [CI/CD & releases](../../operations/ci-cd/).
+CI runs on every push/PR and weekly (rustfmt, clippy, the full workspace test suite on Linux, and cargo-deny). The core is **not** published as a standalone artifact — it is consumed as a path dependency by the server and client, and its FFI bindings are generated on demand. The shippable binaries are the desktop client bundles; see [CI/CD & releases](../../operations/ci-cd/).
 
 ## What is not here
 

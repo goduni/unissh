@@ -10,12 +10,12 @@ Each instance keeps an **append-only audit log**, stored server-side. The log re
 The whole log is a hash chain:
 
 ```text
-prev_hash[n] = SHA-256( prev_hash[n-1] ‖ record_bytes(n) )     domain: unissh-audit-chain-v1
+prev_hash[n] = SHA-256( prev_hash[n-1] ‖ record_bytes(n) )     domain: unissh-audit-chain-v2
 ```
 
-It is computed under the instance write lock. `GET /v1/admin/audit/verify` recomputes the chain and returns `{ ok, count, broken_at, head_hash }`, detecting any edit, reorder, or deletion. A client does **not** need to recompute the chain itself, and `prev_hash` is not exposed on the `/v1/audit` listing.
+`record_bytes(n)` binds the entry's identity and placement — its `seq`, `entry_blob`, `signature`/`author_pubkey`, `vault_id`, and `server_seq` — so a reorder or edit breaks the chain. It is computed under the instance write lock. `GET /v1/admin/audit/verify` recomputes the chain and returns `{ ok, count, broken_at, head_hash }`, detecting any edit, reorder, or deletion. A client does **not** need to recompute the chain itself, and `prev_hash` is not exposed on the `/v1/audit` listing.
 
-:::caution[Honest limits of audit v1]
+:::caution[Honest limits of the audit log]
 The chain proves the **integrity of the recorded sequence**. It does **not** stop a malicious operator from refusing to serve the log wholesale, and server-observed entries are **unsigned** — their *origin* is not provable, only their *integrity* within the chain. Client-signed entries are authentic via the instance **owner** signature. See the [zero-knowledge model](../../architecture/zero-knowledge-model/).
 :::
 
@@ -55,6 +55,7 @@ Every server-observed event has `event` (a string discriminator) and `ts` (unix 
 | `join` | `account_id`, `device_id` | `POST /v1/join` redeems an invite → new account |
 | `oidc_login` | `account_id`, `device_id` | `POST /v1/oidc/callback` (SSO) |
 | `device_add` | `account_id`, `device_id` | A new sibling device is registered (`POST /v1/devices/add`) |
+| `device_self_enroll` | `account_id`, `device_id` | An account self-enrolls a further device (`POST /v1/devices/self-enroll`) |
 | `device_remove` | `account_id`, `device_id` | `POST /v1/session/device-revoke` |
 | `keyset_publish` | `account_id`, `device_id` | A keyset generation is published (`PUT /v1/keyset`) |
 | `key_attest` | `account_id`, `attestor_pubkey` | A space-admin attests a member's key |

@@ -18,7 +18,7 @@ just build-server # cargo build -p unissh-server --release
 just build-cli    # cargo build -p unissh-cli --release
 just test         # cargo test --workspace --lib --bins  +  cargo test -p unissh-server
 just test-pg      # Postgres integration test (needs a live PG; single-threaded)
-just lint         # cargo fmt --all --check  +  cargo clippy --workspace --all-targets -- -D warnings
+just lint         # log-redaction guard  +  cargo fmt --all --check  +  cargo clippy --workspace --all-targets -- -D warnings
 just fmt          # cargo fmt --all
 
 # JS front-ends
@@ -64,7 +64,7 @@ cargo test                      # SQLite + the byte-compat oracle vs. rust-core
 docker run -d --name pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=unissh \
   -p 55433:5432 postgres:16-alpine
 UNISSH_TEST_PG=postgres://postgres:test@127.0.0.1:55433/unissh \
-  cargo test --test pg_integration -- --test-threads=1
+  cargo test -p unissh-server --test pg_integration -- --test-threads=1
 ```
 
 The oracle test runs the **real core sync engine** against a live server over HTTP and asserts identical results to the reference in-memory transport — so a successful `cargo test` proves wire-format parity with the core. See [Server & API surface](../../components/server/).
@@ -93,6 +93,6 @@ npm run build            # typecheck + vite production build (frontend only)
 npm run tauri build      # full desktop bundle
 ```
 
-A full `tauri build` (codegen + link) and on-device runs require a machine with a display and adequate disk. See [Desktop & mobile client](../../components/client/).
+A full `tauri build` (codegen + link) and on-device runs require a machine with a display and adequate disk. iOS has dedicated `just` targets (`just ios-init`, `just ios-dev`, `just ios-build`); Android builds run through the client's own `npm run tauri android …`. See [Desktop & mobile client](../../components/client/).
 
 For continuous integration and release artifacts, see [CI/CD & releases](../ci-cd/). For deploying the built server, see [Docker Compose deployment](../deploy/).

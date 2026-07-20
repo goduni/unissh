@@ -52,7 +52,7 @@ All crypto blobs are base64 (STANDARD). **One server = one instance — there is
 
 ### Accounts / devices
 
-`POST /v1/devices/add` (a sibling device sharing the keyset), `GET /v1/devices`, `GET /v1/accounts` (admin: handles, display names, member-ids, device counts), `POST /v1/owner/set` (owner grant/revoke, server-trusted, anti-lockout), `POST /v1/account/profile`.
+`POST /v1/devices/add` (a sibling device sharing the keyset), `POST /v1/devices/self-enroll` (an account enrolls a further device of its own), `GET /v1/devices`, `POST|GET /v1/attestations` (a space-admin attests / lists member-key attestations — backs the `key_attest` audit event), `GET /v1/accounts` (admin: handles, display names, member-ids, device counts), `POST /v1/owner/set` (owner grant/revoke, server-trusted, anti-lockout), `POST /v1/account/profile`.
 
 ### Spaces / directory
 
@@ -64,7 +64,7 @@ All crypto blobs are base64 (STANDARD). **One server = one instance — there is
 
 ### Vaults / policy
 
-`POST /v1/vaults/claim`, `POST /v1/grants/publish` (publish a new-epoch manifest + per-member grants — membership, rotation, or revoke), `GET /v1/grants`, `GET /v1/pending` (a vault-admin's crypto to-do queue: the grant/revoke bindings the calling keyset must fulfil).
+`GET /v1/vaults` (list the vault metadata the caller can see), `POST /v1/vaults/claim`, `POST /v1/grants/publish` (publish a new-epoch manifest + per-member grants — membership, rotation, or revoke), `GET /v1/grants`, `GET /v1/pending` (a vault-admin's crypto to-do queue: the grant/revoke bindings the calling keyset must fulfil).
 
 ### Audit
 
@@ -74,7 +74,7 @@ All crypto blobs are base64 (STANDARD). **One server = one instance — there is
 
 A Bearer-admin (owner / space-admin), per-instance read surface plus lifecycle controls, deliberately **suspended-gate-exempt** so a suspended account stays recoverable:
 
-`GET /v1/admin/{overview,devices,sessions,invites,vaults,vault,objects,relay,keysets,config,metrics,health,migrations,instance}`, `GET /v1/admin/audit/verify`, and `POST /v1/admin/{account/status,session/revoke,seq-bump}`.
+`GET /v1/admin/{overview,devices,sessions,invites,vaults,vault,objects,relay,keysets,config,metrics,metrics/summary,health,migrations,instance}`, `GET /v1/admin/audit/verify`, and `POST /v1/admin/{account/status,session/revoke,seq-bump}` (plus `PUT /v1/admin/config` for the live-editable subset).
 
 These are **read-projections of open metadata** plus lifecycle controls; they **never** expose ciphertext (object bytes, keyset bytes, or relay messages). `config` reads the effective config with secrets masked (and `PUT`s the live-editable subset). Account-disable is enforced in the auth path (existing sessions stop) with owner / last-admin anti-lockout.
 

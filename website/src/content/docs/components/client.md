@@ -3,7 +3,7 @@ title: Desktop & mobile client
 description: The UniSSH cross-platform client — a Tauri 2 + React app wrapping the Rust core directly, with real terminals, fleet ops, SFTP, and tunnels.
 ---
 
-The UniSSH client is a cross-platform SSH client (macOS / iOS / Linux / Windows / Android) built on **Tauri v2** with a **React 18 + TypeScript** frontend and a **Rust backend** that wraps the existing core (`rust-core`, crate `unissh-ffi`) directly as a path dependency.
+The UniSSH client is a cross-platform SSH client (macOS / iOS / Linux / Windows / Android) built on **Tauri v2** with a **React 19 + TypeScript** frontend and a **Rust backend** that wraps the existing core (`rust-core`, crate `unissh-ffi`) directly as a path dependency.
 
 The UI is dark-first and premium-technological — Hanken Grotesk + JetBrains Mono, three theme families (**mono** is the default; **nebula** and **candy** are opt-in), five accent presets, light/dark/auto modes with an AA-verified twin each, **nine** terminal themes (two of them light), a desktop shell and a purpose-built mobile shell.
 
@@ -12,18 +12,18 @@ The UI is dark-first and premium-technological — Hanken Grotesk + JetBrains Mo
 ```
 src/                      React + TS frontend
   theme/      design tokens, ThemeProvider, keyframes/fonts
-  components/ primitives (Icon + ~70 glyphs, Btn, Tag, AuthBadge, StatusDot, …)
+  components/ primitives (Icon + ~60 glyphs, Btn, Tag, AuthBadge, StatusDot, …)
   shell/      Shell.tsx (title bar, sidebar ↔ icon rail, vault switcher, nav)
   bridge/     types.ts (DTO mirrors) + api.ts (typed invoke wrappers per command)
   store/      zustand: route/vault/data/terminals/tunnels/overlays, ctx, toast
   views/      ViewHosts, ViewTerminal (real xterm.js), ViewRun (mounts ViewFleet
               and ViewBroadcast as two modes of one screen), ViewSftp, ViewTunnels,
-              ViewKnown, ViewAgent, ViewSecrets, ViewSettings
+              ViewKnown, ViewSecrets (SSH keys/agent + passwords/notes), ViewSettings
   overlays/   Entry (onboarding/kit/unlock), Modals, CommandPalette, ImportPreview, …
   mobile/     MobileApp.tsx (bottom tabs, push stack, sheets, FAB)
 
 src-tauri/                Rust backend
-  src/lib.rs              Tauri builder, plugins, ~75 command handlers, AppState
+  src/lib.rs              Tauri builder, plugins, ~160 command handlers, AppState
   src/commands.rs         every command wraps the blocking core call in spawn_blocking
   src/dto.rs              serde DTOs <-> unissh-ffi records/enums
   src/observers.rs        SessionObserver/Exec/Broadcast/SftpProgress -> tauri::ipc::Channel
