@@ -74,27 +74,29 @@ clean:
     rm -rf client/node_modules server-ui/node_modules client/dist server-ui/dist server-ui/crypto-wasm/pkg
 
 # ---------- Self-host (local evaluation) ----------
-# Print two fresh random secrets (bootstrap + ops tokens) for a .env file.
+# Print a fresh random ops token for a .env file. There is no bootstrap token —
+# a fresh instance is claimed with the one-time setup code the server prints to
+# its log on first boot, so there is nothing to pre-generate for onboarding.
 gen-secrets:
-    @echo "UNISSH__BOOTSTRAP__TOKEN=$(openssl rand -hex 32)"
     @echo "UNISSH__OPS__TOKEN=$(openssl rand -hex 32)"
 
 # Zero-config local stack on https://localhost (Caddy self-signed CA — the
-# browser cert warning is expected). Creates .env from deploy/.env.localhost
-# with freshly generated tokens on first run, then builds + starts the stack.
+# browser cert warning is expected). Creates .env from deploy/.env.localhost on
+# first run, then builds + starts the stack. Claim the instance with the setup
+# code the server prints to its log on first boot.
 up-local:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -f .env ]; then
       echo "→ .env already exists; leaving it untouched."
     else
-      sed -e "s|^UNISSH__BOOTSTRAP__TOKEN=.*|UNISSH__BOOTSTRAP__TOKEN=$(openssl rand -hex 32)|" \
-          -e "s|^UNISSH__OPS__TOKEN=.*|UNISSH__OPS__TOKEN=$(openssl rand -hex 32)|" \
-          deploy/.env.localhost > .env
-      echo "→ wrote .env from deploy/.env.localhost with freshly generated tokens."
+      cp deploy/.env.localhost .env
+      echo "→ wrote .env from deploy/.env.localhost."
     fi
     docker compose --env-file .env up -d --build
-    echo "→ open https://localhost/ (accept the self-signed cert) and bootstrap with the UNISSH__BOOTSTRAP__TOKEN value in .env"
+    echo "→ open https://localhost/ (accept the self-signed cert)."
+    echo "→ claim the instance with the one-time setup code from the server log:"
+    echo "     docker compose --env-file .env logs server 2>&1 | grep -i 'setup code'"
 
 # Tear the local stack down (keep volumes/data).
 down-local:
