@@ -29,6 +29,26 @@ docker compose up -d --build
 
 Then open `https://<UNISSH_DOMAIN>/`.
 
+### Prebuilt images instead of building
+
+`compose.yml` **builds from source** — it needs the Rust and Node toolchains and a cold compile. Operators who just want to run the server can use `compose.prod.yml` at the repository root, which pulls **prebuilt multi-arch images** from GHCR (`ghcr.io/goduni/unissh-server` and `ghcr.io/goduni/unissh-caddy`, published by the [`publish-images.yml`](../ci-cd/) workflow):
+
+```bash
+docker compose -f compose.prod.yml up -d      # pull + run, no build toolchain
+```
+
+Everything else — the `.env`, TLS, profiles, and volumes — is identical to the from-source stack.
+
+## First run: claim the instance
+
+A fresh instance is **unclaimed** and holds no data. On first boot it prints a one-time **setup code** to the server log; the first person to present it becomes the **owner**.
+
+```bash
+docker compose logs server 2>&1 | grep -i "setup code"
+```
+
+Enter that code on the admin panel's **Claim** screen (or in the desktop client) to take ownership — it is valid only while the instance is unclaimed. See [Server configuration → `[setup]`](../configuration/) and [Admin panel](../../components/server-ui/).
+
 ## TLS strategy
 
 Caddy is the **only** TLS terminator and the only host-exposed service. The UniSSH server always runs **plain HTTP** behind it (`UNISSH__SERVER__TLS_CERT`/`TLS_KEY` empty → plain, `UNISSH__SERVER__TRUST_PROXY=true`). The server **never** does ACME — `acme=true` is a hard startup error — so all certificate management lives in Caddy, and switching TLS modes is a Caddy/env change with no server rebuild.
@@ -48,7 +68,7 @@ The admin panel uses `crypto-wasm` (wasm-bindgen), which requires `script-src 's
 
 ## Health checks
 
-The server image is `gcr.io/distroless/cc-debian12:nonroot` — **no shell, no curl/wget**, and the binary has no `health` subcommand (only `serve` / `migrate` / `seq-bump`). So the `server` service has **no Docker `HEALTHCHECK`** by design. Health is observed at the proxy instead:
+The server image is `gcr.io/distroless/cc-debian12:nonroot` — **no shell, no curl/wget**, and the binary has no `health` subcommand (only `serve` / `migrate` / `seq-bump` / `reclaim`). So the `server` service has **no Docker `HEALTHCHECK`** by design. Health is observed at the proxy instead:
 
 - Caddy reverse-proxies `/healthz` and `/readyz`, so external probes hit `https://<domain>/readyz`.
 - Caddy's `reverse_proxy ... health_uri /readyz` actively health-checks the upstream and stops routing to it when unhealthy.

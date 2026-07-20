@@ -62,6 +62,6 @@ A keyset blob's `generation` is header bytes that are authenticated only when th
 
 ## What the engine is — and is not
 
-The client sync engine models the server as a `SyncTransport` trait with an in-memory mock for tests; there is no real network in the core. A `SyncObject` is a tagged record (`Vault` / `Item` / `MembershipManifest` / `MembershipGrant` / `Audit` / `Keyset`) carrying **already-encrypted, already-signed** blobs plus open metadata, serialized with a hand-rolled length-prefixed byte codec (no `serde`). The engine only transports and verifies — it never decrypts content, and **no plaintext crosses out of it**.
+The client sync engine models the server as a `SyncTransport` trait with an in-memory mock for tests; there is no real network in the core. A `SyncObject` is a tagged record (`Vault` / `Item` / `MembershipManifest` / `MembershipGrant` / `Audit` / `Keyset` / `AccountState`) carrying **already-encrypted, already-signed** blobs plus open metadata, serialized with a hand-rolled length-prefixed byte codec (no `serde`). The engine only transports and verifies — it never decrypts content, and **no plaintext crosses out of it**.
 
 The server side that implements this transport over HTTP is described in [Server & API surface](../../components/server/); the server's own anti-rollback machinery (`server_seq`, `seq-bump`, instance generation) and the safety of a full re-push are covered in [Backups & anti-rollback restore](../../operations/backups/).

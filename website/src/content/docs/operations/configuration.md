@@ -18,13 +18,15 @@ cp config.example.toml config.toml
 ```toml
 [server]
 bind = "0.0.0.0:8443"
+public_url = ""                  # external base URL for links/redirects;
+                                 # empty → derived from the request
 tls_cert = "/secrets/cert.pem"   # in-process TLS 1.3 (rustls)
 tls_key  = "/secrets/key.pem"
 trust_proxy = false
 acme = false
 ```
 
-Set `tls_cert`/`tls_key` for in-process **rustls (TLS 1.3 only)**, or leave them empty and terminate TLS at a reverse proxy with `trust_proxy = true`.
+Set `tls_cert`/`tls_key` for in-process **rustls (TLS 1.3 only)**, or leave them empty and terminate TLS at a reverse proxy with `trust_proxy = true`. `public_url` is the externally reachable base URL (used when the server builds links); leave it empty to derive it from the request. A `cors_allowed_origins` key (a list, empty by default) adds extra browser origins for CORS — unneeded in the same-origin Compose deployment, where CORS stays off.
 
 :::caution[No in-process ACME]
 `acme = true` is a **hard startup error** — the server never does ACME itself. Use a reverse proxy (Caddy/nginx) or supply `tls_cert` + `tls_key`. The recommended [Docker Compose deployment](../deploy/) terminates TLS in Caddy and runs the server as plain HTTP behind it with `trust_proxy = true`.

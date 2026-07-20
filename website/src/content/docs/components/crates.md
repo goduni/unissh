@@ -25,7 +25,7 @@ For Milestone 2 it also provides account-id generation and self-attested registr
 
 **SQLite + SQLCipher** (bundled, linked to system OpenSSL). Stores already-encrypted blobs plus open metadata. **Per-instance isolation:** each instance is a separate encrypted DB file with its own 32-byte raw key, so instances never physically mix.
 
-Storage **does not encrypt content or verify signatures** — that is the `vault` layer. It provides instance isolation, ciphertext storage, **version monotonicity** (anti-rollback at the DB level), soft deletion (tombstones), and host-key TOFU pinning (`known_hosts`). Records carry sync fields from day one: `version`, `signature`/`author_pubkey`, `tombstone`, `server_seq`, wrapped keys, and name/content blobs. The schema (currently `user_version` 4) also holds membership manifests/grants, pinned member keys, an append-only `audit_log`, sync-state, and per-vault epoch floors — the storage substrate for Milestone-2 sync and sharing.
+Storage **does not encrypt content or verify signatures** — that is the `vault` layer. It provides instance isolation, ciphertext storage, **version monotonicity** (anti-rollback at the DB level), soft deletion (tombstones), and host-key TOFU pinning (`known_hosts`). Records carry sync fields from day one: `version`, `signature`/`author_pubkey`, `tombstone`, `server_seq`, wrapped keys, and name/content blobs. The schema (currently `user_version` 9) also holds membership manifests/grants, pinned member keys, an append-only `audit_log`, sync-state, and per-vault epoch floors — the storage substrate for Milestone-2 sync and sharing.
 
 ## `vault` — vaults, Vault Keys, membership
 
@@ -35,7 +35,7 @@ API highlights: `Vault::create` / `open`, `put_item` / `get_item` / `list_items`
 
 ## `ssh-agent` — the embedded in-memory agent
 
-The built-in agent (**not** the system ssh-agent): private keys live only inside the core process. Ed25519 and ECDSA (p256/p384/p521) are fully supported for signing; RSA is import + public key. User certificates are supported.
+The built-in agent (**not** the system ssh-agent): private keys live only inside the core process. Ed25519, ECDSA (p256/p384/p521), and RSA (`rsa-sha2-512`) are supported for signing; an RSA key may also be imported public-key-only. User certificates are supported.
 
 The private key (the Ed25519 seed) sits in **`mlock`-ed** memory and is **zeroized** on removal/drop; the signing key is reconstructed from the seed only for the duration of a signature and zeroized immediately. The plaintext key is **never written to disk**. Where memory locking is unavailable, the buffer is still zeroized (best-effort `mlock`, always-on zeroize). Agent **forwarding is not done** — `ProxyJump` is used instead.
 
@@ -53,6 +53,6 @@ The stable UI boundary. A `Core` facade binds `keychain` + `storage` + `vault` +
 
 **The hard rule:** the UI/FFI **never** receives plaintext keys. Private SSH keys are generated and live in the core; only the public key leaves. No method returns a private key or keyset secret — proven by an end-to-end test. The only secrets that cross by explicit request are a **server password** (`get_password`) and a **note** (`get_note`) for reveal — user-level secrets, not key material, each strictly type-gated.
 
-The facade covers vaults, keys/items, known-hosts, `ssh_exec` and the streaming/fleet/broadcast variants, sessions, tunnels, SFTP, secret version history, integrity audit, interop, encrypted vault backup, connection profiles, and the Milestone-2 surface (cloud vaults, membership/grants, identity/auth, device onboarding, audit append/query, and the `FfiSyncTransport` callback). Bindings are generated with `uniffi-bindgen`; the Swift contract ships under `bindings/swift/`. The temporary [`cli`](../../overview/quickstart/) crate drives this facade for the `init → create-vault → gen-key → exec` flow.
+The facade covers vaults, keys/items, known-hosts, `ssh_exec` and the streaming/fleet/broadcast variants, sessions, tunnels, SFTP, secret version history, integrity audit, interop, encrypted vault backup, connection profiles, and the Milestone-2 surface (cloud vaults, membership/grants, identity/auth, device onboarding, audit append/query, and the `FfiSyncTransport` callback). Bindings (Swift, Kotlin, …) are generated on demand with `uniffi-bindgen` (UniFFI 0.31) and are **not** committed to the repository. The temporary [`cli`](../../overview/quickstart/) crate drives this facade for the `init → create-vault → gen-key → exec` flow.
 
 See also: [System overview](../../architecture/system-overview/) for how the crates fit together.

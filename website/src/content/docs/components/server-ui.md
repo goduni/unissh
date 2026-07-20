@@ -5,7 +5,7 @@ description: The UniSSH self-hosted admin panel — a React SPA that does real c
 
 `server-ui` is the production web admin panel for a self-hosted UniSSH **zero-knowledge** control plane. It is a single-page app that connects to a **live** server API and shares its visual language with the desktop client (it ports the client's design tokens).
 
-**Stack:** React 18 · Vite · TypeScript · Zustand · i18next (ru/en) · **real cryptography via WebAssembly** built from the core.
+**Stack:** React 19 · Vite · TypeScript · Zustand · i18next (ru/en) · **real cryptography via WebAssembly** built from the core.
 
 ## Real crypto in the browser
 
