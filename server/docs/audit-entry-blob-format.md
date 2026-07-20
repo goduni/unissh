@@ -42,25 +42,34 @@ Every server-observed event has:
 
 Additional fields per `event`:
 
-| `event`           | Extra fields                                  | Emitted when                                        |
-|-------------------|-----------------------------------------------|-----------------------------------------------------|
-| `bootstrap_admin` | `account_id`, `device_id`                     | First admin bootstrapped for a tenant.              |
-| `login`           | `account_id`, `device_id`                     | `POST /v1/auth/verify` succeeds.                    |
-| `logout`          | `account_id`, `device_id`                     | `POST /v1/session/logout`.                          |
-| `device_add`      | `account_id`, `device_id`                     | A new device is registered to an account.           |
-| `device_remove`   | `account_id`, `device_id`                     | `POST /v1/session/device-revoke`.                   |
-| `keyset_publish`  | `account_id`, `device_id`                     | A keyset generation is published (`PUT /v1/keyset`).|
-| `admin_grant`     | `account_id`                                  | `POST /v1/admin/set {is_admin:true}`.               |
-| `admin_revoke`    | `account_id`                                  | `POST /v1/admin/set {is_admin:false}`.              |
-| `account_disable` | `account_id`                                  | `POST /v1/admin/account/status {disabled:true}`.    |
-| `account_enable`  | `account_id`                                  | `POST /v1/admin/account/status {disabled:false}`.   |
-| `tenant_suspend`  | `by: "ops"` **only** when via the ops console | Tenant suspended (admin `/v1/admin/tenant/status` or ops `/v1/ops/tenant/status`). |
-| `tenant_activate` | `by: "ops"` **only** when via the ops console | Tenant re-activated.                                |
-| `tenant_rename`   | `by: "ops"`, `display_name` (string\|null)    | `POST /v1/ops/tenant/profile` set/cleared the tenant label. |
-| `access_grant`    | `vault_id`, `new_epoch`, `revoke_epoch` (int\|null) | `POST /v1/grants/publish` (membership publish / rotation / revoke). The entry's top-level `vault_id` column is also set. |
+| `event`              | Extra fields                                  | Emitted when                                        |
+|----------------------|-----------------------------------------------|-----------------------------------------------------|
+| `login`              | `account_id`, `device_id`                     | `POST /v1/auth/verify` succeeds.                    |
+| `logout`             | `account_id`, `device_id`                     | `POST /v1/session/logout`.                          |
+| `join`               | `account_id`, `device_id`                     | `POST /v1/join` redeems an invite → new account.    |
+| `oidc_login`         | `account_id`, `device_id`                     | `POST /v1/oidc/callback` (SSO).                     |
+| `device_add`         | `account_id`, `device_id`                     | A new sibling device is registered (`POST /v1/devices/add`). |
+| `device_self_enroll` | `account_id`, `device_id`                     | An account self-enrolls a further device (`POST /v1/devices/self-enroll`). |
+| `device_remove`      | `account_id`, `device_id`                     | `POST /v1/session/device-revoke`.                   |
+| `keyset_publish`     | `account_id`, `device_id`                     | A keyset generation is published (`PUT /v1/keyset`).|
+| `key_attest`         | `account_id`, `attestor_pubkey`               | A space-admin attests a member's key.               |
+| `owner_grant`        | `account_id`                                  | `POST /v1/owner/set {is_owner:true}`.               |
+| `owner_revoke`       | `account_id`                                  | `POST /v1/owner/set {is_owner:false}`.              |
+| `account_disable`    | `account_id`                                  | `POST /v1/admin/account/status {disabled:true}`.    |
+| `account_enable`     | `account_id`                                  | `POST /v1/admin/account/status {disabled:false}`.   |
+| `space_create`       | `space_id`, `account_id`                      | `POST /v1/spaces`.                                  |
+| `space_member_add`   | `space_id`, `account_id`                      | `POST /v1/spaces/members`.                          |
+| `space_member_remove`| `space_id`, `account_id`                      | `POST /v1/spaces/members/remove`.                   |
+| `space_member_role`  | `space_id`, `account_id`                      | `POST /v1/spaces/members/role`.                     |
+| `invite_create`      | `invite_id`, `account_id`                     | `POST /v1/invite`.                                 |
+| `invite_revoke`      | `invite_id`, `account_id`                     | `POST /v1/invite/revoke`.                           |
+| `access_grant`       | `vault_id`, `new_epoch`, `revoke_epoch` (int\|null) | `POST /v1/grants/publish` (membership publish / rotation / revoke). The entry's top-level `vault_id` column is also set. |
 
-`account_id`, `device_id`, `vault_id` values are **base64** (same encoding as the
-rest of the API). Treat the `event` set as **open** — render unknown `event`
+`account_id`, `device_id`, `space_id`, `invite_id`, `vault_id`, and
+`attestor_pubkey` values are **base64** (same encoding as the rest of the API).
+The instance **owner** is established at claim (a server-side lifecycle event,
+not one of the rows above); subsequent changes surface as `owner_grant` /
+`owner_revoke`. Treat the `event` set as **open** — render unknown `event`
 strings generically (show `event` + remaining keys) rather than failing.
 
 Example decoded blob:
@@ -74,9 +83,9 @@ Example decoded blob:
 ## 2. `source: "client-signed"`
 
 `entry_blob` is **opaque canonical bytes** produced and signed by the client
-(rust-core), submitted via `POST /v1/audit` or sync push tag 5. The server stores
+(rust-core), submitted via `POST /v1/audit` or a sync push. The server stores
 it verbatim and **does not parse it** — it only enforces that `author_pubkey`
-equals the tenant's genesis owner and that `signature` verifies.
+equals the instance **owner** and that `signature` verifies.
 
 For these entries:
 
@@ -97,7 +106,7 @@ blobs.
 
 Independent of `entry_blob` content, the whole log is a hash chain
 (`prev_hash[n] = SHA-256(prev_hash[n-1] ‖ record_bytes(n))`, domain
-`unissh-audit-chain-v1`). The UI verifies integrity via
+`unissh-audit-chain-v2`). The UI verifies integrity via
 `GET /v1/admin/audit/verify` → `{ok, count, broken_at, head_hash}` — it does
 **not** need to recompute the chain itself, and `prev_hash` is not exposed on the
 `/v1/audit` listing.
