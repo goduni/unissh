@@ -79,7 +79,7 @@ export function FileRow({
   const showRowMenu = isMobile && !isUp && !!onContextAt;
   const isLink = !isDir && ((entry.mode ?? 0) & 0o170000) === 0o120000;
   const icon: IconName = isUp ? "cl" : isDir ? "folder" : isLink ? "link" : "file";
-  const color = isDir ? p.accent : p.txt3;
+  const color = isDir ? p.accentText : p.txt3;
 
   return (
     <div
@@ -139,7 +139,7 @@ export function FileRow({
         gap: 9,
         height: isMobile ? 44 : 30,
         padding: "0 10px",
-        borderRadius: 7,
+        borderRadius: 8,
         cursor: isFile ? "grab" : "pointer",
         userSelect: "none",
         background: pressing
@@ -158,7 +158,7 @@ export function FileRow({
             : selected
               ? `inset 2px 0 0 ${p.accent}`
               : "none",
-        fontSize: 12.5,
+        fontSize: 13,
       }}
     >
       <Icon name={icon} size={14} color={color} stroke={1.8} />
@@ -222,7 +222,7 @@ export function FileRow({
             justifyContent: "center",
           }}
         >
-          <Icon name={actionIcon} size={13} color={p.accent} />
+          <Icon name={actionIcon} size={13} color={p.accentText} />
         </button>
       )}
       {showRowMenu && (

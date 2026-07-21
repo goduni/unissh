@@ -163,7 +163,7 @@ function GroupsModalBody() {
           flexDirection: "column",
           background: p.bg1,
           border: `1px solid ${p.line2}`,
-          borderRadius: 18,
+          borderRadius: 16,
           boxShadow: p.shadow,
           overflow: "hidden",
           animation: "uhPop .2s ease-out",
@@ -196,7 +196,7 @@ function GroupsModalBody() {
             <Icon name="folders" size={18} color={p.txt2} />
           </span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3, color: p.txt }}>
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.3, color: p.txt }}>
               {t("groups.title")}
             </div>
             <div style={{ fontSize: 12, color: p.txt3 }}>
@@ -271,7 +271,7 @@ function GroupsModalBody() {
                       width: "100%",
                       background: p.bg0,
                       border: `1px solid ${p.accentLine}`,
-                      borderRadius: 7,
+                      borderRadius: 8,
                       padding: isMobile ? "9px 11px" : "5px 9px",
                       color: p.txt,
                       fontSize: 14,
@@ -281,7 +281,7 @@ function GroupsModalBody() {
                     }}
                   />
                 ) : (
-                  <div style={{ fontSize: 14.5, fontWeight: 700, color: p.txt }}>{g.label}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: p.txt }}>{g.label}</div>
                 )}
                 <div style={{ fontSize: 12, color: p.txt3, marginTop: 2 }}>
                   {t("count.hosts", { count: memberCount(g) })}
@@ -350,7 +350,7 @@ function GroupsModalBody() {
               background: "transparent",
               color: p.txt2,
               cursor: "pointer",
-              fontSize: 13.5,
+              fontSize: 13,
               fontWeight: 600,
               ...(isMobile ? { minHeight: 44 } : null),
             }}
@@ -388,7 +388,7 @@ function GroupsModalBody() {
                         borderRadius: 20,
                         background: on ? p.bg3 : p.bg2,
                         border: `1px solid ${on ? p.line2 : p.line}`,
-                        fontSize: 12.5,
+                        fontSize: 13,
                         fontWeight: on ? 600 : 400,
                         color: p.txt,
                         cursor: "grab",
@@ -403,7 +403,7 @@ function GroupsModalBody() {
               </div>
               <div
                 style={{
-                  fontSize: 11.5,
+                  fontSize: 12,
                   color: p.txt3,
                   marginTop: 8,
                   display: "flex",

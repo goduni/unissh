@@ -3,7 +3,8 @@
 
 import React, { CSSProperties, useEffect, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, UI, AUTH_LABEL_KEY, Palette } from "@/theme/tokens";
+import { MONO, RADIUS, SIZE, UI, AUTH_LABEL_KEY, Palette } from "@/theme/tokens";
+import { useIsMobile } from "@/store/responsive";
 import { tDyn } from "@/i18n";
 
 // Spread onto any text <input>/<textarea> to stop the WebView from spell-checking,
@@ -255,7 +256,7 @@ export function VaultBadge({
         display: "inline-flex",
         alignItems: "center",
         gap: 4,
-        fontSize: 10.5,
+        fontSize: 11,
         fontWeight: 600,
         color: c,
         background: "transparent",
@@ -383,6 +384,11 @@ export function Btn({
   "aria-label"?: string;
 }) {
   const p = usePalette();
+  // Not one Btn size clears the touch minimum on its own — sm lands at ~24.5px,
+  // md ~34.9, lg ~41. Patching minHeight at call sites only ever fixed the call
+  // sites someone was already thinking about touch at, and missed the rest
+  // (Run/Stop on the fleet runner, the host detail's actions). Fix it here.
+  const touch = useIsMobile();
   const pad = size === "sm" ? "5px 10px" : size === "lg" ? "11px 18px" : "8px 14px";
   const fs = size === "sm" ? 12.5 : size === "lg" ? 15 : 13.5;
   const variants: Record<BtnVariant, CSSProperties> = {
@@ -429,14 +435,18 @@ export function Btn({
         fontWeight: variant === "primary" ? 700 : 600,
         letterSpacing: 0.1,
         padding: pad,
-        borderRadius: 10,
+        minHeight: touch ? SIZE.tapMin : undefined,
+        borderRadius: RADIUS.ctl,
         cursor: disabled ? "default" : "pointer",
         width: full ? "100%" : "auto",
         // Let the button shrink as a flex child so a long (RU) label ellipsizes
         // inside its own box instead of spilling over neighbours or being clipped
         // by an ancestor's overflow:hidden. The icon keeps its width (Icon sets
         // flexShrink:0); only the label span truncates.
-        minWidth: 0,
+        // On touch the floor is the tap minimum instead: an icon-only Btn has no
+        // label to widen it, so flooring only the height left a ~33x44 target —
+        // tall enough to look handled, too narrow to be.
+        minWidth: touch ? SIZE.tapMin : 0,
         opacity: disabled ? 0.5 : 1,
         transition: "filter .15s, transform .1s",
         whiteSpace: wrap ? "normal" : "nowrap",
@@ -520,32 +530,49 @@ export function IconBtn({
   color?: string;
 }) {
   const p = usePalette();
+  // A 28-30px icon button is a fine mouse target and a poor thumb one. Grow the
+  // hit box on touch; the drawn box (background/border) keeps its size, so dense
+  // rows don't visually inflate — they just become tappable.
+  const touch = useIsMobile();
+  const hit = touch ? Math.max(size, SIZE.tapMin) : size;
+  const [hover, setHover] = useState(false);
   return (
     <button
       onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       title={title}
       aria-label={title}
       style={{
-        width: size,
-        height: size,
+        width: hit,
+        height: hit,
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        borderRadius: 8,
-        background: active ? p.bg2 : "transparent",
-        border: `1px solid ${active ? p.line : "transparent"}`,
+        borderRadius: RADIUS.chip,
+        background: "transparent",
+        border: "none",
         color: color || (active ? p.txt : p.txt2),
         cursor: "pointer",
-        transition: "background .12s, color .12s",
-      }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = p.bg2;
-      }}
-      onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.background = "transparent";
+        padding: 0,
+        transition: "color .12s",
       }}
     >
-      <Icon name={icon} size={Math.round(size * 0.53)} stroke={1.7} />
+      <span
+        style={{
+          width: size,
+          height: size,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: RADIUS.chip,
+          background: active || hover ? p.bg2 : "transparent",
+          border: `1px solid ${active ? p.line : "transparent"}`,
+          transition: "background .12s",
+        }}
+      >
+        <Icon name={icon} size={Math.round(size * 0.53)} stroke={1.7} />
+      </span>
     </button>
   );
 }
@@ -580,7 +607,7 @@ export function Segmented<T extends string>({
         flexWrap: "wrap",
         background: p.bg2,
         border: `1px solid ${p.line}`,
-        borderRadius: 9,
+        borderRadius: RADIUS.chip,
         padding: 2,
         gap: 2,
         opacity: disabled ? 0.5 : 1,
@@ -601,7 +628,7 @@ export function Segmented<T extends string>({
               fontSize: fs,
               fontWeight: 600,
               fontFamily: UI,
-              borderRadius: 7,
+              borderRadius: 8,
               cursor: disabled ? "default" : "pointer",
               border: "1px solid transparent",
               background: on ? p.bg4 : "transparent",
@@ -642,6 +669,12 @@ export function Checkbox({
   labelStyle?: CSSProperties;
 }) {
   const p = usePalette();
+  // Growing the drawn box (16 -> 22) does nothing for the target: the button's
+  // height IS the box's height. The hit area is what has to clear the minimum —
+  // on BOTH axes: a label-less checkbox is only as wide as its box, so flooring
+  // the height alone leaves a 20x44 target and throws off any caller that centres
+  // it by offsetting half the slack.
+  const touch = useIsMobile();
   return (
     <button
       role="checkbox"
@@ -658,6 +691,8 @@ export function Checkbox({
         alignItems: "center",
         gap: 8,
         flexShrink: 0,
+        minHeight: touch ? SIZE.tapMin : undefined,
+        minWidth: touch && !label ? SIZE.tapMin : undefined,
         ...style,
       }}
     >
@@ -680,7 +715,7 @@ export function Checkbox({
         )}
       </span>
       {label != null && (
-        <span style={{ fontSize: 12.5, color: p.txt2, ...labelStyle }}>{label}</span>
+        <span style={{ fontSize: 13, color: p.txt2, ...labelStyle }}>{label}</span>
       )}
     </button>
   );
@@ -730,7 +765,7 @@ export function Toggle({
         style={{
           width: 44,
           height: 26,
-          borderRadius: 13,
+          borderRadius: 12,
           background: checked ? p.accent : p.bg4,
           position: "relative",
           transition: "background .18s",
@@ -839,7 +874,7 @@ export function Input({
         boxShadow: accent ? `0 0 0 3px ${p.accentSoft}` : "none",
       }}
     >
-      {icon && <Icon name={icon} size={17} color={accent ? p.accent : p.txt3} />}
+      {icon && <Icon name={icon} size={17} color={accent ? p.accentText : p.txt3} />}
       <input
         {...NO_AUTOCORRECT}
         value={value}

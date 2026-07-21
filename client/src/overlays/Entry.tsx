@@ -69,7 +69,7 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
           overflow: "auto",
           background: p.bg1,
           border: `1px solid ${p.line2}`,
-          borderRadius: 18,
+          borderRadius: 16,
           padding: isMobile ? 20 : 30,
           boxShadow: p.shadow,
         }}
@@ -142,7 +142,7 @@ function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
 
 // Shared box metrics for the entry-overlay fields (taller + rounder than the modal
 // default). Only the height varies with the viewport, passed per call site.
-const ENTRY_BOX = { radius: 11, pad: "0 14px", gap: 10, fontSize: 14.5 } as const;
+const ENTRY_BOX = { radius: 11, pad: "0 14px", gap: 10, fontSize: 14 } as const;
 
 /** Coarse 0–4 master-password strength: length plus character-class variety.
  *  Drives the meter only — the hard gate is non-empty + matching confirmation. */
@@ -198,10 +198,10 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
         <Logo size={24} />
       </div>
       <Stepper step={0} isMobile={isMobile} />
-      <h1 style={{ margin: "0 0 6px", fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>
+      <h1 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>
         {t("onboarding.newInstanceTitle")}
       </h1>
-      <p style={{ margin: "0 0 20px", fontSize: 13.5, color: p.txt2, lineHeight: 1.5 }}>
+      <p style={{ margin: "0 0 20px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
         {t("onboarding.newInstanceDesc")}
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
@@ -290,7 +290,7 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
               )}
             </div>
           ) : (
-            <div style={{ fontSize: 12.5, color: p.txt2, padding: "6px 2px" }}>
+            <div style={{ fontSize: 13, color: p.txt2, padding: "6px 2px" }}>
               {t("onboarding.noPasswordHint")}
             </div>
           )}
@@ -308,7 +308,7 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
         }}
       >
         <Icon name="shieldcheck" size={17} color={p.txt3} style={{ marginTop: 1 }} />
-        <span style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5 }}>
+        <span style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
           <Trans
             i18nKey="onboarding.secretKeyNotice"
             components={{
@@ -340,13 +340,13 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
           border: "none",
           cursor: busy ? "default" : "pointer",
           fontFamily: UI,
-          fontSize: 12.5,
+          fontSize: 13,
           color: p.txt3,
           textAlign: "center",
         }}
       >
         {t("onboarding.haveAccount")}{" "}
-        <span style={{ color: p.accent, fontWeight: 600 }}>{t("onboarding.connectDevice")}</span>
+        <span style={{ color: p.accentText, fontWeight: 600 }}>{t("onboarding.connectDevice")}</span>
       </button>
     </Modal>
   );
@@ -420,7 +420,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
             width: 38,
             height: 38,
             flexShrink: 0,
-            borderRadius: 11,
+            borderRadius: 12,
             background: rgba(p.amber, 0.12),
             border: `1px solid ${rgba(p.amber, 0.5)}`,
             display: "flex",
@@ -431,7 +431,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
           <Icon name="key" size={20} color={p.amber} />
         </span>
         <h1
-          style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: -0.5, whiteSpace: "nowrap" }}
+          style={{ margin: 0, fontSize: 24, fontWeight: 800, letterSpacing: -0.5, whiteSpace: "nowrap" }}
         >
           {t("onboarding.yourSecretKey")}
         </h1>
@@ -442,14 +442,14 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
         </div>
       ) : key ? (
         <>
-          <p style={{ margin: "0 0 18px", fontSize: 13.5, color: p.txt2, lineHeight: 1.5 }}>
+          <p style={{ margin: "0 0 18px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
             {isReveal ? t("onboarding.revealNotice") : t("onboarding.singleShowNotice")}
           </p>
           <div
             style={{
               position: "relative",
               padding: "16px 18px 18px",
-              borderRadius: 14,
+              borderRadius: 16,
               background: p.bg0,
               border: `1px solid ${p.line2}`,
               marginBottom: 14,
@@ -458,7 +458,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
             <div
               style={{
                 fontFamily: MONO,
-                fontSize: 10.5,
+                fontSize: 11,
                 color: p.txt2,
                 letterSpacing: 1,
                 marginBottom: 12,
@@ -520,13 +520,13 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
               gap: 9,
               marginBottom: 16,
               padding: 12,
-              borderRadius: 11,
+              borderRadius: 12,
               background: rgba(p.amber, 0.1),
               border: `1px solid ${rgba(p.amber, 0.4)}`,
             }}
           >
             <Icon name="shield" size={17} color={p.amber} style={{ marginTop: 1 }} />
-            <span style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5 }}>
+            <span style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
               <Trans
                 i18nKey="onboarding.lossWarning"
                 components={{ b: <b style={{ color: p.txt }} /> }}
@@ -550,7 +550,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
                 size={22}
                 label={t("onboarding.kitSaved")}
                 style={{ display: "flex", gap: 11, marginBottom: 16 }}
-                labelStyle={{ fontSize: 13.5, color: p.txt, fontWeight: 600 }}
+                labelStyle={{ fontSize: 13, color: p.txt, fontWeight: 600 }}
               />
           {/* really disabled (not opacity-faked): unfocusable and announced as
               disabled until the "I saved it" checkbox is ticked */}
@@ -573,7 +573,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
         </>
       ) : (
         <>
-          <p style={{ margin: "0 0 18px", fontSize: 13.5, color: p.txt2, lineHeight: 1.5 }}>
+          <p style={{ margin: "0 0 18px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
             <Trans
               i18nKey="onboarding.alreadyShownNotice"
               components={{ b: <b style={{ color: p.txt }} /> }}
@@ -667,7 +667,7 @@ function Unlock() {
             width: 60,
             height: 60,
             margin: "0 auto 18px",
-            borderRadius: 18,
+            borderRadius: 16,
             background: p.bg3,
             border: `1px solid ${p.line2}`,
             display: "flex",
@@ -677,7 +677,7 @@ function Unlock() {
         >
           <Icon name="lock" size={26} color={p.txt2} stroke={2} />
         </div>
-        <h1 style={{ margin: "0 0 4px", fontSize: 21, fontWeight: 800, letterSpacing: -0.4 }}>
+        <h1 style={{ margin: "0 0 4px", fontSize: 19, fontWeight: 800, letterSpacing: -0.4 }}>
           {t("onboarding.locked")}
         </h1>
         <p style={{ margin: "0 0 22px", fontSize: 13, color: p.txt2 }}>
@@ -723,7 +723,7 @@ function Unlock() {
         </Field>
         {fromKeychain && (
           <div
-            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: p.green }}
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: p.green }}
           >
             <Icon name="shieldcheck" size={12} color={p.green} />
             {t("onboarding.loadedFromKeychain")}
@@ -753,9 +753,9 @@ function Unlock() {
           border: "none",
           cursor: "pointer",
           fontFamily: UI,
-          fontSize: 12.5,
+          fontSize: 13,
           fontWeight: 600,
-          color: p.accent,
+          color: p.accentText,
           textAlign: "center",
         }}
       >
@@ -786,7 +786,7 @@ function Unlock() {
           alignItems: "center",
           justifyContent: "center",
           gap: 6,
-          fontSize: 11.5,
+          fontSize: 12,
           color: p.txt3,
         }}
       >
@@ -847,7 +847,7 @@ function Repair() {
             width: 38,
             height: 38,
             flexShrink: 0,
-            borderRadius: 11,
+            borderRadius: 12,
             background: rgba(p.amber, 0.12),
             border: `1px solid ${rgba(p.amber, 0.5)}`,
             display: "flex",
@@ -857,11 +857,11 @@ function Repair() {
         >
           <Icon name="shield" size={20} color={p.amber} />
         </span>
-        <h1 style={{ margin: 0, fontSize: 21, fontWeight: 800, letterSpacing: -0.4 }}>
+        <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800, letterSpacing: -0.4 }}>
           {t("entry.repair.title")}
         </h1>
       </div>
-      <p style={{ margin: "0 0 20px", fontSize: 13.5, color: p.txt2, lineHeight: 1.55 }}>
+      <p style={{ margin: "0 0 20px", fontSize: 13, color: p.txt2, lineHeight: 1.55 }}>
         {t("entry.repair.body")}
       </p>
       <Btn
@@ -904,7 +904,7 @@ function Retry() {
             width: 60,
             height: 60,
             margin: "0 auto 18px",
-            borderRadius: 18,
+            borderRadius: 16,
             background: p.bg3,
             border: `1px solid ${p.line2}`,
             display: "flex",
@@ -914,7 +914,7 @@ function Retry() {
         >
           <Icon name="refresh" size={26} color={p.txt2} stroke={2} />
         </div>
-        <h1 style={{ margin: "0 0 4px", fontSize: 21, fontWeight: 800, letterSpacing: -0.4 }}>
+        <h1 style={{ margin: "0 0 4px", fontSize: 19, fontWeight: 800, letterSpacing: -0.4 }}>
           {t("entry.retry.title")}
         </h1>
         <p style={{ margin: "0 0 22px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
@@ -1005,10 +1005,10 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
       <div style={{ marginBottom: 18 }}>
         <Logo size={24} />
       </div>
-      <h1 style={{ margin: "0 0 6px", fontSize: 22, fontWeight: 800, letterSpacing: -0.5 }}>
+      <h1 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>
         {t("entry.join.title")}
       </h1>
-      <p style={{ margin: "0 0 18px", fontSize: 13.5, color: p.txt2, lineHeight: 1.5 }}>
+      <p style={{ margin: "0 0 18px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
         {t("entry.join.desc")}
       </p>
       <textarea
@@ -1023,7 +1023,7 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
           minHeight: 128,
           resize: "vertical",
           padding: 12,
-          borderRadius: 11,
+          borderRadius: 12,
           background: p.bg2,
           border: `1px solid ${p.line2}`,
           outline: "none",
@@ -1067,7 +1067,7 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
             />
           </Field>
         ) : (
-          <div style={{ fontSize: 12.5, color: p.txt2, padding: "6px 2px" }}>
+          <div style={{ fontSize: 13, color: p.txt2, padding: "6px 2px" }}>
             {t("onboarding.noPasswordHint")}
           </div>
         )}
@@ -1084,7 +1084,7 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
         }}
       >
         <Icon name="link" size={17} color={p.txt3} style={{ marginTop: 1 }} />
-        <span style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5 }}>
+        <span style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
           {busy ? t("entry.join.waiting") : t("entry.join.hint")}
         </span>
       </div>
@@ -1110,7 +1110,7 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
           border: "none",
           cursor: busy ? "default" : "pointer",
           fontFamily: UI,
-          fontSize: 12.5,
+          fontSize: 13,
           color: p.txt3,
           textAlign: "center",
         }}

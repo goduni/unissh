@@ -56,11 +56,11 @@ function TextInput({
         width: "100%",
         boxSizing: "border-box",
         padding: "9px 11px",
-        borderRadius: 9,
+        borderRadius: 8,
         border: `1px solid ${focus ? p.accentLine : p.line2}`,
         background: p.bg2,
         color: p.txt,
-        fontSize: 13.5,
+        fontSize: 13,
         fontFamily: MONO,
         outline: "none",
       }}
@@ -207,7 +207,7 @@ export function ConfirmDeleteDialog({
         </>
       }
     >
-      <div style={{ fontSize: 13.5, color: p.txt }}>
+      <div style={{ fontSize: 13, color: p.txt }}>
         {names.length === 1
           ? t("sftp.dlg.deleteOne", { name: names[0] })
           : t("sftp.dlg.deleteMany", { count: names.length })}
@@ -266,7 +266,7 @@ export function ConflictDialog({
         </>
       }
     >
-      <div style={{ fontSize: 13.5, color: p.txt }}>
+      <div style={{ fontSize: 13, color: p.txt }}>
         {t("sftp.dlg.conflictBody", { there: fmtSize(targetSize), incoming: fmtSize(sourceSize) })}
       </div>
       {batchable && (
@@ -334,7 +334,7 @@ export function ChmodDialog({
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {classes.map((cls) => (
           <div key={cls.shift} style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ width: 64, fontSize: 12.5, color: p.txt2 }}>{cls.label}</span>
+            <span style={{ width: 64, fontSize: 13, color: p.txt2 }}>{cls.label}</span>
             {perms.map((perm) => {
               const bit = perm.bit << cls.shift;
               const on = (bits & bit) !== 0;
