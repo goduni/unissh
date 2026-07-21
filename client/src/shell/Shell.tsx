@@ -97,7 +97,7 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
           justifyContent: "center",
           width: 34,
           height: 30,
-          borderRadius: 9,
+          borderRadius: 8,
           background: p.bg2,
           border: `1px solid ${p.line}`,
           color: p.txt3,
@@ -122,7 +122,7 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
         maxWidth: "40vw",
         height: 30,
         padding: "0 12px",
-        borderRadius: 9,
+        borderRadius: 8,
         background: p.bg2,
         border: `1px solid ${p.line}`,
         color: p.txt3,
@@ -141,7 +141,7 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
           fontFamily: MONO,
           fontSize: 11,
           padding: "1px 6px",
-          borderRadius: 5,
+          borderRadius: 6,
           background: p.bg3,
           border: `1px solid ${p.line}`,
         }}
@@ -183,7 +183,7 @@ export function WindowControls() {
         background: "transparent",
         color: p.txt2,
         cursor: "pointer",
-        borderRadius: 7,
+        borderRadius: 8,
         transition: "background .12s, color .12s",
       }}
       onMouseEnter={(e) => {
@@ -348,7 +348,7 @@ function NavGroup({
         <span
           style={{
             flex: 1,
-            fontSize: 10.5,
+            fontSize: 11,
             fontWeight: 700,
             letterSpacing: 0.6,
             color: p.txt3,
@@ -565,7 +565,7 @@ function VaultSwitcher() {
               </span>
               <VaultBadge target={x.syncTarget} label={badgeLabel(x)} size={11} />
               {unboundCloud(x) && <Icon name="alert" size={11} color={p.amber} />}
-              {x.vaultId === vaultId && <Icon name="check" size={14} color={p.accent} />}
+              {x.vaultId === vaultId && <Icon name="check" size={14} color={p.accentText} />}
             </button>
           ))}
           <div style={{ height: 1, background: p.line, margin: "6px 4px" }} />
@@ -638,12 +638,12 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
       style={{
         width: 40,
         height: 40,
-        borderRadius: 11,
+        borderRadius: 12,
         cursor: "pointer",
         position: "relative",
         border: "1px solid transparent",
         background: "transparent",
-        color: route === r ? p.accent : p.txt3,
+        color: route === r ? p.accentText : p.txt3,
         boxShadow: route === r ? `inset 2px 0 0 ${p.accent}` : "none",
         display: "flex",
         alignItems: "center",
@@ -696,7 +696,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
           border: `1px solid ${p.line}`,
           color: p.txt2,
           fontWeight: 700,
-          fontSize: 15,
+          fontSize: 16,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -721,7 +721,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
           style={{
             width: 38,
             height: 38,
-            borderRadius: 11,
+            borderRadius: 12,
             border: `1px solid ${p.line}`,
             background: p.bg1,
             color: p.txt2,
@@ -741,7 +741,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
         style={{
           width: 38,
           height: 38,
-          borderRadius: 11,
+          borderRadius: 12,
           border: `1px solid ${p.line}`,
           background: p.bg1,
           color: p.txt2,

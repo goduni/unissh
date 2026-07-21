@@ -80,7 +80,7 @@ export function HostMenu({
         overflow: "auto",
         background: p.bg1,
         border: `1px solid ${p.line2}`,
-        borderRadius: 11,
+        borderRadius: 12,
         boxShadow: p.shadow,
         padding: 5,
       }}
@@ -121,7 +121,7 @@ export function HostMenu({
             borderRadius: 8,
             border: "1px solid transparent",
             background: "transparent",
-            color: p.accent,
+            color: p.accentText,
             cursor: "pointer",
             textAlign: "left",
             fontSize: 13,
@@ -129,12 +129,12 @@ export function HostMenu({
           onMouseEnter={(e) => (e.currentTarget.style.background = p.bg2)}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
-          <Icon name="plus" size={15} color={p.accent} />
+          <Icon name="plus" size={15} color={p.accentText} />
           {t("sftp.addHost")}
         </button>
       )}
       {ql && filtered.length === 0 && hosts.length > 0 && (
-        <div style={{ padding: "8px 10px", fontSize: 12.5, color: p.txt3 }}>{t("sftp.noMatches", { q })}</div>
+        <div style={{ padding: "8px 10px", fontSize: 13, color: p.txt3 }}>{t("sftp.noMatches", { q })}</div>
       )}
       {filtered.map((h) => (
         <button

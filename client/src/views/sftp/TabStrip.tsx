@@ -94,7 +94,7 @@ export function TabStrip({
               borderRadius: 8,
               cursor: "pointer",
               fontFamily: UI,
-              fontSize: 12.5,
+              fontSize: 13,
               fontWeight: on ? 700 : 500,
               minHeight: isMobile ? 38 : undefined,
               color: on ? p.txt : p.txt2,

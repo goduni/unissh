@@ -441,7 +441,7 @@ function ImportPreviewBody() {
           flexDirection: "column",
           background: p.bg1,
           border: `1px solid ${p.line2}`,
-          borderRadius: 18,
+          borderRadius: 16,
           boxShadow: p.shadow,
           overflow: "hidden",
           outline: "none",
@@ -472,7 +472,7 @@ function ImportPreviewBody() {
             <Icon name="download" size={18} color={p.txt2} />
           </span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.3 }}>
               {t("import.title")}
             </div>
             <div style={{ fontSize: 12, color: p.txt3 }}>
@@ -530,7 +530,7 @@ function ImportPreviewBody() {
             style={{
               fontSize: 12,
               fontWeight: 600,
-              color: p.accent,
+              color: p.accentText,
               background: "none",
               border: "none",
               cursor: "pointer",
@@ -623,7 +623,7 @@ function ImportPreviewBody() {
                     style={{
                       width: 34,
                       height: 34,
-                      borderRadius: 9,
+                      borderRadius: 8,
                       background: p.bg3,
                       border: `1px solid ${p.line}`,
                       display: "flex",
@@ -662,7 +662,7 @@ function ImportPreviewBody() {
                             display: "inline-flex",
                             alignItems: "center",
                             gap: 5,
-                            fontSize: 10.5,
+                            fontSize: 11,
                             fontWeight: 600,
                             color: p.amber,
                             ...(isMobile ? { flexShrink: 0 } : null),
@@ -684,7 +684,7 @@ function ImportPreviewBody() {
                     <div
                       style={{
                         fontFamily: MONO,
-                        fontSize: 11.5,
+                        fontSize: 12,
                         color: p.txt3,
                         // ellipsize unconditionally: user@host:port spills on desktop for long FQDNs
                         overflow: "hidden",
@@ -712,7 +712,7 @@ function ImportPreviewBody() {
             background: p.bg0,
           }}
         >
-          <span style={{ fontSize: 12.5, color: p.txt3 }}>
+          <span style={{ fontSize: 13, color: p.txt3 }}>
             <Trans
               i18nKey="import.selectedOf"
               components={{ b: <b style={{ color: p.txt }} /> }}

@@ -427,6 +427,7 @@ export const ru = {
   },
   hosts: {
     "title": "Хосты",
+    "searchPlaceholder": "Поиск по имени, адресу или тегу",
     "connect": "Подключить",
     "newHost": "Новый хост",
     "linkIdentity": "Привязать идентичность",
@@ -543,51 +544,18 @@ export const ru = {
     }
   },
   mobile: {
-    "keyVerified": "Ключ подтверждён",
-    "notConnectedTofu": "Ещё не подключались (TOFU)",
     "vault": "Хранилище",
     "vaultLower": "хранилище",
     "noVaults": "Нет хранилищ",
-    "session": "сессия",
+    "tabsLabel": "Основное",
     "tabHosts": "Хосты",
-    "searchHosts": "Поиск хостов…",
-    "groups": "Группы",
-    "untagged": "без тегов",
-    "shownOf": "{{shown}} из {{total}}",
-    "noHostsYet": "Пока нет хостов",
-    "nothingFound": "Ничего не найдено",
-    "sortTitle": "Сортировка",
-    "sort": {
-      "name": "Имя",
-      "connected": "Последнее подключение",
-      "added": "Недавно добавлены"
-    },
-    "authKey": "SSH-ключ",
-    "authPassword": "Пароль",
-    "authPrompt": "Спросить при подключении",
-    "openSession": "Открыть сессию",
-    "sessionActive": "сессия активна",
-    "sessionNow": "идёт сейчас",
-    "sessionNone": "нет",
-    "tofuNote": "Host key закрепляется при первом коннекте (TOFU)",
-    "detail": {
-      "host": "Хост",
-      "port": "Порт",
-      "user": "Пользователь",
-      "session": "Сессия",
-      "auth": "Авторизация",
-      "proxyJump": "ProxyJump",
-      "tags": "Теги"
-    },
     "more": {
-      "broadcastDesc": "Синхронный ввод",
+      "lockDesc": "Снова спросить мастер-пароль",
       "sftpDesc": "Передача файлов",
       "tunnelsDesc": "-L / -R / -D",
       "knownDesc": "TOFU",
       "secrets": "Секреты",
       "secretsDesc": "Ключи · пароли · заметки",
-      "appearance": "Внешний вид",
-      "appearanceDesc": "Темы и акцент",
       "settingsDesc": "Внешний вид · безопасность · облако · о приложении"
     }
   },
@@ -1168,6 +1136,7 @@ export const ru = {
     },
     "menu": {
       "copy": "Скопировать",
+      "selectAll": "Выделить всё",
       "paste": "Вставить",
       "splitRight": "Разделить вправо",
       "splitDown": "Разделить вниз",

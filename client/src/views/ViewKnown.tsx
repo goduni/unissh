@@ -139,7 +139,7 @@ export function ViewKnown() {
           flexWrap: isMobile ? "wrap" : "nowrap",
         }}
       >
-        <Icon name="shieldcheck" size={20} color={p.accent} />
+        <Icon name="shieldcheck" size={20} color={p.accentText} />
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
           {t("nav.known")}
         </h1>
@@ -171,7 +171,7 @@ export function ViewKnown() {
             <div
               style={{
                 marginBottom: 16,
-                borderRadius: 14,
+                borderRadius: 16,
                 overflow: "hidden",
                 border: `1px solid ${rgba(p.red, 0.5)}`,
                 background: rgba(p.red, 0.07),
@@ -202,10 +202,10 @@ export function ViewKnown() {
                   <Icon name="alert" size={18} color={p.red} />
                 </span>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14.5, fontWeight: 800, color: p.red }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: p.red }}>
                     ⚠ {t("known.mismatchTitle")}
                   </div>
-                  <div style={{ fontSize: 12.5, color: p.txt2 }}>
+                  <div style={{ fontSize: 13, color: p.txt2 }}>
                     <Trans
                       i18nKey="known.mismatchBody"
                       values={{ host: pendingMismatch.host }}
@@ -296,7 +296,7 @@ export function ViewKnown() {
           {knownHosts.length === 0 ? (
             <div
               style={{
-                borderRadius: 13,
+                borderRadius: 12,
                 border: `1px solid ${p.line}`,
                 background: p.bg1,
                 padding: "48px 22px",
@@ -311,7 +311,7 @@ export function ViewKnown() {
                 style={{
                   width: 52,
                   height: 52,
-                  borderRadius: 14,
+                  borderRadius: 16,
                   background: p.bg2,
                   border: `1px solid ${p.line}`,
                   display: "flex",
@@ -321,15 +321,15 @@ export function ViewKnown() {
               >
                 <Icon name="fingerprint" size={24} color={p.txt3} />
               </span>
-              <div style={{ fontSize: 15, fontWeight: 700 }}>{t("known.emptyTitle")}</div>
-              <div style={{ fontSize: 12.5, color: p.txt2, maxWidth: 360 }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>{t("known.emptyTitle")}</div>
+              <div style={{ fontSize: 13, color: p.txt2, maxWidth: 360 }}>
                 {t("known.emptyBody")}
               </div>
             </div>
           ) : (
             <div
               style={{
-                borderRadius: 13,
+                borderRadius: 12,
                 border: `1px solid ${p.line}`,
                 overflow: "hidden",
                 background: p.bg1,
@@ -342,7 +342,7 @@ export function ViewKnown() {
                     gridTemplateColumns: GRID,
                     padding: "9px 16px",
                     fontFamily: MONO,
-                    fontSize: 10.5,
+                    fontSize: 11,
                     letterSpacing: 0.8,
                     color: p.txt3,
                     textTransform: "uppercase",
@@ -418,7 +418,7 @@ export function ViewKnown() {
                           marginTop: 2,
                           minHeight: 40,
                           width: "100%",
-                          borderRadius: 9,
+                          borderRadius: 8,
                           border: `1px solid ${p.line}`,
                           background: p.bg2,
                           color: p.txt2,
@@ -469,7 +469,7 @@ export function ViewKnown() {
                     <span
                       style={{
                         fontFamily: MONO,
-                        fontSize: 11.5,
+                        fontSize: 12,
                         color: p.txt3,
                         // Ellipsize long algo names in the fixed 130px track.
                         overflow: "hidden",
@@ -483,7 +483,7 @@ export function ViewKnown() {
                     <span
                       style={{
                         fontFamily: MONO,
-                        fontSize: 11.5,
+                        fontSize: 12,
                         color: p.txt2,
                         whiteSpace: "nowrap",
                         overflow: "hidden",
@@ -493,7 +493,7 @@ export function ViewKnown() {
                     >
                       {k.fingerprint}
                     </span>
-                    <span style={{ fontSize: 11.5, color: p.txt3 }}>{fmtDate(k.addedAt)}</span>
+                    <span style={{ fontSize: 12, color: p.txt3 }}>{fmtDate(k.addedAt)}</span>
                     <span style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
                       <button
                         title={t("known.forget")}
@@ -502,7 +502,7 @@ export function ViewKnown() {
                         style={{
                           width: 26,
                           height: 26,
-                          borderRadius: 7,
+                          borderRadius: 8,
                           border: `1px solid ${p.line}`,
                           background: p.bg2,
                           color: p.txt3,

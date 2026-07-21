@@ -138,7 +138,7 @@ export function TextEditor({
           background: p.bg1,
         }}
       >
-        <Icon name="note" size={16} color={p.accent} />
+        <Icon name="note" size={16} color={p.accentText} />
         <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {name}
           {dirty ? " •" : ""}
@@ -164,7 +164,7 @@ export function TextEditor({
             borderBottom: `1px solid ${p.line}`,
           }}
         >
-          <span style={{ flex: 1, fontSize: 12.5, color: p.txt2 }}>{t("sftp.editor.discardQ")}</span>
+          <span style={{ flex: 1, fontSize: 13, color: p.txt2 }}>{t("sftp.editor.discardQ")}</span>
           <Btn variant="ghost" size="sm" onClick={() => setConfirmClose(false)}>
             {t("common.cancel")}
           </Btn>

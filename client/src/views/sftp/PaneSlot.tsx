@@ -121,7 +121,7 @@ export function PaneSlot({
         flexDirection: "column",
         background: p.bg1,
         border: `1px solid ${p.line}`,
-        borderRadius: 13,
+        borderRadius: 12,
         overflow: "hidden",
       }}
     >
@@ -156,7 +156,7 @@ export function PaneSlot({
             style={{
               width: 48,
               height: 48,
-              borderRadius: 14,
+              borderRadius: 16,
               background: p.bg2,
               border: `1px solid ${p.line}`,
               display: "flex",
@@ -167,7 +167,7 @@ export function PaneSlot({
             <Icon name="server" size={22} color={p.txt3} />
           </span>
           <div style={{ fontSize: 14, fontWeight: 700, color: p.txt }}>{t("sftp.selectHost")}</div>
-          <div style={{ fontSize: 12.5, color: p.txt3, maxWidth: 220 }}>{t("sftp.addFirstHint")}</div>
+          <div style={{ fontSize: 13, color: p.txt3, maxWidth: 220 }}>{t("sftp.addFirstHint")}</div>
         </div>
       ) : (
         <>
@@ -235,7 +235,7 @@ export function PaneSlot({
           size={isMobile ? 40 : 26}
           title={t("common.refresh")}
           onClick={slot.refresh}
-          color={slot.loading ? p.accent : undefined}
+          color={slot.loading ? p.accentText : undefined}
         />
       </div>
 

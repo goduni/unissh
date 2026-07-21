@@ -243,7 +243,7 @@ export function CommandPalette() {
                 <div
                   style={{
                     padding: "6px 10px 4px",
-                    fontSize: 10.5,
+                    fontSize: 11,
                     fontWeight: 700,
                     letterSpacing: 0.6,
                     color: p.txt3,
@@ -302,7 +302,7 @@ export function CommandPalette() {
                         <div
                           style={{
                             fontFamily: it.kind === "host" ? MONO : UI,
-                            fontSize: 11.5,
+                            fontSize: 12,
                             color: p.txt3,
                             whiteSpace: "nowrap",
                             overflow: "hidden",
@@ -329,7 +329,7 @@ export function CommandPalette() {
             gap: 14,
             padding: "9px 14px",
             borderTop: `1px solid ${p.line}`,
-            fontSize: 11.5,
+            fontSize: 12,
             color: p.txt3,
           }}
         >

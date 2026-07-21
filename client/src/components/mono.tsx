@@ -7,7 +7,7 @@
 
 import React, { useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO, UI } from "@/theme/tokens";
+import { MONO, RADIUS, UI } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconName, Spinner } from "@/components/primitives";
 import { useMenu } from "@/components/a11y";
 
@@ -38,7 +38,7 @@ export function Card({
       style={{
         background: active ? p.bg2 : p.bg0,
         border: `1px solid ${active ? p.line2 : p.line}`,
-        borderRadius: compact ? 11 : 16,
+        borderRadius: compact ? RADIUS.cardCompact : RADIUS.card,
         padding: compact ? 13 : 18,
         boxShadow: "none",
         cursor: onClick ? "pointer" : undefined,
@@ -113,7 +113,7 @@ export function FactRow({
         gap: 12,
         padding: "10px 0",
         borderTop: first ? undefined : `1px solid ${p.line}`,
-        fontSize: 12.5,
+        fontSize: 13,
       }}
     >
       <span style={{ color: p.txt3, flexShrink: 0 }}>{label}</span>
@@ -149,7 +149,7 @@ export function MetaChip({
         display: "inline-flex",
         alignItems: "center",
         gap: 5,
-        fontSize: 11.5,
+        fontSize: 12,
         fontWeight: 600,
         color: c,
         fontFamily: mono ? MONO : UI,
@@ -273,7 +273,7 @@ export function UnderlineTabs<T extends string>({
               display: "inline-flex",
               alignItems: "center",
               gap: 7,
-              fontSize: 13.5,
+              fontSize: 13,
               fontWeight: on ? 700 : 600,
               color: on ? p.txt : p.txt3,
               cursor: "pointer",
@@ -295,7 +295,7 @@ export function UnderlineTabs<T extends string>({
                   bottom: -1,
                   height: 2,
                   background: p.accent,
-                  borderRadius: 2,
+                  borderRadius: RADIUS.tick,
                 }}
               />
             )}
@@ -345,7 +345,7 @@ export function RowOverflowMenu({ items, ariaLabel }: { items: OverflowItem[]; a
         style={{
           width: 30,
           height: 30,
-          borderRadius: 8,
+          borderRadius: RADIUS.chip,
           border: "none",
           background: open ? p.bg3 : "transparent",
           color: p.txt3,
@@ -373,7 +373,7 @@ export function RowOverflowMenu({ items, ariaLabel }: { items: OverflowItem[]; a
             minWidth: 180,
             background: p.bg2,
             border: `1px solid ${p.line2}`,
-            borderRadius: 12,
+            borderRadius: RADIUS.menu,
             padding: 6,
             boxShadow: p.shadow,
           }}
@@ -394,7 +394,7 @@ export function RowOverflowMenu({ items, ariaLabel }: { items: OverflowItem[]; a
                 alignItems: "center",
                 gap: 9,
                 padding: "8px 10px",
-                borderRadius: 8,
+                borderRadius: RADIUS.chip,
                 cursor: "pointer",
                 fontSize: 13,
                 fontWeight: 500,
@@ -431,7 +431,12 @@ export function SyncBadge({ state, label, title }: { state: SyncState; label: st
         fontSize: 11,
         fontWeight: 600,
         color,
-        whiteSpace: "nowrap",
+        // nowrap alone floors this badge at its label's full min-content width and
+        // makes it unshrinkable, so in a tight row it doesn't yield — its NEIGHBOURS
+        // do. That is why "Синхронизация…" could eat the server name next to it down
+        // to "p…". The badge has to be able to give like everything else.
+        minWidth: 0,
+        overflow: "hidden",
       }}
     >
       {state === "syncing" ? (
@@ -439,7 +444,9 @@ export function SyncBadge({ state, label, title }: { state: SyncState; label: st
       ) : (
         <Icon name={state === "error" ? "alert" : "check"} size={12} color={color} stroke={1.9} />
       )}
-      {label}
+      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {label}
+      </span>
     </span>
   );
 }

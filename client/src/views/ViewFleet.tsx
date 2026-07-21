@@ -12,12 +12,13 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rgba } from "@/theme/tokens";
+import { MONO, SPACE, rgba } from "@/theme/tokens";
 import { Icon, Btn, Checkbox, NO_AUTOCORRECT, Spinner } from "@/components/primitives";
 import { pressActivate } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useTranslation } from "@/i18n";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useFmt } from "@/i18n/format";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, mismatchFromError } from "@/bridge/types";
@@ -110,7 +111,7 @@ const HostTile = React.memo(function HostTile({
       onClick={selectable ? (e) => toggle(e.shiftKey) : undefined}
       onKeyDown={selectable ? pressActivate(() => toggle(false)) : undefined}
       style={{
-        borderRadius: 13,
+        borderRadius: 12,
         background: selectable && checked ? p.bg2 : p.bg1,
         border: `1px solid ${p.line}`,
         boxShadow: selectable && checked ? `inset 0 0 0 1px ${p.line2}` : "none",
@@ -183,7 +184,7 @@ const HostTile = React.memo(function HostTile({
           </span>
         )}
         {st === "running" && (
-          <span style={{ fontFamily: MONO, fontSize: 11, color: p.accent }}>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: p.accentText }}>
             {t("fleet.running")}
           </span>
         )}
@@ -215,7 +216,7 @@ const HostTile = React.memo(function HostTile({
         }}
       >
         {(st === "queued" || st === "cancelled") && <span style={{ color: p.txt3 }}>—</span>}
-        {st === "running" && <span style={{ color: p.accent }}>▋</span>}
+        {st === "running" && <span style={{ color: p.accentText }}>▋</span>}
         {result && (
           <React.Fragment>
             {bodyLines.map((l, i) => (
@@ -254,6 +255,12 @@ export function ViewFleet() {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
+  const narrow = useNarrow();
+  // Same split as ViewHosts: narrow is WIDTH (gutters, type), touch is the
+  // POINTER (tap targets, tooltips that never fire). A 700px desktop window is
+  // narrow and still has a mouse.
+  const touch = useIsMobile();
+  const gutter = narrow ? SPACE.gutterNarrow : SPACE.gutter;
   const hosts = useApp((s) => s.hosts);
   const groups = useApp((s) => s.groups);
   const hostFilter = useApp((s) => s.hostFilter);
@@ -567,14 +574,17 @@ export function ViewFleet() {
           gap: 10,
           // Wrap so the done-summary group (counts + rerun-failed) drops below the title instead of overflowing.
           flexWrap: "wrap",
-          padding: "16px 22px 12px",
+          padding: `16px ${gutter}px 12px`,
         }}
       >
-        <Icon name="layers" size={20} color={p.accent} />
+        <Icon name="layers" size={20} color={p.accentText} />
         <h1
           style={{
             margin: 0,
-            fontSize: 28,
+            // Under the Run tab AND ViewRun's own mode tabs, a 28px h1 is a third
+            // header — and in RU ("Массовое выполнение") 238 of 358px of one.
+            display: narrow ? "none" : undefined,
+            fontSize: narrow ? 24 : 28,
             fontWeight: 800,
             letterSpacing: -0.7,
             whiteSpace: "nowrap",
@@ -601,20 +611,26 @@ export function ViewFleet() {
         {skipped > 0 && (
           <span
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
               fontFamily: MONO,
               fontSize: 11,
               color: p.amber,
               whiteSpace: "nowrap",
             }}
-            title={t("fleet.skippedTitle")}
+            // Touch never fires a tooltip, so the reason why hosts were skipped is
+            // rendered as real text below instead of hidden in here.
+            title={touch ? undefined : t("fleet.skippedTitle")}
           >
-            ⚠ {t("fleet.skipped", { count: skipped })}
+            <Icon name="alert" size={12} color={p.amber} stroke={1.8} />
+            {t("fleet.skipped", { count: skipped })}
           </span>
         )}
         <div style={{ flex: 1 }} />
         {phase === "done" && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontFamily: MONO, fontSize: 12.5 }}>
+            <span style={{ fontFamily: MONO, fontSize: 13 }}>
               <span style={{ color: p.green }}>{t("fleet.okCount", { count: okCount })}</span> ·{" "}
               <span style={{ color: p.red }}>{t("fleet.failCount", { count: failCount })}</span>
             </span>
@@ -627,6 +643,15 @@ export function ViewFleet() {
         )}
       </div>
 
+      {/* The skipped-hosts reason, as text. On the desktop it's the chip's tooltip;
+          a phone has no hover, and "why didn't these hosts run?" is not a question
+          to leave unanswered on a screen that just refused to run them. */}
+      {touch && skipped > 0 && (
+        <div style={{ padding: `0 ${gutter}px 10px`, fontSize: 12, color: p.txt3 }}>
+          {t("fleet.skippedTitle")}
+        </div>
+      )}
+
       {/* selection toolbar — the in-place target picker's controls (idle only;
           during a run/after it the grid is the frozen result snapshot, not a picker) */}
       {phase === "idle" && filtered.length > 0 && runnable.length > 0 && (
@@ -636,22 +661,22 @@ export function ViewFleet() {
             alignItems: "center",
             gap: 10,
             flexWrap: "wrap",
-            padding: "0 22px 12px",
+            padding: `0 ${gutter}px 12px`,
           }}
         >
-          <span style={{ fontSize: 12.5, color: p.txt2, whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 13, color: p.txt2, whiteSpace: "nowrap" }}>
             {t("fleet.selectedOfTotal", {
               n: selectedRunnable.length,
               m: runnable.length,
             })}
           </span>
-          <Btn variant="ghost" size="sm" onClick={selectAllVisible}>
+          <Btn variant="ghost" size={touch ? "md" : "sm"} onClick={selectAllVisible}>
             {t("fleet.selAll")}
           </Btn>
-          <Btn variant="ghost" size="sm" onClick={selectNoneVisible}>
+          <Btn variant="ghost" size={touch ? "md" : "sm"} onClick={selectNoneVisible}>
             {t("fleet.selNone")}
           </Btn>
-          <Btn variant="ghost" size="sm" onClick={invertVisible}>
+          <Btn variant="ghost" size={touch ? "md" : "sm"} onClick={invertVisible}>
             {t("fleet.invert")}
           </Btn>
           <div
@@ -663,7 +688,7 @@ export function ViewFleet() {
               minWidth: 180,
               height: 34,
               padding: "0 12px",
-              borderRadius: 9,
+              borderRadius: 8,
               background: p.bg1,
               border: `1px solid ${p.line2}`,
             }}
@@ -707,7 +732,7 @@ export function ViewFleet() {
       )}
 
       {/* command bar */}
-      <div style={{ padding: "0 22px 14px" }}>
+      <div style={{ padding: `0 ${gutter}px 14px` }}>
         <div
           style={{
             display: "flex",
@@ -723,7 +748,7 @@ export function ViewFleet() {
             boxShadow: "none",
           }}
         >
-          <span style={{ fontFamily: MONO, fontSize: 18, color: p.accent, fontWeight: 700 }}>
+          <span style={{ fontFamily: MONO, fontSize: 18, color: p.accentText, fontWeight: 700 }}>
             ❯
           </span>
           <input
@@ -745,18 +770,27 @@ export function ViewFleet() {
             placeholder={t("fleet.commandPlaceholder")}
             style={{
               fontFamily: MONO,
-              fontSize: 15,
+              fontSize: 16,
               color: p.txt,
-              flex: 1,
+              // A real basis, not `flex: 1`. With a 0 basis this input's hypothetical
+              // size is 0, so it contributes NOTHING to line-breaking: the row never
+              // wraps on its behalf and the input silently collects whatever is left
+              // over — 30px on a 390px screen, about two characters, for the field
+              // that types a command onto every host you own. Given a basis it can
+              // push the checkbox and Run onto their own line instead of starving.
+              flex: "1 1 200px",
+              minWidth: 160,
               background: "transparent",
               border: "none",
               outline: "none",
-              minWidth: 0,
             }}
           />
           <Checkbox
             checked={stopOnError}
             onChange={setStopOnError}
+            // Bigger BOX on touch (the hit area is the button's, and Checkbox now
+            // floors that at the tap minimum itself).
+            size={touch ? 22 : 16}
             label={t("fleet.stopOnError")}
             title={t("fleet.stopOnErrorTitle")}
             style={{ gap: 6, whiteSpace: "nowrap" }}
@@ -794,7 +828,7 @@ export function ViewFleet() {
       </div>
 
       {/* per-host grid */}
-      <div style={{ flex: 1, overflow: "auto", padding: "0 22px 18px" }}>
+      <div style={{ flex: 1, overflow: "auto", padding: `0 ${gutter}px 18px` }}>
         {filtered.length === 0 ? (
           <div
             style={{

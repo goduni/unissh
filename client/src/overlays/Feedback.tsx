@@ -20,7 +20,7 @@ const TOAST_META: Record<ToastKind, { icon: IconName; color: (p: ReturnType<type
   ok: { icon: "check", color: (p) => p.green },
   err: { icon: "x", color: (p) => p.red },
   warn: { icon: "alert", color: (p) => p.amber },
-  info: { icon: "bolt", color: (p) => p.accent },
+  info: { icon: "bolt", color: (p) => p.accentText },
 };
 
 let toastSeq = 0;
@@ -140,12 +140,12 @@ export function ToastHost() {
               alignItems: "center",
               gap: 10,
               padding: isErr ? "10px 10px 10px 16px" : "10px 16px",
-              borderRadius: 11,
+              borderRadius: 12,
               background: p.bg3,
               border: `1px solid ${isErr ? rgba(p.red, 0.5) : p.line2}`,
               boxShadow: p.shadow,
               color: p.txt,
-              fontSize: 13.5,
+              fontSize: 13,
               fontWeight: 600,
               maxWidth: "min(520px, calc(100vw - 32px))",
               animation: "uhToast .26s cubic-bezier(.2,.8,.3,1)",
@@ -163,7 +163,7 @@ export function ToastHost() {
               <span
                 style={{
                   fontFamily: MONO,
-                  fontSize: 11.5,
+                  fontSize: 12,
                   color: c,
                   background: rgba(c, 0.14),
                   border: `1px solid ${rgba(c, 0.35)}`,
@@ -275,7 +275,7 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: data.danger ? p.red : p.accent,
+              color: data.danger ? p.red : p.accentText,
             }}
           >
             <Icon name={(data.icon as IconName) || (data.danger ? "alert" : "shield")} size={18} />
@@ -283,7 +283,7 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
           <div style={{ fontSize: 16, fontWeight: 700 }}>{data.title}</div>
         </div>
         {data.body && (
-          <p style={{ margin: "0 0 18px", fontSize: 13.5, color: p.txt2, lineHeight: 1.5 }}>
+          <p style={{ margin: "0 0 18px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
             {data.body}
           </p>
         )}
@@ -364,7 +364,7 @@ export function ShortcutsHelp() {
           {SHORTCUTS.map(([k, label]) => (
             <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
               {/* minWidth:0 lets a long RU shortcut description wrap instead of shoving the keycap */}
-              <span style={{ fontSize: 13.5, color: p.txt2, minWidth: 0 }}>{tDyn(label)}</span>
+              <span style={{ fontSize: 13, color: p.txt2, minWidth: 0 }}>{tDyn(label)}</span>
               <span
                 style={{
                   fontFamily: MONO,
