@@ -160,8 +160,10 @@ jobs:
               Play Protect will warn.
             - **iOS** (.ipa): an UNSIGNED sideload build. Stock iOS refuses
               unsigned code — install it by re-signing with your own Apple ID
-              via [AltStore](https://altstore.io) or Sideloadly. The only
-              identity on the app after that is your own.
+              via [AltStore](https://altstore.io) or Sideloadly (free Apple ID:
+              7-day signature AltStore auto-renews, 3-app limit), or install
+              as-is via TrollStore where iOS allows it. The only identity on
+              the app after that is your own.
 
             **Verify what you downloaded** — you do not need to trust the maintainer:
             - **Checksums:** download `SHA256SUMS` and run `sha256sum -c SHA256SUMS`
