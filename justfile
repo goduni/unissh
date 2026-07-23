@@ -101,3 +101,31 @@ up-local:
 # Tear the local stack down (keep volumes/data).
 down-local:
     docker compose --env-file .env down
+
+# ---------- release ----------
+# The ONLY supported way to move the product version. Bumps all five manifests,
+# refreshes both lockfiles, commits and tags — then PRINTS the push command instead of
+# running it: a mistyped version becomes a public tag the instant it is pushed, and a
+# tag is the one thing here that is awkward to retract. The tagged commit is the commit
+# that contains the bump, so a released binary is always reproducible from the tag.
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -z "$(git status --porcelain)" ] || { echo "working tree is dirty — commit or stash first"; exit 1; }
+    [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || { echo "release from main only"; exit 1; }
+    if git rev-parse -q --verify "refs/tags/v{{version}}" >/dev/null; then
+      echo "tag v{{version}} already exists"; exit 1
+    fi
+    python3 scripts/bump-version.py {{version}}
+    cargo update -w --quiet
+    (cd client/src-tauri && cargo update -w --quiet)
+    python3 scripts/bump-version.py --check {{version}}
+    git add Cargo.toml Cargo.lock \
+            client/package.json client/src-tauri/Cargo.toml \
+            client/src-tauri/Cargo.lock client/src-tauri/tauri.conf.json \
+            server-ui/package.json
+    git commit -m "chore(release): v{{version}}"
+    git tag -a "v{{version}}" -m "v{{version}}"
+    echo
+    echo "Tagged v{{version}}. Push to trigger the release build:"
+    echo "    git push origin main && git push origin v{{version}}"
