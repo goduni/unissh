@@ -66,6 +66,8 @@ export type ModalKind =
    *  the global active vault; reports the created vault id back via onCreated. */
   | { kind: "identityVault"; onCreated?: (vaultId: string) => void }
   | { kind: "termtheme"; edit?: TermTheme }
+  /** A donation address rendered as a QR, generated offline (see support/qr.ts). */
+  | { kind: "qr"; label: string; address: string }
   | { kind: "copyKeyToServer"; openssh: string; keyItemId: string };
 
 export type Device = "desktop" | "mobile";
