@@ -1,0 +1,279 @@
+---
+import '../styles/theme.css';
+import '../styles/landing.css';
+
+import SiteHeader from '../components/SiteHeader.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+
+const base = import.meta.env.BASE_URL; // '/' on the unissh.dev custom domain
+const withBase = (p: string) => `${base}${p.replace(/^\//, '')}`;
+
+// Internal doc links (base-aware) — the header and footer need the same set the
+// landing page passes them.
+const overviewHref = withBase('overview/introduction/');
+const installHref = withBase('overview/install/');
+const quickstartHref = withBase('overview/quickstart/');
+const archHref = withBase('architecture/system-overview/');
+const securityHref = withBase('architecture/zero-knowledge-model/');
+const cratesHref = withBase('components/crates/');
+const serverDocHref = withBase('components/server/');
+const deployHref = withBase('operations/deploy/');
+const supportHref = withBase('support/');
+
+// External links.
+const githubHref = 'https://github.com/goduni/unissh';
+const githubReleases = 'https://github.com/goduni/unissh/releases';
+const issuesHref = 'https://github.com/goduni/unissh/issues/new/choose';
+const telegramHref = 'https://t.me/unissh';
+const contributingHref = 'https://github.com/goduni/unissh/blob/main/CONTRIBUTING.md';
+const contactEmail = 'uni@goduni.me';
+
+// Kept in lockstep with client/src/support/wallets.ts — the client's wallets.test.ts
+// reads this file and fails if a label and address stop matching. Labels are the network
+// names people look for in their wallet; ERC20 and BEP20 are separate rows even though
+// one EVM key backs both.
+const wallets = [
+  { label: 'BTC', address: 'bc1qc683mf2rh63ng4eegv0emzejrhy6uux5k0zg2y' },
+  { label: 'BEP20', address: '0x63E3e9E690f64f149A4F920396E47328cACa6aA7' },
+  { label: 'ERC20', address: '0x63E3e9E690f64f149A4F920396E47328cACa6aA7' },
+  { label: 'TRC20', address: 'TSzgPmq6LQXijuistHFFCdeTZsYZXPSfEJ' },
+  { label: 'TON', address: 'UQCA3uYaDrMTc7cPR_DUxvqCZeAgg-2skRCLOpNrKfdg7_3d' },
+  { label: 'SOL', address: 'jSsCcdS8Vaw1qvzUSioQ63r4niw9h914WqwmsfFA7eM' },
+];
+
+const title = 'Support UniSSH';
+const description =
+  'UniSSH is free, open source, and has no company behind it. Ways to help — most of them free — and the addresses to send to if you would rather send something.';
+const canonical = `${import.meta.env.SITE ?? ''}${base}support/`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href={withBase('favicon.svg')} type="image/svg+xml" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#070911" />
+    <link rel="canonical" href={canonical} />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+  </head>
+
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="sky" aria-hidden="true">
+      <div class="sky__neb sky__neb--violet"></div>
+      <div class="sky__neb sky__neb--indigo"></div>
+      <div class="sky__neb sky__neb--teal"></div>
+      <div class="sky__arc-glow"></div>
+    </div>
+
+    <div class="page">
+      <SiteHeader
+        docsHref={overviewHref}
+        archHref={archHref}
+        securityHref={securityHref}
+        ctaHref={githubReleases}
+        githubHref={githubHref}
+      />
+
+      <main id="main" class="support">
+        <span id="top"></span>
+
+        <h1>Support UniSSH</h1>
+        <p class="support__lede">
+          UniSSH is free, open source, and has no company behind it. If it saved you time,
+          you can send some back. Nothing here is gated and nothing will be — donations
+          don't buy priority support, roadmap influence, or private builds.
+        </p>
+
+        <h2>Costs nothing</h2>
+        <ul class="support__free">
+          <li><a href={githubHref} rel="noopener">Star the repo</a> — it's how other people find it.</li>
+          <li><a href={issuesHref} rel="noopener">Report a bug you hit</a> — with steps, so it's fixable.</li>
+          <li><a href={telegramHref} rel="noopener">Join the chat</a> — @unissh on Telegram.</li>
+          <li><a href={contributingHref} rel="noopener">Translate the client</a> — English and Russian today.</li>
+        </ul>
+
+        <h2>Why crypto only</h2>
+        <p>
+          GitHub Sponsors, Ko-fi and every card processor need a legal name and a bank
+          account. UniSSH is maintained anonymously, and that isn't traded away for easier
+          payments. If none of these work for you, write and we'll find something.
+        </p>
+
+        <h2>Donate</h2>
+        <ul class="support__wallets">
+          {
+            wallets.map((w) => (
+              <li class="wallet">
+                <span class="wallet__label">{w.label}</span>
+                <code class="wallet__addr">{w.address}</code>
+                <button class="wallet__copy" type="button" data-address={w.address}>Copy</button>
+              </li>
+            ))
+          }
+        </ul>
+
+        <p class="support__verify">
+          The same addresses are in the app under <strong>Settings → Support</strong> and in the
+          <a href={githubHref} rel="noopener">README</a>. Compare at least two before you send
+          anything — malware that swaps clipboard addresses is real.
+        </p>
+
+        <h2>Anything else</h2>
+        <p>
+          <a href={`mailto:${contactEmail}`}>{contactEmail}</a> — for anything not on this page.
+          Not a support address: bugs go to <a href={issuesHref} rel="noopener">Issues</a>,
+          questions to <a href={telegramHref} rel="noopener">Telegram</a> or Discussions.
+        </p>
+      </main>
+
+      <SiteFooter
+        links={{
+          overview: overviewHref,
+          quickstart: quickstartHref,
+          install: installHref,
+          arch: archHref,
+          security: securityHref,
+          crates: cratesHref,
+          server: serverDocHref,
+          deploy: deployHref,
+          github: githubHref,
+          githubReleases: githubReleases,
+          support: supportHref,
+        }}
+      />
+    </div>
+
+    <script>
+      // Progressive enhancement only: the address is always present as selectable text,
+      // so the page is fully usable with JS disabled — the button just saves a drag.
+      for (const btn of document.querySelectorAll<HTMLButtonElement>('.wallet__copy')) {
+        btn.addEventListener('click', async () => {
+          const address = btn.dataset.address;
+          if (!address) return;
+          try {
+            await navigator.clipboard.writeText(address);
+            const previous = btn.textContent;
+            btn.textContent = 'Copied';
+            btn.classList.add('is-copied');
+            setTimeout(() => {
+              btn.textContent = previous;
+              btn.classList.remove('is-copied');
+            }, 1600);
+          } catch {
+            /* clipboard blocked — the address is selectable, which is the fallback */
+          }
+        });
+      }
+    </script>
+  </body>
+</html>
+
+<style>
+  .support {
+    padding: clamp(32px, 6vw, 88px) 0 96px;
+    max-width: 74ch;
+  }
+  .support h1 {
+    font-size: clamp(30px, 5vw, 44px);
+    letter-spacing: -0.03em;
+    margin: 0 0 16px;
+  }
+  .support__lede {
+    max-width: 62ch;
+    font-size: 18px;
+    line-height: 1.6;
+    opacity: 0.82;
+    margin: 0 0 40px;
+  }
+  .support h2 {
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    margin: 40px 0 14px;
+  }
+  .support p {
+    max-width: 62ch;
+    line-height: 1.65;
+    margin: 0 0 12px;
+  }
+  .support__free {
+    max-width: 62ch;
+    margin: 0;
+    padding-left: 20px;
+    line-height: 1.9;
+  }
+  .support__wallets {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .wallet {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .wallet__label {
+    flex: 0 0 74px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    opacity: 0.62;
+  }
+  .wallet__addr {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+  .wallet__copy {
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: 12px;
+    padding: 5px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+  .wallet__copy:hover,
+  .wallet__copy:focus-visible {
+    border-color: rgba(255, 255, 255, 0.34);
+  }
+  .wallet__copy.is-copied {
+    opacity: 0.6;
+  }
+  .support__verify {
+    margin-top: 18px;
+    font-size: 14px;
+    opacity: 0.72;
+  }
+  @media (max-width: 620px) {
+    .wallet {
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .wallet__label {
+      flex-basis: 100%;
+    }
+  }
+</style>
