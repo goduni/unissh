@@ -1,6 +1,6 @@
 [package]
 name = "unissh-cli"
-version = "0.1.0"
+version.workspace = true
 description = "Temporary UniSSH CLI harness: poke at the core from a terminal (create a local vault → SSH key → connect)."
 edition.workspace = true
 rust-version.workspace = true

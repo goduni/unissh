@@ -1,6 +1,6 @@
 [package]
 name = "unissh-keychain"
-version = "0.1.0"
+version.workspace = true
 description = "UniSSH key hierarchy (spec 5.1): Secret Key, Argon2id, Unlock Key, personal keyset under the Unlock Key."
 readme = "README.md"
 edition.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "unissh-ssh-agent"
-version = "0.1.0"
+version.workspace = true
 description = "Embedded in-memory SSH agent for UniSSH: keys live only in-process, mlock/zeroize, challenge signing (spec 10.1)."
 readme = "README.md"
 edition.workspace = true

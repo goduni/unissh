@@ -1,6 +1,6 @@
 [package]
 name = "unissh-storage"
-version = "0.1.0"
+version.workspace = true
 description = "UniSSH local encrypted storage (SQLite+SQLCipher): instance isolation, item/vault/version/tombstone/signature model designed for future sync."
 readme = "README.md"
 edition.workspace = true

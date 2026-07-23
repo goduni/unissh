@@ -6,6 +6,10 @@ exclude = ["client/src-tauri", "server-ui/crypto-wasm"]
 [workspace.package]
 edition = "2021"
 rust-version = "1.85"
+# One product version for everything in this workspace. The client and server-ui sit
+# outside it and carry their own — scripts/bump-version.py is the only thing that moves
+# any of them (see `just release`).
+version = "0.1.0"
 authors = ["UniSSH"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/goduni/unissh"
