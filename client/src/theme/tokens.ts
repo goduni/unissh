@@ -598,6 +598,15 @@ export type TermFontId =
   | "system"
   | "custom";
 
+// Ligatures are deliberately NOT offered. @xterm/addon-ligatures supports only the
+// canvas/DOM renderer, and while the desktop panes DO use the DOM renderer (WebGL is
+// mobile-only here, see ViewTerminal), three things make a toggle not worth it: it would
+// be a no-op on mobile with no honest way to say so per-platform; correct rendering needs
+// the addon (raw `font-feature-settings: "calt"` misaligns in xterm's fixed cell grid, so
+// it can't be done in CSS alone); and it is mutually exclusive with the letterSpacing
+// control above (tracking disables ligatures). JetBrains Mono's ligatures stay off — a
+// deliberate absence, not an oversight.
+
 /** Only JetBrains Mono is bundled (`@fontsource/jetbrains-mono`). The rest exist only if
  *  the user installed them, which is why the settings picker probes each with
  *  `document.fonts.check` and says so instead of silently falling back. */
