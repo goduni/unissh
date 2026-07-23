@@ -32,6 +32,7 @@ import {
 } from "@/components/primitives";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { Modal } from "@/components/Modal";
+import { drawQr } from "@/support/qr";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import { useApp } from "@/store/app";
@@ -2968,6 +2969,60 @@ function BindHostModal({
 }
 
 // ── Root dispatcher ────────────────────────────────────────────
+// ── QR (donation address) ──────────────────────────────────────
+function QrModal({
+  label,
+  address,
+  onClose,
+}: {
+  label: string;
+  address: string;
+  onClose: () => void;
+}) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const ref = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    if (ref.current) drawQr(ref.current, address, 220);
+  }, [address]);
+
+  return (
+    <Modal
+      position="absolute"
+      zIndex={150}
+      icon="grid"
+      title={t("support.qrTitle", { label })}
+      onClose={onClose}
+      w={320}
+    >
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        {/* White plate: the canvas is black-on-white, and a dark theme behind a bare
+            canvas leaves no quiet zone for a camera to lock onto. */}
+        <div style={{ padding: 12, borderRadius: 12, background: "#ffffff" }}>
+          <canvas ref={ref} aria-label={`${label} ${address}`} />
+        </div>
+        <span
+          className="uh-selectable"
+          style={{
+            fontFamily: MONO,
+            fontSize: 11,
+            color: p.txt2,
+            textAlign: "center",
+            wordBreak: "break-all",
+            maxWidth: 260,
+          }}
+        >
+          {address}
+        </span>
+        <span style={{ fontSize: 11, color: p.txt3, textAlign: "center" }}>
+          {t("support.qrNote")}
+        </span>
+      </div>
+    </Modal>
+  );
+}
+
 export function Modals() {
   const modal = useApp((s) => s.modal);
   const closeModal = useApp((s) => s.closeModal);
@@ -2989,6 +3044,8 @@ export function Modals() {
   if (modal.kind === "identityVault")
     return <IdentityVaultModal onCreated={modal.onCreated} onClose={closeModal} />;
   if (modal.kind === "termtheme") return <TermThemeModal edit={modal.edit} onClose={closeModal} />;
+  if (modal.kind === "qr")
+    return <QrModal label={modal.label} address={modal.address} onClose={closeModal} />;
   if (modal.kind === "copyKeyToServer")
     return (
       <CopyKeyToServerModal
