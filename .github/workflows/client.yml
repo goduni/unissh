@@ -1,4 +1,4 @@
-name: Client (Tauri desktop)
+name: Client (Tauri)
 
 # Two flows in one file:
 #   (a) CI  — on pull_request + push to main: build the desktop bundles to
@@ -21,8 +21,16 @@ name: Client (Tauri desktop)
 # resolves inside this single checkout — only actions/checkout of this repo is
 # used. No cross-repo checkout, no CORE_REPO_TOKEN / PAT of any kind.
 #
-# Mobile (iOS/Android) is intentionally OUT of scope: there is no
-# privacy-preserving unsigned distributable for those stores/runtimes.
+# Mobile is built for SIDELOADING only — no store listing, and no identity:
+#   * Android: an installable APK must carry *a* signature, but nothing says it
+#     must carry an identity. The release APK is signed by a self-signed key
+#     whose certificate subject is just "CN=UniSSH Release" (no name/email/org)
+#     — generated offline, stored only as a repo secret. Play Protect will warn;
+#     that is the expected cost of an anonymous distributable.
+#   * iOS: ships as an UNSIGNED .ipa. Stock iOS refuses unsigned code, so the
+#     user re-signs it with their own Apple ID (AltStore / Sideloadly) — the
+#     only identity ever attached is the installer's own, never the project's.
+# Both get the same SHA256SUMS + SLSA provenance treatment as desktop.
 
 on:
   push:
@@ -146,6 +154,14 @@ jobs:
             - **Windows** (.msi/.exe): SmartScreen may warn — choose
               "More info" → "Run anyway".
             - **Linux** (.deb/.rpm/.AppImage): no signing.
+            - **Android** (.apk, arm64): a sideload build — enable "install
+              unknown apps" for your browser/file manager. Signed by an
+              identity-free self-signed key (subject `CN=UniSSH Release`), so
+              Play Protect will warn.
+            - **iOS** (.ipa): an UNSIGNED sideload build. Stock iOS refuses
+              unsigned code — install it by re-signing with your own Apple ID
+              via [AltStore](https://altstore.io) or Sideloadly. The only
+              identity on the app after that is your own.
 
             **Verify what you downloaded** — you do not need to trust the maintainer:
             - **Checksums:** download `SHA256SUMS` and run `sha256sum -c SHA256SUMS`
@@ -154,6 +170,244 @@ jobs:
               cryptographically proves GitHub's CI built this exact file from this
               public commit (stronger than a code-signing cert for this purpose).
             - Or **build from source** and trust only your own compiler.
+
+  # ---------------------------------------------------------------------------
+  # Android: arm64 sideload APK, signed by an identity-free self-signed key
+  # (see the header). gen/android is gitignored by design, so the project is
+  # (re)generated here on every run — the signing block is injected right after
+  # init, before gradle ever evaluates the project.
+  # ---------------------------------------------------------------------------
+  android:
+    name: build (android, arm64 apk)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Setup Java (AGP)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Add the Android Rust target
+        run: rustup target add aarch64-linux-android
+
+      - name: Cache Rust (client/src-tauri standalone workspace)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/src-tauri
+          key: android
+
+      - name: Point the build at the runner's preinstalled NDK
+        run: |
+          echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          # openssl-src (vendored libcrypto for SQLCipher — see
+          # rust-core/crates/storage/Cargo.toml) discovers the android clang
+          # wrappers via PATH, not via the *_HOME vars.
+          echo "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Install client npm deps
+        # Same fresh-resolve rationale as the desktop job (npm/cli#4828).
+        shell: bash
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install --no-audit --no-fund
+        working-directory: client
+
+      - name: Generate the Android project + icons
+        run: |
+          npx tauri android init
+          npx tauri icon src-tauri/app-icon.png
+        working-directory: client
+
+      - name: Wire release signing into the generated gradle project
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > gen/android/unissh-release.p12
+          python3 - <<'PYEOF'
+          import pathlib, sys
+
+          p = pathlib.Path("gen/android/app/build.gradle.kts")
+          s = p.read_text()
+          if "signingConfigs" in s:
+              sys.exit("signingConfigs already present — template changed, re-check this patch")
+
+          sign = """
+              signingConfigs {
+                  create("release") {
+                      storeFile = file(System.getenv("ANDROID_KEYSTORE_PATH")!!)
+                      storeType = "PKCS12"
+                      keyAlias = "unissh"
+                      storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                      keyPassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                  }
+              }
+          """
+          out = s.replace("android {", "android {" + sign, 1)
+          if out == s:
+              sys.exit("anchor `android {` not found in build.gradle.kts")
+          s = out
+          out = s.replace(
+              'getByName("release") {',
+              'getByName("release") {\n            signingConfig = signingConfigs.getByName("release")',
+              1,
+          )
+          if out == s:
+              sys.exit('anchor `getByName("release") {` not found in build.gradle.kts')
+          p.write_text(out)
+          print("release signing wired into app/build.gradle.kts")
+          PYEOF
+        working-directory: client/src-tauri
+
+      - name: Build the signed release APK (arm64)
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/client/src-tauri/gen/android/unissh-release.p12
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: npx tauri android build --apk --target aarch64
+        working-directory: client
+
+      - name: Collect + verify the APK signature
+        run: |
+          APK=$(find client/src-tauri/gen/android -name '*-release.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "no signed release apk found; apks present:"
+            find client/src-tauri/gen/android -name '*.apk'
+            exit 1
+          fi
+          VERSION=$(node -p "require('./client/src-tauri/tauri.conf.json').version")
+          OUT="UniSSH_${VERSION}_arm64.apk"
+          cp "$APK" "$OUT"
+          BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --print-certs "$OUT"
+          echo "APK_NAME=$OUT" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: ${{ env.APK_NAME }}
+          if-no-files-found: error
+
+      - name: Attach to the release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # tauri-action (desktop job) creates the release with the full notes;
+          # wait for it instead of racing it with a bare `release create` that
+          # would win the race and ship an empty body.
+          for i in $(seq 1 60); do
+            gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1 && break
+            sleep 30
+          done
+          gh release upload "${{ github.ref_name }}" "$APK_NAME" \
+            --repo "${{ github.repository }}" --clobber
+
+  # ---------------------------------------------------------------------------
+  # iOS: unsigned sideload .ipa (see the header — the installer re-signs with
+  # their own Apple ID; the project never touches a signing identity). Built
+  # with xcodebuild directly because `tauri ios build` insists on a signing
+  # team; the Xcode build phase still drives the Rust/frontend build via the
+  # tauri CLI (`tauri ios xcode-script`).
+  # ---------------------------------------------------------------------------
+  ios:
+    name: build (ios, unsigned sideload ipa)
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Add the iOS Rust target
+        run: rustup target add aarch64-apple-ios
+
+      - name: Cache Rust (client/src-tauri standalone workspace)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/src-tauri
+          key: ios
+
+      - name: Install client npm deps
+        shell: bash
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install --no-audit --no-fund
+        working-directory: client
+
+      - name: Generate the iOS project + icons
+        run: |
+          npx tauri ios init
+          npx tauri icon src-tauri/app-icon.png
+        working-directory: client
+
+      - name: Build the .app unsigned
+        run: |
+          cd src-tauri/gen/apple
+          PROJ=$(ls -d *.xcodeproj | head -1)
+          SCHEME=$(xcodebuild -project "$PROJ" -list \
+            | sed -n '/Schemes:/,$p' | tail -n +2 | sed 's/^ *//' | grep -m1 .)
+          echo "building project=$PROJ scheme=$SCHEME"
+          xcodebuild \
+            -project "$PROJ" -scheme "$SCHEME" -configuration release \
+            -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+        working-directory: client
+
+      - name: Package the sideload IPA
+        run: |
+          APP=$(find client/src-tauri/gen/apple/build/Build/Products -maxdepth 2 -name '*.app' -type d | head -1)
+          if [ -z "$APP" ]; then
+            echo "no .app produced; products:"
+            find client/src-tauri/gen/apple/build/Build/Products -maxdepth 3 | head -30
+            exit 1
+          fi
+          VERSION=$(node -p "require('./client/src-tauri/tauri.conf.json').version")
+          OUT="UniSSH_${VERSION}_ios-sideload.ipa"
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry "$OUT" Payload
+          echo "IPA_NAME=$OUT" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: ${{ env.IPA_NAME }}
+          if-no-files-found: error
+
+      - name: Attach to the release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for i in $(seq 1 60); do
+            gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1 && break
+            sleep 30
+          done
+          gh release upload "${{ github.ref_name }}" "$IPA_NAME" \
+            --repo "${{ github.repository }}" --clobber
 
   # ---------------------------------------------------------------------------
   # Release integrity (tag builds only): publish a SHA256SUMS file and a build
@@ -167,8 +421,11 @@ jobs:
   # ---------------------------------------------------------------------------
   release-integrity:
     name: checksums + provenance
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Waits for mobile too so the APK/IPA land in SHA256SUMS. `!cancelled()`
+    # (not the implicit success()) so a broken mobile leg degrades the release
+    # to desktop-only instead of shipping desktop artifacts with no checksums.
+    needs: [build, android, ios]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # upload SHA256SUMS to the release

@@ -15,13 +15,14 @@ zeroize = "1.8"
 hex = "0.4"
 
 # SQLite + SQLCipher, built from source. SQLCipher links OpenSSL (libcrypto):
-#   * non-Windows: link the system OpenSSL (libssl-dev / macOS system) — small & fast.
-#   * Windows: there is no system OpenSSL, and a distributed .exe must be
-#     self-contained, so vendor + statically link OpenSSL (built from source via
-#     openssl-src). Requires perl + nasm at build time (see client.yml windows leg).
-[target.'cfg(not(windows))'.dependencies]
+#   * Linux / macOS: link the system OpenSSL (libssl-dev / macOS system) — small & fast.
+#   * Windows, Android, iOS: no system OpenSSL exists (and the distributed binary
+#     must be self-contained), so vendor + statically link OpenSSL (built from
+#     source via openssl-src). Windows needs perl + nasm at build time (see the
+#     client.yml windows leg); Android needs the NDK toolchain on PATH (mobile leg).
+[target.'cfg(not(any(windows, target_os = "android", target_os = "ios")))'.dependencies]
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(any(windows, target_os = "android", target_os = "ios"))'.dependencies]
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [dev-dependencies]
@@ -29,7 +30,7 @@ tempfile = "3"
 
 # Raw connection for the upgrade test (we build a v3 DB before Storage::open).
 # Mirror the per-OS SQLCipher/OpenSSL split above.
-[target.'cfg(not(windows))'.dev-dependencies]
+[target.'cfg(not(any(windows, target_os = "android", target_os = "ios")))'.dev-dependencies]
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }
-[target.'cfg(windows)'.dev-dependencies]
+[target.'cfg(any(windows, target_os = "android", target_os = "ios"))'.dev-dependencies]
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
