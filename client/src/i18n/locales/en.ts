@@ -1326,4 +1326,28 @@ export const en = {
     "removeServerBody": "The link to {{server}} will be removed. Cloud vaults synced through it will stop syncing on this device.",
     "removeServerDone": "Server removed"
   },
+  support: {
+    "tab": "Support",
+    "lede": "UniSSH is free, open source, and has no company behind it. If it saved you time, you can send some back. Nothing here is gated and nothing will be — donations don't buy priority support, roadmap influence, or private builds.",
+    "freeLabel": "Costs nothing",
+    "star": "Star the repo",
+    "starDesc": "It's how other people find it",
+    "bug": "Report a bug you hit",
+    "bugDesc": "With steps, so it's fixable",
+    "chat": "Join the chat",
+    "chatDesc": "@unissh on Telegram",
+    "translate": "Translate the client",
+    "translateDesc": "English and Russian today",
+    "whyLabel": "Why crypto only",
+    "why": "GitHub Sponsors, Ko-fi and every card processor need a legal name and a bank account. UniSSH is maintained anonymously, and that isn't traded away for easier payments. If none of these work for you, write and we'll find something.",
+    "donateLabel": "Donate",
+    "contactLabel": "Anything else",
+    "contactDesc": "Not a support address: bugs go to GitHub Issues, questions to Discussions or Telegram.",
+    "verify": "These addresses are also on unissh.dev/support and in the README. Compare at least two before sending — malware that swaps clipboard addresses is real.",
+    "open": "Open",
+    "showQr": "Show QR code",
+    "qrTitle": "Scan to send {{label}}",
+    "qrNote": "Generated on this device. Nothing was sent anywhere.",
+    "addressCopied": "Address copied"
+  },
 } as const;

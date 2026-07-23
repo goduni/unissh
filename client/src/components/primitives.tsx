@@ -94,6 +94,7 @@ export const ICONS = {
   drive: '<rect x="2.5" y="13" width="19" height="6.5" rx="2"/><path d="M5.5 13 8 4.5h8L18.5 13"/><circle cx="7" cy="16.2" r="0.7" fill="currentColor" stroke="none"/>',
   arrows: '<polyline points="7 4 3 8 7 12"/><line x1="3" y1="8" x2="17" y2="8"/><polyline points="17 12 21 16 17 20"/><line x1="21" y1="16" x2="7" y2="16"/>',
   star: '<polygon points="12 3 14.6 8.6 20.5 9.3 16 13.3 17.3 19.2 12 16 6.7 19.2 8 13.3 3.5 9.3 9.4 8.6 12 3"/>',
+  heart: '<path d="M12 20.3 4.7 13a4.9 4.9 0 0 1 6.9-6.9l.4.4.4-.4A4.9 4.9 0 0 1 19.3 13z"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><polyline points="12 7 12 12 15.5 14"/>',
   link: '<path d="M9.5 14.5 14.5 9.5"/><path d="M8 12 6 14a3.5 3.5 0 0 0 5 5l2-2"/><path d="M16 12l2-2a3.5 3.5 0 0 0-5-5l-2 2"/>',
   fingerprint: '<path d="M12 4.5a6.5 6.5 0 0 0-6.5 6.5v2"/><path d="M12 4.5a6.5 6.5 0 0 1 6.5 6.5v4"/><path d="M9 11a3 3 0 0 1 6 0v4a2 2 0 0 1-2 2"/><path d="M12 11v5"/><path d="M5.8 17.5A6.5 6.5 0 0 0 7 19"/>',
