@@ -4,7 +4,7 @@
 // platform strings: the About panel reads real platform info from plugin-os,
 // and the danger zone clears real known_hosts via api.forgetHost.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { ACCENT_KEYS, ACCENTS, MONO, UI, rgba } from "@/theme/tokens";
 import type { AppThemeFamily, Density, HostsLayout, Mode, Palette, TermTheme } from "@/theme/tokens";
@@ -189,7 +189,18 @@ function SettingsAppearance() {
     customThemes,
     deleteTermTheme,
     resetTermTheme,
+    effMode,
   } = useTheme();
+  const [showAllThemes, setShowAllThemes] = useState(false);
+  // Themes for the mode you are actually in first — at 17 cards, a dark-theme user
+  // scrolling past eight light ones to reach the rest is the whole problem.
+  const orderedThemes = useMemo(() => {
+    const wantLight = effMode === "light";
+    return [...termThemes].sort(
+      (a, b) => Number(!!b.light === wantLight) - Number(!!a.light === wantLight),
+    );
+  }, [termThemes, effMode]);
+  const visibleThemes = showAllThemes ? orderedThemes : orderedThemes.slice(0, 8);
   const openModal = useApp((s) => s.openModal);
   const setConfirm = useApp((s) => s.setConfirm);
   const termZoom = useApp((s) => s.termZoom);
@@ -407,7 +418,7 @@ function SettingsAppearance() {
             gap: 10,
           }}
         >
-          {termThemes.map((th) => {
+          {visibleThemes.map((th) => {
             const active = th.id === termThemeId;
             const isCustom = customIds.has(th.id);
             return (
@@ -490,6 +501,13 @@ function SettingsAppearance() {
             <span style={{ fontSize: 12, fontWeight: 600 }}>{t("settings.customTheme")}</span>
           </button>
         </div>
+        {!showAllThemes && orderedThemes.length > 8 && (
+          <div style={{ marginTop: 12 }}>
+            <Btn variant="ghost" size="sm" onClick={() => setShowAllThemes(true)}>
+              {t("settings.termShowAllThemes", { n: orderedThemes.length })}
+            </Btn>
+          </div>
+        )}
       </div>
     </>
   );

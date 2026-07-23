@@ -15,6 +15,7 @@ import {
   contrastRatio,
   hexToRgb,
   resolveAppPalette,
+  TERM_THEMES,
   type AccentKey,
   type AppThemeFamily,
   type EffMode,
@@ -134,5 +135,39 @@ describe("palette contrast (WCAG AA)", () => {
         a.s * 0.85,
       );
     });
+  });
+});
+
+describe("terminal themes", () => {
+  it("ships seventeen built-ins", () => {
+    expect(TERM_THEMES).toHaveLength(17);
+  });
+
+  it.each(TERM_THEMES.map((t) => [t.name, t] as const))(
+    "%s: default text is legible on its own background",
+    (_name, theme) => {
+      expect(contrastRatio(theme.fg, theme.bg)).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it.each(TERM_THEMES.map((t) => [t.name, t] as const))("%s: has every colour field", (_n, t) => {
+    for (const f of [
+      "bg",
+      "fg",
+      "dimc",
+      "red",
+      "green",
+      "yellow",
+      "blue",
+      "cyan",
+      "purple",
+    ] as const) {
+      expect(t[f], f).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+    expect(t.sel).toBeTruthy();
+  });
+
+  it("has no duplicate ids", () => {
+    expect(new Set(TERM_THEMES.map((t) => t.id)).size).toBe(TERM_THEMES.length);
   });
 });

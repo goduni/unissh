@@ -368,6 +368,14 @@ export const TERM_THEMES: TermTheme[] = [
   { id: "solight", name: "Solarized Light", light: true, bg: "#fdf6e3", fg: "#586e75", dimc: "#93a1a1", green: "#859900", blue: "#268bd2", cyan: "#2aa198", red: "#dc322f", yellow: "#b58900", purple: "#6c71c4", white: "#eee8d5", sel: "rgba(38,139,210,0.15)" },
   { id: "candy-light", name: "Candy Holo Light", light: true, bg: "#fff2fb", fg: "#4a1440", dimc: "#a2628c", green: "#0e8055", blue: "#8552db", cyan: "#1c7994", red: "#e0294f", yellow: "#cc7d1c", purple: "#cf2680", white: "#4a1440", sel: "rgba(217,40,134,0.20)" },
   { id: "candy-dark", name: "Candy Holo Dark", bg: "#160a1e", fg: "#fbeaf6", dimc: "#a578a8", green: "#4fe0b0", blue: "#b06aff", cyan: "#5ec7ff", red: "#ff6b8f", yellow: "#ffcf6a", purple: "#ff5fb8", white: "#fbeaf6", sel: "rgba(255,95,184,0.28)" },
+  { id: "catppuccin-mocha", name: "Catppuccin Mocha", bg: "#1e1e2e", fg: "#cdd6f4", dimc: "#585b70", green: "#a6e3a1", blue: "#89b4fa", cyan: "#94e2d5", red: "#f38ba8", yellow: "#f9e2af", purple: "#cba6f7", white: "#bac2de", sel: "rgba(137,180,250,0.24)" },
+  { id: "catppuccin-latte", name: "Catppuccin Latte", light: true, bg: "#eff1f5", fg: "#4c4f69", dimc: "#9ca0b0", green: "#40a02b", blue: "#1e66f5", cyan: "#179299", red: "#d20f39", yellow: "#df8e1d", purple: "#8839ef", white: "#5c5f77", sel: "rgba(30,102,245,0.16)" },
+  { id: "rose-pine", name: "Rosé Pine", bg: "#191724", fg: "#e0def4", dimc: "#6e6a86", green: "#31748f", blue: "#9ccfd8", cyan: "#ebbcba", red: "#eb6f92", yellow: "#f6c177", purple: "#c4a7e7", white: "#e0def4", sel: "rgba(196,167,231,0.24)" },
+  { id: "rose-pine-dawn", name: "Rosé Pine Dawn", light: true, bg: "#faf4ed", fg: "#575279", dimc: "#9893a5", green: "#286983", blue: "#56949f", cyan: "#d7827e", red: "#b4637a", yellow: "#ea9d34", purple: "#907aa9", white: "#575279", sel: "rgba(144,122,169,0.18)" },
+  { id: "everforest-dark", name: "Everforest Dark", bg: "#2d353b", fg: "#d3c6aa", dimc: "#859289", green: "#a7c080", blue: "#7fbbb3", cyan: "#83c092", red: "#e67e80", yellow: "#dbbc7f", purple: "#d699b6", white: "#d3c6aa", sel: "rgba(127,187,179,0.22)" },
+  { id: "one-dark", name: "One Dark", bg: "#282c34", fg: "#abb2bf", dimc: "#5c6370", green: "#98c379", blue: "#61afef", cyan: "#56b6c2", red: "#e06c75", yellow: "#e5c07b", purple: "#c678dd", white: "#ffffff", sel: "rgba(97,175,239,0.22)" },
+  { id: "kanagawa-wave", name: "Kanagawa Wave", bg: "#1f1f28", fg: "#dcd7ba", dimc: "#727169", green: "#98bb6c", blue: "#7e9cd8", cyan: "#7aa89f", red: "#e82424", yellow: "#e6c384", purple: "#957fb8", white: "#dcd7ba", sel: "rgba(126,156,216,0.24)" },
+  { id: "github-light", name: "GitHub Light", light: true, bg: "#ffffff", fg: "#24292f", dimc: "#6e7781", green: "#116329", blue: "#0550ae", cyan: "#1b7c83", red: "#cf222e", yellow: "#8a6a00", purple: "#8250df", white: "#24292f", sel: "rgba(5,80,174,0.14)" },
 ];
 
 export const AUTH_LABEL_KEY: Record<string, string> = {
