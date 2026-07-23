@@ -8,7 +8,7 @@ order.
 
 A lot of common questions are already answered:
 
-- **Docs site:** <https://goduni.github.io/unissh/>
+- **Docs site:** <https://unissh.dev/>
 - **README FAQ / Troubleshooting:** <https://github.com/goduni/unissh#faq--troubleshooting>
 
 Things covered there include the unsigned-build OS warnings ("developer cannot be
@@ -16,17 +16,17 @@ verified" / SmartScreen), a client not reaching your server, bootstrap/first-acc
 problems, the admin panel's `wasm not loaded` message, and `TransportRollback` after a
 server restore. Each component also has its own README with platform specifics.
 
-## 2. Questions, support & ideas → GitHub Discussions
+## 2. Questions, support & ideas → Discussions or Telegram
 
-For usage questions, self-host/setup help, "how do I…", and open-ended ideas, use
-**GitHub Discussions**:
+Two places, and the difference between them matters:
 
-- <https://github.com/goduni/unissh/discussions>
-
-Discussions is the **community home**. There is intentionally **no Discord or chat
-server** — running one would add identity/moderation surface that doesn't fit an
-anonymously-maintained project. Discussions keeps help searchable for the next person,
-which is better for everyone.
+- **[GitHub Discussions](https://github.com/goduni/unissh/discussions)** — the canonical
+  home. Use it for usage questions, self-host and setup help, "how do I…", and
+  open-ended ideas. Answers stay searchable for the next person, which is why anything
+  worth answering once belongs here.
+- **Telegram — [@unissh](https://t.me/unissh)** — quick questions, release notes, and
+  the fastest way to reach other users. Nothing there is archived or searchable, so if a
+  Telegram answer turns out to be useful, please repost it as a Discussion.
 
 ## 3. Found a bug? → Open an issue
 
@@ -62,8 +62,10 @@ The full disclosure policy, scope, and what to expect are in
 
 | I want to… | Go to |
 | --- | --- |
-| Solve a common problem | [Docs](https://goduni.github.io/unissh/) + [README FAQ](https://github.com/goduni/unissh#faq--troubleshooting) |
+| Solve a common problem | [Docs](https://unissh.dev/) + [README FAQ](https://github.com/goduni/unissh#faq--troubleshooting) |
 | Ask a question / get setup help / share an idea | [GitHub Discussions](https://github.com/goduni/unissh/discussions) |
+| Ask something quickly, or talk to other users | [Telegram @unissh](https://t.me/unissh) |
 | Report a reproducible bug | [New issue](https://github.com/goduni/unissh/issues/new/choose) |
 | Report a security vulnerability (private) | uni@goduni.me or the [advisory form](https://github.com/goduni/unissh/security/advisories/new) |
 | Contribute code or docs | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Support the project | [README § Supporting the project](https://github.com/goduni/unissh#supporting-the-project) |
