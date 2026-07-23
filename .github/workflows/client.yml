@@ -71,6 +71,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # A tag must agree with the manifests it will name artifacts from. Without this,
+      # `git tag v0.1.1` on an un-bumped tree produces a release full of
+      # UniSSH_0.1.0_* files — which is exactly what v0.1.1 shipped.
+      - name: Tag must match the manifest version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/bump-version.py --check "${GITHUB_REF_NAME#v}"
+
       - name: Install Linux system deps (Tauri/webkit + AppImage/rpm tooling)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -187,6 +194,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      # A tag must agree with the manifests it will name artifacts from. Without this,
+      # `git tag v0.1.1` on an un-bumped tree produces a release full of
+      # UniSSH_0.1.0_* files — which is exactly what v0.1.1 shipped.
+      - name: Tag must match the manifest version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/bump-version.py --check "${GITHUB_REF_NAME#v}"
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -333,6 +347,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      # A tag must agree with the manifests it will name artifacts from. Without this,
+      # `git tag v0.1.1` on an un-bumped tree produces a release full of
+      # UniSSH_0.1.0_* files — which is exactly what v0.1.1 shipped.
+      - name: Tag must match the manifest version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/bump-version.py --check "${GITHUB_REF_NAME#v}"
 
       - name: Setup Node
         uses: actions/setup-node@v6
