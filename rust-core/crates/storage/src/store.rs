@@ -37,15 +37,24 @@ impl std::fmt::Debug for Storage {
     }
 }
 
+/// SQLCipher sets up process-global crypto state the first time a connection
+/// is keyed; two first-opens racing from different threads can observe that
+/// state half-built ("sqlcipherCodecAttach: sqlcipher not initialized",
+/// surfacing as a PRAGMA key error). Opens are rare (once per instance /
+/// unlock), so serialize them entirely rather than special-casing the first.
+static OPEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 impl Storage {
     /// Opens (creating if needed) the instance's encrypted DB at the given path.
     pub fn open(path: &Path, db_key: &[u8]) -> Result<Self, StorageError> {
+        let _serialized = OPEN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let conn = Connection::open(path)?;
         Self::init(conn, db_key)
     }
 
     /// Opens an in-memory encrypted DB (for tests / ephemeral instances).
     pub fn open_in_memory(db_key: &[u8]) -> Result<Self, StorageError> {
+        let _serialized = OPEN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let conn = Connection::open_in_memory()?;
         Self::init(conn, db_key)
     }
