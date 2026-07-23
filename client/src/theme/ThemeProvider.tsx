@@ -1,5 +1,6 @@
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -9,13 +10,18 @@ import {
   AccentKey,
   AppThemeFamily,
   Density,
+  DEFAULT_TERM_PREFS,
   HostsLayout,
   EffMode,
+  isHexColor,
   Mode,
   Palette,
   resolveAppPalette,
+  TERM_FONTS,
   TERM_LINK,
   TERM_THEMES,
+  TermFontId,
+  TermPrefs,
   TermTheme,
   TermThemePalette,
   validateTermThemeImport,
@@ -40,6 +46,10 @@ interface ThemeCtx {
   termThemeId: string;
   setTermThemeId: (id: string) => void;
   resetTermTheme: () => void;
+  /** Terminal typography + behaviour. Independent of the terminal COLOUR theme. */
+  termPrefs: TermPrefs;
+  setTermPrefs: (patch: Partial<TermPrefs>) => void;
+  resetTermPrefs: () => void;
   termTheme: TermTheme;
   /** Builtin + user-custom themes, in display order. */
   termThemes: TermTheme[];
@@ -91,6 +101,39 @@ function saveCustomThemes(list: TermTheme[]) {
     localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(list));
   } catch {
     /* ignore (private mode / quota) */
+  }
+}
+
+const TERM_PREFS_KEY = "unissh.termPrefs";
+
+/** Load prefs, dropping any field that is missing or malformed rather than the whole
+ *  object — a hand-edited or forward-incompatible store degrades to defaults per field
+ *  instead of resetting everything the user chose. */
+function loadTermPrefs(): TermPrefs {
+  try {
+    const raw = localStorage.getItem(TERM_PREFS_KEY);
+    if (!raw) return DEFAULT_TERM_PREFS;
+    const o = JSON.parse(raw) as Partial<TermPrefs>;
+    const num = (v: unknown, lo: number, hi: number, dflt: number): number =>
+      typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
+    return {
+      fontId:
+        TERM_FONTS.some((f) => f.id === o.fontId) || o.fontId === "custom"
+          ? (o.fontId as TermFontId)
+          : DEFAULT_TERM_PREFS.fontId,
+      fontCustom: typeof o.fontCustom === "string" ? o.fontCustom.slice(0, 64) : "",
+      lineHeight: num(o.lineHeight, 1.0, 1.6, DEFAULT_TERM_PREFS.lineHeight),
+      letterSpacing: num(o.letterSpacing, -1, 2, DEFAULT_TERM_PREFS.letterSpacing),
+      cursor:
+        o.cursor === "bar" || o.cursor === "underline" || o.cursor === "block"
+          ? o.cursor
+          : DEFAULT_TERM_PREFS.cursor,
+      cursorBlink: typeof o.cursorBlink === "boolean" ? o.cursorBlink : true,
+      fg: isHexColor(o.fg) ? (o.fg as string) : null,
+      minContrast: o.minContrast === true,
+    };
+  } catch {
+    return DEFAULT_TERM_PREFS;
   }
 }
 
@@ -179,6 +222,29 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     () => lsGet("unissh.termOverrideLight", "") || null,
   );
   const [customThemes, setCustomThemes] = useState<TermTheme[]>(() => loadCustomThemes());
+  const [termPrefs, setTermPrefsState] = useState<TermPrefs>(loadTermPrefs);
+
+  const setTermPrefs = useCallback((patch: Partial<TermPrefs>) => {
+    setTermPrefsState((prev) => {
+      const next = { ...prev, ...patch };
+      try {
+        localStorage.setItem(TERM_PREFS_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore (private mode / quota) */
+      }
+      return next;
+    });
+  }, []);
+
+  const resetTermPrefs = useCallback(() => {
+    setTermPrefsState(DEFAULT_TERM_PREFS);
+    try {
+      localStorage.removeItem(TERM_PREFS_KEY);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const [sysDark, setSysDark] = useState<boolean>(() => {
     try {
       return window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -325,6 +391,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     termThemeId,
     setTermThemeId,
     resetTermTheme,
+    termPrefs,
+    setTermPrefs,
+    resetTermPrefs,
     termTheme,
     termThemes,
     customThemes,
