@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import readme from "../../../README.md?raw";
+import page from "../../../website/src/pages/support.astro?raw";
 import { CONTACT_EMAIL, WALLETS } from "./wallets";
 
 describe("wallets", () => {
@@ -46,6 +47,22 @@ describe("wallets", () => {
 
     it("links the Telegram community", () => {
       expect(readme).toContain("https://t.me/unissh");
+    });
+  });
+
+  describe("website /support", () => {
+    it.each(WALLETS.map((w) => [w.label, w.address] as const))(
+      "pairs %s with its address",
+      (label, address) => {
+        const paired = page
+          .split("\n")
+          .some((line) => line.includes(`'${label}'`) && line.includes(address));
+        expect(paired, `support.astro has no entry pairing ${label} with ${address}`).toBe(true);
+      },
+    );
+
+    it("names the contact address", () => {
+      expect(page).toContain(CONTACT_EMAIL);
     });
   });
 });

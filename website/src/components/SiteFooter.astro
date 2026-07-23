@@ -11,6 +11,7 @@ interface Props {
     deploy: string;
     github: string;
     githubReleases: string;
+    support: string;
   };
 }
 const { links } = Astro.props;
@@ -40,6 +41,7 @@ const columns = [
       { label: 'GitHub', href: links.github },
       { label: 'Deploy the server', href: links.deploy },
       { label: 'Server & API', href: links.server },
+      { label: 'Support', href: links.support },
     ],
   },
 ];
