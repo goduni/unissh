@@ -574,6 +574,97 @@ export function termToXterm(t: TermTheme) {
   };
 }
 
+// ── Terminal typography & behaviour ────────────────────────────
+// Colour (TermTheme) and typography (TermPrefs) are independent axes: a font size
+// applies to every theme, and a theme applies at every font size. Keeping them apart is
+// what lets the theme picker stay a picker instead of growing a font section per theme.
+
+export type TermCursorStyle = "block" | "bar" | "underline";
+
+export type TermFontId =
+  | "jetbrains"
+  | "fira"
+  | "cascadia"
+  | "sfmono"
+  | "menlo"
+  | "system"
+  | "custom";
+
+/** Only JetBrains Mono is bundled (`@fontsource/jetbrains-mono`). The rest exist only if
+ *  the user installed them, which is why the settings picker probes each with
+ *  `document.fonts.check` and says so instead of silently falling back. */
+export const TERM_FONTS: { id: TermFontId; name: string; stack: string }[] = [
+  { id: "jetbrains", name: "JetBrains Mono", stack: MONO },
+  { id: "fira", name: "Fira Code", stack: `'Fira Code', ${MONO}` },
+  { id: "cascadia", name: "Cascadia Code", stack: `'Cascadia Code', ${MONO}` },
+  { id: "sfmono", name: "SF Mono", stack: `'SF Mono', ${MONO}` },
+  { id: "menlo", name: "Menlo", stack: `Menlo, ${MONO}` },
+  { id: "system", name: "System monospace", stack: "ui-monospace, monospace" },
+];
+
+export interface TermPrefs {
+  fontId: TermFontId;
+  /** CSS family name used when `fontId` is "custom". */
+  fontCustom: string;
+  lineHeight: number;
+  /** Extra tracking in px; xterm takes a number. */
+  letterSpacing: number;
+  cursor: TermCursorStyle;
+  cursorBlink: boolean;
+  /** Overrides the active theme's `fg` for text AND cursor. null = follow the theme. */
+  fg: string | null;
+  /** Raise xterm's contrast floor from the cosmetic 1.1 to WCAG AA. */
+  minContrast: boolean;
+}
+
+export const DEFAULT_TERM_PREFS: TermPrefs = {
+  fontId: "jetbrains",
+  fontCustom: "",
+  lineHeight: 1.2,
+  letterSpacing: 0,
+  cursor: "block",
+  cursorBlink: true,
+  fg: null,
+  minContrast: false,
+};
+
+/** A family name is user input that ends up inside a CSS declaration, so anything that
+ *  could terminate the quote and append a second property is refused outright rather
+ *  than escaped — there is no legitimate font whose name contains a quote or semicolon. */
+const SAFE_FAMILY = /^[\w .+-]{1,64}$/;
+
+export function termFontStack(prefs: TermPrefs): string {
+  if (prefs.fontId === "custom") {
+    const name = (prefs.fontCustom ?? "").trim();
+    if (!name || !SAFE_FAMILY.test(name)) return MONO;
+    return `'${name}', ${MONO}`;
+  }
+  return TERM_FONTS.find((f) => f.id === prefs.fontId)?.stack ?? MONO;
+}
+
+/** Build the xterm options for a pane. The ONLY place this happens — the settings live
+ *  preview calls it too, so the preview cannot drift from what a real pane will do. */
+export function termOptions(prefs: TermPrefs, theme: TermTheme, fontSize: number) {
+  const base = termToXterm(theme);
+  return {
+    fontFamily: termFontStack(prefs),
+    fontSize,
+    lineHeight: prefs.lineHeight,
+    letterSpacing: prefs.letterSpacing,
+    cursorStyle: prefs.cursor,
+    cursorBlink: prefs.cursorBlink,
+    theme: prefs.fg ? { ...base, foreground: prefs.fg, cursor: prefs.fg } : base,
+    // Render bold text in the (distinct) bright palette and nudge any too-low-contrast
+    // glyph so nothing comes out unreadable.
+    drawBoldTextInBrightColors: true,
+    minimumContrastRatio: prefs.minContrast ? 4.5 : 1.1,
+    allowProposedApi: true,
+    // When a TUI turns on mouse reporting, a plain drag no longer selects text. macOS
+    // needs this flag for the Option+drag override (Shift works elsewhere by default).
+    macOptionClickForcesSelection: true,
+  };
+}
+
 // ── Custom terminal-theme editor support ───────────────────────
 
 /** The nine solid-colour fields of a TermTheme (everything except `sel`, which
