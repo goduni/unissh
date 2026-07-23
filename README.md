@@ -35,6 +35,7 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 - [Security & Privacy](#security--privacy)
 - [Build from source](#build-from-source)
 - [Contributing](#contributing)
+- [Community](#community) — [supporting the project](#supporting-the-project)
 - [FAQ / Troubleshooting](#faq--troubleshooting)
 - [License](#license)
 
@@ -426,6 +427,43 @@ Contributions are welcome. A good first pass:
 4. Open a PR. By contributing you agree your work is licensed under the project's dual license (Apache-2.0 §5).
 
 Full guidelines are in [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). Security issues go to `uni@goduni.me` — see [Reporting a vulnerability](#reporting-a-vulnerability).
+
+---
+
+## Community
+
+Two places, on purpose:
+
+- **Telegram — [@unissh](https://t.me/unissh)** — quick questions, release notes, and the
+  fastest way to reach other users.
+- **[GitHub Discussions](https://github.com/goduni/unissh/discussions)** — the canonical
+  home for anything whose answer should still be findable in a year.
+
+Bugs belong in [issues](https://github.com/goduni/unissh/issues/new/choose); security
+reports go privately to **uni@goduni.me** — see [`SECURITY.md`](SECURITY.md).
+
+### Supporting the project
+
+UniSSH is free, open source, and has no company behind it. The things that help most cost
+nothing: star the repo, file a good bug report, fix a doc typo, or translate the client.
+
+If you'd rather send something, the project takes crypto. GitHub Sponsors and the card
+processors all need a legal name and a bank account, which an anonymously maintained
+project can't provide:
+
+| Network | Address |
+| --- | --- |
+| **BTC** | `bc1qc683mf2rh63ng4eegv0emzejrhy6uux5k0zg2y` |
+| **BEP20** | `0x63E3e9E690f64f149A4F920396E47328cACa6aA7` |
+| **ERC20** | `0x63E3e9E690f64f149A4F920396E47328cACa6aA7` |
+| **TRC20** | `TSzgPmq6LQXijuistHFFCdeTZsYZXPSfEJ` |
+| **TON** | `UQCA3uYaDrMTc7cPR_DUxvqCZeAgg-2skRCLOpNrKfdg7_3d` |
+| **SOL** | `jSsCcdS8Vaw1qvzUSioQ63r4niw9h914WqwmsfFA7eM` |
+
+The same addresses are in the app under **Settings → Support** and on
+[unissh.dev/support](https://unissh.dev/support) — compare two before you send anything.
+Donations don't buy priority support, roadmap influence, or private builds. For anything
+else, write to **uni@goduni.me**.
 
 ---
 
