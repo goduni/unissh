@@ -6,8 +6,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { ACCENT_KEYS, ACCENTS, MONO, UI, rgba } from "@/theme/tokens";
-import type { AppThemeFamily, Density, HostsLayout, Mode, Palette, TermTheme } from "@/theme/tokens";
+import { ACCENT_KEYS, ACCENTS, MONO, TERM_FONTS, UI, rgba, toHexInput } from "@/theme/tokens";
+import type {
+  AppThemeFamily,
+  Density,
+  HostsLayout,
+  Mode,
+  Palette,
+  TermCursorStyle,
+  TermFontId,
+  TermTheme,
+} from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, Segmented, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
 import { ServerVaultsSection } from "./ServerVaultsSection";
 import { Modal } from "@/components/Modal";
@@ -168,6 +177,38 @@ function ThemeCardAction({
   );
 }
 
+/** Which of the offered fonts this machine actually has. Only JetBrains Mono is bundled;
+ *  the rest silently fall back to it if absent, and a picker that hides that is a picker
+ *  that lies. */
+function useInstalledFonts(): Set<string> {
+  const [installed, setInstalled] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let alive = true;
+    const probe = () => {
+      if (!alive) return;
+      const found = new Set<string>();
+      for (const f of TERM_FONTS) {
+        // The bundled face is always available; probing it can race webfont loading.
+        if (f.id === "jetbrains" || f.id === "system") {
+          found.add(f.id);
+          continue;
+        }
+        try {
+          if (document.fonts.check(`12px ${f.stack.split(",")[0]}`)) found.add(f.id);
+        } catch {
+          /* older webview without FontFaceSet — leave it unmarked */
+        }
+      }
+      setInstalled(found);
+    };
+    void (document.fonts?.ready?.then(probe).catch(probe) ?? probe());
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return installed;
+}
+
 function SettingsAppearance() {
   const p = usePalette();
   const { t } = useTranslation();
@@ -190,7 +231,12 @@ function SettingsAppearance() {
     deleteTermTheme,
     resetTermTheme,
     effMode,
+    termTheme,
+    termPrefs,
+    setTermPrefs,
+    resetTermPrefs,
   } = useTheme();
+  const installedFonts = useInstalledFonts();
   const [showAllThemes, setShowAllThemes] = useState(false);
   // Themes for the mode you are actually in first — at 17 cards, a dark-theme user
   // scrolling past eight light ones to reach the rest is the whole problem.
@@ -361,6 +407,144 @@ function SettingsAppearance() {
           )}
         </div>
       </SettingRow>
+
+      <SettingRow title={t("settings.termFontFamilyTitle")} desc={t("settings.termFontFamilyDesc")}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+          <select
+            value={termPrefs.fontId}
+            onChange={(e) => setTermPrefs({ fontId: e.target.value as TermFontId })}
+            style={{
+              fontFamily: UI,
+              fontSize: 13,
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: `1px solid ${p.line2}`,
+              background: p.bg2,
+              color: p.txt,
+            }}
+          >
+            {TERM_FONTS.map((f) => (
+              <option key={f.id} value={f.id}>
+                {installedFonts.has(f.id)
+                  ? f.name
+                  : `${f.name} — ${t("settings.termFontNotInstalled")}`}
+              </option>
+            ))}
+            <option value="custom">…</option>
+          </select>
+          {termPrefs.fontId === "custom" && (
+            <input
+              value={termPrefs.fontCustom}
+              onChange={(e) => setTermPrefs({ fontCustom: e.target.value })}
+              placeholder={t("settings.termFontCustomPlaceholder")}
+              style={{
+                fontFamily: MONO,
+                fontSize: 13,
+                padding: "6px 10px",
+                borderRadius: 8,
+                border: `1px solid ${p.line2}`,
+                background: p.bg2,
+                color: p.txt,
+                width: 220,
+              }}
+            />
+          )}
+        </div>
+      </SettingRow>
+
+      <SettingRow title={t("settings.termLineHeightTitle")} desc={t("settings.termLineHeightDesc")}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input
+            type="range"
+            min={1}
+            max={1.6}
+            step={0.05}
+            value={termPrefs.lineHeight}
+            onChange={(e) => setTermPrefs({ lineHeight: parseFloat(e.target.value) })}
+            style={{ width: 150 }}
+          />
+          <span style={{ fontFamily: MONO, fontSize: 12, minWidth: 34, textAlign: "right" }}>
+            {termPrefs.lineHeight.toFixed(2)}
+          </span>
+        </div>
+      </SettingRow>
+
+      <SettingRow
+        title={t("settings.termLetterSpacingTitle")}
+        desc={t("settings.termLetterSpacingDesc")}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input
+            type="range"
+            min={-1}
+            max={2}
+            step={0.25}
+            value={termPrefs.letterSpacing}
+            onChange={(e) => setTermPrefs({ letterSpacing: parseFloat(e.target.value) })}
+            style={{ width: 150 }}
+          />
+          <span style={{ fontFamily: MONO, fontSize: 12, minWidth: 34, textAlign: "right" }}>
+            {termPrefs.letterSpacing.toFixed(2)}
+          </span>
+        </div>
+      </SettingRow>
+
+      <SettingRow title={t("settings.termCursorTitle")}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <Segmented<TermCursorStyle>
+            value={termPrefs.cursor}
+            onChange={(v) => setTermPrefs({ cursor: v })}
+            options={[
+              { value: "block", label: t("settings.termCursorBlock") },
+              { value: "bar", label: t("settings.termCursorBar") },
+              { value: "underline", label: t("settings.termCursorUnderline") },
+            ]}
+          />
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <Toggle
+              checked={termPrefs.cursorBlink}
+              onChange={(v) => setTermPrefs({ cursorBlink: v })}
+              aria-label={t("settings.termCursorBlink")}
+            />
+            {t("settings.termCursorBlink")}
+          </label>
+        </div>
+      </SettingRow>
+
+      <SettingRow title={t("settings.termFgTitle")} desc={t("settings.termFgDesc")}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input
+            type="color"
+            value={toHexInput(termPrefs.fg ?? termTheme.fg)}
+            onChange={(e) => setTermPrefs({ fg: e.target.value })}
+            aria-label={t("settings.termFgTitle")}
+            style={{ width: 36, height: 28, padding: 0, border: "none", background: "none" }}
+          />
+          {termPrefs.fg && (
+            <Btn variant="ghost" size="sm" onClick={() => setTermPrefs({ fg: null })}>
+              {t("settings.termFgReset")}
+            </Btn>
+          )}
+        </div>
+      </SettingRow>
+
+      <SettingRow
+        title={t("settings.termMinContrastTitle")}
+        desc={t("settings.termMinContrastDesc")}
+      >
+        <Toggle
+          checked={termPrefs.minContrast}
+          onChange={(v) => setTermPrefs({ minContrast: v })}
+          aria-label={t("settings.termMinContrastTitle")}
+        />
+      </SettingRow>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: "12px 0" }}>
+        <Btn variant="ghost" size="sm" icon="refresh" onClick={resetTermPrefs}>
+          {t("settings.termResetPrefs")}
+        </Btn>
+      </div>
+
       <SettingRow title={t("settings.keepaliveTitle")} desc={t("settings.keepaliveDesc")}>
         <Segmented<string>
           value={String(keepaliveSecs)}
