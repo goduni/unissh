@@ -34,6 +34,7 @@ import {
   type VaultInfo,
 } from "@/bridge/types";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeSecretToClipboard } from "@/bridge/clipboard";
 import { readSecretKeyOnce } from "@/bridge/secretKey";
 import { getVersion } from "@tauri-apps/api/app";
@@ -825,9 +826,11 @@ function AboutRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   );
 }
 
-/** External link row: the URL is visible and copyable. The webview deliberately
- *  has no opener/shell capability, so "copy link" IS the action — an honest
- *  affordance instead of a dead Website/GitHub button. */
+/** External link row: the URL stays visible and copyable, and can also be opened in the
+ *  system browser (`opener:default` is granted in src-tauri/capabilities;
+ *  ViewTerminal uses the same call for terminal web-links). Copy is kept alongside Open
+ *  because a copied URL is what you need when the machine running UniSSH is not the
+ *  machine you browse from. */
 function LinkRow({ label, url }: { label: string; url: string }) {
   const p = usePalette();
   const { t } = useTranslation();
@@ -867,6 +870,14 @@ function LinkRow({ label, url }: { label: string; url: string }) {
       >
         {url}
       </span>
+      <Btn
+        variant="ghost"
+        size="sm"
+        icon="ar"
+        onClick={() => void guard(async () => openUrl(url))}
+        title={t("support.open")}
+        aria-label={`${t("support.open")}: ${label}`}
+      />
       <Btn
         variant="ghost"
         size="sm"
@@ -963,7 +974,7 @@ function SettingsAbout() {
       <AboutRow k={t("settings.aboutEngine")} v={engineStr} />
       <AboutRow k={t("settings.accountId")} v={acctId} mono />
       <AboutRow k={t("settings.aboutLicense")} v="MIT OR Apache-2.0" />
-      <LinkRow label={t("settings.website")} url="https://goduni.github.io/unissh/" />
+      <LinkRow label={t("settings.website")} url="https://unissh.dev/" />
       <LinkRow label="GitHub" url="https://github.com/goduni/unissh" />
     </>
   );
