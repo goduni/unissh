@@ -1,6 +1,6 @@
 [package]
 name = "unissh-ffi"
-version = "0.1.0"
+version.workspace = true
 description = "UniSSH core FFI boundary (UniFFI): instances, unlock, vault/item CRUD, launching SSH sessions/tunnels. The UI never receives plaintext keys (spec 4)."
 readme = "README.md"
 edition.workspace = true

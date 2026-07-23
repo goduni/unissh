@@ -1,6 +1,6 @@
 [package]
 name = "unissh-ssh-transport"
-version = "0.1.0"
+version.workspace = true
 description = "UniSSH SSH transport on russh: connect, authentication via the embedded agent, ProxyJump chains, forwards, TOFU/host key pinning, ssh-config import (spec 10.4)."
 readme = "README.md"
 edition.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "unissh-vault"
-version = "0.1.0"
+version.workspace = true
 description = "UniSSH local vaults: Vault Key, per-item keys, item encryption with associated-data binding (spec 5.2–5.3, the local part)."
 readme = "README.md"
 edition.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "unissh-crypto"
-version = "0.1.0"
+version.workspace = true
 description = "Cryptographic foundation of the UniSSH core: primitives, envelope wrappers, AEAD with associated data, signatures, blob versioning (crypto agility)."
 readme = "README.md"
 edition.workspace = true
