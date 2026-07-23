@@ -53,6 +53,7 @@ import type { Lang } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import { useNarrow } from "@/store/responsive";
 import { SettingsSupport } from "./SettingsSupport";
+import { TerminalPreview } from "./TerminalPreview";
 
 // ── localStorage helpers ───────────────────────────────────────
 function lsGet(key: string, fallback: string): string {
@@ -572,6 +573,9 @@ function SettingsAppearance() {
           ]}
         />
       </SettingRow>
+      <div style={{ padding: "16px 0 0" }}>
+        <TerminalPreview />
+      </div>
       <div style={{ padding: "16px 0" }}>
         <div
           style={{
