@@ -12,7 +12,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO, rgba, termToXterm } from "@/theme/tokens";
+import { MONO, rgba, termOptions } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, StatusDot, type IconName } from "@/components/primitives";
 import { ReconnectBanner } from "@/components/ReconnectBanner";
 import { useTranslation, Trans } from "@/i18n";
@@ -256,7 +256,7 @@ function TerminalPane({
   focused: boolean;
   multi: boolean;
 }) {
-  const { termTheme } = useTheme();
+  const { termTheme, termPrefs } = useTheme();
   const { t } = useTranslation();
   const p = usePalette();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -306,25 +306,13 @@ function TerminalPane({
   useEffect(() => {
     if (!hostRef.current) return;
     const isMobile = useApp.getState().device === "mobile";
-    const term = new Xterm({
-      fontFamily: MONO,
-      fontSize: baseFontSize(isMobile) + useApp.getState().termZoom,
-      lineHeight: 1.2,
-      cursorBlink: true,
-      theme: termToXterm(termTheme),
-      // Render bold text in the (now distinct) bright palette and nudge any
-      // too-low-contrast glyph so nothing comes out unreadable.
-      drawBoldTextInBrightColors: true,
-      minimumContrastRatio: 1.1,
-      allowProposedApi: true,
-      // When a TUI turns on mouse reporting (zellij/tmux/vim/htop), xterm forwards
-      // drags to the app, so a plain drag no longer selects text — leaving nothing to
-      // copy. xterm still lets you force a local selection with a modifier+drag: Shift
-      // works out of the box on Linux/Windows, but on macOS the Option+drag override
-      // is gated behind this flag (default false). Enable it so ⌥-drag selects inside
-      // zellij (then ⌘C copies it) instead of being swallowed by the remote app.
-      macOptionClickForcesSelection: true,
-    });
+    // Every xterm option comes from termOptions() — the same function the live settings
+    // preview uses — so the preview can never drift from a real pane. termPrefs is read
+    // once at mount; later changes reach the pane through the live-apply effect below,
+    // NOT by re-running this effect (that would destroy the scrollback and session).
+    const term = new Xterm(
+      termOptions(termPrefs, termTheme, baseFontSize(isMobile) + useApp.getState().termZoom),
+    );
     const fit = new FitAddon();
     term.loadAddon(fit);
     try {
@@ -510,19 +498,25 @@ function TerminalPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // live-apply terminal theme changes
-  useEffect(() => {
-    if (xtermRef.current) xtermRef.current.options.theme = termToXterm(termTheme);
-  }, [termTheme]);
-
-  // live-apply font zoom: resize the glyphs, then re-fit + push the new geometry
-  // to the PTY so cols/rows stay in sync (same path the ResizeObserver uses).
+  // live-apply every appearance change — theme, zoom, and the termPrefs typography —
+  // without a reconnect. xterm accepts option writes at runtime, but a font-metric
+  // change (family/size/line-height/tracking) invalidates the grid, so the refit must
+  // follow and the new cols/rows must be pushed to the PTY (the same sync path the
+  // ResizeObserver and the old zoom effect used).
   useEffect(() => {
     const term = xtermRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
     const isMobile = useApp.getState().device === "mobile";
-    term.options.fontSize = baseFontSize(isMobile) + termZoom;
+    const next = termOptions(termPrefs, termTheme, baseFontSize(isMobile) + termZoom);
+    term.options.fontFamily = next.fontFamily;
+    term.options.fontSize = next.fontSize;
+    term.options.lineHeight = next.lineHeight;
+    term.options.letterSpacing = next.letterSpacing;
+    term.options.cursorStyle = next.cursorStyle;
+    term.options.cursorBlink = next.cursorBlink;
+    term.options.minimumContrastRatio = next.minimumContrastRatio;
+    term.options.theme = next.theme;
     if (!hostLaidOut(hostRef.current)) return;
     try {
       fit.fit();
@@ -531,7 +525,7 @@ function TerminalPane({
     } catch {
       /* ignore */
     }
-  }, [termZoom]);
+  }, [termPrefs, termTheme, termZoom]);
 
   // open the session (once we have auth). Re-runs on a reconnect (pane.gen bumped),
   // re-opening in the SAME pane so the xterm scrollback is preserved.
