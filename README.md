@@ -370,20 +370,23 @@ UniSSH does **not roll its own crypto** — it builds on RustCrypto, `hpke`, SQL
 
 Found a security issue? Please report it **privately** to **`uni@goduni.me`** instead of opening a public issue, and allow a reasonable window for a fix before disclosure.
 
-> The full policy is in [`SECURITY.md`](SECURITY.md). _TODO(maintainer): publish a PGP/age key so reports can be encrypted end-to-end._
+> The full policy — including the project's **age public key** for end-to-end-encrypted reports — is in [`SECURITY.md`](SECURITY.md).
 
 ### Verifying release integrity
 
+Every release ships a `SHA256SUMS` file plus a GitHub **build-provenance (SLSA) attestation**, both produced by CI on the tag build:
+
 ```bash
-# macOS / Linux
-shasum -a 256 UniSSH-<version>-<target>.<ext>
-# Windows (PowerShell)
-Get-FileHash .\UniSSH-<version>-<target>.<ext> -Algorithm SHA256
+# 1) Checksums — download SHA256SUMS next to your artifact, then:
+sha256sum -c SHA256SUMS --ignore-missing          # Linux
+shasum -a 256 -c SHA256SUMS --ignore-missing      # macOS
+Get-FileHash .\UniSSH_<version>_x64-setup.exe -Algorithm SHA256   # Windows: compare by eye
+
+# 2) Provenance — proves the artifact was built by this repo's CI from the tagged commit:
+gh attestation verify UniSSH_<version>_amd64.AppImage --repo goduni/unissh
 ```
 
-Compare the output against the published checksum for that artifact.
-
-> _TODO(maintainer): decide and document the integrity story — publish a `SHA256SUMS` file with each release, and optionally a detached GPG/minisign signature + the public key here. (No checksums/signature pipeline is wired up in this repo yet.)_
+The binaries themselves are deliberately **unsigned** (no notarization / Authenticode) — the reasoning is in [`SECURITY.md`](SECURITY.md#release-integrity--unsigned-builds).
 
 ---
 

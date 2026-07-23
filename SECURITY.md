@@ -59,23 +59,29 @@ with an on-call team, so please set expectations accordingly:
   you to where it's documented in [`THREAT_MODEL.md`](THREAT_MODEL.md) rather than
   silently closing it.
 
-### PGP / encrypted reports
+### Encrypted reports (age)
 
-For especially sensitive reports you may want to encrypt the contents.
+For especially sensitive reports you may want to encrypt the contents. The
+project publishes a dedicated [age](https://age-encryption.org) public key:
 
-> **TODO (maintainer): publish an encrypted-report public key.**
-> A dedicated **age / minisign / PGP** public key for `uni@goduni.me` has **not
-> been generated yet**, so there is no key to fingerprint here. Until one is
-> published, email plain text (omit the actual exploit payload and offer to send
-> details over an encrypted channel), or use the private GitHub advisory form.
-> When a key exists it will be committed here and pinned in this section:
->
-> ```text
-> -----BEGIN PLACEHOLDER PUBLIC KEY-----
->   (not yet generated — do NOT trust any key claiming to be this one
->    until it appears in this file on the main branch)
-> -----END PLACEHOLDER PUBLIC KEY-----
-> ```
+```text
+age16fdpvz77sqfauktyn84hajhnltuhxu56w7k228rprhnm4p70sveqvwftwq
+```
+
+Encrypt your report and attach the result to a plain e-mail:
+
+```bash
+age -a -r age16fdpvz77sqfauktyn84hajhnltuhxu56w7k228rprhnm4p70sveqvwftwq \
+    -o report.txt.age report.txt
+```
+
+Trust only the key that appears **in this file on the `main` branch** — any key
+claiming to speak for UniSSH elsewhere is not ours. If it is ever rotated, the
+old key will be listed here as revoked alongside the new one. PGP is
+deliberately not offered: one modern, hard-to-misuse tool beats a parallel
+half-maintained one. If you cannot use age, email plain text omitting the
+exploit payload and offer to send details over an encrypted channel, or use the
+private GitHub advisory form.
 
 ## Release integrity / unsigned builds
 
