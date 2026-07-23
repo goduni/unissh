@@ -881,6 +881,7 @@ export const ru = {
     "themeCandyDark": "Candy Holo — тёмная",
     "customize": "Настроить",
     "termResetDefault": "Сбросить к теме по умолчанию",
+    "termShowAllThemes": "Показать все ({{n}})",
     "themeLight": "Светлая",
     "themeDark": "Тёмная",
     "themeAuto": "Авто",

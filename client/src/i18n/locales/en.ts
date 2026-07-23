@@ -846,6 +846,7 @@ export const en = {
     "themeCandyDark": "Candy Holo — Dark",
     "customize": "Customize",
     "termResetDefault": "Reset to theme default",
+    "termShowAllThemes": "Show all {{n}}",
     "themeLight": "Light",
     "themeDark": "Dark",
     "themeAuto": "Auto",
