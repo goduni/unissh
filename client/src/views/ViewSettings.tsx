@@ -43,6 +43,7 @@ import { useTranslation, setLang, currentLang, tDyn, LANGS, LANG_LABELS } from "
 import type { Lang } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import { useNarrow } from "@/store/responsive";
+import { SettingsSupport } from "./SettingsSupport";
 
 // ── localStorage helpers ───────────────────────────────────────
 function lsGet(key: string, fallback: string): string {
@@ -96,7 +97,9 @@ function SettingRow({
   );
 }
 
-function SectionLabel({ children, first }: { children: React.ReactNode; first?: boolean }) {
+/** Exported so the Support panel (SettingsSupport.tsx) uses the same section heading as
+ *  every other settings pane rather than a look-alike of its own. */
+export function SectionLabel({ children, first }: { children: React.ReactNode; first?: boolean }) {
   const p = usePalette();
   return (
     <div
@@ -3600,7 +3603,7 @@ function SettingsCloud() {
 }
 
 // ── shell ──────────────────────────────────────────────────────
-type TabId = "appearance" | "general" | "vaults" | "cloud" | "security" | "about";
+type TabId = "appearance" | "general" | "vaults" | "cloud" | "security" | "about" | "support";
 const SETTINGS_TABS: { id: TabId; icon: IconName; labelKey: string }[] = [
   { id: "appearance", icon: "sliders", labelKey: "settings.tabAppearance" },
   { id: "general", icon: "refresh", labelKey: "settings.tabGeneral" },
@@ -3608,6 +3611,7 @@ const SETTINGS_TABS: { id: TabId; icon: IconName; labelKey: string }[] = [
   { id: "cloud", icon: "cloud", labelKey: "serverCloud.tab" },
   { id: "security", icon: "shieldcheck", labelKey: "settings.tabSecurity" },
   { id: "about", icon: "note", labelKey: "settings.tabAbout" },
+  { id: "support", icon: "heart", labelKey: "support.tab" },
 ];
 
 export function ViewSettings() {
@@ -3708,6 +3712,7 @@ export function ViewSettings() {
           {tab === "cloud" && <SettingsCloud />}
           {tab === "security" && <SettingsSecurity />}
           {tab === "about" && <SettingsAbout />}
+          {tab === "support" && <SettingsSupport />}
         </div>
       </div>
     </div>
