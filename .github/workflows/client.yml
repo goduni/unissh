@@ -361,33 +361,27 @@ jobs:
           npx tauri icon src-tauri/app-icon.png
         working-directory: client
 
-      - name: Build the .app unsigned
-        run: |
-          cd src-tauri/gen/apple
-          PROJ=$(ls -d *.xcodeproj | head -1)
-          SCHEME=$(xcodebuild -project "$PROJ" -list \
-            | sed -n '/Schemes:/,$p' | tail -n +2 | sed 's/^ *//' | grep -m1 .)
-          echo "building project=$PROJ scheme=$SCHEME"
-          xcodebuild \
-            -project "$PROJ" -scheme "$SCHEME" -configuration release \
-            -destination 'generic/platform=iOS' -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build
+      - name: Build the unsigned IPA (tauri ios build --no-sign)
+        # --no-sign is the upstream unsigned path: xcodebuild archives with
+        # codesigning skipped and the CLI packages the IPA from the .xcarchive
+        # itself (no exportArchive, which would demand a team). Running plain
+        # xcodebuild instead does NOT work: the generated project's build phase
+        # calls `tauri ios xcode-script`, which dials the options server that
+        # only `tauri ios build/dev` starts.
+        run: npx tauri ios build --no-sign --ci
         working-directory: client
 
-      - name: Package the sideload IPA
+      - name: Collect the IPA
         run: |
-          APP=$(find client/src-tauri/gen/apple/build/Build/Products -maxdepth 2 -name '*.app' -type d | head -1)
-          if [ -z "$APP" ]; then
-            echo "no .app produced; products:"
-            find client/src-tauri/gen/apple/build/Build/Products -maxdepth 3 | head -30
+          IPA=$(find client/src-tauri/gen/apple/build -name '*.ipa' | head -1)
+          if [ -z "$IPA" ]; then
+            echo "no .ipa produced; build dir:"
+            find client/src-tauri/gen/apple/build -maxdepth 3 | head -30
             exit 1
           fi
           VERSION=$(node -p "require('./client/src-tauri/tauri.conf.json').version")
           OUT="UniSSH_${VERSION}_ios-sideload.ipa"
-          mkdir Payload
-          cp -R "$APP" Payload/
-          zip -qry "$OUT" Payload
+          cp "$IPA" "$OUT"
           echo "IPA_NAME=$OUT" >> "$GITHUB_ENV"
 
       - name: Upload workflow artifact
