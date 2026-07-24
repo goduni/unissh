@@ -167,13 +167,6 @@ export function SettingsSupport() {
         url={LINKS.contributing}
       />
 
-      <SectionLabel>{t("support.whyLabel")}</SectionLabel>
-      <p
-        style={{ margin: "0 0 6px", fontSize: 13, lineHeight: 1.6, color: p.txt2, maxWidth: "58ch" }}
-      >
-        {t("support.why")}
-      </p>
-
       <SectionLabel>{t("support.donateLabel")}</SectionLabel>
       {WALLETS.map((w) => (
         <WalletRow key={w.label} label={w.label} address={w.address} />

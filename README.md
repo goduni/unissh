@@ -447,9 +447,7 @@ reports go privately to **uni@goduni.me** — see [`SECURITY.md`](SECURITY.md).
 UniSSH is free, open source, and has no company behind it. The things that help most cost
 nothing: star the repo, file a good bug report, fix a doc typo, or translate the client.
 
-If you'd rather send something, the project takes crypto. GitHub Sponsors and the card
-processors all need a legal name and a bank account, which an anonymously maintained
-project can't provide:
+If you'd rather send something, the project takes crypto:
 
 | Network | Address |
 | --- | --- |
