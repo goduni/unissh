@@ -901,6 +901,7 @@ export const ru = {
     "termMinContrastTitle": "Гарантировать читаемость",
     "termMinContrastDesc": "Подтягивать любой глиф ниже WCAG AA (4.5:1) до читаемого. Некоторые схемы будут выглядеть иначе.",
     "termResetPrefs": "Сбросить оформление",
+    "termPreviewLabel": "Предпросмотр",
     "themeLight": "Светлая",
     "themeDark": "Тёмная",
     "themeAuto": "Авто",
