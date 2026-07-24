@@ -910,6 +910,7 @@ export const en = {
     "startupPwNote": "Auto-unlock only works for passwordless instances — a master password is set, so unlocking is always manual.",
     "startupLocked": "Locked",
     "startupUnlocked": "Unlocked",
+    "sectionConnection": "Connection",
     "sectionBehavior": "Behavior",
     "restoreTabsTitle": "Restore terminal tabs",
     "restoreTabsDesc": "Reopen previous sessions on startup",
