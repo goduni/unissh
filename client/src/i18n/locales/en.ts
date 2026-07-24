@@ -1348,7 +1348,7 @@ export const en = {
   },
   support: {
     "tab": "Support",
-    "lede": "UniSSH is free, open source, and has no company behind it. If it saved you time, you can send some back. Nothing here is gated and nothing will be — donations don't buy priority support, roadmap influence, or private builds.",
+    "lede": "UniSSH is free, open source, and has no company behind it. If it solved a problem for you, you can support the project. Nothing here is gated and nothing will be — donations don't buy priority support, roadmap influence, or private builds.",
     "freeLabel": "Costs nothing",
     "star": "Star the repo",
     "starDesc": "It's how other people find it",
@@ -1358,8 +1358,6 @@ export const en = {
     "chatDesc": "@unissh on Telegram",
     "translate": "Translate the client",
     "translateDesc": "English and Russian today",
-    "whyLabel": "Why crypto only",
-    "why": "GitHub Sponsors, Ko-fi and every card processor need a legal name and a bank account. UniSSH is maintained anonymously, and that isn't traded away for easier payments. If none of these work for you, write and we'll find something.",
     "donateLabel": "Donate",
     "contactLabel": "Anything else",
     "contactDesc": "Not a support address: bugs go to GitHub Issues, questions to Discussions or Telegram.",
