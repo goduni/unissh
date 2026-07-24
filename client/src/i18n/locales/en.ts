@@ -1348,7 +1348,7 @@ export const en = {
   },
   support: {
     "tab": "Support",
-    "lede": "UniSSH is free, open source, and has no company behind it. If it solved a problem for you, you can support the project. Nothing here is gated and nothing will be — donations don't buy priority support, roadmap influence, or private builds.",
+    "lede": "UniSSH is free, open source, and has no company behind it. If it solved a problem for you, you can support the project. Nothing here is gated and nothing will be — donations don't buy priority support or private builds.",
     "freeLabel": "Costs nothing",
     "star": "Star the repo",
     "starDesc": "It's how other people find it",
@@ -1361,11 +1361,10 @@ export const en = {
     "donateLabel": "Donate",
     "contactLabel": "Anything else",
     "contactDesc": "Not a support address: bugs go to GitHub Issues, questions to Discussions or Telegram.",
-    "verify": "These addresses are also on unissh.dev/support and in the README. Compare at least two before sending — malware that swaps clipboard addresses is real.",
+    "verify": "These addresses are also on unissh.dev/support and in the README. Compare at least two before sending.",
     "open": "Open",
     "showQr": "Show QR code",
     "qrTitle": "Scan to send {{label}}",
-    "qrNote": "Generated on this device. Nothing was sent anywhere.",
     "addressCopied": "Address copied"
   },
 } as const;
