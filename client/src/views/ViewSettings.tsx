@@ -546,34 +546,8 @@ function SettingsAppearance() {
         </Btn>
       </div>
 
-      <SettingRow title={t("settings.keepaliveTitle")} desc={t("settings.keepaliveDesc")}>
-        <Segmented<string>
-          value={String(keepaliveSecs)}
-          onChange={(v) => setKeepaliveSecs(parseInt(v, 10) || 0)}
-          options={[
-            { value: "0", label: t("settings.keepaliveOff") },
-            { value: "15", label: t("settings.keepaliveSec", { n: 15 }) },
-            { value: "30", label: t("settings.keepaliveSec", { n: 30 }) },
-            { value: "60", label: t("settings.keepaliveSec", { n: 60 }) },
-          ]}
-        />
-      </SettingRow>
-      <SettingRow
-        title={t("settings.sftpParallelismTitle")}
-        desc={t("settings.sftpParallelismDesc")}
-      >
-        <Segmented<string>
-          value={String(sftpParallelism)}
-          onChange={(v) => setSftpParallelism(parseInt(v, 10) || 1)}
-          options={[
-            { value: "1", label: t("settings.sftpParallelismOff") },
-            { value: "2", label: "2" },
-            { value: "4", label: "4" },
-            { value: "8", label: "8" },
-          ]}
-        />
-      </SettingRow>
-      <div style={{ padding: "16px 0 0" }}>
+      <SectionLabel>{t("settings.termPreviewLabel")}</SectionLabel>
+      <div style={{ padding: "4px 0 0" }}>
         <TerminalPreview />
       </div>
       <div style={{ padding: "16px 0" }}>
@@ -697,6 +671,34 @@ function SettingsAppearance() {
           </div>
         )}
       </div>
+
+      <SettingRow title={t("settings.keepaliveTitle")} desc={t("settings.keepaliveDesc")}>
+        <Segmented<string>
+          value={String(keepaliveSecs)}
+          onChange={(v) => setKeepaliveSecs(parseInt(v, 10) || 0)}
+          options={[
+            { value: "0", label: t("settings.keepaliveOff") },
+            { value: "15", label: t("settings.keepaliveSec", { n: 15 }) },
+            { value: "30", label: t("settings.keepaliveSec", { n: 30 }) },
+            { value: "60", label: t("settings.keepaliveSec", { n: 60 }) },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow
+        title={t("settings.sftpParallelismTitle")}
+        desc={t("settings.sftpParallelismDesc")}
+      >
+        <Segmented<string>
+          value={String(sftpParallelism)}
+          onChange={(v) => setSftpParallelism(parseInt(v, 10) || 1)}
+          options={[
+            { value: "1", label: t("settings.sftpParallelismOff") },
+            { value: "2", label: "2" },
+            { value: "4", label: "4" },
+            { value: "8", label: "8" },
+          ]}
+        />
+      </SettingRow>
     </>
   );
 }

@@ -866,6 +866,7 @@ export const en = {
     "termMinContrastTitle": "Force readable output",
     "termMinContrastDesc": "Nudge any glyph below WCAG AA (4.5:1) until it is readable. Changes how some colour schemes look.",
     "termResetPrefs": "Reset appearance",
+    "termPreviewLabel": "Preview",
     "themeLight": "Light",
     "themeDark": "Dark",
     "themeAuto": "Auto",
