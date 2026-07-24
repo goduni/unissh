@@ -3015,9 +3015,6 @@ function QrModal({
         >
           {address}
         </span>
-        <span style={{ fontSize: 11, color: p.txt3, textAlign: "center" }}>
-          {t("support.qrNote")}
-        </span>
       </div>
     </Modal>
   );

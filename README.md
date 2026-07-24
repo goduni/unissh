@@ -460,8 +460,8 @@ If you'd rather send something, the project takes crypto:
 
 The same addresses are in the app under **Settings → Support** and on
 [unissh.dev/support](https://unissh.dev/support) — compare two before you send anything.
-Donations don't buy priority support, roadmap influence, or private builds. For anything
-else, write to **uni@goduni.me**.
+Donations don't buy priority support or private builds. For anything else, write to
+**uni@goduni.me**.
 
 ---
 
