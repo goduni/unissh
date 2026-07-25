@@ -2564,7 +2564,6 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const revoke = (d: DeviceInfo) => {
@@ -2956,7 +2955,6 @@ function CloudAuditLog() {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

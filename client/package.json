@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "test": "vitest run",
     "tauri": "tauri",
     "ios:dev": "tauri ios dev",
@@ -41,11 +42,16 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "^2.11.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6",
+    "eslint": "^10.8.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
     "typescript": "^6",
+    "typescript-eslint": "^8.65.0",
     "vite": "^8.0.0",
     "vitest": "^4.1.10"
   }

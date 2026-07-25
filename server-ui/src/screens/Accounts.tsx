@@ -49,7 +49,7 @@ function AccountsBody() {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(null);
 
-  const accounts = data.data?.accounts ?? [];
+  const accounts = useMemo(() => data.data?.accounts ?? [], [data.data]);
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return accounts;

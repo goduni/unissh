@@ -383,7 +383,6 @@ function ImportPreviewBody() {
         );
         if (skips.length > 0) {
           for (const s of skips) {
-            // eslint-disable-next-line no-console
             console.warn(`[ssh-config import] ${s.host}: key skipped (${s.reason}) — ${s.raw}`);
           }
           const order: SkipReason[] = [
