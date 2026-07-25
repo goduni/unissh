@@ -9,8 +9,8 @@ This guide is meant to be practical and skimmable. If anything here is wrong or 
 You don't have to write Rust to help.
 
 - **Code** — fix bugs or build features in any component. Stay inside the component you're touching and respect the [invariants](#critical-invariants).
-- **Docs** — improve the top-level `README.md`, component READMEs, or the [docs site](https://goduni.github.io/unissh/) (`website/`).
-- **Translating the core docs** — the Rust core's `rust-core/README.md` and `rust-core/ARCH.md` (the architecture spec) are currently in **Russian**. Translating them to English is one of the most useful non-code contributions right now — it's on the roadmap. Keep technical decisions and the ✅/⏳ status markers intact.
+- **Docs** — improve the top-level `README.md`, component READMEs, or the [docs site](https://unissh.dev/) (`website/`).
+- **Translating the core docs** — the Rust core's `rust-core/README.md` is currently in **Russian**. Translating it to English is one of the most useful non-code contributions right now — it's on the roadmap. Keep technical decisions and the ✅/⏳ status markers intact.
 - **Reproducible-build verification** — build the unsigned releases from source and confirm the artifacts match. Releases are intentionally unsigned; the trust story is open source + `SHA256SUMS` + GitHub build provenance + reproducible builds. Independent verification is real, valuable work — report mismatches.
 - **Fuzzing the length-prefixed parsers** — the blob formats, the SSH wire/agent protocols, and the sync envelopes are all length-prefixed binary. Fuzz harnesses (and the crashing inputs they find) are very welcome.
 - **Security review** — read the crypto, FFI boundary, and storage code and tell us what's wrong. See [Security](#security) — please report vulnerabilities **privately**, never in a public issue or PR.
@@ -21,7 +21,7 @@ It's a monorepo. One root virtual Cargo workspace covers the core crates plus th
 
 | Path | What it is |
 | --- | --- |
-| `rust-core/` | The Rust core — 9 crates (`crypto`, `keychain`, `storage`, `vault`, `ssh-agent`, `ssh-transport`, `ffi`, `cli`, `sync`). All crypto, blob formats, storage, SSH, and agent logic lives **only** here. Architecture truth: `rust-core/ARCH.md`. |
+| `rust-core/` | The Rust core — 9 crates (`crypto`, `keychain`, `storage`, `vault`, `ssh-agent`, `ssh-transport`, `ffi`, `cli`, `sync`). All crypto, blob formats, storage, SSH, and agent logic lives **only** here. Architecture truth: the crate map in `rust-core/README.md`, the per-crate READMEs, and the [architecture docs](https://unissh.dev/architecture/system-overview/). |
 | `server/` | The self-hosted server (axum). Control plane only — metadata, encrypted blobs, access policy, audit, sync. SSH traffic never flows through it. |
 | `server-ui/` | The web admin panel — a zero-knowledge React SPA with real in-browser crypto via a wasm bundle (`server-ui/crypto-wasm/`). |
 | `client/` | The Tauri v2 + React desktop/mobile client (macOS, Windows, Linux, iOS, Android). |
@@ -104,7 +104,7 @@ These are non-negotiable. A PR that breaks either of them cannot be merged as-is
 1. **Never duplicate core logic.** Crypto, blob/wire formats, storage, SSH, and the agent live **only** in `rust-core`. The server, the wasm panel, and the client must call into the core (or the documented contract) — they must not reimplement it. Diverging copies are how zero-knowledge guarantees silently rot.
 2. **Never route plaintext private keys across the FFI boundary.** Private key material stays inside the core's in-memory agent and never crosses the core↔UI boundary. Authentication happens via a signer over the agent. The only sanctioned exception is the strictly type-gated *reveal* of user passwords / notes (which are user secrets, not key material) — and even that can never be used to extract a private key.
 
-When in doubt, read `rust-core/ARCH.md` and the relevant crate README before changing anything in or near the trust boundary.
+When in doubt, read the relevant crate README plus the [zero-knowledge model](https://unissh.dev/architecture/zero-knowledge-model/) and [crypto & keys](https://unissh.dev/architecture/crypto-and-keys/) docs before changing anything in or near the trust boundary. [`THREAT_MODEL.md`](THREAT_MODEL.md) states which properties are cryptographic and which are merely server-trusted — that distinction is usually the one at stake.
 
 ## Commit style
 

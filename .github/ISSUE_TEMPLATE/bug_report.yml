@@ -16,7 +16,7 @@ body:
 
         Before filing, please skim the
         [README FAQ / Troubleshooting](https://github.com/goduni/unissh#faq--troubleshooting)
-        and the [docs site](https://goduni.github.io/unissh/) — several common issues
+        and the [docs site](https://unissh.dev/) — several common issues
         (unsigned-build warnings, a client not reaching the server, `wasm not loaded`,
         `TransportRollback` after a restore) are answered there.
 

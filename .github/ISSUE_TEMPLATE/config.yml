@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Questions, support & ideas (GitHub Discussions)
     url: https://github.com/goduni/unissh/discussions
-    about: "Usage questions, setup/self-host help, and open-ended discussion. Discussions is the community home — there is intentionally no Discord/chat (maintainer anonymity). Check the docs (https://goduni.github.io/unissh/) and the README FAQ first."
+    about: "Usage questions, setup/self-host help, and open-ended discussion. Discussions is the community home — there is intentionally no Discord/chat (maintainer anonymity). Check the docs (https://unissh.dev/) and the README FAQ first."
   - name: Report a security vulnerability (private)
     url: mailto:uni@goduni.me
     about: "Do NOT open a public issue for a suspected vulnerability. Email uni@goduni.me, or use GitHub's private 'Report a vulnerability' advisory form. See SECURITY.md."

@@ -9,7 +9,7 @@ It is deliberately honest: some properties are cryptographic, others are merely
 This file promotes the model out of the docs subpage so reviewers find it at the
 repo root. The deeper, primitive-level write-up (byte formats, key hierarchy) lives
 in the
-[zero-knowledge model docs](https://goduni.github.io/unissh/architecture/zero-knowledge-model/).
+[zero-knowledge model docs](https://unissh.dev/architecture/zero-knowledge-model/).
 To report something that breaks these guarantees, see [`SECURITY.md`](SECURITY.md).
 
 ## What UniSSH protects
@@ -46,7 +46,11 @@ but never holds anything in the clear.
   records**.
 
 UniSSH does **not** roll its own crypto: it builds on RustCrypto, `hpke`,
-SQLCipher, and Argon2id, with Ed25519 for signatures.
+SQLCipher, and Argon2id, with Ed25519 for signatures. It does compose them —
+the associated-data binding, envelope layout, and key hierarchy are this
+project's own, and **no third party has reviewed them**. What that leaves
+verifiable, and what it leaves open, is set out in
+[Independent review status](SECURITY.md#independent-review-status).
 
 ## Instance model and the two authority planes
 
@@ -287,7 +291,7 @@ escrow is a planned future capability, not a default.
 ---
 
 For the primitives and key hierarchy, see the
-[zero-knowledge model docs](https://goduni.github.io/unissh/architecture/zero-knowledge-model/)
+[zero-knowledge model docs](https://unissh.dev/architecture/zero-knowledge-model/)
 and [`rust-core/crates/sync/README.md`](rust-core/crates/sync/README.md) for the
 verify-before-apply pipeline. To report a vulnerability, see
 [`SECURITY.md`](SECURITY.md).

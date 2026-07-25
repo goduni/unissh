@@ -30,9 +30,10 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 - [How it works](#how-it-works) · [Identity model](#identity-model)
 - [Components](#components)
 - [Quick Start](#quick-start) — [get the client](#a-get-the-client) · [self-host a server](#b-self-host-a-sync-server-optional) · [admin panel](#c-open-the-admin-panel)
-- [Installing unsigned builds](#installing-unsigned-builds)
+- [Installing unsigned builds](#installing-unsigned-builds) — [macOS](#macos) · [Windows](#windows) · [Linux](#linux) · [Android](#android) · [iOS](#ios)
 - [Configuration](#configuration)
 - [Security & Privacy](#security--privacy)
+- [Changelog](CHANGELOG.md) — what changed, and whether it breaks your vault
 - [Build from source](#build-from-source)
 - [Contributing](#contributing)
 - [Community](#community) — [supporting the project](#supporting-the-project)
@@ -67,7 +68,7 @@ And it's built to be **one of the best-looking SSH clients around** — a consid
 
 ## Features
 
-Everything below is implemented in the shared Rust core and exposed to the clients. The crypto and SSH stack are **not** re-implemented per platform — every client calls the same audited core.
+Everything below is implemented in the shared Rust core and exposed to the clients. The crypto and SSH stack are **not** re-implemented per platform — every client calls the same core, so there is one implementation to review rather than four. That core has **not** been audited by a third party; see [Independent review status](SECURITY.md#independent-review-status) for exactly what is and isn't verified.
 
 **Vaults & secrets (zero-knowledge)**
 - Encrypted vaults backed by **SQLCipher**, per-item keys under a per-vault key.
@@ -179,13 +180,21 @@ The fastest path to a working setup: **(A)** get the desktop client — download
 
 **Download (recommended).** Grab the latest build for your OS from the [**Releases**](https://github.com/goduni/unissh/releases/latest) page:
 
-| OS | Artifact |
-| --- | --- |
-| macOS | `UniSSH-<version>.dmg` (drag to Applications) |
-| Windows | `UniSSH-<version>-setup.exe` or `.msi` |
-| Linux | `UniSSH-<version>.AppImage` (portable) or `unissh_<version>_amd64.deb` |
+| OS | Architecture | Artifact |
+| --- | --- | --- |
+| macOS | Apple Silicon **and** Intel | `UniSSH_<version>_universal.dmg` (drag to Applications) |
+| Windows | x86-64 | `UniSSH_<version>_x64-setup.exe` or `.msi` |
+| Linux | x86-64 | `UniSSH_<version>_amd64.AppImage` (portable) or `.deb` / `.rpm` |
+| Android | any (universal) | `UniSSH_<version>_universal.apk` — [sideload](#android) |
+| Android | pick your own | `_arm64` / `_armv7` / `_x86_64` / `_x86` `.apk` — smaller |
+| iOS | Apple Silicon | `UniSSH_<version>_ios-sideload.ipa` — unsigned, [sideload](#ios) |
 
-Release builds are **unsigned** — your OS shows a one-time warning on first launch; the 10-second "open anyway" steps per OS are in [Installing unsigned builds](#installing-unsigned-builds). Always [verify the download](#verifying-release-integrity) against the published checksum first.
+**Architectures that are not built**, so you know before you look: there is no ARM
+build for **Linux** or **Windows**, and no 32-bit build for either. On those two, the
+release is x86-64 only — [build from source](#build-from-source) if you need another
+architecture. macOS and Android are covered end to end.
+
+Release builds are **unsigned**. On desktop that means a one-time warning and a ten-second "open anyway" — on **Android** it means a permanent Play Protect warning, and on **iOS** it means re-signing the `.ipa` with your own Apple ID before it will run at all. The steps for all five platforms are in [Installing unsigned builds](#installing-unsigned-builds). Always [verify the download](#verifying-release-integrity) against the published checksum first.
 
 <details>
 <summary><b>Build the client from source</b> (also your strongest trust check)</summary>
@@ -284,9 +293,11 @@ For production, build it (`npm run build`) and serve `dist/` behind your reverse
 
 ## Installing unsigned builds
 
-UniSSH release binaries currently ship without a paid developer certificate — no Apple Developer-ID signature/notarization, no Windows Authenticode. **The code is fully open**; if you'd rather not run an unsigned binary at all, [build from source](#build-from-source) and you trust only your own toolchain.
+UniSSH release binaries currently ship without a paid developer certificate — no Apple Developer-ID signature/notarization, no Windows Authenticode, no Play Store listing. **The code is fully open**; if you'd rather not run an unsigned binary at all, [build from source](#build-from-source) and you trust only your own toolchain.
 
-Your OS will show a scary-looking warning the first time. Here's how to get past it safely.
+This is a deliberate trade, not an oversight. Obtaining those certificates means attaching a legal identity to an anonymously maintained project. What replaces them is [verifiable provenance](#verifying-release-integrity) — proof that this repo's public CI built these exact bytes from this exact public commit, which a certificate does not prove.
+
+Your OS will show a scary-looking warning the first time. Here's how to get past it safely — desktop first, then the two mobile platforms, which are sideload-only and need genuinely different steps.
 
 ### macOS
 
@@ -316,7 +327,71 @@ The installer/`.exe` is unsigned, so **SmartScreen** may say "Windows protected 
   ```
 - **`.deb`:** `sudo apt install ./unissh_*.deb` (or `sudo dpkg -i`). No code-signing prompt applies.
 
-**Verify what you downloaded** before trusting it — see [Verifying release integrity](#verifying-release-integrity).
+### Android
+
+**Sideload only — UniSSH is not on the Play Store.** Take
+`UniSSH_<version>_universal.apk` unless you specifically know your device's ABI;
+it installs on any of them. The per-ABI files are the same app, just smaller.
+
+1. Open the downloaded `.apk` (from your browser's downloads or a file manager).
+2. Android asks whether that app may install unknown apps — **allow it**. This is
+   a per-app permission, so you are granting it to your browser or file manager,
+   not to UniSSH. Revoke it afterwards if you like.
+3. **Play Protect will warn you.** Expect "Unsafe app blocked" or a scan prompt.
+   Tap **More details → Install anyway**.
+
+**Why that warning appears, in plain terms.** An installable APK must carry *a*
+signature, but nothing requires it to carry an *identity*. UniSSH's release APK is
+signed by a self-signed key whose certificate subject is just `CN=UniSSH Release`
+— no name, no email, no organization. Play Protect flags any signer it cannot
+match against the Play catalogue, so it flags this one. That warning is the
+expected, permanent cost of an anonymously distributed app; it is not evidence of
+anything about the file, and it will not go away in a later release.
+
+What *is* evidence about the file is the checksum and the provenance attestation
+— **check them before you install**, see
+[Verifying release integrity](#verifying-release-integrity). If you have the
+Android SDK, `apksigner verify --print-certs UniSSH_*.apk` prints the signing
+certificate, which should be that same identity-free subject on every release.
+
+> **Mobile does not auto-update.** No updater is compiled into the mobile builds,
+> so nothing on your phone will offer you a new version. Watch
+> [Releases](https://github.com/goduni/unissh/releases) or the
+> [Telegram channel](https://t.me/unissh) and reinstall by hand — installing a
+> newer APK over an older one keeps your data, as long as it is signed by the
+> same key, which every official release is.
+
+### iOS
+
+**The `.ipa` ships completely unsigned, and stock iOS refuses to run unsigned
+code.** There is no way around that from this side — so instead of the project
+signing it, **you** re-sign it with your own Apple ID. The only identity ever
+attached to the app on your phone is yours, and it never leaves your device.
+
+You need a computer and one of the usual sideloading tools:
+
+- **[AltStore](https://altstore.io/)** — install AltServer on a Mac or PC, pair
+  your device, then install the `.ipa` through it. In the EU, **AltStore PAL** is
+  the notarized alternative-marketplace version.
+- **[Sideloadly](https://sideloadly.io/)** — a single desktop app; connect the
+  device over USB, drop in the `.ipa`, sign in with your Apple ID.
+
+Then **trust the profile** on the device: **Settings → General → VPN & Device
+Management** → your Apple ID → **Trust**. The app will not launch until you do.
+
+**Know the limits before you start** — they are Apple's, not this project's:
+
+| | Free Apple ID | Paid Apple Developer ($99/yr) |
+| --- | --- | --- |
+| App stops working after | **7 days** | 1 year |
+| Sideloaded apps at once | 3 | unlimited |
+| Refreshing | reconnect to the tool and re-sign | once a year |
+
+A free account is fine for trying UniSSH out; if it becomes something you rely on,
+the weekly refresh is the part that gets old. As with Android, there is no
+auto-update — a new release means sideloading again.
+
+**Verify what you downloaded** before trusting it, on every platform above — see [Verifying release integrity](#verifying-release-integrity).
 
 ---
 
@@ -397,11 +472,11 @@ The binaries themselves are deliberately **unsigned** (no notarization / Authent
 
 Desktop builds keep themselves current. UniSSH checks the release feed (at most hourly), verifies the download against a signing key compiled into the app, and installs when you click — never silently. Turn it off in **Settings → About**; what the check does and doesn't reveal is spelled out in [`THREAT_MODEL.md`](THREAT_MODEL.md#the-update-check-visible-to-github-not-to-your-server-operator).
 
-On macOS this also means the quarantine dance below is a **one-time** cost of the first install rather than something you repeat every release.
+On macOS this also means the [quarantine dance](#macos) is a **one-time** cost of the first install rather than something you repeat every release.
 
 `.deb` and `.rpm` update themselves too, but the install runs `dpkg -i` / `rpm -U` and so needs root: you get a polkit prompt, or a graphical password dialog, and on a machine with neither it falls back to terminal `sudo` and will not succeed from a desktop launcher. If that happens UniSSH opens the release page instead of failing silently.
 
-Not covered, and updated by hand: Android/iOS sideloads, and anything installed from **v0.1.1 or earlier** — those predate the updater, so install the current release once by hand.
+Not covered, and updated by hand: [Android](#android) / [iOS](#ios) sideloads, and anything installed from **v0.1.1 or earlier** — those predate the updater, so install the current release once by hand.
 
 ---
 
@@ -435,7 +510,7 @@ The core's per-crate map (crypto, keychain, storage, vault, ssh-agent, ssh-trans
 
 Contributions are welcome. A good first pass:
 
-1. Pick a component and read its README + (for the core) `ARCH.md`.
+1. Pick a component and read its README + (for the core) the [architecture docs](https://unissh.dev/architecture/system-overview/).
 2. Build and run its tests (see [Build from source](#build-from-source)).
 3. Keep changes within the component's boundary — **never duplicate core logic** (crypto, blob formats, storage, SSH, agent live in `rust-core` only), and **never** route plaintext private keys across the FFI boundary.
 4. Open a PR. By contributing you agree your work is licensed under the project's dual license (Apache-2.0 §5).

@@ -8,7 +8,7 @@ verify-before-apply path matter more than almost anything else in this repo — 
 take reports about them seriously and want to make them easy to send.
 
 The deeper model lives in [`THREAT_MODEL.md`](THREAT_MODEL.md) and in the
-[zero-knowledge model docs](https://goduni.github.io/unissh/architecture/zero-knowledge-model/).
+[zero-knowledge model docs](https://unissh.dev/architecture/zero-knowledge-model/).
 
 ## Supported versions
 
@@ -278,6 +278,57 @@ block sets issuer / client_id / audience / jwks_url / group_map / reassertion ag
 (disabled by default); and the optional `[ops].token` is a **server-trusted**
 infrastructure token that grants **no** decryption — empty disables the
 `/v1/ops/*` surface entirely.
+
+## Independent review status
+
+**No third-party security audit has been performed.** None has been commissioned,
+none is scheduled, and no penetration test or cryptographic review by anyone
+outside the project exists. If you have read a claim on this project's pages that
+implied otherwise, that claim was wrong and has been corrected — treat this
+section as the authoritative answer.
+
+This matters most precisely where the project makes its strongest promise. A
+zero-knowledge design asks you to believe that a server operator cannot read your
+secrets, and "the source is open" is not the same as "someone qualified has
+looked." Below is what a stranger *can* check today without trusting the
+maintainer, and what remains unchecked.
+
+**Verifiable today, by you, without trusting anyone here:**
+
+- **The published artifact came from the published source.** Every release ships
+  GitHub build provenance (SLSA attestations), a `SHA256SUMS` file, and a
+  `minisign` signature over it — see
+  [Release integrity / unsigned builds](#release-integrity--unsigned-builds).
+  `gh attestation verify` proves the public CI built those exact bytes from that
+  exact public commit.
+- **No home-grown primitives.** The stack is RustCrypto, `hpke` (RFC 9180),
+  Argon2id, SQLCipher, and Ed25519 with `verify_strict`. What *is* project-specific
+  is the **composition** — the AEAD associated-data binding, the envelope layout,
+  the key hierarchy, and the byte formats — and composition is exactly where
+  reviewed primitives still get misused. That is the part no outsider has vetted.
+- **The wire and on-disk formats cannot drift silently.** Frozen schemes are
+  pinned by golden byte vectors; a change that breaks one fails CI as a format
+  break rather than shipping — see
+  [On-disk format changes](#on-disk-format-changes-migration-discipline).
+- **Memory-unsafety surface is small and enumerable.** Six of the eight library
+  crates carry `#![forbid(unsafe_code)]`. The two that do not are `ssh-agent`
+  (three `unsafe` blocks, all `libc::mlock`/`munlock` in `locked.rs`, to keep key
+  material off swap) and `ffi` (whose own source contains no `unsafe`, but
+  `uniffi::setup_scaffolding!` generates some, which `forbid` would reject).
+- **Dependency advisories are gated continuously.** `cargo-deny` runs weekly over
+  all three Cargo workspaces; the npm side is covered by grouped Dependabot
+  updates. Neither is a substitute for review of this project's own code.
+
+**Not verified by anyone independent:** the composition above, the sync
+verify-before-apply logic, the escrow and onboarding surface, and the admin-panel
+wasm crypto. In other words, the parts listed under [Scope](#scope) — that list
+doubles as the scope an audit should have, in roughly that priority order.
+
+If you are qualified and want to look, findings are welcome through the process
+in [Reporting a vulnerability](#reporting-a-vulnerability); a report of a real
+composition flaw is worth considerably more to this project than a dependency
+bump. If an audit is ever funded and performed, its report and its scope will be
+linked from this section — including the findings that were not fixed.
 
 ## Scope
 
