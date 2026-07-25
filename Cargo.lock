@@ -4971,7 +4971,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "clap",
  "unissh-ffi",
@@ -4979,7 +4979,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-crypto"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "argon2 0.5.3",
  "chacha20poly1305",
@@ -4995,7 +4995,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-ffi"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "base64",
  "hex",
@@ -5021,7 +5021,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-keychain"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "hkdf 0.12.4",
  "hmac 0.12.1",
@@ -5037,7 +5037,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-server"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -5077,7 +5077,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-ssh-agent"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ed25519-dalek 2.2.0",
  "libc",
@@ -5099,7 +5099,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-ssh-transport"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "log",
  "russh",
@@ -5114,7 +5114,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-storage"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "hex",
  "rusqlite",
@@ -5125,7 +5125,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-sync"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "log",
  "thiserror",
@@ -5138,7 +5138,7 @@ dependencies = [
 
 [[package]]
 name = "unissh-vault"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "sha2 0.10.9",
  "thiserror",
