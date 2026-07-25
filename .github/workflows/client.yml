@@ -243,48 +243,13 @@ jobs:
           # and an unknown input is only a WARNING, so the wrong name looks fine
           # in the diff and does nothing in the run.
           includeUpdaterJson: true
-          releaseBody: |
-            UniSSH desktop builds. These binaries are **unsigned** (privacy: no
-            developer identity is attached).
-
-            - **macOS** (.dmg/.app): Gatekeeper will quarantine the app. After
-              moving it to /Applications run:
-              `xattr -dr com.apple.quarantine /Applications/UniSSH.app`
-            - **Windows** (.msi/.exe): SmartScreen may warn — choose
-              "More info" → "Run anyway".
-            - **Linux** (.deb/.rpm/.AppImage): no signing.
-            - **Android** (.apk, arm64): a sideload build — enable "install
-              unknown apps" for your browser/file manager. Signed by an
-              identity-free self-signed key (subject `CN=UniSSH Release`), so
-              Play Protect will warn.
-            - **iOS** (.ipa): an UNSIGNED sideload build. Stock iOS refuses
-              unsigned code — install it by re-signing with your own Apple ID
-              via [AltStore](https://altstore.io) or Sideloadly (free Apple ID:
-              7-day signature AltStore auto-renews, 3-app limit), or install
-              as-is via TrollStore where iOS allows it. The only identity on
-              the app after that is your own.
-
-            **Updating** — desktop builds update themselves from here. UniSSH
-            checks this release feed, verifies the download against a signing key
-            built into the app, and installs on your click; you can turn the check
-            off in Settings → About. On macOS that also means the
-            `xattr -dr com.apple.quarantine` dance is a one-time cost of the first
-            install, not a per-release ritual. `.deb`/`.rpm` are owned by your
-            package manager and Android/iOS are sideloads — those still update by
-            hand. Anything installed before this release has no updater in it and
-            needs one manual update to pick it up.
-
-            **Verify what you downloaded** — you do not need to trust the maintainer:
-            - **Checksums:** download `SHA256SUMS` and run `sha256sum -c SHA256SUMS`
-              (Windows PowerShell: `Get-FileHash <file> -Algorithm SHA256`).
-            - **Signature:** `SHA256SUMS.minisig` is signed with a bare Ed25519 key
-              carrying no identity —
-              `minisign -Vm SHA256SUMS -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'`
-              (the same key is published in `SECURITY.md`; compare them).
-            - **Provenance:** `gh attestation verify <file> --repo goduni/unissh`
-              cryptographically proves GitHub's CI built this exact file from this
-              public commit (stronger than a code-signing cert for this purpose).
-            - Or **build from source** and trust only your own compiler.
+          # No releaseBody here on purpose. GitHub generates the changelog
+          # (generateReleaseNotes) and the release-integrity job appends the
+          # download/verify footer once, at the end. Setting a body here would
+          # (a) push the changelog below a wall of boilerplate, since GitHub
+          # PRE-pends the body to what it generates, and (b) have all three
+          # desktop jobs race to write the same field.
+          generateReleaseNotes: true
 
   # ---------------------------------------------------------------------------
   # Android: arm64 sideload APK, signed by an identity-free self-signed key
@@ -633,3 +598,70 @@ jobs:
             -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'
           gh release upload "${{ github.ref_name }}" SHA256SUMS.minisig \
             --repo "${{ github.repository }}" --clobber
+
+      # Release notes, written once and last.
+      #
+      # tauri-action created the release with GitHub's generated changelog and no
+      # body of its own. Everything that does NOT change between releases lives in
+      # the README and is linked, not inlined: the previous version of this pasted
+      # ~45 identical lines of install instructions onto every tag, which buried the
+      # one thing a release page exists to say and forked the README's content into
+      # a second copy that would drift.
+      #
+      # What survives the "does this change per release, or is it needed at the very
+      # moment of downloading?" filter is only: the changelog, which file is yours
+      # (nine artifacts with non-obvious names), and one line each for the unsigned
+      # first launch, verification, and auto-update.
+      #
+      # This runs in release-integrity rather than the build matrix because that job
+      # is the only one that runs exactly once — the three desktop jobs would
+      # otherwise race each other for the same field.
+      - name: Write the release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" \
+            --json body --jq .body > body.md
+
+          # Re-runs must not stack a second footer onto the first.
+          if grep -q '<!-- unissh:footer -->' body.md; then
+            echo "footer already present — leaving the notes alone"
+            exit 0
+          fi
+
+          cat >> body.md <<EOF
+
+          <!-- unissh:footer -->
+          ---
+
+          ### Downloads
+
+          | Platform | File |
+          | --- | --- |
+          | **macOS** (Apple Silicon) | \`UniSSH_${VERSION}_aarch64.dmg\` |
+          | **Windows** | \`UniSSH_${VERSION}_x64-setup.exe\` — or the \`.msi\` |
+          | **Linux** | \`UniSSH_${VERSION}_amd64.AppImage\` · \`.deb\` · \`.rpm\` |
+          | **Android** (sideload) | \`UniSSH_${VERSION}_arm64.apk\` |
+          | **iOS** (sideload, unsigned) | \`UniSSH_${VERSION}_ios-sideload.ipa\` |
+
+          **Your OS will block the first launch.** These builds carry no Apple or
+          Windows code-signing certificate — obtaining one would attach a legal
+          identity to an anonymously maintained project. The way past the warning is
+          ten seconds per platform:
+          [Installing unsigned builds](https://github.com/goduni/unissh#installing-unsigned-builds).
+
+          **Verify it before you trust it.** \`SHA256SUMS\`, a \`minisign\` signature
+          over that file, and GitHub build provenance proving this repo's public CI
+          built these exact artifacts from this exact commit — which is a stronger
+          claim than a certificate:
+          [Verifying release integrity](https://github.com/goduni/unissh#verifying-release-integrity).
+
+          **Desktop keeps itself current.** After the first install, UniSSH checks
+          this feed, verifies the download against a signing key compiled into the
+          app, and installs on your click — never silently. Turn it off in
+          Settings → About. Mobile sideloads are updated by hand.
+          EOF
+
+          gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" \
+            --notes-file body.md
