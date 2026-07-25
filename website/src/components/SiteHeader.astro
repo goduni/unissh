@@ -2,6 +2,8 @@
 import Icon from './Icon.astro';
 
 interface Props {
+  /** Where the logo goes. The site root, not an in-page anchor. */
+  homeHref: string;
   docsHref: string;
   archHref: string;
   securityHref: string;
@@ -11,12 +13,13 @@ interface Props {
   githubHref: string;
 }
 
-const { docsHref, archHref, securityHref, supportHref, ctaHref, githubHref } = Astro.props;
+const { homeHref, docsHref, archHref, securityHref, supportHref, ctaHref, githubHref } =
+  Astro.props;
 ---
 
 <header class="site-header" id="site-header">
   <div class="site-header__inner">
-    <a class="brand" href="#top" aria-label="unissh home">
+    <a class="brand" href={homeHref} aria-label="unissh home">
       <span class="brand__glyph" aria-hidden="true">&gt;_</span>
       <span class="brand__name">unissh</span>
     </a>

@@ -67,6 +67,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
 
     <div class="page">
       <SiteHeader
+        homeHref={base}
         docsHref={overviewHref}
         archHref={archHref}
         securityHref={securityHref}
@@ -76,8 +77,6 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
       />
 
       <main id="main">
-        <span id="top"></span>
-
         <section class="hero" aria-labelledby="hero-head">
           <h1 id="hero-head">
             <span class="grad-text">unissh</span> – a modern and secure, fully open-source SSH
@@ -112,6 +111,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
 
       <SiteFooter
         links={{
+          home: base,
           overview: overviewHref,
           quickstart: quickstartHref,
           install: installHref,
