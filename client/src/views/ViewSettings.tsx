@@ -52,6 +52,9 @@ import { useTranslation, setLang, currentLang, tDyn, LANGS, LANG_LABELS } from "
 import type { Lang } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import { useNarrow } from "@/store/responsive";
+import { useUpdate } from "@/store/update";
+import { updatesSupported } from "@/bridge/updater";
+import { osPlatform } from "@/bridge/platform";
 import { SettingsSupport } from "./SettingsSupport";
 import { TerminalPreview } from "./TerminalPreview";
 
@@ -1188,6 +1191,60 @@ function SettingsAbout() {
       <AboutRow k={t("settings.aboutLicense")} v="MIT OR Apache-2.0" />
       <LinkRow label={t("settings.website")} url="https://unissh.dev/" />
       <LinkRow label="GitHub" url="https://github.com/goduni/unissh" />
+      <SettingsUpdates />
+    </>
+  );
+}
+
+/** Update controls. Hidden entirely where there is no updater — mobile sideload
+ *  builds and a plain browser preview — rather than shown greyed out: a control
+ *  that can never do anything is worse than its absence. */
+function SettingsUpdates() {
+  const { t } = useTranslation();
+  const state = useUpdate((s) => s.state);
+  const info = useUpdate((s) => s.info);
+  const installing = useUpdate((s) => s.installing);
+  const autoCheck = useUpdate((s) => s.autoCheck);
+  const setAutoCheck = useUpdate((s) => s.setAutoCheck);
+  const check = useUpdate((s) => s.check);
+  const install = useUpdate((s) => s.install);
+
+  if (!updatesSupported(osPlatform())) return null;
+
+  const status =
+    state === "checking"
+      ? t("update.checking")
+      : info
+        ? t("update.available", { version: info.version })
+        : state === "current"
+          ? t("update.upToDate")
+          : state === "error"
+            ? t("update.checkFailed")
+            : t("update.statusDesc");
+
+  return (
+    <>
+      <SectionLabel>{t("settings.sectionUpdates")}</SectionLabel>
+      <SettingRow title={t("update.statusTitle")} desc={status}>
+        {info ? (
+          <Btn size="sm" icon="download" onClick={() => void install()} disabled={installing}>
+            {installing ? t("update.installing") : t("update.install")}
+          </Btn>
+        ) : (
+          <Btn
+            variant="ghost"
+            size="sm"
+            icon="refresh"
+            onClick={() => void check(true)}
+            disabled={state === "checking"}
+          >
+            {t("update.checkNow")}
+          </Btn>
+        )}
+      </SettingRow>
+      <SettingRow title={t("update.autoTitle")} desc={t("update.autoDesc")}>
+        <Toggle checked={autoCheck} onChange={setAutoCheck} />
+      </SettingRow>
     </>
   );
 }
