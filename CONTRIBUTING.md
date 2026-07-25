@@ -74,6 +74,29 @@ cargo test --workspace
 - If you touched the admin panel, also run `just build-ui` to confirm the wasm bundle and SPA still build.
 - Keep PRs focused on one component / one concern where you can — it makes review (and the security story) much easier.
 
+### Changelog entries
+
+Add a line to the `## [Unreleased]` section of [`CHANGELOG.md`](CHANGELOG.md) if
+your change is one a user or a server operator would notice — a feature, a
+behaviour change, a fixed bug. Refactors, tests, and internal cleanups don't
+need one; GitHub's generated release notes already list every commit.
+
+Two cases where the entry is **required**, not optional:
+
+- **You changed an on-disk or wire format.** Say what changed, and confirm the
+  old data still reads. The migration rules are in
+  [`SECURITY.md`](SECURITY.md#on-disk-format-changes-migration-discipline) —
+  formats get a new version, they never get edited in place.
+- **You broke something.** A format that no longer reads, a server that no
+  longer serves an older client, a setting that resets. Put it under a
+  `Breaking changes` heading at the top of `## [Unreleased]`, and say what a
+  user has to do about it.
+
+Every released version carries an explicit **Compatibility** line stating whether
+the vault format and server protocol moved. Keep the `## [Unreleased]` one
+current as you go — reconstructing it at release time is how a break ships
+undocumented.
+
 ## Critical invariants
 
 These are non-negotiable. A PR that breaks either of them cannot be merged as-is:
