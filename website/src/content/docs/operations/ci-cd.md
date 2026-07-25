@@ -31,7 +31,7 @@ One file carries two flows:
 
 It builds on a matrix of `ubuntu-22.04` (pinned for webkit2gtk-4.1 availability and broad AppImage glibc compatibility → `.deb`/`.rpm`/`.AppImage`), `windows-latest` (`.msi` via WiX + NSIS `.exe`), and `macos-latest` (`.dmg`/`.app`). Node 22 + the repo-root pinned Rust toolchain are used; the client's path dependency on `../../rust-core/crates/ffi` resolves inside the single checkout (no cross-repo checkout, no PAT).
 
-Each tagged release also gets a **`SHA256SUMS`** file and a **build-provenance attestation** (`actions/attest-build-provenance`) for the bundles — verifiable with `gh attestation verify <file> --repo goduni/unissh` (see [Install from a release](../../overview/install/)).
+Each tagged release also gets a **`SHA256SUMS`** file, a **`SHA256SUMS.minisig`** detached signature over it, and a **build-provenance attestation** (`actions/attest-build-provenance`) for the bundles — verifiable with `gh attestation verify <file> --repo goduni/unissh` (see [Install from a release](../../overview/install/)).
 
 :::caution[Unsigned by design (privacy)]
 The client builds ship **unsigned** — no Apple cert/notarization, no Windows code-signing. This is a deliberate privacy choice: no developer identity is attached.
@@ -40,6 +40,19 @@ The client builds ship **unsigned** — no Apple cert/notarization, no Windows c
 - **Windows** (`.msi`/`.exe`): SmartScreen may warn — choose "More info" → "Run anyway".
 - **Linux** (`.deb`/`.rpm`/`.AppImage`): unsigned.
 :::
+
+### Signing keys (not code-signing certificates)
+
+The workflow holds two bare Ed25519 (`minisign`) keypairs. Neither carries a name, email, or keyserver presence, which is exactly why they are compatible with an anonymously maintained project where a code-signing certificate is not.
+
+| Secret | Signs | Purpose |
+| --- | --- | --- |
+| `MINISIGN_SECRET_KEY` | `SHA256SUMS` | Proves the checksum file itself wasn't swapped on the release page. |
+| `TAURI_SIGNING_PRIVATE_KEY` | Desktop updater artifacts | Lets an already-installed client verify an update before executing it. |
+
+They are kept separate on purpose: the first authorizes nothing, the second authorizes code execution on every desktop install. The updater's public half is compiled into the app (`client/src-tauri/tauri.conf.json`), so **losing that private key permanently ends auto-update for everyone already installed** — a new key would be rejected by every existing client.
+
+Because `bundle.createUpdaterArtifacts` makes the bundler *require* the signing key, and GitHub withholds secrets from fork pull requests, non-release builds pass `--no-sign`. Only tag builds produce signed updater artifacts and the `latest.json` manifest clients poll.
 
 Mobile (iOS/Android) is intentionally **out of scope** for the workflow: there is no privacy-preserving unsigned distributable for those stores/runtimes.
 

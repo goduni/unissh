@@ -207,6 +207,27 @@ The operator can see — and this is an accepted, documented trade-off:
 For privacy-sensitive deployments, an account's human labels (`display_name`,
 `handle`) are also server-visible metadata — **use a pseudonym, not real PII.**
 
+### The update check (visible to GitHub, not to your server operator)
+
+Desktop builds make one outbound request that does **not** go to your server or to
+a host you configured: at most once an hour, UniSSH fetches the release manifest
+from `github.com` to see whether a newer version exists. It is a plain GET of a
+public file.
+
+- **Sent:** nothing about you, your account, your hosts, or your vaults. No
+  identifier, no telemetry, no version-specific path — the URL is the same for
+  every user.
+- **Inferable by GitHub:** your IP address, and the timing pattern of a UniSSH
+  install starting up. That is enough to say "someone at this IP runs UniSSH".
+- **Downloaded updates** are verified against a signing key compiled into the app
+  before anything executes, so a hostile network cannot substitute a payload.
+
+This is on by default: builds are unsigned, there are no back-ports (see
+[`SECURITY.md`](SECURITY.md)), and a user who never updates runs known-vulnerable
+code — a worse outcome for most people than the IP exposure. If that trade is
+wrong for your threat model, turn it off in **Settings → About**; nothing else in
+the app depends on it. Linux `.deb`/`.rpm` and mobile sideloads never check.
+
 The server **never** sees: item/vault **names** or **content**, Vault Keys (VK),
 per-item keys, audit bodies, or private keys. Content — **including item names** —
 is always encrypted. But membership, the social graph, sizes, and timings are

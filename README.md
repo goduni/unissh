@@ -299,7 +299,7 @@ The app is **ad-hoc signed** (no Developer ID), so a downloaded build is quarant
   xattr -dr com.apple.quarantine /Applications/UniSSH.app
   ```
 
-> A **locally-built** app (via `npm run tauri build`) is **not** quarantined and needs none of this.
+> A **locally-built** app (via `npm run tauri build`) is **not** quarantined and needs none of this. Neither are **auto-updates**: quarantine is applied by the browser that downloaded a file, and the updater fetches the new version itself — so this is a one-time step at first install, not a per-release chore.
 
 ### Windows
 
@@ -375,7 +375,7 @@ Found a security issue? Please report it **privately** to **`uni@goduni.me`** in
 
 ### Verifying release integrity
 
-Every release ships a `SHA256SUMS` file plus a GitHub **build-provenance (SLSA) attestation**, both produced by CI on the tag build:
+Every release ships a `SHA256SUMS` file, a `SHA256SUMS.minisig` signature over it, and a GitHub **build-provenance (SLSA) attestation** — all produced by CI on the tag build:
 
 ```bash
 # 1) Checksums — download SHA256SUMS next to your artifact, then:
@@ -383,11 +383,23 @@ sha256sum -c SHA256SUMS --ignore-missing          # Linux
 shasum -a 256 -c SHA256SUMS --ignore-missing      # macOS
 Get-FileHash .\UniSSH_<version>_x64-setup.exe -Algorithm SHA256   # Windows: compare by eye
 
-# 2) Provenance — proves the artifact was built by this repo's CI from the tagged commit:
+# 2) Signature — proves SHA256SUMS itself wasn't swapped on the release page.
+#    The key is a bare Ed25519 public key; it carries no identity by design.
+minisign -Vm SHA256SUMS -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'
+
+# 3) Provenance — proves the artifact was built by this repo's CI from the tagged commit:
 gh attestation verify UniSSH_<version>_amd64.AppImage --repo goduni/unissh
 ```
 
 The binaries themselves are deliberately **unsigned** (no notarization / Authenticode) — the reasoning is in [`SECURITY.md`](SECURITY.md#release-integrity--unsigned-builds).
+
+### Updates
+
+Desktop builds keep themselves current. UniSSH checks the release feed (at most hourly), verifies the download against a signing key compiled into the app, and installs when you click — never silently. Turn it off in **Settings → About**; what the check does and doesn't reveal is spelled out in [`THREAT_MODEL.md`](THREAT_MODEL.md#the-update-check-visible-to-github-not-to-your-server-operator).
+
+On macOS this also means the quarantine dance below is a **one-time** cost of the first install rather than something you repeat every release.
+
+Not covered, and updated by hand: Linux `.deb`/`.rpm` (your package manager owns those), Android/iOS sideloads, and anything installed from **v0.1.1 or earlier** — those predate the updater, so install the current release once by hand.
 
 ---
 
