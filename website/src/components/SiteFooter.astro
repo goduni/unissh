@@ -1,6 +1,8 @@
 ---
 interface Props {
   links: {
+    /** Where the logo goes. The site root, not an in-page anchor. */
+    home: string;
     overview: string;
     quickstart: string;
     install: string;
@@ -51,7 +53,7 @@ const columns = [
   <div class="wrap">
     <div class="footer__top">
       <div class="footer__brand">
-        <a class="brand" href="#top" aria-label="unissh home">
+        <a class="brand" href={links.home} aria-label="unissh home">
           <span class="brand__glyph" aria-hidden="true">&gt;_</span>
           <span class="brand__name">unissh</span>
         </a>

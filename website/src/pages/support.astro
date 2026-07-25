@@ -80,6 +80,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}support/`;
 
     <div class="page">
       <SiteHeader
+        homeHref={base}
         docsHref={overviewHref}
         archHref={archHref}
         securityHref={securityHref}
@@ -89,7 +90,6 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}support/`;
       />
 
       <main id="main" class="support">
-        <span id="top"></span>
         <div class="wrap">
           <div class="support__col">
             <h1>Support UniSSH</h1>
@@ -138,6 +138,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}support/`;
 
       <SiteFooter
         links={{
+          home: base,
           overview: overviewHref,
           quickstart: quickstartHref,
           install: installHref,
