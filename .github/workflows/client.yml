@@ -297,9 +297,43 @@ jobs:
   # (re)generated here on every run — the signing block is injected right after
   # init, before gradle ever evaluates the project.
   # ---------------------------------------------------------------------------
+  # Can this run sign at all? GitHub withholds repository secrets from
+  # Dependabot-authored runs (they read a separate, empty store) and from
+  # fork pull requests. The keystore is materialised by base64-decoding a
+  # secret, so on those runs the .p12 is an empty file and gradle dies on it —
+  # but only at the packaging step, i.e. after ~26 minutes of Rust compilation,
+  # with `KeytoolException: Tag number over 30 is not supported`, which reads
+  # like a corrupt keystore rather than an absent one.
+  #
+  # This gate turns that into a skip that costs seconds. It is deliberately a
+  # separate job: `secrets` is not available in a job-level `if`, so the check
+  # has to happen in a step and be handed on as an output.
+  #
+  # NOT a candidate for giving Dependabot access to the secret instead. This one
+  # signs the artifact users install; a bot-authored branch must never be able to
+  # reach it.
+  android-signable:
+    name: android (can this run sign?)
+    runs-on: ubuntu-latest
+    outputs:
+      signable: ${{ steps.check.outputs.signable }}
+    steps:
+      - id: check
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_B64" ]; then
+            echo "signable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signable=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Android keystore secret on this run (Dependabot or fork PR) — skipping the Android build. Nothing is wrong with the change; the signing key is intentionally out of reach here."
+          fi
+
   android:
     name: build (android, all ABIs)
     runs-on: ubuntu-latest
+    needs: android-signable
+    if: needs.android-signable.outputs.signable == 'true'
     permissions:
       contents: write
 
