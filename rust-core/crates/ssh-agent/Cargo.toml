@@ -27,7 +27,7 @@ ssh-key = { version = "0.6", features = [
 ] }
 # Decryption of encrypted PKCS#8 (`BEGIN ENCRYPTED PRIVATE KEY`, PBES2:
 # PBKDF2/scrypt + AES) — `from_pkcs8_encrypted_pem`.
-pkcs8 = { version = "0.10", features = ["encryption", "pem", "std"] }
+pkcs8 = { version = "0.11", features = ["encryption", "pem", "std"] }
 # Parsing of classic PEM private keys on import (PKCS#1/PKCS#8/SEC1).
 # `ssh-key` reads only the OpenSSH container; these crates parse the remaining
 # formats, after which we convert to OpenSSH (see `import.rs`).
