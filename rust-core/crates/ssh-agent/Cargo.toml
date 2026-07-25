@@ -37,9 +37,9 @@ pkcs8 = { version = "0.10", features = ["encryption", "pem", "std"] }
 # `ssh-key` reads only the OpenSSH container; these crates parse the remaining
 # formats, after which we convert to OpenSSH (see `import.rs`).
 rsa = { version = "0.9", features = ["std", "pem"] }
-p256 = { version = "0.13", features = ["pkcs8", "pem", "std"] }
-p384 = { version = "0.13", features = ["pkcs8", "pem", "std"] }
-p521 = { version = "0.13", features = ["pkcs8", "pem", "std"] }
+p256 = { version = "0.14", features = ["pkcs8", "pem", "std"] }
+p384 = { version = "0.14", features = ["pkcs8", "pem", "std"] }
+p521 = { version = "0.14", features = ["pkcs8", "pem", "std"] }
 ed25519-dalek = { version = "2.2", features = ["pkcs8", "pem"] }
 # We do RSA signing (rsa-sha2-512 / pkcs1v15) ourselves: ssh-key 0.6.7 mixes up
 # the components in its rsa converter, and its RSA signature does not verify. `oid`
