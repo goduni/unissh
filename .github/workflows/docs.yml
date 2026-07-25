@@ -1,10 +1,20 @@
 name: Deploy docs site
 
+# Also runs on pull_request — without it a broken link is only discovered after
+# it has been deployed, which for a docs site is the moment it starts costing
+# readers. The deploy job is gated to pushes, so a PR gets built and checked
+# without publishing anything.
 on:
   push:
     branches: [main]
     paths:
       - 'website/**'
+      - 'scripts/check-site-links.py'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'scripts/check-site-links.py'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -14,9 +24,11 @@ permissions:
   pages: write
   id-token: write
 
-# Allow one concurrent deployment; skip in-progress runs.
+# Scoped to the ref so a pull-request build does not queue behind a deployment.
+# Pushes to main still share a single group, which is what keeps concurrent
+# deployments from colliding.
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -30,9 +42,18 @@ jobs:
         with:
           path: website
           node-version: 22
+      # A docs site fails by 404, not by crashing: a page is renamed or a heading
+      # reworded, the build stays green, and the link rots unnoticed — astro
+      # resolves imports, not hrefs. Checked against the BUILT output so it sees
+      # the URLs readers actually get, after slug routing and trailing slashes.
+      # It found one on its first run: operations/build linked to ../crates/,
+      # which resolves to /operations/crates/ and has never existed.
+      - name: Check internal links and anchors
+        run: python3 scripts/check-site-links.py website/dist
 
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

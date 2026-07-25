@@ -37,7 +37,7 @@ just clean        # cargo clean + remove node_modules / dist / wasm pkg
 
 ## Building the core directly
 
-The [core](../crates/) builds and tests standalone, offline:
+The [core](../../components/crates/) builds and tests standalone, offline:
 
 ```bash
 cargo build --workspace
