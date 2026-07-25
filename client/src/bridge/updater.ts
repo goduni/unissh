@@ -18,7 +18,7 @@
 import { logDebug, logError, logInfo } from "@/bridge/log";
 import { osPlatform } from "@/bridge/platform";
 
-/** Where a user is sent when in-place install is impossible (deb/rpm, sandboxed installs). */
+/** Where a user is sent when the in-place install could not be completed. */
 export const RELEASES_URL = "https://github.com/goduni/unissh/releases/latest";
 
 /**
@@ -53,9 +53,11 @@ export type CheckResult =
 export type InstallResult =
   | { status: "installed" }
   /**
-   * In-place replacement is impossible for this install — a .deb/.rpm managed by
-   * the system package manager, or any format the updater cannot swap. The caller
-   * points the user at the release page instead.
+   * The in-place install could not be completed, so the caller points the user at
+   * the release page instead. The likeliest cause on Linux is privileges: .deb and
+   * .rpm updates shell out to `dpkg -i` / `rpm -U`, which need root, and a machine
+   * with no polkit agent and no graphical password dialog falls back to terminal
+   * `sudo` — which a desktop launcher cannot answer.
    */
   | { status: "manual"; message: string };
 
@@ -233,10 +235,12 @@ export async function checkForUpdateIfDue(): Promise<CheckResult | null> {
  * On Windows the installer terminates this process itself, so `relaunch()` may
  * never be reached — that is expected, not a failure.
  *
- * A rejection here does not necessarily mean something broke: a .deb/.rpm install
- * is owned by the system package manager and cannot be swapped in place. Rather
- * than pre-guessing the install format (which would go stale the moment the
- * updater learns a new one), we attempt it and translate a failure into the
+ * A rejection does not necessarily mean something broke. Every desktop format is
+ * updatable — the bundler stamps the package type into each binary it produces, so
+ * an install knows which artifact in the manifest is its own — but .deb/.rpm
+ * updates need root, and on a machine with no polkit agent and no graphical
+ * password prompt the escalation has nowhere to ask. Rather than pre-guessing
+ * which installs can succeed, we attempt it and translate any failure into the
  * manual path.
  */
 export async function installUpdate(): Promise<InstallResult> {

@@ -226,7 +226,8 @@ This is on by default: builds are unsigned, there are no back-ports (see
 [`SECURITY.md`](SECURITY.md)), and a user who never updates runs known-vulnerable
 code — a worse outcome for most people than the IP exposure. If that trade is
 wrong for your threat model, turn it off in **Settings → About**; nothing else in
-the app depends on it. Linux `.deb`/`.rpm` and mobile sideloads never check.
+the app depends on it. Mobile sideloads never check — no updater is compiled
+into them.
 
 The server **never** sees: item/vault **names** or **content**, Vault Keys (VK),
 per-item keys, audit bodies, or private keys. Content — **including item names** —

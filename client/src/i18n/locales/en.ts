@@ -222,7 +222,7 @@ export const en = {
     installing: "Installing…",
     notes: "Release notes",
     installedRestart: "Update installed — restart UniSSH to use it",
-    installManual: "This install can't update itself — opening the download page",
+    installManual: "Couldn't finish the update — opening the download page",
     confirmTitle: "Update to {{version}}?",
     confirmSessions_one: "UniSSH restarts to finish. {{count}} active session will be closed.",
     confirmSessions_other: "UniSSH restarts to finish. {{count}} active sessions will be closed.",
