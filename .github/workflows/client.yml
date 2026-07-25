@@ -66,6 +66,7 @@ on:
       - "rust-core/**"
       - "rust-toolchain.toml"
       - "scripts/bump-version.py"
+      - "scripts/assert-icons-replaced.py"
       - ".github/workflows/client.yml"
   pull_request:
     paths:
@@ -73,6 +74,7 @@ on:
       - "rust-core/**"
       - "rust-toolchain.toml"
       - "scripts/bump-version.py"
+      - "scripts/assert-icons-replaced.py"
       - ".github/workflows/client.yml"
   workflow_dispatch:
 
@@ -324,10 +326,23 @@ jobs:
           npm install --no-audit --no-fund
         working-directory: client
 
+      # `tauri android init` scaffolds the project with TAURI'S OWN default icons
+      # and `tauri icon` then overwrites them. That ordering is load-bearing and
+      # fails silently: a run where the second command stopped writing to the
+      # generated tree — an upstream layout change, say — still succeeds and ships
+      # an APK wearing someone else's logo. Nothing else in the pipeline looks at
+      # icons, so hash what init scaffolded and require afterwards that every one
+      # of those files changed. That asserts "our icon replaced the default"
+      # without hardcoding what either icon looks like.
       - name: Generate the Android project + icons
         run: |
           npx tauri android init
-          npx tauri icon src-tauri/app-icon.png
+          find src-tauri/gen/android -name 'ic_launcher*.png' \
+            -exec sha256sum {} + > /tmp/icons-before.txt
+          npx tauri icon src-tauri/app-icon.json
+          find src-tauri/gen/android -name 'ic_launcher*.png' \
+            -exec sha256sum {} + > /tmp/icons-after.txt
+          python3 ../scripts/assert-icons-replaced.py /tmp/icons-before.txt /tmp/icons-after.txt
         working-directory: client
 
       - name: Wire release signing into the generated gradle project
@@ -471,10 +486,17 @@ jobs:
           npm install --no-audit --no-fund
         working-directory: client
 
+      # Same scaffold-then-overwrite hazard as the Android job — see the comment
+      # there. iOS keeps its icons in the asset catalog rather than mipmap dirs.
       - name: Generate the iOS project + icons
         run: |
           npx tauri ios init
-          npx tauri icon src-tauri/app-icon.png
+          find src-tauri/gen/apple -path '*AppIcon.appiconset*' -name '*.png' \
+            -exec shasum -a 256 {} + > /tmp/icons-before.txt
+          npx tauri icon src-tauri/app-icon.json
+          find src-tauri/gen/apple -path '*AppIcon.appiconset*' -name '*.png' \
+            -exec shasum -a 256 {} + > /tmp/icons-after.txt
+          python3 ../scripts/assert-icons-replaced.py /tmp/icons-before.txt /tmp/icons-after.txt
         working-directory: client
 
       - name: Build the unsigned IPA (tauri ios build --no-sign)
