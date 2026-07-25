@@ -251,7 +251,7 @@ export const ru = {
     installing: "Установка…",
     notes: "Что нового",
     installedRestart: "Обновление установлено — перезапустите UniSSH",
-    installManual: "Эта установка не обновляется сама — открываю страницу загрузки",
+    installManual: "Не удалось завершить обновление — открываю страницу загрузки",
     confirmTitle: "Обновить до {{version}}?",
     confirmSessions_one:
       "Для завершения UniSSH перезапустится. {{count}} активная сессия будет закрыта.",

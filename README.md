@@ -399,7 +399,9 @@ Desktop builds keep themselves current. UniSSH checks the release feed (at most 
 
 On macOS this also means the quarantine dance below is a **one-time** cost of the first install rather than something you repeat every release.
 
-Not covered, and updated by hand: Linux `.deb`/`.rpm` (your package manager owns those), Android/iOS sideloads, and anything installed from **v0.1.1 or earlier** — those predate the updater, so install the current release once by hand.
+`.deb` and `.rpm` update themselves too, but the install runs `dpkg -i` / `rpm -U` and so needs root: you get a polkit prompt, or a graphical password dialog, and on a machine with neither it falls back to terminal `sudo` and will not succeed from a desktop launcher. If that happens UniSSH opens the release page instead of failing silently.
+
+Not covered, and updated by hand: Android/iOS sideloads, and anything installed from **v0.1.1 or earlier** — those predate the updater, so install the current release once by hand.
 
 ---
 

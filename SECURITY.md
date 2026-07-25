@@ -149,8 +149,11 @@ installs when you click. Nothing is installed silently.
   check is the only outbound request UniSSH makes that isn't to a host you
   configured; it sends nothing about you or your hosts, but it does reveal your IP
   to GitHub — see [`THREAT_MODEL.md`](THREAT_MODEL.md).
-- **Not covered:** Linux `.deb`/`.rpm` (owned by your package manager) and
-  Android/iOS sideloads. Update those by hand.
+- **Linux `.deb`/`.rpm`** update in place as well, via `dpkg -i` / `rpm -U`.
+  That needs root, so expect a polkit prompt or a graphical password dialog; on
+  a system offering neither, the install cannot complete from a desktop launcher
+  and UniSSH opens the release page instead.
+- **Not covered:** Android/iOS sideloads. Update those by hand.
 - **v0.1.1 and earlier** predate this feature and have no updater compiled into
   them. Install the current release once by hand; from there it self-updates.
 

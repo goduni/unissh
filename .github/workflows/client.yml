@@ -28,8 +28,10 @@ name: Client (Tauri)
 # makes an unsigned distributable safe to keep current — and it costs no identity:
 # minisign keys have no name, email, or keyserver. SECURITY.md promises no
 # back-ports, so a user who cannot update is a user running known-vulnerable code.
-# Linux .deb/.rpm (owned by the package manager) and mobile sideloads are excluded;
-# they update by hand.
+# Every desktop format is covered, .deb and .rpm included: the bundler stamps the
+# package type into each binary it produces, so an install knows which artifact in
+# latest.json is its own. Mobile sideloads are excluded — no updater is compiled
+# into them.
 #
 # MONOREPO: the client's path dep (client/src-tauri -> ../../rust-core/crates/ffi)
 # resolves inside this single checkout — only actions/checkout of this repo is

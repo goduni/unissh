@@ -29,7 +29,9 @@ Desktop builds update themselves. UniSSH asks the release feed (at most once an 
 
 Because the updater fetches the new version itself rather than going through a browser, macOS never quarantines it: the Gatekeeper step above is a one-time cost at first install.
 
-`.deb` and `.rpm` belong to your package manager and are excluded, as are the mobile sideload builds. Anything installed from **v0.1.1 or earlier** predates the updater — install the current release once by hand and it takes over from there.
+`.deb` and `.rpm` update in place as well, but the install shells out to `dpkg -i` / `rpm -U`, which needs root — expect a polkit prompt or a graphical password dialog. On a system with neither, the update cannot complete from a desktop launcher and UniSSH opens the release page instead.
+
+The mobile sideload builds are not covered, nor is anything installed from **v0.1.1 or earlier** — those predate the updater, so install the current release once by hand and it takes over from there.
 
 ### Verify what you downloaded
 
