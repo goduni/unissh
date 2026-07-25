@@ -44,18 +44,42 @@ updates:
         patterns: ["*"]
     ignore:
       # Crypto stack is deliberately pinned to the rand_core 0.6 / digest 0.10
-      # generation. The 0.x "next" bumps (hpke 0.13, sha2 0.11, hkdf 0.13,
-      # hmac 0.13, signature 3.0) jump to digest 0.11 and break that aligned
-      # set — bump manually when the whole ecosystem moves together.
+      # generation. The 0.x "next" bumps (hpke 0.13, chacha20poly1305 0.11, sha2
+      # 0.11, hkdf 0.13, hmac 0.13, signature 3.0) jump to digest 0.11 and break
+      # that aligned set — bump manually when the whole ecosystem moves together.
+      #
+      # chacha20poly1305 0.11 is the one that proved how quietly this can go
+      # wrong. It compiles on the host, so it looks landable; but it moves to
+      # crypto-common 0.2, which pulls getrandom 0.4, which has no backend on
+      # wasm32-unknown-unknown — so the admin panel's wasm crypto stops building
+      # while every host gate stays green.
       #
       # This ignores VERSION updates only. Dependabot still opens security
       # updates for an ignored dependency, which is the behaviour we want: a
       # pin is a compatibility decision, not a reason to sit on a CVE.
       - dependency-name: hpke
+      - dependency-name: chacha20poly1305
       - dependency-name: sha2
       - dependency-name: hkdf
       - dependency-name: hmac
       - dependency-name: signature
+      # The two below are here because the first grouped run PROVED they cannot
+      # land yet — each was tried, each failed to compile, each is blocked by a
+      # dependency that has not moved. Without these entries the same broken PR
+      # returns every month. (`typescript` is blocked the same way; its entry is
+      # under the npm groups below.)
+      #
+      # ed25519-dalek 3.0 takes `CryptoRng` from rand_core 0.9 while `OsRng` in
+      # unissh-crypto is rand_core 0.6 — the generation hpke 0.12 pins. Error:
+      # `OsRng: ed25519_dalek::rand_core::CryptoRng is not satisfied`
+      # (crypto/src/keys.rs). Unblocks when hpke does.
+      - dependency-name: ed25519-dalek
+      # pkcs8 0.11 puts the 0.11 `DecryptPrivateKey` trait in scope for key
+      # types that still build on pkcs8 0.10 (rsa 0.9, p256-p521 0.13,
+      # ed25519-dalek 2.2), so every `from_pkcs8_encrypted_pem` call in
+      # ssh-agent/src/import.rs stops resolving — i.e. encrypted-PEM key import
+      # breaks. Unblocks when the key crates move to 0.11.
+      - dependency-name: pkcs8
 
   # Standalone Tauri client crate — excluded from the root workspace
   # (own [workspace] root), so it has its own Cargo.lock and needs its own entry.
@@ -74,10 +98,14 @@ updates:
     ignore:
       # Same pinned crypto generation as the root workspace.
       - dependency-name: hpke
+      - dependency-name: chacha20poly1305
       - dependency-name: sha2
       - dependency-name: hkdf
       - dependency-name: hmac
       - dependency-name: signature
+      # ed25519-dalek 3.0 needs rand_core 0.9; this workspace is on 0.6 (pinned
+      # by hpke 0.12). See the root entry for the exact compile error.
+      - dependency-name: ed25519-dalek
 
   # Standalone WASM crypto crate — excluded from the root workspace. Runs in
   # users' browsers (keyset unlock / challenge signing / registration).
@@ -96,10 +124,14 @@ updates:
     ignore:
       # Same pinned crypto generation as the root workspace.
       - dependency-name: hpke
+      - dependency-name: chacha20poly1305
       - dependency-name: sha2
       - dependency-name: hkdf
       - dependency-name: hmac
       - dependency-name: signature
+      # ed25519-dalek 3.0 needs rand_core 0.9; this workspace is on 0.6 (pinned
+      # by hpke 0.12). See the root entry for the exact compile error.
+      - dependency-name: ed25519-dalek
 
   # ── npm ─────────────────────────────────────────────────────────────────
   # The npm side is why this file is worth having at all: `cargo-deny` runs
@@ -119,6 +151,12 @@ updates:
       npm-client-security:
         applies-to: security-updates
         patterns: ["*"]
+    ignore:
+      # TypeScript 7 cannot be installed: typescript-eslint 8.x declares
+      # `peer typescript@">=4.8.4 <6.1.0"`, so `npm ci` fails with ERESOLVE
+      # before anything is even compiled. Unblocks when typescript-eslint
+      # supports 7.
+      - dependency-name: typescript
 
   - package-ecosystem: npm
     directory: /server-ui
@@ -132,6 +170,12 @@ updates:
       npm-server-ui-security:
         applies-to: security-updates
         patterns: ["*"]
+    ignore:
+      # TypeScript 7 cannot be installed: typescript-eslint 8.x declares
+      # `peer typescript@">=4.8.4 <6.1.0"`, so `npm ci` fails with ERESOLVE
+      # before anything is even compiled. Unblocks when typescript-eslint
+      # supports 7.
+      - dependency-name: typescript
 
   # Docs site (Astro). Ships no code to users, so it gets the same cadence but
   # is the first place to relax if the PR volume ever needs cutting.

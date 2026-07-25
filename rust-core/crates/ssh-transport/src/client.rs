@@ -7,12 +7,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use russh::client::{
-    AuthResult, Config, Handle, Handler, KeyboardInteractiveAuthResponse, Msg, Session,
+    AuthResult, ChannelOpenHandle, Config, Handle, Handler, KeyboardInteractiveAuthResponse, Msg,
+    Session,
 };
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{HashAlg, PublicKey};
 use russh::MethodKind;
-use russh::{Channel, ChannelMsg, Signer};
+use russh::{Channel, ChannelMsg, ChannelOpenFailure, Signer};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -122,6 +123,10 @@ impl Handler for ClientHandler {
         })
     }
 
+    /// `reply` arrived with russh 0.62: the caller must now explicitly accept or reject
+    /// the channel, where earlier versions opened it before handing it over. Ignoring the
+    /// parameter compiles but silently breaks remote forwarding — the server never gets a
+    /// confirmation — so the two outcomes are spelled out rather than defaulted.
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: Channel<Msg>,
@@ -129,6 +134,7 @@ impl Handler for ClientHandler {
         connected_port: u32,
         _originator_address: &str,
         _originator_port: u32,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), TransportError> {
         let target = self
@@ -137,13 +143,25 @@ impl Handler for ClientHandler {
             .expect("mutex")
             .get(&(connected_address.to_string(), connected_port))
             .cloned();
-        if let Some((host, port)) = target {
-            tokio::spawn(async move {
-                if let Ok(mut tcp) = TcpStream::connect((host.as_str(), port)).await {
-                    let mut stream = channel.into_stream();
-                    let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
-                }
-            });
+        match target {
+            Some((host, port)) => {
+                // Accept BEFORE `into_stream()`: the stream is only live once the peer has
+                // been told the channel is open.
+                reply.accept().await;
+                tokio::spawn(async move {
+                    if let Ok(mut tcp) = TcpStream::connect((host.as_str(), port)).await {
+                        let mut stream = channel.into_stream();
+                        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                    }
+                });
+            }
+            // No forward registered for this (address, port) — say so instead of dropping
+            // the channel on the floor and leaving the server waiting for a reply.
+            None => {
+                reply
+                    .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+            }
         }
         Ok(())
     }
