@@ -95,12 +95,31 @@ jobs:
       matrix:
         include:
           # ubuntu-22.04 pinned: webkit2gtk-4.1 availability + broad AppImage
-          # glibc compatibility. Produces .deb / .rpm / .AppImage.
+          # glibc compatibility. Produces .deb / .rpm / .AppImage — x86_64 only.
           - platform: ubuntu-22.04
+            args: ""
           # .msi (WiX) + NSIS .exe
           - platform: windows-latest
-          # .dmg / .app
+            args: ""
+          # .dmg / .app. `macos-latest` has been Apple Silicon since early 2025,
+          # so a default build here is arm64-ONLY and silently ships nothing an
+          # Intel Mac can run. Building the universal target instead is the fix
+          # that survives: the last Intel RUNNER (`macos-15-intel`) is gone in
+          # Fall 2027, but cross-compiling x86_64 from an arm64 runner is not
+          # affected by that — it only needs the second rustup target below.
+          #
+          # SAFE FOR THE INSTALLED BASE. tauri-plugin-updater 2.10.1 looks up
+          # only `{os}-{arch}-{installer}` then `{os}-{arch}` (updater.rs:578-596)
+          # — there is NO `darwin-universal` fallback, so publishing that key
+          # alone would strand every client already installed on `darwin-aarch64`.
+          # It doesn't happen here: tauri-action's upload-version-json.ts special-
+          # cases `os === 'darwin' && arch === 'universal'` and writes the SAME
+          # artifact under BOTH `darwin-aarch64` and `darwin-x86_64` (guarded by
+          # `if (!versionContent.platforms[...])`, so a native build still wins).
+          # Verified against the released `@v0`, not just `dev` — the two have
+          # disagreed before (see includeUpdaterJson below).
           - platform: macos-latest
+            args: "--target universal-apple-darwin"
 
     runs-on: ${{ matrix.platform }}
 
@@ -145,6 +164,14 @@ jobs:
             patchelf \
             rpm \
             pkg-config
+
+      # A universal bundle is two real compilations `lipo`'d together, so BOTH
+      # targets must exist before the bundler runs — the runner's default only
+      # covers its own arm64. Explicit here rather than relying on tauri-action
+      # to infer them from `--target`, matching how the android/ios jobs do it.
+      - name: Add the macOS Rust targets (universal = arm64 + Intel)
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -223,7 +250,11 @@ jobs:
           # `startsWith(tag) && '' || '--no-sign'` evaluates to '--no-sign' on
           # tags too, which silently disabled updater signing on the very builds
           # that need it. Keep the non-empty value in the truthy branch.
-          args: ${{ !startsWith(github.ref, 'refs/tags/v') && '--no-sign' || '' }}
+          # `matrix.args` carries the per-platform bundle flags (macOS: universal).
+          # `format()` rather than string concatenation because the truthy branch
+          # must stay non-empty for the reason above — and it always is, since it
+          # begins with the literal `--no-sign`.
+          args: ${{ !startsWith(github.ref, 'refs/tags/v') && format('--no-sign {0}', matrix.args) || matrix.args }}
           # Release flow (tag push): cut a GitHub Release and upload bundles.
           # CI flow (branch/PR/dispatch): tagName empty → tauri-action builds
           # the bundles only and does NOT create a release.
@@ -240,8 +271,10 @@ jobs:
           # jobs upload it for the same tag; tauri-action merges each platform's
           # entry into the existing asset instead of overwriting it. VERIFY on the
           # first real release that latest.json ends up with darwin-aarch64,
-          # windows-x86_64 AND linux-x86_64 — if a job overwrote it, two of the
-          # three platforms would silently never see an update again.
+          # darwin-x86_64, windows-x86_64 AND linux-x86_64 — if a job overwrote
+          # it, platforms would silently never see an update again. The two
+          # darwin keys both point at the ONE universal .app.tar.gz and share its
+          # signature; that is tauri-action's universal handling, not a bug.
           # The input is `includeUpdaterJson`, NOT the `uploadUpdaterJson` name
           # used on tauri-action's dev branch: the released v0 does not know it,
           # and an unknown input is only a WARNING, so the wrong name looks fine
@@ -262,7 +295,7 @@ jobs:
   # init, before gradle ever evaluates the project.
   # ---------------------------------------------------------------------------
   android:
-    name: build (android, arm64 apk)
+    name: build (android, all ABIs)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -301,8 +334,13 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Add the Android Rust target
-        run: rustup target add aarch64-linux-android
+      - name: Add the Android Rust targets (one per shipped ABI)
+        run: |
+          rustup target add \
+            aarch64-linux-android \
+            armv7-linux-androideabi \
+            i686-linux-android \
+            x86_64-linux-android
 
       - name: Cache Rust (client/src-tauri standalone workspace)
         uses: Swatinem/rust-cache@v2
@@ -387,33 +425,107 @@ jobs:
           PYEOF
         working-directory: client/src-tauri
 
-      - name: Build the signed release APK (arm64)
+      # TWO invocations on purpose, and the order matters.
+      #
+      # `--target aarch64` used to be passed here, which built exactly one ABI:
+      # every x86_64 emulator (i.e. anyone evaluating the app on a desktop) and
+      # every armv7 device got no artifact at all, with nothing on the release
+      # page saying so. The CLI's default is "all by default" — so dropping the
+      # flag is what widens it.
+      #
+      # Pass 1 (no --split-per-abi) produces ONE universal APK carrying all four
+      # ABIs. That is the file a human sideloading onto an unknown device should
+      # get: it cannot be the wrong one. Pass 2 produces the per-ABI APKs for
+      # people who would rather not carry ~4x the native code.
+      #
+      # Pass 1's output must be moved aside BEFORE pass 2 runs: both write into
+      # the same gradle output dir, and the split build would otherwise clobber
+      # (or be mistaken for) the universal one when collecting. Pass 2 is cheap
+      # despite the doubled gradle work — the Rust objects it needs are already
+      # in the cargo target dir from pass 1.
+      - name: Build the signed release APKs (universal, then per-ABI)
         env:
           ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/client/src-tauri/gen/android/unissh-release.p12
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: npx tauri android build --apk --target aarch64
+        run: |
+          set -eux
+          npx tauri android build --apk
+          mkdir -p "$GITHUB_WORKSPACE/apk-universal"
+          find src-tauri/gen/android -name '*-release.apk' \
+            -exec mv {} "$GITHUB_WORKSPACE/apk-universal/" \;
+          npx tauri android build --apk --split-per-abi
         working-directory: client
 
-      - name: Collect + verify the APK signature
+      - name: Collect + verify every APK signature
         run: |
-          APK=$(find client/src-tauri/gen/android -name '*-release.apk' | head -1)
-          if [ -z "$APK" ]; then
-            echo "no signed release apk found; apks present:"
-            find client/src-tauri/gen/android -name '*.apk'
+          set -eu
+          VERSION=$(node -p "require('./client/src-tauri/tauri.conf.json').version")
+          BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          SIGNER="$ANDROID_HOME/build-tools/$BT/apksigner"
+          mkdir -p out
+
+          # gradle names APKs after the ABI it split on; map those to the names
+          # the release page uses. The universal build has no ABI in its name,
+          # hence the separate directory it was moved to above.
+          # `universal` is listed first and maps to SKIP: depending on the gradle
+          # template, the split build may ALSO emit a universal APK, and that one
+          # is a duplicate of what pass 1 already collected — not an error.
+          name_for() {
+            case "$1" in
+              *universal*)   echo "SKIP" ;;
+              *arm64-v8a*)   echo "UniSSH_${VERSION}_arm64.apk" ;;
+              *armeabi-v7a*) echo "UniSSH_${VERSION}_armv7.apk" ;;
+              *x86_64*)      echo "UniSSH_${VERSION}_x86_64.apk" ;;
+              *x86*)         echo "UniSSH_${VERSION}_x86.apk" ;;
+              *)             echo "" ;;
+            esac
+          }
+
+          # An unmatched glob expands to the literal pattern, so `-e` is what
+          # actually detects "pass 1 produced nothing" here.
+          for APK in apk-universal/*.apk; do
+            if [ ! -e "$APK" ]; then
+              echo "universal APK missing — pass 1 produced no *-release.apk" >&2
+              exit 1
+            fi
+            cp "$APK" "out/UniSSH_${VERSION}_universal.apk"
+          done
+
+          for APK in $(find client/src-tauri/gen/android -name '*-release.apk'); do
+            OUT=$(name_for "$APK")
+            # Plain `if`, not `[ ... ] && continue`: under `set -e` a false test
+            # as the first half of an AND-list is a documented footgun.
+            if [ "$OUT" = "SKIP" ]; then
+              continue
+            fi
+            if [ -z "$OUT" ]; then
+              echo "unrecognized split APK name: $APK" >&2
+              exit 1
+            fi
+            cp "$APK" "out/$OUT"
+          done
+
+          # Five artifacts expected: universal + 4 ABIs. Fail loudly rather than
+          # shipping a release that is quietly missing an architecture again.
+          COUNT=$(ls out | wc -l)
+          if [ "$COUNT" -ne 5 ]; then
+            echo "expected 5 APKs (universal + 4 ABIs), found $COUNT:" >&2
+            ls -l out >&2
             exit 1
           fi
-          VERSION=$(node -p "require('./client/src-tauri/tauri.conf.json').version")
-          OUT="UniSSH_${VERSION}_arm64.apk"
-          cp "$APK" "$OUT"
-          BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
-          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --print-certs "$OUT"
-          echo "APK_NAME=$OUT" >> "$GITHUB_ENV"
+
+          # An unsigned APK installs nowhere; verify each one rather than
+          # assuming the injected signingConfig applied to every variant.
+          for APK in out/*.apk; do
+            echo "--- $APK"
+            "$SIGNER" verify --print-certs "$APK"
+          done
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: ${{ env.APK_NAME }}
+          name: android-apks
+          path: out/*.apk
           if-no-files-found: error
 
       - name: Attach to the release (tag builds)
@@ -428,7 +540,7 @@ jobs:
             gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1 && break
             sleep 30
           done
-          gh release upload "${{ github.ref_name }}" "$APK_NAME" \
+          gh release upload "${{ github.ref_name }}" out/*.apk \
             --repo "${{ github.repository }}" --clobber
 
   # ---------------------------------------------------------------------------
@@ -634,8 +746,10 @@ jobs:
       #
       # What survives the "does this change per release, or is it needed at the very
       # moment of downloading?" filter is only: the changelog, which file is yours
-      # (nine artifacts with non-obvious names), and one line each for the unsigned
-      # first launch, verification, and auto-update.
+      # (a dozen-plus artifacts with non-obvious names), and one line each for the
+      # unsigned first launch, verification, and auto-update. The architectures a
+      # release does NOT cover are named here too — an absent artifact is otherwise
+      # indistinguishable from one the reader failed to spot.
       #
       # This runs in release-integrity rather than the build matrix because that job
       # is the only one that runs exactly once — the three desktop jobs would
@@ -663,11 +777,18 @@ jobs:
 
           | Platform | File |
           | --- | --- |
-          | **macOS** (Apple Silicon) | \`UniSSH_${VERSION}_aarch64.dmg\` |
-          | **Windows** | \`UniSSH_${VERSION}_x64-setup.exe\` — or the \`.msi\` |
-          | **Linux** | \`UniSSH_${VERSION}_amd64.AppImage\` · \`.deb\` · \`.rpm\` |
-          | **Android** (sideload) | \`UniSSH_${VERSION}_arm64.apk\` |
+          | **macOS** (Apple Silicon *and* Intel) | \`UniSSH_${VERSION}_universal.dmg\` |
+          | **Windows** (x86-64) | \`UniSSH_${VERSION}_x64-setup.exe\` — or the \`.msi\` |
+          | **Linux** (x86-64) | \`UniSSH_${VERSION}_amd64.AppImage\` · \`.deb\` · \`.rpm\` |
+          | **Android** (sideload) | \`UniSSH_${VERSION}_universal.apk\` — works on any device |
+          | ↳ smaller, if you know your ABI | \`_arm64\` · \`_armv7\` · \`_x86_64\` · \`_x86\` \`.apk\` |
           | **iOS** (sideload, unsigned) | \`UniSSH_${VERSION}_ios-sideload.ipa\` |
+
+          Linux and Windows are **x86-64 only** — there is no ARM build for either.
+
+          **Does this break anything you already have?** The changelog answers that
+          per release, including whether the vault format or server protocol moved:
+          [CHANGELOG.md](https://github.com/goduni/unissh/blob/main/CHANGELOG.md).
 
           **Your OS will block the first launch.** These builds carry no Apple or
           Windows code-signing certificate — obtaining one would attach a legal
