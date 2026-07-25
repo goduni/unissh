@@ -70,7 +70,6 @@ pub fn run() {
         log_builder = log_builder.level_for(module, level);
     }
 
-    #[cfg_attr(not(mobile), allow(unused_mut))]
     let mut builder = tauri::Builder::default()
         .plugin(log_builder.build())
         .plugin(tauri_plugin_os::init())
@@ -84,6 +83,16 @@ pub fn run() {
     #[cfg(mobile)]
     {
         builder = builder.plugin(tauri_plugin_biometric::init());
+    }
+
+    // Auto-update is desktop-only: mobile ships as sideload artifacts that the
+    // user re-installs by hand, so there is nothing for an updater to replace.
+    // Registering it on mobile would only expose a command that always fails.
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
     }
 
     builder

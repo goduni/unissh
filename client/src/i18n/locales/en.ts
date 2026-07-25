@@ -209,6 +209,28 @@ export const en = {
     stay: "Stay unlocked",
   },
 
+  update: {
+    statusTitle: "Updates",
+    statusDesc: "Not checked yet in this session",
+    checkNow: "Check now",
+    checking: "Checking…",
+    upToDate: "You're on the latest version",
+    checkFailed: "Couldn't reach the update server",
+    available: "Version {{version}} is available",
+    currentIs: "You're on {{version}}.",
+    install: "Update",
+    installing: "Installing…",
+    notes: "Release notes",
+    installedRestart: "Update installed — restart UniSSH to use it",
+    installManual: "This install can't update itself — opening the download page",
+    confirmTitle: "Update to {{version}}?",
+    confirmSessions_one: "UniSSH restarts to finish. {{count}} active session will be closed.",
+    confirmSessions_other: "UniSSH restarts to finish. {{count}} active sessions will be closed.",
+    autoTitle: "Check for updates automatically",
+    autoDesc:
+      "Asks github.com once an hour at most whether a newer release exists. Nothing about you or your hosts is sent — only the request itself, which reveals your IP to GitHub. Downloads are verified against a signing key built into this app before anything runs.",
+  },
+
   quit: {
     title: "Quit UniSSH?",
     body: "You have {{count}} live session(s). Closing the window will disconnect them.",
@@ -912,6 +934,7 @@ export const en = {
     "startupUnlocked": "Unlocked",
     "sectionConnection": "Connection",
     "sectionBehavior": "Behavior",
+    "sectionUpdates": "Updates",
     "restoreTabsTitle": "Restore terminal tabs",
     "restoreTabsDesc": "Reopen previous sessions on startup",
     "confirmQuitTitle": "Confirm quit",

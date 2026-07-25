@@ -5,7 +5,10 @@ import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useTranslation } from "@/i18n";
 import { Icon } from "@/components/primitives";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { Sidebar, TitleBar } from "@/shell/Shell";
+import { useUpdate } from "@/store/update";
+import { BOOT_CHECK_DELAY_MS, PERIODIC_CHECK_MS } from "@/bridge/updater";
 
 import { ViewHosts } from "@/views/ViewHosts";
 import { ViewTerminal } from "@/views/ViewTerminal";
@@ -170,6 +173,22 @@ export function App() {
     window.addEventListener("resize", on);
     return () => window.removeEventListener("resize", on);
   }, []);
+
+  // Desktop auto-update. One check a few seconds after boot — late enough that it
+  // never competes with unlock and session restore — then a slow tick for windows
+  // left open for days. Both go through the same one-per-hour throttle and the
+  // user's preference (see bridge/updater), so this schedule is an upper bound on
+  // how often UniSSH talks to github.com, not a promise that it will.
+  useEffect(() => {
+    if (device === "mobile") return; // sideload targets have no updater at all
+    const run = () => void useUpdate.getState().check(false);
+    const first = setTimeout(run, BOOT_CHECK_DELAY_MS);
+    const tick = setInterval(run, PERIODIC_CHECK_MS);
+    return () => {
+      clearTimeout(first);
+      clearInterval(tick);
+    };
+  }, [device]);
 
   // Auto-lock on idle. Re-arms whenever the instance unlocks or the setting
   // changes (store-backed), so a Settings change applies without a restart.
@@ -414,6 +433,7 @@ export function App() {
       {showApp && lockWarnSec !== null && (
         <LockWarnBanner sec={lockWarnSec} onStay={() => rearmLockRef.current()} />
       )}
+      {showApp && <UpdateBanner />}
       <ConfirmDialog />
       <ShortcutsHelp />
       <ToastHost />

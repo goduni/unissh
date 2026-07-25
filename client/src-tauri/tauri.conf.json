@@ -29,9 +29,16 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2MEE1ODBENTQ4NDRCOTAKUldTUVM0UlVEVmdLVnMwKzFmRkUxREVYVi9adjNwTDZTUXBTdTVLb28yS2xUSWtVSlFGcHAyM1EK",
+      "endpoints": ["https://github.com/goduni/unissh/releases/latest/download/latest.json"]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

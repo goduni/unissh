@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updater",
+  "description": "In-place auto-update. Desktop only: mobile ships as sideload artifacts the user re-installs by hand, and the updater plugin is not compiled into those targets — listing this permission in the shared default capability would fail the Android/iOS build on an unknown permission.",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "permissions": ["updater:default", "process:allow-restart"]
+}

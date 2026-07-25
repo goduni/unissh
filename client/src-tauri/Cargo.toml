@@ -55,6 +55,18 @@ unissh-ffi = { path = "../../rust-core/crates/ffi" }
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 tauri-plugin-biometric = "2"
 
+# In-place auto-update, desktop only. There is no mobile updater: Android/iOS
+# ship as sideload artifacts and are re-installed by hand. Update payloads are
+# verified against the minisign public key in tauri.conf.json before anything is
+# executed — that key, not a code-signing certificate, is what makes an unsigned
+# distributable safely updatable (see .github/workflows/client.yml).
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+tauri-plugin-updater = "2"
+# Only used to relaunch into the freshly installed version once the updater has
+# swapped the bundle on disk. Pulled in beside the updater rather than globally:
+# nothing else in the app restarts the process.
+tauri-plugin-process = "2"
+
 # OS keychain for the Secret Key (per-platform native backend; no extra C deps).
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
