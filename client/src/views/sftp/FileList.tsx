@@ -105,7 +105,10 @@ export function FileList({
       e.preventDefault();
       if (showUp && focusIdx === 0) return onOpenUp();
       const ent = display[focusIdx - base];
-      if (ent) ent.isDir ? onOpenDir(ent.name) : onActivate(ent);
+      if (ent) {
+        if (ent.isDir) onOpenDir(ent.name);
+        else onActivate(ent);
+      }
     } else if (e.key === " ") {
       e.preventDefault();
       const ent = showUp && focusIdx === 0 ? null : display[focusIdx - base];

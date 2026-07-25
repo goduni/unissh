@@ -1,0 +1,125 @@
+name: Frontend
+
+# The two TypeScript frontends had almost no CI of their own.
+#
+#   * The client's vitest suite ran only inside the ~15-minute Tauri bundling job,
+#     so a broken unit test cost a full five-platform build to discover.
+#   * server-ui's typecheck ran ONLY inside the multi-arch QEMU image build
+#     (deploy/Caddy.Dockerfile runs `npm run build`, which is `tsc --noEmit &&
+#     vite build`) — a type error surfaced twenty minutes in, during a job whose
+#     purpose is publishing a container.
+#   * Neither package had a working linter. server-ui shipped a `lint` script that
+#     could never run: eslint was not in devDependencies at all, and the `--ext`
+#     flag it passed was removed in ESLint 9.
+#   * The client's typecheck was, and still is, also reachable via Tauri's
+#     beforeBuildCommand — but only as a side effect. Editing that one config line
+#     would have removed the check with nothing to notice.
+#
+# This workflow runs the checks that need neither a bundler nor a container, so a
+# broken frontend fails in about two minutes instead of twenty. It does not
+# replace the bundling/image builds; it front-runs them.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "client/**"
+      # src-tauri is the Rust sidecar and its generated mobile projects — nothing
+      # here typechecks, lints or tests it. client.yml and ci.yml own that.
+      - "!client/src-tauri/**"
+      - "server-ui/**"
+      # crypto-wasm path-depends on this crate, and the .d.ts wasm-pack generates
+      # from it is what server-ui's `tsc` resolves its crypto imports against — so
+      # a change here can break the typecheck with nothing in server-ui touched.
+      - "rust-core/crates/crypto/**"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    paths:
+      - "client/**"
+      - "!client/src-tauri/**"
+      - "server-ui/**"
+      - "rust-core/crates/crypto/**"
+      - ".github/workflows/frontend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client:
+    name: client (lint · typecheck · test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # `npm ci` here, unlike client.yml's `rm -rf node_modules && npm install`.
+      # That dance exists because a lockfile resolved on one OS makes npm skip the
+      # other OSes' native optionalDependencies (npm/cli#4828) — a cross-platform
+      # matrix problem. This job is Linux-only, on the platform the lockfile was
+      # resolved on, so the deterministic install is both correct and faster.
+      - run: npm ci --no-audit --no-fund
+        working-directory: client
+
+      - run: npm run lint
+        working-directory: client
+
+      - run: npm run typecheck
+        working-directory: client
+
+      - run: npm test
+        working-directory: client
+
+  server-ui:
+    name: server-ui (lint · typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server-ui/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+        working-directory: server-ui
+
+      # Lint first: it needs nothing but the sources, so a lint failure costs
+      # seconds rather than waiting behind the wasm build below.
+      - run: npm run lint
+        working-directory: server-ui
+
+      # `tsc` cannot resolve src/crypto/wasm-provider.ts without the generated
+      # crypto-wasm/pkg/, which is gitignored — so the typecheck genuinely needs a
+      # wasm build first. Verified: removing pkg/ produces
+      #   TS2307: Cannot find module '../../crypto-wasm/pkg/unissh_crypto_wasm.js'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-ui/crypto-wasm
+
+      - run: rustup target add wasm32-unknown-unknown
+
+      # Same pinned version, and the same build-from-source install, as
+      # deploy/Caddy.Dockerfile — no unverified prebuilt binary is introduced.
+      # rust-cache restores ~/.cargo/bin, so this is a no-op after the first run.
+      - name: Install wasm-pack (pinned, from source)
+        run: command -v wasm-pack || cargo install --locked wasm-pack@0.13.1
+
+      # `--dev`, unlike the Dockerfile's `--release`: this build is thrown away.
+      # Nothing here is shipped or served — it exists only so the type resolver has
+      # the generated bindings to read, and those are identical either way. The
+      # wasm users actually load is still built, from source and in release mode,
+      # by the image pipeline.
+      - name: Build crypto-wasm (throwaway — only to satisfy the type resolver)
+        run: wasm-pack build --target web --out-dir pkg --dev
+        working-directory: server-ui/crypto-wasm
+
+      - run: npm run typecheck
+        working-directory: server-ui

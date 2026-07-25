@@ -256,6 +256,7 @@ function RotateModal({
           "manifest authority chain failed verification from the pinned genesis owner — " +
             "refusing to rotate to an unverified member set" +
             (e instanceof Error && e.message ? ` (${e.message})` : ""),
+          { cause: e },
         );
       }
 
