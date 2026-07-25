@@ -1,0 +1,166 @@
+# Dependency updates across all seven ecosystems this repo ships from.
+#
+# WHY THIS FILE LOOKS THE WAY IT DOES. A previous version of it was removed
+# rather than tuned: ungrouped weekly updates across seven ecosystems opened
+# ~40 pull requests, and back then the repo was private, so those 40 PRs each
+# spent from a metered CI budget and drained it outright. Two things changed,
+# and only one of them is GitHub's doing:
+#
+#   1. The repo is public now, so Actions minutes on standard runners are free.
+#      That removes the budget problem but NOT the review problem — 40 PRs is
+#      still 40 PRs a single maintainer has to read.
+#   2. `groups` (below) is what actually fixes it. The old config had none, so
+#      Dependabot's default of one-PR-per-dependency applied. With a group per
+#      ecosystem the same updates arrive as ONE PR each.
+#
+# Expected steady state: at most 7 routine PRs a month (one per ecosystem, and
+# only for ecosystems that actually moved), plus security PRs as advisories
+# land. If this ever climbs back toward the old volume, the knob to turn is
+# `groups`, not `interval` — spreading the same number of PRs over more weeks
+# does not reduce them.
+#
+# SECURITY UPDATES ARE DELIBERATELY NOT ON THE MONTHLY CADENCE. `schedule`
+# governs version updates only; Dependabot security updates fire when an
+# advisory is published. Each ecosystem therefore declares TWO groups: the
+# `version-updates` one rides the monthly schedule, the `security-updates` one
+# does not wait for it. For a project whose SECURITY.md promises no back-ports,
+# a month of latency on a known-vulnerable dependency is the wrong trade.
+version: 2
+
+updates:
+  # ── Cargo ───────────────────────────────────────────────────────────────
+  # Root workspace (rust-core/crates/* + server). resolver=2, single Cargo.lock.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      cargo-root:
+        applies-to: version-updates
+        patterns: ["*"]
+      cargo-root-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      # Crypto stack is deliberately pinned to the rand_core 0.6 / digest 0.10
+      # generation. The 0.x "next" bumps (hpke 0.13, sha2 0.11, hkdf 0.13,
+      # hmac 0.13, signature 3.0) jump to digest 0.11 and break that aligned
+      # set — bump manually when the whole ecosystem moves together.
+      #
+      # This ignores VERSION updates only. Dependabot still opens security
+      # updates for an ignored dependency, which is the behaviour we want: a
+      # pin is a compatibility decision, not a reason to sit on a CVE.
+      - dependency-name: hpke
+      - dependency-name: sha2
+      - dependency-name: hkdf
+      - dependency-name: hmac
+      - dependency-name: signature
+
+  # Standalone Tauri client crate — excluded from the root workspace
+  # (own [workspace] root), so it has its own Cargo.lock and needs its own entry.
+  - package-ecosystem: cargo
+    directory: /client/src-tauri
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      cargo-client:
+        applies-to: version-updates
+        patterns: ["*"]
+      cargo-client-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      # Same pinned crypto generation as the root workspace.
+      - dependency-name: hpke
+      - dependency-name: sha2
+      - dependency-name: hkdf
+      - dependency-name: hmac
+      - dependency-name: signature
+
+  # Standalone WASM crypto crate — excluded from the root workspace. Runs in
+  # users' browsers (keyset unlock / challenge signing / registration).
+  - package-ecosystem: cargo
+    directory: /server-ui/crypto-wasm
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      cargo-wasm:
+        applies-to: version-updates
+        patterns: ["*"]
+      cargo-wasm-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      # Same pinned crypto generation as the root workspace.
+      - dependency-name: hpke
+      - dependency-name: sha2
+      - dependency-name: hkdf
+      - dependency-name: hmac
+      - dependency-name: signature
+
+  # ── npm ─────────────────────────────────────────────────────────────────
+  # The npm side is why this file is worth having at all: `cargo-deny` runs
+  # weekly in ci.yml and covers the three Cargo workspaces, so Rust advisories
+  # surface with or without Dependabot. Nothing equivalent watches npm — CI
+  # runs `npm ci --no-audit` — so React/xterm/Vite/i18next have no advisory
+  # gate except these entries.
+  - package-ecosystem: npm
+    directory: /client
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      npm-client:
+        applies-to: version-updates
+        patterns: ["*"]
+      npm-client-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /server-ui
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      npm-server-ui:
+        applies-to: version-updates
+        patterns: ["*"]
+      npm-server-ui-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # Docs site (Astro). Ships no code to users, so it gets the same cadence but
+  # is the first place to relax if the PR volume ever needs cutting.
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      npm-website:
+        applies-to: version-updates
+        patterns: ["*"]
+      npm-website-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # ── GitHub Actions ──────────────────────────────────────────────────────
+  # These actions hold `contents: write`, `id-token: write` and the signing
+  # secrets during a release — a compromised or abandoned one is a supply-chain
+  # problem for every artifact users download, not a CI inconvenience.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns: ["*"]
+      github-actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
