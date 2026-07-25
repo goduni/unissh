@@ -1166,12 +1166,17 @@ mod pwserver {
             }
         }
 
+        // russh 0.62 replaced the `-> Result<bool>` "did you accept?" convention with an
+        // explicit handle: the channel is opened by calling `accept()`, and returning
+        // without doing so leaves the client waiting rather than refusing.
         async fn channel_open_session(
             &mut self,
             _channel: Channel<Msg>,
+            reply: server::ChannelOpenHandle,
             _session: &mut Session,
-        ) -> Result<bool, russh::Error> {
-            Ok(true)
+        ) -> Result<(), russh::Error> {
+            reply.accept().await;
+            Ok(())
         }
 
         async fn exec_request(
@@ -1542,12 +1547,16 @@ mod fleetserver {
             }
         }
 
+        // See the note on the other test server: 0.62 accepts via the handle, not by
+        // returning true.
         async fn channel_open_session(
             &mut self,
             _c: Channel<Msg>,
+            reply: server::ChannelOpenHandle,
             _s: &mut Session,
-        ) -> Result<bool, russh::Error> {
-            Ok(true)
+        ) -> Result<(), russh::Error> {
+            reply.accept().await;
+            Ok(())
         }
 
         async fn exec_request(

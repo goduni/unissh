@@ -389,11 +389,20 @@ fn key_algorithms(jwk: &Jwk) -> AppResult<Vec<Algorithm>> {
             EllipticCurve::P521 | EllipticCurve::Ed25519 => {
                 Err(AppError::unauthenticated("invalid id_token"))
             }
+            // `EllipticCurve` is `#[non_exhaustive]` as of jsonwebtoken 11, so this arm is
+            // mandatory. It MUST refuse: this allowlist is what pins a token's algorithm to
+            // its key, and a curve this code has never heard of is one whose mapping nobody
+            // here has checked. Failing closed keeps an upstream addition from widening the
+            // allowlist silently on the next `cargo update`.
+            _ => Err(AppError::unauthenticated("invalid id_token")),
         },
         // OKP (Ed25519/Ed448) → EdDSA.
         AlgorithmParameters::OctetKeyPair(_) => Ok(vec![Algorithm::EdDSA]),
         // Symmetric key: never valid for JWKS-backed id_token verification.
         AlgorithmParameters::OctetKey(_) => Err(AppError::unauthenticated("invalid id_token")),
+        // Same reasoning as the curve wildcard above: `AlgorithmParameters` is now
+        // `#[non_exhaustive]`, and an unrecognized key type has no vetted algorithm mapping.
+        _ => Err(AppError::unauthenticated("invalid id_token")),
     }
 }
 
