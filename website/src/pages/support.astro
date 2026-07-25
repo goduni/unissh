@@ -83,14 +83,16 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}support/`;
         docsHref={overviewHref}
         archHref={archHref}
         securityHref={securityHref}
+        supportHref={supportHref}
         ctaHref={githubReleases}
         githubHref={githubHref}
       />
 
       <main id="main" class="support">
         <span id="top"></span>
-
-        <h1>Support UniSSH</h1>
+        <div class="wrap">
+          <div class="support__col">
+            <h1>Support UniSSH</h1>
         <p class="support__lede">
           UniSSH is free, open source, and has no company behind it. If it solved a problem
           for you, you can support the project. Nothing here is gated and nothing will be —
@@ -130,6 +132,8 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}support/`;
           Not a support address: bugs go to <a href={issuesHref} rel="noopener">Issues</a>,
           questions to <a href={telegramHref} rel="noopener">Telegram</a> or Discussions.
         </p>
+          </div>
+        </div>
       </main>
 
       <SiteFooter
@@ -176,8 +180,14 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}support/`;
 
 <style>
   .support {
-    padding: clamp(32px, 6vw, 88px) 0 96px;
-    max-width: 74ch;
+    padding-block: clamp(32px, 6vw, 88px) 96px;
+  }
+  /* Readable prose column, left-aligned inside the site's .wrap so its edge lines up
+     with the header brand and footer. Without this the content ran full-bleed against
+     the viewport while the header stayed centred at 1240px — the "everything shifted"
+     misalignment. */
+  .support__col {
+    max-width: 720px;
   }
   .support h1 {
     font-size: clamp(30px, 5vw, 44px);
