@@ -1,0 +1,50 @@
+# Review routing. GitHub requests a review from the owner of every path a pull
+# request touches.
+#
+# There is one maintainer, so a catch-all would be enough to get the notification.
+# The per-path entries below exist for a different reason: they make the trust
+# boundary visible in the diff. A PR that touches only `website/` and a PR that
+# touches `rust-core/crates/crypto` both get the same reviewer, but only the
+# second one announces in its file list that it is changing code where a mistake
+# is a vulnerability rather than a bug.
+#
+# Contributions are welcome everywhere — this routes review, it does not restrict
+# who may open a PR. See CONTRIBUTING.md.
+
+* @goduni
+
+# ── The trust boundary ──────────────────────────────────────────────────────
+# Crypto primitives' composition, byte formats, and the key hierarchy. Frozen
+# schemes here are pinned by golden vectors: a change that breaks one is a format
+# break needing a new version, never an edit.
+/rust-core/crates/crypto/     @goduni
+
+# Keys never cross this boundary in plaintext — the invariant in CONTRIBUTING.md
+# that cannot be relaxed by review.
+/rust-core/crates/ffi/        @goduni
+/rust-core/crates/keychain/   @goduni
+
+# The client treats the transport as untrusted; this is the verify-before-apply
+# path that enforces it.
+/rust-core/crates/sync/       @goduni
+
+# Encrypted-at-rest storage and the schema migrations that must keep old vaults
+# readable.
+/rust-core/crates/storage/    @goduni
+
+# Real in-browser crypto, shipped to users as wasm.
+/server-ui/crypto-wasm/       @goduni
+
+# ── Supply chain ────────────────────────────────────────────────────────────
+# These hold `contents: write`, `id-token: write`, and the signing secrets during
+# a release. A change here can alter what users download without altering a line
+# of product code.
+/.github/workflows/           @goduni
+/deny.toml                    @goduni
+
+# ── The promises ────────────────────────────────────────────────────────────
+# Security claims are part of the product. A change to what these documents
+# promise is a change to what the project is accountable for.
+/SECURITY.md                  @goduni
+/THREAT_MODEL.md              @goduni
+/CHANGELOG.md                 @goduni
