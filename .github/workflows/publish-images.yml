@@ -120,8 +120,30 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          # Cache lives in GHCR, NOT in the Actions cache. `type=gha` is capped
+          # at 10 GB per REPOSITORY, shared with every other consumer — and the
+          # Swatinem/rust-cache entries from ci.yml and client.yml (Android
+          # 1.5 GB, Windows/macOS ~0.9 GB each, times two OS variants) fill that
+          # on their own. Once full, exporting a multi-arch Rust image's
+          # mode=max cache evicts entries mid-write and the finalize call answers
+          # `not_found`, which surfaces as:
+          #
+          #     #37 exporting to GitHub Actions Cache
+          #     #37 ERROR: not_found
+          #     ERROR: failed to build: failed to solve: not_found
+          #
+          # That is why this job failed on every push while unissh-caddy, whose
+          # cache is small, kept passing — and why the failure looked mysterious:
+          # the image itself had already been pushed successfully one step above,
+          # so the red mark was reporting a caching problem as a build problem.
+          #
+          # A registry-backed cache has no such cap, the credentials are already
+          # in hand from the login step, and moving it here hands the whole 10 GB
+          # back to the Rust builds that actually benefit from it.
+          # `image-manifest=true,oci-mediatypes=true` is what GHCR needs to
+          # accept a cache manifest for a multi-platform build.
+          cache-from: type=registry,ref=ghcr.io/goduni/${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/goduni/${{ matrix.image }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
 
       # SLSA build provenance for the image we just pushed — the compensating
       # control for unsigned-by-design images (consistent with the desktop
