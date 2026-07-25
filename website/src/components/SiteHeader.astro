@@ -5,12 +5,13 @@ interface Props {
   docsHref: string;
   archHref: string;
   securityHref: string;
+  supportHref: string;
   /** Where the header Download button goes. */
   ctaHref: string;
   githubHref: string;
 }
 
-const { docsHref, archHref, securityHref, ctaHref, githubHref } = Astro.props;
+const { docsHref, archHref, securityHref, supportHref, ctaHref, githubHref } = Astro.props;
 ---
 
 <header class="site-header" id="site-header">
@@ -24,6 +25,7 @@ const { docsHref, archHref, securityHref, ctaHref, githubHref } = Astro.props;
       <a href={docsHref}>Docs</a>
       <a href={archHref}>Architecture</a>
       <a href={securityHref}>Security</a>
+      <a href={supportHref}>Support</a>
       <a href={githubHref} rel="noopener">Open Source</a>
     </nav>
 
