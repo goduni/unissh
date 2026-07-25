@@ -214,7 +214,12 @@ jobs:
           # GitHub does not expose secrets to pull requests from forks. Without
           # --no-sign, every outside contributor's PR would fail at bundle time.
           # Release builds (tag pushes) always have the secret, so they sign.
-          args: ${{ startsWith(github.ref, 'refs/tags/v') && '' || '--no-sign' }}
+          # NOTE the inverted condition. GitHub's `a && b || c` returns a VALUE,
+          # and an empty string is FALSY -- so the natural-reading
+          # `startsWith(tag) && '' || '--no-sign'` evaluates to '--no-sign' on
+          # tags too, which silently disabled updater signing on the very builds
+          # that need it. Keep the non-empty value in the truthy branch.
+          args: ${{ !startsWith(github.ref, 'refs/tags/v') && '--no-sign' || '' }}
           # Release flow (tag push): cut a GitHub Release and upload bundles.
           # CI flow (branch/PR/dispatch): tagName empty → tauri-action builds
           # the bundles only and does NOT create a release.
@@ -233,7 +238,11 @@ jobs:
           # first real release that latest.json ends up with darwin-aarch64,
           # windows-x86_64 AND linux-x86_64 — if a job overwrote it, two of the
           # three platforms would silently never see an update again.
-          uploadUpdaterJson: true
+          # The input is `includeUpdaterJson`, NOT the `uploadUpdaterJson` name
+          # used on tauri-action's dev branch: the released v0 does not know it,
+          # and an unknown input is only a WARNING, so the wrong name looks fine
+          # in the diff and does nothing in the run.
+          includeUpdaterJson: true
           releaseBody: |
             UniSSH desktop builds. These binaries are **unsigned** (privacy: no
             developer identity is attached).
