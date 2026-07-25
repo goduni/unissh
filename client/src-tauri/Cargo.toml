@@ -44,7 +44,7 @@ reqwest = { version = "0.13.4", default-features = false, features = ["rustls", 
 # x-www-form-urlencoded body for the OIDC token exchange (reqwest's `.form()` is
 # stripped by default-features=false; this is the same crate it uses internally).
 serde_urlencoded = "0.7"
-base64 = "0.22.1"
+base64 = "0.23.0"
 # Content-stable Idempotency-Key for sync/push (server replays identical pushes).
 sha2 = "0.10"
 

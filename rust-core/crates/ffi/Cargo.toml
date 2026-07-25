@@ -29,7 +29,7 @@ unissh-ssh-agent = { path = "../ssh-agent" }
 unissh-ssh-transport = { path = "../ssh-transport" }
 unissh-sync = { path = "../sync" }
 
-uniffi = { version = "0.31", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
 # Logging facade — events surface through whatever logger the host installs
 # (tauri-plugin-log in the app; a no-op in tests). Metadata only, never secrets.
@@ -38,7 +38,7 @@ hkdf = "0.12"
 sha2 = "0.10"
 # STANDARD base64 (with padding) for the OIDC nonce key-binding — MUST match the
 # server's `ids::b64` (base64 0.22, STANDARD) so `oidc_nonce` byte-agrees.
-base64 = "0.22"
+base64 = "0.23"
 hex = "0.4"
 zeroize = "1.8"
 thiserror = "2"
