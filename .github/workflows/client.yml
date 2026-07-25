@@ -117,7 +117,7 @@ jobs:
           # artifact under BOTH `darwin-aarch64` and `darwin-x86_64` (guarded by
           # `if (!versionContent.platforms[...])`, so a native build still wins).
           # Verified against the released `@v0`, not just `dev` — the two have
-          # disagreed before (see includeUpdaterJson below).
+          # disagreed before (see uploadUpdaterJson below).
           - platform: macos-latest
             args: "--target universal-apple-darwin"
 
@@ -174,7 +174,7 @@ jobs:
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -226,7 +226,7 @@ jobs:
           "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build & bundle (Tauri)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # NO code-signing/notarization env on purpose — see header. Unsigned builds.
@@ -275,11 +275,14 @@ jobs:
           # it, platforms would silently never see an update again. The two
           # darwin keys both point at the ONE universal .app.tar.gz and share its
           # signature; that is tauri-action's universal handling, not a bug.
-          # The input is `includeUpdaterJson`, NOT the `uploadUpdaterJson` name
-          # used on tauri-action's dev branch: the released v0 does not know it,
-          # and an unknown input is only a WARNING, so the wrong name looks fine
-          # in the diff and does nothing in the run.
-          includeUpdaterJson: true
+          # The input is `uploadUpdaterJson` as of tauri-action v1, which renamed it
+          # from `includeUpdaterJson`. Both names must stay on the maintainer's radar
+          # because an unknown input is only a WARNING, never an error: whichever name
+          # is wrong for the pinned major looks perfectly fine in the diff and in the
+          # run log. The saving grace is that this input DEFAULTS TO TRUE, so the
+          # rename could not have silently disabled the updater manifest — it is named
+          # here because it is load-bearing, not because the default is wrong.
+          uploadUpdaterJson: true
           # No releaseBody here on purpose. GitHub generates the changelog
           # (generateReleaseNotes) and the release-integrity job appends the
           # download/verify footer once, at the end. Setting a body here would
@@ -322,14 +325,14 @@ jobs:
           "$PY" scripts/bump-version.py --check "${GITHUB_REF_NAME#v}"
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: client/package-lock.json
 
       - name: Setup Java (AGP)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -531,7 +534,7 @@ jobs:
           done
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-apks
           path: out/*.apk
@@ -587,7 +590,7 @@ jobs:
           "$PY" scripts/bump-version.py --check "${GITHUB_REF_NAME#v}"
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -646,7 +649,7 @@ jobs:
           echo "IPA_NAME=$OUT" >> "$GITHUB_ENV"
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-ipa
           path: ${{ env.IPA_NAME }}
@@ -699,7 +702,7 @@ jobs:
           rm -f dist/SHA256SUMS dist/SHA256SUMS.minisig
 
       - name: Attest build provenance for the artifacts
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/*"
 

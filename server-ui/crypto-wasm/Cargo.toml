@@ -21,7 +21,7 @@ zeroize = { version = "1.8", features = ["derive"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 # Browser CSPRNG for OsRng on wasm32 (feature-unifies the whole dep tree).
 getrandom = { version = "0.2", features = ["js"] }
-base64 = "0.22"
+base64 = "0.23"
 
 [profile.release]
 opt-level = "s"
