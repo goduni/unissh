@@ -80,6 +80,17 @@ updates:
       # ssh-agent/src/import.rs stops resolving — i.e. encrypted-PEM key import
       # breaks. Unblocks when the key crates move to 0.11.
       - dependency-name: pkcs8
+      # p256/p384/p521 0.14 move to elliptic-curve 0.14, while `ssh-key 0.6`
+      # is built against 0.13. The types keep their names but stop being the
+      # same types, so ssh-key's `From<p521::SecretKey> for EcdsaPrivateKey<66>`
+      # (and eleven siblings) no longer apply to ours — 12 errors in
+      # ssh-agent/src/import.rs, plus two versions of `sec1` in the graph.
+      # Same shape as the pkcs8 entry above: a generation that must move as one,
+      # anchored by ssh-key. Unblocks when ssh-key 0.7 is stable — 0.7.0-rc.11
+      # is already in the tree via russh, so this is a question of when, not if.
+      - dependency-name: p256
+      - dependency-name: p384
+      - dependency-name: p521
 
   # Standalone Tauri client crate — excluded from the root workspace
   # (own [workspace] root), so it has its own Cargo.lock and needs its own entry.
