@@ -13,13 +13,13 @@ license.workspace = true
 # KDF
 argon2 = "0.5"
 # Default symmetric cipher (192-bit nonce, does not depend on AES-NI)
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 # Public-key encryption: HPKE RFC 9180, DHKEM(X25519, HKDF-SHA256).
 # Version 0.12 keeps rand_core 0.6 — the same generation as dalek 2.x/chacha 0.10
 # (0.13 moved to rand_core 0.9 and forks the RNG traits away from the whole stack).
 hpke = { version = "0.12", default-features = false, features = ["alloc", "x25519"] }
 # Signatures
-ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 # Hash for the content_digest of the signed object
 sha2 = "0.10"
 # Secret zeroization
