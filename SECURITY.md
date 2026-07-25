@@ -17,7 +17,8 @@ branches yet — APIs, formats, and the server protocol can still change.
 
 Security fixes land on **`main`** and in the **latest tagged release**. There is
 no back-porting to older tags. If you run UniSSH today, track `main` (or the most
-recent release) to stay current on fixes.
+recent release) to stay current on fixes — on desktop the app does this for you,
+see [Staying current](#staying-current-auto-update).
 
 | Version            | Supported                          |
 | ------------------ | ---------------------------------- |
@@ -105,17 +106,53 @@ to ignore integrity — we replace certificate-based trust with verifiability:
   gh attestation verify <artifact> --repo goduni/unissh
   ```
 
-- **Reproducible builds + optional pseudonymous minisign signature.** You can
-  rebuild from source and compare, and (once published) verify a detached
-  `minisign` signature over `SHA256SUMS`.
+- **Pseudonymous minisign signature.** Each release ships `SHA256SUMS.minisig`, a
+  detached signature over `SHA256SUMS`. `minisign` keys are a bare Ed25519 public
+  key with no name, email, or keyserver presence — which is why we can sign at all
+  where GPG (identity in the UID) and cosign keyless (identity in the public Rekor
+  log) would not fit. Verify with:
+
+  ```bash
+  minisign -Vm SHA256SUMS -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'
+  ```
+
 - **Build it yourself.** If you'd rather trust only your own toolchain, see
   [Build from source](https://github.com/goduni/unissh#build-from-source). A
   locally-built app is the strongest trust check.
 
-> Some of the above (the `SHA256SUMS` / provenance / signature release pipeline)
-> is still being wired up — the README and [`THREAT_MODEL.md`](THREAT_MODEL.md)
-> track current status honestly. Do **not** suggest, or wait for, Apple/Windows
-> code-signing: it's out of scope by design.
+> Do **not** suggest, or wait for, Apple/Windows code-signing: it's out of scope
+> by design.
+
+### Signing keys used by this project
+
+Neither key below carries an identity; both are bare Ed25519 keypairs. They are
+deliberately **separate**, because they authorize very different things.
+
+| Key | Signs | If it were compromised |
+| --- | --- | --- |
+| `RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs` | `SHA256SUMS` | A tampered download could be made to look verified — but only for someone checking by hand. |
+| `RWSQS4RUDVgKVs0+1fFE1DEXV/Zv3pL6SQpSu5Koo2KlTIkUJQFpp23Q` | Auto-update payloads | Attacker code could be pushed to installed desktop clients. This is the more dangerous of the two. |
+
+The second key is also compiled into the app
+(`client/src-tauri/tauri.conf.json`), so a client only installs an update the
+holder of that key signed. Report a suspected compromise of either key using the
+process above — treat it as critical.
+
+## Staying current (auto-update)
+
+Because there are no back-ports, an old install is an unfixed install. Desktop
+builds therefore update themselves: UniSSH asks GitHub's release feed whether a
+newer version exists, verifies the download against the updater key above, and
+installs when you click. Nothing is installed silently.
+
+- **Turn it off** in **Settings → About → Check for updates automatically**. The
+  check is the only outbound request UniSSH makes that isn't to a host you
+  configured; it sends nothing about you or your hosts, but it does reveal your IP
+  to GitHub — see [`THREAT_MODEL.md`](THREAT_MODEL.md).
+- **Not covered:** Linux `.deb`/`.rpm` (owned by your package manager) and
+  Android/iOS sideloads. Update those by hand.
+- **v0.1.1 and earlier** predate this feature and have no updater compiled into
+  them. Install the current release once by hand; from there it self-updates.
 
 A captured warning ("developer cannot be verified" / SmartScreen) on first launch
 is expected for unsigned builds and is **not** a security finding — see

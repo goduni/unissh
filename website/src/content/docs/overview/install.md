@@ -23,13 +23,24 @@ The `.AppImage` is self-contained: `chmod +x` it and run.
 
 Intel Macs, ARM Linux, ARM Windows, and both mobile platforms are **not** in the release matrix — build those from source.
 
+### Staying up to date
+
+Desktop builds update themselves. UniSSH asks the release feed (at most once an hour) whether a newer version exists, verifies the download against a signing key compiled into the app, and installs when you click — never silently. You can turn the check off in **Settings → About**.
+
+Because the updater fetches the new version itself rather than going through a browser, macOS never quarantines it: the Gatekeeper step above is a one-time cost at first install.
+
+`.deb` and `.rpm` belong to your package manager and are excluded, as are the mobile sideload builds. Anything installed from **v0.1.1 or earlier** predates the updater — install the current release once by hand and it takes over from there.
+
 ### Verify what you downloaded
 
-Every release attaches `SHA256SUMS` and a build-provenance attestation.
+Every release attaches `SHA256SUMS`, a `SHA256SUMS.minisig` signature over it, and a build-provenance attestation.
 
 ```bash
 # checksum
 sha256sum -c SHA256SUMS --ignore-missing
+
+# signature over the checksum file — the key carries no identity by design
+minisign -Vm SHA256SUMS -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'
 
 # provenance — proves the artifact was built by this repo's CI, not forged
 gh attestation verify UniSSH_0.1.0_amd64.AppImage --repo goduni/unissh
