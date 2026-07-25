@@ -464,20 +464,29 @@ jobs:
           SIGNER="$ANDROID_HOME/build-tools/$BT/apksigner"
           mkdir -p out
 
-          # gradle names APKs after the ABI it split on; map those to the names
-          # the release page uses. The universal build has no ABI in its name,
-          # hence the separate directory it was moved to above.
-          # `universal` is listed first and maps to SKIP: depending on the gradle
-          # template, the split build may ALSO emit a universal APK, and that one
-          # is a duplicate of what pass 1 already collected — not an error.
+          # The split build lays output out as `.../apk/<abi>/release/app-<abi>-release.apk`,
+          # so the ABI is read from the path rather than guessed from a substring of
+          # the filename. Substring matching was the first attempt and it was wrong
+          # twice over: Tauri labels the variants with ITS target names, not gradle's
+          # ABI names (armv7 comes out as `arm`, not `armeabi-v7a`), and `*arm*` also
+          # matches `arm64`, so order became load-bearing. Reading the directory is
+          # exact and needs no ordering rules.
+          #
+          # `universal` maps to SKIP: depending on the gradle template the split build
+          # may ALSO emit a universal APK, which duplicates what pass 1 collected —
+          # not an error.
+          abi_of() {
+            # .../apk/<abi>/release/x.apk -> <abi>
+            basename "$(dirname "$(dirname "$1")")"
+          }
           name_for() {
-            case "$1" in
-              *universal*)   echo "SKIP" ;;
-              *arm64-v8a*)   echo "UniSSH_${VERSION}_arm64.apk" ;;
-              *armeabi-v7a*) echo "UniSSH_${VERSION}_armv7.apk" ;;
-              *x86_64*)      echo "UniSSH_${VERSION}_x86_64.apk" ;;
-              *x86*)         echo "UniSSH_${VERSION}_x86.apk" ;;
-              *)             echo "" ;;
+            case "$(abi_of "$1")" in
+              universal)            echo "SKIP" ;;
+              arm64|arm64-v8a)      echo "UniSSH_${VERSION}_arm64.apk" ;;
+              arm|armeabi-v7a)      echo "UniSSH_${VERSION}_armv7.apk" ;;
+              x86_64)               echo "UniSSH_${VERSION}_x86_64.apk" ;;
+              x86|i686)             echo "UniSSH_${VERSION}_x86.apk" ;;
+              *)                    echo "" ;;
             esac
           }
 
