@@ -12,10 +12,24 @@ name: Client (Tauri)
 # unsigned (Gatekeeper quarantine / SmartScreen expected); Linux artifacts are
 # unsigned. authors=["UniSSH"] and the identity-free bundle identifier
 # (me.goduni.unissh) carry no personal identity. Instead of a code-signing cert,
-# each release ships a SHA256SUMS checksum file and GitHub build provenance
-# (SLSA attestations) — verifiable with `gh attestation verify` (see the
-# release-integrity job below). Provenance proves the public CI built exactly
-# these artifacts from this public commit, which a paid cert cannot.
+# each release ships a SHA256SUMS checksum file, a minisign signature over it,
+# and GitHub build provenance (SLSA attestations) — verifiable with
+# `gh attestation verify` (see the release-integrity job below). Provenance proves
+# the public CI built exactly these artifacts from this public commit, which a paid
+# cert cannot.
+#
+# AUTO-UPDATE (desktop): checksums and provenance only help a user who checks them
+# by hand, which the second and every later install never does. So desktop bundles
+# also ship updater artifacts signed with a SEPARATE bare Ed25519 key — not the
+# one that signs SHA256SUMS; that one authorizes nothing, this one authorizes code
+# execution, and collapsing them would merge two very different blast radii. Its
+# public half is compiled into the app (client/src-tauri/tauri.conf.json). An installed
+# client verifies every update against it before executing anything. This is what
+# makes an unsigned distributable safe to keep current — and it costs no identity:
+# minisign keys have no name, email, or keyserver. SECURITY.md promises no
+# back-ports, so a user who cannot update is a user running known-vulnerable code.
+# Linux .deb/.rpm (owned by the package manager) and mobile sideloads are excluded;
+# they update by hand.
 #
 # MONOREPO: the client's path dep (client/src-tauri -> ../../rust-core/crates/ffi)
 # resolves inside this single checkout — only actions/checkout of this repo is
@@ -149,6 +163,15 @@ jobs:
           npm install --no-audit --no-fund
         working-directory: client
 
+      # Frontend unit tests. Run once (Linux) rather than per-platform: they are
+      # pure logic with no platform surface, and the node/npm setup above is
+      # already paid for here. `tsc --noEmit` is covered separately by the
+      # beforeBuildCommand that tauri-action runs on all three.
+      - name: Test (frontend)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: npm test
+        working-directory: client
+
       # Windows-only: SQLCipher vendors + statically links OpenSSL there (no system
       # OpenSSL on Windows, and the shipped .exe must be self-contained — see
       # rust-core/crates/storage/Cargo.toml). Building OpenSSL from source
@@ -164,16 +187,42 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # NO signing/notarization env on purpose — see header. Unsigned builds.
+          # NO code-signing/notarization env on purpose — see header. Unsigned builds.
+          #
+          # The updater key below is NOT a code-signing certificate and does not
+          # undo that: it is a bare minisign (Ed25519) keypair with no name, email,
+          # or keyserver presence. It signs UPDATE PAYLOADS so an already-installed
+          # client can verify what it is about to execute, which is the one thing
+          # checksums and provenance cannot do (both require a human to check them).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: client
+          # `bundle.createUpdaterArtifacts: true` makes the bundler REQUIRE the
+          # signing key ("A public key has been found, but no private key"), and
+          # GitHub does not expose secrets to pull requests from forks. Without
+          # --no-sign, every outside contributor's PR would fail at bundle time.
+          # Release builds (tag pushes) always have the secret, so they sign.
+          args: ${{ startsWith(github.ref, 'refs/tags/v') && '' || '--no-sign' }}
           # Release flow (tag push): cut a GitHub Release and upload bundles.
           # CI flow (branch/PR/dispatch): tagName empty → tauri-action builds
           # the bundles only and does NOT create a release.
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseDraft: false
+          # Must stay false: installed clients poll
+          # /releases/latest/download/latest.json, and GitHub's "latest" pointer
+          # skips prereleases. Flipping this would publish a release whose
+          # latest.json no client ever sees.
           prerelease: false
+          # latest.json — the manifest the updater polls. Default-true, named here
+          # because it is load-bearing rather than incidental. All three desktop
+          # jobs upload it for the same tag; tauri-action merges each platform's
+          # entry into the existing asset instead of overwriting it. VERIFY on the
+          # first real release that latest.json ends up with darwin-aarch64,
+          # windows-x86_64 AND linux-x86_64 — if a job overwrote it, two of the
+          # three platforms would silently never see an update again.
+          uploadUpdaterJson: true
           releaseBody: |
             UniSSH desktop builds. These binaries are **unsigned** (privacy: no
             developer identity is attached).
@@ -195,9 +244,23 @@ jobs:
               as-is via TrollStore where iOS allows it. The only identity on
               the app after that is your own.
 
+            **Updating** — desktop builds update themselves from here. UniSSH
+            checks this release feed, verifies the download against a signing key
+            built into the app, and installs on your click; you can turn the check
+            off in Settings → About. On macOS that also means the
+            `xattr -dr com.apple.quarantine` dance is a one-time cost of the first
+            install, not a per-release ritual. `.deb`/`.rpm` are owned by your
+            package manager and Android/iOS are sideloads — those still update by
+            hand. Anything installed before this release has no updater in it and
+            needs one manual update to pick it up.
+
             **Verify what you downloaded** — you do not need to trust the maintainer:
             - **Checksums:** download `SHA256SUMS` and run `sha256sum -c SHA256SUMS`
               (Windows PowerShell: `Get-FileHash <file> -Algorithm SHA256`).
+            - **Signature:** `SHA256SUMS.minisig` is signed with a bare Ed25519 key
+              carrying no identity —
+              `minisign -Vm SHA256SUMS -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'`
+              (the same key is published in `SECURITY.md`; compare them).
             - **Provenance:** `gh attestation verify <file> --repo goduni/unissh`
               cryptographically proves GitHub's CI built this exact file from this
               public commit (stronger than a code-signing cert for this purpose).
@@ -500,21 +563,31 @@ jobs:
           gh release upload "${{ github.ref_name }}" SHA256SUMS \
             --repo "${{ github.repository }}" --clobber
 
-      # TODO(maintainer): optional pseudonymous minisign signature over SHA256SUMS.
-      # minisign (a single Ed25519 public key, NO name/email, no keyservers/WoT) is
-      # the anonymity-safe choice — unlike GPG (identity in the UID) or cosign
-      # keyless (OIDC identity in the public Rekor log).
-      #   1. Offline:  minisign -G -p minisign.pub -s minisign.key   (commit minisign.pub)
-      #   2. Store the secret key as the `MINISIGN_SECRET_KEY` repo secret.
-      #   3. Uncomment:
-      # - name: Sign SHA256SUMS with minisign
-      #   env:
-      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #     MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-      #   run: |
-      #     sudo apt-get update && sudo apt-get install -y minisign
-      #     printf '%s' "$MINISIGN_SECRET_KEY" > minisign.key
-      #     minisign -S -s minisign.key -m SHA256SUMS -x SHA256SUMS.minisig
-      #     rm -f minisign.key
-      #     gh release upload "${{ github.ref_name }}" SHA256SUMS.minisig \
-      #       --repo "${{ github.repository }}" --clobber
+      # Pseudonymous signature over SHA256SUMS. minisign (a single Ed25519 public
+      # key, NO name/email, no keyservers/WoT) is the anonymity-safe choice —
+      # unlike GPG (identity in the UID) or cosign keyless (OIDC identity in the
+      # public Rekor log). The public key is published in SECURITY.md and in the
+      # release body, so a checksum file swapped on the release page is detectable.
+      #
+      # This is a SEPARATE key from the updater's (see the build job): this one
+      # signs "what you downloaded by hand", the updater's signs "what may execute
+      # on your machine without asking". Same algorithm, deliberately different
+      # blast radius.
+      #
+      # The key is passwordless on purpose: the key material IS the repo secret, so
+      # a passphrase stored beside it in the same secret store protects nothing and
+      # only adds a way for the release to fail.
+      - name: Sign SHA256SUMS with minisign
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y minisign
+          # '%s\n': minisign requires the trailing newline on the key file.
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > minisign.key
+          minisign -S -s minisign.key -m SHA256SUMS -x SHA256SUMS.minisig
+          rm -f minisign.key
+          minisign -Vm SHA256SUMS -x SHA256SUMS.minisig \
+            -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'
+          gh release upload "${{ github.ref_name }}" SHA256SUMS.minisig \
+            --repo "${{ github.repository }}" --clobber
