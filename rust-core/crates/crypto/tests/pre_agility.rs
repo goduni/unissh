@@ -56,6 +56,43 @@ fn keywrap_pre_agility_roundtrips() {
     assert_eq!(got.expose_bytes(), k.expose_bytes());
 }
 
+/// GOLDEN. A `wrap_key_pre_agility` wrapper captured once and frozen thereafter.
+///
+/// Everything else in this file round-trips: it wraps and unwraps in the same run,
+/// which is self-consistent and therefore CANNOT detect drift — change both halves
+/// together and the test still passes. `keychain` already pins the legacy AEAD path
+/// this way (`FROZEN_LEGACY_RECORD`), but the legacy *keywrap* codec had no captured
+/// bytes of its own, so a change to `KEYWRAP_DOMAIN`, to the AAD layout, or to the
+/// header would have gone unnoticed here.
+///
+/// Captured with kek=[0x55;32], key=[0x66;32], aad=b"item-1". If this stops
+/// unwrapping, the pre-agility keywrap format changed — that is a format break
+/// needing a new version, not an edit to these bytes (see `SECURITY.md`,
+/// "On-disk format changes").
+const FROZEN_PRE_AGILITY_WRAPPER: &[u8] = &[
+    0x01, 0x00, 0x01, 0xe9, 0x3d, 0xde, 0x23, 0x60, 0x99, 0x60, 0xff, 0xca, 0xec, 0xac, 0x3b, 0xc3,
+    0x3d, 0xb1, 0xf4, 0xb9, 0x0c, 0xf1, 0x88, 0xee, 0x06, 0x95, 0x4d, 0x4f, 0xb6, 0x9e, 0x3e, 0x04,
+    0x04, 0xcd, 0x30, 0xc3, 0x9f, 0x18, 0x3f, 0x21, 0xc3, 0x9b, 0x24, 0x09, 0x9f, 0xa2, 0x30, 0xcc,
+    0x67, 0x3d, 0xe1, 0xc6, 0x93, 0x8f, 0xba, 0xb2, 0xc2, 0xb1, 0xf8, 0x47, 0x48, 0x44, 0x74, 0x7d,
+    0x7c, 0x43, 0x04, 0x9b, 0x24, 0x07, 0x67, 0xe6, 0x1f, 0x6f, 0x82,
+];
+
+#[test]
+fn frozen_pre_agility_wrapper_still_unwraps() {
+    let kek = SymmetricKey::from_bytes([0x55u8; 32]);
+    let got = unwrap_key_pre_agility(&kek, FROZEN_PRE_AGILITY_WRAPPER, b"item-1")
+        .expect("the frozen pre-agility wrapper must keep unwrapping");
+    assert_eq!(got.expose_bytes(), &[0x66u8; 32]);
+}
+
+#[test]
+fn frozen_pre_agility_wrapper_is_bound_to_its_aad() {
+    // The other half of the guarantee: the captured bytes decode under the AAD they
+    // were sealed with and no other, so the vector pins the binding, not just the key.
+    let kek = SymmetricKey::from_bytes([0x55u8; 32]);
+    assert!(unwrap_key_pre_agility(&kek, FROZEN_PRE_AGILITY_WRAPPER, b"item-2").is_err());
+}
+
 #[test]
 fn keywrap_current_and_pre_agility_incompatible() {
     // Canary for keywrap: round 2 added the KEYWRAP_DOMAIN domain tag and header
