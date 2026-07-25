@@ -1,0 +1,14 @@
+# Renders the "Sponsor" button on the repo page.
+#
+# Every platform GitHub supports natively (github, patreon, ko_fi, open_collective,
+# …) requires an account tied to a legal identity — which is the one thing this
+# project cannot have; see the maintainer-anonymity note in SUPPORT.md. `custom`
+# is the only field that takes a plain URL, so it points at the donation page the
+# project already publishes, which lists crypto addresses GitHub has no field for.
+#
+# Keep this in sync with the client's Support tab and README#supporting-the-project
+# — the three list the same addresses, and a drift between them is indistinguishable
+# from an address swap by someone else.
+custom:
+  - "https://unissh.dev/support"
+  - "https://github.com/goduni/unissh#supporting-the-project"
