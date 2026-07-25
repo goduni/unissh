@@ -1,9 +1,45 @@
 name: CI
 
+# Path-filtered so a website-only or docs-only commit does not compile Rust.
+# Two things this filter must NOT quietly break, hence the duplication below:
+#   * tag pushes — GitHub does not evaluate `paths` for them, so releases are
+#     unaffected (this workflow has no tag trigger anyway);
+#   * `schedule` — `paths` never applies to cron, so the weekly cargo-deny
+#     advisory sweep keeps running whether or not anything changed.
+# GitHub Actions does not support YAML anchors, so push/pull_request repeat the
+# list verbatim — keep the two copies in sync.
 on:
   push:
     branches: [main]
+    paths:
+      - "rust-core/**"
+      - "server/**"
+      # Both are excluded from the root workspace, but the `deny` job gates
+      # their lockfiles because they ship to users (client binary, admin wasm).
+      - "client/src-tauri/**"
+      - "server-ui/crypto-wasm/**"
+      # Not Rust, but the log-redaction guard scans client/src for .ts/.tsx —
+      # dropping this would silently stop policing the frontend's log calls.
+      - "client/src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "deny.toml"
+      - "scripts/check-log-redaction.py"
+      - ".github/workflows/ci.yml"
   pull_request:
+    paths:
+      - "rust-core/**"
+      - "server/**"
+      - "client/src-tauri/**"
+      - "server-ui/crypto-wasm/**"
+      - "client/src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "deny.toml"
+      - "scripts/check-log-redaction.py"
+      - ".github/workflows/ci.yml"
   schedule:
     - cron: "0 6 * * 1" # weekly — surfaces new advisories via cargo-deny
 

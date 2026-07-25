@@ -26,10 +26,26 @@ name: Publish container images (GHCR)
 # plus the Vite SPA. Building from each Dockerfile's own dir would break the
 # path deps.
 
+# PATH FILTER = exactly the build context both Dockerfiles COPY, nothing more:
+#   server/Dockerfile      -> Cargo.toml, Cargo.lock, rust-core/, server/
+#   deploy/Caddy.Dockerfile-> Cargo.toml, rust-core/, server-ui/, deploy/Caddyfile
+# Without it a website or client-only commit spent ~20 minutes of QEMU arm64
+# emulation before the NEXT commit cancelled it (cancel-in-progress), so at this
+# repo's commit rate the images almost never actually got published.
+# Tag pushes are unaffected: GitHub does not evaluate `paths` for tags, so `v*`
+# always builds and pushes the versioned images.
 on:
   push:
     branches: [main] # keep :main / :latest fresh
     tags: ["v*"] # versioned image tags for releases
+    paths:
+      - "rust-core/**"
+      - "server/**"
+      - "server-ui/**"
+      - "deploy/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/publish-images.yml"
   workflow_dispatch:
 
 concurrency:

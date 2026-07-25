@@ -32,11 +32,34 @@ name: Client (Tauri)
 #     only identity ever attached is the installer's own, never the project's.
 # Both get the same SHA256SUMS + SLSA provenance treatment as desktop.
 
+# Path-filtered on branch pushes and PRs so a website/server/docs-only commit
+# does not spend ~15 minutes bundling five platforms. THE RELEASE FLOW IS NOT
+# AFFECTED: GitHub does not evaluate `paths` for tag pushes, so `v*` always runs
+# the full matrix (desktop + android + ios + release-integrity) no matter which
+# files the tagged commit happens to touch.
+# `rust-core/**` is load-bearing here, not decoration: client/src-tauri depends
+# on it by path (unissh-ffi = { path = "../../rust-core/crates/ffi" }), so a
+# core change must rebuild the client. Same for rust-toolchain.toml — the
+# standalone client workspace has no toolchain file of its own and inherits the
+# repo-root pin by rustup walking up.
+# GitHub Actions does not support YAML anchors; keep the two lists in sync.
 on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths:
+      - "client/**"
+      - "rust-core/**"
+      - "rust-toolchain.toml"
+      - "scripts/bump-version.py"
+      - ".github/workflows/client.yml"
   pull_request:
+    paths:
+      - "client/**"
+      - "rust-core/**"
+      - "rust-toolchain.toml"
+      - "scripts/bump-version.py"
+      - ".github/workflows/client.yml"
   workflow_dispatch:
 
 concurrency:
