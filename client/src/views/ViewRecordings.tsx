@@ -71,7 +71,6 @@ function Player({ cast, onClose, title }: { cast: string; onClose: () => void; t
   // rather than like a generic terminal.
   const { termTheme, termPrefs } = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const timersRef = useRef<number[]>([]);
   const [playing, setPlaying] = useState(true);
 
   useEffect(() => {
@@ -92,20 +91,35 @@ function Player({ cast, onClose, title }: { cast: string; onClose: () => void; t
       /* the container may not be laid out yet */
     }
 
-    // One timer per event, scheduled against the event's own timestamp. Simple,
-    // and exact: chaining setTimeouts would accumulate drift across a long
-    // recording, so a five-minute session would end visibly late.
-    const timers = timersRef.current;
-    for (const [at, stream, data] of events) {
-      if (stream !== "o") continue;
-      timers.push(window.setTimeout(() => term.write(data), Math.max(0, at * 1000)));
-    }
-    const last = events.length ? events[events.length - 1][0] : 0;
-    timers.push(window.setTimeout(() => setPlaying(false), Math.max(0, last * 1000) + 50));
+    // A single cursor advanced against the wall clock, rather than one timer per
+    // event: an 8 MB recording holds tens of thousands of events, and scheduling
+    // a timer for each would hand the browser a queue that size at once. Reading
+    // the elapsed time on each tick also means no drift accumulates, which is
+    // what chaining timeouts would have cost.
+    const out = events.filter(([, stream]) => stream === "o");
+    const startedAt = performance.now();
+    let next = 0;
+    let raf = 0;
+    const step = () => {
+      const elapsed = (performance.now() - startedAt) / 1000;
+      // Everything now due is written in one pass, so a tab that was throttled
+      // catches up instead of replaying the rest in slow motion.
+      let batch = "";
+      while (next < out.length && out[next][0] <= elapsed) {
+        batch += out[next][2];
+        next++;
+      }
+      if (batch) term.write(batch);
+      if (next < out.length) {
+        raf = requestAnimationFrame(step);
+      } else {
+        setPlaying(false);
+      }
+    };
+    raf = requestAnimationFrame(step);
 
     return () => {
-      for (const id of timers) clearTimeout(id);
-      timers.length = 0;
+      cancelAnimationFrame(raf);
       term.dispose();
     };
   }, [cast, termPrefs, termTheme]);

@@ -36,6 +36,7 @@ export type Route =
   | "tunnels"
   | "known"
   | "recordings"
+  | "snippets"
   | "keys"
   | "passwords"
   | "notes"

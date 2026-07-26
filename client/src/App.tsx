@@ -22,6 +22,7 @@ import { ViewSettings } from "@/views/ViewSettings";
 import { EntryOverlays } from "@/overlays/Entry";
 import { Modals } from "@/overlays/Modals";
 import { ViewRecordings } from "@/views/ViewRecordings";
+import { ViewSnippets } from "@/views/ViewSnippets";
 import { AuthPrompt } from "@/overlays/AuthPrompt";
 import { CommandPalette } from "@/overlays/CommandPalette";
 import { ImportPreview } from "@/overlays/ImportPreview";
@@ -29,7 +30,7 @@ import { GroupsModal } from "@/overlays/GroupsModal";
 import { ConfirmDialog, ShortcutsHelp, ToastHost } from "@/overlays/Feedback";
 import { MobileApp } from "@/mobile/MobileApp";
 
-const ROUTES = ["hosts", "terminal", "fleet", "broadcast", "sftp", "tunnels", "known", "recordings", "keys"] as const;
+const ROUTES = ["hosts", "terminal", "fleet", "broadcast", "sftp", "tunnels", "known", "recordings", "snippets", "keys"] as const;
 
 function RenderView() {
   const route = useApp((s) => s.route);
@@ -50,6 +51,8 @@ function RenderView() {
       return <ViewKnown />;
     case "recordings":
       return <ViewRecordings />;
+    case "snippets":
+      return <ViewSnippets />;
     case "keys":
     case "passwords":
     case "notes":

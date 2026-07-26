@@ -642,6 +642,23 @@ struct StoredRecording {
     extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// The same record without the body.
+///
+/// Listing recordings used to deserialize [`StoredRecording`], which allocates
+/// the entire asciicast — up to 8 MiB per recording — only to throw it away.
+/// Opening the screen with a few dozen recordings meant decrypting and
+/// materializing hundreds of megabytes. serde skips a field this struct does not
+/// declare, so the body is walked but never built.
+#[derive(serde::Deserialize)]
+struct StoredRecordingMeta {
+    label: String,
+    host: String,
+    user: String,
+    started_unix: u64,
+    duration_secs: f64,
+    truncated: bool,
+}
+
 /// Serializable body of a host-chain reference (B2.2).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StoredHopRef {
@@ -3175,7 +3192,7 @@ impl Core {
                 Arc::new(RecordingSink {
                     inner: Arc::new(ObserverSink(observer)),
                     recorder,
-                    saver: RecordingSaver {
+                    saver: Arc::new(RecordingSaver {
                         state: self.state.clone(),
                         vault_id: req.vault_id,
                         recording_id: req.recording_id,
@@ -3183,7 +3200,7 @@ impl Core {
                         host: host_for_record,
                         user: user_for_record,
                         started_unix,
-                    },
+                    }),
                     saved: std::sync::atomic::AtomicBool::new(false),
                 })
             }
@@ -3696,7 +3713,7 @@ impl Core {
                     continue;
                 }
                 if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(r) = serde_json::from_slice::<StoredRecording>(&item.content) {
+                    if let Ok(r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content) {
                         out.push(RecordingMeta {
                             recording_id: String::from_utf8_lossy(&m.item_id).to_string(),
                             label: r.label,
@@ -3705,7 +3722,10 @@ impl Core {
                             started_unix: r.started_unix,
                             duration_secs: r.duration_secs,
                             truncated: r.truncated,
-                            size_bytes: r.asciicast.len() as u64,
+                            // The stored record's size, not the asciicast's: the
+                            // body is deliberately not parsed here, and this is
+                            // what the recording actually costs on disk anyway.
+                            size_bytes: item.content.len() as u64,
                         });
                     }
                 }
@@ -6726,7 +6746,7 @@ impl RecordingSaver {
 struct RecordingSink {
     inner: Arc<dyn OutputSink>,
     recorder: Arc<SessionRecorder>,
-    saver: RecordingSaver,
+    saver: Arc<RecordingSaver>,
     saved: std::sync::atomic::AtomicBool,
 }
 
@@ -6740,8 +6760,18 @@ impl OutputSink for RecordingSink {
         // closing, the transport dropping — which is why the write happens here
         // rather than in an explicit close(): a dropped connection is exactly the
         // session someone will want the recording of.
+        //
+        // On a dedicated thread, and that is not an optimisation. This runs on a
+        // tokio worker (the channel reader task), while writing to the vault
+        // needs the core lock — which a concurrent connect holds across its
+        // `block_on`. Blocking workers here would starve the very runtime that
+        // connect is waiting on, and with few cores that is a deadlock, not a
+        // delay. Detached because nothing waits for the result: the session is
+        // over, and the observer below must be told immediately either way.
         if !self.saved.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            self.saver.save(&self.recorder);
+            let saver = Arc::clone(&self.saver);
+            let recorder = Arc::clone(&self.recorder);
+            std::thread::spawn(move || saver.save(&recorder));
         }
         self.inner.on_close(exit_status);
     }

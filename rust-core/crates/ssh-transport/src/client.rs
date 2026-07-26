@@ -1019,9 +1019,16 @@ async fn authenticate(
     // The whole authentication phase is under a hard deadline (a malicious/hung
     // server must not hang the call forever) — widened when a person may be
     // asked to type something, see INTERACTIVE_BUDGET.
-    let deadline = match opts.prompter {
-        Some(_) => HANDSHAKE_TIMEOUT + INTERACTIVE_BUDGET,
-        None => HANDSHAKE_TIMEOUT,
+    // A human in the loop gets the wider budget, and a hardware token counts as
+    // one: the OS agent may be waiting for a finger on a YubiKey, and often for a
+    // PIN before that. Thirty seconds is generous between machines and mean to
+    // someone who stepped away from the desk mid-connect.
+    let waits_on_a_person =
+        opts.prompter.is_some() || matches!(opts.auth, Auth::SystemAgent { .. });
+    let deadline = if waits_on_a_person {
+        HANDSHAKE_TIMEOUT + INTERACTIVE_BUDGET
+    } else {
+        HANDSHAKE_TIMEOUT
     };
     let result = timeout(deadline, async {
         let first: AuthResult = match &opts.auth {

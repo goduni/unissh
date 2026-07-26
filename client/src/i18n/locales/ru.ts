@@ -106,6 +106,20 @@ export const ru = {
   },
 
   // ── Sidebar / navigation labels (shared: Shell, CommandPalette, MobileApp) ─
+  snippets: {
+    new: "Новый сниппет",
+    newTitle: "Новый сниппет",
+    editTitle: "Изменить сниппет",
+    empty: "Сниппетов пока нет. Сниппет — это сохранённая команда: она синхронизируется вместе с вольтом и вставляется в любую сессию из ⌘K.",
+    label: "Название",
+    labelHint: "Смотреть лог приложения",
+    command: "Команда",
+    commandHint: "Отправляется в оболочку как есть. Несколько строк — несколько команд.",
+    needCommand: "Сниппету нужна команда",
+    tags: "Теги",
+    tagHint: "Введите тег и нажмите Enter",
+  },
+
   recordings: {
     empty: "Записей пока нет. Включите «Записывать сессии» у хоста, чтобы начать.",
     play: "Воспроизвести",
@@ -129,6 +143,7 @@ export const ru = {
     tunnels: "Туннели",
     known: "Известные хосты",
     recordings: "Записи",
+    snippets: "Сниппеты",
     settings: "Настройки",
     fleet: "Массово",
     fleetExec: "Массовое выполнение",
@@ -356,6 +371,7 @@ export const ru = {
       "tunnels": "-L / -R / -D",
       "known": "TOFU",
       "recordings": "записи сессий",
+      "snippets": "сохранённые команды",
       "keys": "секреты",
       "terminal": "живые сессии",
       "passwords": "сохранённые пароли",

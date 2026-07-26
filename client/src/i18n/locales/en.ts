@@ -77,6 +77,20 @@ export const en = {
     hostsUnavailable_other: "{{labels}} are unavailable — will be skipped",
   },
 
+  snippets: {
+    new: "New snippet",
+    newTitle: "New snippet",
+    editTitle: "Edit snippet",
+    empty: "No snippets yet. A snippet is a command you keep — it syncs with the vault and can be typed into any session from ⌘K.",
+    label: "Name",
+    labelHint: "Tail the app log",
+    command: "Command",
+    commandHint: "Sent to the shell as typed. Multiple lines run as multiple commands.",
+    needCommand: "A snippet needs a command",
+    tags: "Tags",
+    tagHint: "Add a tag and press Enter",
+  },
+
   recordings: {
     empty: "No recordings yet. Turn on “Record sessions” for a host to start capturing.",
     play: "Play",
@@ -100,6 +114,7 @@ export const en = {
     tunnels: "Tunnels",
     known: "Known hosts",
     recordings: "Recordings",
+    snippets: "Snippets",
     settings: "Settings",
     fleet: "Fleet",
     fleetExec: "Fleet exec",
@@ -319,6 +334,7 @@ export const en = {
       "tunnels": "-L / -R / -D",
       "known": "TOFU",
       "recordings": "session replays",
+      "snippets": "saved commands",
       "keys": "secrets",
       "terminal": "live sessions",
       "passwords": "stored passwords",
