@@ -175,6 +175,31 @@ struct ClientHandler {
 impl Handler for ClientHandler {
     type Error = TransportError;
 
+    /// Refuses agent-forwarding channels.
+    ///
+    /// This override is the whole point: russh's **default implementation
+    /// accepts** an `auth-agent@openssh.com` channel open. We never request
+    /// forwarding, so no honest server opens one — but a hostile one can open it
+    /// unsolicited, and inheriting the default would have us accept a channel
+    /// whose entire purpose is asking us to sign things.
+    ///
+    /// Nothing leaked even then, because nothing serves the agent protocol over
+    /// it; the pipe would just sit there. Accepting a channel we will never
+    /// serve is still the wrong answer, and saying no explicitly is what makes
+    /// "forwarding is off" true at the protocol level rather than by omission.
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        _channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), TransportError> {
+        log::warn!("server opened an unsolicited agent-forwarding channel; rejecting");
+        reply
+            .reject(ChannelOpenFailure::AdministrativelyProhibited)
+            .await;
+        Ok(())
+    }
+
     async fn check_server_key(
         &mut self,
         server_public_key: &russh::keys::ssh_key::PublicKey,
