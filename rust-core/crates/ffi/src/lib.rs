@@ -5516,13 +5516,9 @@ impl unissh_ssh_transport::KeySource for StateKeySource {
     }
 }
 
-/// The core was locked while a connection was still being established — the user
-/// locked the app mid-handshake. Reported rather than papered over: the
-/// connection cannot continue without the keys that just went away.
+/// The core was locked while a connection was still being established.
 fn locked_mid_connect() -> unissh_ssh_transport::TransportError {
-    unissh_ssh_transport::TransportError::KeyEncoding(
-        "the core was locked while connecting".to_string(),
-    )
+    unissh_ssh_transport::TransportError::CoreLocked
 }
 
 /// Connect + authentication against the shared unwrapped state (under its
@@ -5867,6 +5863,10 @@ fn with_prompter(opts: ConnectOptions, prompter: Option<&Arc<dyn AuthPrompter>>)
 
 fn map_transport_err(e: unissh_ssh_transport::TransportError) -> FfiError {
     match e {
+        // The user locked the app mid-connect: the UI already knows what to do
+        // with Locked, and dressing it as an SSH failure would send them looking
+        // at the host.
+        unissh_ssh_transport::TransportError::CoreLocked => FfiError::Locked,
         unissh_ssh_transport::TransportError::HostKeyMismatch {
             host,
             port,

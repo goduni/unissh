@@ -67,6 +67,16 @@ pub enum TransportError {
     #[error("authentication failed")]
     AuthFailed,
 
+    /// The core was locked while a connection was still being established — the
+    /// user locked the app mid-handshake, so the keys the connection needs are
+    /// gone.
+    ///
+    /// Its own variant rather than a generic one: with the core lock no longer
+    /// held across the network phase this became reachable, and reporting it as a
+    /// key-encoding failure would send whoever reads the log looking at the key.
+    #[error("the core was locked while connecting")]
+    CoreLocked,
+
     /// The operating system's ssh-agent could not be reached or refused.
     #[error("system ssh-agent: {0}")]
     SystemAgent(String),

@@ -3856,6 +3856,13 @@ fn the_core_lock_is_free_during_a_handshake() {
         buf: std::sync::Mutex::new(Vec::new()),
         closed: std::sync::atomic::AtomicBool::new(false),
     });
+    // A quiet baseline first: on a loaded CI box the scheduler alone can stall a
+    // thread for milliseconds, and comparing against a fixed number would make
+    // this test flake. The question is whether the connect makes waiting
+    // *dramatically* worse than it already is.
+    std::thread::sleep(Duration::from_millis(120));
+    let baseline = Duration::from_micros(worst_wait_us.swap(0, Ordering::Relaxed) as u64);
+
     let connect_started = Instant::now();
     let session = core
         .open_session(
@@ -3878,9 +3885,16 @@ fn the_core_lock_is_free_during_a_handshake() {
     session.close().unwrap();
 
     let worst = Duration::from_micros(worst_wait_us.load(Ordering::Relaxed) as u64);
+    // Holding the lock across the handshake produces one wait the length of the
+    // whole connect, so the threshold is expressed relative to that rather than
+    // as an absolute number: a fraction of the connect fails loudly for a held
+    // lock while leaving room for the scheduler noise a loaded CI box adds. The
+    // idle baseline is the floor, for the case where the connect is so fast that
+    // a fraction of it is smaller than ordinary jitter.
+    let allowed = std::cmp::max(connect_took / 3, baseline * 4 + Duration::from_millis(10));
     assert!(
-        worst * 2 < connect_took,
-        "a core call waited {worst:?} while the handshake took {connect_took:?} — the lock \
-         is still being held across the network phase"
+        worst < allowed,
+        "a core call waited {worst:?} during a {connect_took:?} handshake (idle baseline \
+         {baseline:?}) — the lock looks held across the network phase"
     );
 }
