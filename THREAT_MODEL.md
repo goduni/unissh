@@ -22,10 +22,13 @@ but never holds anything in the clear.
   it leaves the device. The server stores ciphertext blobs plus open metadata and
   performs **no payload crypto** — it cannot decrypt vaults, mint access, or forge
   records.
-- **Keys never cross the FFI / UI boundary.** The private keyset never leaves the
-  device; the server holds only the **public** halves. The UI never receives
-  plaintext private keys — the core won't hand them out. The only revealable
-  secrets are user passwords/notes, strictly type-gated. Secrets are zeroized,
+- **The keyset never crosses the FFI / UI boundary.** The private keyset never
+  leaves the device; the server holds only the **public** halves. No operation
+  hands the UI a private SSH key as a side effect either — authentication signs
+  inside the agent. The single exception is `export_ssh_key`, an explicit
+  user-initiated export of the user's own key; it is allowlisted in the boundary
+  test rather than hidden by it. Everything else revealable is a password or a
+  note, strictly type-gated. Secrets are zeroized,
   private-key plaintext is never written to disk, and key pages are `mlock`'d where
   possible.
 - **Signed, monotonic versions + associated-data binding.** Every item is

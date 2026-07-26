@@ -41,6 +41,12 @@ Secret Key ──────────┘                                    
 
 AES-256-GCM is **reserved** in the registry as a FIPS/compliance option — the id is allocated, but the algorithm is not yet implemented (there is no `aes-gcm` dependency). Every encrypted/signed blob is **versioned** (a format-version byte + a 2-byte algorithm id) for **crypto agility**, and a hybrid X25519 + ML-KEM wrap (post-quantum) is likewise reserved in the registry — the format is laid down now, the algorithm is future work.
 
+:::note[Two different layers, two different answers on post-quantum]
+The table above is the **vault at rest**, where the post-quantum wrap is reserved but not yet implemented. The **SSH transport is a separate question and is already post-quantum**: the client negotiates the hybrid `mlkem768x25519-sha256` (ML-KEM-768 + X25519, NIST FIPS 203) first, ahead of classical `curve25519-sha256`, and degrades cleanly on servers that don't offer it. Hybrid means an attacker must break both halves, which is what makes it safe to deploy before the lattice assumptions are old.
+
+The distinction matters because the threats differ. Transport secrecy is exposed to **harvest-now-decrypt-later**: someone recording your session today can attack it in twenty years, so it needs the answer today. Vault ciphertext is only reachable by someone who already holds the file, which is a much smaller set — so the format is versioned to accept a PQ wrap later without a flag day.
+:::
+
 ## Blob formats
 
 Every encrypted or signed blob starts with a **3-byte header**:

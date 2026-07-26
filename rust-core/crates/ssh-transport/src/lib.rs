@@ -23,6 +23,15 @@
 //!   `russh::auth::Signer` on top of the embedded agent: the agent signs the
 //!   authentication data, and only the public key is handed out of the agent.
 //!
+//! ## Interactive authentication
+//! `keyboard-interactive` is answered from the stored password only where that
+//! is unambiguous: the first round, every field hidden-input — the shape a PAM
+//! sshd uses when it wants nothing but the password. Anything else (a one-time
+//! code, a push confirmation, a forced password change) is handed to an
+//! [`AuthPrompter`] attached via [`ConnectOptions::with_prompter`]. Without one,
+//! such a login fails with [`TransportError::InteractiveAuthUnsupported`] rather
+//! than sending a wrong answer.
+//!
 //! ## Out of scope (⏳ LATER)
 //! The relay/bastion service and CA are not implemented (spec 11).
 
@@ -36,8 +45,8 @@ mod sftp;
 
 pub use client::{
     canonical_host_key, fingerprint_openssh, set_keepalive_secs, trust_host_key, Auth,
-    CommandOutput, ConnectOptions, ExecHandle, ExecSink, ForwardGuard, OutputSink, SftpSession,
-    ShellHandle, SshClient,
+    AuthPrompter, CommandOutput, ConnectOptions, ExecHandle, ExecSink, ForwardGuard, OutputSink,
+    PromptField, SftpSession, ShellHandle, SshClient,
 };
 pub use config::{HostSettings, SshConfig};
 pub use error::TransportError;

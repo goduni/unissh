@@ -74,12 +74,13 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 - Encrypted vaults backed by **SQLCipher**, per-item keys under a per-vault key.
 - Item types: **SSH keys** (generate or import) and user **certificates**, **host/connection profiles**, **server passwords**, **encrypted notes**, and **nested host groups**.
 - **Version history** for passwords/notes — past versions archived per item, reveal any version; history is purged on delete.
-- **Type-gated reveal**: passwords/notes can be revealed; **private keys can never be exported** through the UI boundary.
+- **Type-gated reveal**: passwords/notes can be revealed. A private key leaves the core **only** through an explicit, user-initiated export of that key — never as a side effect of any other call.
 
 **Connectivity**
 - Auth by **key** (via a built-in in-memory agent — the private key never leaves the core), **password** (inline or from the vault, with `keyboard-interactive` fallback), or **certificate**.
 - Interactive **PTY** sessions with resize; **streaming `exec`** with separate stdout/stderr; **auto-reconnect** with backoff (and a hard stop on MITM/host-key change).
 - **TOFU** host-key pinning; a `HostKeyMismatch` is always surfaced to you, never trusted silently.
+- **Post-quantum key exchange by default**: the transport negotiates the hybrid `mlkem768x25519-sha256` (ML-KEM-768 + X25519, NIST FIPS 203) ahead of classical curve25519, and falls back cleanly on servers that don't offer it. Hybrid means a future quantum adversary must break *both* halves — and it defeats "harvest now, decrypt later" against traffic recorded today.
 
 **Fleet operations**
 - Multi-host `exec` with a concurrency limit and per-host timeout; target by **group**, by **tags**, by **hand-picked hosts** (an in-grid multi-select target picker), or **dry-run** first.
@@ -436,7 +437,7 @@ UniSSH does **not roll its own crypto** — it builds on RustCrypto, `hpke`, SQL
 
 **What is protected**
 - **Zero-knowledge vaults**: all vault content is encrypted on the client. The server stores ciphertext + open metadata only and performs no payload crypto.
-- **Keys never leak across the boundary**: the UI never receives plaintext private keys (the core won't hand them out). The only revealable secrets are user passwords/notes, strictly type-gated.
+- **Keys do not leak across the boundary**: no operation hands the UI a private key as a side effect — signing happens inside the core, and the agent never exports. The one exception is deliberate and user-driven: `export_ssh_key` returns your own key when you ask for it, because you own it. Everything else revealable is a password or a note, strictly type-gated.
 - **Secrets are zeroized**; private-key plaintext is never written to disk; key pages are `mlock`'d where possible.
 - **Signed, monotonic versions + tombstones + associated-data binding** underpin both sync and the local integrity audit (`verify_chain`).
 - **Transport**: TLS 1.3 only (the bundled Caddy, in-process rustls, or a reverse proxy you control).

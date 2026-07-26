@@ -67,6 +67,18 @@ pub enum TransportError {
     #[error("authentication failed")]
     AuthFailed,
 
+    /// The server asked something only the user can answer — a one-time code, a
+    /// push confirmation — and no prompter was attached to the connection.
+    /// Distinct from [`AuthFailed`](Self::AuthFailed) on purpose: the credentials
+    /// may be perfectly correct, the client simply had no way to ask.
+    #[error("server requires interactive input (e.g. a one-time code), but no prompt handler is attached")]
+    InteractiveAuthUnsupported,
+
+    /// The user dismissed the interactive prompt, or answered it with the wrong
+    /// number of fields.
+    #[error("authentication cancelled")]
+    AuthCancelled,
+
     /// Key encoding/decoding error.
     #[error("key encoding error: {0}")]
     KeyEncoding(String),

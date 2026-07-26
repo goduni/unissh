@@ -59,7 +59,7 @@ impl core::fmt::Debug for Auth {
 }
 
 /// Parameters for connecting to a single host.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ConnectOptions {
     /// Host (name or IP).
     pub host: String,
@@ -69,6 +69,11 @@ pub struct ConnectOptions {
     pub user: String,
     /// Authentication.
     pub auth: Auth,
+    /// Who to ask when the server wants something only the user can supply — a
+    /// one-time code, a push confirmation, a password change. `None` keeps the
+    /// pre-existing behaviour: answer with the password where that is plausible,
+    /// and fail rather than hang if it is not.
+    pub prompter: Option<Arc<dyn AuthPrompter>>,
 }
 
 impl ConnectOptions {
@@ -79,8 +84,61 @@ impl ConnectOptions {
             port,
             user: user.into(),
             auth,
+            prompter: None,
         }
     }
+
+    /// Attaches the interactive prompter. Without one, keyboard-interactive can
+    /// only complete when every prompt is answerable from the stored password —
+    /// which is exactly why two-factor logins did not work.
+    #[must_use]
+    pub fn with_prompter(mut self, prompter: Arc<dyn AuthPrompter>) -> Self {
+        self.prompter = Some(prompter);
+        self
+    }
+}
+
+// Hand-written because a prompter is a trait object with no Debug bound — an
+// implementation is a UI handle, and requiring it to be printable would push
+// that requirement out to every frontend for no benefit. Whether one is attached
+// is the only part worth logging, and it is the part that explains a
+// `InteractiveAuthUnsupported`.
+impl core::fmt::Debug for ConnectOptions {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ConnectOptions")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("auth", &self.auth)
+            .field("prompter", &self.prompter.is_some())
+            .finish()
+    }
+}
+
+/// One field the server asks the user to fill in during keyboard-interactive
+/// authentication.
+#[derive(Debug, Clone)]
+pub struct PromptField {
+    /// The text to show, verbatim from the server (e.g. `"Verification code: "`).
+    pub prompt: String,
+    /// `true` when the typed characters may be shown — a login name, a hint.
+    /// `false` means hidden input: a password, a one-time code.
+    pub echo: bool,
+}
+
+/// Answers the keyboard-interactive prompts that the client cannot answer by
+/// itself: one-time codes (TOTP/HOTP), hardware-token responses, push-approval
+/// confirmations, forced password changes.
+///
+/// [`prompt`](AuthPrompter::prompt) is called off the async reactor, so an
+/// implementation may block for as long as the person takes to type. Returning
+/// `None` aborts authentication — that is what a Cancel button must do.
+pub trait AuthPrompter: Send + Sync {
+    /// Ask the user. `name` and `instruction` come from the server and may be
+    /// empty. The returned vector must hold exactly one answer per prompt, in
+    /// order; any other length is treated as a cancellation.
+    fn prompt(&self, name: &str, instruction: &str, prompts: &[PromptField])
+        -> Option<Vec<String>>;
 }
 
 /// The result of running a command.
@@ -817,7 +875,7 @@ async fn authenticate(
     // The whole authentication phase is under a hard deadline (a malicious/hung
     // server must not hang the call forever).
     let result = timeout(HANDSHAKE_TIMEOUT, async {
-        Ok::<AuthResult, TransportError>(match &opts.auth {
+        let first: AuthResult = match &opts.auth {
             Auth::Agent { key_id } => {
                 // The private key does NOT leave the agent: the agent itself signs via
                 // russh::auth::Signer. Out of the agent — only the public key /
@@ -880,22 +938,36 @@ async fn authenticate(
                 // lives in russh memory until the allocator reuses it. This can be
                 // eliminated only by patching russh; our side (Auth::Password) keeps
                 // the password in Zeroizing.
-                let first = handle
+                handle
                     .authenticate_password(opts.user.clone(), password.as_str().to_string())
-                    .await?;
-                match first {
-                    // The server did not accept the "password" method but offers
-                    // keyboard-interactive (a typical sshd with PAM) — try it,
-                    // answering with the same password (like OpenSSH).
-                    AuthResult::Failure {
-                        ref remaining_methods,
-                        ..
-                    } if remaining_methods.contains(&MethodKind::KeyboardInteractive) => {
-                        keyboard_interactive_with_password(handle, &opts.user, password).await?
-                    }
-                    other => other,
-                }
+                    .await?
             }
+        };
+
+        // The first method did not finish the job, but the server still offers
+        // keyboard-interactive. Two very different situations arrive here:
+        //
+        //   * a PAM sshd that never accepted "password" as a method and wants the
+        //     same password through keyboard-interactive (OpenSSH does this too), and
+        //   * a second factor after a *successful* first step — `partial_success`
+        //     is set, the key or password was accepted, and now a one-time code
+        //     is required.
+        //
+        // Both are the same call; what differs is whether a stored password is
+        // allowed to answer, which `keyboard_interactive` decides per round.
+        let escalate = matches!(
+            first,
+            AuthResult::Failure { ref remaining_methods, .. }
+                if remaining_methods.contains(&MethodKind::KeyboardInteractive)
+        );
+        Ok::<AuthResult, TransportError>(if escalate {
+            let password = match &opts.auth {
+                Auth::Password { password } => Some(password),
+                Auth::Agent { .. } => None,
+            };
+            keyboard_interactive(handle, &opts.user, password, opts.prompter.as_ref()).await?
+        } else {
+            first
         })
     })
     .await
@@ -928,18 +1000,28 @@ async fn authenticate(
 /// server must not keep the client in an endless loop of prompts.
 const MAX_KBD_INTERACTIVE_ROUNDS: usize = 8;
 
-/// keyboard-interactive that answers each prompt with the password. Used as a
-/// fallback for `Auth::Password`; interactive scenarios (OTP etc.) are a separate
-/// task (prompts are not forwarded to the UI).
-async fn keyboard_interactive_with_password(
+/// keyboard-interactive.
+///
+/// Two things happen here, and the split matters. A PAM sshd that merely wants
+/// the password sends one round of hidden-input prompts — we answer those from
+/// the stored password, exactly as OpenSSH does, so nothing prompts the user
+/// needlessly. A two-factor login sends a *second* round asking for a one-time
+/// code, and no stored secret can answer it. That second round is what used to
+/// be answered with the password again, which is why TOTP/Duo/RSA-token logins
+/// could not succeed at all.
+///
+/// So: the password answers only the first round, and only when every prompt in
+/// it is hidden-input. Everything else goes to the user via `prompter`.
+async fn keyboard_interactive(
     handle: &mut Handle<ClientHandler>,
     user: &str,
-    password: &Zeroizing<String>,
+    password: Option<&Zeroizing<String>>,
+    prompter: Option<&Arc<dyn AuthPrompter>>,
 ) -> Result<AuthResult, TransportError> {
     let mut response = handle
         .authenticate_keyboard_interactive_start(user.to_string(), None::<String>)
         .await?;
-    for _ in 0..MAX_KBD_INTERACTIVE_ROUNDS {
+    for round in 0..MAX_KBD_INTERACTIVE_ROUNDS {
         match response {
             KeyboardInteractiveAuthResponse::Success => return Ok(AuthResult::Success),
             KeyboardInteractiveAuthResponse::Failure {
@@ -951,20 +1033,37 @@ async fn keyboard_interactive_with_password(
                     partial_success,
                 })
             }
-            KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
-                // Answer with the password only on NON-echo prompts (hidden-input
-                // fields — password/passphrase). echo=true is a visible field (login,
-                // hint); the password must not be sent there — answer with an empty string.
-                let answers = prompts
+            KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                let fields: Vec<PromptField> = prompts
                     .iter()
-                    .map(|p| {
-                        if p.echo {
-                            String::new()
-                        } else {
-                            password.as_str().to_string()
-                        }
+                    .map(|p| PromptField {
+                        prompt: p.prompt.clone(),
+                        echo: p.echo,
                     })
                     .collect();
+
+                let answers = match answer_from_password(round, password, &fields) {
+                    Some(answers) => answers,
+                    None => match prompter {
+                        Some(prompter) => ask_user(prompter, name, instructions, fields).await?,
+                        // Nothing can answer this. Fail now with a distinct error
+                        // rather than sending a wrong answer and reporting a
+                        // generic auth failure — "the server wants a code and no
+                        // one asked me for one" is the actionable message.
+                        None => {
+                            log::warn!(
+                                "ssh keyboard-interactive round {round} needs user input for user {user}, \
+                                 but no prompter is attached"
+                            );
+                            return Err(TransportError::InteractiveAuthUnsupported);
+                        }
+                    },
+                };
+
                 response = handle
                     .authenticate_keyboard_interactive_respond(answers)
                     .await?;
@@ -972,6 +1071,54 @@ async fn keyboard_interactive_with_password(
         }
     }
     Err(TransportError::AuthFailed)
+}
+
+/// The stored password answers a round only when it is the first one and every
+/// field is hidden input. An `echo=true` field is a visible one (a login, a
+/// hint) and must never receive the password.
+fn answer_from_password(
+    round: usize,
+    password: Option<&Zeroizing<String>>,
+    fields: &[PromptField],
+) -> Option<Vec<String>> {
+    let password = password?;
+    if round != 0 || fields.is_empty() || fields.iter().any(|f| f.echo) {
+        return None;
+    }
+    Some(
+        fields
+            .iter()
+            .map(|_| password.as_str().to_string())
+            .collect(),
+    )
+}
+
+/// Asks the user, off the reactor: the implementation shows a dialog and blocks
+/// until it is answered, which must not stall every other task in the runtime.
+async fn ask_user(
+    prompter: &Arc<dyn AuthPrompter>,
+    name: String,
+    instruction: String,
+    fields: Vec<PromptField>,
+) -> Result<Vec<String>, TransportError> {
+    let prompter = Arc::clone(prompter);
+    let expected = fields.len();
+    let answers =
+        tokio::task::spawn_blocking(move || prompter.prompt(&name, &instruction, &fields))
+            .await
+            .map_err(|_| TransportError::AuthCancelled)?
+            .ok_or(TransportError::AuthCancelled)?;
+
+    // A short answer would be silently padded by the server into a wrong one;
+    // a long one is a buggy implementation. Neither should reach the wire.
+    if answers.len() != expected {
+        log::warn!(
+            "auth prompter returned {} answers for {expected} prompts — treating as cancelled",
+            answers.len()
+        );
+        return Err(TransportError::AuthCancelled);
+    }
+    Ok(answers)
 }
 
 /// A signer on top of the embedded agent: implements `russh::auth::Signer` without
@@ -1082,8 +1229,86 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::require_loopback;
+    use super::{answer_from_password, require_loopback, PromptField};
     use crate::error::TransportError;
+    use zeroize::Zeroizing;
+
+    fn hidden(prompt: &str) -> PromptField {
+        PromptField {
+            prompt: prompt.to_string(),
+            echo: false,
+        }
+    }
+
+    fn visible(prompt: &str) -> PromptField {
+        PromptField {
+            prompt: prompt.to_string(),
+            echo: true,
+        }
+    }
+
+    fn pw() -> Zeroizing<String> {
+        Zeroizing::new("correct horse".to_string())
+    }
+
+    #[test]
+    fn stored_password_answers_a_plain_pam_round() {
+        // The common case: sshd never accepted the "password" method and asks
+        // for the same secret through keyboard-interactive. Nobody should be
+        // prompted for something the client already knows.
+        let answers = answer_from_password(0, Some(&pw()), &[hidden("Password: ")])
+            .expect("first hidden-only round is answerable from the stored password");
+        assert_eq!(answers, vec!["correct horse".to_string()]);
+    }
+
+    #[test]
+    fn second_round_is_never_answered_from_the_password() {
+        // THE regression this guards. A two-factor login asks twice: password,
+        // then a one-time code. Answering round 1 with the password again is
+        // what made TOTP/Duo logins impossible — it must go to the user.
+        assert!(
+            answer_from_password(1, Some(&pw()), &[hidden("Verification code: ")]).is_none(),
+            "the second round must be routed to the user, not answered from storage"
+        );
+    }
+
+    #[test]
+    fn a_visible_field_is_never_given_the_password() {
+        // echo=true means the server intends the input to be displayed — a login
+        // name, a hint. Putting the password there would echo it to the screen
+        // and send it somewhere it was never meant to go.
+        assert!(answer_from_password(
+            0,
+            Some(&pw()),
+            &[visible("Username: "), hidden("Password: ")]
+        )
+        .is_none());
+        assert!(answer_from_password(0, Some(&pw()), &[visible("Token name: ")]).is_none());
+    }
+
+    #[test]
+    fn every_hidden_field_of_the_first_round_is_filled() {
+        let answers =
+            answer_from_password(0, Some(&pw()), &[hidden("Password: "), hidden("Again: ")])
+                .expect("all-hidden first round");
+        assert_eq!(answers.len(), 2, "one answer per prompt, in order");
+        assert!(answers.iter().all(|a| a == "correct horse"));
+    }
+
+    #[test]
+    fn without_a_password_nothing_is_answerable() {
+        // Key-based auth escalating into a one-time code: there is no stored
+        // secret at all, so the prompter is the only way through.
+        assert!(answer_from_password(0, None, &[hidden("Verification code: ")]).is_none());
+    }
+
+    #[test]
+    fn an_empty_round_is_not_answered() {
+        // Servers do send prompt-less rounds to display a banner. Returning an
+        // empty answer set from here would be indistinguishable from "answered",
+        // so it is left to the caller to respond with nothing.
+        assert!(answer_from_password(0, Some(&pw()), &[]).is_none());
+    }
 
     #[test]
     fn loopback_accepted() {
