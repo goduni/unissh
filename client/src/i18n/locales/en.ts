@@ -490,6 +490,8 @@ export const en = {
   },
   import: {
     "title": "Import from ~/.ssh/config",
+    "skippedTitle": "{{count}} directive(s) will not be imported",
+    "skippedDesc": "UniSSH has no equivalent for these, or they sit inside a Match block whose conditions depend on the connection. The hosts below still import; these specific lines simply have no effect afterwards.",
     "found": "Found {{hosts}} · choose what to add",
     "selectAll": "Select all",
     "clear": "Clear",

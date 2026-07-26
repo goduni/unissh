@@ -226,6 +226,19 @@ pub async fn set_keepalive_secs(secs: u64, state: State<'_, AppState>) -> ApiRes
     Ok(())
 }
 
+/// What an ~/.ssh/config import would drop. Read-only: it parses the text and
+/// writes nothing, so the user can see the damage before agreeing to it.
+#[tauri::command]
+pub async fn ssh_config_report(
+    config_text: String,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::SshConfigReport> {
+    let core = state.core.clone();
+    Ok(blocking(move || core.ssh_config_report(config_text))
+        .await?
+        .into())
+}
+
 /// Sets which algorithms new SSH connections may negotiate. Also an atomic
 /// store, so it stays off the blocking pool.
 #[tauri::command]

@@ -49,6 +49,6 @@ pub use client::{
     ConnectOptions, ExecHandle, ExecSink, ForwardGuard, OutputSink, PromptField, SftpSession,
     ShellHandle, SshClient,
 };
-pub use config::{HostSettings, SshConfig};
+pub use config::{HostSettings, SkipReason, SkippedDirective, SshConfig};
 pub use error::TransportError;
 pub use sftp::{DirEntry, FileStat, Sftp, SftpCancel, SftpProgress, TransferOutcome};

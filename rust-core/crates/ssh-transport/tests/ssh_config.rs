@@ -101,3 +101,110 @@ fn host_aliases_lists_concrete_only() {
     // concrete aliases in order of appearance; patterns (*, ?) are dropped
     assert_eq!(cfg.host_aliases(), vec!["bastion", "web", "prod"]);
 }
+
+#[test]
+fn a_match_block_does_not_contaminate_the_host_above_it() {
+    // The regression this guards. `Match` was not recognised, so the directives
+    // inside it were merged into the preceding Host block — here, silently
+    // rewriting prod's user to root and pointing it at a different machine.
+    let text = "\
+Host prod
+  HostName 10.0.0.5
+  User deploy
+
+Match user root
+  HostName 10.0.0.99
+  User root
+";
+    let cfg = SshConfig::parse(text).unwrap();
+    let prod = cfg.resolve("prod");
+    assert_eq!(
+        prod.user.as_deref(),
+        Some("deploy"),
+        "Match must not rewrite the host above it"
+    );
+    assert_eq!(prod.hostname.as_deref(), Some("10.0.0.5"));
+    assert!(
+        cfg.skipped()
+            .iter()
+            .any(|s| s.keyword.eq_ignore_ascii_case("match")),
+        "the skipped Match must be reported, not silently dropped"
+    );
+}
+
+#[test]
+fn unsupported_directives_are_reported_with_their_line() {
+    let text = "\
+Host gw
+  HostName gw.example.com
+  ProxyCommand /usr/bin/nc %h %p
+";
+    let cfg = SshConfig::parse(text).unwrap();
+    let pc = cfg
+        .skipped()
+        .iter()
+        .find(|s| s.keyword.eq_ignore_ascii_case("proxycommand"))
+        .expect("ProxyCommand must be reported: it silently not working is the bug");
+    assert_eq!(
+        pc.line, 3,
+        "the line number is what makes the report actionable"
+    );
+}
+
+#[test]
+fn forwards_accumulate_across_matching_blocks() {
+    // OpenSSH applies every matching LocalForward, and a `Host *` block adding a
+    // tunnel to everything is ordinary. First-wins would drop all but one.
+    let text = "\
+Host db
+  HostName db.internal
+  LocalForward 5432 127.0.0.1:5432
+
+Host *
+  LocalForward 9000 127.0.0.1:9000
+  DynamicForward 1080
+";
+    let cfg = SshConfig::parse(text).unwrap();
+    let db = cfg.resolve("db");
+    assert_eq!(db.local_forwards.len(), 2);
+    assert!(db.local_forwards.iter().any(|f| f.starts_with("5432 ")));
+    assert!(db.local_forwards.iter().any(|f| f.starts_with("9000 ")));
+    assert_eq!(db.dynamic_forwards, vec!["1080".to_string()]);
+}
+
+#[test]
+fn scalar_directives_are_parsed() {
+    let text = "\
+Host box
+  HostName box.example.com
+  ServerAliveInterval 30
+  ConnectTimeout 5
+  Compression yes
+  SetEnv LANG=C.UTF-8
+";
+    let s = SshConfig::parse(text).unwrap().resolve("box");
+    assert_eq!(s.server_alive_interval, Some(30));
+    assert_eq!(s.connect_timeout, Some(5));
+    assert_eq!(s.compression, Some(true));
+    assert_eq!(s.set_env, vec!["LANG=C.UTF-8".to_string()]);
+}
+
+#[test]
+fn includes_are_followed_through_the_loader_and_cannot_loop() {
+    // A cycle must terminate rather than run until memory does.
+    let root = "Include conf.d/*\nHost a\n  User from_root\n";
+    let mut seen = 0;
+    let cfg = SshConfig::parse_with_includes(root, |path| {
+        seen += 1;
+        assert_eq!(path, "conf.d/*");
+        // Every included file includes the parent again.
+        vec!["Include conf.d/*\nHost b\n  User from_include\n".to_string()]
+    })
+    .unwrap();
+    assert_eq!(cfg.resolve("a").user.as_deref(), Some("from_root"));
+    assert_eq!(cfg.resolve("b").user.as_deref(), Some("from_include"));
+    assert!(
+        seen <= 16,
+        "include recursion must be bounded, saw {seen} rounds"
+    );
+}

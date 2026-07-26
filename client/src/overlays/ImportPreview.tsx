@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation, Trans } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rgba } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
@@ -177,6 +177,10 @@ function ImportPreviewBody() {
 
   const [path, setPath] = useState<string>("~/.ssh/config");
   const [fileText, setFileText] = useState<string>("");
+  // What the core says it cannot carry over. Fetched from the core rather than
+  // derived from the TS preview parser, so the warning reflects what the import
+  // will actually do rather than a second opinion about it.
+  const [skipped, setSkipped] = useState<api.SkippedDirective[]>([]);
   const [rows, setRows] = useState<ParsedHost[]>([]);
   const [sel, setSel] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -219,6 +223,13 @@ function ImportPreviewBody() {
         const parsed = parseSshConfig(text, existing);
         setPath(selected);
         setFileText(text);
+        try {
+          const report = await api.sshConfigReport(text);
+          if (!cancelled) setSkipped(report.skipped);
+        } catch {
+          // A failed report must not block the import itself — worst case the
+          // user just doesn't get the warning.
+        }
         setRows(parsed);
         setSel(parsed.filter((h) => !h.dup).map((h) => h.host));
       } catch (e) {
@@ -578,7 +589,35 @@ function ImportPreviewBody() {
               {t("import.empty")}
             </div>
           ) : (
-            rows.map((h, i) => {
+            <>
+              {skipped.length > 0 && (
+                <div
+                  role="note"
+                  style={{
+                    margin: "0 0 12px",
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    border: `1px solid ${rgba(p.amber, 0.35)}`,
+                    background: rgba(p.amber, 0.08),
+                    fontSize: 12.5,
+                    color: p.txt2,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: 4 }}>
+                    {t("import.skippedTitle", { count: skipped.length })}
+                  </div>
+                  <div style={{ marginBottom: 6 }}>{t("import.skippedDesc")}</div>
+                  <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
+                    {skipped
+                      .slice(0, 12)
+                      .map((d) => `${d.line}: ${d.keyword}${d.insideMatch ? " (Match)" : ""}`)
+                      .join("  ·  ")}
+                    {skipped.length > 12 ? "  ·  …" : ""}
+                  </div>
+                </div>
+              )}
+              {rows.map((h, i) => {
               const on = sel.includes(h.host);
               return (
                 <div
@@ -696,7 +735,8 @@ function ImportPreviewBody() {
                   </div>
                 </div>
               );
-            })
+              })}
+            </>
           )}
         </div>
 

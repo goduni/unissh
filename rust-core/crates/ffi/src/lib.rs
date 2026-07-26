@@ -4409,6 +4409,29 @@ impl Core {
         apply_username_template(&base_user, username_template.as_deref())
     }
 
+    /// What an `~/.ssh/config` import would and would not bring across.
+    ///
+    /// Separate from [`Core::import_ssh_config`] so the UI can show it *before*
+    /// writing anything: a real config is mostly directives UniSSH does not
+    /// implement, and importing in silence leaves the user believing their
+    /// `ProxyCommand` or `Match` block came with it.
+    pub fn ssh_config_report(&self, config_text: String) -> Result<SshConfigReport, FfiError> {
+        let cfg = SshConfig::parse(&config_text).map_err(FfiError::other)?;
+        Ok(SshConfigReport {
+            aliases: cfg.host_aliases(),
+            skipped: cfg
+                .skipped()
+                .iter()
+                .map(|s| SkippedDirectiveFfi {
+                    line: s.line,
+                    keyword: s.keyword.clone(),
+                    inside_match: matches!(s.reason, unissh_ssh_transport::SkipReason::InsideMatch),
+                })
+                .collect(),
+            pending_includes: cfg.pending_includes().to_vec(),
+        })
+    }
+
     /// Imports `~/.ssh/config`: for each concrete `Host` alias it creates
     /// a connection profile with an empty `key_item_id` (the core does not read files). The keys
     /// specified in `IdentityFile` are read and imported by the UI layer: it pulls in
@@ -6019,6 +6042,32 @@ fn split_host_port(s: &str) -> (String, u16) {
         Some((h, p)) => (h.to_string(), p.parse().unwrap_or(22)),
         None => (s.to_string(), 22),
     }
+}
+
+/// A directive an `~/.ssh/config` import will not carry over.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SkippedDirectiveFfi {
+    /// 1-based line in the config text.
+    pub line: u32,
+    /// The directive as written, e.g. `ProxyCommand`.
+    pub keyword: String,
+    /// `true` when it was skipped because it sits inside a `Match` block, whose
+    /// conditions depend on the connection being attempted (and `Match exec`
+    /// runs a program). Worth distinguishing: the fix is different — a `Match`
+    /// block has to be rewritten as a `Host` block, an unsupported directive
+    /// simply has no equivalent.
+    pub inside_match: bool,
+}
+
+/// What importing an `~/.ssh/config` would produce.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SshConfigReport {
+    /// Concrete host aliases that would become profiles.
+    pub aliases: Vec<String>,
+    /// Directives that would be dropped.
+    pub skipped: Vec<SkippedDirectiveFfi>,
+    /// `Include` paths seen but not followed.
+    pub pending_includes: Vec<String>,
 }
 
 /// Which algorithms a connection may negotiate.

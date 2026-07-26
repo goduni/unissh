@@ -272,6 +272,7 @@ pub fn run() {
             commands::cancel_dispose,
             commands::submit_auth_prompt,
             commands::set_algorithm_policy,
+            commands::ssh_config_report,
             // keychain (Secret Key on trusted device)
             keychain::keychain_available,
             keychain::keychain_save_secret_key,

@@ -1170,3 +1170,42 @@ impl From<ffi::DbConsistencyReport> for DbConsistencyReport {
         }
     }
 }
+
+// ---------- ssh_config import report ----------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedDirective {
+    pub line: u32,
+    pub keyword: String,
+    /// Distinguished from a plain unsupported directive because the remedy
+    /// differs: a Match block has to be rewritten as a Host block, while an
+    /// unsupported directive simply has no equivalent here.
+    pub inside_match: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigReport {
+    pub aliases: Vec<String>,
+    pub skipped: Vec<SkippedDirective>,
+    pub pending_includes: Vec<String>,
+}
+
+impl From<ffi::SshConfigReport> for SshConfigReport {
+    fn from(r: ffi::SshConfigReport) -> Self {
+        SshConfigReport {
+            aliases: r.aliases,
+            pending_includes: r.pending_includes,
+            skipped: r
+                .skipped
+                .into_iter()
+                .map(|s| SkippedDirective {
+                    line: s.line,
+                    keyword: s.keyword,
+                    inside_match: s.inside_match,
+                })
+                .collect(),
+        }
+    }
+}

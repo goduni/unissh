@@ -271,6 +271,25 @@ export async function resolveConnectAuth(
   }
   return { user: profile.user, auth: profileToAuth(profile.auth, vaultId, promptedPassword) };
 }
+export interface SkippedDirective {
+  line: number;
+  keyword: string;
+  /** Inside a `Match` block, whose conditions depend on the connection being
+   *  made. The remedy differs from a plain unsupported directive: a Match block
+   *  has to be rewritten as a Host block. */
+  insideMatch: boolean;
+}
+
+export interface SshConfigReport {
+  aliases: string[];
+  skipped: SkippedDirective[];
+  pendingIncludes: string[];
+}
+
+/** What an import would drop. Parses only — writes nothing. */
+export const sshConfigReport = (configText: string) =>
+  invoke<SshConfigReport>("ssh_config_report", { configText });
+
 export const importSshConfig = (vaultId: string, configText: string) =>
   afterMut(vaultId, invoke<string[]>("import_ssh_config", { vaultId, configText }));
 export const exportSshConfig = (vaultId: string) =>
