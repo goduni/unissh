@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use russh::client::{
@@ -123,6 +123,61 @@ impl core::fmt::Debug for ConnectOptions {
             .field("auth", &self.auth)
             .field("prompter", &self.prompter.is_some())
             .finish()
+    }
+}
+
+/// Which algorithms the transport is willing to negotiate.
+///
+/// There is deliberately no "compatibility" variant that re-enables SHA-1 MACs,
+/// CBC ciphers or 1024-bit groups. russh's defaults already exclude all of them,
+/// and a switch that puts them back would be a footgun sitting in a product
+/// whose whole argument is that the defaults are trustworthy. A host too old for
+/// the list below is a host to fix, not to reach down to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum AlgorithmPolicy {
+    /// russh's vetted set. Hybrid post-quantum key exchange
+    /// (`mlkem768x25519-sha256`) is negotiated first, with classical curve25519
+    /// and the 2048-bit-and-up DH groups behind it for servers that lack it.
+    #[default]
+    Balanced = 0,
+    /// Modern only, for people who control both ends and have to prove it to an
+    /// auditor: post-quantum key exchange **required** (no classical fallback,
+    /// so a server without it fails to connect rather than quietly downgrading),
+    /// Ed25519 host keys only, AEAD ciphers only, encrypt-then-MAC only.
+    Modern = 1,
+}
+
+impl AlgorithmPolicy {
+    fn preferred(self) -> russh::Preferred {
+        match self {
+            AlgorithmPolicy::Balanced => russh::Preferred::DEFAULT,
+            AlgorithmPolicy::Modern => russh::Preferred {
+                // No classical fallback: the point of this mode is that a
+                // downgrade is a failure, not a silent success.
+                kex: std::borrow::Cow::Borrowed(&[
+                    russh::kex::MLKEM768X25519_SHA256,
+                    // The extension markers are protocol negotiation, not
+                    // cryptography — dropping them would disable strict-kex,
+                    // which is the Terrapin countermeasure.
+                    russh::kex::EXTENSION_SUPPORT_AS_CLIENT,
+                    russh::kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
+                ]),
+                key: std::borrow::Cow::Borrowed(&[russh::keys::Algorithm::Ed25519]),
+                cipher: std::borrow::Cow::Borrowed(&[
+                    russh::cipher::CHACHA20_POLY1305,
+                    russh::cipher::AES_256_GCM,
+                ]),
+                // Only relevant for non-AEAD ciphers, but pinned so a future
+                // addition to the cipher list cannot drag in a MAC we did not
+                // choose.
+                mac: std::borrow::Cow::Borrowed(&[
+                    russh::mac::HMAC_SHA512_ETM,
+                    russh::mac::HMAC_SHA256_ETM,
+                ]),
+                compression: std::borrow::Cow::Borrowed(&[russh::compression::NONE]),
+            },
+        }
     }
 }
 
@@ -689,9 +744,33 @@ pub fn set_keepalive_secs(secs: u64) {
     KEEPALIVE_SECS.store(secs, Ordering::Relaxed);
 }
 
-fn client_config() -> Arc<Config> {
+/// Algorithm policy for all new connections. Global for the same reason
+/// keepalive is: it is one user decision that has to hold everywhere, and a
+/// policy with per-host exceptions is not a policy.
+///
+/// It is also why there is no per-host override: the non-default mode is
+/// *stricter* than the default, so the escape hatch a per-host setting normally
+/// buys — "this one legacy box needs something weaker" — has nothing to grant.
+static ALGORITHM_POLICY: AtomicU8 = AtomicU8::new(0);
+
+/// Sets the algorithm policy for subsequent connections. Established ones keep
+/// what they negotiated.
+pub fn set_algorithm_policy(policy: AlgorithmPolicy) {
+    ALGORITHM_POLICY.store(policy as u8, Ordering::Relaxed);
+}
+
+/// The policy in force for new connections.
+pub fn algorithm_policy() -> AlgorithmPolicy {
+    match ALGORITHM_POLICY.load(Ordering::Relaxed) {
+        0 => AlgorithmPolicy::Balanced,
+        _ => AlgorithmPolicy::Modern,
+    }
+}
+
+fn client_config(algorithms: AlgorithmPolicy) -> Arc<Config> {
     let secs = KEEPALIVE_SECS.load(Ordering::Relaxed);
     Arc::new(Config {
+        preferred: algorithms.preferred(),
         // Keepalive detects a dead peer on long sessions/tunnels, while
         // NOT killing live-but-idle sessions (we leave inactivity_timeout as
         // None — otherwise an idle interactive shell/tunnel would be torn down).
@@ -726,7 +805,11 @@ async fn establish_tcp(
     };
     let connected = timeout(
         HANDSHAKE_TIMEOUT,
-        russh::client::connect(client_config(), (opts.host.as_str(), opts.port), handler),
+        russh::client::connect(
+            client_config(algorithm_policy()),
+            (opts.host.as_str(), opts.port),
+            handler,
+        ),
     )
     .await
     .map_err(|_| TransportError::HandshakeTimeout)?;
@@ -759,7 +842,7 @@ where
     };
     let connected = timeout(
         HANDSHAKE_TIMEOUT,
-        russh::client::connect_stream(client_config(), stream, handler),
+        russh::client::connect_stream(client_config(algorithm_policy()), stream, handler),
     )
     .await
     .map_err(|_| TransportError::HandshakeTimeout)?;
@@ -876,7 +959,15 @@ pub async fn trust_host_key(
     };
     let handle = timeout(
         HANDSHAKE_TIMEOUT,
-        russh::client::connect(client_config(), (host, port), handler),
+        // Balanced, not the connection's policy: this is the re-pin probe, and it
+        // must be able to reach the same server the user just saw a fingerprint
+        // from. Refusing to fetch a key we are only going to show and compare
+        // would block re-pinning without protecting anything.
+        russh::client::connect(
+            client_config(AlgorithmPolicy::Balanced),
+            (host, port),
+            handler,
+        ),
     )
     .await
     .map_err(|_| TransportError::HandshakeTimeout)??;

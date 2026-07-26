@@ -3053,6 +3053,21 @@ impl Core {
         unissh_ssh_transport::set_keepalive_secs(secs);
     }
 
+    /// Sets which algorithms new connections may negotiate. Global, like
+    /// keepalive: one decision that has to hold everywhere. Already-open
+    /// connections keep what they negotiated.
+    pub fn set_algorithm_policy(&self, policy: FfiAlgorithmPolicy) {
+        unissh_ssh_transport::set_algorithm_policy(policy.into());
+    }
+
+    /// The policy in force for new connections.
+    pub fn algorithm_policy(&self) -> FfiAlgorithmPolicy {
+        match unissh_ssh_transport::algorithm_policy() {
+            unissh_ssh_transport::AlgorithmPolicy::Balanced => FfiAlgorithmPolicy::Balanced,
+            unissh_ssh_transport::AlgorithmPolicy::Modern => FfiAlgorithmPolicy::Modern,
+        }
+    }
+
     /// Opens an interactive PTY session. Terminal output is streamed to
     /// `observer` (a callback). Returns a session object for input/resize/close.
     /// The Core lock is held only for the connect, not for the duration of the session.
@@ -6003,6 +6018,33 @@ fn split_host_port(s: &str) -> (String, u16) {
     match s.rsplit_once(':') {
         Some((h, p)) => (h.to_string(), p.parse().unwrap_or(22)),
         None => (s.to_string(), 22),
+    }
+}
+
+/// Which algorithms a connection may negotiate.
+///
+/// There is no "compatibility" setting that re-enables SHA-1 MACs or CBC
+/// ciphers: the defaults already exclude them, and a switch that put them back
+/// would be a footgun in a product whose argument is that its defaults can be
+/// trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, uniffi::Enum)]
+pub enum FfiAlgorithmPolicy {
+    /// The vetted set: hybrid post-quantum key exchange first, classical
+    /// curve25519 and the strong DH groups behind it for servers without it.
+    #[default]
+    Balanced,
+    /// Modern only: post-quantum key exchange **required** (a server without it
+    /// fails to connect rather than silently downgrading), Ed25519 host keys,
+    /// AEAD ciphers, encrypt-then-MAC.
+    Modern,
+}
+
+impl From<FfiAlgorithmPolicy> for unissh_ssh_transport::AlgorithmPolicy {
+    fn from(p: FfiAlgorithmPolicy) -> Self {
+        match p {
+            FfiAlgorithmPolicy::Balanced => unissh_ssh_transport::AlgorithmPolicy::Balanced,
+            FfiAlgorithmPolicy::Modern => unissh_ssh_transport::AlgorithmPolicy::Modern,
+        }
     }
 }
 

@@ -44,9 +44,10 @@ mod error;
 mod sftp;
 
 pub use client::{
-    canonical_host_key, fingerprint_openssh, set_keepalive_secs, trust_host_key, Auth,
-    AuthPrompter, CommandOutput, ConnectOptions, ExecHandle, ExecSink, ForwardGuard, OutputSink,
-    PromptField, SftpSession, ShellHandle, SshClient,
+    algorithm_policy, canonical_host_key, fingerprint_openssh, set_algorithm_policy,
+    set_keepalive_secs, trust_host_key, AlgorithmPolicy, Auth, AuthPrompter, CommandOutput,
+    ConnectOptions, ExecHandle, ExecSink, ForwardGuard, OutputSink, PromptField, SftpSession,
+    ShellHandle, SshClient,
 };
 pub use config::{HostSettings, SshConfig};
 pub use error::TransportError;

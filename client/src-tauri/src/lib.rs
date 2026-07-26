@@ -111,9 +111,8 @@ pub fn run() {
             // Registered before anything can connect: a server may demand a
             // second factor on the very first connection, and a prompter wired
             // up later would miss it.
-            let prompter = std::sync::Arc::new(crate::observers::AppPrompter::new(
-                app.handle().clone(),
-            ));
+            let prompter =
+                std::sync::Arc::new(crate::observers::AppPrompter::new(app.handle().clone()));
             core.set_auth_prompter(Some(prompter.clone()));
             app.manage(prompter);
             app.manage(AppState::new(core, db_path, keyset_path));
@@ -272,6 +271,7 @@ pub fn run() {
             commands::cancel_trigger,
             commands::cancel_dispose,
             commands::submit_auth_prompt,
+            commands::set_algorithm_policy,
             // keychain (Secret Key on trusted device)
             keychain::keychain_available,
             keychain::keychain_save_secret_key,

@@ -915,6 +915,8 @@ export const en = {
     "termFontSmaller": "Smaller",
     "termFontLarger": "Larger",
     "termFontReset": "Reset",
+    "modernAlgorithmsTitle": "Modern algorithms only",
+    "modernAlgorithmsDesc": "Require post-quantum key exchange (ML-KEM + X25519), Ed25519 host keys and AEAD ciphers. There is no fallback: a server that doesn't offer them stops connecting rather than quietly downgrading. Off by default, because older servers will refuse.",
     "keepaliveTitle": "Keep-alive",
     "keepaliveDesc": "Ping idle connections so they aren't dropped by NAT/firewall timeouts. Applies to new connections.",
     "keepaliveOff": "Off",

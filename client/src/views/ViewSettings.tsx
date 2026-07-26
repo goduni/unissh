@@ -690,6 +690,8 @@ function SettingsGeneral() {
   const setAutoReconnect = useApp((s) => s.setAutoReconnect);
   const keepaliveSecs = useApp((s) => s.keepaliveSecs);
   const setKeepaliveSecs = useApp((s) => s.setKeepaliveSecs);
+  const modernAlgorithms = useApp((s) => s.modernAlgorithms);
+  const setModernAlgorithms = useApp((s) => s.setModernAlgorithms);
   const sftpParallelism = useApp((s) => s.sftpParallelism);
   const setSftpParallelism = useApp((s) => s.setSftpParallelism);
 
@@ -775,6 +777,12 @@ function SettingsGeneral() {
       <SectionLabel>{t("settings.sectionConnection")}</SectionLabel>
       <SettingRow title={t("settings.autoReconnectTitle")} desc={t("settings.autoReconnectDesc")}>
         <Toggle checked={autoReconnect} onChange={setAutoReconnect} />
+      </SettingRow>
+      <SettingRow
+        title={t("settings.modernAlgorithmsTitle")}
+        desc={t("settings.modernAlgorithmsDesc")}
+      >
+        <Toggle checked={modernAlgorithms} onChange={setModernAlgorithms} />
       </SettingRow>
       <SettingRow title={t("settings.keepaliveTitle")} desc={t("settings.keepaliveDesc")}>
         <Segmented<string>

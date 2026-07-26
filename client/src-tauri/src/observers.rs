@@ -18,7 +18,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 use unissh_ffi::{
-    AuthPrompter, AuthPromptRequest, BroadcastObserver, ExecObserver, SessionObserver,
+    AuthPromptRequest, AuthPrompter, BroadcastObserver, ExecObserver, SessionObserver,
     SftpProgressObserver,
 };
 

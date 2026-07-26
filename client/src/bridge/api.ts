@@ -384,6 +384,11 @@ export const sessionClose = (id: string) => invoke<void>("session_close", { id }
 export const setKeepaliveSecs = (secs: number) =>
   invoke<void>("set_keepalive_secs", { secs });
 
+/** Restrict what new SSH connections may negotiate. `true` = modern only:
+ *  post-quantum key exchange required, Ed25519 host keys, AEAD ciphers. */
+export const setAlgorithmPolicy = (modern: boolean) =>
+  invoke<void>("set_algorithm_policy", { modern });
+
 // ── broadcast ──────────────────────────────────────────────────
 export async function broadcastOpen(
   targets: MultiExecTarget[],

@@ -369,6 +369,8 @@ interface AppStore {
   resetTermZoom: () => void;
   setAutoReconnect: (b: boolean) => void;
   setKeepaliveSecs: (secs: number) => void;
+  modernAlgorithms: boolean;
+  setModernAlgorithms: (on: boolean) => void;
   setSftpParallelism: (n: number) => void;
 
   // group / tag membership (bulk — driven by the host multi-select bar)
@@ -512,6 +514,17 @@ const lsKeepaliveSecs = (): number => {
   }
 };
 
+/** Modern-only algorithm policy for new SSH connections. Off by default: it
+ *  requires post-quantum key exchange with no classical fallback, so a server
+ *  that lacks it stops connecting — that has to be a deliberate choice. */
+const lsModernAlgorithms = (): boolean => {
+  try {
+    return localStorage.getItem("unissh.modernAlgorithms") === "1";
+  } catch {
+    return false;
+  }
+};
+
 /** Bounds for the SFTP channel-pool size (parallel transfers). Kept modest: each
  *  channel costs a per-channel SSH window of memory, and most servers throttle a
  *  single connection's aggregate anyway. */
@@ -600,6 +613,7 @@ export const useApp = create<AppStore>((set, get) => ({
   termZoom: lsTermZoom(),
   autoReconnect: lsAutoReconnect(),
   keepaliveSecs: lsKeepaliveSecs(),
+  modernAlgorithms: lsModernAlgorithms(),
   sftpParallelism: lsSftpParallelism(),
   lastConnected: lsLastConnected(),
   tunnels: [],
@@ -629,6 +643,11 @@ export const useApp = create<AppStore>((set, get) => ({
     void api
       .setKeepaliveSecs(get().keepaliveSecs)
       .catch((e) => logWarn(`boot: keepalive push failed: ${apiErrorMessage(e)}`));
+    // Same reason: the policy has to be in force before the first connection,
+    // not after the user next visits Settings.
+    void api
+      .setAlgorithmPolicy(get().modernAlgorithms)
+      .catch((e) => logWarn(`boot: algorithm policy push failed: ${apiErrorMessage(e)}`));
     try {
       let status = await api.instanceStatus();
       // Auto-unlock a passwordless (Secret-Key-only) instance straight from the
@@ -1026,6 +1045,17 @@ export const useApp = create<AppStore>((set, get) => ({
     } catch {
       /* ignore */
     }
+  },
+  setModernAlgorithms: (on) => {
+    set({ modernAlgorithms: on });
+    try {
+      localStorage.setItem("unissh.modernAlgorithms", on ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+    void api
+      .setAlgorithmPolicy(on)
+      .catch((e) => logWarn(`setAlgorithmPolicy: ${apiErrorMessage(e)}`));
   },
   setKeepaliveSecs: (secs) => {
     const v = Number.isFinite(secs) && secs >= 0 ? Math.round(secs) : 15;

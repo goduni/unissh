@@ -10,7 +10,8 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 use unissh_ffi::{
-    BroadcastObserver, CancelToken, ExecObserver, FfiError, SessionObserver, SftpProgressObserver,
+    BroadcastObserver, CancelToken, ExecObserver, FfiAlgorithmPolicy, FfiError, SessionObserver,
+    SftpProgressObserver,
 };
 
 use crate::dto;
@@ -222,6 +223,18 @@ pub async fn is_unlocked(state: State<'_, AppState>) -> ApiResult<bool> {
 #[tauri::command]
 pub async fn set_keepalive_secs(secs: u64, state: State<'_, AppState>) -> ApiResult<()> {
     state.core.set_keepalive_secs(secs);
+    Ok(())
+}
+
+/// Sets which algorithms new SSH connections may negotiate. Also an atomic
+/// store, so it stays off the blocking pool.
+#[tauri::command]
+pub async fn set_algorithm_policy(modern: bool, state: State<'_, AppState>) -> ApiResult<()> {
+    state.core.set_algorithm_policy(if modern {
+        FfiAlgorithmPolicy::Modern
+    } else {
+        FfiAlgorithmPolicy::Balanced
+    });
     Ok(())
 }
 
