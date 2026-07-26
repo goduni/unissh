@@ -59,33 +59,127 @@ permissions:
   attestations: write # write the attestation
 
 jobs:
-  publish:
-    name: build & push (${{ matrix.image }})
-    runs-on: ubuntu-latest
+  # ── Per-platform build ──────────────────────────────────────────────────────
+  # One job per (image x architecture), each on a runner of its OWN architecture.
+  #
+  # This replaced a single job that built both platforms through QEMU. Emulating
+  # arm64 on an amd64 runner makes rustc roughly an order of magnitude slower, and
+  # since both platforms went through one job they were also serialised — together
+  # that is where ~80 minutes of wall clock came from. GitHub's arm64 runners are
+  # free for public repositories, so each half now compiles natively and the two
+  # halves run at the same time.
+  #
+  # Nothing is tagged here. Each job pushes an untagged manifest identified only by
+  # its digest, and the merge job below assembles those digests into the one
+  # multi-arch tag users pull — the standard buildx pattern, and the only way to
+  # let two runners contribute to a single image.
+  build:
+    name: build ${{ matrix.image.name }} (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
       matrix:
-        include:
+        image:
           # server: distroless Rust binary. COPYs rust-core/ + server/.
-          - image: unissh-server
+          - name: unissh-server
             dockerfile: server/Dockerfile
           # caddy/SPA: builds crypto-wasm (path-dep ../../rust-core/crates/crypto)
           # + the Vite SPA, served by caddy:2.
-          - image: unissh-caddy
+          - name: unissh-caddy
             dockerfile: deploy/Caddy.Dockerfile
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v7
 
-      # Multi-arch: emulate arm64 on the amd64 runner via QEMU, then drive both
-      # platforms through a single buildx builder.
-      - name: Set up QEMU (cross-arch emulation)
-        uses: docker/setup-qemu-action@v4
-
+      # No QEMU step any more: the runner already is the target architecture.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
       # Identity-free login: github.actor (the Actions bot) + GITHUB_TOKEN.
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Labels only. Tags are applied once, by the merge job, to the manifest list.
+      - name: Derive image labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/goduni/${{ matrix.image.name }}
+
+      - name: Build & push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          # CRITICAL: context is the repo root for BOTH images (see header /
+          # compose.yml) — the Dockerfiles COPY across rust-core/, server/ and
+          # server-ui/, which only resolve from a single repo-root context.
+          context: .
+          file: ${{ matrix.image.dockerfile }}
+          platforms: linux/${{ matrix.platform.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=ghcr.io/goduni/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
+          # Cache lives in GHCR, NOT in the Actions cache, which is capped at 10 GB
+          # per REPOSITORY and shared with every other consumer — the rust-cache
+          # entries from ci.yml and client.yml fill it on their own. Once it was
+          # full, exporting this image's mode=max cache evicted entries mid-write
+          # and the finalize call answered `not_found`, which buildx reports as
+          # `failed to solve` even though the image had already been pushed.
+          #
+          # Per-ARCH cache refs: the two legs run concurrently, and a shared ref
+          # would have them overwrite each other's export.
+          cache-from: type=registry,ref=ghcr.io/goduni/${{ matrix.image.name }}:buildcache-${{ matrix.platform.arch }}
+          cache-to: type=registry,ref=ghcr.io/goduni/${{ matrix.image.name }}:buildcache-${{ matrix.platform.arch }},mode=max,image-manifest=true,oci-mediatypes=true
+
+      # The digest is the only thing the merge job needs, and artifacts are how it
+      # travels between runners. The file is empty on purpose — its NAME is the
+      # payload.
+      - name: Export the digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Manifest list ───────────────────────────────────────────────────────────
+  # Assembles the per-architecture digests into the single tag users pull, and
+  # attests THAT — the manifest list is what a `docker pull` resolves, so it is
+  # what provenance has to cover.
+  merge:
+    name: manifest + provenance (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [unissh-server, unissh-caddy]
+
+    steps:
+      - name: Download this image's digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digest-${{ matrix.image }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -107,51 +201,50 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build & push image
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          # CRITICAL: context is the repo root for BOTH images (see header /
-          # compose.yml) — the Dockerfiles COPY across rust-core/, server/ and
-          # server-ui/, which only resolve from a single repo-root context.
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Cache lives in GHCR, NOT in the Actions cache. `type=gha` is capped
-          # at 10 GB per REPOSITORY, shared with every other consumer — and the
-          # Swatinem/rust-cache entries from ci.yml and client.yml (Android
-          # 1.5 GB, Windows/macOS ~0.9 GB each, times two OS variants) fill that
-          # on their own. Once full, exporting a multi-arch Rust image's
-          # mode=max cache evicts entries mid-write and the finalize call answers
-          # `not_found`, which surfaces as:
-          #
-          #     #37 exporting to GitHub Actions Cache
-          #     #37 ERROR: not_found
-          #     ERROR: failed to build: failed to solve: not_found
-          #
-          # That is why this job failed on every push while unissh-caddy, whose
-          # cache is small, kept passing — and why the failure looked mysterious:
-          # the image itself had already been pushed successfully one step above,
-          # so the red mark was reporting a caching problem as a build problem.
-          #
-          # A registry-backed cache has no such cap, the credentials are already
-          # in hand from the login step, and moving it here hands the whole 10 GB
-          # back to the Rust builds that actually benefit from it.
-          # `image-manifest=true,oci-mediatypes=true` is what GHCR needs to
-          # accept a cache manifest for a multi-platform build.
-          cache-from: type=registry,ref=ghcr.io/goduni/${{ matrix.image }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/goduni/${{ matrix.image }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
+      # Fails loudly if a leg is missing: publishing a "multi-arch" tag that
+      # silently carries one architecture is exactly the class of quiet gap this
+      # repository has been fixing elsewhere.
+      - name: Both architectures must be present
+        working-directory: /tmp/digests
+        run: |
+          set -eu
+          COUNT=$(ls -1 | wc -l)
+          if [ "$COUNT" -ne 2 ]; then
+            echo "expected 2 per-architecture digests (amd64 + arm64), found $COUNT:" >&2
+            ls -l >&2
+            exit 1
+          fi
 
-      # SLSA build provenance for the image we just pushed — the compensating
-      # control for unsigned-by-design images (consistent with the desktop
-      # release-integrity job). Bound via GitHub OIDC, no personal key, and
-      # pushed alongside the image in the registry.
+      - name: Create the manifest list
+        working-directory: /tmp/digests
+        run: |
+          set -eu
+          # shellcheck disable=SC2046
+          # Word splitting is the mechanism here, not an accident: the first
+          # expansion has to become several `-t <tag>` arguments and the second one
+          # `<ref>@sha256:<digest>` per architecture. Quoting either would pass a
+          # single argument and imagetools would reject it.
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/goduni/${{ matrix.image }}@sha256:%s ' *)
+
+      - name: Read the manifest-list digest
+        id: manifest
+        run: |
+          set -eu
+          DIGEST=$(docker buildx imagetools inspect \
+            "ghcr.io/goduni/${{ matrix.image }}:${{ steps.meta.outputs.version }}" \
+            --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "manifest list: $DIGEST"
+
+      # SLSA build provenance for the manifest list — the compensating control for
+      # unsigned-by-design images (consistent with the desktop release-integrity
+      # job). Bound via GitHub OIDC, no personal key, and pushed alongside the
+      # image in the registry.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/goduni/${{ matrix.image }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
