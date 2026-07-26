@@ -158,6 +158,42 @@ export function App() {
     }
   };
 
+  // Returning from the background is not a network blip.
+  //
+  // A phone suspends the app: timers stop, the TCP connections die, and on the
+  // way down the pane burns retries against a machine that was never going to
+  // answer. Coming back, the user then waits out an exponential backoff that was
+  // computed for a flaky link — or finds the retry budget already spent and the
+  // pane simply dead.
+  //
+  // So a resume is treated as what it is: a deliberate act, equivalent to the
+  // user pressing reconnect. That resets the budget and retries at once. Only
+  // panes that are actually dead are touched; a session that survived is left
+  // alone rather than being torn down and rebuilt for no reason.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const st = useApp.getState();
+      if (!st.unlocked) return;
+      for (const tab of st.terminals) {
+        for (const pane of tab.panes) {
+          // "closed" is an exited shell — the user's own `exit`, not a drop.
+          // Reconnecting that would resurrect a session they deliberately ended.
+          //
+          // A host-key mismatch is also status "error", and must never be
+          // retried: the attempt cannot succeed, and each one re-offers a
+          // possibly hostile key for acceptance. That decision belongs to the
+          // Accept/Reject ceremony, not to a resume.
+          if (pane.status === "error" && !pane.mismatch) {
+            st.reconnectPane(tab.id, pane.id, true);
+          }
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
   useEffect(() => {
     void boot();
     // auto-select the native mobile shell on phones
