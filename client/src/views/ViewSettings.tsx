@@ -51,7 +51,7 @@ import { platform, version as osVersion } from "@tauri-apps/plugin-os";
 import { useTranslation, setLang, currentLang, tDyn, LANGS, LANG_LABELS } from "@/i18n";
 import type { Lang } from "@/i18n";
 import { useFmt } from "@/i18n/format";
-import { useNarrow } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useUpdate } from "@/store/update";
 import { updatesSupported } from "@/bridge/updater";
 import { osPlatform } from "@/bridge/platform";
@@ -214,6 +214,9 @@ function useInstalledFonts(): Set<string> {
 }
 
 function SettingsAppearance() {
+  const isPhone = useIsMobile();
+  const gpuRendering = useApp((s) => s.gpuRendering);
+  const setGpuRendering = useApp((s) => s.setGpuRendering);
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
@@ -373,6 +376,13 @@ function SettingsAppearance() {
       </SettingRow>
 
       <SectionLabel>{t("settings.sectionTerminal")}</SectionLabel>
+      {/* device, not window width: a desktop user with a narrow window must not
+          lose the toggle, and a phone already renders on the GPU unconditionally. */}
+      {!isPhone && (
+        <SettingRow title={t("settings.gpuRenderingTitle")} desc={t("settings.gpuRenderingDesc")}>
+          <Toggle checked={gpuRendering} onChange={setGpuRendering} />
+        </SettingRow>
+      )}
       <SettingRow title={t("settings.termFontTitle")} desc={t("settings.termFontDesc")}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Btn

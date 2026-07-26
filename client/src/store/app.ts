@@ -371,6 +371,8 @@ interface AppStore {
   setKeepaliveSecs: (secs: number) => void;
   modernAlgorithms: boolean;
   setModernAlgorithms: (on: boolean) => void;
+  gpuRendering: boolean;
+  setGpuRendering: (on: boolean) => void;
   setSftpParallelism: (n: number) => void;
 
   // group / tag membership (bulk — driven by the host multi-select bar)
@@ -525,6 +527,17 @@ const lsModernAlgorithms = (): boolean => {
   }
 };
 
+/** GPU (WebGL) terminal rendering on desktop. Phones always use it; desktop is
+ *  opt-in because the DOM renderer is already adequate there and the WebGL addon
+ *  paints nothing on some drivers — a failure no feature probe detects. */
+const lsGpuRendering = (): boolean => {
+  try {
+    return localStorage.getItem("unissh.gpuRendering") === "1";
+  } catch {
+    return false;
+  }
+};
+
 /** Bounds for the SFTP channel-pool size (parallel transfers). Kept modest: each
  *  channel costs a per-channel SSH window of memory, and most servers throttle a
  *  single connection's aggregate anyway. */
@@ -614,6 +627,7 @@ export const useApp = create<AppStore>((set, get) => ({
   autoReconnect: lsAutoReconnect(),
   keepaliveSecs: lsKeepaliveSecs(),
   modernAlgorithms: lsModernAlgorithms(),
+  gpuRendering: lsGpuRendering(),
   sftpParallelism: lsSftpParallelism(),
   lastConnected: lsLastConnected(),
   tunnels: [],
@@ -1056,6 +1070,14 @@ export const useApp = create<AppStore>((set, get) => ({
     void api
       .setAlgorithmPolicy(on)
       .catch((e) => logWarn(`setAlgorithmPolicy: ${apiErrorMessage(e)}`));
+  },
+  setGpuRendering: (on) => {
+    set({ gpuRendering: on });
+    try {
+      localStorage.setItem("unissh.gpuRendering", on ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
   },
   setKeepaliveSecs: (secs) => {
     const v = Number.isFinite(secs) && secs >= 0 ? Math.round(secs) : 15;

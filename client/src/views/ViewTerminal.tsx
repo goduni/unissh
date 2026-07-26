@@ -3,7 +3,7 @@
 // a recursive split layout, and each pane owns its own session.
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { Terminal as Xterm } from "@xterm/xterm";
+import { Terminal as Xterm, type IDisposable, type IMarker } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -285,6 +285,11 @@ function TerminalPane({
   const autoTimerRef = useRef<number | null>(null);
   const previewBufRef = useRef("");
   const previewTimerRef = useRef<number | null>(null);
+  // Held outside the init effect so the cleanup can reach it; the effect owns the
+  // array's contents.
+  const shellMarksRef = useRef<
+    { marker: IMarker; exit?: number; decoration?: IDisposable }[] | null
+  >(null);
   const decoderRef = useRef<TextDecoder | null>(null);
   const previewLinesRef = useRef<string[]>([]);
   const updatePane = useApp((s) => s.updatePane);
@@ -306,6 +311,10 @@ function TerminalPane({
   useEffect(() => {
     if (!hostRef.current) return;
     const isMobile = useApp.getState().device === "mobile";
+    // Read once at mount, like every other option here: switching renderer on a
+    // live pane means tearing down and rebuilding it, which would drop the
+    // scrollback. The setting takes effect on the next pane.
+    const gpuRendering = useApp.getState().gpuRendering;
     // Every xterm option comes from termOptions() — the same function the live settings
     // preview uses — so the preview can never drift from a real pane. termPrefs is read
     // once at mount; later changes reach the pane through the live-apply effect below,
@@ -348,10 +357,14 @@ function TerminalPane({
         ta.setAttribute("spellcheck", "false");
       }
     }
-    // GPU renderer for smoother scrolling on phones. The DOM renderer is fine on
-    // desktop, so we leave the desktop path untouched (no renderer change there).
-    // Mobile-only, feature-detected, and context-loss-safe → falls back to DOM.
-    if (isMobile) {
+    // GPU renderer. Always on for phones (scrolling is visibly smoother there);
+    // opt-in on desktop, where the DOM renderer is already adequate and the WebGL
+    // addon can render nothing at all on some drivers. Feature-detected and
+    // context-loss-safe, so the worst case is falling back to DOM — but a driver
+    // that "works" while painting an empty terminal is not something a probe
+    // catches, which is why desktop stays a deliberate choice rather than a
+    // default nobody asked for.
+    if (isMobile || gpuRendering) {
       try {
         const probe = document.createElement("canvas");
         if (probe.getContext("webgl2") || probe.getContext("webgl")) {
@@ -407,6 +420,63 @@ function TerminalPane({
           : { current: e.resultIndex >= 0 ? e.resultIndex + 1 : 0, total: e.resultCount },
       );
     });
+    // Shell integration (OSC 133, the FinalTerm/iTerm2 sequences most shells can
+    // emit): A marks where a prompt starts, D reports the exit code of the
+    // command that just finished. We keep a marker per prompt so the user can
+    // jump between them, and decorate the prompt of a command that failed.
+    //
+    // This is entirely opt-in on the server side — a shell that emits nothing
+    // simply produces no marks, and everything behaves exactly as before. There
+    // is deliberately no attempt to infer prompts heuristically: guessing wrong
+    // would put a "failed" mark on an innocent line, which is worse than no mark.
+    const shellMarks: { marker: IMarker; exit?: number; decoration?: IDisposable }[] = [];
+    shellMarksRef.current = shellMarks;
+    const disposeMarks = () => {
+      for (const m of shellMarks) {
+        m.decoration?.dispose();
+        m.marker.dispose();
+      }
+      shellMarks.length = 0;
+    };
+    term.parser.registerOscHandler(133, (data) => {
+      // Payloads look like "A", "B", "C", "D", "D;0", "A;aid=..." — only the
+      // first field is the command, and unknown ones are ignored rather than
+      // guessed at.
+      const [kind, ...rest] = data.split(";");
+      if (kind === "A") {
+        const marker = term.registerMarker(0);
+        if (marker) {
+          // Bounded: a long-lived session can run thousands of commands, and an
+          // unbounded marker list is a slow leak in a pane that never closes.
+          if (shellMarks.length >= 500) {
+            const oldest = shellMarks.shift();
+            oldest?.decoration?.dispose();
+            oldest?.marker.dispose();
+          }
+          shellMarks.push({ marker });
+        }
+      } else if (kind === "D") {
+        const last = shellMarks[shellMarks.length - 1];
+        const code = Number.parseInt(rest[0] ?? "", 10);
+        if (last && Number.isFinite(code)) {
+          last.exit = code;
+          if (code !== 0 && !last.decoration) {
+            const dec = term.registerDecoration({ marker: last.marker, x: 0, width: 1 });
+            dec?.onRender((el) => {
+              // A gutter tick, not a colour change on the text: the line itself
+              // is the user's prompt and output, and recolouring it would be us
+              // editing what the server actually printed.
+              el.style.background = "var(--term-fail-mark, #e0574a)";
+              el.style.borderRadius = "1px";
+              el.title = `exit ${code}`;
+            });
+            if (dec) last.decoration = dec;
+          }
+        }
+      }
+      return true;
+    });
+
     // Cmd+F (macOS) / Ctrl+Shift+F opens find; plain Ctrl+F is left to the shell
     // (readline forward-char). Escape closes it. attachCustomKeyEventHandler runs
     // only while THIS terminal has focus, so other panes/tabs are unaffected.
@@ -420,6 +490,24 @@ function TerminalPane({
       }
       if (ev.key === "Escape" && searchOpenRef.current) {
         setSearchOpen(false);
+        return false;
+      }
+      // Jump between prompts. Only bound when the shell actually emits OSC 133 —
+      // otherwise these keys keep whatever meaning the shell gives them, rather
+      // than being swallowed for a feature that would do nothing.
+      if (
+        (ev.key === "ArrowUp" || ev.key === "ArrowDown") &&
+        (ev.metaKey || ev.ctrlKey) &&
+        ev.shiftKey &&
+        shellMarks.length > 0
+      ) {
+        const viewportTop = term.buffer.active.viewportY;
+        const lines = shellMarks.map((m) => m.marker.line).filter((l) => l >= 0);
+        const target =
+          ev.key === "ArrowUp"
+            ? [...lines].reverse().find((l) => l < viewportTop)
+            : lines.find((l) => l > viewportTop);
+        if (target !== undefined) term.scrollToLine(target);
         return false;
       }
       // Keyboard copy. macOS keeps ⌘C (the browser's native copy event handles it)
@@ -489,6 +577,8 @@ function TerminalPane({
       window.removeEventListener("orientationchange", onOrient);
       window.visualViewport?.removeEventListener("resize", refit);
       resultsSub.dispose();
+      disposeMarks();
+      shellMarksRef.current = null;
       term.dispose();
       if (previewTimerRef.current != null) {
         clearTimeout(previewTimerRef.current);
