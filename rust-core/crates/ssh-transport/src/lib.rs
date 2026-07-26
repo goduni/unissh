@@ -47,8 +47,8 @@ pub use client::system_agent_keys;
 pub use client::{
     algorithm_policy, canonical_host_key, fingerprint_openssh, set_algorithm_policy,
     set_keepalive_secs, trust_host_key, AlgorithmPolicy, Auth, AuthPrompter, CommandOutput,
-    ConnectOptions, ExecHandle, ExecSink, ForwardGuard, OutputSink, PromptField, SftpSession,
-    ShellHandle, SshClient, SystemAgentKey,
+    ConnectOptions, ExecHandle, ExecSink, ForwardGuard, KeySource, KnownHosts, OutputSink,
+    PromptField, SftpSession, ShellHandle, SshClient, SystemAgentKey,
 };
 pub use config::{HostSettings, SkipReason, SkippedDirective, SshConfig};
 pub use error::TransportError;

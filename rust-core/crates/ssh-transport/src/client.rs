@@ -21,7 +21,6 @@ use tokio::time::{timeout, Duration};
 use zeroize::Zeroizing;
 
 use unissh_ssh_agent::InMemoryAgent;
-use unissh_storage::Storage;
 
 use crate::error::TransportError;
 
@@ -140,6 +139,75 @@ impl core::fmt::Debug for ConnectOptions {
             .field("auth", &self.auth)
             .field("prompter", &self.prompter.is_some())
             .finish()
+    }
+}
+
+/// Where the transport reads and pins host keys.
+///
+/// A trait rather than `&Storage` so the caller decides how long a lock is held.
+/// The connect path used to be handed the storage handle for the whole
+/// handshake, which forced its owner's lock to stay taken across the network —
+/// and a lock held across `block_on` starves the runtime the handshake needs.
+/// With this, each lookup and each pin takes whatever lock it needs and gives it
+/// straight back.
+///
+/// No `Send + Sync` bound: a rusqlite `Connection` is neither, which would rule
+/// out the plain implementation every test and the CLI rely on. The connect
+/// future is driven by `block_on`, which does not require `Send`.
+pub trait KnownHosts {
+    /// The pinned key for a host, if one was pinned.
+    fn get(&self, host: &str, port: u16) -> Result<Option<Vec<u8>>, TransportError>;
+    /// Pins a key for a host (upsert).
+    fn put(&self, host: &str, port: u16, key: &[u8]) -> Result<(), TransportError>;
+}
+
+/// The keys the transport may authenticate with, and the signatures it may ask
+/// for.
+///
+/// Same reasoning as [`KnownHosts`]: the agent is borrowed only for the instant
+/// of a single operation, not for the duration of a connection. Public halves
+/// cross as OpenSSH text, which is also how they already crossed the ssh-key /
+/// russh version boundary.
+///
+/// `Send + Sync` here and not on [`KnownHosts`]: russh's `Signer` returns a
+/// `Send` future, and `&dyn KeySource` is `Send` only if the trait is `Sync`.
+/// Host-key lookups carry no such constraint, and requiring it there would have
+/// excluded a plain `Storage`, which is `!Sync`.
+pub trait KeySource: Send + Sync {
+    /// The public key for `key_id`, in OpenSSH format.
+    fn public_key_openssh(&self, key_id: &[u8]) -> Option<String>;
+    /// The certificate attached to `key_id`, in OpenSSH format, if any.
+    fn certificate_openssh(&self, key_id: &[u8]) -> Option<String>;
+    /// Signs `data` with `key_id`, returning `(algorithm, signature blob)`. The
+    /// private key never crosses this boundary.
+    fn sign(&self, key_id: &[u8], data: &[u8]) -> Result<(String, Vec<u8>), TransportError>;
+}
+
+/// The obvious implementation for a caller that owns the storage outright —
+/// tests and the CLI, where nothing else contends for it.
+impl KnownHosts for unissh_storage::Storage {
+    fn get(&self, host: &str, port: u16) -> Result<Option<Vec<u8>>, TransportError> {
+        Ok(self.get_known_host(host, port)?)
+    }
+    fn put(&self, host: &str, port: u16, key: &[u8]) -> Result<(), TransportError> {
+        Ok(self.put_known_host(host, port, key)?)
+    }
+}
+
+/// The obvious implementation, so a caller holding the agent directly (tests,
+/// the CLI) needs no wrapper of its own.
+impl KeySource for InMemoryAgent {
+    fn public_key_openssh(&self, key_id: &[u8]) -> Option<String> {
+        self.public_key(key_id).and_then(|k| k.to_openssh().ok())
+    }
+    fn certificate_openssh(&self, key_id: &[u8]) -> Option<String> {
+        self.certificate(key_id).and_then(|c| c.to_openssh().ok())
+    }
+    fn sign(&self, key_id: &[u8], data: &[u8]) -> Result<(String, Vec<u8>), TransportError> {
+        let sig = self
+            .sign(key_id, data)
+            .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
+        Ok((sig.algorithm, sig.signature))
     }
 }
 
@@ -345,12 +413,12 @@ impl SshClient {
     /// Direct connection to a host with authentication and host key TOFU pinning.
     pub async fn connect(
         opts: &ConnectOptions,
-        agent: &InMemoryAgent,
-        storage: &Storage,
+        agent: &dyn KeySource,
+        known_hosts: &dyn KnownHosts,
     ) -> Result<Self, TransportError> {
         log::info!("ssh connect {}@{}:{}", opts.user, opts.host, opts.port);
         let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
-        let mut handle = establish_tcp(opts, storage, remote_forwards.clone()).await?;
+        let mut handle = establish_tcp(opts, known_hosts, remote_forwards.clone()).await?;
         authenticate(&mut handle, opts, agent).await?;
         Ok(SshClient {
             handle: Arc::new(handle),
@@ -364,11 +432,11 @@ impl SshClient {
     pub async fn connect_through(
         chain: &[ConnectOptions],
         target: &ConnectOptions,
-        agent: &InMemoryAgent,
-        storage: &Storage,
+        agent: &dyn KeySource,
+        known_hosts: &dyn KnownHosts,
     ) -> Result<Self, TransportError> {
         if chain.is_empty() {
-            return Self::connect(target, agent, storage).await;
+            return Self::connect(target, agent, known_hosts).await;
         }
 
         log::info!(
@@ -383,7 +451,7 @@ impl SshClient {
 
         // The first jump — over TCP.
         let mut first =
-            establish_tcp(&chain[0], storage, Arc::new(Mutex::new(HashMap::new()))).await?;
+            establish_tcp(&chain[0], known_hosts, Arc::new(Mutex::new(HashMap::new()))).await?;
         authenticate(&mut first, &chain[0], agent).await?;
         handles.push(first);
 
@@ -407,7 +475,7 @@ impl SshClient {
             } else {
                 Arc::new(Mutex::new(HashMap::new()))
             };
-            let mut next = establish_stream(stream, hop, storage, rf).await?;
+            let mut next = establish_stream(stream, hop, known_hosts, rf).await?;
             authenticate(&mut next, hop, agent).await?;
             handles.push(next);
         }
@@ -810,10 +878,10 @@ fn client_config(algorithms: AlgorithmPolicy) -> Arc<Config> {
 
 async fn establish_tcp(
     opts: &ConnectOptions,
-    storage: &Storage,
+    known_hosts: &dyn KnownHosts,
     remote_forwards: RemoteForwards,
 ) -> Result<Handle<ClientHandler>, TransportError> {
-    let expected = storage.get_known_host(&opts.host, opts.port)?;
+    let expected = known_hosts.get(&opts.host, opts.port)?;
     let observed = Arc::new(Mutex::new(None));
     let handler = ClientHandler {
         expected_host_key: expected.clone(),
@@ -832,7 +900,7 @@ async fn establish_tcp(
     .map_err(|_| TransportError::HandshakeTimeout)?;
     match connected {
         Ok(handle) => {
-            pin_tofu(storage, &opts.host, opts.port, &expected, &observed)?;
+            pin_tofu(known_hosts, &opts.host, opts.port, &expected, &observed)?;
             Ok(handle)
         }
         Err(e) => Err(classify_connect_error(
@@ -844,13 +912,13 @@ async fn establish_tcp(
 async fn establish_stream<R>(
     stream: R,
     opts: &ConnectOptions,
-    storage: &Storage,
+    known_hosts: &dyn KnownHosts,
     remote_forwards: RemoteForwards,
 ) -> Result<Handle<ClientHandler>, TransportError>
 where
     R: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let expected = storage.get_known_host(&opts.host, opts.port)?;
+    let expected = known_hosts.get(&opts.host, opts.port)?;
     let observed = Arc::new(Mutex::new(None));
     let handler = ClientHandler {
         expected_host_key: expected.clone(),
@@ -865,7 +933,7 @@ where
     .map_err(|_| TransportError::HandshakeTimeout)?;
     match connected {
         Ok(handle) => {
-            pin_tofu(storage, &opts.host, opts.port, &expected, &observed)?;
+            pin_tofu(known_hosts, &opts.host, opts.port, &expected, &observed)?;
             Ok(handle)
         }
         Err(e) => Err(classify_connect_error(
@@ -875,7 +943,7 @@ where
 }
 
 fn pin_tofu(
-    storage: &Storage,
+    known_hosts: &dyn KnownHosts,
     host: &str,
     port: u16,
     expected: &Option<Vec<u8>>,
@@ -883,7 +951,7 @@ fn pin_tofu(
 ) -> Result<(), TransportError> {
     if expected.is_none() {
         if let Some(key) = observed.lock().expect("mutex").clone() {
-            storage.put_known_host(host, port, &key)?;
+            known_hosts.put(host, port, &key)?;
         }
     }
     Ok(())
@@ -964,7 +1032,7 @@ pub fn fingerprint_openssh(openssh: &[u8]) -> String {
 pub async fn trust_host_key(
     host: &str,
     port: u16,
-    storage: &Storage,
+    known_hosts: &dyn KnownHosts,
     expected_fingerprint: &str,
 ) -> Result<String, TransportError> {
     let observed = Arc::new(Mutex::new(None));
@@ -1007,14 +1075,14 @@ pub async fn trust_host_key(
         });
     }
     // put_known_host does an UPSERT → re-pinning (overwrite).
-    storage.put_known_host(host, port, &key)?;
+    known_hosts.put(host, port, &key)?;
     Ok(got)
 }
 
 async fn authenticate(
     handle: &mut Handle<ClientHandler>,
     opts: &ConnectOptions,
-    agent: &InMemoryAgent,
+    agent: &dyn KeySource,
 ) -> Result<(), TransportError> {
     // The whole authentication phase is under a hard deadline (a malicious/hung
     // server must not hang the call forever) — widened when a person may be
@@ -1037,12 +1105,9 @@ async fn authenticate(
                 // russh::auth::Signer. Out of the agent — only the public key /
                 // certificate (bridged into russh::keys via the stable OpenSSH format,
                 // since ssh-agent is on ssh-key 0.6 and russh is on 0.7).
-                let public06 = agent
-                    .public_key(key_id)
+                let public_openssh = agent
+                    .public_key_openssh(key_id)
                     .ok_or_else(|| TransportError::KeyEncoding("key not in agent".into()))?;
-                let public_openssh = public06
-                    .to_openssh()
-                    .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
                 let russh_public = PublicKey::from_openssh(&public_openssh)
                     .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
 
@@ -1060,11 +1125,8 @@ async fn authenticate(
 
                 // If a certificate is attached to the key — cert-based authentication
                 // (also via Signer, the key does not leave the agent).
-                match agent.certificate(key_id) {
-                    Some(cert06) => {
-                        let cert_openssh = cert06
-                            .to_openssh()
-                            .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
+                match agent.certificate_openssh(key_id) {
+                    Some(cert_openssh) => {
                         let russh_cert = russh::keys::Certificate::from_openssh(&cert_openssh)
                             .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
                         handle
@@ -1427,7 +1489,7 @@ impl Signer for SystemAgentSigner {
 /// exporting the private key. The agent signs the authentication data, and the
 /// result is wrapped in the SSH signature format.
 struct AgentSigner<'a> {
-    agent: &'a InMemoryAgent,
+    agent: &'a dyn KeySource,
     key_id: Vec<u8>,
 }
 
@@ -1441,9 +1503,9 @@ impl Signer for AgentSigner<'_> {
         to_sign: Vec<u8>,
     ) -> Result<Vec<u8>, TransportError> {
         // The agent signs the whole authentication buffer (session_id || request).
-        let sig = self.agent.sign(&self.key_id, &to_sign)?;
-        let name = sig.algorithm.as_bytes();
-        let raw = &sig.signature;
+        let (algorithm, raw) = self.agent.sign(&self.key_id, &to_sign)?;
+        let name = algorithm.as_bytes();
+        let raw = &raw;
 
         // russh expects: to_sign ++ string( string(alg) || string(sig) ).
         let inner_len = 4 + name.len() + 4 + raw.len();

@@ -2664,25 +2664,34 @@ impl Core {
         port: u16,
         expected_fingerprint: String,
     ) -> Result<String, FfiError> {
-        self.with_state(|state| {
-            self.rt
-                .block_on(trust_host_key(
-                    &host,
-                    port,
-                    &state.storage,
-                    &expected_fingerprint,
-                ))
-                .map_err(|e| match e {
-                    unissh_ssh_transport::TransportError::FingerprintMismatch { got, .. } => {
-                        FfiError::HostKeyMismatch {
-                            host: host.clone(),
-                            port,
-                            fingerprint: got,
-                        }
+        // Same reason as the connect path: this re-pin makes a fresh connection
+        // to read the key back, and holding the core lock across that network
+        // round-trip would freeze every other call for its duration. The
+        // unlocked check is explicit because the adapter below only notices a
+        // locked core once it is asked for something.
+        if !self.is_unlocked() {
+            return Err(FfiError::Locked);
+        }
+        let known_hosts = StateKnownHosts {
+            state: Arc::clone(&self.state),
+        };
+        self.rt
+            .block_on(trust_host_key(
+                &host,
+                port,
+                &known_hosts,
+                &expected_fingerprint,
+            ))
+            .map_err(|e| match e {
+                unissh_ssh_transport::TransportError::FingerprintMismatch { got, .. } => {
+                    FfiError::HostKeyMismatch {
+                        host: host.clone(),
+                        port,
+                        fingerprint: got,
                     }
-                    other => map_transport_err(other),
-                })
-        })
+                }
+                other => map_transport_err(other),
+            })
     }
 
     /// Changes the instance master password (re-wraps the keyset under a new Unlock Key).
@@ -5439,6 +5448,83 @@ impl Core {
     }
 }
 
+/// Host-key store backed by the shared core state.
+///
+/// The point of this indirection: each lookup and each pin takes the core lock
+/// and gives it straight back. Before, the connect path handed `&Storage`
+/// straight to the transport, which meant the lock had to stay held for the
+/// whole handshake — and a lock held across `block_on` starves the runtime that
+/// same handshake needs to finish.
+struct StateKnownHosts {
+    state: Arc<Mutex<Option<CoreState>>>,
+}
+
+impl unissh_ssh_transport::KnownHosts for StateKnownHosts {
+    fn get(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<Option<Vec<u8>>, unissh_ssh_transport::TransportError> {
+        let guard = lock_recover(&self.state);
+        let st = guard.as_ref().ok_or_else(locked_mid_connect)?;
+        Ok(st.storage.get_known_host(host, port)?)
+    }
+
+    fn put(
+        &self,
+        host: &str,
+        port: u16,
+        key: &[u8],
+    ) -> Result<(), unissh_ssh_transport::TransportError> {
+        let guard = lock_recover(&self.state);
+        let st = guard.as_ref().ok_or_else(locked_mid_connect)?;
+        Ok(st.storage.put_known_host(host, port, key)?)
+    }
+}
+
+/// Signing source backed by the shared core state, on the same terms.
+struct StateKeySource {
+    state: Arc<Mutex<Option<CoreState>>>,
+}
+
+impl unissh_ssh_transport::KeySource for StateKeySource {
+    fn public_key_openssh(&self, key_id: &[u8]) -> Option<String> {
+        let guard = lock_recover(&self.state);
+        let st = guard.as_ref()?;
+        st.agent
+            .public_key(key_id)
+            .and_then(|k| k.to_openssh().ok())
+    }
+
+    fn certificate_openssh(&self, key_id: &[u8]) -> Option<String> {
+        let guard = lock_recover(&self.state);
+        let st = guard.as_ref()?;
+        st.agent
+            .certificate(key_id)
+            .and_then(|c| c.to_openssh().ok())
+    }
+
+    fn sign(
+        &self,
+        key_id: &[u8],
+        data: &[u8],
+    ) -> Result<(String, Vec<u8>), unissh_ssh_transport::TransportError> {
+        let guard = lock_recover(&self.state);
+        let st = guard.as_ref().ok_or_else(locked_mid_connect)?;
+        let sig = st.agent.sign(key_id, data)?;
+        Ok((sig.algorithm, sig.signature))
+    }
+}
+
+/// The core was locked while a connection was still being established — the user
+/// locked the app mid-handshake. Reported rather than papered over: the
+/// connection cannot continue without the keys that just went away.
+fn locked_mid_connect() -> unissh_ssh_transport::TransportError {
+    unissh_ssh_transport::TransportError::KeyEncoding(
+        "the core was locked while connecting".to_string(),
+    )
+}
+
 /// Connect + authentication against the shared unwrapped state (under its
 /// lock). Used by both [`Core::connect_session`] and [`ReconnectingSession`] —
 /// the latter re-resolves credentials from the vault on every reconnect (plaintext is not
@@ -5509,11 +5595,30 @@ fn connect_with_state(
         ConnectOptions::new(host, port, user, target_auth),
         prompter.as_ref(),
     );
+    // Everything that needed the unwrapped state has happened: keys are in the
+    // agent, vault passwords are decrypted into the options. Drop the lock
+    // *before* the network phase.
+    //
+    // This is the fix for the whole class of problem. Holding it across
+    // `block_on` meant a handshake — 30 seconds, or minutes when a person is
+    // typing a one-time code or touching a token — froze every other call, and
+    // any callback that needed the same lock from a runtime thread deadlocked
+    // outright. The transport now reaches storage and the agent through
+    // `KnownHosts` / `KeySource`, which take the lock per operation and release
+    // it immediately.
+    drop(guard);
+
+    let known_hosts = StateKnownHosts {
+        state: Arc::clone(state),
+    };
+    let keys = StateKeySource {
+        state: Arc::clone(state),
+    };
     rt.block_on(SshClient::connect_through(
         &chain,
         &target,
-        &st.agent,
-        &st.storage,
+        &keys,
+        &known_hosts,
     ))
     .map_err(map_transport_err)
 }

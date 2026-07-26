@@ -3807,3 +3807,80 @@ fn a_recording_is_written_off_the_runtime() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+/// The core lock must be free while a connection is being established.
+///
+/// This is the property the whole KnownHosts/KeySource split exists for. Before,
+/// the lock was held across the entire handshake, so every other call queued
+/// behind it — and a callback needing the same lock from a runtime thread
+/// deadlocked outright.
+///
+/// The test drives a real handshake against a real sshd and, from another
+/// thread, hammers a method that needs the lock. If the lock were still held
+/// across the network phase those calls would stall until the connect finished;
+/// here they have to keep completing while it runs.
+#[test]
+fn the_core_lock_is_free_during_a_handshake() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    let sshd = TestSshd::start(&pubkey);
+
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    // The longest a call had to wait for the lock. This, not a simple count, is
+    // the measurement that matters: if the lock were held across the handshake
+    // there would be exactly one gap the length of the whole connect.
+    let worst_wait_us = std::sync::Arc::new(AtomicUsize::new(0));
+    let prober = std::thread::spawn({
+        let core = core.clone();
+        let stop = stop.clone();
+        let worst = worst_wait_us.clone();
+        move || {
+            while !stop.load(Ordering::Relaxed) {
+                let t = Instant::now();
+                core.list_vaults().unwrap();
+                let waited = t.elapsed().as_micros() as usize;
+                worst.fetch_max(waited, Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    });
+
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let connect_started = Instant::now();
+    let session = core
+        .open_session(
+            "127.0.0.1".to_string(),
+            sshd.port,
+            "root".to_string(),
+            agent_auth("v", "key"),
+            vec![],
+            "xterm".to_string(),
+            80,
+            24,
+            observer,
+            None,
+        )
+        .unwrap();
+    let connect_took = connect_started.elapsed();
+
+    stop.store(true, Ordering::Relaxed);
+    prober.join().unwrap();
+    session.close().unwrap();
+
+    let worst = Duration::from_micros(worst_wait_us.load(Ordering::Relaxed) as u64);
+    assert!(
+        worst * 2 < connect_took,
+        "a core call waited {worst:?} while the handshake took {connect_took:?} — the lock \
+         is still being held across the network phase"
+    );
+}
