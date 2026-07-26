@@ -298,6 +298,19 @@ export const importPuttySessions = (vaultId: string, regText: string) =>
   afterMut(vaultId, invoke<HostImportReport>("import_putty_sessions", { vaultId, regText }));
 
 // ── groups ─────────────────────────────────────────────────────
+export interface SystemAgentKey {
+  /** OpenSSH public-key line — the handle that selects this identity. */
+  publicKey: string;
+  /** The agent's comment: usually a filename or a token label. */
+  comment: string;
+  /** e.g. `sk-ssh-ed25519@openssh.com` for a FIDO token. */
+  algorithm: string;
+}
+
+/** What the OS ssh-agent currently holds. Needs no unlock — this reads the
+ *  agent, not the vault. */
+export const systemAgentKeys = () => invoke<SystemAgentKey[]>("system_agent_keys");
+
 export interface Snippet {
   snippetId: string;
   label: string;

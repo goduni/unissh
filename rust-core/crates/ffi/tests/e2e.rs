@@ -3672,3 +3672,75 @@ fn no_recording_request_records_nothing() {
     std::thread::sleep(Duration::from_millis(400));
     assert!(core.list_recordings("v".to_string()).unwrap().is_empty());
 }
+
+/// A profile can carry a system-agent identity, and it survives a round-trip.
+///
+/// The public key is stored in the clear inside the (encrypted) profile because
+/// it is a handle, not a secret — the same status as a key item id.
+#[test]
+fn profile_round_trips_a_system_agent_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+
+    let pub_line = "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QHNzaC5jb20AAAA token";
+    core.save_connection(
+        "v".to_string(),
+        unissh_ffi::ConnectionProfile {
+            profile_id: "gw".to_string(),
+            uid: String::new(),
+            label: "gw".to_string(),
+            host: "gw.example.com".to_string(),
+            port: 22,
+            user: "me".to_string(),
+            auth: unissh_ffi::ProfileAuth::SystemAgent {
+                public_key: pub_line.to_string(),
+            },
+            username_template: None,
+            jumps: vec![],
+            tags: vec![],
+            startup_snippet_ids: vec![],
+            record_sessions: false,
+        },
+    )
+    .unwrap();
+
+    let read = core
+        .list_connections("v".to_string())
+        .unwrap()
+        .into_iter()
+        .find(|c| c.profile_id == "gw")
+        .expect("saved profile");
+    match read.auth {
+        unissh_ffi::ProfileAuth::SystemAgent { public_key } => {
+            assert_eq!(public_key, pub_line)
+        }
+        _ => panic!("expected ProfileAuth::SystemAgent"),
+    }
+}
+
+/// With no agent reachable, a system-agent connect fails with a message that
+/// says the agent is the problem — not a generic authentication failure that
+/// would send the user to check their key.
+#[test]
+fn system_agent_without_an_agent_reports_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+
+    // Point SSH_AUTH_SOCK at nothing so the lookup fails deterministically
+    // rather than depending on whatever the test machine happens to run.
+    let missing = dir.path().join("no-such-agent.sock");
+    // SAFETY: single-threaded test setup; no other thread reads the environment
+    // between the set and the call below.
+    unsafe { std::env::set_var("SSH_AUTH_SOCK", &missing) };
+
+    let err = core.system_agent_keys().expect_err("no agent is listening");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("agent"),
+        "the error must name the agent, got: {msg}"
+    );
+}

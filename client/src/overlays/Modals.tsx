@@ -168,7 +168,7 @@ const slug = (s: string) =>
     .replace(/^-+|-+$/g, "") || "host";
 
 // ── New / edit host ────────────────────────────────────────────
-type AuthSeg = "key" | "password" | "ask" | "personal";
+type AuthSeg = "key" | "password" | "ask" | "personal" | "systemAgent";
 
 /** Sentinel `groupId` meaning "create a new group (named `newGroupName`) on save".
  *  Group ids are `slug-timestamp`, so this can never collide with a real one. */
@@ -218,9 +218,42 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           ? "password"
           : edit.auth.type === "personal"
             ? "personal"
-            : "ask"
+            : edit.auth.type === "systemAgent"
+              ? "systemAgent"
+              : "ask"
       : "key",
   );
+  // The identity chosen from the OS agent, as its public-key line.
+  const [agentPublicKey, setAgentPublicKey] = useState<string>(
+    edit?.auth.type === "systemAgent" ? edit.auth.publicKey : "",
+  );
+  // Loaded lazily, only when this auth kind is selected: it talks to the agent,
+  // and a user who never picks it should not pay for a socket connection — nor
+  // see an error about an agent they are not using.
+  const [agentKeys, setAgentKeys] = useState<api.SystemAgentKey[] | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
+  useEffect(() => {
+    if (auth !== "systemAgent" || agentKeys !== null) return;
+    let cancelled = false;
+    void api
+      .systemAgentKeys()
+      .then((keys) => {
+        if (cancelled) return;
+        setAgentKeys(keys);
+        // Pre-select when there is exactly one — the common case with a single
+        // token plugged in.
+        if (keys.length === 1 && !agentPublicKey) setAgentPublicKey(keys[0].publicKey);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setAgentKeys([]);
+          setAgentError(apiErrorMessage(e));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth, agentKeys, agentPublicKey]);
   const [usernameTemplate, setUsernameTemplate] = useState(edit?.usernameTemplate ?? "");
   // Inline personal-identity binding (auth = "personal"): pick the identity right
   // here instead of the old "no creds" dead-end + a separate bind modal.
@@ -523,6 +556,12 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       // No creds stored here — the member logs in with their personal identity
       // via a binding (B4). Nothing to collect at save time.
       profileAuth = { type: "personal" };
+    } else if (auth === "systemAgent") {
+      if (!agentPublicKey) {
+        ctx.toast(t("modals.host.selectAgentKey"), "warn");
+        return;
+      }
+      profileAuth = { type: "systemAgent", publicKey: agentPublicKey };
     } else {
       profileAuth = { type: "promptPassword" };
     }
@@ -811,6 +850,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               {seg("password", t("modals.host.authPassword"), "lock")}
               {seg("ask", t("modals.host.authAsk"), "eye")}
               {seg("personal", t("modals.host.authPersonal"), "fingerprint")}
+              {seg("systemAgent", t("modals.host.authSystemAgent"), "shieldcheck")}
             </div>
             <div style={{ marginTop: 10 }}>
               {auth === "key" && (
@@ -961,6 +1001,69 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               {auth === "ask" && (
                 <div style={{ fontSize: 13, color: p.txt3, padding: "2px 2px" }}>
                   {t("modals.host.askHint")}
+                </div>
+              )}
+              {auth === "systemAgent" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5 }}>
+                    {t("modals.host.agentExplain")}
+                  </div>
+                  {agentKeys === null ? (
+                    <Spinner />
+                  ) : agentKeys.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: p.amber, lineHeight: 1.5 }}>
+                      {agentError ?? t("modals.host.agentEmpty")}
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {agentKeys.map((k) => {
+                        const on = k.publicKey === agentPublicKey;
+                        return (
+                          <button
+                            key={k.publicKey}
+                            type="button"
+                            onClick={() => setAgentPublicKey(k.publicKey)}
+                            style={{
+                              ...BTN_RESET,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              textAlign: "left",
+                              padding: "8px 10px",
+                              borderRadius: 8,
+                              border: `1px solid ${on ? p.accentText : p.line}`,
+                              background: on ? rgba(p.accentText, 0.08) : "transparent",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <Icon
+                              name={k.algorithm.startsWith("sk-") ? "shieldcheck" : "key"}
+                              size={14}
+                              color={on ? p.accentText : p.txt3}
+                            />
+                            <span style={{ minWidth: 0, flex: 1 }}>
+                              <span style={{ display: "block", fontSize: 13 }}>
+                                {k.comment || t("modals.host.agentNoComment")}
+                              </span>
+                              <span
+                                style={{
+                                  display: "block",
+                                  fontFamily: MONO,
+                                  fontSize: 11,
+                                  color: p.txt3,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {k.algorithm}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
               {auth === "personal" &&

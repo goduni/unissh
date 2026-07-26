@@ -542,6 +542,13 @@ pub enum ProfileAuth {
     },
     /// The password is prompted from the user on every connection.
     PromptPassword,
+    /// By a key in the operating system's ssh-agent — the hardware-token route.
+    /// The public key is a handle, not a secret, so it is stored in the clear
+    /// inside the (still encrypted) profile like any other reference.
+    SystemAgent {
+        /// OpenSSH public-key line naming which identity to use.
+        public_key: String,
+    },
     /// By a personal identity: a shared profile has NO stored credentials; each member
     /// links their own identity via a binding in the personal vault (B3). At connect time
     /// the credentials and username are taken from the personal vault ([`Core::resolve_personal_auth`]),
@@ -591,6 +598,10 @@ struct StoredProfile {
     startup_snippet_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     record_sessions: bool,
+    /// OpenSSH public-key line selecting an identity in the OS ssh-agent. A
+    /// handle, not a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_agent_public_key: Option<String>,
     /// Forward compatibility: unknown fields (added by a future version)
     /// are preserved on round-trip rather than dropped. Otherwise an OLDER client would
     /// read the profile without the new field (e.g. `personal`), and on re-
@@ -693,6 +704,17 @@ pub enum AuthMethod {
         vault_id: String,
         /// Id of the password item in the vault.
         password_item_id: String,
+    },
+    /// By a key held in the **operating system's** ssh-agent.
+    ///
+    /// The route to hardware: FIDO/U2F tokens, PKCS#11 smart cards, Secure
+    /// Enclave keys, 1Password and gpg-agent all speak the agent protocol, and
+    /// the agent signs. For these hosts the key is outside the vault and outside
+    /// our control — a deliberate trade, since it is what makes a token usable
+    /// at all, and the key still never leaves *the agent*.
+    SystemAgent {
+        /// OpenSSH public-key line naming which identity to use.
+        public_key: String,
     },
 }
 
@@ -3633,6 +3655,30 @@ impl Core {
         })
     }
 
+    // --- system ssh-agent ---
+
+    /// Keys the operating system's ssh-agent currently holds.
+    ///
+    /// The picker's data source. It exists so a user chooses a key they can see
+    /// is loaded rather than typing a fingerprint and hoping — and so "my token
+    /// isn't plugged in" is visible before a connection fails.
+    ///
+    /// Needs no unlock: this reads the OS agent, not the vault.
+    pub fn system_agent_keys(&self) -> Result<Vec<SystemAgentKeyFfi>, FfiError> {
+        let keys = self
+            .rt
+            .block_on(unissh_ssh_transport::system_agent_keys())
+            .map_err(map_transport_err)?;
+        Ok(keys
+            .into_iter()
+            .map(|k| SystemAgentKeyFfi {
+                public_key: k.public_key,
+                comment: k.comment,
+                algorithm: k.algorithm,
+            })
+            .collect())
+    }
+
     // --- session recordings ---
 
     /// Recorded sessions in a vault, newest first, without their bodies.
@@ -4102,13 +4148,14 @@ impl Core {
             } else {
                 uid
             };
-            let (key_item_id, password_item_id, personal) = match auth {
-                ProfileAuth::Key { key_item_id } => (Some(key_item_id), None, false),
+            let (key_item_id, password_item_id, personal, system_agent_public_key) = match auth {
+                ProfileAuth::Key { key_item_id } => (Some(key_item_id), None, false, None),
                 ProfileAuth::VaultPassword { password_item_id } => {
-                    (None, Some(password_item_id), false)
+                    (None, Some(password_item_id), false, None)
                 }
-                ProfileAuth::PromptPassword => (None, None, false),
-                ProfileAuth::Personal => (None, None, true),
+                ProfileAuth::PromptPassword => (None, None, false, None),
+                ProfileAuth::Personal => (None, None, true, None),
+                ProfileAuth::SystemAgent { public_key } => (None, None, false, Some(public_key)),
             };
             let mut stored = StoredProfile {
                 uid: Some(uid),
@@ -4127,6 +4174,7 @@ impl Core {
                 tags,
                 startup_snippet_ids,
                 record_sessions,
+                system_agent_public_key,
                 extra: BTreeMap::new(),
             };
             ensure_item_type(
@@ -4744,6 +4792,7 @@ impl Core {
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
+                    system_agent_public_key: None,
                     extra: std::collections::BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
@@ -4937,6 +4986,7 @@ impl Core {
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
+                    system_agent_public_key: None,
                     extra: std::collections::BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
@@ -5379,6 +5429,11 @@ fn connect_with_state(
                         vault_id: hr.vault_id.clone(),
                         password_item_id,
                     },
+                    // A system-agent key IS usable as a hop: the agent signs for
+                    // the bastion exactly as it would for a target.
+                    ProfileAuth::SystemAgent { public_key } => {
+                        AuthMethod::SystemAgent { public_key }
+                    }
                     ProfileAuth::PromptPassword | ProfileAuth::Personal => {
                         return Err(FfiError::other(
                             "referenced bastion profile has no stored credential usable as a hop",
@@ -5436,6 +5491,11 @@ fn resolve_auth(state: &mut CoreState, auth: &AuthMethod) -> Result<Auth, FfiErr
             password_item_id,
         } => Auth::Password {
             password: read_password_item(state, vault_id, password_item_id)?,
+        },
+        // Nothing to load: the key is the OS agent's, and all we pass along is
+        // which one to ask for.
+        AuthMethod::SystemAgent { public_key } => Auth::SystemAgent {
+            public_key: public_key.clone(),
         },
     })
 }
@@ -5615,6 +5675,7 @@ fn profile_auth_to_method(vault_id: &str, auth: ProfileAuth) -> AuthMethod {
         ProfileAuth::PromptPassword => AuthMethod::Password {
             password: String::new(),
         },
+        ProfileAuth::SystemAgent { public_key } => AuthMethod::SystemAgent { public_key },
         // Personal normally does NOT reach here: the fan-out paths (resolve_group,
         // select_targets_by_tags) exclude it before profile_to_target, and
         // an individual connect goes through resolve_personal_auth (with an
@@ -5911,6 +5972,16 @@ fn jump_to_stored(j: JumpHost) -> Result<StoredJump, FfiError> {
                     "inline password cannot be stored in a profile; save it as a vault item",
                 ))
             }
+            // A stored jump hop references vault items; a system-agent identity
+            // is not one. Refused with its own message rather than folded into
+            // the password error, which would send the user looking for a
+            // password they never set.
+            AuthMethod::SystemAgent { .. } => {
+                return Err(FfiError::other(
+                    "a system-agent key cannot be stored on an inline jump hop; \
+                     save the bastion as its own host and reference it",
+                ))
+            }
         }
     };
     Ok(StoredJump {
@@ -6005,7 +6076,9 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         record_sessions: s.record_sessions,
         username_template: s.username_template,
         // Personal takes priority over key/password references (Personal has none anyway).
-        auth: if s.personal {
+        auth: if let Some(public_key) = s.system_agent_public_key {
+            ProfileAuth::SystemAgent { public_key }
+        } else if s.personal {
             ProfileAuth::Personal
         } else {
             match (s.password_item_id, s.key_item_id) {
@@ -6302,6 +6375,17 @@ fn split_host_port(s: &str) -> (String, u16) {
         Some((h, p)) => (h.to_string(), p.parse().unwrap_or(22)),
         None => (s.to_string(), 22),
     }
+}
+
+/// One key the operating system's ssh-agent is offering.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SystemAgentKeyFfi {
+    /// OpenSSH public-key line — the handle used to select this identity.
+    pub public_key: String,
+    /// The agent's comment, usually a filename or a token label.
+    pub comment: String,
+    /// Algorithm, e.g. `sk-ssh-ed25519@openssh.com` for a FIDO token.
+    pub algorithm: String,
 }
 
 /// A recorded session, without its body — for listing.
@@ -8096,7 +8180,9 @@ mod tests {
         let (key_item_id, password_item_id) = match prof.auth.clone() {
             ProfileAuth::Key { key_item_id } => (Some(key_item_id), None),
             ProfileAuth::VaultPassword { password_item_id } => (None, Some(password_item_id)),
-            ProfileAuth::PromptPassword | ProfileAuth::Personal => (None, None),
+            ProfileAuth::PromptPassword
+            | ProfileAuth::Personal
+            | ProfileAuth::SystemAgent { .. } => (None, None),
         };
         let stored = StoredProfile {
             uid: Some(prof.uid.clone()),
@@ -8118,6 +8204,7 @@ mod tests {
             extra: std::collections::BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
+            system_agent_public_key: None,
         };
         let json = serde_json::to_string(&stored).unwrap();
         let back: StoredProfile = serde_json::from_str(&json).unwrap();
@@ -8208,6 +8295,7 @@ mod tests {
             extra: std::collections::BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
+            system_agent_public_key: None,
         };
         let prof = stored_to_profile("va", "p".into(), sp);
         let hr = prof.jumps[0].hop_ref.as_ref().unwrap();

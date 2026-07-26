@@ -67,6 +67,19 @@ pub enum TransportError {
     #[error("authentication failed")]
     AuthFailed,
 
+    /// The operating system's ssh-agent could not be reached or refused.
+    #[error("system ssh-agent: {0}")]
+    SystemAgent(String),
+
+    /// The system agent is running but does not hold the requested key.
+    ///
+    /// Separate from a signing failure because the fix is different and obvious
+    /// once named: `ssh-add` the key, or plug the token in.
+    #[error(
+        "the system ssh-agent does not hold this key — add it with `ssh-add`, or connect the token"
+    )]
+    SystemAgentKeyMissing,
+
     /// The server asked something only the user can answer — a one-time code, a
     /// push confirmation — and no prompter was attached to the connection.
     /// Distinct from [`AuthFailed`](Self::AuthFailed) on purpose: the credentials

@@ -54,6 +54,19 @@ pub enum Auth {
         /// Password.
         password: Zeroizing<String>,
     },
+    /// With a key held by the **operating system's** ssh-agent, selected by its
+    /// public key.
+    ///
+    /// This is how hardware reaches us: a FIDO/U2F token, a PKCS#11 smart card,
+    /// a Secure Enclave key, 1Password or gpg-agent all speak the agent
+    /// protocol, and the agent does the signing. The trade is explicit — for
+    /// these hosts the key is outside our control, so the guarantee that a key
+    /// never leaves the core does not apply. It never leaves *the agent*
+    /// instead, which is the property those tools exist to provide.
+    SystemAgent {
+        /// The identity to use, as an OpenSSH public key line.
+        public_key: String,
+    },
 }
 
 impl core::fmt::Debug for Auth {
@@ -64,6 +77,10 @@ impl core::fmt::Debug for Auth {
             Auth::Password { .. } => f
                 .debug_struct("Password")
                 .field("password", &"<redacted>")
+                .finish(),
+            Auth::SystemAgent { public_key } => f
+                .debug_struct("SystemAgent")
+                .field("public_key", public_key)
                 .finish(),
         }
     }
@@ -1064,6 +1081,38 @@ async fn authenticate(
                     }
                 }
             }
+            Auth::SystemAgent { public_key } => {
+                // The OS agent holds the key; we only say which one and hand it
+                // the bytes. Nothing here ever sees private material — that is
+                // the whole point of the agent protocol, and it is what makes a
+                // hardware token reachable at all.
+                let public = PublicKey::from_openssh(public_key.trim())
+                    .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
+                let hash_alg = if public.algorithm().is_rsa() {
+                    Some(HashAlg::Sha512)
+                } else {
+                    None
+                };
+                let mut agent = SystemAgent::connect().await?;
+                // Refuse early and clearly when the agent does not hold the key.
+                // Otherwise the server sees a signature it cannot verify and
+                // reports a generic auth failure, sending the user to check the
+                // wrong thing entirely.
+                let identities = agent.identities().await?;
+                let known = identities.iter().any(|id| match id {
+                    AgentIdentity::PublicKey { key, .. } => key == &public,
+                    AgentIdentity::Certificate { certificate, .. } => {
+                        certificate.public_key() == public.key_data()
+                    }
+                });
+                if !known {
+                    return Err(TransportError::SystemAgentKeyMissing);
+                }
+                let mut signer = SystemAgentSigner { agent };
+                handle
+                    .authenticate_publickey_with(opts.user.clone(), public, hash_alg, &mut signer)
+                    .await?
+            }
             Auth::Password { password } => {
                 // Residual risk: russh::authenticate_password (and kbd-respond)
                 // take a String by value and do not zeroize it — a copy of the password
@@ -1095,7 +1144,7 @@ async fn authenticate(
         Ok::<AuthResult, TransportError>(if escalate {
             let password = match &opts.auth {
                 Auth::Password { password } => Some(password),
-                Auth::Agent { .. } => None,
+                Auth::Agent { .. } | Auth::SystemAgent { .. } => None,
             };
             keyboard_interactive(handle, &opts.user, password, opts.prompter.as_ref()).await?
         } else {
@@ -1251,6 +1300,120 @@ async fn ask_user(
         return Err(TransportError::AuthCancelled);
     }
     Ok(answers)
+}
+
+/// A connection to the operating system's ssh-agent.
+///
+/// An enum rather than a generic because the transport genuinely differs per
+/// platform — a Unix socket named by `SSH_AUTH_SOCK`, a named pipe on Windows —
+/// and spelling that out keeps the platform difference visible instead of
+/// hidden behind a type parameter that only ever has one inhabitant per build.
+enum SystemAgent {
+    #[cfg(unix)]
+    Uds(russh::keys::agent::client::AgentClient<tokio::net::UnixStream>),
+    #[cfg(windows)]
+    Pipe(russh::keys::agent::client::AgentClient<tokio::net::windows::named_pipe::NamedPipeClient>),
+}
+
+/// The pipe Windows' own OpenSSH agent listens on — the one `ssh-add` talks to.
+#[cfg(windows)]
+const WINDOWS_OPENSSH_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+
+impl SystemAgent {
+    async fn connect() -> Result<Self, TransportError> {
+        #[cfg(unix)]
+        {
+            russh::keys::agent::client::AgentClient::connect_env()
+                .await
+                .map(SystemAgent::Uds)
+                .map_err(|e| TransportError::SystemAgent(e.to_string()))
+        }
+        #[cfg(windows)]
+        {
+            russh::keys::agent::client::AgentClient::connect_named_pipe(WINDOWS_OPENSSH_AGENT_PIPE)
+                .await
+                .map(SystemAgent::Pipe)
+                .map_err(|e| TransportError::SystemAgent(e.to_string()))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Err(TransportError::SystemAgent(
+                "no ssh-agent transport on this platform".into(),
+            ))
+        }
+    }
+
+    async fn identities(&mut self) -> Result<Vec<AgentIdentity>, TransportError> {
+        let r = match self {
+            #[cfg(unix)]
+            SystemAgent::Uds(c) => c.request_identities().await,
+            #[cfg(windows)]
+            SystemAgent::Pipe(c) => c.request_identities().await,
+        };
+        r.map_err(|e| TransportError::SystemAgent(e.to_string()))
+    }
+}
+
+/// One key the operating system's ssh-agent is offering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemAgentKey {
+    /// OpenSSH public-key line — the handle used to select this identity.
+    pub public_key: String,
+    /// The agent's comment for it, usually a filename or a token label.
+    pub comment: String,
+    /// Key algorithm, e.g. `sk-ssh-ed25519@openssh.com`.
+    pub algorithm: String,
+}
+
+/// Lists what the operating system's ssh-agent currently holds.
+///
+/// This is the picker's data source, and the reason it exists: a user should be
+/// choosing a key they can see is loaded, not typing a fingerprint and hoping.
+pub async fn system_agent_keys() -> Result<Vec<SystemAgentKey>, TransportError> {
+    let mut agent = SystemAgent::connect().await?;
+    let mut out = Vec::new();
+    for id in agent.identities().await? {
+        // Certificates are skipped: the certificate itself is the credential and
+        // selecting one by its public key would be ambiguous. Plain keys cover
+        // the hardware-token case this exists for.
+        if let AgentIdentity::PublicKey { key, comment } = id {
+            let Ok(line) = key.to_openssh() else { continue };
+            out.push(SystemAgentKey {
+                public_key: line,
+                comment,
+                algorithm: key.algorithm().as_str().to_string(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Signs through the OS agent.
+///
+/// Thin by design: the agent already implements everything hard about a hardware
+/// token — the touch prompt, the PIN, the signature counter — and doing any of
+/// it here would be doing it worse.
+struct SystemAgentSigner {
+    agent: SystemAgent,
+}
+
+impl Signer for SystemAgentSigner {
+    type Error = TransportError;
+
+    async fn auth_sign(
+        &mut self,
+        key: &AgentIdentity,
+        hash_alg: Option<HashAlg>,
+        to_sign: Vec<u8>,
+    ) -> Result<Vec<u8>, TransportError> {
+        let r = match &mut self.agent {
+            #[cfg(unix)]
+            SystemAgent::Uds(c) => c.sign_request(key, hash_alg, to_sign).await,
+            #[cfg(windows)]
+            SystemAgent::Pipe(c) => c.sign_request(key, hash_alg, to_sign).await,
+        };
+        r.map_err(|e| TransportError::SystemAgent(e.to_string()))
+    }
 }
 
 /// A signer on top of the embedded agent: implements `russh::auth::Signer` without

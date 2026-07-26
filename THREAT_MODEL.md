@@ -22,6 +22,15 @@ but never holds anything in the clear.
   it leaves the device. The server stores ciphertext blobs plus open metadata and
   performs **no payload crypto** — it cannot decrypt vaults, mint access, or forge
   records.
+- **A host may deliberately use a key we do not hold.** Choosing *System agent*
+  for a host delegates signing to the operating system's ssh-agent — which is how
+  a FIDO/U2F token, a PKCS#11 smart card, a Secure Enclave key, 1Password or
+  gpg-agent becomes usable at all. For such a host the guarantee below does not
+  apply, because the key was never ours: it lives in the agent, and whoever can
+  reach that agent socket can ask it to sign. That is the same trust the tool
+  providing the key already asks for, and it is opt-in per host — the default
+  remains a key inside the vault. What UniSSH stores is the public key, which is
+  a handle, not a secret.
 - **The keyset never crosses the FFI / UI boundary.** The private keyset never
   leaves the device; the server holds only the **public** halves. No operation
   hands the UI a private SSH key as a side effect either — authentication signs

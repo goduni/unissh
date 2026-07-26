@@ -257,6 +257,16 @@ pub async fn delete_recording(
     blocking(move || core.delete_recording(vault_id, recording_id)).await
 }
 
+/// Keys the OS ssh-agent currently holds — the picker's data source.
+///
+/// Needs no unlock: this reads the agent, not the vault.
+#[tauri::command]
+pub async fn system_agent_keys(state: State<'_, AppState>) -> ApiResult<Vec<dto::SystemAgentKey>> {
+    let core = state.core.clone();
+    let v = blocking(move || core.system_agent_keys()).await?;
+    Ok(v.into_iter().map(Into::into).collect())
+}
+
 /// What an ~/.ssh/config import would drop. Read-only: it parses the text and
 /// writes nothing, so the user can see the damage before agreeing to it.
 #[tauri::command]

@@ -280,11 +280,21 @@ export function VaultBadge({
   );
 }
 
-export type AuthKind = "key" | "password" | "ask" | "personal";
+export type AuthKind = "key" | "password" | "ask" | "personal" | "systemAgent";
 export function AuthBadge({ auth, jump }: { auth: AuthKind; jump?: boolean }) {
   const p = usePalette();
   const icon: IconName =
-    auth === "key" ? "key" : auth === "password" ? "lock" : auth === "personal" ? "fingerprint" : "eye";
+    auth === "key"
+      ? "key"
+      : auth === "password"
+        ? "lock"
+        : auth === "personal"
+          ? "fingerprint"
+          : auth === "systemAgent"
+            ? // A hardware/external credential: the key is held by the OS agent,
+              // not by us.
+              "shieldcheck"
+            : "eye";
   // Colour = meaning only: password/ask auth is the weaker credential → amber
   // warning; everything else is neutral (no decorative accent/purple).
   const c = auth === "password" || auth === "ask" ? p.amber : p.txt2;

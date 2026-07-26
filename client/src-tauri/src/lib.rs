@@ -273,6 +273,7 @@ pub fn run() {
             commands::submit_auth_prompt,
             commands::set_algorithm_policy,
             commands::ssh_config_report,
+            commands::system_agent_keys,
             commands::list_recordings,
             commands::get_recording,
             commands::delete_recording,

@@ -77,7 +77,8 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 - **Type-gated reveal**: passwords/notes can be revealed. A private key leaves the core **only** through an explicit, user-initiated export of that key — never as a side effect of any other call.
 
 **Connectivity**
-- Auth by **key** (via a built-in in-memory agent — the private key never leaves the core), **password** (inline or from the vault, with `keyboard-interactive` fallback), or **certificate**.
+- Auth by **key** (via a built-in in-memory agent — the private key never leaves the core), **password** (inline or from the vault), or **certificate**. Two-factor logins work: `keyboard-interactive` prompts that no stored secret can answer — a one-time code, a push confirmation — are put to you.
+- **Hardware keys via the system ssh-agent**, per host: FIDO/U2F tokens, PKCS#11 smart cards, Secure Enclave keys, 1Password and gpg-agent all sign through the OS agent, and UniSSH stores only which identity to ask for. The trade is explicit — for such a host the key is outside the vault, by definition, since that is what makes a token usable.
 - Interactive **PTY** sessions with resize; **streaming `exec`** with separate stdout/stderr; **auto-reconnect** with backoff (and a hard stop on MITM/host-key change).
 - **TOFU** host-key pinning; a `HostKeyMismatch` is always surfaced to you, never trusted silently.
 - **Post-quantum key exchange by default**: the transport negotiates the hybrid `mlkem768x25519-sha256` (ML-KEM-768 + X25519, NIST FIPS 203) ahead of classical curve25519, and falls back cleanly on servers that don't offer it. Hybrid means a future quantum adversary must break *both* halves — and it defeats "harvest now, decrypt later" against traffic recorded today.

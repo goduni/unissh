@@ -383,6 +383,7 @@ export const AUTH_LABEL_KEY: Record<string, string> = {
   password: "auth.password",
   ask: "auth.ask",
   personal: "auth.personal",
+  systemAgent: "auth.systemAgent",
 };
 
 // ── Accent presets + palette factory ───────────────────────────

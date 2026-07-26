@@ -51,6 +51,11 @@ used and **zeroized**, but not locked. Zeroization is always performed.
 ## Out of scope
 
 The SSH transport/connect itself is the `ssh-transport` crate. The system agent and
-**agent forwarding** are not implemented (spec 10.2, ProxyJump instead of forwarding).
+**agent forwarding** is not implemented (spec 10.2, ProxyJump instead of forwarding).
+This crate is not the system agent: keys added here live only in this process.
+Using the *operating system's* agent is a separate per-host opt-in in
+`ssh-transport` (`Auth::SystemAgent`) — the route to hardware tokens and smart
+cards, whose keys never enter this agent. FIDO/U2F (`sk-*`) credentials are
+refused at import, since signing them needs the token.
 In Milestone 1 — Ed25519 only. A single `unsafe` module (`mlock`/`munlock`),
 `#![deny(unsafe_op_in_unsafe_fn)]`.

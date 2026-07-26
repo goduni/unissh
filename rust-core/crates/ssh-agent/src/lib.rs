@@ -22,9 +22,21 @@
 //! these, `ssh-transport` implements `russh::auth::Signer`.
 //!
 //! ## Limitations / out of scope
-//! The SSH transport/connect itself is the `ssh-transport` crate. The system agent
-//! and **agent forwarding** are not implemented (spec 10.2). `mlock` is
-//! best-effort (see [`locked`]).
+//! The SSH transport/connect itself is the `ssh-transport` crate. **Agent
+//! forwarding** is not implemented (spec 10.2) — `ProxyJump` is used instead, so
+//! the key is never handed to a bastion.
+//!
+//! This crate is not the system agent and does not wrap one; keys added here live
+//! only in this process. Talking to the *operating system's* agent is a separate,
+//! per-host opt-in that lives in `ssh-transport`
+//! (`Auth::SystemAgent`) — that is the route to hardware tokens and smart cards,
+//! whose keys by definition never enter this agent.
+//!
+//! FIDO/U2F credentials (`sk-*`) are rejected at import: they parse, because the
+//! file holds a key handle rather than a private scalar, but signing needs the
+//! token. Use them through the system agent.
+//!
+//! `mlock` is best-effort (see [`locked`]).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]

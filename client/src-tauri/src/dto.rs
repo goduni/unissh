@@ -29,6 +29,9 @@ pub enum AuthMethod {
         vault_id: String,
         password_item_id: String,
     },
+    /// A key held by the OS ssh-agent — the route to hardware tokens.
+    #[serde(rename_all = "camelCase")]
+    SystemAgent { public_key: String },
 }
 
 impl From<AuthMethod> for ffi::AuthMethod {
@@ -49,6 +52,7 @@ impl From<AuthMethod> for ffi::AuthMethod {
                 vault_id,
                 password_item_id,
             },
+            AuthMethod::SystemAgent { public_key } => ffi::AuthMethod::SystemAgent { public_key },
         }
     }
 }
@@ -73,6 +77,7 @@ impl From<ffi::AuthMethod> for AuthMethod {
                 vault_id,
                 password_item_id,
             },
+            ffi::AuthMethod::SystemAgent { public_key } => AuthMethod::SystemAgent { public_key },
         }
     }
 }
@@ -92,6 +97,11 @@ pub enum ProfileAuth {
     /// No stored creds in the (shared) vault — log in with a personal identity
     /// via a binding (B4).
     Personal,
+    /// A key in the OS ssh-agent, named by its public key. A handle, not a secret.
+    #[serde(rename_all = "camelCase")]
+    SystemAgent {
+        public_key: String,
+    },
 }
 
 impl From<ProfileAuth> for ffi::ProfileAuth {
@@ -103,6 +113,7 @@ impl From<ProfileAuth> for ffi::ProfileAuth {
             }
             ProfileAuth::PromptPassword => ffi::ProfileAuth::PromptPassword,
             ProfileAuth::Personal => ffi::ProfileAuth::Personal,
+            ProfileAuth::SystemAgent { public_key } => ffi::ProfileAuth::SystemAgent { public_key },
         }
     }
 }
@@ -115,6 +126,7 @@ impl From<ffi::ProfileAuth> for ProfileAuth {
             }
             ffi::ProfileAuth::PromptPassword => ProfileAuth::PromptPassword,
             ffi::ProfileAuth::Personal => ProfileAuth::Personal,
+            ffi::ProfileAuth::SystemAgent { public_key } => ProfileAuth::SystemAgent { public_key },
         }
     }
 }
@@ -188,6 +200,9 @@ impl From<ffi::JumpHost> for JumpHost {
                     password_item_id,
                 },
                 ffi::AuthMethod::Password { .. } => AuthMethodOut::Password,
+                ffi::AuthMethod::SystemAgent { public_key } => {
+                    AuthMethodOut::SystemAgent { public_key }
+                }
             }
             .into(),
             hop_ref: j.hop_ref.map(Into::into),
@@ -206,6 +221,9 @@ enum AuthMethodOut {
     VaultPassword {
         vault_id: String,
         password_item_id: String,
+    },
+    SystemAgent {
+        public_key: String,
     },
 }
 impl From<AuthMethodOut> for AuthMethod {
@@ -228,6 +246,7 @@ impl From<AuthMethodOut> for AuthMethod {
                 vault_id,
                 password_item_id,
             },
+            AuthMethodOut::SystemAgent { public_key } => AuthMethod::SystemAgent { public_key },
         }
     }
 }
@@ -259,6 +278,12 @@ impl Serialize for AuthMethod {
                 st.serialize_field("type", "vaultPassword")?;
                 st.serialize_field("vaultId", vault_id)?;
                 st.serialize_field("passwordItemId", password_item_id)?;
+                st.end()
+            }
+            AuthMethod::SystemAgent { public_key } => {
+                let mut st = s.serialize_struct("AuthMethod", 2)?;
+                st.serialize_field("type", "systemAgent")?;
+                st.serialize_field("publicKey", public_key)?;
                 st.end()
             }
         }
@@ -1300,6 +1325,26 @@ impl From<ffi::RecordingMeta> for RecordingMeta {
             duration_secs: m.duration_secs,
             truncated: m.truncated,
             size_bytes: m.size_bytes,
+        }
+    }
+}
+
+// ---------- system ssh-agent ----------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemAgentKey {
+    pub public_key: String,
+    pub comment: String,
+    pub algorithm: String,
+}
+
+impl From<ffi::SystemAgentKeyFfi> for SystemAgentKey {
+    fn from(k: ffi::SystemAgentKeyFfi) -> Self {
+        SystemAgentKey {
+            public_key: k.public_key,
+            comment: k.comment,
+            algorithm: k.algorithm,
         }
     }
 }

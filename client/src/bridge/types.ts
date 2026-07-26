@@ -7,7 +7,11 @@ import { i18n } from "@/i18n";
 export type AuthMethod =
   | { type: "agent"; vaultId: string; keyItemId: string }
   | { type: "password"; password: string }
-  | { type: "vaultPassword"; vaultId: string; passwordItemId: string };
+  | { type: "vaultPassword"; vaultId: string; passwordItemId: string }
+  /** A key held by the OS ssh-agent, named by its public key. The route to
+   *  hardware: FIDO tokens, PKCS#11 smart cards, Secure Enclave, 1Password,
+   *  gpg-agent. For these hosts the key lives outside the vault. */
+  | { type: "systemAgent"; publicKey: string };
 
 export type ProfileAuth =
   | { type: "key"; keyItemId: string }
@@ -16,7 +20,9 @@ export type ProfileAuth =
   // Shared host with no stored creds — log in with a personal identity via a
   // binding (B4). Resolved at connect via `api.resolvePersonalAuth`, not
   // `profileToAuth` (needs an in-core binding lookup + anti-redirect check).
-  | { type: "personal" };
+  | { type: "personal" }
+  /** A key in the OS ssh-agent. The public key is a handle, not a secret. */
+  | { type: "systemAgent"; publicKey: string };
 
 /** Host-chain reference (B2.2): a jump hop that points at another saved profile
  *  by its immutable uid (possibly in another vault), resolved to that profile's
@@ -397,14 +403,21 @@ export function profileToAuth(
       // (binding → identity + anti-redirect). Callers must branch on this before
       // calling profileToAuth.
       throw new Error("personal profiles must be resolved via resolvePersonalAuth");
+    case "systemAgent":
+      // Nothing to resolve from the vault: the OS agent holds the key and all we
+      // pass along is which identity to ask it for.
+      return { type: "systemAgent", publicKey: a.publicKey };
   }
 }
 
 /** UI auth-kind from a stored ProfileAuth (matches AuthBadge's AuthKind). */
-export function profileAuthKind(a: ProfileAuth): "key" | "password" | "ask" | "personal" {
+export function profileAuthKind(
+  a: ProfileAuth,
+): "key" | "password" | "ask" | "personal" | "systemAgent" {
   if (a.type === "key") return "key";
   if (a.type === "vaultPassword") return "password";
   if (a.type === "personal") return "personal";
+  if (a.type === "systemAgent") return "systemAgent";
   return "ask";
 }
 
