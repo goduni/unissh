@@ -164,9 +164,10 @@ impl AppPrompter {
 impl AuthPrompter for AppPrompter {
     fn prompt(&self, request: AuthPromptRequest) -> Option<Vec<String>> {
         let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
-        // Rendezvous channel: the core thread is already blocked waiting, so
-        // there is nothing to buffer.
-        let (tx, rx) = sync_channel(0);
+        // Capacity 1, not a rendezvous: `answer` runs on a Tauri command thread
+        // and should hand the answer over and return, not block until the core
+        // thread happens to be back at recv.
+        let (tx, rx) = sync_channel(1);
         self.pending.lock().expect("prompt map").insert(id, tx);
 
         let event = AuthPromptEvent {

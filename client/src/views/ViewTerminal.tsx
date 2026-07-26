@@ -502,7 +502,10 @@ async function runStartupSnippets(
               // A gutter tick, not a colour change on the text: the line itself
               // is the user's prompt and output, and recolouring it would be us
               // editing what the server actually printed.
-              el.style.background = "var(--term-fail-mark, #e0574a)";
+              // A fixed red rather than a theme token: this element is created
+              // by xterm outside React, so it cannot read the palette, and a CSS
+              // variable nothing defines is configurability that does not exist.
+              el.style.background = "#e0574a";
               el.style.borderRadius = "1px";
               el.title = `exit ${code}`;
             });

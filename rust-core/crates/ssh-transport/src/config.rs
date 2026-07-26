@@ -69,6 +69,10 @@ pub enum SkipReason {
     InsideMatch,
 }
 
+/// OpenSSH stops following includes at this depth; matching it keeps a cyclic
+/// config terminating instead of recursing until the stack gives out.
+const MAX_INCLUDE_DEPTH: u32 = 16;
+
 #[derive(Debug)]
 struct HostBlock {
     patterns: Vec<String>,
@@ -88,7 +92,8 @@ impl SshConfig {
     /// [`Self::parse_with_includes`] when they should be followed.
     pub fn parse(text: &str) -> Result<Self, TransportError> {
         let mut cfg = SshConfig::default();
-        cfg.parse_into(text)?;
+        // No loader: includes are recorded in `includes` and left alone.
+        cfg.parse_into::<fn(&str) -> Vec<String>>(text, &mut None, 0)?;
         Ok(cfg)
     }
 
@@ -105,22 +110,26 @@ impl SshConfig {
         F: FnMut(&str) -> Vec<String>,
     {
         let mut cfg = SshConfig::default();
-        cfg.parse_into(text)?;
-        // Bounded so an include cycle (a includes b includes a) terminates
-        // instead of looping until memory runs out. OpenSSH's own limit is 16.
-        let mut depth = 0;
-        while !cfg.includes.is_empty() && depth < 16 {
-            depth += 1;
-            for path in std::mem::take(&mut cfg.includes) {
-                for text in load(&path) {
-                    cfg.parse_into(&text)?;
-                }
-            }
-        }
+        cfg.parse_into(text, &mut Some(&mut load), 0)?;
         Ok(cfg)
     }
 
-    fn parse_into(&mut self, text: &str) -> Result<(), TransportError> {
+    /// `load` is `None` for [`Self::parse`], which only records include paths.
+    ///
+    /// Included blocks are spliced in **where the `Include` line sits**, not
+    /// appended at the end. Resolution is first-match-wins, so the position is
+    /// the meaning: a config that opens with `Include conf.d/*` and then has a
+    /// catch-all `Host *` expects the included hosts to win, and appending them
+    /// would hand every host the catch-all's user instead.
+    fn parse_into<F>(
+        &mut self,
+        text: &str,
+        load: &mut Option<&mut F>,
+        depth: u32,
+    ) -> Result<(), TransportError>
+    where
+        F: FnMut(&str) -> Vec<String>,
+    {
         let mut current: Option<HostBlock> = None;
         // Directives inside a Match block belong to that block, not to the Host
         // block above it. Without this they were merged into the preceding Host —
@@ -164,7 +173,47 @@ impl SshConfig {
             }
 
             if key == "include" {
-                self.includes.push(rest.trim().to_string());
+                let path = rest.trim().to_string();
+                // Inside a Match block the include shares that block's fate.
+                if in_match {
+                    self.skipped.push(SkippedDirective {
+                        line: line_no,
+                        keyword: keyword.to_string(),
+                        reason: SkipReason::InsideMatch,
+                    });
+                    continue;
+                }
+                match load.as_mut() {
+                    None => self.includes.push(path),
+                    Some(_) if depth >= MAX_INCLUDE_DEPTH => {
+                        // A cycle (a includes b includes a) has to stop somewhere;
+                        // OpenSSH's own limit is 16. Reported, not silently cut.
+                        self.skipped.push(SkippedDirective {
+                            line: line_no,
+                            keyword: keyword.to_string(),
+                            reason: SkipReason::Unsupported,
+                        });
+                    }
+                    Some(loader) => {
+                        // Close the open Host block so included blocks land after
+                        // it and before whatever follows.
+                        let reopen = current.take().map(|b| {
+                            let patterns = b.patterns.clone();
+                            self.blocks.push(b);
+                            patterns
+                        });
+                        for included in loader(&path) {
+                            self.parse_into(&included, load, depth + 1)?;
+                        }
+                        // Reopen the same Host block: in OpenSSH an Include in
+                        // the middle of a Host block does not end it, and the
+                        // directives after it still belong to that host.
+                        current = reopen.map(|patterns| HostBlock {
+                            patterns,
+                            settings: HostSettings::default(),
+                        });
+                    }
+                }
                 continue;
             }
 

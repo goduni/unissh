@@ -208,3 +208,62 @@ fn includes_are_followed_through_the_loader_and_cannot_loop() {
         "include recursion must be bounded, saw {seen} rounds"
     );
 }
+
+#[test]
+fn an_include_is_spliced_where_it_sits_not_appended() {
+    // Resolution is first-match-wins, so position IS the meaning. A config that
+    // opens with an Include and then has a catch-all expects the included host
+    // to win; appending the include would give every host the catch-all's user.
+    let root = "\
+Include conf.d/hosts
+Host *
+  User fallback
+";
+    let cfg = SshConfig::parse_with_includes(root, |path| {
+        assert_eq!(path, "conf.d/hosts");
+        vec!["Host prod\n  User deploy\n".to_string()]
+    })
+    .unwrap();
+    assert_eq!(
+        cfg.resolve("prod").user.as_deref(),
+        Some("deploy"),
+        "the included block precedes the catch-all, so it must win"
+    );
+    assert_eq!(cfg.resolve("other").user.as_deref(), Some("fallback"));
+}
+
+#[test]
+fn an_include_inside_a_host_block_does_not_end_it() {
+    // OpenSSH keeps the Host block open across an Include; directives after it
+    // still belong to that host.
+    let root = "\
+Host web
+  HostName web.example.com
+  Include conf.d/common
+  User after
+";
+    let cfg =
+        SshConfig::parse_with_includes(root, |_| vec!["Host other\n  User someone\n".to_string()])
+            .unwrap();
+    let web = cfg.resolve("web");
+    assert_eq!(web.hostname.as_deref(), Some("web.example.com"));
+    assert_eq!(
+        web.user.as_deref(),
+        Some("after"),
+        "a directive after the Include still belongs to the host it was written under"
+    );
+    assert_eq!(cfg.resolve("other").user.as_deref(), Some("someone"));
+}
+
+#[test]
+fn a_cyclic_include_terminates_and_is_reported() {
+    let root = "Include loop\nHost a\n  User u\n";
+    let cfg = SshConfig::parse_with_includes(root, |_| vec!["Include loop\n".to_string()]).unwrap();
+    assert_eq!(cfg.resolve("a").user.as_deref(), Some("u"));
+    assert!(
+        cfg.skipped()
+            .iter()
+            .any(|s| s.keyword.eq_ignore_ascii_case("include")),
+        "hitting the depth limit must be reported, not silently truncated"
+    );
+}
