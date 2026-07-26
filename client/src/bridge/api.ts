@@ -298,6 +298,22 @@ export const importPuttySessions = (vaultId: string, regText: string) =>
   afterMut(vaultId, invoke<HostImportReport>("import_putty_sessions", { vaultId, regText }));
 
 // ── groups ─────────────────────────────────────────────────────
+export interface Snippet {
+  snippetId: string;
+  label: string;
+  command: string;
+  /** Run automatically right after connecting. */
+  runOnConnect: boolean;
+  tags: string[];
+}
+
+export const saveSnippet = (vaultId: string, snippet: Snippet) =>
+  afterMut(vaultId, invoke<void>("save_snippet", { vaultId, snippet }));
+export const listSnippets = (vaultId: string) =>
+  invoke<Snippet[]>("list_snippets", { vaultId });
+export const deleteSnippet = (vaultId: string, snippetId: string) =>
+  afterMut(vaultId, invoke<void>("delete_snippet", { vaultId, snippetId }));
+
 export const saveGroup = (vaultId: string, group: ServerGroup) =>
   afterMut(vaultId, invoke<void>("save_group", { vaultId, group }));
 export const listGroups = (vaultId: string) => invoke<ServerGroup[]>("list_groups", { vaultId });

@@ -78,6 +78,11 @@ const ITEM_TYPE_IDENTITY: u32 = 7;
 /// [`StoredBinding`]). Lives in the PERSONAL vault; keyed by (team_vault_id,
 /// profile_uid). Synced only between the account's devices.
 const ITEM_TYPE_BINDING: u32 = 8;
+/// Item type for a reusable command snippet (content is JSON [`StoredSnippet`]).
+/// A snippet is vault content like everything else, so it is encrypted at rest
+/// and syncs between devices — a command line is often a secret in practice
+/// (hostnames, ticket ids, one-off tokens someone pasted once).
+const ITEM_TYPE_SNIPPET: u32 = 9;
 /// Depth limit for expanding nested groups (guards against blow-up/cycling
 /// beyond the visited-set).
 const GROUP_MAX_DEPTH: u32 = 32;
@@ -572,6 +577,22 @@ struct StoredProfile {
     /// read the profile without the new field (e.g. `personal`), and on re-
     /// save would strip it → an LWW downgrade for everyone. Empty → serializes
     /// to nothing (existing signed items do not change byte-for-byte).
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// Serializable snippet body (JSON in the item content). `snippet_id` is not
+/// serialized — it is the item id. Flat optional fields with `extra`, like
+/// [`StoredProfile`], so a future field survives an older client's round-trip.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredSnippet {
+    label: String,
+    command: String,
+    #[serde(default)]
+    run_on_connect: bool,
+    #[serde(default)]
+    tags: Vec<String>,
+    /// Forward compatibility (see [`StoredProfile::extra`]).
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -3464,6 +3485,97 @@ impl Core {
         }))
     }
 
+    // --- snippets ---
+
+    /// Saves or updates a reusable command. The command text is vault content,
+    /// so it is encrypted at rest and syncs — which is the point: a command line
+    /// carries hostnames, ticket ids and the occasional token, and keeping a
+    /// library of them in plaintext beside an encrypted vault would be an odd
+    /// place to stop.
+    pub fn save_snippet(&self, vault_id: String, snippet: Snippet) -> Result<(), FfiError> {
+        if snippet.snippet_id.is_empty() {
+            return Err(FfiError::other("snippet_id must not be empty"));
+        }
+        if snippet.command.is_empty() {
+            return Err(FfiError::other("a snippet with no command is not useful"));
+        }
+        self.with_state_mut(|state| {
+            ensure_item_type(
+                &state.storage,
+                &vault_id,
+                snippet.snippet_id.as_bytes(),
+                ITEM_TYPE_SNIPPET,
+            )?;
+            let stored = StoredSnippet {
+                label: snippet.label,
+                command: snippet.command,
+                run_on_connect: snippet.run_on_connect,
+                tags: snippet.tags,
+                extra: BTreeMap::new(),
+            };
+            let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, &vault_id),
+            )
+            .map_err(FfiError::other)?;
+            vault
+                .put_item(snippet.snippet_id.as_bytes(), ITEM_TYPE_SNIPPET, &json)
+                .map_err(FfiError::other)?;
+            Ok(())
+        })
+    }
+
+    /// A vault's snippets (broken JSON is skipped, tombstones are not visible).
+    pub fn list_snippets(&self, vault_id: String) -> Result<Vec<Snippet>, FfiError> {
+        self.with_state_mut(|state| {
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, &vault_id),
+            )
+            .map_err(FfiError::other)?;
+            let mut out = Vec::new();
+            for m in vault.list_items().map_err(FfiError::other)? {
+                if m.item_type != ITEM_TYPE_SNIPPET {
+                    continue;
+                }
+                if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
+                    if let Ok(stored) = serde_json::from_slice::<StoredSnippet>(&item.content) {
+                        out.push(Snippet {
+                            snippet_id: String::from_utf8_lossy(&m.item_id).to_string(),
+                            label: stored.label,
+                            command: stored.command,
+                            run_on_connect: stored.run_on_connect,
+                            tags: stored.tags,
+                        });
+                    }
+                }
+            }
+            out.sort_by(|a, b| a.label.cmp(&b.label));
+            Ok(out)
+        })
+    }
+
+    /// Deletes a snippet (a tombstone, like every other item — so the deletion
+    /// propagates to other devices instead of the snippet coming back on the
+    /// next sync).
+    pub fn delete_snippet(&self, vault_id: String, snippet_id: String) -> Result<(), FfiError> {
+        self.with_state_mut(|state| {
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, &vault_id),
+            )
+            .map_err(FfiError::other)?;
+            vault
+                .delete_item(snippet_id.as_bytes())
+                .map_err(map_vault_err)?;
+            Ok(())
+        })
+    }
+
     // --- host groups ---
 
     /// Saves/updates a host group (an item of type "group"). Only references to
@@ -6042,6 +6154,21 @@ fn split_host_port(s: &str) -> (String, u16) {
         Some((h, p)) => (h.to_string(), p.parse().unwrap_or(22)),
         None => (s.to_string(), 22),
     }
+}
+
+/// A reusable command.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct Snippet {
+    /// Item id in the vault.
+    pub snippet_id: String,
+    /// Human-readable name.
+    pub label: String,
+    /// The command text. Multi-line is allowed; it is sent verbatim.
+    pub command: String,
+    /// Run automatically after connecting to a host that references it.
+    pub run_on_connect: bool,
+    /// Tags, for filtering a long library.
+    pub tags: Vec<String>,
 }
 
 /// A directive an `~/.ssh/config` import will not carry over.

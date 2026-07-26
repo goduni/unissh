@@ -7,7 +7,9 @@ import { MONO, UI } from "@/theme/tokens";
 import { Icon, NO_AUTOCORRECT, type IconName } from "@/components/primitives";
 import { useApp, type Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import type { ConnectionProfile } from "@/bridge/types";
+import { apiErrorMessage, type ConnectionProfile } from "@/bridge/types";
+import * as api from "@/bridge/api";
+import { toast } from "@/store/toast";
 import { useTranslation, tDyn } from "@/i18n";
 
 interface NavCmd {
@@ -52,7 +54,8 @@ const CMD_ACTIONS: ActionCmd[] = [
 type FlatItem =
   | { id: string; icon: IconName; label: string; sub: string; kind: "host"; host: ConnectionProfile }
   | { id: string; icon: IconName; label: string; sub: string; kind: "nav"; route: Route }
-  | { id: string; icon: IconName; label: string; sub: string; kind: "action"; action: ActionCmd["action"] };
+  | { id: string; icon: IconName; label: string; sub: string; kind: "action"; action: ActionCmd["action"] }
+  | { id: string; icon: IconName; label: string; sub: string; kind: "snippet"; command: string };
 
 interface Group {
   title: string;
@@ -66,6 +69,27 @@ export function CommandPalette() {
   const open = useApp((s) => s.palette);
   const setPalette = useApp((s) => s.setPalette);
   const hosts = useApp((s) => s.hosts);
+  const vaultId = useApp((s) => s.vaultId);
+
+  // Loaded when the palette opens rather than kept in the store: the library is
+  // small, and reading it on demand means a snippet saved on another device
+  // shows up after a sync without anything having to invalidate a cache.
+  const [snippets, setSnippets] = useState<api.Snippet[]>([]);
+  useEffect(() => {
+    if (!open || !vaultId) return;
+    let cancelled = false;
+    void api
+      .listSnippets(vaultId)
+      .then((list) => {
+        if (!cancelled) setSnippets(list);
+      })
+      .catch(() => {
+        // A palette that still finds hosts is better than one that fails to open.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, vaultId]);
 
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
@@ -108,12 +132,27 @@ export function CommandPalette() {
       action: c.action,
     })).filter((c) => match(c.label) || match(c.sub));
 
+    const snippetItems: FlatItem[] = snippets
+      .filter((sn) => match(sn.label) || match(sn.command) || sn.tags.some(match))
+      .slice(0, 6)
+      .map((sn) => ({
+        id: "s-" + sn.snippetId,
+        icon: "terminal" as IconName,
+        label: sn.label,
+        // The command itself is the subtitle: a snippet is chosen by recognising
+        // what it runs, and hiding that behind a name makes the list a guess.
+        sub: sn.command.split("\n")[0],
+        kind: "snippet" as const,
+        command: sn.command,
+      }));
+
     return [
       { title: t("command.group.hosts"), items: hostItems },
+      { title: t("command.group.snippets"), items: snippetItems },
       { title: t("command.group.actions"), items: actItems },
       { title: t("command.group.go"), items: navItems },
     ].filter((g) => g.items.length);
-  }, [ql, hosts, t]);
+  }, [ql, hosts, snippets, t]);
 
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
 
@@ -129,6 +168,22 @@ export function CommandPalette() {
     if (it.kind === "host") {
       setPalette(false);
       ctx.connect(it.host);
+    } else if (it.kind === "snippet") {
+      setPalette(false);
+      // Typed into the pane, not executed for the user: the text lands at the
+      // prompt exactly as if they had pasted it, and pressing Enter stays their
+      // decision. A snippet that ran itself on selection would make a
+      // mis-click destructive.
+      const st = useApp.getState();
+      const tab = st.terminals.find((x) => x.id === st.activeTermId);
+      const pane = tab?.panes.find((x) => x.id === tab.activePaneId);
+      if (!pane?.sessionId) {
+        toast(t("command.snippetNoPane"), "warn");
+        return;
+      }
+      void api
+        .sessionWrite(pane.sessionId, Array.from(new TextEncoder().encode(it.command)))
+        .catch((e) => toast(apiErrorMessage(e), "err"));
     } else if (it.kind === "nav") {
       setPalette(false);
       ctx.go(it.route);

@@ -328,7 +328,9 @@ export const en = {
       "lock": "Lock instance",
       "lockSub": "zero out secrets"
     },
+    "snippetNoPane": "Open a terminal first — a snippet is typed into the active pane.",
     "group": {
+      "snippets": "Snippets",
       "hosts": "Hosts",
       "actions": "Actions",
       "go": "Go to"

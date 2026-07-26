@@ -3285,10 +3285,17 @@ fn secret_returning_surface() {
         "get_note",       // user secret (note reveal)
         "export_ssh_key", // by-design: user owns & may export their private key
         "export_vault",   // passphrase-encrypted backup
+        // Snippet command text. Listed here rather than quietly omitted: a saved
+        // command routinely carries hostnames, ticket ids and the odd token, so
+        // it is user content of the same kind as a note. It is NOT type-gated
+        // like get_note, because a snippet library is chosen from by reading the
+        // commands — gating the only thing that makes the list usable would be
+        // theatre, not a control.
+        "list_snippets",
     ];
     assert_eq!(
         SECRET_RETURNING.len(),
-        4,
+        5,
         "update the test when the surface changes"
     );
 
@@ -3340,4 +3347,114 @@ fn secret_returning_surface() {
         .export_vault("v".to_string(), "backup-pass".to_string())
         .unwrap();
     assert!(!backup.is_empty());
+}
+
+/// Snippets: the round-trip, the guards, and that a delete leaves a tombstone
+/// rather than a gap another device will refill on the next sync.
+#[test]
+fn snippet_crud_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+
+    core.save_snippet(
+        "v".to_string(),
+        unissh_ffi::Snippet {
+            snippet_id: "tail-log".to_string(),
+            label: "Tail the app log".to_string(),
+            command: "sudo journalctl -fu app".to_string(),
+            run_on_connect: false,
+            tags: vec!["ops".to_string()],
+        },
+    )
+    .unwrap();
+    core.save_snippet(
+        "v".to_string(),
+        unissh_ffi::Snippet {
+            snippet_id: "motd".to_string(),
+            label: "A greeting".to_string(),
+            command: "echo hi".to_string(),
+            run_on_connect: true,
+            tags: vec![],
+        },
+    )
+    .unwrap();
+
+    let list = core.list_snippets("v".to_string()).unwrap();
+    assert_eq!(list.len(), 2);
+    // Sorted by label, so the library does not reshuffle between reads.
+    assert_eq!(list[0].label, "A greeting");
+    assert!(list[0].run_on_connect);
+    assert_eq!(list[1].command, "sudo journalctl -fu app");
+    assert_eq!(list[1].tags, vec!["ops".to_string()]);
+
+    // Empty id and empty command are refused rather than stored as junk.
+    assert!(core
+        .save_snippet(
+            "v".to_string(),
+            unissh_ffi::Snippet {
+                snippet_id: String::new(),
+                label: "x".to_string(),
+                command: "echo".to_string(),
+                run_on_connect: false,
+                tags: vec![],
+            },
+        )
+        .is_err());
+    assert!(core
+        .save_snippet(
+            "v".to_string(),
+            unissh_ffi::Snippet {
+                snippet_id: "blank".to_string(),
+                label: "x".to_string(),
+                command: String::new(),
+                run_on_connect: false,
+                tags: vec![],
+            },
+        )
+        .is_err());
+
+    core.delete_snippet("v".to_string(), "motd".to_string())
+        .unwrap();
+    let after = core.list_snippets("v".to_string()).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].snippet_id, "tail-log");
+}
+
+/// A snippet id must not be usable to overwrite an item of another type — the
+/// same cross-type guard the other item kinds get.
+#[test]
+fn snippet_cannot_overwrite_another_item_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.save_password(
+        "v".to_string(),
+        "shared-id".to_string(),
+        "s3cret".to_string(),
+    )
+    .unwrap();
+
+    let clash = core.save_snippet(
+        "v".to_string(),
+        unissh_ffi::Snippet {
+            snippet_id: "shared-id".to_string(),
+            label: "sneaky".to_string(),
+            command: "echo pwned".to_string(),
+            run_on_connect: false,
+            tags: vec![],
+        },
+    );
+    assert!(
+        clash.is_err(),
+        "a snippet must not clobber a stored password"
+    );
+    // And the password is still intact.
+    assert_eq!(
+        core.get_password("v".to_string(), "shared-id".to_string())
+            .unwrap(),
+        "s3cret"
+    );
 }

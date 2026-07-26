@@ -1209,3 +1209,39 @@ impl From<ffi::SshConfigReport> for SshConfigReport {
         }
     }
 }
+
+// ---------- snippets ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snippet {
+    pub snippet_id: String,
+    pub label: String,
+    pub command: String,
+    pub run_on_connect: bool,
+    pub tags: Vec<String>,
+}
+
+impl From<ffi::Snippet> for Snippet {
+    fn from(s: ffi::Snippet) -> Self {
+        Snippet {
+            snippet_id: s.snippet_id,
+            label: s.label,
+            command: s.command,
+            run_on_connect: s.run_on_connect,
+            tags: s.tags,
+        }
+    }
+}
+
+impl From<Snippet> for ffi::Snippet {
+    fn from(s: Snippet) -> Self {
+        ffi::Snippet {
+            snippet_id: s.snippet_id,
+            label: s.label,
+            command: s.command,
+            run_on_connect: s.run_on_connect,
+            tags: s.tags,
+        }
+    }
+}

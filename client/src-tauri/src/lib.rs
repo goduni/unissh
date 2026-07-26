@@ -273,6 +273,9 @@ pub fn run() {
             commands::submit_auth_prompt,
             commands::set_algorithm_policy,
             commands::ssh_config_report,
+            commands::save_snippet,
+            commands::list_snippets,
+            commands::delete_snippet,
             // keychain (Secret Key on trusted device)
             keychain::keychain_available,
             keychain::keychain_save_secret_key,

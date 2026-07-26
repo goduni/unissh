@@ -779,6 +779,37 @@ pub async fn import_putty_sessions(
 // ---------- groups ----------
 
 #[tauri::command]
+pub async fn save_snippet(
+    vault_id: String,
+    snippet: dto::Snippet,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    let s = snippet.into();
+    blocking(move || core.save_snippet(vault_id, s)).await
+}
+
+#[tauri::command]
+pub async fn list_snippets(
+    vault_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::Snippet>> {
+    let core = state.core.clone();
+    let v = blocking(move || core.list_snippets(vault_id)).await?;
+    Ok(v.into_iter().map(Into::into).collect())
+}
+
+#[tauri::command]
+pub async fn delete_snippet(
+    vault_id: String,
+    snippet_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking(move || core.delete_snippet(vault_id, snippet_id)).await
+}
+
+#[tauri::command]
 pub async fn save_group(
     vault_id: String,
     group: dto::ServerGroup,
