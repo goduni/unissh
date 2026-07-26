@@ -168,6 +168,11 @@ jobs:
           PY=$(command -v python3 || command -v python)
           "$PY" scripts/bump-version.py --check "${GITHUB_REF_NAME#v}"
 
+      # `xdg-utils` is here for the arm64 runner: the AppImage bundler copies
+      # /usr/bin/xdg-open into the AppDir and aborts if it is missing. The x86-64
+      # image happens to preinstall it, the arm64 image does not — so this was
+      # invisible until the ARM job existed, and it failed at bundle time with
+      # every artifact already compiled. Install it rather than rely on the image.
       - name: Install Linux system deps (Tauri/webkit + AppImage/rpm tooling)
         if: matrix.os == 'linux'
         run: |
@@ -182,7 +187,8 @@ jobs:
             libayatana-appindicator3-dev \
             patchelf \
             rpm \
-            pkg-config
+            pkg-config \
+            xdg-utils
 
       # A universal bundle is two real compilations `lipo`'d together, so BOTH
       # targets must exist before the bundler runs — the runner's default only

@@ -99,10 +99,10 @@ See [Server configuration](../../operations/configuration/) and [Docker Compose 
 sudo apt-get install -y \
   libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
   libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev \
-  libxdo-dev libayatana-appindicator3-dev patchelf
+  libxdo-dev libayatana-appindicator3-dev patchelf xdg-utils
 ```
 
-`patchelf` is needed for the AppImage bundle; drop it only if you build `.deb`/`.rpm` alone.
+`patchelf` and `xdg-utils` are needed for the AppImage bundle (the bundler copies `xdg-open` into the AppDir); drop them only if you build `.deb`/`.rpm` alone. A desktop install usually has `xdg-utils` already — a minimal container or a slim ARM image often does not.
 
 **Mobile builds:**
 
