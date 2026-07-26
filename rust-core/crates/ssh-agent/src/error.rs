@@ -32,6 +32,19 @@ pub enum AgentError {
     #[error("unsupported private key type or format")]
     Unsupported,
 
+    /// A FIDO/U2F security-key credential (`sk-ssh-ed25519@openssh.com`,
+    /// `sk-ecdsa-sha2-nistp256@openssh.com`).
+    ///
+    /// These parse cleanly — the file holds a key handle, not a private scalar —
+    /// so without this they import happily and then fail at authentication with
+    /// an opaque signing error, which reads as "UniSSH is broken" rather than
+    /// "this key needs hardware we cannot reach yet". Signing requires talking
+    /// to the authenticator over CTAP2, which is not implemented.
+    #[error(
+        "FIDO/U2F security keys (sk-*) are not supported yet: signing requires the hardware token"
+    )]
+    SecurityKeyUnsupported,
+
     /// Error from the ssh-key library.
     #[error("ssh key error: {0}")]
     Ssh(String),

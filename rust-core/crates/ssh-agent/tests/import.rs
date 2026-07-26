@@ -298,3 +298,49 @@ fn garbage_reports_parse() {
         AgentError::Parse
     ));
 }
+
+/// A FIDO/U2F security-key credential must be refused at import with a message
+/// that says why.
+///
+/// It parses cleanly — the file holds a key handle and an application id, not a
+/// private scalar — so without an explicit check it imports without complaint
+/// and then fails at authentication with an opaque signing error. That reads as
+/// a broken client rather than "this key needs hardware we cannot reach yet".
+#[test]
+fn security_key_credentials_are_refused_with_a_named_error() {
+    // sk-ssh-ed25519@openssh.com, generated with:
+    //   ssh-keygen -t ed25519-sk -N '' -f k   (fields below are a synthetic
+    //   stand-in with the same structure — no token was involved)
+    let key = build_sk_ed25519_openssh();
+    let err = normalize_private_key_to_openssh(&key).expect_err("sk keys must be refused");
+    assert!(
+        matches!(err, AgentError::SecurityKeyUnsupported),
+        "expected the dedicated security-key error, got {err:?}"
+    );
+    // And the message has to name the reason, not just fail.
+    let msg = err.to_string();
+    assert!(
+        msg.contains("sk-"),
+        "the error should name the key type: {msg}"
+    );
+}
+
+/// Builds a structurally valid `sk-ssh-ed25519@openssh.com` private key so the
+/// test does not need a hardware token.
+fn build_sk_ed25519_openssh() -> String {
+    use unissh_ssh_agent::ssh_key::private::{KeypairData, SkEd25519};
+    use unissh_ssh_agent::ssh_key::public;
+    use unissh_ssh_agent::ssh_key::LineEnding;
+
+    let ed = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let public = public::SkEd25519::new(
+        public::Ed25519PublicKey(ed.verifying_key().to_bytes()),
+        "ssh:".to_string(),
+    );
+    let kp = SkEd25519::new(public, 0x01, vec![0xAB; 32]).expect("sk keypair");
+    PrivateKey::new(KeypairData::SkEd25519(kp), "test sk key")
+        .expect("private key")
+        .to_openssh(LineEnding::LF)
+        .expect("encode")
+        .to_string()
+}

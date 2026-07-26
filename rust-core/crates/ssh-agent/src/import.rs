@@ -82,6 +82,19 @@ pub fn normalize_private_key_with_passphrase(
         _ => return Err(AgentError::Parse),
     };
 
+    // Caught here, after parsing, because a security-key credential is
+    // structurally valid: the file carries a key handle and an application id,
+    // not a private scalar. Left alone it would import without complaint and
+    // then fail at authentication with an opaque signing error — which reads as
+    // a broken client rather than a key we cannot use yet.
+    if matches!(
+        key.key_data(),
+        ssh_key::private::KeypairData::SkEd25519(_)
+            | ssh_key::private::KeypairData::SkEcdsaSha2NistP256(_)
+    ) {
+        return Err(AgentError::SecurityKeyUnsupported);
+    }
+
     key.to_openssh(LineEnding::LF).map_err(AgentError::from)
 }
 
