@@ -314,6 +314,28 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   const [addingGroup, setAddingGroup] = useState(false);
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   const [recordSessions, setRecordSessions] = useState<boolean>(edit?.recordSessions ?? false);
+  const [tmuxSession, setTmuxSession] = useState<boolean>(edit?.tmuxSession ?? false);
+  const [startupSnippetIds, setStartupSnippetIds] = useState<string[]>(
+    edit?.startupSnippetIds ?? [],
+  );
+  // Loaded once the dialog is open: the picker needs names, and a host editor
+  // that silently listed nothing would look like the library was empty.
+  const [snippetLib, setSnippetLib] = useState<api.Snippet[]>([]);
+  useEffect(() => {
+    if (!vault) return;
+    let cancelled = false;
+    void api
+      .listSnippets(vault)
+      .then((l) => {
+        if (!cancelled) setSnippetLib(l);
+      })
+      .catch(() => {
+        /* the rest of the dialog still works without the library */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [vault]);
   const [tagDraft, setTagDraft] = useState("");
 
   // B5.3(b): in a SHARED (multi-member) cloud vault, default a NEW host to
@@ -606,10 +628,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       auth: profileAuth,
       jumps,
       tags,
-      // Preserved rather than reset: this dialog does not edit startup snippets,
-      // and dropping them here would silently unlink them on every host edit.
-      startupSnippetIds: edit?.startupSnippetIds ?? [],
-      recordSessions: recordSessions,
+      startupSnippetIds,
+      recordSessions,
+      tmuxSession,
     };
 
     try {
@@ -1402,6 +1423,82 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               <div style={{ fontSize: 12, opacity: 0.7 }}>{t("modals.host.recordDesc")}</div>
             </div>
           </div>
+
+          {/* persistent session — the reason work survives a dropped phone */}
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <Toggle checked={tmuxSession} onChange={setTmuxSession} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{t("modals.host.tmuxTitle")}</div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>{t("modals.host.tmuxDesc")}</div>
+            </div>
+          </div>
+
+          {/* startup snippets */}
+          {snippetLib.length > 0 && (
+            <div style={{ display: "flex", gap: 12 }}>
+              <Field label={t("modals.host.startupSnippets")} hint={t("modals.host.startupHint")} w="100%">
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {snippetLib.map((sn) => {
+                    const on = startupSnippetIds.includes(sn.snippetId);
+                    return (
+                      <button
+                        key={sn.snippetId}
+                        type="button"
+                        onClick={() =>
+                          setStartupSnippetIds(
+                            on
+                              ? startupSnippetIds.filter((x) => x !== sn.snippetId)
+                              : // Appended, because the order is the order they
+                                // are typed in.
+                                [...startupSnippetIds, sn.snippetId],
+                          )
+                        }
+                        style={{
+                          ...BTN_RESET,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          textAlign: "left",
+                          padding: "6px 8px",
+                          borderRadius: 8,
+                          border: `1px solid ${on ? p.accentText : p.line}`,
+                          background: on ? rgba(p.accentText, 0.08) : "transparent",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <Icon
+                          name={on ? "check" : "terminal"}
+                          size={13}
+                          color={on ? p.accentText : p.txt3}
+                        />
+                        <span style={{ minWidth: 0, flex: 1 }}>
+                          <span style={{ display: "block", fontSize: 12.5 }}>{sn.label}</span>
+                          <span
+                            style={{
+                              display: "block",
+                              fontFamily: MONO,
+                              fontSize: 11,
+                              color: p.txt3,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {sn.command.split("\n")[0]}
+                          </span>
+                        </span>
+                        {on && (
+                          <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+                            {startupSnippetIds.indexOf(sn.snippetId) + 1}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
+            </div>
+          )}
 
           {/* tags */}
           <div style={{ display: "flex", gap: 12 }}>

@@ -1020,6 +1020,7 @@ fn connection_profiles_crud_and_import() {
         tags: vec![],
         startup_snippet_ids: vec![],
         record_sessions: false,
+        tmux_session: false,
     };
     core.save_connection("v".to_string(), prof).unwrap();
 
@@ -1083,6 +1084,7 @@ fn cross_type_clobber_rejected() {
         tags: vec![],
         startup_snippet_ids: vec![],
         record_sessions: false,
+        tmux_session: false,
     };
     assert!(matches!(
         core.save_connection("v".to_string(), prof),
@@ -1107,6 +1109,7 @@ fn cross_type_clobber_rejected() {
         tags: vec![],
         startup_snippet_ids: vec![],
         record_sessions: false,
+        tmux_session: false,
     };
     core.save_connection("v".to_string(), prof2).unwrap();
     assert!(matches!(
@@ -1439,6 +1442,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         tags: vec![],
         startup_snippet_ids: vec![],
         record_sessions: false,
+        tmux_session: false,
     };
     core.save_connection("v".to_string(), prof).unwrap();
 
@@ -1476,6 +1480,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         tags: vec![],
         startup_snippet_ids: vec![],
         record_sessions: false,
+        tmux_session: false,
     };
     assert!(core.save_connection("v".to_string(), bad).is_err());
     assert!(matches!(
@@ -1836,6 +1841,7 @@ fn save_profile(core: &Core, id: &str, host: &str, port: u16, key_item: &str, ta
             tags: tags.iter().map(|s| s.to_string()).collect(),
             startup_snippet_ids: vec![],
             record_sessions: false,
+            tmux_session: false,
         },
     )
     .unwrap();
@@ -1907,6 +1913,7 @@ fn select_targets_by_tags_excludes_prompt_password() {
             tags: vec!["web".to_string()],
             startup_snippet_ids: vec![],
             record_sessions: false,
+            tmux_session: false,
         },
     )
     .unwrap();
@@ -2123,6 +2130,7 @@ fn dry_run_group_reports_statuses() {
             tags: vec![],
             startup_snippet_ids: vec![],
             record_sessions: false,
+            tmux_session: false,
         },
     )
     .unwrap();
@@ -3501,6 +3509,7 @@ fn profile_carries_its_startup_snippets() {
         tags: vec![],
         startup_snippet_ids: vec!["tmux-attach".to_string(), "cd-app".to_string()],
         record_sessions: false,
+        tmux_session: false,
     };
     core.save_connection("v".to_string(), p.clone()).unwrap();
 
@@ -3702,6 +3711,7 @@ fn profile_round_trips_a_system_agent_identity() {
             tags: vec![],
             startup_snippet_ids: vec![],
             record_sessions: false,
+            tmux_session: false,
         },
     )
     .unwrap();

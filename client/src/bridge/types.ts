@@ -64,6 +64,10 @@ export interface ConnectionProfile {
   /** Record interactive sessions with this host. Per host, not global:
    *  recording production is a requirement and recording a homelab is noise. */
   recordSessions: boolean;
+  /** Attach to a persistent tmux session on connect instead of a bare shell.
+   *  This is what lets work survive a backgrounded phone or a moved network —
+   *  the session keeps running on the server and a reconnect reattaches. */
+  tmuxSession: boolean;
 }
 
 export interface ServerGroup {

@@ -322,6 +322,28 @@ function TerminalPane({
  * Failures are swallowed on purpose: a missing snippet (deleted on another
  * device, not yet synced) must not turn a working connection into an error.
  */
+/** Reattaches to (or creates) the host's persistent tmux session.
+ *
+ *  `new-session -A` is attach-or-create in one step, so a reconnect lands back
+ *  in the same session rather than starting a second one beside it. The name is
+ *  derived from the profile id, not the label: it has to stay identical across
+ *  reconnects and across a rename, or the whole point is lost.
+ *
+ *  Sent before startup snippets so those run *inside* the persistent session —
+ *  otherwise they would execute in the outer shell and vanish with it. */
+async function attachTmux(sessionId: string, profile: ConnectionProfile | null) {
+  if (!profile?.tmuxSession) return;
+  const name = `unissh-${profile.profileId}`.replace(/[^\w.-]+/g, "_");
+  try {
+    await api.sessionWrite(
+      sessionId,
+      Array.from(new TextEncoder().encode(`tmux new-session -A -s ${name}\n`)),
+    );
+  } catch {
+    /* a failed attach must not break a session that is otherwise fine */
+  }
+}
+
 async function runStartupSnippets(
   sessionId: string,
   profile: ConnectionProfile | null,
@@ -817,7 +839,12 @@ async function runStartupSnippets(
         // Refresh the host's "recently connected" timestamp on every (re)connect.
         if (profile) useApp.getState().markConnected(profile.profileId);
         term.focus();
-        void runStartupSnippets(id, profile, vaultId);
+        void (async () => {
+          // Ordered, not fired in parallel: the snippets are meant to run inside
+          // the tmux session, so the attach has to land first.
+          await attachTmux(id, profile);
+          await runStartupSnippets(id, profile, vaultId);
+        })();
       })
       .catch((err) => {
         if (cancelled) return;

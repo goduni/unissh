@@ -315,6 +315,9 @@ pub struct ConnectionProfile {
     /// Record interactive sessions with this host.
     #[serde(default)]
     pub record_sessions: bool,
+    /// Attach to a persistent tmux session on connect.
+    #[serde(default)]
+    pub tmux_session: bool,
 }
 
 impl From<ConnectionProfile> for ffi::ConnectionProfile {
@@ -332,6 +335,7 @@ impl From<ConnectionProfile> for ffi::ConnectionProfile {
             tags: p.tags,
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
+            tmux_session: p.tmux_session,
         }
     }
 }
@@ -350,6 +354,7 @@ impl From<ffi::ConnectionProfile> for ConnectionProfile {
             tags: p.tags,
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
+            tmux_session: p.tmux_session,
         }
     }
 }

@@ -300,6 +300,16 @@ pub struct ConnectionProfile {
     /// recording a homelab is noise, and unlike an algorithm policy there is a
     /// real reason to want the exception.
     pub record_sessions: bool,
+    /// Attach to a persistent `tmux` session on connect instead of starting a
+    /// bare shell.
+    ///
+    /// This is what makes a session survive a phone being backgrounded or a
+    /// network moving: the work continues on the server, and reconnecting
+    /// reattaches to it. A first-class toggle rather than advice to write
+    /// `tmux new -A -s …` yourself — the incantation is the part people get
+    /// wrong, and its whole value depends on the name staying identical across
+    /// reconnects.
+    pub tmux_session: bool,
 }
 
 /// A personal identity: SSH credentials under a single name (username + optional references to
@@ -598,6 +608,8 @@ struct StoredProfile {
     startup_snippet_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     record_sessions: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    tmux_session: bool,
     /// OpenSSH public-key line selecting an identity in the OS ssh-agent. A
     /// handle, not a secret.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4156,6 +4168,7 @@ impl Core {
                 tags,
                 startup_snippet_ids,
                 record_sessions,
+                tmux_session,
             } = profile;
             if profile_id.is_empty() {
                 return Err(FfiError::other("profile_id must not be empty"));
@@ -4194,6 +4207,7 @@ impl Core {
                 tags,
                 startup_snippet_ids,
                 record_sessions,
+                tmux_session,
                 system_agent_public_key,
                 extra: BTreeMap::new(),
             };
@@ -4812,6 +4826,7 @@ impl Core {
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
+                    tmux_session: false,
                     system_agent_public_key: None,
                     extra: std::collections::BTreeMap::new(),
                 };
@@ -5006,6 +5021,7 @@ impl Core {
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
+                    tmux_session: false,
                     system_agent_public_key: None,
                     extra: std::collections::BTreeMap::new(),
                 };
@@ -6094,6 +6110,7 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         tags: s.tags,
         startup_snippet_ids: s.startup_snippet_ids,
         record_sessions: s.record_sessions,
+        tmux_session: s.tmux_session,
         username_template: s.username_template,
         // Personal takes priority over key/password references (Personal has none anyway).
         auth: if let Some(public_key) = s.system_agent_public_key {
@@ -6633,6 +6650,61 @@ struct RecordingBuf {
     body: String,
     bytes: usize,
     truncated: bool,
+    /// Bytes of a multi-byte UTF-8 sequence that arrived split across chunks.
+    ///
+    /// A PTY writes whatever fits, so a character can straddle two reads. Held
+    /// until the rest arrives instead of being replaced: dropping a replacement
+    /// character into the middle of a word is exactly the corruption a recording
+    /// is supposed to be free of, and it shows up on any non-ASCII output.
+    /// Bounded by construction — never more than three bytes, since four is a
+    /// complete sequence.
+    partial: Vec<u8>,
+}
+
+impl RecordingBuf {
+    /// Appends one asciicast event, enforcing the size cap.
+    ///
+    /// The cap counts the **encoded** line, not the raw bytes that produced it.
+    /// JSON escaping can multiply a control-heavy stream several times over, and
+    /// a limit that counts the input while the user is told about the output
+    /// would let an "8 MB" recording land as a far larger item.
+    fn append_event(&mut self, at: f64, text: &str) {
+        let line = format!("{}\n", serde_json::json!([at, "o", text]));
+        if self.bytes.saturating_add(line.len()) > RECORDING_MAX_BYTES {
+            self.truncated = true;
+            let note =
+                serde_json::json!([at, "o", "\r\n[recording truncated: size limit reached]\r\n"]);
+            self.body.push_str(&format!("{note}\n"));
+            return;
+        }
+        self.bytes += line.len();
+        self.body.push_str(&line);
+    }
+}
+
+/// Splits a byte run into the longest decodable prefix and the trailing bytes of
+/// an incomplete multi-byte sequence.
+///
+/// A byte that is genuinely invalid — not merely incomplete — is replaced rather
+/// than held: waiting for a continuation that will never come would stall the
+/// recording for the rest of the session.
+fn split_utf8(bytes: Vec<u8>) -> (String, Vec<u8>) {
+    match std::str::from_utf8(&bytes) {
+        Ok(s) => (s.to_string(), Vec::new()),
+        Err(e) => {
+            let valid = e.valid_up_to();
+            match e.error_len() {
+                // Incomplete tail: keep it for the next chunk.
+                None => {
+                    let head = String::from_utf8_lossy(&bytes[..valid]).into_owned();
+                    (head, bytes[valid..].to_vec())
+                }
+                // A real decoding error somewhere in the middle: replace it and
+                // carry on with the rest.
+                Some(_) => (String::from_utf8_lossy(&bytes).into_owned(), Vec::new()),
+            }
+        }
+    }
 }
 
 impl SessionRecorder {
@@ -6652,6 +6724,7 @@ impl SessionRecorder {
                 body: format!("{header}\n"),
                 bytes: 0,
                 truncated: false,
+                partial: Vec::new(),
             }),
         }
     }
@@ -6662,26 +6735,30 @@ impl SessionRecorder {
         if buf.truncated {
             return;
         }
-        if buf.bytes.saturating_add(data.len()) > RECORDING_MAX_BYTES {
-            buf.truncated = true;
-            let line =
-                serde_json::json!([at, "o", "\r\n[recording truncated: size limit reached]\r\n"]);
-            buf.body.push_str(&format!("{line}\n"));
+
+        // Anything held back from the previous chunk goes first.
+        let mut pending = std::mem::take(&mut buf.partial);
+        pending.extend_from_slice(data);
+        let (text, tail) = split_utf8(pending);
+        buf.partial = tail;
+        if text.is_empty() {
             return;
         }
-        buf.bytes += data.len();
-        // Lossy on purpose: a terminal stream is not required to be valid UTF-8
-        // (a partial multi-byte sequence can straddle two chunks), and asciicast
-        // events are JSON strings. Replacement characters in a recording are a
-        // far better outcome than dropping the event.
-        let text = String::from_utf8_lossy(data);
-        let line = serde_json::json!([at, "o", text]);
-        buf.body.push_str(&format!("{line}\n"));
+        buf.append_event(at, &text);
     }
 
+    /// Ends the recording, flushing anything still held back.
     fn finish(&self) -> (String, bool, f64) {
         let secs = self.started.elapsed().as_secs_f64();
-        let buf = lock_recover(&self.buf);
+        let mut buf = lock_recover(&self.buf);
+        // A sequence that never completed cannot be waited for any longer; it is
+        // written lossily rather than silently dropped, so the recording ends
+        // where the session did.
+        if !buf.partial.is_empty() && !buf.truncated {
+            let tail = std::mem::take(&mut buf.partial);
+            let text = String::from_utf8_lossy(&tail).into_owned();
+            buf.append_event(secs, &text);
+        }
         (buf.body.clone(), buf.truncated, secs)
     }
 }
@@ -7834,6 +7911,90 @@ fn derive_db_key(keyset: &unissh_keychain::UnlockedKeyset) -> Zeroizing<[u8; 32]
 }
 
 #[cfg(test)]
+mod recorder_tests {
+    use super::{split_utf8, SessionRecorder, RECORDING_MAX_BYTES};
+
+    /// A character split across two chunks must survive intact. A PTY writes
+    /// whatever fits, so this happens on any non-ASCII output — and a
+    /// replacement character dropped into the middle of a word is exactly the
+    /// corruption a recording exists to avoid.
+    #[test]
+    fn a_character_split_across_chunks_is_reassembled() {
+        let rec = SessionRecorder::new(80, 24, "t", 0);
+        let ch = "ы".as_bytes(); // two bytes
+        rec.record(&ch[..1]);
+        rec.record(&ch[1..]);
+        let (body, truncated, _) = rec.finish();
+        assert!(!truncated);
+        assert!(
+            body.contains("ы"),
+            "the character must be whole, got: {body}"
+        );
+        assert!(
+            !body.contains('\u{fffd}'),
+            "no replacement character should appear: {body}"
+        );
+    }
+
+    /// The first chunk carries nothing decodable, so it must produce no event at
+    /// all rather than an event containing a replacement character.
+    #[test]
+    fn an_incomplete_chunk_emits_nothing_yet() {
+        let rec = SessionRecorder::new(80, 24, "t", 0);
+        rec.record(&"я".as_bytes()[..1]);
+        let (body, _, _) = rec.finish();
+        // finish() flushes the stranded byte lossily — one event, not two.
+        assert_eq!(
+            body.lines().count(),
+            2,
+            "expected the header plus a single flush event: {body}"
+        );
+    }
+
+    /// Genuinely invalid bytes must not stall the recording waiting for a
+    /// continuation that will never arrive.
+    #[test]
+    fn invalid_bytes_do_not_stall_the_stream() {
+        let rec = SessionRecorder::new(80, 24, "t", 0);
+        rec.record(&[0xff, 0xfe, b'o', b'k']);
+        let (body, _, _) = rec.finish();
+        assert!(
+            body.contains("ok"),
+            "the valid tail must still be recorded: {body}"
+        );
+    }
+
+    #[test]
+    fn split_utf8_keeps_only_an_incomplete_tail() {
+        let (head, tail) = split_utf8("abя".as_bytes()[..3].to_vec());
+        assert_eq!(head, "ab");
+        assert_eq!(tail.len(), 1, "the lone lead byte is held back");
+    }
+
+    /// The cap counts the encoded document, not the raw input: JSON escaping can
+    /// multiply a control-heavy stream several times over, and a limit that
+    /// measured the input while the user is told about the output would let an
+    /// "8 MB" recording land as a much larger item.
+    #[test]
+    fn the_cap_measures_the_written_document() {
+        let rec = SessionRecorder::new(80, 24, "t", 0);
+        // Every byte here encodes to six characters (\u0001), so raw-byte
+        // accounting would let roughly six times the cap through.
+        let chunk = vec![0x01u8; 64 * 1024];
+        for _ in 0..200 {
+            rec.record(&chunk);
+        }
+        let (body, truncated, _) = rec.finish();
+        assert!(truncated, "the cap must have been reached");
+        assert!(
+            body.len() < RECORDING_MAX_BYTES + 64 * 1024,
+            "document grew to {} bytes, past the {RECORDING_MAX_BYTES} cap",
+            body.len()
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -8206,6 +8367,7 @@ mod tests {
             tags: vec!["prod".to_string()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
+            tmux_session: false,
         };
         let (key_item_id, password_item_id) = match prof.auth.clone() {
             ProfileAuth::Key { key_item_id } => (Some(key_item_id), None),
@@ -8234,6 +8396,7 @@ mod tests {
             extra: std::collections::BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
+            tmux_session: false,
             system_agent_public_key: None,
         };
         let json = serde_json::to_string(&stored).unwrap();
@@ -8325,6 +8488,7 @@ mod tests {
             extra: std::collections::BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
+            tmux_session: false,
             system_agent_public_key: None,
         };
         let prof = stored_to_profile("va", "p".into(), sp);
@@ -8358,6 +8522,7 @@ mod tests {
                 tags: vec![],
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
+                tmux_session: false,
             },
         )
         .unwrap();
@@ -8551,6 +8716,7 @@ mod tests {
                 tags: vec![],
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
+                tmux_session: false,
             },
         )
         .unwrap();
@@ -8882,6 +9048,7 @@ mod tests {
             tags: vec!["prod".into()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
+            tmux_session: false,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();
@@ -8961,6 +9128,7 @@ mod tests {
             tags: vec!["prod".into()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
+            tmux_session: false,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();
