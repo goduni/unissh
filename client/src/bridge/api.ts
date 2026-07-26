@@ -393,13 +393,42 @@ export interface OpenSessionArgs extends ConnectArgs {
   cols: number;
   rows: number;
 }
+/** Ask the core to record this session into `vaultId` under `recordingId`.
+ *  The document is written when the session ends, not while it runs. */
+export interface RecordingRequest {
+  vaultId: string;
+  recordingId: string;
+  label: string;
+}
+
+export interface RecordingMeta {
+  recordingId: string;
+  label: string;
+  host: string;
+  user: string;
+  startedUnix: number;
+  durationSecs: number;
+  /** The size cap stopped the capture before the session ended. */
+  truncated: boolean;
+  sizeBytes: number;
+}
+
+export const listRecordings = (vaultId: string) =>
+  invoke<RecordingMeta[]>("list_recordings", { vaultId });
+/** The asciicast v2 document — playable by `asciinema`, not only by us. */
+export const getRecording = (vaultId: string, recordingId: string) =>
+  invoke<string>("get_recording", { vaultId, recordingId });
+export const deleteRecording = (vaultId: string, recordingId: string) =>
+  afterMut(vaultId, invoke<void>("delete_recording", { vaultId, recordingId }));
+
 export async function sessionOpen(
   a: OpenSessionArgs,
   onEvent: (e: TermEvent) => void,
+  recording?: RecordingRequest,
 ): Promise<string> {
   const ch = new Channel<TermEvent>();
   ch.onmessage = onEvent;
-  return invoke<string>("session_open", { ...a, onEvent: ch });
+  return invoke<string>("session_open", { ...a, onEvent: ch, recording: recording ?? null });
 }
 export async function sessionOpenReconnecting(
   a: OpenSessionArgs & { maxRetries: number; backoffMs: number },

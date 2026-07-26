@@ -226,6 +226,37 @@ pub async fn set_keepalive_secs(secs: u64, state: State<'_, AppState>) -> ApiRes
     Ok(())
 }
 
+#[tauri::command]
+pub async fn list_recordings(
+    vault_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::RecordingMeta>> {
+    let core = state.core.clone();
+    let v = blocking(move || core.list_recordings(vault_id)).await?;
+    Ok(v.into_iter().map(Into::into).collect())
+}
+
+/// The asciicast v2 document — for replay in-app or export to a file.
+#[tauri::command]
+pub async fn get_recording(
+    vault_id: String,
+    recording_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<String> {
+    let core = state.core.clone();
+    blocking(move || core.get_recording(vault_id, recording_id)).await
+}
+
+#[tauri::command]
+pub async fn delete_recording(
+    vault_id: String,
+    recording_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking(move || core.delete_recording(vault_id, recording_id)).await
+}
+
 /// What an ~/.ssh/config import would drop. Read-only: it parses the text and
 /// writes nothing, so the user can see the damage before agreeing to it.
 #[tauri::command]
@@ -1000,15 +1031,18 @@ pub async fn session_open(
     cols: u32,
     rows: u32,
     on_event: Channel<TermEvent>,
+    recording: Option<dto::RecordingRequest>,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
     let obs: Arc<dyn SessionObserver> = Arc::new(ChannelSessionObserver { chan: on_event });
-    let session =
-        blocking(move || core.open_session(host, port, user, auth, jumps, term, cols, rows, obs))
-            .await?;
+    let rec = recording.map(Into::into);
+    let session = blocking(move || {
+        core.open_session(host, port, user, auth, jumps, term, cols, rows, obs, rec)
+    })
+    .await?;
     let id = new_id();
     state
         .sessions

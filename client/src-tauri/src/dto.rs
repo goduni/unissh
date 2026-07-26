@@ -287,6 +287,9 @@ pub struct ConnectionProfile {
     /// Snippets typed into the shell right after connecting, in order.
     #[serde(default)]
     pub startup_snippet_ids: Vec<String>,
+    /// Record interactive sessions with this host.
+    #[serde(default)]
+    pub record_sessions: bool,
 }
 
 impl From<ConnectionProfile> for ffi::ConnectionProfile {
@@ -303,6 +306,7 @@ impl From<ConnectionProfile> for ffi::ConnectionProfile {
             jumps: p.jumps.into_iter().map(Into::into).collect(),
             tags: p.tags,
             startup_snippet_ids: p.startup_snippet_ids,
+            record_sessions: p.record_sessions,
         }
     }
 }
@@ -320,6 +324,7 @@ impl From<ffi::ConnectionProfile> for ConnectionProfile {
             jumps: p.jumps.into_iter().map(Into::into).collect(),
             tags: p.tags,
             startup_snippet_ids: p.startup_snippet_ids,
+            record_sessions: p.record_sessions,
         }
     }
 }
@@ -1247,6 +1252,54 @@ impl From<Snippet> for ffi::Snippet {
             command: s.command,
             run_on_connect: s.run_on_connect,
             tags: s.tags,
+        }
+    }
+}
+
+// ---------- session recordings ----------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingRequest {
+    pub vault_id: String,
+    pub recording_id: String,
+    pub label: String,
+}
+
+impl From<RecordingRequest> for ffi::RecordingRequest {
+    fn from(r: RecordingRequest) -> Self {
+        ffi::RecordingRequest {
+            vault_id: r.vault_id,
+            recording_id: r.recording_id,
+            label: r.label,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingMeta {
+    pub recording_id: String,
+    pub label: String,
+    pub host: String,
+    pub user: String,
+    pub started_unix: u64,
+    pub duration_secs: f64,
+    pub truncated: bool,
+    pub size_bytes: u64,
+}
+
+impl From<ffi::RecordingMeta> for RecordingMeta {
+    fn from(m: ffi::RecordingMeta) -> Self {
+        RecordingMeta {
+            recording_id: m.recording_id,
+            label: m.label,
+            host: m.host,
+            user: m.user,
+            started_unix: m.started_unix,
+            duration_secs: m.duration_secs,
+            truncated: m.truncated,
+            size_bytes: m.size_bytes,
         }
     }
 }

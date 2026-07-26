@@ -280,6 +280,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   const [newGroupName, setNewGroupName] = useState("");
   const [addingGroup, setAddingGroup] = useState(false);
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
+  const [recordSessions, setRecordSessions] = useState<boolean>(edit?.recordSessions ?? false);
   const [tagDraft, setTagDraft] = useState("");
 
   // B5.3(b): in a SHARED (multi-member) cloud vault, default a NEW host to
@@ -569,6 +570,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       // Preserved rather than reset: this dialog does not edit startup snippets,
       // and dropping them here would silently unlink them on every host edit.
       startupSnippetIds: edit?.startupSnippetIds ?? [],
+      recordSessions: recordSessions,
     };
 
     try {
@@ -1284,6 +1286,18 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                 </button>
               </div>
             </Field>
+          </div>
+
+          {/* session recording — per host, because recording production is a
+              requirement and recording a homelab is noise */}
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <Toggle checked={recordSessions} onChange={setRecordSessions} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                {t("modals.host.recordTitle")}
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>{t("modals.host.recordDesc")}</div>
+            </div>
           </div>
 
           {/* tags */}

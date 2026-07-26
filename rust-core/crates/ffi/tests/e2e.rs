@@ -556,6 +556,7 @@ fn interactive_pty_session() {
             80,
             24,
             observer.clone(),
+            None,
         )
         .unwrap();
 
@@ -1018,6 +1019,7 @@ fn connection_profiles_crud_and_import() {
         }],
         tags: vec![],
         startup_snippet_ids: vec![],
+        record_sessions: false,
     };
     core.save_connection("v".to_string(), prof).unwrap();
 
@@ -1080,6 +1082,7 @@ fn cross_type_clobber_rejected() {
         jumps: vec![],
         tags: vec![],
         startup_snippet_ids: vec![],
+        record_sessions: false,
     };
     assert!(matches!(
         core.save_connection("v".to_string(), prof),
@@ -1103,6 +1106,7 @@ fn cross_type_clobber_rejected() {
         jumps: vec![],
         tags: vec![],
         startup_snippet_ids: vec![],
+        record_sessions: false,
     };
     core.save_connection("v".to_string(), prof2).unwrap();
     assert!(matches!(
@@ -1434,6 +1438,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         }],
         tags: vec![],
         startup_snippet_ids: vec![],
+        record_sessions: false,
     };
     core.save_connection("v".to_string(), prof).unwrap();
 
@@ -1470,6 +1475,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         }],
         tags: vec![],
         startup_snippet_ids: vec![],
+        record_sessions: false,
     };
     assert!(core.save_connection("v".to_string(), bad).is_err());
     assert!(matches!(
@@ -1829,6 +1835,7 @@ fn save_profile(core: &Core, id: &str, host: &str, port: u16, key_item: &str, ta
             jumps: vec![],
             tags: tags.iter().map(|s| s.to_string()).collect(),
             startup_snippet_ids: vec![],
+            record_sessions: false,
         },
     )
     .unwrap();
@@ -1899,6 +1906,7 @@ fn select_targets_by_tags_excludes_prompt_password() {
             jumps: vec![],
             tags: vec!["web".to_string()],
             startup_snippet_ids: vec![],
+            record_sessions: false,
         },
     )
     .unwrap();
@@ -2114,6 +2122,7 @@ fn dry_run_group_reports_statuses() {
             jumps: vec![],
             tags: vec![],
             startup_snippet_ids: vec![],
+            record_sessions: false,
         },
     )
     .unwrap();
@@ -2217,6 +2226,7 @@ fn resize_changes_terminal_size() {
             80,
             24,
             observer.clone(),
+            None,
         )
         .unwrap();
 
@@ -2273,6 +2283,7 @@ fn open_session_rejects_zero_size() {
         0,
         24,
         observer,
+        None,
     );
     assert!(r.is_err(), "zero width must be rejected by validation");
 }
@@ -3489,6 +3500,7 @@ fn profile_carries_its_startup_snippets() {
         jumps: vec![],
         tags: vec![],
         startup_snippet_ids: vec!["tmux-attach".to_string(), "cd-app".to_string()],
+        record_sessions: false,
     };
     core.save_connection("v".to_string(), p.clone()).unwrap();
 
@@ -3514,4 +3526,149 @@ fn profile_carries_its_startup_snippets() {
         .find(|c| c.profile_id == "web1")
         .unwrap();
     assert!(cleared.startup_snippet_ids.is_empty());
+}
+
+/// Session recording against a real sshd: the capture happens, it lands in the
+/// vault when the session ends, and it is a valid asciicast v2 document.
+#[test]
+fn session_recording_captures_and_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    let sshd = TestSshd::start(&pubkey);
+
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let session = core
+        .open_session(
+            "127.0.0.1".to_string(),
+            sshd.port,
+            "root".to_string(),
+            agent_auth("v", "key"),
+            vec![],
+            "xterm".to_string(),
+            80,
+            24,
+            observer.clone(),
+            Some(unissh_ffi::RecordingRequest {
+                vault_id: "v".to_string(),
+                recording_id: "rec-1".to_string(),
+                label: "test host".to_string(),
+            }),
+        )
+        .unwrap();
+
+    // Nothing is written while the session is live — the document lands when it ends.
+    assert!(
+        core.list_recordings("v".to_string()).unwrap().is_empty(),
+        "a recording must not appear before the session it records has finished"
+    );
+
+    session.write(b"echo recorded-marker\n".to_vec()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if contains(&observer.buf.lock().unwrap(), b"recorded-marker") {
+            break;
+        }
+        assert!(Instant::now() <= deadline, "no output from the shell");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    session.close().unwrap();
+
+    // on_close is delivered from the reader task, so give it a moment to land.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let meta = loop {
+        let list = core.list_recordings("v".to_string()).unwrap();
+        if let Some(m) = list.into_iter().next() {
+            break m;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the recording was never written"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    assert_eq!(meta.recording_id, "rec-1");
+    assert_eq!(meta.host, "127.0.0.1");
+    assert_eq!(meta.user, "root");
+    assert!(
+        !meta.truncated,
+        "a short session must not be marked truncated"
+    );
+    assert!(meta.size_bytes > 0);
+
+    let cast = core
+        .get_recording("v".to_string(), "rec-1".to_string())
+        .unwrap();
+    let mut lines = cast.lines();
+    // The header is a JSON object naming the format version and the geometry.
+    let header: serde_json::Value = serde_json::from_str(lines.next().expect("header")).unwrap();
+    assert_eq!(header["version"], 2);
+    assert_eq!(header["width"], 80);
+    assert_eq!(header["height"], 24);
+    // Every following line is an [time, "o", data] event, and the output we
+    // provoked has to be in there somewhere.
+    let mut saw_marker = false;
+    for line in lines {
+        let ev: serde_json::Value = serde_json::from_str(line).expect("event is valid JSON");
+        assert_eq!(ev[1], "o");
+        assert!(ev[0].as_f64().is_some(), "event carries a timestamp");
+        if ev[2]
+            .as_str()
+            .is_some_and(|s| s.contains("recorded-marker"))
+        {
+            saw_marker = true;
+        }
+    }
+    assert!(
+        saw_marker,
+        "the recording is missing the output it recorded"
+    );
+
+    core.delete_recording("v".to_string(), "rec-1".to_string())
+        .unwrap();
+    assert!(core.list_recordings("v".to_string()).unwrap().is_empty());
+}
+
+/// A session opened without a recording request leaves nothing behind.
+#[test]
+fn no_recording_request_records_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    let sshd = TestSshd::start(&pubkey);
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let session = core
+        .open_session(
+            "127.0.0.1".to_string(),
+            sshd.port,
+            "root".to_string(),
+            agent_auth("v", "key"),
+            vec![],
+            "xterm".to_string(),
+            80,
+            24,
+            observer,
+            None,
+        )
+        .unwrap();
+    session.write(b"echo nope\n".to_vec()).unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    session.close().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(core.list_recordings("v".to_string()).unwrap().is_empty());
 }

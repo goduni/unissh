@@ -55,6 +55,9 @@ export interface ConnectionProfile {
    *  Kept on the profile rather than as a flag on the snippet: "run on connect"
    *  has to say where, and a global flag would fire on every host. */
   startupSnippetIds: string[];
+  /** Record interactive sessions with this host. Per host, not global:
+   *  recording production is a requirement and recording a homelab is noise. */
+  recordSessions: boolean;
 }
 
 export interface ServerGroup {

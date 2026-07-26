@@ -83,6 +83,8 @@ const ITEM_TYPE_BINDING: u32 = 8;
 /// and syncs between devices — a command line is often a secret in practice
 /// (hostnames, ticket ids, one-off tokens someone pasted once).
 const ITEM_TYPE_SNIPPET: u32 = 9;
+/// Item type for a recorded session (content is an asciicast v2 document).
+const ITEM_TYPE_RECORDING: u32 = 10;
 /// Depth limit for expanding nested groups (guards against blow-up/cycling
 /// beyond the visited-set).
 const GROUP_MAX_DEPTH: u32 = 32;
@@ -292,6 +294,12 @@ pub struct ConnectionProfile {
     /// meaningless without saying *where*, and a global flag would mean running
     /// it on every host — which is how a convenience becomes an accident.
     pub startup_snippet_ids: Vec<String>,
+    /// Record interactive sessions with this host.
+    ///
+    /// Per host rather than global: recording production is a requirement,
+    /// recording a homelab is noise, and unlike an algorithm policy there is a
+    /// real reason to want the exception.
+    pub record_sessions: bool,
 }
 
 /// A personal identity: SSH credentials under a single name (username + optional references to
@@ -581,6 +589,8 @@ struct StoredProfile {
     /// Omitted when empty so existing signed items keep their exact bytes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     startup_snippet_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    record_sessions: bool,
     /// Forward compatibility: unknown fields (added by a future version)
     /// are preserved on round-trip rather than dropped. Otherwise an OLDER client would
     /// read the profile without the new field (e.g. `personal`), and on re-
@@ -602,6 +612,21 @@ struct StoredSnippet {
     #[serde(default)]
     tags: Vec<String>,
     /// Forward compatibility (see [`StoredProfile::extra`]).
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// Serializable body of a session recording.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredRecording {
+    label: String,
+    host: String,
+    user: String,
+    started_unix: u64,
+    duration_secs: f64,
+    truncated: bool,
+    /// The asciicast v2 document.
+    asciicast: String,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -3113,11 +3138,34 @@ impl Core {
         cols: u32,
         rows: u32,
         observer: Arc<dyn SessionObserver>,
+        recording: Option<RecordingRequest>,
     ) -> Result<Arc<SshSession>, FfiError> {
         check_term_size(cols, rows)?;
+        let host_for_record = host.clone();
+        let user_for_record = user.clone();
         let client = self.connect_session(&auth, &jumps, host, port, user)?;
 
-        let sink: Arc<dyn OutputSink> = Arc::new(ObserverSink(observer));
+        let sink: Arc<dyn OutputSink> = match recording {
+            None => Arc::new(ObserverSink(observer)),
+            Some(req) => {
+                let started_unix = unix_now();
+                let recorder = Arc::new(SessionRecorder::new(cols, rows, &req.label, started_unix));
+                Arc::new(RecordingSink {
+                    inner: Arc::new(ObserverSink(observer)),
+                    recorder,
+                    saver: RecordingSaver {
+                        state: self.state.clone(),
+                        vault_id: req.vault_id,
+                        recording_id: req.recording_id,
+                        label: req.label,
+                        host: host_for_record,
+                        user: user_for_record,
+                        started_unix,
+                    },
+                    saved: std::sync::atomic::AtomicBool::new(false),
+                })
+            }
+        };
         let shell = self
             .rt
             .block_on(client.open_shell(&term, cols, rows, sink))
@@ -3585,6 +3633,87 @@ impl Core {
         })
     }
 
+    // --- session recordings ---
+
+    /// Recorded sessions in a vault, newest first, without their bodies.
+    pub fn list_recordings(&self, vault_id: String) -> Result<Vec<RecordingMeta>, FfiError> {
+        self.with_state_mut(|state| {
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, &vault_id),
+            )
+            .map_err(FfiError::other)?;
+            let mut out = Vec::new();
+            for m in vault.list_items().map_err(FfiError::other)? {
+                if m.item_type != ITEM_TYPE_RECORDING {
+                    continue;
+                }
+                if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
+                    if let Ok(r) = serde_json::from_slice::<StoredRecording>(&item.content) {
+                        out.push(RecordingMeta {
+                            recording_id: String::from_utf8_lossy(&m.item_id).to_string(),
+                            label: r.label,
+                            host: r.host,
+                            user: r.user,
+                            started_unix: r.started_unix,
+                            duration_secs: r.duration_secs,
+                            truncated: r.truncated,
+                            size_bytes: r.asciicast.len() as u64,
+                        });
+                    }
+                }
+            }
+            out.sort_by(|a, b| b.started_unix.cmp(&a.started_unix));
+            Ok(out)
+        })
+    }
+
+    /// The asciicast v2 document of one recording — for replay or export.
+    ///
+    /// A standard format, so a recording can be handed to an auditor and played
+    /// with `asciinema` rather than only inside this app.
+    pub fn get_recording(
+        &self,
+        vault_id: String,
+        recording_id: String,
+    ) -> Result<String, FfiError> {
+        self.with_state_mut(|state| {
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, &vault_id),
+            )
+            .map_err(FfiError::other)?;
+            let item = vault
+                .get_item(recording_id.as_bytes())
+                .map_err(FfiError::other)?
+                .ok_or(FfiError::NotFound)?;
+            if item.item_type != ITEM_TYPE_RECORDING {
+                return Err(FfiError::other("item is not a session recording"));
+            }
+            let r: StoredRecording =
+                serde_json::from_slice(&item.content).map_err(FfiError::other)?;
+            Ok(r.asciicast)
+        })
+    }
+
+    /// Deletes a recording (a tombstone, so it does not come back on sync).
+    pub fn delete_recording(&self, vault_id: String, recording_id: String) -> Result<(), FfiError> {
+        self.with_state_mut(|state| {
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, &vault_id),
+            )
+            .map_err(FfiError::other)?;
+            vault
+                .delete_item(recording_id.as_bytes())
+                .map_err(map_vault_err)?;
+            Ok(())
+        })
+    }
+
     // --- host groups ---
 
     /// Saves/updates a host group (an item of type "group"). Only references to
@@ -3960,6 +4089,7 @@ impl Core {
                 jumps,
                 tags,
                 startup_snippet_ids,
+                record_sessions,
             } = profile;
             if profile_id.is_empty() {
                 return Err(FfiError::other("profile_id must not be empty"));
@@ -3996,6 +4126,7 @@ impl Core {
                     .collect::<Result<_, _>>()?,
                 tags,
                 startup_snippet_ids,
+                record_sessions,
                 extra: BTreeMap::new(),
             };
             ensure_item_type(
@@ -4612,6 +4743,7 @@ impl Core {
                     jumps: parse_proxy_jump(s.proxy_jump.as_deref()),
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
+                    record_sessions: false,
                     extra: std::collections::BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
@@ -4804,6 +4936,7 @@ impl Core {
                     jumps,
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
+                    record_sessions: false,
                     extra: std::collections::BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
@@ -5869,6 +6002,7 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         user: s.user,
         tags: s.tags,
         startup_snippet_ids: s.startup_snippet_ids,
+        record_sessions: s.record_sessions,
         username_template: s.username_template,
         // Personal takes priority over key/password references (Personal has none anyway).
         auth: if s.personal {
@@ -6170,6 +6304,41 @@ fn split_host_port(s: &str) -> (String, u16) {
     }
 }
 
+/// A recorded session, without its body — for listing.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RecordingMeta {
+    /// Item id in the vault.
+    pub recording_id: String,
+    /// Label, usually the host's.
+    pub label: String,
+    /// Host and user it was recorded against.
+    pub host: String,
+    /// User.
+    pub user: String,
+    /// Unix seconds when it started.
+    pub started_unix: u64,
+    /// How long it ran.
+    pub duration_secs: f64,
+    /// `true` when the size cap stopped the capture before the session ended.
+    /// Surfaced rather than hidden: a partial recording that looks complete is
+    /// worse than no recording.
+    pub truncated: bool,
+    /// Size of the asciicast document in bytes.
+    pub size_bytes: u64,
+}
+
+/// What to record, and where to put it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RecordingRequest {
+    /// Vault that will hold the recording.
+    pub vault_id: String,
+    /// Item id to write. The caller mints it so it can be referenced before the
+    /// session ends.
+    pub recording_id: String,
+    /// Human-readable label.
+    pub label: String,
+}
+
 /// A reusable command.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct Snippet {
@@ -6321,6 +6490,177 @@ pub trait SessionObserver: Send + Sync {
     fn on_data(&self, data: Vec<u8>);
     /// The session is closed; the exit code (or -1).
     fn on_close(&self, exit_status: i32);
+}
+
+/// Wall-clock seconds since the epoch, for stamping a recording.
+///
+/// Saturating rather than panicking: a machine with its clock before 1970 is
+/// misconfigured, not a reason to fail a session that already ran.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// How much captured output one recording may hold before it stops growing.
+///
+/// A recording is accumulated in memory and written once when the session ends,
+/// so an unbounded one is a session-length memory leak — and `cat`ting a large
+/// file into a terminal would be enough to trigger it. Past the cap the
+/// recording is closed off and marked truncated rather than quietly losing the
+/// end, so a reader can tell the difference between "nothing else happened" and
+/// "we stopped listening".
+const RECORDING_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Accumulates an [asciicast v2] document for one session.
+///
+/// asciicast rather than a private format on purpose: a recording that can only
+/// be played by the tool that made it is not evidence anyone else can check, and
+/// export is the thing competitors in this space are criticised for lacking.
+///
+/// [asciicast v2]: https://docs.asciinema.org/manual/asciicast/v2/
+struct SessionRecorder {
+    started: std::time::Instant,
+    buf: Mutex<RecordingBuf>,
+}
+
+struct RecordingBuf {
+    body: String,
+    bytes: usize,
+    truncated: bool,
+}
+
+impl SessionRecorder {
+    fn new(cols: u32, rows: u32, title: &str, started_unix: u64) -> Self {
+        // The header is written up front so a recording salvaged from a crash is
+        // still a valid document.
+        let header = serde_json::json!({
+            "version": 2,
+            "width": cols,
+            "height": rows,
+            "timestamp": started_unix,
+            "title": title,
+        });
+        SessionRecorder {
+            started: std::time::Instant::now(),
+            buf: Mutex::new(RecordingBuf {
+                body: format!("{header}\n"),
+                bytes: 0,
+                truncated: false,
+            }),
+        }
+    }
+
+    fn record(&self, data: &[u8]) {
+        let at = self.started.elapsed().as_secs_f64();
+        let mut buf = lock_recover(&self.buf);
+        if buf.truncated {
+            return;
+        }
+        if buf.bytes.saturating_add(data.len()) > RECORDING_MAX_BYTES {
+            buf.truncated = true;
+            let line =
+                serde_json::json!([at, "o", "\r\n[recording truncated: size limit reached]\r\n"]);
+            buf.body.push_str(&format!("{line}\n"));
+            return;
+        }
+        buf.bytes += data.len();
+        // Lossy on purpose: a terminal stream is not required to be valid UTF-8
+        // (a partial multi-byte sequence can straddle two chunks), and asciicast
+        // events are JSON strings. Replacement characters in a recording are a
+        // far better outcome than dropping the event.
+        let text = String::from_utf8_lossy(data);
+        let line = serde_json::json!([at, "o", text]);
+        buf.body.push_str(&format!("{line}\n"));
+    }
+
+    fn finish(&self) -> (String, bool, f64) {
+        let secs = self.started.elapsed().as_secs_f64();
+        let buf = lock_recover(&self.buf);
+        (buf.body.clone(), buf.truncated, secs)
+    }
+}
+
+/// Where a finished recording is written, and what it is called.
+struct RecordingSaver {
+    state: Arc<Mutex<Option<CoreState>>>,
+    vault_id: String,
+    recording_id: String,
+    label: String,
+    host: String,
+    user: String,
+    started_unix: u64,
+}
+
+impl RecordingSaver {
+    fn save(&self, recorder: &SessionRecorder) {
+        let (body, truncated, duration) = recorder.finish();
+        let stored = StoredRecording {
+            label: self.label.clone(),
+            host: self.host.clone(),
+            user: self.user.clone(),
+            started_unix: self.started_unix,
+            duration_secs: duration,
+            truncated,
+            asciicast: body,
+            extra: BTreeMap::new(),
+        };
+        let json = match serde_json::to_vec(&stored) {
+            Ok(j) => j,
+            Err(e) => {
+                log::warn!("session recording could not be serialized: {e}");
+                return;
+            }
+        };
+        // Failure here must never surface as a session error: the session is
+        // already over, and the user losing a recording is not a reason to make
+        // a clean disconnect look like a fault. It is logged and dropped.
+        let mut guard = lock_recover(&self.state);
+        let Some(st) = guard.as_mut() else {
+            log::warn!("session recording dropped: the core locked before it could be written");
+            return;
+        };
+        let vault = match Vault::open(
+            &st.storage,
+            &st.keyset,
+            &resolve_vid(&st.storage, &self.vault_id),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("session recording dropped: {e}");
+                return;
+            }
+        };
+        if let Err(e) = vault.put_item(self.recording_id.as_bytes(), ITEM_TYPE_RECORDING, &json) {
+            log::warn!("session recording dropped: {e}");
+        }
+    }
+}
+
+/// Wraps the UI's sink, copying the stream into a recording on the way past.
+struct RecordingSink {
+    inner: Arc<dyn OutputSink>,
+    recorder: Arc<SessionRecorder>,
+    saver: RecordingSaver,
+    saved: std::sync::atomic::AtomicBool,
+}
+
+impl OutputSink for RecordingSink {
+    fn on_data(&self, data: Vec<u8>) {
+        self.recorder.record(&data);
+        self.inner.on_data(data);
+    }
+    fn on_close(&self, exit_status: Option<u32>) {
+        // Every way a session ends arrives here — the shell exiting, the server
+        // closing, the transport dropping — which is why the write happens here
+        // rather than in an explicit close(): a dropped connection is exactly the
+        // session someone will want the recording of.
+        if !self.saved.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            self.saver.save(&self.recorder);
+        }
+        self.inner.on_close(exit_status);
+    }
 }
 
 struct ObserverSink(Arc<dyn SessionObserver>);
@@ -7751,6 +8091,7 @@ mod tests {
             }],
             tags: vec!["prod".to_string()],
             startup_snippet_ids: Vec::new(),
+            record_sessions: false,
         };
         let (key_item_id, password_item_id) = match prof.auth.clone() {
             ProfileAuth::Key { key_item_id } => (Some(key_item_id), None),
@@ -7776,6 +8117,7 @@ mod tests {
             tags: prof.tags.clone(),
             extra: std::collections::BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
+            record_sessions: false,
         };
         let json = serde_json::to_string(&stored).unwrap();
         let back: StoredProfile = serde_json::from_str(&json).unwrap();
@@ -7865,6 +8207,7 @@ mod tests {
             tags: vec![],
             extra: std::collections::BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
+            record_sessions: false,
         };
         let prof = stored_to_profile("va", "p".into(), sp);
         let hr = prof.jumps[0].hop_ref.as_ref().unwrap();
@@ -7896,6 +8239,7 @@ mod tests {
                 jumps: vec![],
                 tags: vec![],
                 startup_snippet_ids: Vec::new(),
+                record_sessions: false,
             },
         )
         .unwrap();
@@ -8088,6 +8432,7 @@ mod tests {
                 jumps: vec![],
                 tags: vec![],
                 startup_snippet_ids: Vec::new(),
+                record_sessions: false,
             },
         )
         .unwrap();
@@ -8418,6 +8763,7 @@ mod tests {
             jumps: vec![],
             tags: vec!["prod".into()],
             startup_snippet_ids: Vec::new(),
+            record_sessions: false,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();
@@ -8496,6 +8842,7 @@ mod tests {
             jumps: vec![],
             tags: vec!["prod".into()],
             startup_snippet_ids: Vec::new(),
+            record_sessions: false,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();

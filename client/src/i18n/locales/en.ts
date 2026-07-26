@@ -603,6 +603,8 @@ export const en = {
       "newGroup": "New group",
       "newGroupPlaceholder": "Group name…",
       "editNewGroup": "Edit new group name",
+      "recordTitle": "Record sessions",
+      "recordDesc": "Save what happens in interactive sessions with this host as an asciicast, encrypted in the vault. Capped at 8 MB per session; a recording that hits the cap is marked truncated rather than quietly cut short.",
       "tags": "Tags",
       "removeTag": "Remove tag",
       "addTagPlaceholder": "+ add",

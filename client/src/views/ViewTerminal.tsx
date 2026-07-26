@@ -791,6 +791,16 @@ async function runStartupSnippets(
             rows: term.rows || 24,
           },
           onEvent,
+          // A recording per connection, not per pane: a reconnect is a new
+          // session with its own start time, and appending it to the previous
+          // document would produce one recording whose timeline lies.
+          profile.recordSessions && vaultId
+            ? {
+                vaultId,
+                recordingId: `rec-${profile.profileId}-${Date.now()}`,
+                label: profile.label,
+              }
+            : undefined,
         ),
       )
       .then((id) => {
