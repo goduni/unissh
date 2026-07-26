@@ -1052,6 +1052,11 @@ pub struct Core {
     // (reconnection needs access to the keyset/storage/agent).
     state: Arc<Mutex<Option<CoreState>>>,
     rt: Arc<tokio::runtime::Runtime>,
+    // Registered once by the UI rather than passed to each of the dozen connect
+    // paths, and shared by Arc so reconnects reach it too: a reconnect needs a
+    // *fresh* one-time code, so it must be able to ask again. Outside CoreState
+    // on purpose — locking the core must not detach the UI's prompt handler.
+    prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
 }
 
 /// Escrow enrollment/fetch credentials derived on the device (spec 5.1 / server-tz
@@ -1087,7 +1092,19 @@ impl Core {
                     .build()
                     .expect("tokio runtime"),
             ),
+            prompter: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Registers who to ask when a server wants something only the person at the
+    /// keyboard can supply — a one-time code, a push confirmation, a forced
+    /// password change. Register once at start-up; it applies to every
+    /// connection, including reconnects and fleet operations.
+    ///
+    /// Without one, a server that demands a second factor fails the connection
+    /// with a distinct "no prompt handler" error rather than guessing.
+    pub fn set_auth_prompter(&self, prompter: Option<Arc<dyn AuthPrompter>>) {
+        *lock_recover(&self.prompter) = prompter;
     }
 
     /// Creates a new account (the first device). Returns the Secret Key (hex) for
@@ -3092,6 +3109,7 @@ impl Core {
         let session = Arc::new(ReconnectingSession {
             state: self.state.clone(),
             rt: self.rt.clone(),
+            prompter: self.prompter.clone(),
             host,
             port,
             user,
@@ -3761,6 +3779,7 @@ impl Core {
             .map_err(map_transport_err)?;
         let max = (parallelism.clamp(1, 16)) as usize;
         Ok(Arc::new(SftpFfi {
+            prompter: self.prompter.clone(),
             client: Mutex::new(Some(client)),
             pool: Mutex::new(SftpPool {
                 idle: vec![sftp],
@@ -4863,7 +4882,16 @@ impl Core {
         port: u16,
         user: String,
     ) -> Result<SshClient, FfiError> {
-        connect_with_state(&self.state, &self.rt, auth, jumps, host, port, user)
+        connect_with_state(
+            &self.state,
+            &self.rt,
+            &self.prompter,
+            auth,
+            jumps,
+            host,
+            port,
+            user,
+        )
     }
 
     /// Reveal of a specific version of a UTF-8 secret from history, type-gated to
@@ -5026,12 +5054,17 @@ impl Core {
 fn connect_with_state(
     state: &Arc<Mutex<Option<CoreState>>>,
     rt: &tokio::runtime::Runtime,
+    prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     auth: &AuthMethod,
     jumps: &[JumpHost],
     host: String,
     port: u16,
     user: String,
 ) -> Result<SshClient, FfiError> {
+    // Cloned out before the state lock is taken: the prompt fires while that lock
+    // is held (see the note above), so reaching back for another lock here would
+    // be one more chance to deadlock for no benefit.
+    let prompter = lock_recover(prompter).clone();
     let mut guard = lock_recover(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;
     let mut chain = Vec::with_capacity(jumps.len());
@@ -5061,10 +5094,16 @@ fn connect_with_state(
             None => (j.host.clone(), j.port, j.user.clone(), j.auth.clone()),
         };
         let a = resolve_auth(st, &auth)?;
-        chain.push(ConnectOptions::new(host, port, user, a));
+        chain.push(with_prompter(
+            ConnectOptions::new(host, port, user, a),
+            prompter.as_ref(),
+        ));
     }
     let target_auth = resolve_auth(st, auth)?;
-    let target = ConnectOptions::new(host, port, user, target_auth);
+    let target = with_prompter(
+        ConnectOptions::new(host, port, user, target_auth),
+        prompter.as_ref(),
+    );
     rt.block_on(SshClient::connect_through(
         &chain,
         &target,
@@ -5293,6 +5332,23 @@ fn profile_auth_to_method(vault_id: &str, auth: ProfileAuth) -> AuthMethod {
 }
 
 /// Mapping of transport errors: a host-key mismatch is singled out for the UI.
+/// Attaches the registered prompter to one hop, carrying that hop's identity so
+/// the dialog can say which host is asking.
+fn with_prompter(opts: ConnectOptions, prompter: Option<&Arc<dyn AuthPrompter>>) -> ConnectOptions {
+    match prompter {
+        None => opts,
+        Some(p) => {
+            let bridge = PrompterBridge {
+                inner: Arc::clone(p),
+                host: opts.host.clone(),
+                port: opts.port,
+                user: opts.user.clone(),
+            };
+            opts.with_prompter(Arc::new(bridge))
+        }
+    }
+}
+
 fn map_transport_err(e: unissh_ssh_transport::TransportError) -> FfiError {
     match e {
         unissh_ssh_transport::TransportError::HostKeyMismatch {
@@ -5950,6 +6006,82 @@ fn split_host_port(s: &str) -> (String, u16) {
     }
 }
 
+/// One field a server asks the user to fill in while authenticating.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AuthPromptField {
+    /// The text to show, verbatim from the server (`"Verification code: "`).
+    pub prompt: String,
+    /// `true` when the typed characters may be displayed — a login name, a hint.
+    /// `false` means hidden input: a password, a one-time code. The UI must
+    /// honour this; it is the server saying whether the answer is a secret.
+    pub echo: bool,
+}
+
+/// Everything needed to render one round of interactive authentication.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AuthPromptRequest {
+    /// The host being authenticated to — shown so a prompt arriving during a
+    /// jump chain or a fleet run cannot be mistaken for a different host.
+    pub host: String,
+    /// Port.
+    pub port: u16,
+    /// The user name being authenticated as.
+    pub user: String,
+    /// Server-supplied title; often empty.
+    pub name: String,
+    /// Server-supplied instruction text; often empty.
+    pub instruction: String,
+    /// The fields to ask for, in order.
+    pub prompts: Vec<AuthPromptField>,
+}
+
+/// Asked when the server wants something no stored credential can answer — a
+/// one-time code, a hardware-token response, a push confirmation.
+///
+/// Implemented by the UI. The call happens on a blocking thread, so taking as
+/// long as a person needs to type is fine.
+#[uniffi::export(with_foreign)]
+pub trait AuthPrompter: Send + Sync {
+    /// Returns one answer per prompt, in order, or `None` to abort the
+    /// connection — which is what Cancel must do. A mismatched answer count is
+    /// treated as a cancellation rather than sent to the server.
+    fn prompt(&self, request: AuthPromptRequest) -> Option<Vec<String>>;
+}
+
+/// Adapts the UI-facing prompter to the transport's, pinning the host context
+/// that the transport trait does not carry. One bridge per hop, so a prompt
+/// raised midway through a jump chain names the hop it belongs to.
+struct PrompterBridge {
+    inner: Arc<dyn AuthPrompter>,
+    host: String,
+    port: u16,
+    user: String,
+}
+
+impl unissh_ssh_transport::AuthPrompter for PrompterBridge {
+    fn prompt(
+        &self,
+        name: &str,
+        instruction: &str,
+        prompts: &[unissh_ssh_transport::PromptField],
+    ) -> Option<Vec<String>> {
+        self.inner.prompt(AuthPromptRequest {
+            host: self.host.clone(),
+            port: self.port,
+            user: self.user.clone(),
+            name: name.to_string(),
+            instruction: instruction.to_string(),
+            prompts: prompts
+                .iter()
+                .map(|p| AuthPromptField {
+                    prompt: p.prompt.clone(),
+                    echo: p.echo,
+                })
+                .collect(),
+        })
+    }
+}
+
 /// Observer of an interactive session (implemented by the UI; a UniFFI callback interface).
 #[uniffi::export(with_foreign)]
 pub trait SessionObserver: Send + Sync {
@@ -6109,6 +6241,9 @@ impl ExecHandleFfi {
 pub struct ReconnectingSession {
     state: Arc<Mutex<Option<CoreState>>>,
     rt: Arc<tokio::runtime::Runtime>,
+    // A reconnect is a brand-new authentication: if the host wants a one-time
+    // code, the old one is spent and a fresh one must be asked for.
+    prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     host: String,
     port: u16,
     user: String,
@@ -6131,6 +6266,7 @@ impl ReconnectingSession {
         let client = connect_with_state(
             &self.state,
             &self.rt,
+            &self.prompter,
             &self.auth,
             &self.jumps,
             self.host.clone(),
@@ -6555,6 +6691,9 @@ pub struct SftpFfi {
     // creds are re-resolved from the vault on each reconnect (plaintext isn't
     // cached); an inline `Password` lives in `auth` for the session's lifetime.
     state: Arc<Mutex<Option<CoreState>>>,
+    // Same reason as on ReconnectingSession: a full reconnect re-authenticates,
+    // and a spent one-time code cannot be replayed.
+    prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     host: String,
     port: u16,
     user: String,
@@ -6712,6 +6851,7 @@ impl SftpFfi {
         let client = connect_with_state(
             &self.state,
             &self.rt,
+            &self.prompter,
             &self.auth,
             &self.jumps,
             self.host.clone(),

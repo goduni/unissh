@@ -30,6 +30,17 @@ use crate::error::TransportError;
 /// (the SFTP per-packet timeout only covers an already-established session).
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Extra budget granted to the authentication phase when a prompter is attached.
+///
+/// [`HANDSHAKE_TIMEOUT`] exists to stop a hung or hostile server from blocking a
+/// caller forever, and 30 seconds is generous for machines talking to machines.
+/// It is not generous for a person finding their phone, unlocking it, opening an
+/// authenticator and typing six digits — that routinely takes longer, and
+/// without this the login would fail while the human is still reading the
+/// prompt. The budget stays bounded, so the original protection survives; it is
+/// only granted when someone is actually there to be asked.
+const INTERACTIVE_BUDGET: Duration = Duration::from_secs(300);
+
 /// The authentication method.
 #[derive(Clone)]
 pub enum Auth {
@@ -873,8 +884,13 @@ async fn authenticate(
     agent: &InMemoryAgent,
 ) -> Result<(), TransportError> {
     // The whole authentication phase is under a hard deadline (a malicious/hung
-    // server must not hang the call forever).
-    let result = timeout(HANDSHAKE_TIMEOUT, async {
+    // server must not hang the call forever) — widened when a person may be
+    // asked to type something, see INTERACTIVE_BUDGET.
+    let deadline = match opts.prompter {
+        Some(_) => HANDSHAKE_TIMEOUT + INTERACTIVE_BUDGET,
+        None => HANDSHAKE_TIMEOUT,
+    };
+    let result = timeout(deadline, async {
         let first: AuthResult = match &opts.auth {
             Auth::Agent { key_id } => {
                 // The private key does NOT leave the agent: the agent itself signs via
