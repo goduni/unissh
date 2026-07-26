@@ -82,6 +82,7 @@ export const ICONS = {
   trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
   pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   play: '<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/>',
+  record: '<circle cx="12" cy="12" r="7" fill="currentColor" stroke="none"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   upload: '<path d="M12 20.5v-11"/><polyline points="7.5 13.5 12 9 16.5 13.5"/><path d="M5 3.5h14"/>',

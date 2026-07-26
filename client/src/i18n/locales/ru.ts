@@ -106,6 +106,17 @@ export const ru = {
   },
 
   // ── Sidebar / navigation labels (shared: Shell, CommandPalette, MobileApp) ─
+  recordings: {
+    empty: "Записей пока нет. Включите «Записывать сессии» у хоста, чтобы начать.",
+    play: "Воспроизвести",
+    export: "Экспорт",
+    exported: "Запись экспортирована",
+    playing: "Воспроизведение…",
+    finished: "Завершено",
+    playerLabel: "Воспроизведение сессии",
+    truncated: "Усечена — сессия превысила лимит 8 МБ, остаток не записан",
+  },
+
   nav: {
     allHosts: "Все хосты",
     terminals: "Терминалы",
@@ -117,6 +128,7 @@ export const ru = {
     secrets: "Секреты",
     tunnels: "Туннели",
     known: "Известные хосты",
+    recordings: "Записи",
     settings: "Настройки",
     fleet: "Массово",
     fleetExec: "Массовое выполнение",
@@ -342,6 +354,7 @@ export const ru = {
       "sftp": "передача файлов",
       "tunnels": "-L / -R / -D",
       "known": "TOFU",
+      "recordings": "записи сессий",
       "keys": "секреты",
       "terminal": "живые сессии",
       "passwords": "сохранённые пароли",

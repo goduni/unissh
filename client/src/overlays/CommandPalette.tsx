@@ -35,6 +35,7 @@ const CMD_NAV: NavCmd[] = [
   { id: "n-fleet", icon: "layers", labelKey: "nav.fleetExec", subKey: "command.nav.fleet", route: "fleet" },
   { id: "n-tunnels", icon: "branch", labelKey: "nav.tunnels", subKey: "command.nav.tunnels", route: "tunnels" },
   { id: "n-known", icon: "shieldcheck", labelKey: "nav.known", subKey: "command.nav.known", route: "known" },
+  { id: "n-recordings", icon: "record", labelKey: "nav.recordings", subKey: "command.nav.recordings", route: "recordings" },
   { id: "n-keys", icon: "key", labelKey: "nav.keys", subKey: "command.nav.keys", route: "keys" },
   { id: "n-passwords", icon: "lock", labelKey: "nav.passwords", subKey: "command.nav.passwords", route: "passwords" },
   { id: "n-identities", icon: "fingerprint", labelKey: "nav.identities", subKey: "command.nav.identities", route: "identities" },

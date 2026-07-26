@@ -35,6 +35,7 @@ export type Route =
   | "sftp"
   | "tunnels"
   | "known"
+  | "recordings"
   | "keys"
   | "passwords"
   | "notes"

@@ -77,6 +77,17 @@ export const en = {
     hostsUnavailable_other: "{{labels}} are unavailable — will be skipped",
   },
 
+  recordings: {
+    empty: "No recordings yet. Turn on “Record sessions” for a host to start capturing.",
+    play: "Play",
+    export: "Export",
+    exported: "Recording exported",
+    playing: "Playing…",
+    finished: "Finished",
+    playerLabel: "Session replay",
+    truncated: "Truncated — the session outgrew the 8 MB cap and the rest was not captured",
+  },
+
   nav: {
     allHosts: "All hosts",
     terminals: "Terminals",
@@ -88,6 +99,7 @@ export const en = {
     secrets: "Secrets",
     tunnels: "Tunnels",
     known: "Known hosts",
+    recordings: "Recordings",
     settings: "Settings",
     fleet: "Fleet",
     fleetExec: "Fleet exec",
@@ -305,6 +317,7 @@ export const en = {
       "sftp": "file transfer",
       "tunnels": "-L / -R / -D",
       "known": "TOFU",
+      "recordings": "session replays",
       "keys": "secrets",
       "terminal": "live sessions",
       "passwords": "stored passwords",

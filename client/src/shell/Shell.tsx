@@ -617,6 +617,7 @@ const RAIL_LABEL_KEY: Partial<Record<Route, string>> = {
   keys: "nav.keys",
   tunnels: "nav.tunnels",
   known: "nav.known",
+  recordings: "nav.recordings",
 };
 
 function SidebarRail({ onExpand }: { onExpand?: () => void }) {
@@ -712,6 +713,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
       {item("key", "keys")}
       {item("branch", "tunnels")}
       {item("shieldcheck", "known")}
+      {item("record", "recordings")}
       <div style={{ flex: 1 }} />
       {onExpand && (
         <button
@@ -878,6 +880,12 @@ export function Sidebar({
             count={knownHosts.length}
             active={route === "known"}
             onClick={() => ctx.go("known")}
+          />
+          <NavItem
+            icon="record"
+            label={t("nav.recordings")}
+            active={route === "recordings"}
+            onClick={() => ctx.go("recordings")}
           />
         </NavGroup>
       </div>
