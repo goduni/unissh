@@ -44,6 +44,11 @@ starts with `0.`:
   that installs on any device, plus smaller per-ABI APKs (`arm64`, `armv7`,
   `x86_64`, `x86`) for people who want them. Previously only `arm64` was built,
   which left x86-64 emulators and armv7 devices with nothing.
+- **Linux builds for ARM64** (`.deb`, `.rpm`, `.AppImage`), alongside the existing
+  x86-64 ones. This was the last remaining platform gap: an SSH client is used on
+  Asahi, on ARM laptops and on a Raspberry Pi that has a screen attached, and none
+  of those had an artifact. ARM *servers* are a different question and were already
+  answered — the container images are multi-arch. Windows remains x86-64 only.
 - Sideloading instructions for **Android and iOS** in
   [Installing unsigned builds](README.md#installing-unsigned-builds), including
   the Play Protect warning and what re-signing an unsigned `.ipa` with your own
@@ -62,7 +67,7 @@ starts with `0.`:
 
 - Release notes and the README download table now name the **architecture** of
   every artifact, and name the architectures that are deliberately not built
-  (no ARM or 32-bit build for Linux or Windows).
+  (Windows is x86-64 only; nothing ships 32-bit for desktop).
 
 ### Fixed
 

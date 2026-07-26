@@ -185,14 +185,17 @@ The fastest path to a working setup: **(A)** get the desktop client — download
 | macOS | Apple Silicon **and** Intel | `UniSSH_<version>_universal.dmg` (drag to Applications) |
 | Windows | x86-64 | `UniSSH_<version>_x64-setup.exe` or `.msi` |
 | Linux | x86-64 | `UniSSH_<version>_amd64.AppImage` (portable) or `.deb` / `.rpm` |
+| Linux | ARM64 | `UniSSH_<version>_aarch64.AppImage` or `_arm64.deb` / `.rpm` |
 | Android | any (universal) | `UniSSH_<version>_universal.apk` — [sideload](#android) |
 | Android | pick your own | `_arm64` / `_armv7` / `_x86_64` / `_x86` `.apk` — smaller |
 | iOS | Apple Silicon | `UniSSH_<version>_ios-sideload.ipa` — unsigned, [sideload](#ios) |
 
-**Architectures that are not built**, so you know before you look: there is no ARM
-build for **Linux** or **Windows**, and no 32-bit build for either. On those two, the
-release is x86-64 only — [build from source](#build-from-source) if you need another
-architecture. macOS and Android are covered end to end.
+**Architectures that are not built**, so you know before you look: **Windows** is
+x86-64 only, and nothing here ships 32-bit for desktop. Everything else covers both
+architectures — [build from source](#build-from-source) if you need one that is
+missing. Linux ARM64 exists because that is where an SSH client actually gets used
+on ARM: Asahi, ARM laptops, a Raspberry Pi on a desk. ARM *servers* are served by
+the [container images](#b-self-host-a-sync-server-optional), which are multi-arch.
 
 Release builds are **unsigned**. On desktop that means a one-time warning and a ten-second "open anyway" — on **Android** it means a permanent Play Protect warning, and on **iOS** it means re-signing the `.ipa` with your own Apple ID before it will run at all. The steps for all five platforms are in [Installing unsigned builds](#installing-unsigned-builds). Always [verify the download](#verifying-release-integrity) against the published checksum first.
 

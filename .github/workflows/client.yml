@@ -94,12 +94,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ubuntu-22.04 pinned: webkit2gtk-4.1 availability + broad AppImage
-          # glibc compatibility. Produces .deb / .rpm / .AppImage — x86_64 only.
+          # NOTE the `os` field. Steps below branch on IT, not on the runner
+          # label, because the label is not a reliable predicate: `ubuntu-22.04`
+          # and `ubuntu-22.04-arm` are both Linux, and an `== 'ubuntu-22.04'`
+          # test silently excludes the arm one. That is not hypothetical — the
+          # webkit/AppImage dependency step was written that way, so adding the
+          # arm runner without this would have skipped its system deps and failed
+          # deep inside the bundler instead of at the missing package.
+          #
+          # ubuntu-22.04 pinned (both architectures): webkit2gtk-4.1 availability
+          # + broad AppImage glibc compatibility. Produces .deb / .rpm / .AppImage.
           - platform: ubuntu-22.04
+            os: linux
+            args: ""
+          # Linux on ARM is not a niche for an SSH client specifically: Asahi,
+          # ARM laptops and desktop Raspberry Pi are exactly where one gets used.
+          # (ARM servers are covered by the multi-arch container image instead —
+          # nobody runs a GUI client on a VPS.) The runner is free for public
+          # repositories, same as the arm64 runners publish-images.yml uses.
+          - platform: ubuntu-22.04-arm
+            os: linux
             args: ""
           # .msi (WiX) + NSIS .exe
           - platform: windows-latest
+            os: windows
             args: ""
           # .dmg / .app. `macos-latest` has been Apple Silicon since early 2025,
           # so a default build here is arm64-ONLY and silently ships nothing an
@@ -119,6 +137,7 @@ jobs:
           # Verified against the released `@v0`, not just `dev` — the two have
           # disagreed before (see uploadUpdaterJson below).
           - platform: macos-latest
+            os: macos
             args: "--target universal-apple-darwin"
 
     runs-on: ${{ matrix.platform }}
@@ -150,7 +169,7 @@ jobs:
           "$PY" scripts/bump-version.py --check "${GITHUB_REF_NAME#v}"
 
       - name: Install Linux system deps (Tauri/webkit + AppImage/rpm tooling)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.os == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -170,7 +189,7 @@ jobs:
       # covers its own arm64. Explicit here rather than relying on tauri-action
       # to infer them from `--target`, matching how the android/ios jobs do it.
       - name: Add the macOS Rust targets (universal = arm64 + Intel)
-        if: matrix.platform == 'macos-latest'
+        if: matrix.os == 'macos'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Setup Node
@@ -209,6 +228,9 @@ jobs:
       # pure logic with no platform surface, and the node/npm setup above is
       # already paid for here. `tsc --noEmit` is covered separately by the
       # beforeBuildCommand that tauri-action runs on all three.
+      # Pinned to ONE job on purpose, and to the platform rather than the os:
+      # these tests are platform-independent, so running them on all four
+      # bundlers would just buy the same result four times.
       - name: Test (frontend)
         if: matrix.platform == 'ubuntu-22.04'
         run: npm test
@@ -219,7 +241,7 @@ jobs:
       # rust-core/crates/storage/Cargo.toml). Building OpenSSL from source
       # (openssl-src) needs NASM to assemble its crypto; Perl ships on the runner.
       - name: Install NASM (Windows OpenSSL vendored build)
-        if: matrix.platform == 'windows-latest'
+        if: matrix.os == 'windows'
         shell: pwsh
         run: |
           choco install nasm -y --no-progress
@@ -271,8 +293,8 @@ jobs:
           # jobs upload it for the same tag; tauri-action merges each platform's
           # entry into the existing asset instead of overwriting it. VERIFY on the
           # first real release that latest.json ends up with darwin-aarch64,
-          # darwin-x86_64, windows-x86_64 AND linux-x86_64 — if a job overwrote
-          # it, platforms would silently never see an update again. The two
+          # darwin-x86_64, windows-x86_64, linux-x86_64 AND linux-aarch64 — if a
+          # job overwrote it, platforms would silently never see an update again. The two
           # darwin keys both point at the ONE universal .app.tar.gz and share its
           # signature; that is tauri-action's universal handling, not a bug.
           # The input is `uploadUpdaterJson` as of tauri-action v1, which renamed it
@@ -826,11 +848,13 @@ jobs:
           | **macOS** (Apple Silicon *and* Intel) | \`UniSSH_${VERSION}_universal.dmg\` |
           | **Windows** (x86-64) | \`UniSSH_${VERSION}_x64-setup.exe\` — or the \`.msi\` |
           | **Linux** (x86-64) | \`UniSSH_${VERSION}_amd64.AppImage\` · \`.deb\` · \`.rpm\` |
+          | **Linux** (ARM64) | \`UniSSH_${VERSION}_aarch64.AppImage\` · \`arm64.deb\` · \`.rpm\` |
           | **Android** (sideload) | \`UniSSH_${VERSION}_universal.apk\` — works on any device |
           | ↳ smaller, if you know your ABI | \`_arm64\` · \`_armv7\` · \`_x86_64\` · \`_x86\` \`.apk\` |
           | **iOS** (sideload, unsigned) | \`UniSSH_${VERSION}_ios-sideload.ipa\` |
 
-          Linux and Windows are **x86-64 only** — there is no ARM build for either.
+          **Windows is x86-64 only** — there is no ARM build for it. Every other
+          platform here covers both architectures.
 
           **Does this break anything you already have?** The changelog answers that
           per release, including whether the vault format or server protocol moved:
