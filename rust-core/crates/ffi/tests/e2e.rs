@@ -3391,7 +3391,6 @@ fn snippet_crud_round_trip() {
             snippet_id: "tail-log".to_string(),
             label: "Tail the app log".to_string(),
             command: "sudo journalctl -fu app".to_string(),
-            run_on_connect: false,
             tags: vec!["ops".to_string()],
         },
     )
@@ -3402,7 +3401,6 @@ fn snippet_crud_round_trip() {
             snippet_id: "motd".to_string(),
             label: "A greeting".to_string(),
             command: "echo hi".to_string(),
-            run_on_connect: true,
             tags: vec![],
         },
     )
@@ -3412,7 +3410,6 @@ fn snippet_crud_round_trip() {
     assert_eq!(list.len(), 2);
     // Sorted by label, so the library does not reshuffle between reads.
     assert_eq!(list[0].label, "A greeting");
-    assert!(list[0].run_on_connect);
     assert_eq!(list[1].command, "sudo journalctl -fu app");
     assert_eq!(list[1].tags, vec!["ops".to_string()]);
 
@@ -3424,7 +3421,6 @@ fn snippet_crud_round_trip() {
                 snippet_id: String::new(),
                 label: "x".to_string(),
                 command: "echo".to_string(),
-                run_on_connect: false,
                 tags: vec![],
             },
         )
@@ -3436,7 +3432,6 @@ fn snippet_crud_round_trip() {
                 snippet_id: "blank".to_string(),
                 label: "x".to_string(),
                 command: String::new(),
-                run_on_connect: false,
                 tags: vec![],
             },
         )
@@ -3470,7 +3465,6 @@ fn snippet_cannot_overwrite_another_item_type() {
             snippet_id: "shared-id".to_string(),
             label: "sneaky".to_string(),
             command: "echo pwned".to_string(),
-            run_on_connect: false,
             tags: vec![],
         },
     );
@@ -3755,47 +3749,61 @@ fn system_agent_without_an_agent_reports_the_agent() {
     );
 }
 
-/// The tripwire that guards the deadlock fixed in d500e0e: taking the core lock
-/// from inside a spawned tokio task starves the runtime a concurrent connect is
-/// waiting on. This proves the detection works — a callback that does its work
-/// on its own thread, as the recording sink does, is not flagged.
+/// The recording write must not run inside a tokio task.
+///
+/// That was the deadlock in d500e0e: on_close fires on a channel-reader task,
+/// and writing to the vault needs the core lock that a concurrent connect holds
+/// across its block_on. The fix moved the write to its own thread; a
+/// debug_assert in RecordingSaver::save keeps it there, so a real recorded
+/// session is what proves it — if the write ever drifts back onto the runtime,
+/// this test panics.
 #[test]
-fn core_state_is_reachable_from_a_plain_thread() {
+fn a_recording_is_written_off_the_runtime() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
     core.create_vault("v".to_string(), "V".to_string()).unwrap();
-
-    // A detached thread — the shape RecordingSink::on_close uses — must be able
-    // to touch the core without tripping anything.
-    let handle = std::thread::spawn({
-        let core = core.clone();
-        move || core.list_vaults().map(|v| v.len())
-    });
-    assert_eq!(handle.join().unwrap().unwrap(), 1);
-}
-
-/// And the inverse: from inside a tokio task the guard fires. Asserted through
-/// a `debug_assert`, so this only holds where debug assertions are on — which is
-/// every test run, and that is the point: a mistake fails where someone is
-/// watching rather than hanging in front of a user.
-#[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "core state locked from inside a tokio task")]
-fn core_state_from_a_tokio_task_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = new_core(dir.path());
-    core.create_account(None).unwrap();
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .build()
+    let pubkey = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
         .unwrap();
-    rt.block_on(async move {
-        // spawn, not block_on: try_id() is Some only inside a spawned task, and
-        // that is exactly the distinction the guard draws.
-        tokio::spawn(async move { core.list_vaults() })
-            .await
-            .unwrap()
-    })
-    .ok();
+    let sshd = TestSshd::start(&pubkey);
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let session = core
+        .open_session(
+            "127.0.0.1".to_string(),
+            sshd.port,
+            "root".to_string(),
+            agent_auth("v", "key"),
+            vec![],
+            "xterm".to_string(),
+            80,
+            24,
+            observer,
+            Some(unissh_ffi::RecordingRequest {
+                vault_id: "v".to_string(),
+                recording_id: "rec-thread".to_string(),
+                label: "t".to_string(),
+            }),
+        )
+        .unwrap();
+    session.write(b"echo x\n".to_vec()).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    session.close().unwrap();
+
+    // The assertion fires inside the writing thread, so the recording simply
+    // never lands if it tripped. Waiting for it is the check.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if !core.list_recordings("v".to_string()).unwrap().is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the recording never landed — the write thread may have tripped its assertion"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }

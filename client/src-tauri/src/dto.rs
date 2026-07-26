@@ -1258,7 +1258,6 @@ pub struct Snippet {
     pub snippet_id: String,
     pub label: String,
     pub command: String,
-    pub run_on_connect: bool,
     pub tags: Vec<String>,
 }
 
@@ -1268,7 +1267,6 @@ impl From<ffi::Snippet> for Snippet {
             snippet_id: s.snippet_id,
             label: s.label,
             command: s.command,
-            run_on_connect: s.run_on_connect,
             tags: s.tags,
         }
     }
@@ -1280,7 +1278,6 @@ impl From<Snippet> for ffi::Snippet {
             snippet_id: s.snippet_id,
             label: s.label,
             command: s.command,
-            run_on_connect: s.run_on_connect,
             tags: s.tags,
         }
     }

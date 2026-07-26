@@ -60,7 +60,6 @@ function Editor({
         snippetId: edit?.snippetId ?? mintId(label || command),
         label: label.trim() || command.trim().split("\n")[0].slice(0, 40),
         command,
-        runOnConnect: edit?.runOnConnect ?? false,
         tags,
       });
       onSaved();

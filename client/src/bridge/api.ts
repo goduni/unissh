@@ -315,8 +315,6 @@ export interface Snippet {
   snippetId: string;
   label: string;
   command: string;
-  /** Run automatically right after connecting. */
-  runOnConnect: boolean;
   tags: string[];
 }
 

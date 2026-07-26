@@ -102,31 +102,26 @@ fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Takes the **core state** lock, refusing to do so from inside a spawned tokio
-/// task.
+/// Asserts that the caller is **not** inside any tokio task.
 ///
-/// This is a tripwire for one specific deadlock, which already happened once
-/// (see `d500e0e`). The connect path holds this lock across `rt.block_on`, so
-/// the runtime must stay free to drive that future. Any code that blocks a
-/// worker thread waiting for this same lock starves the runtime the connect is
-/// waiting on — and with few cores, the two never resolve.
+/// This guards the deadlock fixed in `d500e0e`. The connect path holds the
+/// core-state lock across `rt.block_on`, so blocking a runtime worker on that
+/// same lock starves the runtime the connect needs, and with few cores neither
+/// finishes. The fix was to move the recording write onto its own thread; this
+/// keeps it there.
 ///
-/// `task::try_id()` is `Some` only inside a spawned task; `block_on` on the
-/// calling thread leaves it `None`, which is exactly the distinction that
-/// matters here. Work that must touch core state from a callback belongs on its
-/// own thread.
-///
-/// It panics in tests and debug builds so a mistake fails loudly where someone
-/// is watching, and logs in release rather than turning a hang into a crash for
-/// a user — a frozen app is bad, an aborted one mid-session is worse.
-fn lock_core_state<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    if tokio::task::try_id().is_some() {
-        let msg = "core state locked from inside a tokio task — this starves the runtime a \
-                   concurrent connect is waiting on; move the work to its own thread";
-        debug_assert!(false, "{msg}");
-        log::error!("{msg}");
-    }
-    lock_recover(m)
+/// Deliberately *not* a check inside the lock helper itself. `task::try_id()` is
+/// `Some` on the blocking pool too — and every Tauri command runs the core
+/// through `spawn_blocking`, which is precisely where blocking is correct. A
+/// global check would therefore have fired on every single call rather than on
+/// the mistake. Tokio exposes no way to tell an async worker from a blocking-pool
+/// thread, so the assertion lives at the one callback that got this wrong
+/// instead of pretending to enforce it everywhere.
+fn debug_assert_off_the_runtime(what: &str) {
+    debug_assert!(
+        tokio::task::try_id().is_none(),
+        "{what} ran inside a tokio task; it must be on its own thread — see d500e0e"
+    );
 }
 
 /// FFI-boundary errors.
@@ -657,8 +652,6 @@ struct StoredProfile {
 struct StoredSnippet {
     label: String,
     command: String,
-    #[serde(default)]
-    run_on_connect: bool,
     #[serde(default)]
     tags: Vec<String>,
     /// Forward compatibility (see [`StoredProfile::extra`]).
@@ -3644,7 +3637,6 @@ impl Core {
             let stored = StoredSnippet {
                 label: snippet.label,
                 command: snippet.command,
-                run_on_connect: snippet.run_on_connect,
                 tags: snippet.tags,
                 extra: BTreeMap::new(),
             };
@@ -3682,7 +3674,6 @@ impl Core {
                             snippet_id: String::from_utf8_lossy(&m.item_id).to_string(),
                             label: stored.label,
                             command: stored.command,
-                            run_on_connect: stored.run_on_connect,
                             tags: stored.tags,
                         });
                     }
@@ -5198,7 +5189,7 @@ impl Core {
     /// under the lock is ordinary, not invariant-bearing) so that a single panic does not
     /// "jam" the entire Core forever on calls through the FFI.
     fn locked_state(&self) -> std::sync::MutexGuard<'_, Option<CoreState>> {
-        lock_core_state(&self.state)
+        lock_recover(&self.state)
     }
 
     /// Runs `f` with a shared reference to the unlocked state, or returns
@@ -5474,7 +5465,7 @@ fn connect_with_state(
     // is held (see the note above), so reaching back for another lock here would
     // be one more chance to deadlock for no benefit.
     let prompter = lock_recover(prompter).clone();
-    let mut guard = lock_core_state(state);
+    let mut guard = lock_recover(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;
     let mut chain = Vec::with_capacity(jumps.len());
     for j in jumps {
@@ -6496,8 +6487,6 @@ pub struct Snippet {
     pub label: String,
     /// The command text. Multi-line is allowed; it is sent verbatim.
     pub command: String,
-    /// Run automatically after connecting to a host that references it.
-    pub run_on_connect: bool,
     /// Tags, for filtering a long library.
     pub tags: Vec<String>,
 }
@@ -6803,6 +6792,7 @@ struct RecordingSaver {
 
 impl RecordingSaver {
     fn save(&self, recorder: &SessionRecorder) {
+        debug_assert_off_the_runtime("session-recording write");
         let (body, truncated, duration) = recorder.finish();
         let stored = StoredRecording {
             label: self.label.clone(),
@@ -6824,7 +6814,7 @@ impl RecordingSaver {
         // Failure here must never surface as a session error: the session is
         // already over, and the user losing a recording is not a reason to make
         // a clean disconnect look like a fault. It is logged and dropped.
-        let mut guard = lock_core_state(&self.state);
+        let mut guard = lock_recover(&self.state);
         let Some(st) = guard.as_mut() else {
             log::warn!("session recording dropped: the core locked before it could be written");
             return;

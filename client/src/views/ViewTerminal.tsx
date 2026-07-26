@@ -333,7 +333,15 @@ function TerminalPane({
  *  otherwise they would execute in the outer shell and vanish with it. */
 async function attachTmux(sessionId: string, profile: ConnectionProfile | null) {
   if (!profile?.tmuxSession) return;
-  const name = `unissh-${profile.profileId}`.replace(/[^\w.-]+/g, "_");
+  // Dots go too, not just the obviously unsafe characters: tmux treats "." as a
+  // target separator and silently rewrites a session name containing one. The
+  // rewrite is deterministic, so reattaching still worked — but we would be
+  // sending a name tmux never uses, and `tmux ls` on the host would show
+  // something the user never asked for. Sanitising to what tmux will actually
+  // call it keeps the two in agreement. (Profile ids can contain dots: an
+  // ssh_config import uses the Host alias verbatim, and "web.example.com" is an
+  // ordinary alias.)
+  const name = `unissh-${profile.profileId}`.replace(/[^\w-]+/g, "_");
   try {
     await api.sessionWrite(
       sessionId,
