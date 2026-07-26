@@ -31,7 +31,7 @@ One file carries two flows:
 
 It builds on a matrix of `ubuntu-22.04` (pinned for webkit2gtk-4.1 availability and broad AppImage glibc compatibility → `.deb`/`.rpm`/`.AppImage`), `windows-latest` (`.msi` via WiX + NSIS `.exe`), and `macos-latest` (`.dmg`/`.app`). Node 22 + the repo-root pinned Rust toolchain are used; the client's path dependency on `../../rust-core/crates/ffi` resolves inside the single checkout (no cross-repo checkout, no PAT).
 
-Each tagged release also gets a **`SHA256SUMS`** file, a **`SHA256SUMS.minisig`** detached signature over it, and a **build-provenance attestation** (`actions/attest-build-provenance`) for the bundles — verifiable with `gh attestation verify <file> --repo goduni/unissh` (see [Install from a release](../../overview/install/)).
+Each tagged release also gets a **`SHA256SUMS`** file, a **`SHA256SUMS.minisig`** detached signature over it, and a **build-provenance attestation** (`actions/attest-build-provenance`) for the bundles — verifiable with `gh attestation verify <file> --repo goduni/unissh`, which needs GitHub CLI 2.49 or newer (see [Install from a release](../../overview/install/)).
 
 :::caution[Unsigned by design (privacy)]
 The client builds ship **unsigned** — no Apple cert/notarization, no Windows code-signing. This is a deliberate privacy choice: no developer identity is attached.

@@ -104,7 +104,16 @@ to ignore integrity — we replace certificate-based trust with verifiability:
 
   ```bash
   gh attestation verify <artifact> --repo goduni/unissh
+  # container images carry the same attestation, on the manifest list a pull resolves:
+  gh attestation verify oci://ghcr.io/goduni/unissh-server:latest --repo goduni/unissh
   ```
+
+  This needs **GitHub CLI 2.49 or newer** — the `attestation` subcommand was added
+  there. An older `gh` does not report an unknown command; it prints its usage and
+  exits, which reads like the verification failed rather than like the tool is too
+  old. Check with `gh --version`, and note that distribution packages lag (Ubuntu
+  ships 2.45). Verification is what stands in for a code-signing certificate here,
+  so it is worth making sure the command actually ran.
 
 - **Pseudonymous minisign signature.** Each release ships `SHA256SUMS.minisig`, a
   detached signature over `SHA256SUMS`. `minisign` keys are a bare Ed25519 public

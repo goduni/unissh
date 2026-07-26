@@ -462,8 +462,14 @@ Get-FileHash .\UniSSH_<version>_x64-setup.exe -Algorithm SHA256   # Windows: com
 #    The key is a bare Ed25519 public key; it carries no identity by design.
 minisign -Vm SHA256SUMS -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'
 
-# 3) Provenance — proves the artifact was built by this repo's CI from the tagged commit:
+# 3) Provenance — proves the artifact was built by this repo's CI from the tagged commit.
+#    Needs GitHub CLI >= 2.49 (`gh --version`); the subcommand does not exist before
+#    that, and older gh answers with a bare help dump rather than saying so. Distro
+#    packages are often behind — Ubuntu still ships 2.45.
 gh attestation verify UniSSH_<version>_amd64.AppImage --repo goduni/unissh
+
+# The self-hosted server and admin-panel container images carry the same provenance:
+gh attestation verify oci://ghcr.io/goduni/unissh-server:latest --repo goduni/unissh
 ```
 
 The binaries themselves are deliberately **unsigned** (no notarization / Authenticode) — the reasoning is in [`SECURITY.md`](SECURITY.md#release-integrity--unsigned-builds).

@@ -45,6 +45,7 @@ sha256sum -c SHA256SUMS --ignore-missing
 minisign -Vm SHA256SUMS -P 'RWQvV7DIid665aUPiJiN5NXimAehmWEjgRS9uLgi2nSWIUiiBY7ZKCAs'
 
 # provenance — proves the artifact was built by this repo's CI, not forged
+# (needs GitHub CLI >= 2.49; older gh prints its help instead of an error)
 gh attestation verify UniSSH_0.1.0_amd64.AppImage --repo goduni/unissh
 ```
 
