@@ -102,6 +102,33 @@ fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Takes the **core state** lock, refusing to do so from inside a spawned tokio
+/// task.
+///
+/// This is a tripwire for one specific deadlock, which already happened once
+/// (see `d500e0e`). The connect path holds this lock across `rt.block_on`, so
+/// the runtime must stay free to drive that future. Any code that blocks a
+/// worker thread waiting for this same lock starves the runtime the connect is
+/// waiting on — and with few cores, the two never resolve.
+///
+/// `task::try_id()` is `Some` only inside a spawned task; `block_on` on the
+/// calling thread leaves it `None`, which is exactly the distinction that
+/// matters here. Work that must touch core state from a callback belongs on its
+/// own thread.
+///
+/// It panics in tests and debug builds so a mistake fails loudly where someone
+/// is watching, and logs in release rather than turning a hang into a crash for
+/// a user — a frozen app is bad, an aborted one mid-session is worse.
+fn lock_core_state<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    if tokio::task::try_id().is_some() {
+        let msg = "core state locked from inside a tokio task — this starves the runtime a \
+                   concurrent connect is waiting on; move the work to its own thread";
+        debug_assert!(false, "{msg}");
+        log::error!("{msg}");
+    }
+    lock_recover(m)
+}
+
 /// FFI-boundary errors.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum FfiError {
@@ -5171,7 +5198,7 @@ impl Core {
     /// under the lock is ordinary, not invariant-bearing) so that a single panic does not
     /// "jam" the entire Core forever on calls through the FFI.
     fn locked_state(&self) -> std::sync::MutexGuard<'_, Option<CoreState>> {
-        lock_recover(&self.state)
+        lock_core_state(&self.state)
     }
 
     /// Runs `f` with a shared reference to the unlocked state, or returns
@@ -5447,7 +5474,7 @@ fn connect_with_state(
     // is held (see the note above), so reaching back for another lock here would
     // be one more chance to deadlock for no benefit.
     let prompter = lock_recover(prompter).clone();
-    let mut guard = lock_recover(state);
+    let mut guard = lock_core_state(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;
     let mut chain = Vec::with_capacity(jumps.len());
     for j in jumps {
@@ -6797,7 +6824,7 @@ impl RecordingSaver {
         // Failure here must never surface as a session error: the session is
         // already over, and the user losing a recording is not a reason to make
         // a clean disconnect look like a fault. It is logged and dropped.
-        let mut guard = lock_recover(&self.state);
+        let mut guard = lock_core_state(&self.state);
         let Some(st) = guard.as_mut() else {
             log::warn!("session recording dropped: the core locked before it could be written");
             return;
