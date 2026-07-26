@@ -284,6 +284,9 @@ pub struct ConnectionProfile {
     pub jumps: Vec<JumpHost>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Snippets typed into the shell right after connecting, in order.
+    #[serde(default)]
+    pub startup_snippet_ids: Vec<String>,
 }
 
 impl From<ConnectionProfile> for ffi::ConnectionProfile {
@@ -299,6 +302,7 @@ impl From<ConnectionProfile> for ffi::ConnectionProfile {
             username_template: p.username_template,
             jumps: p.jumps.into_iter().map(Into::into).collect(),
             tags: p.tags,
+            startup_snippet_ids: p.startup_snippet_ids,
         }
     }
 }
@@ -315,6 +319,7 @@ impl From<ffi::ConnectionProfile> for ConnectionProfile {
             username_template: p.username_template,
             jumps: p.jumps.into_iter().map(Into::into).collect(),
             tags: p.tags,
+            startup_snippet_ids: p.startup_snippet_ids,
         }
     }
 }

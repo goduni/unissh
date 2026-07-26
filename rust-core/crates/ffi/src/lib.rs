@@ -286,6 +286,12 @@ pub struct ConnectionProfile {
     /// Tags for organizing/selecting targets (e.g. `prod`, `web`, `eu`). This is
     /// a selection filter, not access rights (RBAC is server Milestone 2).
     pub tags: Vec<String>,
+    /// Snippets to type into the shell right after connecting, in order.
+    ///
+    /// Held here rather than as a flag on the snippet: "run on connect" is
+    /// meaningless without saying *where*, and a global flag would mean running
+    /// it on every host — which is how a convenience becomes an accident.
+    pub startup_snippet_ids: Vec<String>,
 }
 
 /// A personal identity: SSH credentials under a single name (username + optional references to
@@ -572,6 +578,9 @@ struct StoredProfile {
     jumps: Vec<StoredJump>,
     #[serde(default)]
     tags: Vec<String>,
+    /// Omitted when empty so existing signed items keep their exact bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    startup_snippet_ids: Vec<String>,
     /// Forward compatibility: unknown fields (added by a future version)
     /// are preserved on round-trip rather than dropped. Otherwise an OLDER client would
     /// read the profile without the new field (e.g. `personal`), and on re-
@@ -3950,6 +3959,7 @@ impl Core {
                 username_template,
                 jumps,
                 tags,
+                startup_snippet_ids,
             } = profile;
             if profile_id.is_empty() {
                 return Err(FfiError::other("profile_id must not be empty"));
@@ -3985,6 +3995,7 @@ impl Core {
                     .map(jump_to_stored)
                     .collect::<Result<_, _>>()?,
                 tags,
+                startup_snippet_ids,
                 extra: BTreeMap::new(),
             };
             ensure_item_type(
@@ -4600,6 +4611,7 @@ impl Core {
                     username_template: None,
                     jumps: parse_proxy_jump(s.proxy_jump.as_deref()),
                     tags: Vec::new(),
+                    startup_snippet_ids: Vec::new(),
                     extra: std::collections::BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
@@ -4791,6 +4803,7 @@ impl Core {
                     username_template: None,
                     jumps,
                     tags: Vec::new(),
+                    startup_snippet_ids: Vec::new(),
                     extra: std::collections::BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
@@ -5855,6 +5868,7 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         port: s.port,
         user: s.user,
         tags: s.tags,
+        startup_snippet_ids: s.startup_snippet_ids,
         username_template: s.username_template,
         // Personal takes priority over key/password references (Personal has none anyway).
         auth: if s.personal {
@@ -7736,6 +7750,7 @@ mod tests {
                 hop_ref: None,
             }],
             tags: vec!["prod".to_string()],
+            startup_snippet_ids: Vec::new(),
         };
         let (key_item_id, password_item_id) = match prof.auth.clone() {
             ProfileAuth::Key { key_item_id } => (Some(key_item_id), None),
@@ -7760,6 +7775,7 @@ mod tests {
                 .collect(),
             tags: prof.tags.clone(),
             extra: std::collections::BTreeMap::new(),
+            startup_snippet_ids: Vec::new(),
         };
         let json = serde_json::to_string(&stored).unwrap();
         let back: StoredProfile = serde_json::from_str(&json).unwrap();
@@ -7848,6 +7864,7 @@ mod tests {
             jumps: vec![stored],
             tags: vec![],
             extra: std::collections::BTreeMap::new(),
+            startup_snippet_ids: Vec::new(),
         };
         let prof = stored_to_profile("va", "p".into(), sp);
         let hr = prof.jumps[0].hop_ref.as_ref().unwrap();
@@ -7878,6 +7895,7 @@ mod tests {
                 username_template: None,
                 jumps: vec![],
                 tags: vec![],
+                startup_snippet_ids: Vec::new(),
             },
         )
         .unwrap();
@@ -8069,6 +8087,7 @@ mod tests {
                 username_template: None,
                 jumps: vec![],
                 tags: vec![],
+                startup_snippet_ids: Vec::new(),
             },
         )
         .unwrap();
@@ -8398,6 +8417,7 @@ mod tests {
             username_template: None,
             jumps: vec![],
             tags: vec!["prod".into()],
+            startup_snippet_ids: Vec::new(),
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();
@@ -8475,6 +8495,7 @@ mod tests {
             username_template: None,
             jumps: vec![],
             tags: vec!["prod".into()],
+            startup_snippet_ids: Vec::new(),
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();

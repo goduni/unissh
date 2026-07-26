@@ -566,6 +566,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       auth: profileAuth,
       jumps,
       tags,
+      // Preserved rather than reset: this dialog does not edit startup snippets,
+      // and dropping them here would silently unlink them on every host edit.
+      startupSnippetIds: edit?.startupSnippetIds ?? [],
     };
 
     try {

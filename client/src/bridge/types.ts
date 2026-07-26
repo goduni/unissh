@@ -51,6 +51,10 @@ export interface ConnectionProfile {
   usernameTemplate?: string | null;
   jumps: JumpHost[];
   tags: string[];
+  /** Snippet ids typed into the shell right after connecting, in order.
+   *  Kept on the profile rather than as a flag on the snippet: "run on connect"
+   *  has to say where, and a global flag would fire on every host. */
+  startupSnippetIds: string[];
 }
 
 export interface ServerGroup {

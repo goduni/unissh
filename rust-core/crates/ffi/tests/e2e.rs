@@ -1017,6 +1017,7 @@ fn connection_profiles_crud_and_import() {
             hop_ref: None,
         }],
         tags: vec![],
+        startup_snippet_ids: vec![],
     };
     core.save_connection("v".to_string(), prof).unwrap();
 
@@ -1078,6 +1079,7 @@ fn cross_type_clobber_rejected() {
         auth: unissh_ffi::ProfileAuth::PromptPassword,
         jumps: vec![],
         tags: vec![],
+        startup_snippet_ids: vec![],
     };
     assert!(matches!(
         core.save_connection("v".to_string(), prof),
@@ -1100,6 +1102,7 @@ fn cross_type_clobber_rejected() {
         auth: unissh_ffi::ProfileAuth::PromptPassword,
         jumps: vec![],
         tags: vec![],
+        startup_snippet_ids: vec![],
     };
     core.save_connection("v".to_string(), prof2).unwrap();
     assert!(matches!(
@@ -1430,6 +1433,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
             hop_ref: None,
         }],
         tags: vec![],
+        startup_snippet_ids: vec![],
     };
     core.save_connection("v".to_string(), prof).unwrap();
 
@@ -1465,6 +1469,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
             hop_ref: None,
         }],
         tags: vec![],
+        startup_snippet_ids: vec![],
     };
     assert!(core.save_connection("v".to_string(), bad).is_err());
     assert!(matches!(
@@ -1823,6 +1828,7 @@ fn save_profile(core: &Core, id: &str, host: &str, port: u16, key_item: &str, ta
             },
             jumps: vec![],
             tags: tags.iter().map(|s| s.to_string()).collect(),
+            startup_snippet_ids: vec![],
         },
     )
     .unwrap();
@@ -1892,6 +1898,7 @@ fn select_targets_by_tags_excludes_prompt_password() {
             auth: unissh_ffi::ProfileAuth::PromptPassword,
             jumps: vec![],
             tags: vec!["web".to_string()],
+            startup_snippet_ids: vec![],
         },
     )
     .unwrap();
@@ -2106,6 +2113,7 @@ fn dry_run_group_reports_statuses() {
             auth: unissh_ffi::ProfileAuth::PromptPassword,
             jumps: vec![],
             tags: vec![],
+            startup_snippet_ids: vec![],
         },
     )
     .unwrap();
@@ -3457,4 +3465,53 @@ fn snippet_cannot_overwrite_another_item_type() {
             .unwrap(),
         "s3cret"
     );
+}
+
+/// Startup snippets live on the profile, not as a global flag on the snippet:
+/// "run on connect" has to say *where*, and a global one would run on every
+/// host. Checks the round-trip and that clearing the list really clears it.
+#[test]
+fn profile_carries_its_startup_snippets() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+
+    let mut p = unissh_ffi::ConnectionProfile {
+        profile_id: "web1".to_string(),
+        uid: String::new(),
+        label: "web1".to_string(),
+        host: "10.0.0.1".to_string(),
+        port: 22,
+        user: "deploy".to_string(),
+        auth: unissh_ffi::ProfileAuth::PromptPassword,
+        username_template: None,
+        jumps: vec![],
+        tags: vec![],
+        startup_snippet_ids: vec!["tmux-attach".to_string(), "cd-app".to_string()],
+    };
+    core.save_connection("v".to_string(), p.clone()).unwrap();
+
+    let read = core
+        .list_connections("v".to_string())
+        .unwrap()
+        .into_iter()
+        .find(|c| c.profile_id == "web1")
+        .expect("saved profile");
+    assert_eq!(
+        read.startup_snippet_ids,
+        vec!["tmux-attach".to_string(), "cd-app".to_string()],
+        "order matters — these are typed in sequence"
+    );
+
+    p.uid = read.uid.clone();
+    p.startup_snippet_ids.clear();
+    core.save_connection("v".to_string(), p).unwrap();
+    let cleared = core
+        .list_connections("v".to_string())
+        .unwrap()
+        .into_iter()
+        .find(|c| c.profile_id == "web1")
+        .unwrap();
+    assert!(cleared.startup_snippet_ids.is_empty());
 }

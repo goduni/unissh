@@ -20,7 +20,12 @@ import { useApp, type PendingMismatch, type TerminalPaneState, type TermLayout }
 import { useIsMobile } from "@/store/responsive";
 import { useCtx } from "@/store/ctx";
 import * as api from "@/bridge/api";
-import { apiErrorMessage, isApiError, type TermEvent } from "@/bridge/types";
+import {
+  apiErrorMessage,
+  isApiError,
+  type ConnectionProfile,
+  type TermEvent,
+} from "@/bridge/types";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { isMac } from "@/bridge/platform";
 import { ContextMenu } from "@/components/ContextMenu";
@@ -307,7 +312,38 @@ function TerminalPane({
   // Hover state so a split pane can offer an obvious close (✕) affordance.
   const [paneHover, setPaneHover] = useState(false);
 
-  // init xterm once
+  /** Types a host's startup snippets into a freshly opened session.
+ *
+ * Typed, not executed: each snippet is sent followed by a newline, because a
+ * startup command that never runs is useless — unlike the palette, where the
+ * user is choosing one interactively and Enter must stay theirs. The list is
+ * ordered, so they are sent in sequence.
+ *
+ * Failures are swallowed on purpose: a missing snippet (deleted on another
+ * device, not yet synced) must not turn a working connection into an error.
+ */
+async function runStartupSnippets(
+  sessionId: string,
+  profile: ConnectionProfile | null,
+  vaultId: string,
+) {
+  const ids = profile?.startupSnippetIds ?? [];
+  if (!ids.length || !vaultId) return;
+  try {
+    const library = await api.listSnippets(vaultId);
+    const byId = new Map(library.map((s) => [s.snippetId, s]));
+    const enc = new TextEncoder();
+    for (const id of ids) {
+      const snippet = byId.get(id);
+      if (!snippet) continue;
+      await api.sessionWrite(sessionId, Array.from(enc.encode(snippet.command + "\n")));
+    }
+  } catch {
+    /* a startup snippet must never break the session it was meant to set up */
+  }
+}
+
+// init xterm once
   useEffect(() => {
     if (!hostRef.current) return;
     const isMobile = useApp.getState().device === "mobile";
@@ -768,6 +804,7 @@ function TerminalPane({
         // Refresh the host's "recently connected" timestamp on every (re)connect.
         if (profile) useApp.getState().markConnected(profile.profileId);
         term.focus();
+        void runStartupSnippets(id, profile, vaultId);
       })
       .catch((err) => {
         if (cancelled) return;
