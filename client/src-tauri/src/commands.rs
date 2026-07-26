@@ -16,8 +16,8 @@ use unissh_ffi::{
 use crate::dto;
 use crate::error::{ApiError, ApiResult};
 use crate::observers::{
-    BroadcastEvent, ChannelBroadcastObserver, ChannelExecObserver, ChannelSessionObserver,
-    ChannelSftpProgress, ExecEvent, ProgressEvent, TermEvent,
+    AppPrompter, BroadcastEvent, ChannelBroadcastObserver, ChannelExecObserver,
+    ChannelSessionObserver, ChannelSftpProgress, ExecEvent, ProgressEvent, TermEvent,
 };
 use crate::state::{new_id, AppState, LiveSession};
 
@@ -1450,4 +1450,18 @@ pub fn cancel_trigger(id: String, state: State<'_, AppState>) {
 #[tauri::command]
 pub fn cancel_dispose(id: String, state: State<'_, AppState>) {
     state.cancels.remove(&id);
+}
+
+/// Answers an outstanding interactive-authentication prompt.
+///
+/// `answers: None` is Cancel and aborts the connection. The core is blocked on
+/// a thread waiting for this, so it must not itself touch the core — it only
+/// hands the strings over.
+#[tauri::command]
+pub fn submit_auth_prompt(
+    id: u64,
+    answers: Option<Vec<String>>,
+    prompter: State<'_, Arc<AppPrompter>>,
+) {
+    prompter.answer(id, answers);
 }

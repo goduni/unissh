@@ -108,6 +108,14 @@ pub fn run() {
                 db_path.to_string_lossy().to_string(),
                 keyset_path.to_string_lossy().to_string(),
             );
+            // Registered before anything can connect: a server may demand a
+            // second factor on the very first connection, and a prompter wired
+            // up later would miss it.
+            let prompter = std::sync::Arc::new(crate::observers::AppPrompter::new(
+                app.handle().clone(),
+            ));
+            core.set_auth_prompter(Some(prompter.clone()));
+            app.manage(prompter);
             app.manage(AppState::new(core, db_path, keyset_path));
 
             // iOS: by default WKWebView adjusts its scroll-view content insets for
@@ -263,6 +271,7 @@ pub fn run() {
             commands::cancel_new,
             commands::cancel_trigger,
             commands::cancel_dispose,
+            commands::submit_auth_prompt,
             // keychain (Secret Key on trusted device)
             keychain::keychain_available,
             keychain::keychain_save_secret_key,

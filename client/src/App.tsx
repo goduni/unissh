@@ -21,6 +21,7 @@ import { ViewSettings } from "@/views/ViewSettings";
 
 import { EntryOverlays } from "@/overlays/Entry";
 import { Modals } from "@/overlays/Modals";
+import { AuthPrompt } from "@/overlays/AuthPrompt";
 import { CommandPalette } from "@/overlays/CommandPalette";
 import { ImportPreview } from "@/overlays/ImportPreview";
 import { GroupsModal } from "@/overlays/GroupsModal";
@@ -355,6 +356,7 @@ export function App() {
         {showApp && <MobileApp />}
         <EntryOverlays />
         {showApp && <Modals />}
+        {showApp && <AuthPrompt />}
         {showApp && <CommandPalette />}
         {showApp && <ImportPreview />}
         {showApp && <GroupsModal />}
@@ -427,6 +429,7 @@ export function App() {
       {/* overlays */}
       <EntryOverlays />
       {showApp && <Modals />}
+      {showApp && <AuthPrompt />}
       {showApp && <CommandPalette />}
       {showApp && <ImportPreview />}
       {showApp && <GroupsModal />}

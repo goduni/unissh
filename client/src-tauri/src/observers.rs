@@ -1,13 +1,26 @@
-//! Bridges from the core's push-only observer callbacks to `tauri::ipc::Channel`s.
+//! Bridges from the core's observer callbacks to the frontend.
 //!
-//! These fire on the core's background runtime threads, so they must stay
-//! non-blocking — they just forward the bytes/events into the channel bound to
-//! the originating `invoke` call. The frontend feeds the bytes straight into
-//! xterm.js (PTY) or its exec/broadcast/transfer views.
+//! Most of these are push-only and fire on the core's background runtime
+//! threads, so they must stay non-blocking — they just forward the bytes/events
+//! into the channel bound to the originating `invoke` call. The frontend feeds
+//! the bytes straight into xterm.js (PTY) or its exec/broadcast/transfer views.
+//!
+//! [`AppPrompter`] is the exception: interactive authentication needs an answer
+//! back, so it emits an app-wide event and blocks until the dialog replies.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::Mutex;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::ipc::Channel;
-use unissh_ffi::{BroadcastObserver, ExecObserver, SessionObserver, SftpProgressObserver};
+use tauri::{AppHandle, Emitter};
+use unissh_ffi::{
+    AuthPrompter, AuthPromptRequest, BroadcastObserver, ExecObserver, SessionObserver,
+    SftpProgressObserver,
+};
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -89,5 +102,104 @@ pub struct ChannelSftpProgress {
 impl SftpProgressObserver for ChannelSftpProgress {
     fn on_progress(&self, transferred: u64, total: u64) {
         let _ = self.chan.send(ProgressEvent { transferred, total });
+    }
+}
+
+/// Interactive authentication: a request the core cannot answer by itself.
+///
+/// Unlike everything else in this file, this one is not push-only — it needs an
+/// answer back. It also cannot ride a `Channel` bound to an `invoke`, because a
+/// prompt can surface during a reconnect or a fleet run that no live invoke owns.
+/// So it goes out as an app-wide event and comes back through the
+/// `submit_auth_prompt` command, matched by `id`.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthPromptEvent {
+    pub id: u64,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub name: String,
+    pub instruction: String,
+    pub prompts: Vec<AuthPromptFieldDto>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthPromptFieldDto {
+    pub prompt: String,
+    /// The server saying whether the answer may be shown on screen. The dialog
+    /// must mask the field when this is false — it marks one-time codes and
+    /// passwords.
+    pub echo: bool,
+}
+
+/// Bridges the core's blocking prompt call to the frontend dialog.
+pub struct AppPrompter {
+    app: AppHandle,
+    next_id: AtomicU64,
+    pending: Mutex<HashMap<u64, SyncSender<Option<Vec<String>>>>>,
+}
+
+impl AppPrompter {
+    pub fn new(app: AppHandle) -> Self {
+        Self {
+            app,
+            next_id: AtomicU64::new(1),
+            pending: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Called by the `submit_auth_prompt` command. `answers: None` is Cancel.
+    /// Unknown ids are ignored: a prompt that already timed out is gone, and a
+    /// late answer must not resurrect it.
+    pub fn answer(&self, id: u64, answers: Option<Vec<String>>) {
+        let tx = self.pending.lock().expect("prompt map").remove(&id);
+        if let Some(tx) = tx {
+            let _ = tx.send(answers);
+        }
+    }
+}
+
+impl AuthPrompter for AppPrompter {
+    fn prompt(&self, request: AuthPromptRequest) -> Option<Vec<String>> {
+        let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
+        // Rendezvous channel: the core thread is already blocked waiting, so
+        // there is nothing to buffer.
+        let (tx, rx) = sync_channel(0);
+        self.pending.lock().expect("prompt map").insert(id, tx);
+
+        let event = AuthPromptEvent {
+            id,
+            host: request.host,
+            port: request.port,
+            user: request.user,
+            name: request.name,
+            instruction: request.instruction,
+            prompts: request
+                .prompts
+                .into_iter()
+                .map(|p| AuthPromptFieldDto {
+                    prompt: p.prompt,
+                    echo: p.echo,
+                })
+                .collect(),
+        };
+
+        if self.app.emit("auth-prompt", event).is_err() {
+            // No window to ask (the app is shutting down, or the webview died).
+            // Abort rather than hold the connection open against a UI that will
+            // never answer.
+            self.pending.lock().expect("prompt map").remove(&id);
+            return None;
+        }
+
+        // Bounded so a dialog the user walks away from cannot pin a core lock
+        // forever. Kept just under the core's own interactive budget so the
+        // timeout that fires is this one, with the connection torn down
+        // deliberately rather than by an opaque handshake deadline.
+        let answers = rx.recv_timeout(Duration::from_secs(290)).ok().flatten();
+        self.pending.lock().expect("prompt map").remove(&id);
+        answers
     }
 }

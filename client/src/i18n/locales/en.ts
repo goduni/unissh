@@ -202,6 +202,11 @@ export const en = {
     password: "Password",
     ask: "Ask on connect",
     personal: "Personal identity",
+    prompt: {
+      title: "The server needs one more thing",
+      submit: "Continue",
+      answer: "Answer",
+    },
   },
 
   autolock: {
