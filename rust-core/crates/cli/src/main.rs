@@ -732,6 +732,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 80,
                 24,
                 observer,
+                // The harness does not record: a recording needs a vault to write
+                // into and a decision about whether the user wanted one, and this
+                // is a debugging shell, not the product.
+                None,
             )?;
             // line-by-line input from stdin (no raw mode — this is a harness)
             use std::io::BufRead;
@@ -866,6 +870,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     unissh_ffi::ProfileAuth::PromptPassword => "(password)".to_string(),
                     unissh_ffi::ProfileAuth::Personal => "(personal)".to_string(),
+                    unissh_ffi::ProfileAuth::SystemAgent { public_key } => {
+                        // Just the comment/type, not the whole blob: a listing
+                        // wants to be readable, and the key is not a secret but
+                        // it is long.
+                        let short = public_key.split_whitespace().next().unwrap_or("key");
+                        format!("(system agent: {short})")
+                    }
                 };
                 println!(
                     "{}\t{}@{}:{}\tauth={}\tjumps={}",

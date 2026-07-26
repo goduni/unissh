@@ -3729,6 +3729,7 @@ fn profile_round_trips_a_system_agent_identity() {
 /// would send the user to check their key.
 #[test]
 fn system_agent_without_an_agent_reports_the_agent() {
+    let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
@@ -3896,5 +3897,244 @@ fn the_core_lock_is_free_during_a_handshake() {
         worst < allowed,
         "a core call waited {worst:?} during a {connect_took:?} handshake (idle baseline \
          {baseline:?}) — the lock looks held across the network phase"
+    );
+}
+
+/// Serializes the tests that set `SSH_AUTH_SOCK`.
+///
+/// The environment is process-wide, so two of these running at once would point
+/// each other at the wrong agent — one expects a live socket, another expects a
+/// dead one. That is a flake waiting for a busy CI box, not a theoretical race.
+static AGENT_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A real `ssh-agent`, spawned and torn down by the test.
+///
+/// The system-agent path had no live coverage: the unit test only proved the
+/// error when no agent is listening. This runs the actual protocol against the
+/// actual OpenSSH agent, which is the only way to know the wire format, the
+/// identity matching and the signature all line up.
+struct TestAgent {
+    sock: std::path::PathBuf,
+    pid: String,
+    _dir: tempfile::TempDir,
+}
+
+impl TestAgent {
+    /// Starts an agent and loads `private_key_pem` into it. Returns `None` when
+    /// the tools are missing, so the test skips rather than fails on a machine
+    /// without OpenSSH.
+    fn start(private_key_pem: &str) -> Option<TestAgent> {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("agent.sock");
+        let out = Command::new("ssh-agent")
+            .args(["-a"])
+            .arg(&sock)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        // ssh-agent prints `SSH_AGENT_PID=1234; export ...`
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let pid = stdout
+            .split("SSH_AGENT_PID=")
+            .nth(1)?
+            .split(';')
+            .next()?
+            .trim()
+            .to_string();
+
+        let key_path = dir.path().join("id");
+        std::fs::write(&key_path, private_key_pem).unwrap();
+        // ssh-add refuses a world-readable key.
+        std::fs::set_permissions(
+            &key_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .unwrap();
+        let added = Command::new("ssh-add")
+            .arg(&key_path)
+            .env("SSH_AUTH_SOCK", &sock)
+            .env("DISPLAY", "")
+            .env("SSH_ASKPASS", "/bin/false")
+            .output()
+            .ok()?;
+        if !added.status.success() {
+            let _ = Command::new("kill").arg(&pid).status();
+            return None;
+        }
+        Some(TestAgent {
+            sock,
+            pid,
+            _dir: dir,
+        })
+    }
+}
+
+impl Drop for TestAgent {
+    fn drop(&mut self) {
+        let _ = Command::new("kill").arg(&self.pid).status();
+    }
+}
+
+/// End to end through a real OpenSSH agent: the agent holds the key, the core
+/// only names it, and the signature is produced by the agent.
+///
+/// This is the path a FIDO token, a PKCS#11 card, a Secure Enclave key or
+/// 1Password would take, so it is the one that has to be exercised for real.
+#[test]
+fn system_agent_authenticates_end_to_end() {
+    let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    // A key the agent will hold and sshd will trust. Generated with ssh-keygen so
+    // the whole chain is the real formats.
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("live");
+    if Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-N", ""])
+        .arg("-f")
+        .arg(&key_path)
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        eprintln!("ssh-keygen unavailable — skipping");
+        return;
+    }
+    let private = std::fs::read_to_string(&key_path).unwrap();
+    let public = std::fs::read_to_string(key_path.with_extension("pub")).unwrap();
+
+    let Some(agent) = TestAgent::start(&private) else {
+        eprintln!("ssh-agent/ssh-add unavailable — skipping");
+        return;
+    };
+    // SAFETY: single-threaded test setup, before any core call reads it.
+    unsafe { std::env::set_var("SSH_AUTH_SOCK", &agent.sock) };
+
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+
+    // The picker's data source must see the key the agent actually holds.
+    let listed = core.system_agent_keys().unwrap();
+    assert!(
+        listed.iter().any(|k| public.contains(&k.public_key)
+            || k.public_key.split_whitespace().nth(1) == public.split_whitespace().nth(1)),
+        "the agent's key is missing from system_agent_keys: {listed:?}"
+    );
+    let chosen = listed
+        .iter()
+        .find(|k| k.algorithm.contains("ed25519"))
+        .expect("the ed25519 key we just added");
+
+    let sshd = TestSshd::start(&public);
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+
+    // No key in our own vault or agent — the OS agent is the only thing that can
+    // produce this signature.
+    let session = core
+        .open_session(
+            "127.0.0.1".to_string(),
+            sshd.port,
+            "root".to_string(),
+            unissh_ffi::AuthMethod::SystemAgent {
+                public_key: chosen.public_key.clone(),
+            },
+            vec![],
+            "xterm".to_string(),
+            80,
+            24,
+            observer.clone(),
+            None,
+        )
+        .expect("the agent must be able to authenticate this session");
+
+    session.write(b"echo agent-auth-works\n".to_vec()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if contains(&observer.buf.lock().unwrap(), b"agent-auth-works") {
+            break;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "no shell output; got {:?}",
+            String::from_utf8_lossy(&observer.buf.lock().unwrap())
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    session.close().unwrap();
+}
+
+/// And the negative: a key the agent does not hold must fail with the dedicated
+/// error, not a generic authentication failure that sends the user to check
+/// their key instead of plugging in their token.
+#[test]
+fn system_agent_missing_key_is_named() {
+    let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("held");
+    if Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-N", ""])
+        .arg("-f")
+        .arg(&key_path)
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return;
+    }
+    let held = std::fs::read_to_string(&key_path).unwrap();
+    let Some(agent) = TestAgent::start(&held) else {
+        return;
+    };
+    unsafe { std::env::set_var("SSH_AUTH_SOCK", &agent.sock) };
+
+    // A different key, never added to the agent.
+    let other = dir.path().join("other");
+    assert!(
+        Command::new("ssh-keygen")
+            .args(["-t", "ed25519", "-q", "-N", ""])
+            .arg("-f")
+            .arg(&other)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+        "ssh-keygen must produce the second key"
+    );
+    let other_pub = std::fs::read_to_string(other.with_extension("pub")).unwrap();
+
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let sshd = TestSshd::start(&other_pub);
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    // `SshSession` is not Debug (it holds a live connection), so unwrap the
+    // Result by hand rather than through expect_err.
+    let outcome = core.open_session(
+        "127.0.0.1".to_string(),
+        sshd.port,
+        "root".to_string(),
+        unissh_ffi::AuthMethod::SystemAgent {
+            public_key: other_pub.clone(),
+        },
+        vec![],
+        "xterm".to_string(),
+        80,
+        24,
+        observer,
+        None,
+    );
+    let msg = match outcome {
+        Ok(_) => panic!("the agent does not hold this key; the connect must fail"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        msg.contains("ssh-add") || msg.contains("does not hold"),
+        "the error must say the agent lacks the key, got: {msg}"
     );
 }
