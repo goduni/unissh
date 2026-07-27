@@ -9,6 +9,7 @@ import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { useApp, type ConfirmData } from "@/store/app";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation, tDyn } from "@/i18n";
+import { isMac } from "@/bridge/platform";
 import type { ToastDetail, ToastKind } from "@/store/toast";
 
 interface ToastItem extends ToastDetail {
@@ -318,15 +319,23 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
   );
 }
 
-const SHORTCUTS: [string, string][] = [
-  ["⌘K", "feedback.shortcut.commandPalette"],
-  ["⌘N", "feedback.shortcut.newHost"],
-  ["⌘T", "feedback.shortcut.goToTerminal"],
-  ["⌘L", "feedback.shortcut.lockInstance"],
-  ["⌘1–9", "feedback.shortcut.switchSections"],
-  ["⌘ +/−/0", "feedback.shortcut.termZoom"],
-  ["⌘/", "feedback.shortcut.thisHelp"],
-];
+// "⌘" was printed on every platform, including the ones without a ⌘ key. The
+// modifier also differs inside the terminal, and deliberately: a bare Ctrl+K/L/T
+// belongs to readline there, so the app takes Ctrl+Shift instead (see
+// support/hotkeys.ts). Both are shown rather than picking one and being wrong
+// half the time.
+const shortcutList = (): [string, string][] => {
+  const mod = isMac() ? "⌘" : "Ctrl+Shift+";
+  return [
+    [`${mod}K`, "feedback.shortcut.commandPalette"],
+    [`${mod}N`, "feedback.shortcut.newHost"],
+    [`${mod}T`, "feedback.shortcut.goToTerminal"],
+    [`${mod}L`, "feedback.shortcut.lockInstance"],
+    [`${mod}1–9`, "feedback.shortcut.switchSections"],
+    [`${mod}+/−/0`, "feedback.shortcut.termZoom"],
+    [`${mod}/`, "feedback.shortcut.thisHelp"],
+  ];
+};
 
 export function ShortcutsHelp() {
   const p = usePalette();
@@ -361,7 +370,7 @@ export function ShortcutsHelp() {
       >
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>{t("feedback.shortcutsTitle")}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {SHORTCUTS.map(([k, label]) => (
+          {shortcutList().map(([k, label]) => (
             <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
               {/* minWidth:0 lets a long RU shortcut description wrap instead of shoving the keycap */}
               <span style={{ fontSize: 13, color: p.txt2, minWidth: 0 }}>{tDyn(label)}</span>

@@ -28,6 +28,7 @@ import {
 } from "@/bridge/types";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { isMac } from "@/bridge/platform";
+import { isAppChord } from "@/support/hotkeys";
 import { ContextMenu } from "@/components/ContextMenu";
 import { TermTabStrip } from "@/views/TermTabStrip";
 import { useTerminalShortcuts } from "@/shell/useTerminalShortcuts";
@@ -521,6 +522,12 @@ async function runStartupSnippets(
     // only while THIS terminal has focus, so other panes/tabs are unaffected.
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
+      // Hand the app's own chords back before xterm can look at them. Returning
+      // false makes xterm return from _keyDown untouched; anything it *does*
+      // recognise it cancels with stopPropagation, and the window listener that
+      // implements these shortcuts then never runs. That is why ⌘K opened the
+      // palette everywhere except the terminal — the one place it is for.
+      if (isAppChord(ev)) return false;
       const isF = ev.key === "f" || ev.key === "F";
       if (isF && ((ev.metaKey && !ev.ctrlKey) || (ev.ctrlKey && ev.shiftKey))) {
         setSearchOpen(true);
