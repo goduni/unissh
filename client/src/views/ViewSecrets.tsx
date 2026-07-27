@@ -9,7 +9,8 @@ import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, UI } from "@/theme/tokens";
-import { Btn, Icon, NO_AUTOCORRECT, VaultBadge } from "@/components/primitives";
+import { Btn, Icon, NO_AUTOCORRECT, Spinner, Tag, VaultBadge } from "@/components/primitives";
+import { Modal } from "@/components/Modal";
 import { UnderlineTabs, fmtRelativeUnix, FlatAvatar, MetaChip, RowOverflowMenu, Card, HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -613,6 +614,101 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
   );
 }
 
+/** Earlier versions of a secret, and a reveal for each.
+ *
+ *  The vault has kept these all along — `list_item_versions` and the per-version
+ *  reveals have existed in the core, and through the Tauri layer, since history
+ *  was implemented. Nothing called them, so from the app's side the feature did
+ *  not exist: overwrite a password and the previous one was gone as far as
+ *  anyone could tell. This is the screen that was missing, not the storage.
+ *
+ *  Each version reveals on its own, through the same RevealField as a live
+ *  secret, so an old password is exactly as deliberate to look at as the current
+ *  one and is dropped from memory again on hide. */
+function VersionHistory({
+  itemId,
+  kind,
+  onClose,
+}: {
+  itemId: string;
+  kind: "password" | "note";
+  onClose: () => void;
+}) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const ctx = useCtx();
+  const vault = useApp((s) => s.vaultId);
+  const [versions, setVersions] = useState<number[] | null>(null);
+
+  useEffect(() => {
+    if (!vault) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const v = await api.listItemVersions(vault, itemId);
+        // Newest first: the current one is what you came to compare against.
+        if (alive) setVersions([...v].sort((a, b) => b - a));
+      } catch (e) {
+        if (alive) {
+          ctx.toast(apiErrorMessage(e), "err");
+          setVersions([]);
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [vault, itemId, ctx]);
+
+  const current = versions && versions.length ? versions[0] : null;
+
+  return (
+    <Modal
+      icon="clock"
+      title={t("secrets.historyTitle")}
+      subtitle={itemId}
+      onClose={onClose}
+      w={460}
+      footer={
+        <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+          <Btn onClick={onClose}>{t("common.done")}</Btn>
+        </div>
+      }
+    >
+      {versions === null ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: p.txt3, fontSize: 13 }}>
+          <Spinner /> {t("serverVaults.loading")}
+        </div>
+      ) : versions.length === 0 ? (
+        <div style={{ fontSize: 13, color: p.txt3 }}>{t("secrets.historyEmpty")}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 12, color: p.txt3, lineHeight: 1.5 }}>
+            {t("secrets.historyExplain")}
+          </div>
+          {versions.map((v) => (
+            <div key={v} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: p.txt2 }}>v{v}</span>
+                {v === current && <Tag>{t("secrets.historyCurrent")}</Tag>}
+              </div>
+              <RevealField
+                load={() =>
+                  kind === "password"
+                    ? api.getPasswordVersion(vault!, itemId, v)
+                    : api.getNoteVersion(vault!, itemId, v)
+                }
+                onError={(e) => ctx.toast(apiErrorMessage(e), "err")}
+                mono={kind === "password"}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function PasswordCard({ item }: { item: ItemInfo }) {
   const p = usePalette();
   const { t, i18n } = useTranslation();
@@ -620,6 +716,7 @@ function PasswordCard({ item }: { item: ItemInfo }) {
   const vault = useApp((s) => s.vaultId);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [history, setHistory] = useState(false);
 
   // Edit overwrites the same item id, so any host referencing it follows along.
   const startEdit = async () => {
@@ -690,6 +787,26 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           </div>
         </div>
         <button
+          onClick={() => setHistory(true)}
+          title={t("secrets.historyTitle")}
+          aria-label={t("secrets.historyTitle")}
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            border: `1px solid ${p.line}`,
+            background: p.bg2,
+            color: p.txt3,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          <Icon name="clock" size={14} />
+        </button>
+        <button
           onClick={editing ? saveEdit : startEdit}
           title={editing ? t("common.save") : t("common.edit")}
           aria-label={editing ? t("common.save") : t("common.edit")}
@@ -755,6 +872,9 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           onError={(e) => ctx.toast(apiErrorMessage(e), "err")}
         />
       )}
+      {history && (
+        <VersionHistory itemId={item.itemId} kind="password" onClose={() => setHistory(false)} />
+      )}
     </Card>
   );
 }
@@ -793,6 +913,7 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
   const [body, setBody] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [history, setHistory] = useState(false);
   const { copied, flash } = useCopied();
 
   const reveal = async () => {
@@ -874,6 +995,26 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
         <Icon name="note" size={16} color={p.txt2} />
         <span style={{ fontSize: 14, fontWeight: 700 }}>{item.itemId}</span>
         <div style={{ flex: 1 }} />
+        <button
+          onClick={() => setHistory(true)}
+          title={t("secrets.historyTitle")}
+          aria-label={t("secrets.historyTitle")}
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            border: `1px solid ${p.line}`,
+            background: p.bg2,
+            color: p.txt3,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          <Icon name="clock" size={14} />
+        </button>
         <button
           onClick={editing ? saveEdit : startEdit}
           title={editing ? t("common.save") : t("common.edit")}
@@ -1030,6 +1171,9 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
             {body}
           </pre>
         </div>
+      )}
+      {history && (
+        <VersionHistory itemId={item.itemId} kind="note" onClose={() => setHistory(false)} />
       )}
     </HairlineRow>
   );
