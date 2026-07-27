@@ -18,8 +18,8 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 use unissh_ffi::{
-    AuthPromptRequest, AuthPrompter, BroadcastObserver, ExecObserver, SessionObserver,
-    SftpProgressObserver,
+    AgentApprover, AgentSignRequest, AuthPromptRequest, AuthPrompter, BroadcastObserver,
+    ExecObserver, SessionObserver, SftpProgressObserver,
 };
 
 #[derive(Clone, Serialize)]
@@ -202,5 +202,68 @@ impl AuthPrompter for AppPrompter {
         let answers = rx.recv_timeout(Duration::from_secs(290)).ok().flatten();
         self.pending.lock().expect("prompt map").remove(&id);
         answers
+    }
+}
+
+/// A forwarded agent asking whether to sign.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentApprovalEvent {
+    pub id: u64,
+    pub host: String,
+    /// `user@service` when the payload is an SSH login; empty otherwise. This is
+    /// what turns the prompt from "something wants a signature" into "this would
+    /// log in as X".
+    pub target: String,
+}
+
+/// Bridges the core's blocking approval call to a dialog.
+///
+/// Same shape as [`AppPrompter`], and for the same reason: the core is blocked
+/// on a worker thread waiting for an answer that only a person can give.
+pub struct AppApprover {
+    app: AppHandle,
+    next_id: AtomicU64,
+    pending: Mutex<HashMap<u64, SyncSender<bool>>>,
+}
+
+impl AppApprover {
+    pub fn new(app: AppHandle) -> Self {
+        Self {
+            app,
+            next_id: AtomicU64::new(1),
+            pending: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn answer(&self, id: u64, approved: bool) {
+        let tx = self.pending.lock().expect("approval map").remove(&id);
+        if let Some(tx) = tx {
+            let _ = tx.send(approved);
+        }
+    }
+}
+
+impl AgentApprover for AppApprover {
+    fn approve(&self, request: AgentSignRequest) -> bool {
+        let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
+        let (tx, rx) = sync_channel(1);
+        self.pending.lock().expect("approval map").insert(id, tx);
+
+        let event = AgentApprovalEvent {
+            id,
+            host: request.host,
+            target: request.target,
+        };
+        if self.app.emit("agent-approval", event).is_err() {
+            self.pending.lock().expect("approval map").remove(&id);
+            return false;
+        }
+
+        // Refusing on timeout, not granting. An unanswered prompt means nobody
+        // was watching, and that is exactly when a signature should not happen.
+        let approved = rx.recv_timeout(Duration::from_secs(60)).unwrap_or(false);
+        self.pending.lock().expect("approval map").remove(&id);
+        approved
     }
 }

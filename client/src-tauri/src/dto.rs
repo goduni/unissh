@@ -318,6 +318,9 @@ pub struct ConnectionProfile {
     /// Attach to a persistent tmux session on connect.
     #[serde(default)]
     pub tmux_session: bool,
+    /// Serve a forwarded ssh-agent to this host.
+    #[serde(default)]
+    pub agent_forward: bool,
 }
 
 impl From<ConnectionProfile> for ffi::ConnectionProfile {
@@ -336,6 +339,7 @@ impl From<ConnectionProfile> for ffi::ConnectionProfile {
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
             tmux_session: p.tmux_session,
+            agent_forward: p.agent_forward,
         }
     }
 }
@@ -355,6 +359,7 @@ impl From<ffi::ConnectionProfile> for ConnectionProfile {
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
             tmux_session: p.tmux_session,
+            agent_forward: p.agent_forward,
         }
     }
 }
@@ -1347,6 +1352,25 @@ impl From<ffi::SystemAgentKeyFfi> for SystemAgentKey {
             public_key: k.public_key,
             comment: k.comment,
             algorithm: k.algorithm,
+        }
+    }
+}
+
+// ---------- forwarded-agent approval ----------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSignRequest {
+    pub host: String,
+    /// `user@service` when the payload is an SSH login; empty otherwise.
+    pub target: String,
+}
+
+impl From<ffi::AgentSignRequest> for AgentSignRequest {
+    fn from(r: ffi::AgentSignRequest) -> Self {
+        AgentSignRequest {
+            host: r.host,
+            target: r.target,
         }
     }
 }

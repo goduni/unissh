@@ -101,6 +101,14 @@ pub struct ConnectOptions {
     /// pre-existing behaviour: answer with the password where that is plausible,
     /// and fail rather than hang if it is not.
     pub prompter: Option<Arc<dyn AuthPrompter>>,
+    /// Serve a forwarded ssh-agent to this host.
+    ///
+    /// `None` — the default — means the server is told nothing, and any channel
+    /// it opens regardless is refused. While a forwarded session lives, anything
+    /// that can reach the socket on the remote side can ask for a signature:
+    /// every process running as you there, not only root. Hence per host, one
+    /// key only, and a confirmation for each signature.
+    pub agent_forward: Option<Arc<crate::forward::ForwardedAgent>>,
 }
 
 impl ConnectOptions {
@@ -112,7 +120,15 @@ impl ConnectOptions {
             user: user.into(),
             auth,
             prompter: None,
+            agent_forward: None,
         }
+    }
+
+    /// Serves a forwarded agent to this host, under the policy in `agent`.
+    #[must_use]
+    pub fn with_agent_forward(mut self, agent: Arc<crate::forward::ForwardedAgent>) -> Self {
+        self.agent_forward = Some(agent);
+        self
     }
 
     /// Attaches the interactive prompter. Without one, keyboard-interactive can
@@ -138,6 +154,7 @@ impl core::fmt::Debug for ConnectOptions {
             .field("user", &self.user)
             .field("auth", &self.auth)
             .field("prompter", &self.prompter.is_some())
+            .field("agent_forward", &self.agent_forward.is_some())
             .finish()
     }
 }
@@ -310,6 +327,9 @@ struct ClientHandler {
     expected_host_key: Option<Vec<u8>>,
     observed_host_key: Arc<Mutex<Option<Vec<u8>>>>,
     remote_forwards: RemoteForwards,
+    /// `None` means forwarding was never asked for on this connection, and a
+    /// channel the server opens anyway is refused.
+    agent_forward: Option<Arc<crate::forward::ForwardedAgent>>,
 }
 
 impl Handler for ClientHandler {
@@ -329,14 +349,25 @@ impl Handler for ClientHandler {
     /// "forwarding is off" true at the protocol level rather than by omission.
     async fn server_channel_open_agent_forward(
         &mut self,
-        _channel: Channel<Msg>,
+        channel: Channel<Msg>,
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), TransportError> {
-        log::warn!("server opened an unsolicited agent-forwarding channel; rejecting");
-        reply
-            .reject(ChannelOpenFailure::AdministrativelyProhibited)
-            .await;
+        let Some(agent) = self.agent_forward.clone() else {
+            // russh accepts these by default; refusing explicitly is what makes
+            // "forwarding is off" a protocol fact rather than an omission.
+            log::warn!("server opened an unsolicited agent-forwarding channel; rejecting");
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        reply.accept().await;
+        // One task per channel: the remote side opens a fresh one for every
+        // connection to the socket, and they run concurrently.
+        tokio::spawn(async move {
+            crate::forward::serve(agent, channel.into_stream()).await;
+        });
         Ok(())
     }
 
@@ -407,6 +438,10 @@ pub struct SshClient {
     /// Intermediate jump hosts — kept alive (their tunnels are needed by the connection).
     _hops: Vec<Arc<Handle<ClientHandler>>>,
     remote_forwards: RemoteForwards,
+    /// Whether this connection asked the server for agent forwarding. Only the
+    /// **target** ever does — a bastion is exactly the machine the ProxyJump
+    /// design exists to keep the key away from.
+    agent_forward_requested: bool,
 }
 
 impl SshClient {
@@ -424,6 +459,7 @@ impl SshClient {
             handle: Arc::new(handle),
             _hops: Vec::new(),
             remote_forwards,
+            agent_forward_requested: opts.agent_forward.is_some(),
         })
     }
 
@@ -485,6 +521,10 @@ impl SshClient {
             handle: Arc::new(target_handle),
             _hops: handles.into_iter().map(Arc::new).collect(),
             remote_forwards,
+            // The target's setting, not a hop's: a bastion is precisely the
+            // machine ProxyJump exists to keep the key away from, so forwarding
+            // to one is never inferred from the target wanting it.
+            agent_forward_requested: target.agent_forward.is_some(),
         })
     }
 
@@ -672,6 +712,12 @@ impl SshClient {
         sink: Arc<dyn OutputSink>,
     ) -> Result<ShellHandle, TransportError> {
         let channel = self.handle.channel_open_session().await?;
+        if self.agent_forward_requested {
+            // Before the shell, as OpenSSH does: the request is per session
+            // channel, and the server has to know before it starts the program
+            // that will look for the socket.
+            channel.agent_forward(false).await?;
+        }
         channel
             .request_pty(false, term, cols, rows, 0, 0, &[])
             .await?;
@@ -887,6 +933,7 @@ async fn establish_tcp(
         expected_host_key: expected.clone(),
         observed_host_key: observed.clone(),
         remote_forwards,
+        agent_forward: opts.agent_forward.clone(),
     };
     let connected = timeout(
         HANDSHAKE_TIMEOUT,
@@ -924,6 +971,7 @@ where
         expected_host_key: expected.clone(),
         observed_host_key: observed.clone(),
         remote_forwards,
+        agent_forward: opts.agent_forward.clone(),
     };
     let connected = timeout(
         HANDSHAKE_TIMEOUT,
@@ -1041,6 +1089,8 @@ pub async fn trust_host_key(
         expected_host_key: None,
         observed_host_key: observed.clone(),
         remote_forwards: Arc::new(Mutex::new(HashMap::new())),
+        // A bare key-fetch probe: never serve an agent to it.
+        agent_forward: None,
     };
     let handle = timeout(
         HANDSHAKE_TIMEOUT,

@@ -41,6 +41,7 @@
 mod client;
 mod config;
 mod error;
+mod forward;
 mod sftp;
 
 pub use client::system_agent_keys;
@@ -52,4 +53,5 @@ pub use client::{
 };
 pub use config::{HostSettings, SkipReason, SkippedDirective, SshConfig};
 pub use error::TransportError;
+pub use forward::{AgentApproval, ForwardedAgent};
 pub use sftp::{DirEntry, FileStat, Sftp, SftpCancel, SftpProgress, TransferOutcome};

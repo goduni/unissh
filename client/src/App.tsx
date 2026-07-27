@@ -24,6 +24,7 @@ import { Modals } from "@/overlays/Modals";
 import { ViewRecordings } from "@/views/ViewRecordings";
 import { ViewSnippets } from "@/views/ViewSnippets";
 import { AuthPrompt } from "@/overlays/AuthPrompt";
+import { AgentApproval } from "@/overlays/AgentApproval";
 import { CommandPalette } from "@/overlays/CommandPalette";
 import { ImportPreview } from "@/overlays/ImportPreview";
 import { GroupsModal } from "@/overlays/GroupsModal";
@@ -399,6 +400,8 @@ export function App() {
         <EntryOverlays />
         {showApp && <Modals />}
         {showApp && <AuthPrompt />}
+      {showApp && <AgentApproval />}
+        {showApp && <AgentApproval />}
         {showApp && <CommandPalette />}
         {showApp && <ImportPreview />}
         {showApp && <GroupsModal />}

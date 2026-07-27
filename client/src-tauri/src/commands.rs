@@ -17,7 +17,7 @@ use unissh_ffi::{
 use crate::dto;
 use crate::error::{ApiError, ApiResult};
 use crate::observers::{
-    AppPrompter, BroadcastEvent, ChannelBroadcastObserver, ChannelExecObserver,
+    AppApprover, AppPrompter, BroadcastEvent, ChannelBroadcastObserver, ChannelExecObserver,
     ChannelSessionObserver, ChannelSftpProgress, ExecEvent, ProgressEvent, TermEvent,
 };
 use crate::state::{new_id, AppState, LiveSession};
@@ -255,6 +255,20 @@ pub async fn delete_recording(
 ) -> ApiResult<()> {
     let core = state.core.clone();
     blocking(move || core.delete_recording(vault_id, recording_id)).await
+}
+
+/// Answers a forwarded agent's request to sign.
+///
+/// Refusal is the default everywhere in this path: an unanswered prompt, a dead
+/// window, a timeout — all decline.
+#[tauri::command]
+pub async fn submit_agent_approval(
+    id: u64,
+    approved: bool,
+    approver: State<'_, Arc<AppApprover>>,
+) -> ApiResult<()> {
+    approver.answer(id, approved);
+    Ok(())
 }
 
 /// Keys the OS ssh-agent currently holds — the picker's data source.
@@ -1042,6 +1056,7 @@ pub async fn session_open(
     rows: u32,
     on_event: Channel<TermEvent>,
     recording: Option<dto::RecordingRequest>,
+    agent_forward: bool,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
@@ -1050,7 +1065,19 @@ pub async fn session_open(
     let obs: Arc<dyn SessionObserver> = Arc::new(ChannelSessionObserver { chan: on_event });
     let rec = recording.map(Into::into);
     let session = blocking(move || {
-        core.open_session(host, port, user, auth, jumps, term, cols, rows, obs, rec)
+        core.open_session(
+            host,
+            port,
+            user,
+            auth,
+            jumps,
+            term,
+            cols,
+            rows,
+            obs,
+            rec,
+            agent_forward,
+        )
     })
     .await?;
     let id = new_id();
@@ -1074,6 +1101,7 @@ pub async fn session_open_reconnecting(
     max_retries: u32,
     backoff_ms: u32,
     on_event: Channel<TermEvent>,
+    agent_forward: bool,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
@@ -1093,6 +1121,7 @@ pub async fn session_open_reconnecting(
             max_retries,
             backoff_ms,
             obs,
+            agent_forward,
         )
     })
     .await?;

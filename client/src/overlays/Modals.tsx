@@ -315,6 +315,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   const [recordSessions, setRecordSessions] = useState<boolean>(edit?.recordSessions ?? false);
   const [tmuxSession, setTmuxSession] = useState<boolean>(edit?.tmuxSession ?? false);
+  const [agentForward, setAgentForward] = useState<boolean>(edit?.agentForward ?? false);
   const [startupSnippetIds, setStartupSnippetIds] = useState<string[]>(
     edit?.startupSnippetIds ?? [],
   );
@@ -631,6 +632,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       startupSnippetIds,
       recordSessions,
       tmuxSession,
+      agentForward,
     };
 
     try {
@@ -1421,6 +1423,19 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                 {t("modals.host.recordTitle")}
               </div>
               <div style={{ fontSize: 12, opacity: 0.7 }}>{t("modals.host.recordDesc")}</div>
+            </div>
+          </div>
+
+          {/* agent forwarding — off by default, and the description says why */}
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <Toggle checked={agentForward} onChange={setAgentForward} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                {t("modals.host.agentForwardTitle")}
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>
+                {t("modals.host.agentForwardDesc")}
+              </div>
             </div>
           </div>
 

@@ -736,6 +736,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // into and a decision about whether the user wanted one, and this
                 // is a debugging shell, not the product.
                 None,
+                // Nor does it forward the agent: that needs an approver to confirm
+                // each signature, and there is nobody at a harness to ask.
+                false,
             )?;
             // line-by-line input from stdin (no raw mode — this is a harness)
             use std::io::BufRead;

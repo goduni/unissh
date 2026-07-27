@@ -332,6 +332,14 @@ pub struct ConnectionProfile {
     /// wrong, and its whole value depends on the name staying identical across
     /// reconnects.
     pub tmux_session: bool,
+    /// Serve a forwarded ssh-agent to this host.
+    ///
+    /// Off by default and per host on purpose. It is what lets `git` or `ssh`
+    /// *on that machine* use your key — and equally what lets anything else
+    /// running as you there ask for a signature while the session lives. Only
+    /// the key this connection used is offered, and every signature is
+    /// confirmed.
+    pub agent_forward: bool,
 }
 
 /// A personal identity: SSH credentials under a single name (username + optional references to
@@ -632,6 +640,8 @@ struct StoredProfile {
     record_sessions: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     tmux_session: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    agent_forward: bool,
     /// OpenSSH public-key line selecting an identity in the OS ssh-agent. A
     /// handle, not a secret.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1183,6 +1193,10 @@ pub struct Core {
     // *fresh* one-time code, so it must be able to ask again. Outside CoreState
     // on purpose — locking the core must not detach the UI's prompt handler.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
+    /// Who approves signatures a forwarded agent is asked for. Registered once,
+    /// like the prompter; without one, forwarding refuses every signature rather
+    /// than granting them unseen.
+    approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
 }
 
 /// Escrow enrollment/fetch credentials derived on the device (spec 5.1 / server-tz
@@ -1219,7 +1233,16 @@ impl Core {
                     .expect("tokio runtime"),
             ),
             prompter: Arc::new(Mutex::new(None)),
+            approver: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Registers who approves each signature a forwarded agent is asked to
+    /// produce. Without one, a forwarded agent refuses everything — the safe
+    /// direction, since the alternative is signing on someone's behalf with
+    /// nobody watching.
+    pub fn set_agent_approver(&self, approver: Option<Arc<dyn AgentApprover>>) {
+        *lock_recover(&self.approver) = approver;
     }
 
     /// Registers who to ask when a server wants something only the person at the
@@ -3219,11 +3242,13 @@ impl Core {
         rows: u32,
         observer: Arc<dyn SessionObserver>,
         recording: Option<RecordingRequest>,
+        agent_forward: bool,
     ) -> Result<Arc<SshSession>, FfiError> {
         check_term_size(cols, rows)?;
         let host_for_record = host.clone();
         let user_for_record = user.clone();
-        let client = self.connect_session(&auth, &jumps, host, port, user)?;
+        let client =
+            self.connect_session_forwarding(&auth, &jumps, host, port, user, agent_forward)?;
 
         let sink: Arc<dyn OutputSink> = match recording {
             None => Arc::new(ObserverSink(observer)),
@@ -3277,12 +3302,15 @@ impl Core {
         max_retries: u32,
         backoff_ms: u32,
         observer: Arc<dyn SessionObserver>,
+        agent_forward: bool,
     ) -> Result<Arc<ReconnectingSession>, FfiError> {
         check_term_size(cols, rows)?;
         let session = Arc::new(ReconnectingSession {
             state: self.state.clone(),
             rt: self.rt.clone(),
             prompter: self.prompter.clone(),
+            approver: self.approver.clone(),
+            agent_forward,
             host,
             port,
             user,
@@ -4150,6 +4178,9 @@ impl Core {
         let max = (parallelism.clamp(1, 16)) as usize;
         Ok(Arc::new(SftpFfi {
             prompter: self.prompter.clone(),
+            approver: self.approver.clone(),
+            // SFTP runs no program on the far side that would look for an agent.
+            agent_forward: false,
             client: Mutex::new(Some(client)),
             pool: Mutex::new(SftpPool {
                 idle: vec![sftp],
@@ -4196,6 +4227,7 @@ impl Core {
                 startup_snippet_ids,
                 record_sessions,
                 tmux_session,
+                agent_forward,
             } = profile;
             if profile_id.is_empty() {
                 return Err(FfiError::other("profile_id must not be empty"));
@@ -4235,6 +4267,7 @@ impl Core {
                 startup_snippet_ids,
                 record_sessions,
                 tmux_session,
+                agent_forward,
                 system_agent_public_key,
                 extra: BTreeMap::new(),
             };
@@ -4854,6 +4887,7 @@ impl Core {
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
                     tmux_session: false,
+                    agent_forward: false,
                     system_agent_public_key: None,
                     extra: std::collections::BTreeMap::new(),
                 };
@@ -5049,6 +5083,7 @@ impl Core {
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
                     tmux_session: false,
+                    agent_forward: false,
                     system_agent_public_key: None,
                     extra: std::collections::BTreeMap::new(),
                 };
@@ -5291,15 +5326,35 @@ impl Core {
         port: u16,
         user: String,
     ) -> Result<SshClient, FfiError> {
+        // No forwarding: this is the path exec, fleet and SFTP take, and none of
+        // them runs a program on the far side that would look for an agent.
+        self.connect_session_forwarding(auth, jumps, host, port, user, false)
+    }
+
+    /// As [`Self::connect_session`], but able to serve a forwarded agent. Only
+    /// the interactive session paths use it — forwarding exists so that a shell
+    /// on the remote host can sign, and only a shell asks.
+    #[allow(clippy::too_many_arguments)]
+    fn connect_session_forwarding(
+        &self,
+        auth: &AuthMethod,
+        jumps: &[JumpHost],
+        host: String,
+        port: u16,
+        user: String,
+        agent_forward: bool,
+    ) -> Result<SshClient, FfiError> {
         connect_with_state(
             &self.state,
             &self.rt,
             &self.prompter,
+            &self.approver,
             auth,
             jumps,
             host,
             port,
             user,
+            agent_forward,
         )
     }
 
@@ -5537,11 +5592,13 @@ fn connect_with_state(
     state: &Arc<Mutex<Option<CoreState>>>,
     rt: &tokio::runtime::Runtime,
     prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
+    approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
     auth: &AuthMethod,
     jumps: &[JumpHost],
     host: String,
     port: u16,
     user: String,
+    agent_forward: bool,
 ) -> Result<SshClient, FfiError> {
     // Cloned out before the state lock is taken: the prompt fires while that lock
     // is held (see the note above), so reaching back for another lock here would
@@ -5587,10 +5644,49 @@ fn connect_with_state(
         ));
     }
     let target_auth = resolve_auth(st, auth)?;
-    let target = with_prompter(
-        ConnectOptions::new(host, port, user, target_auth),
+    let mut target = with_prompter(
+        ConnectOptions::new(host.clone(), port, user, target_auth),
         prompter.as_ref(),
     );
+
+    // Only the target, never a hop: a bastion is exactly the machine ProxyJump
+    // exists to keep the key away from, and forwarding to one would undo that.
+    //
+    // Only the key this connection authenticated with, too. OpenSSH forwards the
+    // whole agent; that hands the remote host a list of every key you hold — a
+    // map of everywhere you log in — and lets it ask for a signature with any.
+    if agent_forward {
+        let approver = lock_recover(approver).clone();
+        // Copied out first: attaching the forward consumes `target`.
+        let forwardable_key = match &target.auth {
+            Auth::Agent { key_id } => Some(key_id.clone()),
+            _ => None,
+        };
+        match (forwardable_key, approver) {
+            (Some(key_id), Some(approver)) => {
+                let keys: Arc<dyn unissh_ssh_transport::KeySource> = Arc::new(StateKeySource {
+                    state: Arc::clone(state),
+                });
+                if let Some(public) = keys.public_key_openssh(&key_id) {
+                    target =
+                        target.with_agent_forward(Arc::new(unissh_ssh_transport::ForwardedAgent {
+                            keys,
+                            key_id,
+                            public_openssh: public,
+                            host: host.clone(),
+                            approval: Arc::new(ApprovalBridge { inner: approver }),
+                        }));
+                }
+            }
+            // Password auth has no key to forward, and without an approver every
+            // signature would be refused anyway — so the request is simply not
+            // made, rather than opening a socket that answers nothing.
+            (Some(_), None) => {
+                log::warn!("agent forwarding requested for {host} but no approver is registered")
+            }
+            _ => log::warn!("agent forwarding requested for {host} but it has no key to forward"),
+        }
+    }
     // Everything that needed the unwrapped state has happened: keys are in the
     // agent, vault passwords are decrypted into the options. Drop the lock
     // *before* the network phase.
@@ -6234,6 +6330,7 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         startup_snippet_ids: s.startup_snippet_ids,
         record_sessions: s.record_sessions,
         tmux_session: s.tmux_session,
+        agent_forward: s.agent_forward,
         username_template: s.username_template,
         // Personal takes priority over key/password references (Personal has none anyway).
         auth: if let Some(public_key) = s.system_agent_public_key {
@@ -6676,6 +6773,77 @@ pub struct AuthPromptRequest {
     pub instruction: String,
     /// The fields to ask for, in order.
     pub prompts: Vec<AuthPromptField>,
+}
+
+/// A signature a forwarded agent has been asked to produce.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AgentSignRequest {
+    /// The host whose session the request arrived through.
+    pub host: String,
+    /// When the payload is an SSH authentication request, the identity it would
+    /// log in as — parsed out so the prompt can say where the signature goes
+    /// rather than only that one was asked for. Empty when it is something else.
+    pub target: String,
+}
+
+/// Approves, or refuses, each signature a forwarded agent is asked for.
+///
+/// This is what makes agent forwarding defensible rather than a footgun. While a
+/// forwarded session lives, anything that can reach the socket on the remote
+/// host can ask to sign as you — every process running as your user there, not
+/// only root. Returning `false` refuses.
+#[uniffi::export(with_foreign)]
+pub trait AgentApprover: Send + Sync {
+    /// Return `true` to sign. Called on a blocking thread, so it may wait for a
+    /// person.
+    fn approve(&self, request: AgentSignRequest) -> bool;
+}
+
+/// Adapts the UI approver to the transport's, and pulls the target out of an SSH
+/// authentication blob so the prompt can name it.
+struct ApprovalBridge {
+    inner: Arc<dyn AgentApprover>,
+}
+
+impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
+    fn approve(&self, host: &str, blob: &[u8]) -> bool {
+        self.inner.approve(AgentSignRequest {
+            host: host.to_string(),
+            target: userauth_target(blob).unwrap_or_default(),
+        })
+    }
+}
+
+/// Extracts `user@service` from an SSH userauth signing blob.
+///
+/// The payload of a publickey authentication is
+/// `string(session_id) byte(50) string(user) string(service) string("publickey") …`.
+/// Reading the user and service turns "something wants a signature" into "this
+/// would log in as X" — without it the prompt is a button people learn to press.
+/// Anything that does not parse returns `None` rather than a guess.
+fn userauth_target(blob: &[u8]) -> Option<String> {
+    fn take<'a>(input: &mut &'a [u8]) -> Option<&'a [u8]> {
+        if input.len() < 4 {
+            return None;
+        }
+        let n = u32::from_be_bytes([input[0], input[1], input[2], input[3]]) as usize;
+        if input.len() < 4 + n {
+            return None;
+        }
+        let (s, rest) = input[4..].split_at(n);
+        *input = rest;
+        Some(s)
+    }
+    let mut b = blob;
+    take(&mut b)?; // session id
+    if b.first() != Some(&50) {
+        // Not SSH_MSG_USERAUTH_REQUEST — a git signature, say.
+        return None;
+    }
+    b = &b[1..];
+    let user = std::str::from_utf8(take(&mut b)?).ok()?;
+    let service = std::str::from_utf8(take(&mut b)?).ok()?;
+    Some(format!("{user}@{service}"))
 }
 
 /// Asked when the server wants something no stored credential can answer — a
@@ -7129,6 +7297,10 @@ pub struct ReconnectingSession {
     // A reconnect is a brand-new authentication: if the host wants a one-time
     // code, the old one is spent and a fresh one must be asked for.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
+    approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    /// Carried across reconnects: the host's setting does not change because the
+    /// link dropped.
+    agent_forward: bool,
     host: String,
     port: u16,
     user: String,
@@ -7152,11 +7324,13 @@ impl ReconnectingSession {
             &self.state,
             &self.rt,
             &self.prompter,
+            &self.approver,
             &self.auth,
             &self.jumps,
             self.host.clone(),
             self.port,
             self.user.clone(),
+            self.agent_forward,
         )?;
         let sink: Arc<dyn OutputSink> = Arc::new(ObserverSink(self.observer.clone()));
         let shell = self
@@ -7579,6 +7753,10 @@ pub struct SftpFfi {
     // Same reason as on ReconnectingSession: a full reconnect re-authenticates,
     // and a spent one-time code cannot be replayed.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
+    approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    /// Carried across reconnects: the host's setting does not change because the
+    /// link dropped.
+    agent_forward: bool,
     host: String,
     port: u16,
     user: String,
@@ -7737,11 +7915,13 @@ impl SftpFfi {
             &self.state,
             &self.rt,
             &self.prompter,
+            &self.approver,
             &self.auth,
             &self.jumps,
             self.host.clone(),
             self.port,
             self.user.clone(),
+            self.agent_forward,
         )?;
         let old_idle = {
             let mut p = lock_recover(&self.pool);
@@ -8490,6 +8670,7 @@ mod tests {
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             tmux_session: false,
+            agent_forward: false,
         };
         let (key_item_id, password_item_id) = match prof.auth.clone() {
             ProfileAuth::Key { key_item_id } => (Some(key_item_id), None),
@@ -8519,6 +8700,7 @@ mod tests {
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             tmux_session: false,
+            agent_forward: false,
             system_agent_public_key: None,
         };
         let json = serde_json::to_string(&stored).unwrap();
@@ -8611,6 +8793,7 @@ mod tests {
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             tmux_session: false,
+            agent_forward: false,
             system_agent_public_key: None,
         };
         let prof = stored_to_profile("va", "p".into(), sp);
@@ -8645,6 +8828,7 @@ mod tests {
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
                 tmux_session: false,
+                agent_forward: false,
             },
         )
         .unwrap();
@@ -8839,6 +9023,7 @@ mod tests {
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
                 tmux_session: false,
+                agent_forward: false,
             },
         )
         .unwrap();
@@ -9171,6 +9356,7 @@ mod tests {
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             tmux_session: false,
+            agent_forward: false,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();
@@ -9251,6 +9437,7 @@ mod tests {
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             tmux_session: false,
+            agent_forward: false,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
             .unwrap();

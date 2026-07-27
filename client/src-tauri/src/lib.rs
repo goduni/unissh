@@ -115,6 +115,13 @@ pub fn run() {
                 std::sync::Arc::new(crate::observers::AppPrompter::new(app.handle().clone()));
             core.set_auth_prompter(Some(prompter.clone()));
             app.manage(prompter);
+            // Registered up front for the same reason: a forwarded agent that
+            // finds no approver refuses every signature, which is safe but looks
+            // like a broken feature.
+            let approver =
+                std::sync::Arc::new(crate::observers::AppApprover::new(app.handle().clone()));
+            core.set_agent_approver(Some(approver.clone()));
+            app.manage(approver);
             app.manage(AppState::new(core, db_path, keyset_path));
 
             // iOS: by default WKWebView adjusts its scroll-view content insets for
@@ -271,6 +278,7 @@ pub fn run() {
             commands::cancel_trigger,
             commands::cancel_dispose,
             commands::submit_auth_prompt,
+            commands::submit_agent_approval,
             commands::set_algorithm_policy,
             commands::ssh_config_report,
             commands::system_agent_keys,

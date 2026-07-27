@@ -831,6 +831,7 @@ async function runStartupSnippets(
                 label: profile.label,
               }
             : undefined,
+          profile.agentForward,
         ),
       )
       .then((id) => {

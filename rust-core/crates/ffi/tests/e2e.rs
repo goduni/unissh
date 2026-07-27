@@ -557,6 +557,7 @@ fn interactive_pty_session() {
             24,
             observer.clone(),
             None,
+            false,
         )
         .unwrap();
 
@@ -1021,6 +1022,7 @@ fn connection_profiles_crud_and_import() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         tmux_session: false,
+        agent_forward: false,
     };
     core.save_connection("v".to_string(), prof).unwrap();
 
@@ -1085,6 +1087,7 @@ fn cross_type_clobber_rejected() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         tmux_session: false,
+        agent_forward: false,
     };
     assert!(matches!(
         core.save_connection("v".to_string(), prof),
@@ -1110,6 +1113,7 @@ fn cross_type_clobber_rejected() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         tmux_session: false,
+        agent_forward: false,
     };
     core.save_connection("v".to_string(), prof2).unwrap();
     assert!(matches!(
@@ -1443,6 +1447,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         tmux_session: false,
+        agent_forward: false,
     };
     core.save_connection("v".to_string(), prof).unwrap();
 
@@ -1481,6 +1486,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         startup_snippet_ids: vec![],
         record_sessions: false,
         tmux_session: false,
+        agent_forward: false,
     };
     assert!(core.save_connection("v".to_string(), bad).is_err());
     assert!(matches!(
@@ -1842,6 +1848,7 @@ fn save_profile(core: &Core, id: &str, host: &str, port: u16, key_item: &str, ta
             startup_snippet_ids: vec![],
             record_sessions: false,
             tmux_session: false,
+            agent_forward: false,
         },
     )
     .unwrap();
@@ -1914,6 +1921,7 @@ fn select_targets_by_tags_excludes_prompt_password() {
             startup_snippet_ids: vec![],
             record_sessions: false,
             tmux_session: false,
+            agent_forward: false,
         },
     )
     .unwrap();
@@ -2131,6 +2139,7 @@ fn dry_run_group_reports_statuses() {
             startup_snippet_ids: vec![],
             record_sessions: false,
             tmux_session: false,
+            agent_forward: false,
         },
     )
     .unwrap();
@@ -2235,6 +2244,7 @@ fn resize_changes_terminal_size() {
             24,
             observer.clone(),
             None,
+            false,
         )
         .unwrap();
 
@@ -2292,6 +2302,7 @@ fn open_session_rejects_zero_size() {
         24,
         observer,
         None,
+        false,
     );
     assert!(r.is_err(), "zero width must be rejected by validation");
 }
@@ -2755,6 +2766,7 @@ fn reconnecting_session_reconnects_and_works() {
             2,
             10,
             observer.clone(),
+            false,
         )
         .unwrap();
     assert!(session.is_connected());
@@ -2802,6 +2814,7 @@ fn reconnecting_session_fails_after_retries() {
         2,
         10,
         observer,
+        false,
     );
     assert!(r.is_err());
 }
@@ -3279,6 +3292,7 @@ fn reconnecting_session_auto_reconnects_on_write() {
             2,
             10,
             observer.clone(),
+            false,
         )
         .unwrap();
     // tear down the current session; the next write must reconnect on its own
@@ -3504,6 +3518,7 @@ fn profile_carries_its_startup_snippets() {
         startup_snippet_ids: vec!["tmux-attach".to_string(), "cd-app".to_string()],
         record_sessions: false,
         tmux_session: false,
+        agent_forward: false,
     };
     core.save_connection("v".to_string(), p.clone()).unwrap();
 
@@ -3564,6 +3579,7 @@ fn session_recording_captures_and_persists() {
                 recording_id: "rec-1".to_string(),
                 label: "test host".to_string(),
             }),
+            false,
         )
         .unwrap();
 
@@ -3667,6 +3683,7 @@ fn no_recording_request_records_nothing() {
             24,
             observer,
             None,
+            false,
         )
         .unwrap();
     session.write(b"echo nope\n".to_vec()).unwrap();
@@ -3706,6 +3723,7 @@ fn profile_round_trips_a_system_agent_identity() {
             startup_snippet_ids: vec![],
             record_sessions: false,
             tmux_session: false,
+            agent_forward: false,
         },
     )
     .unwrap();
@@ -3788,6 +3806,7 @@ fn a_recording_is_written_off_the_runtime() {
                 recording_id: "rec-thread".to_string(),
                 label: "t".to_string(),
             }),
+            false,
         )
         .unwrap();
     session.write(b"echo x\n".to_vec()).unwrap();
@@ -3877,6 +3896,7 @@ fn the_core_lock_is_free_during_a_handshake() {
             24,
             observer,
             None,
+            false,
         )
         .unwrap();
     let connect_took = connect_started.elapsed();
@@ -4048,6 +4068,7 @@ fn system_agent_authenticates_end_to_end() {
             24,
             observer.clone(),
             None,
+            false,
         )
         .expect("the agent must be able to authenticate this session");
 
@@ -4128,6 +4149,7 @@ fn system_agent_missing_key_is_named() {
         24,
         observer,
         None,
+        false,
     );
     let msg = match outcome {
         Ok(_) => panic!("the agent does not hold this key; the connect must fail"),

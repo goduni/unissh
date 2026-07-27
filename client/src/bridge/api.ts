@@ -436,18 +436,25 @@ export async function sessionOpen(
   a: OpenSessionArgs,
   onEvent: (e: TermEvent) => void,
   recording?: RecordingRequest,
+  agentForward = false,
 ): Promise<string> {
   const ch = new Channel<TermEvent>();
   ch.onmessage = onEvent;
-  return invoke<string>("session_open", { ...a, onEvent: ch, recording: recording ?? null });
+  return invoke<string>("session_open", {
+    ...a,
+    onEvent: ch,
+    recording: recording ?? null,
+    agentForward,
+  });
 }
 export async function sessionOpenReconnecting(
   a: OpenSessionArgs & { maxRetries: number; backoffMs: number },
   onEvent: (e: TermEvent) => void,
+  agentForward = false,
 ): Promise<string> {
   const ch = new Channel<TermEvent>();
   ch.onmessage = onEvent;
-  return invoke<string>("session_open_reconnecting", { ...a, onEvent: ch });
+  return invoke<string>("session_open_reconnecting", { ...a, onEvent: ch, agentForward });
 }
 export const sessionWrite = (id: string, data: number[]) =>
   invoke<void>("session_write", { id, data });
