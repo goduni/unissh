@@ -59,7 +59,11 @@ pub struct AppState {
     pub cancels: DashMap<String, Arc<CancelToken>>,
     /// Optional cloud-server link (config sidecar + in-memory session). The cloud
     /// integration is additive: a local-only instance simply leaves this unlinked.
-    pub cloud: CloudState,
+    ///
+    /// Behind an Arc so the HTTP layer can hold a handle to it: a call that comes
+    /// back "access token expired" rotates the token and retries itself, and the
+    /// only thing that knows how to rotate is this.
+    pub cloud: Arc<CloudState>,
 }
 
 impl AppState {
@@ -79,7 +83,7 @@ impl AppState {
             broadcasts: DashMap::new(),
             exec_handles: DashMap::new(),
             cancels: DashMap::new(),
-            cloud: CloudState::new(cloud_path),
+            cloud: Arc::new(CloudState::new(cloud_path)),
         }
     }
 

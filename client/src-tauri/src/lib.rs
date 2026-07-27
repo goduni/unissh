@@ -122,7 +122,17 @@ pub fn run() {
                 std::sync::Arc::new(crate::observers::AppApprover::new(app.handle().clone()));
             core.set_agent_approver(Some(approver.clone()));
             app.manage(approver);
-            app.manage(AppState::new(core, db_path, keyset_path));
+            let app_state = AppState::new(core, db_path, keyset_path);
+            // Token rotation, wired before any request can be made. The HTTP
+            // layer is where an expired access token is discovered — including
+            // on the sync transport, which never passes through a command — and
+            // this is what it calls to get a fresh one instead of surfacing
+            // "access token expired" and waiting for the user to press Refresh.
+            let cloud = app_state.cloud.clone();
+            crate::cloud::client::set_reauth(std::sync::Arc::new(move |stale: &str| {
+                cloud.rotate_expired_access(stale)
+            }));
+            app.manage(app_state);
 
             // iOS: by default WKWebView adjusts its scroll-view content insets for
             // the safe area, which confines the web layout to (screen − safe

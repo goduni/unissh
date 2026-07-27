@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cloud::tokens;
+use crate::cloud::{client, identity, tokens};
 use crate::error::{ApiError, ApiResult};
 
 /// Opaque, locally-generated id for a linked server (32 hex chars of a random
@@ -193,6 +193,11 @@ pub struct CloudState {
     spaces: Mutex<HashMap<ServerId, Vec<SpaceEntry>>>,
     /// The active server (argument-less commands resolve here).
     active: Mutex<Option<ServerId>>,
+    /// Serialises token rotation. Refresh tokens are single-use — the server
+    /// hands back a new one and burns the old — so two calls whose access token
+    /// expires at the same moment must not each spend one, or the second gets
+    /// "refresh token expired or revoked" and the session is gone.
+    refresh_gate: Mutex<()>,
 }
 
 impl CloudState {
@@ -245,6 +250,7 @@ impl CloudState {
             access_tokens: Mutex::new(HashMap::new()),
             spaces: Mutex::new(HashMap::new()),
             active: Mutex::new(active),
+            refresh_gate: Mutex::new(()),
         };
         // A legacy/partial sidecar minted fresh ids on load. Persist immediately
         // so the id is STABLE across boots — otherwise every launch re-mints it
@@ -399,6 +405,56 @@ impl CloudState {
             None => self.active.lock().unwrap().clone()?,
         };
         self.access_tokens.lock().unwrap().get(&key).cloned()
+    }
+
+    /// Swaps an access token the server has just rejected for a fresh one.
+    ///
+    /// Keyed by the STALE TOKEN rather than a server id, because the only thing
+    /// that sees the rejection is the HTTP layer, and all it knows is the bearer
+    /// it sent. Tokens are per-server and unique, so that identifies the link.
+    ///
+    /// Single-flight, and that is the load-bearing part: a refresh token is
+    /// spent by using it. Two calls that expire together would otherwise each
+    /// spend one, and the second would come back "refresh token expired or
+    /// revoked" — turning a routine rotation into a sign-out. The loser of the
+    /// gate finds the token already replaced and takes that instead.
+    ///
+    /// Every failure returns None, which leaves the original 401 to surface
+    /// exactly as it did before. Rotating is an optimisation on top of "ask the
+    /// user to sign in again", never a replacement for it.
+    pub fn rotate_expired_access(&self, stale: &str) -> Option<String> {
+        let sid = {
+            let toks = self.access_tokens.lock().unwrap();
+            toks.iter()
+                .find(|(_, v)| v.as_str() == stale)
+                .map(|(k, _)| k.clone())?
+        };
+        let _gate = self.refresh_gate.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cur) = self.access_tokens.lock().unwrap().get(&sid) {
+            if cur != stale {
+                return Some(cur.clone());
+            }
+        }
+        let base_url = self.servers.lock().unwrap().get(&sid)?.base_url.clone();
+        let refresh_token = tokens::load_refresh(&sid)?;
+        // No Bearer on this request, so it cannot recurse back into here.
+        let session = match identity::refresh(client::http(), &base_url, &refresh_token) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("cloud: token rotation failed for server {sid}: {e:?}");
+                return None;
+            }
+        };
+        self.access_tokens
+            .lock()
+            .unwrap()
+            .insert(sid.clone(), session.access_token.clone());
+        if let Err(e) = tokens::save_refresh(&sid, &session.refresh_token) {
+            // The new refresh token is live on the server either way; failing to
+            // store it costs a re-login after restart, not this session.
+            log::warn!("cloud: rotated refresh token not persisted (server {sid}): {e}");
+        }
+        Some(session.access_token)
     }
 
     /// Set/clear a server's in-memory access token (defaults to the active server).

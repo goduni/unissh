@@ -2,12 +2,14 @@
 //! blocking client, header/auth wiring, base64 STANDARD helpers, JSON send, and
 //! the server error-envelope mapping.
 
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use once_cell::sync::Lazy;
-use reqwest::blocking::{Client, RequestBuilder, Response};
+use reqwest::blocking::{Client, Request, RequestBuilder, Response};
+use reqwest::header::{HeaderValue, AUTHORIZATION};
 use reqwest::StatusCode;
 use serde_json::Value;
 
@@ -123,25 +125,76 @@ pub fn headers(rb: RequestBuilder, bearer: Option<&str>) -> RequestBuilder {
     }
 }
 
+/// Exchanges a rejected bearer for a fresh one. Installed once at startup by the
+/// app, which is what owns the refresh token; this layer only knows that a call
+/// came back 401 and which bearer it sent.
+type Reauth = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+static REAUTH: OnceLock<Reauth> = OnceLock::new();
+
+/// Wire up token rotation. Called once during setup; later calls are ignored.
+pub fn set_reauth(f: Reauth) {
+    let _ = REAUTH.set(f);
+}
+
+/// The fresh bearer for a request whose token the server has rejected, or None
+/// when there is no bearer, no refresher, or nothing to rotate to.
+fn reauth_header(req: &Request, reauth: &Reauth) -> Option<HeaderValue> {
+    let stale = req
+        .headers()
+        .get(AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")?
+        .to_string();
+    let fresh = reauth(&stale)?;
+    HeaderValue::from_str(&format!("Bearer {fresh}")).ok()
+}
+
 /// Send a built request, mapping transport errors and the server error envelope.
 /// Returns the parsed JSON body on 2xx (`Value::Null` for empty/204 bodies).
 /// Retries `429` up to `MAX_429_RETRIES`, honoring (and capping) `Retry-After`.
+///
+/// Also retries ONCE on `401`, after rotating the access token. An access token
+/// is short-lived by design, so meeting an expired one is routine rather than
+/// exceptional — and until this existed the routine case surfaced as "access
+/// token expired" and left the user to press Refresh session by hand, then
+/// repeat whatever they were doing. Retrying here rather than per command covers
+/// the sync transport too, which talks to the server without passing through the
+/// command layer at all.
+///
+/// Safe to replay: the server authenticates in its extractor, before any handler
+/// runs, so a request rejected with 401 had no effect to repeat. Once only — a
+/// second 401 is a real authentication problem and must reach the user.
 pub fn send_json(rb: RequestBuilder) -> ApiResult<Value> {
+    send_json_reauth(rb, REAUTH.get().cloned())
+}
+
+/// The body of [`send_json`], with the refresher passed in rather than read from
+/// the process-global — so the retry can be tested without installing one.
+fn send_json_reauth(rb: RequestBuilder, reauth: Option<Reauth>) -> ApiResult<Value> {
+    let (http, built) = rb.build_split();
+    let mut req = built.map_err(transport_err)?;
     let mut attempt: u32 = 0;
+    let mut rotated = false;
     loop {
         // Clone for a possible retry; our bodies (JSON/empty) are always cloneable.
-        match rb.try_clone() {
-            Some(c) => {
-                let resp = c.send().map_err(transport_err)?;
-                if resp.status() == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_429_RETRIES {
-                    attempt += 1;
-                    std::thread::sleep(Duration::from_secs(retry_after_secs(&resp)));
-                    continue;
-                }
-                return finish(resp);
-            }
-            None => return finish(rb.send().map_err(transport_err)?),
+        let Some(copy) = req.try_clone() else {
+            return finish(http.execute(req).map_err(transport_err)?);
+        };
+        let resp = http.execute(copy).map_err(transport_err)?;
+        if resp.status() == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_429_RETRIES {
+            attempt += 1;
+            std::thread::sleep(Duration::from_secs(retry_after_secs(&resp)));
+            continue;
         }
+        if resp.status() == StatusCode::UNAUTHORIZED && !rotated {
+            if let Some(fresh) = reauth.as_ref().and_then(|f| reauth_header(&req, f)) {
+                rotated = true;
+                req.headers_mut().insert(AUTHORIZATION, fresh);
+                continue;
+            }
+        }
+        return finish(resp);
     }
 }
 
@@ -242,5 +295,149 @@ mod base_url_tests {
         assert!(validate_base_url("ftp://cloud.example.com").is_err());
         assert!(validate_base_url("cloud.example.com").is_err());
         assert!(validate_base_url("https://").is_err());
+    }
+}
+
+#[cfg(test)]
+mod reauth_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    /// A throwaway HTTP server that answers each connection from a canned script
+    /// and records the Authorization header it was given.
+    ///
+    /// `replies` are (status line, JSON body) — the Content-Length is COMPUTED.
+    /// It was hand-written first, was wrong by two bytes, and reqwest then failed
+    /// to read the body: three tests failed asserting on the error code because
+    /// the envelope never parsed. A fixture that can lie about its own length is
+    /// a fixture that tests the fixture.
+    fn serve(replies: Vec<(&'static str, &'static str)>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen2 = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for (status, body) in replies {
+                let Ok((stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut reader = BufReader::new(&stream);
+                let mut auth = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("authorization:") {
+                        auth = v.trim().to_string();
+                    }
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+                seen2.lock().unwrap().push(auth);
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let mut w = &stream;
+                let _ = w.write_all(reply.as_bytes());
+                let _ = w.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), seen)
+    }
+
+    const UNAUTH: (&str, &str) = (
+        "401 Unauthorized",
+        r#"{"error":{"code":"unauthenticated","message":"access token expired"}}"#,
+    );
+    const OK: (&str, &str) = ("200 OK", r#"{"ok":true}"#);
+
+    fn get(base: &str, bearer: &str, reauth: Option<Reauth>) -> ApiResult<Value> {
+        send_json_reauth(
+            headers(http().get(url(base, "/v1/thing")), Some(bearer)),
+            reauth,
+        )
+    }
+
+    /// The whole point: an expired access token is rotated and the call is made
+    /// again with the new one, so what the caller sees is a success rather than
+    /// "access token expired" plus a manual Refresh session.
+    #[test]
+    fn an_expired_token_is_rotated_and_the_call_retried() {
+        let (base, seen) = serve(vec![UNAUTH, OK]);
+        let asked: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let asked2 = Arc::clone(&asked);
+        let reauth: Reauth = Arc::new(move |stale: &str| {
+            asked2.lock().unwrap().push(stale.to_string());
+            Some("fresh-token".to_string())
+        });
+
+        let out = get(&base, "stale-token", Some(reauth)).expect("the retry must succeed");
+        assert_eq!(out["ok"], true);
+
+        assert_eq!(
+            asked.lock().unwrap().as_slice(),
+            ["stale-token"],
+            "the refresher is handed the token that was rejected, and asked once"
+        );
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "exactly one retry");
+        assert_eq!(seen[0], "bearer stale-token");
+        assert_eq!(
+            seen[1], "bearer fresh-token",
+            "the retry must carry the NEW token — replacing the header, not appending to it"
+        );
+    }
+
+    /// A token that is still refused after rotation is a real authentication
+    /// problem. It has to reach the user instead of looping.
+    #[test]
+    fn a_second_rejection_is_not_retried_again() {
+        let (base, seen) = serve(vec![UNAUTH, UNAUTH]);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls2 = Arc::clone(&calls);
+        let reauth: Reauth = Arc::new(move |_| {
+            calls2.fetch_add(1, Ordering::SeqCst);
+            Some("fresh-token".to_string())
+        });
+
+        let err = get(&base, "stale-token", Some(reauth)).expect_err("must surface the 401");
+        assert!(
+            matches!(&err, ApiError::Server { code, .. } if code == "unauthenticated"),
+            "the caller sees the server's own error, not a rotation failure: {err:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "rotation attempted once");
+        assert_eq!(seen.lock().unwrap().len(), 2, "two requests, then stop");
+    }
+
+    /// Nothing to rotate to (no session, no refresh token) must behave exactly as
+    /// it did before rotation existed.
+    #[test]
+    fn without_a_refresher_the_401_surfaces_untouched() {
+        let (base, seen) = serve(vec![UNAUTH]);
+        let err = get(&base, "stale-token", None).expect_err("must surface the 401");
+        assert!(matches!(&err, ApiError::Server { code, .. } if code == "unauthenticated"));
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "no retry without a refresher"
+        );
+    }
+
+    /// A refresher that fails (expired refresh token, no keychain entry) returns
+    /// None, and that must not turn into a retry with the same stale token.
+    #[test]
+    fn a_failed_rotation_does_not_retry() {
+        let (base, seen) = serve(vec![UNAUTH]);
+        let reauth: Reauth = Arc::new(|_| None);
+        let err = get(&base, "stale-token", Some(reauth)).expect_err("must surface the 401");
+        assert!(matches!(&err, ApiError::Server { code, .. } if code == "unauthenticated"));
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 }
