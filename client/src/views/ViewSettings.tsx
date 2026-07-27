@@ -17,7 +17,8 @@ import type {
   TermFontId,
   TermTheme,
 } from "@/theme/tokens";
-import { Btn, Icon, NO_AUTOCORRECT, Segmented, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
+import { Btn, Field, Icon, Input, NO_AUTOCORRECT, Segmented, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
+import { exportPath } from "@/support/paths";
 import { ServerVaultsSection } from "./ServerVaultsSection";
 import { Modal } from "@/components/Modal";
 import type { IconName } from "@/components/primitives";
@@ -1292,6 +1293,13 @@ function SettingsVaults() {
     vault: string;
     report: VaultIntegrityReport;
   } | null>(null);
+  // Export asks for a passphrase before it can write anything; import asks for
+  // one plus a name. Two slots rather than one, because they are different
+  // questions and sharing a dialog would mean a field that means "the passphrase
+  // I am choosing" in one direction and "the passphrase it was made with" in the
+  // other.
+  const [exporting, setExporting] = useState<VaultInfo | null>(null);
+  const [importing, setImporting] = useState(false);
   // Selected server id in the bind/move modal (which vault is being (re)homed is
   // held by `pickerVault`).
   const [bindSel, setBindSel] = useState<string | null>(null);
@@ -1577,6 +1585,13 @@ function SettingsVaults() {
         <Btn
           variant="ghost"
           size="sm"
+          icon="download"
+          title={t("vault.exportBackup")}
+          onClick={() => setExporting(v)}
+        />
+        <Btn
+          variant="ghost"
+          size="sm"
           icon="zap"
           title={isMember ? t("vault.removeLocal") : t("vault.purge")}
           disabled={vaults.length <= 1}
@@ -1769,9 +1784,12 @@ function SettingsVaults() {
       {localVaults.length > 0 && localGroup()}
       {unboundVaults.length > 0 && unboundGroup()}
 
-      <div style={{ marginTop: 20 }}>
+      <div style={{ marginTop: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Btn icon="plus" onClick={() => openModal({ kind: "vault" })}>
           {t("vault.create")}
+        </Btn>
+        <Btn variant="ghost" icon="upload" onClick={() => setImporting(true)}>
+          {t("vault.importBackup")}
         </Btn>
       </div>
 
@@ -1843,6 +1861,19 @@ function SettingsVaults() {
           );
         })()}
 
+      {exporting && (
+        <BackupExport vault={exporting} onClose={() => setExporting(null)} />
+      )}
+      {importing && (
+        <BackupImport
+          onClose={() => setImporting(false)}
+          onDone={() => {
+            setImporting(false);
+            void useApp.getState().reloadVaults();
+          }}
+        />
+      )}
+
       {integrity && (
         <IntegrityResult
           vault={integrity.vault}
@@ -1860,6 +1891,197 @@ function SettingsVaults() {
  *  on success, and on failure it showed a COUNT while the per-item issues the
  *  core had just computed were dropped. "3 issues" tells you to worry; the item
  *  and the way it failed tells you what to do. */
+/** Choose a passphrase, pick a file, write the backup.
+ *
+ *  The passphrase is asked for here and nowhere else, because the bundle is
+ *  decryptable with it ALONE — no keyset, no account, no server. That is what
+ *  makes a backup worth having and also the entire risk of one, so it is the
+ *  user's to choose and is never stored. Two fields, because a typo in a
+ *  passphrase you will not use for months is an unrecoverable file. */
+function BackupExport({ vault, onClose }: { vault: VaultInfo; onClose: () => void }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const [pass, setPass] = useState("");
+  const [again, setAgain] = useState("");
+  const [busy, setBusy] = useState(false);
+  const mismatch = again.length > 0 && pass !== again;
+  const ready = pass.length >= 8 && pass === again && !busy;
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const name = `${vault.name.replace(/[^\w.-]+/g, "_") || "vault"}.unisshbak`;
+      const path = await save({
+        defaultPath: await exportPath(name),
+        filters: [{ name: "UniSSH backup", extensions: ["unisshbak"] }],
+      });
+      if (!path) {
+        setBusy(false);
+        return;
+      }
+      // Same reason as the recording export: the native panel owns the final
+      // name and drops an extension it does not recognise.
+      const target = path.toLowerCase().endsWith(".unisshbak") ? path : `${path}.unisshbak`;
+      const size = await api.vaultExportBackup(vault.vaultId, pass, target);
+      toast(t("vault.backupWritten", { size: Math.max(1, Math.round(size / 1024)) }), "ok");
+      onClose();
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      icon="download"
+      title={t("vault.exportBackup")}
+      subtitle={vault.name}
+      onClose={onClose}
+      w={440}
+      footer={
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", width: "100%" }}>
+          <Btn variant="ghost" onClick={onClose} disabled={busy}>
+            {t("common.cancel")}
+          </Btn>
+          <Btn onClick={run} disabled={!ready}>
+            {busy ? t("vault.backupWriting") : t("vault.exportBackup")}
+          </Btn>
+        </div>
+      }
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+          {t("vault.backupExplain")}
+        </div>
+        <Field label={t("vault.backupPassphrase")} hint={t("vault.backupPassphraseHint")}>
+          <Input value={pass} type="password" onChange={setPass} {...NO_AUTOCORRECT} />
+        </Field>
+        <Field label={t("vault.backupPassphraseAgain")}>
+          <Input value={again} type="password" onChange={setAgain} {...NO_AUTOCORRECT} />
+        </Field>
+        {mismatch && (
+          <div style={{ fontSize: 12, color: p.red }}>{t("vault.backupMismatch")}</div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/** Pick a backup file, give its passphrase and a name, restore into a NEW vault.
+ *
+ *  Never into an existing one: the core refuses a vault id that is taken, and a
+ *  restore that silently replaced a live vault would be a data-loss feature
+ *  wearing a recovery label. */
+function BackupImport({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const [path, setPath] = useState<string | null>(null);
+  const [pass, setPass] = useState("");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const pick = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "UniSSH backup", extensions: ["unisshbak"] }],
+      });
+      if (typeof picked === "string") {
+        setPath(picked);
+        if (!name.trim()) {
+          const base = (picked.split(/[/\\]/).pop() || "").replace(/\.[^.]+$/, "");
+          if (base) setName(base);
+        }
+      }
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+    }
+  };
+
+  const run = async () => {
+    if (!path) return;
+    setBusy(true);
+    try {
+      // The vault id is minted here, not taken from the backup: the bundle
+      // carries the id it had, and reusing it would collide with the vault it
+      // was taken from — restoring alongside the original is the normal case.
+      const vaultId = `${slugName(name)}-${Date.now().toString(36)}`;
+      await api.vaultImportBackup(path, pass, vaultId);
+      toast(t("vault.backupRestored"), "ok");
+      onDone();
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      icon="upload"
+      title={t("vault.importBackup")}
+      onClose={onClose}
+      w={440}
+      footer={
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", width: "100%" }}>
+          <Btn variant="ghost" onClick={onClose} disabled={busy}>
+            {t("common.cancel")}
+          </Btn>
+          <Btn onClick={run} disabled={!path || !pass || !name.trim() || busy}>
+            {busy ? t("vault.backupRestoring") : t("vault.importBackup")}
+          </Btn>
+        </div>
+      }
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+          {t("vault.restoreExplain")}
+        </div>
+        <Field label={t("vault.backupFile")}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <Btn variant="ghost" size="sm" icon="folder" onClick={pick}>
+              {t("vault.chooseFile")}
+            </Btn>
+            <span
+              style={{
+                fontSize: 12,
+                fontFamily: MONO,
+                color: path ? p.txt2 : p.txt3,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {path ?? t("vault.noFileChosen")}
+            </span>
+          </div>
+        </Field>
+        <Field label={t("vault.backupPassphrase")}>
+          <Input value={pass} type="password" onChange={setPass} {...NO_AUTOCORRECT} />
+        </Field>
+        <Field label={t("vault.restoreAsName")}>
+          <Input value={name} onChange={setName} {...NO_AUTOCORRECT} />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+/** Vault ids are path-safe slugs; a restored vault gets one from its new name. */
+function slugName(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "vault"
+  );
+}
+
 function IntegrityResult({
   vault,
   report,

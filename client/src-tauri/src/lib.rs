@@ -187,6 +187,8 @@ pub fn run() {
             commands::delete_vault,
             commands::purge_vault,
             commands::verify_vault_integrity,
+            commands::vault_export_backup,
+            commands::vault_import_backup,
             commands::check_consistency,
             // items / keys / certs
             commands::list_items,

@@ -364,6 +364,58 @@ pub async fn verify_vault_integrity(
     Ok(r.into())
 }
 
+/// Write a vault out as a portable encrypted backup.
+///
+/// The path is passed in and the file is written HERE rather than handing the
+/// bytes back to the webview: a backup carries every item in the vault, session
+/// recordings included, and Tauri serialises a byte array over IPC as a JSON
+/// array of numbers — several bytes of JSON per byte of payload. A 40 MB vault
+/// would cross the bridge as a few hundred MB of text before anyone could save
+/// it. The path comes from the user's own save dialog, so this is the same trust
+/// as writing it from the frontend, minus the round trip.
+///
+/// The bundle is decryptable with the passphrase ALONE — no keyset, no account.
+/// That is the point of a backup and also its whole risk, so the passphrase is
+/// the user's to choose and never stored.
+#[tauri::command]
+pub async fn vault_export_backup(
+    vault_id: String,
+    passphrase: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> ApiResult<u64> {
+    let core = state.core.clone();
+    blocking(move || {
+        let bytes = core.export_vault(vault_id, passphrase)?;
+        let len = bytes.len() as u64;
+        std::fs::write(&path, &bytes).map_err(|e| FfiError::Other {
+            msg: format!("could not write {path}: {e}"),
+        })?;
+        Ok(len)
+    })
+    .await
+}
+
+/// Read a backup back into a NEW vault. Never overwrites an existing one — the
+/// core refuses a vault id that is already taken, and a restore that silently
+/// replaced a live vault would be a data-loss feature.
+#[tauri::command]
+pub async fn vault_import_backup(
+    path: String,
+    passphrase: String,
+    new_vault_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| FfiError::Other {
+            msg: format!("could not read {path}: {e}"),
+        })?;
+        core.import_vault(bytes, passphrase, new_vault_id)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn check_consistency(state: State<'_, AppState>) -> ApiResult<dto::DbConsistencyReport> {
     let core = state.core.clone();

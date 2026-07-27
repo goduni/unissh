@@ -104,6 +104,15 @@ export const verifyVaultIntegrity = (vaultId: string) =>
   invoke<VaultIntegrityReport>("verify_vault_integrity", { vaultId });
 export const checkConsistency = () => invoke<DbConsistencyReport>("check_consistency");
 export const purgeVault = (vaultId: string) => invoke<void>("purge_vault", { vaultId });
+/** Write a vault out as a portable encrypted backup. The PATH goes in and the
+ *  file is written in the core — a backup carries every item, recordings
+ *  included, and a byte array crossing the IPC bridge becomes a JSON array of
+ *  numbers. Returns the size written. */
+export const vaultExportBackup = (vaultId: string, passphrase: string, path: string) =>
+  invoke<number>("vault_export_backup", { vaultId, passphrase, path });
+/** Read a backup into a NEW vault. Never overwrites an existing one. */
+export const vaultImportBackup = (path: string, passphrase: string, newVaultId: string) =>
+  invoke<void>("vault_import_backup", { path, passphrase, newVaultId });
 
 // ── items / keys / certs ───────────────────────────────────────
 export const listItems = (vaultId: string) => invoke<ItemInfo[]>("list_items", { vaultId });
