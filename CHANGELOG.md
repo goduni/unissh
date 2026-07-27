@@ -55,9 +55,6 @@ starts with `0.`:
   Exportable to a file that plays in `asciinema`, because a recording only its
   own tool can read is not evidence anyone else can check. Capped at 8 MB per
   session; a recording that reaches the cap says so instead of ending quietly.
-- **Persistent sessions (tmux)**, per host: attach instead of starting a bare
-  shell, so work survives a dropped connection or a sleeping phone and a
-  reconnect returns to it.
 - A **modern-only algorithm policy**: post-quantum key exchange required with no
   classical fallback, Ed25519 host keys, AEAD ciphers. Off by default, because a
   server without ML-KEM then stops connecting.
@@ -150,7 +147,7 @@ starts with `0.`:
 
 **Vault format extended, additively. Server protocol unchanged.** Two new item
 types — snippets and session recordings — and four new connection-profile fields
-(startup snippets, session recording, tmux, system-agent identity).
+(startup snippets, session recording, agent forwarding, system-agent identity).
 
 Nothing breaks, and the discipline that makes that true is worth stating rather
 than asserting: an older client filters items by type, so it ignores the two new

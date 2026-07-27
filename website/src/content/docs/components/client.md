@@ -48,9 +48,8 @@ The design prototype showed some indicators the core cannot back; these were int
 
 - Host "online" / ping / cipher labels are **removed** — a host shows as active only when it has a live terminal session in-app.
 - Clipboard auto-clear and biometric unlock are wired to **real** platform features (biometric is mobile-only).
-- The per-host "agent forwarding" toggle is **omitted** — the core keeps forwarding off by default and prefers `ProxyJump`.
 - A per-host **Forward the agent** toggle serves a deliberately narrow agent to the target: one key, a confirmation for every signature, add/remove/lock refused, and never to a jump host. Off by default — see [Connecting to hosts](../../overview/connecting/).
-- **Snippets**, **session recording** (asciicast, exportable) and **persistent tmux sessions** are per host and documented in [Connecting to hosts](../../overview/connecting/).
+- **Snippets** and **session recording** (asciicast, exportable) are per host and documented in [Connecting to hosts](../../overview/connecting/).
 - A per-host **System agent** auth kind delegates signing to the operating system's ssh-agent. That is how hardware works: FIDO/U2F tokens, PKCS#11 smart cards, Secure Enclave keys, 1Password and gpg-agent all sign through the agent. For such a host the key lives outside the vault — see [the threat model](https://github.com/goduni/unissh/blob/main/THREAT_MODEL.md).
 
 ## Prerequisites

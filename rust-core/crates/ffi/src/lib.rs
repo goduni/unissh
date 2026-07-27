@@ -322,16 +322,6 @@ pub struct ConnectionProfile {
     /// recording a homelab is noise, and unlike an algorithm policy there is a
     /// real reason to want the exception.
     pub record_sessions: bool,
-    /// Attach to a persistent `tmux` session on connect instead of starting a
-    /// bare shell.
-    ///
-    /// This is what makes a session survive a phone being backgrounded or a
-    /// network moving: the work continues on the server, and reconnecting
-    /// reattaches to it. A first-class toggle rather than advice to write
-    /// `tmux new -A -s …` yourself — the incantation is the part people get
-    /// wrong, and its whole value depends on the name staying identical across
-    /// reconnects.
-    pub tmux_session: bool,
     /// Serve a forwarded ssh-agent to this host.
     ///
     /// Off by default and per host on purpose. It is what lets `git` or `ssh`
@@ -638,8 +628,6 @@ struct StoredProfile {
     startup_snippet_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     record_sessions: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    tmux_session: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     agent_forward: bool,
     /// OpenSSH public-key line selecting an identity in the OS ssh-agent. A
@@ -4226,7 +4214,6 @@ impl Core {
                 tags,
                 startup_snippet_ids,
                 record_sessions,
-                tmux_session,
                 agent_forward,
             } = profile;
             if profile_id.is_empty() {
@@ -4266,7 +4253,6 @@ impl Core {
                 tags,
                 startup_snippet_ids,
                 record_sessions,
-                tmux_session,
                 agent_forward,
                 system_agent_public_key,
                 extra: BTreeMap::new(),
@@ -4886,7 +4872,6 @@ impl Core {
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
-                    tmux_session: false,
                     agent_forward: false,
                     system_agent_public_key: None,
                     extra: std::collections::BTreeMap::new(),
@@ -5082,7 +5067,6 @@ impl Core {
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
-                    tmux_session: false,
                     agent_forward: false,
                     system_agent_public_key: None,
                     extra: std::collections::BTreeMap::new(),
@@ -6329,7 +6313,6 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         tags: s.tags,
         startup_snippet_ids: s.startup_snippet_ids,
         record_sessions: s.record_sessions,
-        tmux_session: s.tmux_session,
         agent_forward: s.agent_forward,
         username_template: s.username_template,
         // Personal takes priority over key/password references (Personal has none anyway).
@@ -8669,7 +8652,6 @@ mod tests {
             tags: vec!["prod".to_string()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
-            tmux_session: false,
             agent_forward: false,
         };
         let (key_item_id, password_item_id) = match prof.auth.clone() {
@@ -8699,7 +8681,6 @@ mod tests {
             extra: std::collections::BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
-            tmux_session: false,
             agent_forward: false,
             system_agent_public_key: None,
         };
@@ -8792,7 +8773,6 @@ mod tests {
             extra: std::collections::BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
-            tmux_session: false,
             agent_forward: false,
             system_agent_public_key: None,
         };
@@ -8827,7 +8807,6 @@ mod tests {
                 tags: vec![],
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
-                tmux_session: false,
                 agent_forward: false,
             },
         )
@@ -9022,7 +9001,6 @@ mod tests {
                 tags: vec![],
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
-                tmux_session: false,
                 agent_forward: false,
             },
         )
@@ -9355,7 +9333,6 @@ mod tests {
             tags: vec!["prod".into()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
-            tmux_session: false,
             agent_forward: false,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))
@@ -9436,7 +9413,6 @@ mod tests {
             tags: vec!["prod".into()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
-            tmux_session: false,
             agent_forward: false,
         };
         core.save_connection("v".into(), mk("personal-host", "gw", ProfileAuth::Personal))

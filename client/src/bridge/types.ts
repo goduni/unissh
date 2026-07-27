@@ -64,10 +64,6 @@ export interface ConnectionProfile {
   /** Record interactive sessions with this host. Per host, not global:
    *  recording production is a requirement and recording a homelab is noise. */
   recordSessions: boolean;
-  /** Attach to a persistent tmux session on connect instead of a bare shell.
-   *  This is what lets work survive a backgrounded phone or a moved network —
-   *  the session keeps running on the server and a reconnect reattaches. */
-  tmuxSession: boolean;
   /** Serve a forwarded ssh-agent to this host. Off by default: while the
    *  session lives, anything running as you on that machine can ask to sign. */
   agentForward: boolean;

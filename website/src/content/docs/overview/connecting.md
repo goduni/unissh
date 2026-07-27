@@ -1,6 +1,6 @@
 ---
 title: Connecting to hosts
-description: Two-factor logins, hardware keys through the system ssh-agent, agent forwarding, persistent tmux sessions, algorithm policy, and what each one costs you.
+description: Two-factor logins, hardware keys through the system ssh-agent, agent forwarding, snippets, session recording, algorithm policy, and what each one costs you.
 ---
 
 Everything on this page is per host and off unless you turn it on, with one
@@ -82,22 +82,6 @@ root. The confirmation prompt is what makes this visible instead of silent. If
 you do not need `git` or `ssh` to work *on the remote machine*, leave it off:
 `ProxyJump` already reaches a target through a bastion without forwarding
 anything.
-:::
-
-## Persistent sessions (tmux)
-
-Attach to a `tmux` session on the host instead of starting a bare shell, so work
-keeps running when the connection drops or a phone sleeps, and reconnecting
-returns you to it. Requires `tmux` on the server.
-
-The session name is derived from the host's stable id, so it survives renaming
-the host — reattaching would otherwise break the moment you edited the label.
-
-:::note[Where your work lives]
-The session, its scrollback and anything still running stay on that host after
-you disconnect, and anyone who can log in as that user there can attach to it.
-That is the point of the feature, and worth knowing before you enable it on a
-shared machine.
 :::
 
 ## Snippets and startup commands

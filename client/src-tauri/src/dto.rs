@@ -315,9 +315,6 @@ pub struct ConnectionProfile {
     /// Record interactive sessions with this host.
     #[serde(default)]
     pub record_sessions: bool,
-    /// Attach to a persistent tmux session on connect.
-    #[serde(default)]
-    pub tmux_session: bool,
     /// Serve a forwarded ssh-agent to this host.
     #[serde(default)]
     pub agent_forward: bool,
@@ -338,7 +335,6 @@ impl From<ConnectionProfile> for ffi::ConnectionProfile {
             tags: p.tags,
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
-            tmux_session: p.tmux_session,
             agent_forward: p.agent_forward,
         }
     }
@@ -358,7 +354,6 @@ impl From<ffi::ConnectionProfile> for ConnectionProfile {
             tags: p.tags,
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
-            tmux_session: p.tmux_session,
             agent_forward: p.agent_forward,
         }
     }

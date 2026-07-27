@@ -314,7 +314,6 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   const [addingGroup, setAddingGroup] = useState(false);
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   const [recordSessions, setRecordSessions] = useState<boolean>(edit?.recordSessions ?? false);
-  const [tmuxSession, setTmuxSession] = useState<boolean>(edit?.tmuxSession ?? false);
   const [agentForward, setAgentForward] = useState<boolean>(edit?.agentForward ?? false);
   const [startupSnippetIds, setStartupSnippetIds] = useState<string[]>(
     edit?.startupSnippetIds ?? [],
@@ -631,7 +630,6 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       tags,
       startupSnippetIds,
       recordSessions,
-      tmuxSession,
       agentForward,
     };
 
@@ -1436,15 +1434,6 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               <div style={{ fontSize: 12, opacity: 0.7 }}>
                 {t("modals.host.agentForwardDesc")}
               </div>
-            </div>
-          </div>
-
-          {/* persistent session — the reason work survives a dropped phone */}
-          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <Toggle checked={tmuxSession} onChange={setTmuxSession} />
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{t("modals.host.tmuxTitle")}</div>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>{t("modals.host.tmuxDesc")}</div>
             </div>
           </div>
 

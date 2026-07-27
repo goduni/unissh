@@ -649,8 +649,6 @@ export const en = {
       "agentExplain": "Use a key held by your operating system’s ssh-agent. This is how hardware works: FIDO/U2F tokens, PKCS#11 smart cards, Secure Enclave keys, 1Password and gpg-agent all sign through the agent. For this host the key lives outside the vault — it never leaves the agent instead.",
       "agentForwardTitle": "Forward the agent",
       "agentForwardDesc": "Let programs on this host — git, scp, ssh — sign with the key this connection uses, without copying it there. Only that one key is offered, and every signature asks you first. Leave it off unless you need it: while the session is open, anything running as your user on that machine can ask.",
-      "tmuxTitle": "Persistent session (tmux)",
-      "tmuxDesc": "Attach to a tmux session on this host instead of a bare shell, so work keeps running when the connection drops or the phone sleeps — reconnecting reattaches. Requires tmux on the server. Note what this means: the session, its scrollback and anything still running stay on that host after you disconnect, and anyone who can log in as this user there can attach to it.",
       "startupSnippets": "Run on connect",
       "startupHint": "Snippets are typed in the order you pick them, right after connecting.",
       "recordTitle": "Record sessions",
