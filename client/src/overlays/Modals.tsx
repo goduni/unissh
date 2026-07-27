@@ -30,7 +30,7 @@ import {
   Tag,
   Toggle,
 } from "@/components/primitives";
-import { useDialogFocus, useDialogKeys } from "@/components/a11y";
+import { useDialogFocus, useDialogKeys, useMenu } from "@/components/a11y";
 import { Modal } from "@/components/Modal";
 import { drawQr } from "@/support/qr";
 import { toast } from "@/store/toast";
@@ -103,6 +103,227 @@ function MSeg<T extends string>({
           {o.desc && <span style={{ fontSize: 11, color: p.txt3, fontWeight: 500 }}>{o.desc}</span>}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Single-choice picker: a trigger that reads like a field, over a list where
+ *  every option carries a line saying what it is.
+ *
+ *  MSeg is the right shape for two or three choices. Five is where it stops
+ *  working: the tiles wrapped to a ragged second row, and a tile narrow enough
+ *  to fit five across has room for a label and nothing else — so the two kinds
+ *  that actually need explaining ("Personal", "System agent") were the two
+ *  reading as bare words. A list has room per row and costs one click. */
+function MPick<T extends string>({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: MSegOption<T>[];
+  ariaLabel: string;
+}) {
+  const p = usePalette();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useMenu(open, () => setOpen(false), ref);
+  const cur = options.find((o) => o.id === value) ?? options[0];
+  if (!cur) return null;
+
+  const row = (o: MSegOption<T>, active: boolean) => (
+    <>
+      <span
+        style={{
+          width: 30,
+          height: 30,
+          borderRadius: 8,
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: active ? p.bg4 : p.bg2,
+          border: `1px solid ${p.line}`,
+        }}
+      >
+        <Icon name={o.icon} size={15} color={active ? p.txt : p.txt3} />
+      </span>
+      <span style={{ flex: 1, minWidth: 0, display: "block" }}>
+        <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: p.txt }}>
+          {o.label}
+        </span>
+        {o.desc && (
+          <span
+            style={{
+              display: "block",
+              fontSize: 11.5,
+              color: p.txt3,
+              fontWeight: 500,
+              marginTop: 1,
+              // One line: the list is a chooser, not the documentation. The
+              // selected kind renders its own full explanation below.
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {o.desc}
+          </span>
+        )}
+      </span>
+    </>
+  );
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
+        style={{
+          ...BTN_RESET,
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "8px 12px",
+          borderRadius: 8,
+          background: p.bg2,
+          border: `1px solid ${open ? p.line2 : p.line}`,
+        }}
+      >
+        {row(cur, true)}
+        <Icon name="cd" size={15} color={p.txt3} style={{ transform: open ? "rotate(180deg)" : "none" }} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label={ariaLabel}
+          onKeyDown={(e) => {
+            if (e.key === "Tab") setOpen(false);
+          }}
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 0,
+            marginTop: 6,
+            zIndex: 30,
+            background: p.bg0,
+            border: `1px solid ${p.line2}`,
+            borderRadius: 12,
+            padding: 6,
+            boxShadow: p.shadow,
+          }}
+        >
+          {options.map((o) => (
+            <button
+              key={o.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={o.id === value}
+              tabIndex={-1}
+              onClick={(e) => {
+                // Field renders a <label>, and a label forwards activation to the
+                // first labelable element inside it — which is this menu's own
+                // trigger. Picking a row closed the menu and the forwarded click
+                // immediately reopened it, so nothing could ever be chosen with
+                // the mouse. Cancelling the default action stops the forwarding.
+                e.preventDefault();
+                onChange(o.id);
+                setOpen(false);
+              }}
+              style={{
+                ...BTN_RESET,
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: 8,
+                borderRadius: 8,
+                background: o.id === value ? p.bg3 : "transparent",
+              }}
+              onMouseEnter={(e) => {
+                if (o.id !== value) e.currentTarget.style.background = p.bg2;
+              }}
+              onMouseLeave={(e) => {
+                if (o.id !== value) e.currentTarget.style.background = "transparent";
+              }}
+            >
+              {row(o, o.id === value)}
+              {o.id === value && <Icon name="check" size={14} color={p.accentText} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The "?" beside a switch. These two toggles carry the longest copy in the
+ *  dialog — each is a paragraph naming what enabling it costs — and stacked
+ *  under their labels they turned the switches into footnotes. Behind a button
+ *  the text is one tap away and no longer competes with the control. */
+function HelpBtn({ label, onClick }: { label: string; onClick: () => void }) {
+  const p = usePalette();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      style={{
+        ...BTN_RESET,
+        width: 22,
+        height: 22,
+        borderRadius: "50%",
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: p.txt3,
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = p.txt)}
+      onMouseLeave={(e) => (e.currentTarget.style.color = p.txt3)}
+    >
+      <Icon name="help" size={16} />
+    </button>
+  );
+}
+
+/** A per-host switch: the control, its name, and the explanation behind "?". */
+function SwitchRow({
+  checked,
+  onChange,
+  title,
+  onHelp,
+  helpLabel,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  title: string;
+  onHelp: () => void;
+  helpLabel: string;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+      {/* The label is a sibling, not a <label for> — so name the switch itself,
+          or a screen reader announces an unlabelled control. */}
+      <Toggle checked={checked} onChange={onChange} aria-label={title} />
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{title}</span>
+        <HelpBtn label={helpLabel} onClick={onHelp} />
+      </div>
     </div>
   );
 }
@@ -315,6 +536,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   const [recordSessions, setRecordSessions] = useState<boolean>(edit?.recordSessions ?? false);
   const [agentForward, setAgentForward] = useState<boolean>(edit?.agentForward ?? false);
+  // The explanation a "?" raises. One slot, not one flag per switch — only one
+  // can be open, and Escape closes it before the host dialog because the dialog
+  // stack in a11y.ts pops innermost first.
+  const [help, setHelp] = useState<{ icon: IconName; title: string; body: string } | null>(null);
   const [startupSnippetIds, setStartupSnippetIds] = useState<string[]>(
     edit?.startupSnippetIds ?? [],
   );
@@ -446,38 +671,28 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
     setTagDraft("");
   };
 
-  const seg = (id: AuthSeg, lbl: string, icon: IconName) => (
-    <button
-      key={id}
-      type="button"
-      onClick={() => {
-        authTouched.current = true;
-        setAuth(id);
-      }}
-      style={{
-        flex: 1,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 7,
-        // minHeight (not a fixed height) so a wrapped RU auth label ("SSH-ключ")
-        // grows the tile instead of clipping when the segment row wraps.
-        minHeight: 38,
-        borderRadius: 8,
-        cursor: "pointer",
-        fontFamily: UI,
-        fontSize: 13,
-        fontWeight: auth === id ? 700 : 600,
-        // De-decor: active auth segment = neutral raised tile + ink text.
-        background: auth === id ? p.bg4 : p.bg2,
-        color: auth === id ? p.txt : p.txt2,
-        border: `1px solid ${auth === id ? p.line2 : p.line}`,
-      }}
-    >
-      <Icon name={icon} size={15} />
-      {lbl}
-    </button>
-  );
+  const authOptions: MSegOption<AuthSeg>[] = [
+    { id: "key", label: t("modals.host.authKey"), icon: "key", desc: t("modals.host.authKeyDesc") },
+    {
+      id: "password",
+      label: t("modals.host.authPassword"),
+      icon: "lock",
+      desc: t("modals.host.authPasswordDesc"),
+    },
+    { id: "ask", label: t("modals.host.authAsk"), icon: "eye", desc: t("modals.host.authAskDesc") },
+    {
+      id: "personal",
+      label: t("modals.host.authPersonal"),
+      icon: "fingerprint",
+      desc: t("modals.host.authPersonalDesc"),
+    },
+    {
+      id: "systemAgent",
+      label: t("modals.host.authSystemAgent"),
+      icon: "shieldcheck",
+      desc: t("modals.host.authSystemAgentDesc"),
+    },
+  ];
 
   // A pasted/loaded key is imported regardless of the algo toggle (the core
   // detects the actual key type); a bare ed25519 with no key material is the only
@@ -864,15 +1079,15 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           )}
 
           <Field label={t("modals.host.auth")}>
-            {/* wrap so the 4 auth segments can drop to a 2×2 on a narrow modal
-                rather than cramming one row and clipping the long RU labels */}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {seg("key", t("modals.host.authKey"), "key")}
-              {seg("password", t("modals.host.authPassword"), "lock")}
-              {seg("ask", t("modals.host.authAsk"), "eye")}
-              {seg("personal", t("modals.host.authPersonal"), "fingerprint")}
-              {seg("systemAgent", t("modals.host.authSystemAgent"), "shieldcheck")}
-            </div>
+            <MPick
+              value={auth}
+              onChange={(v) => {
+                authTouched.current = true;
+                setAuth(v);
+              }}
+              options={authOptions}
+              ariaLabel={t("modals.host.auth")}
+            />
             <div style={{ marginTop: 10 }}>
               {auth === "key" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1414,28 +1629,34 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
 
           {/* session recording — per host, because recording production is a
               requirement and recording a homelab is noise */}
-          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <Toggle checked={recordSessions} onChange={setRecordSessions} />
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>
-                {t("modals.host.recordTitle")}
-              </div>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>{t("modals.host.recordDesc")}</div>
-            </div>
-          </div>
+          <SwitchRow
+            checked={recordSessions}
+            onChange={setRecordSessions}
+            title={t("modals.host.recordTitle")}
+            helpLabel={t("modals.host.explain")}
+            onHelp={() =>
+              setHelp({
+                icon: "record",
+                title: t("modals.host.recordTitle"),
+                body: t("modals.host.recordDesc"),
+              })
+            }
+          />
 
-          {/* agent forwarding — off by default, and the description says why */}
-          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <Toggle checked={agentForward} onChange={setAgentForward} />
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>
-                {t("modals.host.agentForwardTitle")}
-              </div>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>
-                {t("modals.host.agentForwardDesc")}
-              </div>
-            </div>
-          </div>
+          {/* agent forwarding — off by default, and the explanation says why */}
+          <SwitchRow
+            checked={agentForward}
+            onChange={setAgentForward}
+            title={t("modals.host.agentForwardTitle")}
+            helpLabel={t("modals.host.explain")}
+            onHelp={() =>
+              setHelp({
+                icon: "shield",
+                title: t("modals.host.agentForwardTitle"),
+                body: t("modals.host.agentForwardDesc"),
+              })
+            }
+          />
 
           {/* startup snippets */}
           {snippetLib.length > 0 && (
@@ -1605,6 +1826,23 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           </Btn>
         </div>
       </div>
+      {/* Outside the card, not inside it: the card scrolls and clips, and an
+          explanation that arrives already scrolled out of view is no help. */}
+      {help && (
+        <Modal
+          icon={help.icon}
+          title={help.title}
+          onClose={() => setHelp(null)}
+          w={420}
+          footer={
+            <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+              <Btn onClick={() => setHelp(null)}>{t("common.done")}</Btn>
+            </div>
+          }
+        >
+          <div style={{ fontSize: 13, lineHeight: 1.55, color: p.txt2 }}>{help.body}</div>
+        </Modal>
+      )}
     </div>
   );
 }

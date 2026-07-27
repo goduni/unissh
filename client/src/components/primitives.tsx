@@ -101,6 +101,7 @@ export const ICONS = {
   fingerprint: '<path d="M12 4.5a6.5 6.5 0 0 0-6.5 6.5v2"/><path d="M12 4.5a6.5 6.5 0 0 1 6.5 6.5v4"/><path d="M9 11a3 3 0 0 1 6 0v4a2 2 0 0 1-2 2"/><path d="M12 11v5"/><path d="M5.8 17.5A6.5 6.5 0 0 0 7 19"/>',
   cloud: '<path d="M7 18.5h9.5a4 4 0 0 0 .6-7.96 5.5 5.5 0 0 0-10.6-1.2A4.2 4.2 0 0 0 7 18.5z"/>',
   users: '<path d="M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 17.5V19"/><circle cx="10" cy="8" r="3.2"/><path d="M20 19v-1.5a3.5 3.5 0 0 0-2.6-3.4"/><path d="M15.5 5a3.2 3.2 0 0 1 0 6.2"/>',
+  help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.7 9.4a2.4 2.4 0 1 1 3.2 2.3c-.7.3-1 .9-1 1.6v.4"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;
