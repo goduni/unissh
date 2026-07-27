@@ -114,7 +114,7 @@ function Editor({
             }}
           />
         </Field>
-        <Field label={t("snippets.tags")}>
+        <Field label={t("snippets.tags")} group>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             {tags.map((tg) => (
               <button

@@ -234,11 +234,13 @@ function MPick<T extends string>({
               aria-checked={o.id === value}
               tabIndex={-1}
               onClick={(e) => {
-                // Field renders a <label>, and a label forwards activation to the
-                // first labelable element inside it — which is this menu's own
-                // trigger. Picking a row closed the menu and the forwarded click
-                // immediately reopened it, so nothing could ever be chosen with
-                // the mouse. Cancelling the default action stops the forwarding.
+                // Belt and braces against a <label> ancestor. A label forwards
+                // activation to the first labelable element inside it, which
+                // here would be this menu's own trigger: the row closes the menu
+                // and the forwarded click reopens it, so nothing can be chosen
+                // with the mouse. The auth field is a role="group" now (see
+                // Field's `group`), but a picker must not depend on where it is
+                // mounted. Cancelling the default action stops the forwarding.
                 e.preventDefault();
                 onChange(o.id);
                 setOpen(false);
@@ -1078,7 +1080,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
             </Field>
           )}
 
-          <Field label={t("modals.host.auth")}>
+          <Field label={t("modals.host.auth")} group>
             <MPick
               value={auth}
               onChange={(v) => {
@@ -1487,7 +1489,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
 
           {/* group */}
           <div style={{ display: "flex", gap: 12 }}>
-            <Field label={t("modals.host.group")} w="100%">
+            <Field label={t("modals.host.group")} w="100%" group>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {groups.map((g) => {
                   const on = groupId === g.groupId;
@@ -1661,7 +1663,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           {/* startup snippets */}
           {snippetLib.length > 0 && (
             <div style={{ display: "flex", gap: 12 }}>
-              <Field label={t("modals.host.startupSnippets")} hint={t("modals.host.startupHint")} w="100%">
+              <Field label={t("modals.host.startupSnippets")} hint={t("modals.host.startupHint")} w="100%" group>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {snippetLib.map((sn) => {
                     const on = startupSnippetIds.includes(sn.snippetId);
@@ -1727,7 +1729,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
 
           {/* tags */}
           <div style={{ display: "flex", gap: 12 }}>
-            <Field label={t("modals.host.tags")} w="100%">
+            <Field label={t("modals.host.tags")} w="100%" group>
               <div
                 style={{
                   display: "flex",
@@ -1973,7 +1975,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
       <Field label={t("modals.host.label")}>
         <Input value={name} placeholder="prod-deploy" accent onChange={setName} />
       </Field>
-      <Field label={t("modals.key.algorithm")}>
+      <Field label={t("modals.key.algorithm")} group>
         <MSeg
           value={algo}
           set={setAlgo}
@@ -2247,7 +2249,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
       <Field label={t("modals.host.label")}>
         <Input value={name} placeholder="Postgres prod" accent onChange={setName} />
       </Field>
-      <Field label={t("modals.tunnel.forwardType")}>
+      <Field label={t("modals.tunnel.forwardType")} group>
         <MSeg
           value={type}
           set={setType}
@@ -2418,7 +2420,7 @@ function NewVaultModal({
         <Input value={name} placeholder={t("vault.namePlaceholder")} accent onChange={setName} />
       </Field>
       {!edit && (
-        <Field label={t("vault.target")}>
+        <Field label={t("vault.target")} group>
           <MSeg
             value={target}
             set={(v) => {
@@ -2609,7 +2611,7 @@ function IdentityVaultModal({
           onChange={setName}
         />
       </Field>
-      <Field label={t("identityVault.location")}>
+      <Field label={t("identityVault.location")} group>
         <MSeg
           value={target}
           set={setTarget}

@@ -813,17 +813,34 @@ export function Field({
   hint,
   w,
   labelGap = 6,
+  group,
   children,
 }: {
   label?: string;
   hint?: string;
   w?: string;
   labelGap?: number;
+  /** The field holds a SET of controls (segments, chips, a picker and the body
+   *  it reveals) rather than one input.
+   *
+   *  Required there, because a <label> is a trap around a group: a click
+   *  anywhere in its dead space — the padding, the gaps, the label text itself —
+   *  is forwarded by the browser to the first labelable element inside it. On a
+   *  segmented control that silently selects segment one; on the host dialog's
+   *  auth field, clicking the empty space under the picker reopened the picker.
+   *  A labelled set of controls is a role="group", so render that instead and
+   *  keep <label> for the single-input case it is actually for (where clicking
+   *  the label to focus the input is the whole point). */
+  group?: boolean;
   children: React.ReactNode;
 }) {
   const p = usePalette();
+  const Wrap = group ? "div" : "label";
   return (
-    <label style={{ display: "block", width: w || "auto" }}>
+    <Wrap
+      style={{ display: "block", width: w || "auto" }}
+      {...(group ? { role: "group", "aria-label": label } : null)}
+    >
       {label != null && (
         <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: labelGap }}>
           {label}
@@ -831,7 +848,7 @@ export function Field({
         </div>
       )}
       {children}
-    </label>
+    </Wrap>
   );
 }
 
