@@ -3647,6 +3647,88 @@ fn session_recording_captures_and_persists() {
     assert!(core.list_recordings("v".to_string()).unwrap().is_empty());
 }
 
+/// Closing the TAB, not the shell: the handle is closed and dropped at once.
+///
+/// This is what the desktop app does — `session_close` takes the session out of
+/// its registry and drops the last reference the moment `close()` returns — and
+/// it is the case the test above misses, because there the handle stays alive
+/// afterwards and the reader survives long enough to see the peer's close. With
+/// the reader aborted on Drop, the recording of a session ended this way was
+/// thrown away in silence, while the identical session ended with `exit` was
+/// kept.
+#[test]
+fn a_recording_survives_the_session_being_dropped_on_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    let sshd = TestSshd::start(&pubkey);
+
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let session = core
+        .open_session(
+            "127.0.0.1".to_string(),
+            sshd.port,
+            "root".to_string(),
+            agent_auth("v", "key"),
+            vec![],
+            "xterm".to_string(),
+            80,
+            24,
+            observer.clone(),
+            Some(unissh_ffi::RecordingRequest {
+                vault_id: "v".to_string(),
+                recording_id: "rec-tab".to_string(),
+                label: "test host".to_string(),
+            }),
+            false,
+        )
+        .unwrap();
+
+    session.write(b"echo closed-by-tab\n".to_vec()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if contains(&observer.buf.lock().unwrap(), b"closed-by-tab") {
+            break;
+        }
+        assert!(Instant::now() <= deadline, "no output from the shell");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // The app's exact sequence: close, then release the last reference at once.
+    session.close().unwrap();
+    drop(session);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let meta = loop {
+        let list = core.list_recordings("v".to_string()).unwrap();
+        if let Some(m) = list.into_iter().next() {
+            break m;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the recording was thrown away when the session handle was dropped"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(meta.recording_id, "rec-tab");
+    assert!(meta.size_bytes > 0);
+
+    let cast = core
+        .get_recording("v".to_string(), "rec-tab".to_string())
+        .unwrap();
+    assert!(
+        cast.contains("closed-by-tab"),
+        "the recording is missing the output it recorded"
+    );
+}
+
 /// A session opened without a recording request leaves nothing behind.
 #[test]
 fn no_recording_request_records_nothing() {

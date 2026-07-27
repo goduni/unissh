@@ -724,9 +724,30 @@ impl SshClient {
         channel.request_shell(false).await?;
         let (mut read, write) = channel.split();
 
-        let reader = tokio::spawn(async move {
+        // Asks the reader to stop *and still finish*. Aborting it instead loses
+        // whatever `on_close` does — see ShellHandle's Drop.
+        let shutdown = Arc::new(tokio::sync::Notify::new());
+        let stop = Arc::clone(&shutdown);
+
+        // The handle is deliberately not kept: nothing joins or aborts this task
+        // any more — it ends itself on the notify below, or when the channel does.
+        tokio::spawn(async move {
             let mut exit = None;
-            while let Some(msg) = read.wait().await {
+            loop {
+                // `wait()` is a tokio mpsc recv, so dropping it in the losing
+                // select branch cannot swallow a message.
+                //
+                // `biased` so the order is drain-THEN-stop rather than a coin
+                // toss: closing a tab notifies immediately, and output already
+                // sitting in the channel would otherwise be dropped at random
+                // from the tail of the recording. Once our close is sent the
+                // peer stops writing, so preferring data cannot keep this alive.
+                let msg = tokio::select! {
+                    biased;
+                    msg = read.wait() => msg,
+                    _ = stop.notified() => None,
+                };
+                let Some(msg) = msg else { break };
                 match msg {
                     ChannelMsg::Data { data } => sink.on_data(data.to_vec()),
                     ChannelMsg::ExtendedData { data, .. } => sink.on_data(data.to_vec()),
@@ -740,7 +761,7 @@ impl SshClient {
             }
             sink.on_close(exit);
         });
-        Ok(ShellHandle { write, reader })
+        Ok(ShellHandle { write, shutdown })
     }
 
     /// Opens an SFTP session (the `sftp` subsystem) over the connection. The connection
@@ -808,11 +829,12 @@ impl Drop for ExecHandle {
     }
 }
 
-/// Control of an interactive session: input, window resize, closing. Stops the
-/// background reading on Drop.
+/// Control of an interactive session: input, window resize, closing. Asks the
+/// background reader to FINISH on Drop — see the Drop impl for why it must
+/// finish rather than stop.
 pub struct ShellHandle {
     write: russh::ChannelWriteHalf<Msg>,
-    reader: tokio::task::JoinHandle<()>,
+    shutdown: Arc<tokio::sync::Notify>,
 }
 
 impl ShellHandle {
@@ -829,16 +851,30 @@ impl ShellHandle {
     }
 
     /// Closes the session.
+    ///
+    /// The reader is asked to finish rather than left to notice: closing our end
+    /// only *sends* a close, and the peer's answer may never arrive (or arrives
+    /// after the handle is gone). `on_close` has to run either way.
     pub async fn close(&self) -> Result<(), TransportError> {
         let _ = self.write.eof().await;
-        self.write.close().await?;
+        let res = self.write.close().await;
+        self.shutdown.notify_one();
+        res?;
         Ok(())
     }
 }
 
 impl Drop for ShellHandle {
+    /// NOT `reader.abort()`. The reader is what delivers `on_close`, and that is
+    /// where a session recording gets written — aborting it meant closing a tab
+    /// silently threw the recording away, while typing `exit` (the peer closes
+    /// the channel, the loop ends on its own) kept it. Same session, same
+    /// setting, and the difference was which way you left.
+    ///
+    /// `notify_one` stores its permit, so this cannot be missed by a reader that
+    /// has not reached `notified()` yet, and the task ends on its next poll.
     fn drop(&mut self) {
-        self.reader.abort();
+        self.shutdown.notify_one();
     }
 }
 
