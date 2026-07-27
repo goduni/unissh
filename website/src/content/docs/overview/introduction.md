@@ -64,7 +64,7 @@ UniSSH is a monorepo. The Rust core is the shared foundation; the server, client
 | `client/` | Cross-platform SSH client (desktop/mobile) | Tauri 2 + React + Vite |
 | `server-ui/` | Self-hosted admin panel | React + Vite + wasm |
 
-Continue to [Install & prerequisites](../install/), then run the [local quickstart](../quickstart/). To understand the design, read the [System overview](../../architecture/system-overview/) and the [Security & zero-knowledge model](../../architecture/zero-knowledge-model/).
+Continue to [Install & prerequisites](../install/), then run the [local quickstart](../quickstart/). [Connecting to hosts](../connecting/) covers the per-host options — two-factor logins, hardware keys, agent forwarding, persistent sessions, recording — and says what each one costs as well as what it does. To understand the design, read the [System overview](../../architecture/system-overview/) and the [Security & zero-knowledge model](../../architecture/zero-knowledge-model/).
 
 ## License
 

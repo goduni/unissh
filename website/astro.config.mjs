@@ -40,6 +40,7 @@ export default defineConfig({
             { label: 'What is UniSSH', slug: 'overview/introduction' },
             { label: 'Install & prerequisites', slug: 'overview/install' },
             { label: 'Quickstart (local, no server)', slug: 'overview/quickstart' },
+            { label: 'Connecting to hosts', slug: 'overview/connecting' },
           ],
         },
         {
