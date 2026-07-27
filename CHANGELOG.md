@@ -34,6 +34,49 @@ starts with `0.`:
 
 ### Added
 
+- **Two-factor logins work.** A `keyboard-interactive` prompt that no stored
+  secret can answer — a one-time code, a push confirmation, a forced password
+  change — is now put to you instead of being answered with your password. That
+  was the actual defect: a two-factor login sends two rounds, and both were
+  answered from storage, so the second was always wrong and the failure looked
+  like a bad password. The stored password still answers a plain PAM round by
+  itself, so nothing prompts needlessly.
+- **Hardware keys, through the system ssh-agent.** A per-host auth kind that
+  delegates signing to the operating system's agent — which is how a FIDO/U2F
+  token, a PKCS#11 smart card, a Secure Enclave key, 1Password or gpg-agent
+  becomes usable at all. For such a host the key lives outside the vault, by
+  definition; [`THREAT_MODEL.md`](THREAT_MODEL.md) states that plainly. What is
+  stored is the public key, which is a handle.
+- **Snippets** — a command library that is vault content, so it is encrypted at
+  rest and syncs. Reachable from ⌘K, where selecting one types it into the
+  active pane without running it, and linkable per host as startup commands,
+  where they do run, in the order you picked them.
+- **Session recording** as [asciicast v2], encrypted in the vault, per host.
+  Exportable to a file that plays in `asciinema`, because a recording only its
+  own tool can read is not evidence anyone else can check. Capped at 8 MB per
+  session; a recording that reaches the cap says so instead of ending quietly.
+- **Persistent sessions (tmux)**, per host: attach instead of starting a bare
+  shell, so work survives a dropped connection or a sleeping phone and a
+  reconnect returns to it.
+- A **modern-only algorithm policy**: post-quantum key exchange required with no
+  classical fallback, Ed25519 host keys, AEAD ciphers. Off by default, because a
+  server without ML-KEM then stops connecting.
+- **Post-quantum key exchange is now documented.** It is not new — the transport
+  has negotiated the hybrid `mlkem768x25519-sha256` ahead of classical
+  curve25519 since the first release. It had simply never been written down.
+- **Shell integration (OSC 133)**: jump between prompts, and a gutter mark on a
+  prompt whose command failed. Nothing is inferred — a shell that emits no marks
+  produces none.
+- **GPU terminal rendering on desktop**, opt-in. Phones already had it.
+- `~/.ssh/config` import now applies `LocalForward`, `RemoteForward`,
+  `DynamicForward`, `SetEnv`, `ServerAliveInterval`, `ConnectTimeout` and
+  `Compression`, follows `Include`, and — the point — **reports every directive
+  it cannot apply**, with its line. A real config is mostly directives UniSSH
+  does not implement, and importing in silence left people believing their
+  `ProxyCommand` came across.
+
+[asciicast v2]: https://docs.asciinema.org/manual/asciicast/v2/
+
 - Desktop builds for macOS now ship as a **universal binary** — one `.dmg` that
   runs on both Apple Silicon and Intel. Previously the release carried an
   arm64-only build, because GitHub's `macos-latest` runner is Apple Silicon, so
@@ -78,10 +121,43 @@ starts with `0.`:
 - Documentation claimed `.deb` and `.rpm` installs do not auto-update. They do.
 - Removed an unsupported claim that the shared core is "audited" — it is not.
   See [Independent review status](SECURITY.md#independent-review-status).
+- **`Match` blocks in `~/.ssh/config` rewrote the host above them.** The
+  directive was not recognised, so everything inside a `Match` was merged into
+  the preceding `Host` — a config with `Host prod` followed by `Match user root`
+  imported prod with the wrong user and the wrong address. Silent, and in the
+  one place nobody rereads.
+- **`Include` was appended instead of spliced.** Resolution is
+  first-match-wins, so a config opening with `Include conf.d/*` and then a
+  catch-all `Host *` handed every host the catch-all's user.
+- **A FIDO/U2F (`sk-*`) key imported cleanly and then failed at
+  authentication.** The file holds a key handle, not a private scalar, so it
+  parsed; the opaque signing error that followed read as a broken client. It is
+  now refused at import, with the reason.
+- **Returning from the background is treated as a reconnect, not a retry.** A
+  suspended phone spends its retry budget against a machine that was never going
+  to answer, then makes you wait out a backoff computed for a flaky link.
+- Unsolicited agent-forwarding channels are refused. russh accepts them by
+  default and we inherited that; nothing leaked, since no agent protocol is
+  served over such a channel, but accepting a channel whose purpose is to ask us
+  to sign was the wrong answer.
+- A session recording could deadlock the app. The write ran on a runtime worker
+  and needed a lock a concurrent connect held across the network phase.
+- The core lock is no longer held across a handshake at all, so a connection —
+  30 seconds, or minutes while you type a one-time code or touch a token — stops
+  freezing every other operation.
 
 ### Compatibility
 
-Vault format unchanged. Server protocol unchanged.
+**Vault format extended, additively. Server protocol unchanged.** Two new item
+types — snippets and session recordings — and four new connection-profile fields
+(startup snippets, session recording, tmux, system-agent identity).
+
+Nothing breaks, and the discipline that makes that true is worth stating rather
+than asserting: an older client filters items by type, so it ignores the two new
+ones instead of choking on them; and profile fields it does not know round-trip
+through the record's `extra` map, so re-saving a host on an old device does not
+strip settings made on a new one. New fields are omitted from the encoding
+entirely when unset, so existing signed items keep their exact bytes.
 
 ## [0.1.3] — 2026-07-25
 
