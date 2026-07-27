@@ -19,6 +19,7 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/store/toast";
 import { useApp } from "@/store/app";
 import { useNarrow } from "@/store/responsive";
+import { exportPath } from "@/support/paths";
 
 /** One asciicast event: [seconds since start, stream, payload]. */
 type CastEvent = [number, string, string];
@@ -182,11 +183,18 @@ export function ViewRecordings() {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const { writeTextFile } = await import("@tauri-apps/plugin-fs");
       const path = await save({
-        defaultPath: `${m.label.replace(/[^\w.-]+/g, "_")}-${m.startedUnix}.cast`,
+        defaultPath: await exportPath(`${m.label.replace(/[^\w.-]+/g, "_")}-${m.startedUnix}.cast`),
         filters: [{ name: "asciicast", extensions: ["cast"] }],
       });
       if (!path) return;
-      await writeTextFile(path, cast);
+      // The suffix is asked for above and still has to be enforced here: the
+      // native save panel owns the final name, it lets the user delete the
+      // extension, and on macOS `.cast` is not a registered type so the panel
+      // drops it from the name field on its own. asciinema and every web player
+      // pick the format by extension, so a file saved without one is a recording
+      // nothing will open. Add it rather than explain it.
+      const target = path.toLowerCase().endsWith(".cast") ? path : `${path}.cast`;
+      await writeTextFile(target, cast);
       toast(t("recordings.exported"), "ok");
     } catch (e) {
       toast(apiErrorMessage(e), "err");

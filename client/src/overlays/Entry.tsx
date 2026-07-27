@@ -17,6 +17,7 @@ import { readSecretKeyOnce, rememberSecretKey } from "@/bridge/secretKey";
 import { logWarn } from "@/bridge/log";
 import { apiErrorMessage, type PairingPayload } from "@/bridge/types";
 import { useTranslation, Trans } from "@/i18n";
+import { exportPath } from "@/support/paths";
 
 function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number }) {
   const p = usePalette();
@@ -401,7 +402,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
     const body = t("onboarding.kitFileBody", { secretKey: key });
     await guard(async () => {
       const path = await save({
-        defaultPath: "unissh-emergency-kit.txt",
+        defaultPath: await exportPath("unissh-emergency-kit.txt"),
         filters: [{ name: "Text", extensions: ["txt"] }],
       });
       if (path) {

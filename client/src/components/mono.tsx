@@ -454,6 +454,18 @@ export function SyncBadge({ state, label, title }: { state: SyncState; label: st
 // ── fmtRelative ────────────────────────────────────────────────
 // Locale-relative "5 minutes ago" from an epoch-ms timestamp. Replaces the
 // meaningless CRDT "v{version}" subtitle and surfaces last-connected/updated.
+/** Relative time from a UNIX timestamp in SECONDS — the unit the core stores
+ *  (`ItemInfo.createdAt` / `.updatedAt`, `RecordingMeta.startedUnix`).
+ *
+ *  Named rather than left to `* 1000` at each call site, because the failure is
+ *  silent and looks like data loss: seconds read as milliseconds put every
+ *  timestamp in January 1970, so a key generated a second ago was labelled
+ *  "updated 57 years ago". */
+export function fmtRelativeUnix(secs: number, locale = "en"): string {
+  return fmtRelative(secs * 1000, locale);
+}
+
+/** Relative time from a timestamp in MILLISECONDS (what `Date.now()` gives). */
 export function fmtRelative(ms: number, locale = "en"): string {
   const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
   const s = Math.round((ms - Date.now()) / 1000);

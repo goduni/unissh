@@ -54,6 +54,7 @@ import type {
 } from "@/bridge/types";
 import type { ConnectArgs } from "@/bridge/api";
 import type { TunnelType } from "@/store/app";
+import { exportPath } from "@/support/paths";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -1069,7 +1070,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               <Input value={host} placeholder="web-04.prod.example.net" mono onChange={setHost} />
             </Field>
             <Field label={t("modals.host.port")} w={narrow ? "100%" : "96px"}>
-              <Input value={port} mono onChange={setPort} />
+              <Input value={port} mono selectOnFocus onChange={setPort} />
             </Field>
           </div>
           {/* Personal auth derives the login from the chosen identity (see the
@@ -1465,7 +1466,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                         <Input value={jHost} placeholder="bastion.corp.net" mono onChange={setJHost} />
                       </Field>
                       <Field label={t("modals.host.port")} w={narrow ? "100%" : "96px"}>
-                        <Input value={jPort} mono onChange={setJPort} />
+                        <Input value={jPort} mono selectOnFocus onChange={setJPort} />
                       </Field>
                     </div>
                     <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
@@ -2768,7 +2769,7 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
       const { writeTextFile } = await import("@tauri-apps/plugin-fs");
       const base = pal.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
       const path = await saveDialog({
-        defaultPath: `${base || "unissh-theme"}.json`,
+        defaultPath: await exportPath(`${base || "unissh-theme"}.json`),
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (!path) return;

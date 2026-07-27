@@ -55,6 +55,17 @@ export function AuthPrompt() {
       const { listen } = await import("@tauri-apps/api/event");
       const un = await listen<PromptRequest>("auth-prompt", (e) => {
         const next = e.payload;
+        // A round with no fields AND no text is not a question. RFC 4256 allows
+        // num-prompts=0 so a server can say something mid-authentication, and
+        // the client answers with zero responses; servers also send an empty one
+        // as a plain step. Putting that on screen produced a dialog with no
+        // instruction and no input — nothing to read and nothing to do. Answer
+        // it and stay out of the way. (Text with no fields still shows: that one
+        // has something to say.)
+        if (!next.prompts.length && !next.name.trim() && !next.instruction.trim()) {
+          void answer(next.id, []);
+          return;
+        }
         setReq((cur) => {
           if (cur) {
             queue.current.push(next);

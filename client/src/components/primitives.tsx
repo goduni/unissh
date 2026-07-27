@@ -872,6 +872,7 @@ export function Input({
   gap,
   fontSize = 13.5,
   autoFocus,
+  selectOnFocus,
   onKeyDown,
 }: {
   value: string;
@@ -887,6 +888,11 @@ export function Input({
   gap?: number;
   fontSize?: number;
   autoFocus?: boolean;
+  /** Select the whole value when the field takes focus. For a box that arrives
+   *  PREFILLED with a default — a port, a name suggestion. Typing into one of
+   *  those means replacing it, but a caret lands wherever the click did, so "22"
+   *  plus "8022" made "228022" and the host silently pointed somewhere else. */
+  selectOnFocus?: boolean;
   onKeyDown?: (e: React.KeyboardEvent) => void;
 }) {
   const p = usePalette();
@@ -911,6 +917,7 @@ export function Input({
         placeholder={placeholder}
         type={type || "text"}
         autoFocus={autoFocus}
+        onFocus={selectOnFocus ? (e) => e.currentTarget.select() : undefined}
         onKeyDown={onKeyDown}
         onChange={(e) => onChange?.(e.target.value)}
         style={{

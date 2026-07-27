@@ -1,13 +1,11 @@
 // "On this server" — the per-vault catalog + Pull/Push actions for the vault picker
 // (Phase 4). Self-contained so it can be mounted inside Settings (and later the vault
 // switcher) without entangling the rest of the screen.
-//
-// NOTE: strings are literal English for a first cut — wrap them in i18n keys
-// (serverCloud.*) once the flow is confirmed in the running app.
 import { useCallback, useEffect, useState } from "react";
 
 import * as api from "@/bridge/api";
-import type { ServerVault } from "@/bridge/types";
+import { apiErrorMessage, type ServerVault } from "@/bridge/types";
+import { useTranslation } from "@/i18n";
 import { Btn, Icon, Spinner, Tag } from "@/components/primitives";
 import { toast } from "@/store/toast";
 import { usePalette } from "@/theme/ThemeProvider";
@@ -34,6 +32,7 @@ export function ServerVaultsSection({
   hasSession: boolean;
 }) {
   const p = usePalette();
+  const { t } = useTranslation();
   const [rows, setRows] = useState<ServerVault[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -48,11 +47,11 @@ export function ServerVaultsSection({
       setRows(list);
     } catch (e) {
       setRows([]);
-      toast(`Couldn't list server vaults: ${String(e)}`, "err");
+      toast(t("serverVaults.listFailed", { error: apiErrorMessage(e) }), "err");
     } finally {
       setLoading(false);
     }
-  }, [serverId, hasSession]);
+  }, [serverId, hasSession, t]);
 
   useEffect(() => {
     void load();
@@ -62,10 +61,10 @@ export function ServerVaultsSection({
     setBusy(v.vaultId);
     try {
       const r = await api.serverPullVault(v.vaultId, serverId ?? undefined);
-      toast(`Pulled — ${r.applied} applied`, r.rejected > 0 ? "warn" : "ok");
+      toast(t("serverVaults.pulled", { count: r.applied }), r.rejected > 0 ? "warn" : "ok");
       await load();
     } catch (e) {
-      toast(`Pull failed: ${String(e)}`, "err");
+      toast(t("serverVaults.pullFailed", { error: apiErrorMessage(e) }), "err");
     } finally {
       setBusy(null);
     }
@@ -75,10 +74,10 @@ export function ServerVaultsSection({
     setBusy(v.vaultId);
     try {
       const r = await api.serverAdoptVault(v.vaultId, serverId ?? undefined);
-      toast(`Pushed — ${r.pushed} object(s)`, "ok");
+      toast(t("serverVaults.pushed", { count: r.pushed }), "ok");
       await load();
     } catch (e) {
-      toast(`Push failed: ${String(e)}`, "err");
+      toast(t("serverVaults.pushFailed", { error: apiErrorMessage(e) }), "err");
     } finally {
       setBusy(null);
     }
@@ -96,19 +95,19 @@ export function ServerVaultsSection({
           marginBottom: 8,
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 600, color: p.txt }}>On this server</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: p.txt }}>{t("serverVaults.title")}</div>
         <Btn variant="ghost" icon="refresh" onClick={load} disabled={loading}>
-          Refresh
+          {t("common.refresh")}
         </Btn>
       </div>
 
       {loading && rows === null ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: p.txt3, fontSize: 13 }}>
-          <Spinner /> Loading…
+          <Spinner /> {t("serverVaults.loading")}
         </div>
       ) : rows && rows.length === 0 ? (
         <div style={{ fontSize: 13, color: p.txt3, padding: "6px 0" }}>
-          No vaults you can access on this server.
+          {t("serverVaults.empty")}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -140,9 +139,9 @@ export function ServerVaultsSection({
                     {v.isLocal && v.localName ? v.localName : shortId(v.vaultId)}
                   </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 3 }}>
-                    {v.tombstone && <Tag>deleted</Tag>}
-                    {!v.isLocal && <Tag>on server</Tag>}
-                    {v.isLocal && !v.bound && <Tag>local only</Tag>}
+                    {v.tombstone && <Tag>{t("serverVaults.tagDeleted")}</Tag>}
+                    {!v.isLocal && <Tag>{t("serverVaults.tagOnServer")}</Tag>}
+                    {v.isLocal && !v.bound && <Tag>{t("serverVaults.tagLocalOnly")}</Tag>}
                   </div>
                 </div>
 
@@ -150,15 +149,15 @@ export function ServerVaultsSection({
                   <Spinner />
                 ) : kind === "inSync" ? (
                   <span style={{ fontSize: 12, color: p.txt3, display: "inline-flex", gap: 4, alignItems: "center" }}>
-                    <Icon name="check" /> in sync
+                    <Icon name="check" /> {t("serverVaults.inSync")}
                   </span>
                 ) : kind === "pull" ? (
                   <Btn variant="ghost" icon="download" onClick={() => pull(v)}>
-                    Pull
+                    {t("serverVaults.pull")}
                   </Btn>
                 ) : (
                   <Btn variant="ghost" icon="upload" onClick={() => push(v)}>
-                    Push
+                    {t("serverVaults.push")}
                   </Btn>
                 )}
               </div>

@@ -41,6 +41,7 @@ import {
   type PairingPayload,
   type ServerStatus,
   type VaultInfo,
+  type VaultIntegrityReport,
 } from "@/bridge/types";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -1282,6 +1283,15 @@ function SettingsVaults() {
   // Inline "pick a server" popover for Bind / Move (the accessible path alongside
   // drag-and-drop): holds the vault id whose picker is open.
   const [pickerVault, setPickerVault] = useState<string | null>(null);
+  // The integrity result, kept on screen until dismissed. A toast was the whole
+  // report before: it auto-dismissed in under three seconds on success, and on
+  // failure it showed a COUNT while the per-item issues the core had just
+  // computed were dropped on the floor. An answer to "is my vault intact" has to
+  // outlive a glance, and a failure has to say which items.
+  const [integrity, setIntegrity] = useState<{
+    vault: string;
+    report: VaultIntegrityReport;
+  } | null>(null);
   // Selected server id in the bind/move modal (which vault is being (re)homed is
   // held by `pickerVault`).
   const [bindSel, setBindSel] = useState<string | null>(null);
@@ -1415,8 +1425,7 @@ function SettingsVaults() {
   const verify = async (v: VaultInfo) => {
     await guard(async () => {
       const r = await api.verifyVaultIntegrity(v.vaultId);
-      if (r.ok) toast(t("vault.integrityOk", { count: r.checked }), "ok");
-      else toast(t("vault.integrityFailed", { count: r.issues.length }), "err");
+      setIntegrity({ vault: v.name, report: r });
     });
   };
 
@@ -1833,7 +1842,107 @@ function SettingsVaults() {
             </Modal>
           );
         })()}
+
+      {integrity && (
+        <IntegrityResult
+          vault={integrity.vault}
+          report={integrity.report}
+          onClose={() => setIntegrity(null)}
+        />
+      )}
     </>
+  );
+}
+
+/** The result of a vault integrity check, kept on screen until dismissed.
+ *
+ *  A toast was the whole report before: it auto-dismissed in under three seconds
+ *  on success, and on failure it showed a COUNT while the per-item issues the
+ *  core had just computed were dropped. "3 issues" tells you to worry; the item
+ *  and the way it failed tells you what to do. */
+function IntegrityResult({
+  vault,
+  report,
+  onClose,
+}: {
+  vault: string;
+  report: VaultIntegrityReport;
+  onClose: () => void;
+}) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  return (
+    <Modal
+      icon={report.ok ? "shieldcheck" : "alert"}
+      iconColor={report.ok ? p.green : p.red}
+      title={t(report.ok ? "vault.integrityOkTitle" : "vault.integrityFailedTitle")}
+      subtitle={vault}
+      onClose={onClose}
+      w={460}
+      footer={
+        <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+          <Btn onClick={onClose}>{t("common.done")}</Btn>
+        </div>
+      }
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 13 }}>
+        <div style={{ color: p.txt2 }}>
+          {t(report.ok ? "vault.integrityOk" : "vault.integrityFailed", {
+            count: report.ok
+              ? report.checked
+              : report.issues.length,
+          })}
+        </div>
+        {/* Named, not counted. "3 issues" tells you to worry; the item and
+            the way it failed tells you what to do. */}
+        {report.issues.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              maxHeight: 260,
+              overflowY: "auto",
+            }}
+          >
+            {report.issues.map((it) => (
+              <div
+                key={`${it.itemId}-${it.version}`}
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 8,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  background: p.bg2,
+                  border: `1px solid ${p.line}`,
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 12,
+                    color: p.txt,
+                    flex: 1,
+                    minWidth: 0,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {it.itemId}
+                </span>
+                <span style={{ fontSize: 11, color: p.txt3, flexShrink: 0 }}>
+                  v{it.version}
+                  {it.tombstone ? ` · ${t("vault.integrityDeleted")}` : ""}
+                </span>
+                <span style={{ fontSize: 11, color: p.red, flexShrink: 0 }}>
+                  {t(`vault.integrityFailure.${it.failure}`)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 

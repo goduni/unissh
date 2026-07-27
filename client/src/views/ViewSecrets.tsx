@@ -10,7 +10,7 @@ import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, UI } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, VaultBadge } from "@/components/primitives";
-import { UnderlineTabs, fmtRelative, FlatAvatar, MetaChip, RowOverflowMenu, Card, HairlineRow } from "@/components/mono";
+import { UnderlineTabs, fmtRelativeUnix, FlatAvatar, MetaChip, RowOverflowMenu, Card, HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useNarrow } from "@/store/responsive";
@@ -18,6 +18,7 @@ import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
 import type { ItemInfo, Identity, ServerStatus, VaultInfo } from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
+import { exportPath } from "@/support/paths";
 
 type SecretTab = "keys" | "passwords" | "notes" | "identities";
 
@@ -261,7 +262,10 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
       onConfirm: async () => {
         try {
           const pem = await api.exportSshKey(vault, item.itemId);
-          const path = await save({ defaultPath: item.itemId, title: t("secrets.exportKeyTitle") });
+          const path = await save({
+        defaultPath: await exportPath(item.itemId),
+        title: t("secrets.exportKeyTitle"),
+      });
           if (!path) return; // user cancelled the save dialog
           await writeTextFile(path, pem);
           ctx.toast(t("secrets.keyExported"), "ok");
@@ -360,7 +364,7 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
             {item.itemId}
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
-            {t("secrets.updatedAgo", { ago: fmtRelative(item.updatedAt, i18n.language) })}
+            {t("secrets.updatedAgo", { ago: fmtRelativeUnix(item.updatedAt, i18n.language) })}
             {item.hasCertificate ? " · cert" : ""}
           </div>
         </div>
@@ -682,7 +686,7 @@ function PasswordCard({ item }: { item: ItemInfo }) {
             {item.itemId}
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
-            {t("secrets.updatedAgo", { ago: fmtRelative(item.updatedAt, i18n.language) })}
+            {t("secrets.updatedAgo", { ago: fmtRelativeUnix(item.updatedAt, i18n.language) })}
           </div>
         </div>
         <button
