@@ -1355,22 +1355,3 @@ impl From<ffi::SystemAgentKeyFfi> for SystemAgentKey {
         }
     }
 }
-
-// ---------- forwarded-agent approval ----------
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentSignRequest {
-    pub host: String,
-    /// `user@service` when the payload is an SSH login; empty otherwise.
-    pub target: String,
-}
-
-impl From<ffi::AgentSignRequest> for AgentSignRequest {
-    fn from(r: ffi::AgentSignRequest) -> Self {
-        AgentSignRequest {
-            host: r.host,
-            target: r.target,
-        }
-    }
-}

@@ -242,6 +242,20 @@ jobs:
         run: npm test
         working-directory: client
 
+      # client/src-tauri is its OWN workspace, excluded from the root one — so
+      # `cargo clippy --workspace` in ci.yml never reaches it, and a warning here
+      # only ever surfaced to whoever built the app by hand. It runs in this
+      # workflow rather than ci.yml because the webkit/GTK dev packages it needs
+      # are already installed above. Same single-job pinning as the tests: lints
+      # are platform-independent, and the cfg(windows) paths are covered by the
+      # Windows job actually compiling them.
+      - name: Lint (Tauri crate)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          cargo fmt --all --check
+          cargo clippy --all-targets -- -D warnings
+        working-directory: client/src-tauri
+
       # Windows-only: SQLCipher vendors + statically links OpenSSL there (no system
       # OpenSSL on Windows, and the shipped .exe must be self-contained — see
       # rust-core/crates/storage/Cargo.toml). Building OpenSSL from source
