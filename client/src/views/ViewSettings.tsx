@@ -3770,6 +3770,14 @@ function SettingsCloud() {
     await guard(async () => {
       await api.serverRefreshSession(s.serverId ?? undefined);
       await reloadServerStatus();
+      // A new session makes the old sync failure stale by definition, and the
+      // status badge is not self-healing: auto-sync only runs when a vault
+      // changes, so nothing would clear "Sync error" until the user happened to
+      // edit something. Re-run the sync — it both answers the question the badge
+      // is now asking and repairs it.
+      await syncNow().catch(() => {
+        /* the badge reports it; a failed retry must not undo the refresh toast */
+      });
       toast(t("serverCloud.sessionRefreshed"), "ok");
     });
   };
@@ -3780,6 +3788,9 @@ function SettingsCloud() {
     await guard(async () => {
       await api.serverLogin(s.serverId ?? undefined);
       await reloadServerStatus();
+      await syncNow().catch(() => {
+        /* see doRefresh: a fresh session makes a stale sync error meaningless */
+      });
       toast(t("serverCloud.signedIn"), "ok");
     });
   };

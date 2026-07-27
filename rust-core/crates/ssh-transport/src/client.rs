@@ -423,6 +423,15 @@ impl Handler for ClientHandler {
             // No forward registered for this (address, port) — say so instead of dropping
             // the channel on the floor and leaving the server waiting for a reply.
             None => {
+                log::warn!(
+                    "forwarded-tcpip for {connected_address}:{connected_port}, which no remote \
+                     forward is registered for (registered: {:?})",
+                    self.remote_forwards
+                        .lock()
+                        .expect("mutex")
+                        .keys()
+                        .collect::<Vec<_>>()
+                );
                 reply
                     .reject(ChannelOpenFailure::AdministrativelyProhibited)
                     .await;
@@ -678,13 +687,23 @@ impl SshClient {
         local_host: &str,
         local_port: u16,
     ) -> Result<u16, TransportError> {
-        // First ask the server to listen (port 0 → the server assigns one), then
-        // register delivery by the ACTUALLY assigned port: that is the one the
-        // server will indicate as connected_port in forwarded-tcpip.
-        let assigned = self
+        // First ask the server to listen, then register delivery under the port the
+        // server will name as `connected_port` in forwarded-tcpip.
+        //
+        // That port is NOT always what russh hands back. RFC 4254 puts a port in
+        // the reply only for a port-0 request; for a specific port the reply is
+        // empty, and russh reports 0 for it (client/encrypted.rs: "If a specific
+        // port was requested, the reply has no data"). Taking that 0 as the real
+        // port registered delivery under (bind, 0) while the server opened every
+        // forwarded channel on (bind, 9000) — so the listener appeared on the far
+        // side and every connection to it was refused and reset. Which is exactly
+        // what a remote forward looks like when it is broken: it exists, and it
+        // carries nothing.
+        let reply = self
             .handle
             .tcpip_forward(remote_bind.to_string(), remote_port as u32)
             .await? as u16;
+        let assigned = if remote_port == 0 { reply } else { remote_port };
         self.remote_forwards.lock().expect("mutex").insert(
             (remote_bind.to_string(), assigned as u32),
             (local_host.to_string(), local_port),

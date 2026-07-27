@@ -377,6 +377,99 @@ async fn remote_forward_delivers_to_local() {
     assert_eq!(&buf, b"remote-fwd");
 }
 
+/// The same forward asked for on a WILDCARD bind, which is what the tunnel
+/// dialog suggests ("0.0.0.0:9000"). The server is free to report a different
+/// address in the forwarded-tcpip open than the one it was asked to bind, and
+/// the delivery table is keyed by that address — so this is the case where a
+/// listener appears on the far side and every connection to it dies.
+#[tokio::test]
+async fn remote_forward_on_a_wildcard_bind_delivers() {
+    let echo_port = spawn_echo().await;
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[13u8; 32]).unwrap();
+
+    let opts = ConnectOptions::new(
+        "127.0.0.1",
+        sshd.port,
+        "root",
+        Auth::Agent {
+            key_id: b"k".to_vec(),
+        },
+    );
+    let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+
+    let assigned = client
+        .remote_forward("0.0.0.0", 0, "127.0.0.1", echo_port)
+        .await
+        .unwrap();
+    assert!(assigned > 0);
+
+    let mut conn = tokio::net::TcpStream::connect(("127.0.0.1", assigned))
+        .await
+        .unwrap();
+    conn.write_all(b"wildcard-fwd").await.unwrap();
+    let mut buf = vec![0u8; b"wildcard-fwd".len()];
+    conn.read_exact(&mut buf)
+        .await
+        .expect("the forwarded connection delivered nothing");
+    assert_eq!(&buf, b"wildcard-fwd");
+}
+
+/// A remote forward on an EXPLICIT port — what anyone actually asks for, and the
+/// case the two tests above miss by requesting port 0.
+///
+/// RFC 4254 carries a port in the reply only for a port-0 request, so for a
+/// specific port russh reports 0. Registering delivery under that 0 left every
+/// forwarded channel unmatched: the server bound the port, and refused every
+/// connection that arrived on it.
+#[tokio::test]
+async fn remote_forward_on_an_explicit_port_delivers() {
+    let echo_port = spawn_echo().await;
+    // A port that was free a moment ago. Racy in principle; the window is a few
+    // microseconds and nothing else on the runner is opening listeners.
+    let wanted = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[14u8; 32]).unwrap();
+
+    let opts = ConnectOptions::new(
+        "127.0.0.1",
+        sshd.port,
+        "root",
+        Auth::Agent {
+            key_id: b"k".to_vec(),
+        },
+    );
+    let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+
+    let assigned = client
+        .remote_forward("127.0.0.1", wanted, "127.0.0.1", echo_port)
+        .await
+        .unwrap();
+    assert_eq!(
+        assigned, wanted,
+        "a specific port was asked for, so that is the port in use — reporting 0 \
+         here is what put the delivery table under the wrong key"
+    );
+
+    let mut conn = tokio::net::TcpStream::connect(("127.0.0.1", wanted))
+        .await
+        .unwrap();
+    conn.write_all(b"explicit-port").await.unwrap();
+    let mut buf = vec![0u8; b"explicit-port".len()];
+    conn.read_exact(&mut buf)
+        .await
+        .expect("the forwarded connection delivered nothing");
+    assert_eq!(&buf, b"explicit-port");
+}
+
 #[tokio::test]
 async fn ecdsa_key_auth() {
     use unissh_ssh_agent::generate_openssh;
