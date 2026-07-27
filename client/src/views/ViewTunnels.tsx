@@ -19,7 +19,7 @@ import { useTranslation, tDyn } from "@/i18n";
 interface TypeMeta {
   letter: "L" | "R" | "D";
   nameKey: string;
-  /** Palette token, not a raw hex — Candy/light themes get their own hues. */
+  /** Palette token, not a raw hex — named/light themes get their own hues. */
   colorKey: "accent" | "purple" | "green";
 }
 

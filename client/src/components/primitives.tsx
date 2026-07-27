@@ -405,7 +405,7 @@ export function Btn({
   const fs = size === "sm" ? 12.5 : size === "lg" ? 15 : 13.5;
   const variants: Record<BtnVariant, CSSProperties> = {
     primary: {
-      // Named themes (e.g. Candy Holo) can paint the primary button with a holo
+      // Named themes (e.g. Barbie) can paint the primary button with a
       // gradient; the mono default is a FLAT accent block — no inset sheen, no
       // accent-coloured glow (the "монохром × воздух" system is flat). The label
       // uses the palette's accentInk so it clears AA on the accent/gradient.

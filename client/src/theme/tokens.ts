@@ -94,7 +94,7 @@ export type Density = "comfortable" | "compact";
 /** Hosts list rendering: a card grid vs a flat row list. A per-view layout choice,
  *  NOT the spacing density. */
 export type HostsLayout = "cards" | "list";
-export type AppThemeFamily = "mono" | "nebula" | "candy";
+export type AppThemeFamily = "mono" | "nebula" | "barbie";
 
 export interface Palette {
   name: string;
@@ -114,7 +114,7 @@ export interface Palette {
    *  until it clears AA on EVERY surface tier (bg0..bg4). `accent` is a FILL
    *  colour — it sizes buttons,
    *  ticks and borders, where contrast rules don't apply — and it is near-ink in the
-   *  mono family but saturated in nebula/candy, so using it for a LABEL passes in the
+   *  mono family but saturated in nebula/barbie, so using it for a LABEL passes in the
    *  default theme and quietly fails in the opt-in ones. Any accent-coloured text
    *  must use this. Derived, never authored; see accentTextFor. */
   accentText: string;
@@ -136,7 +136,7 @@ export interface Palette {
   accentInk?: string;
   /** Label/ink colour for text sitting ON the danger `red` surface (the danger
    *  button chrome). Same AA rule as accentInk, computed against `red` — the
-   *  accent ink routinely fails on red (e.g. candy-light's plum on #d02545 is
+   *  accent ink routinely fails on red (e.g. barbie-light's plum on #d6003c is
    *  3.05:1). Consumers fall back to "#fff" when absent. */
   dangerInk?: string;
   /** Modal / overlay backdrop scrim for this palette (light/dark-aware). Consumers
@@ -201,65 +201,68 @@ export const LIGHT: AuthoredPalette = {
   shadow: "0 24px 60px -14px rgba(20,26,45,0.28), 0 0 0 1px rgba(15,20,40,0.07)",
 };
 
-// ── Candy Holo — pink-dominant light hero + deep-plum dark twin ─
-// A "named" theme that owns its full surfaces (not just an accent). Light-terminal
-// ANSI and a couple of tokens are deepened for WCAG legibility on the pale pink.
-export const CANDY_LIGHT: AuthoredPalette = {
-  name: "candy-light",
-  desk: "#ffe3f4",
-  bg0: "#fff2fb",
+// ── Barbie — pink-dominant light hero + deep-pink dark twin ────
+// A "named" theme that owns its full surfaces (not just an accent). A few tokens
+// are deepened from the source hues for WCAG legibility on the pale pink: the
+// muted text tier and amber miss AA at their nominal values, and the accent fill
+// is lifted a shade so the dark ink clears 4.5:1 on it as well as on the light
+// end of the gradient. Hue is preserved throughout (327°).
+export const BARBIE_LIGHT: AuthoredPalette = {
+  name: "barbie-light",
+  desk: "#ffd9ec",
+  bg0: "#ffeaf4",
   bg1: "#ffffff",
-  bg2: "#fff0f9",
-  bg3: "#ffe3f2",
-  bg4: "#ffd0ea",
-  line: "rgba(176,106,255,0.14)",
-  line2: "rgba(176,106,255,0.30)",
-  txt: "#4a1440",
-  txt2: "#8a3a72",
-  txt3: "#985982", // AA-contrast on bg0–bg2 (was #a2628c, ~4.1:1 on the pale pink)
-  accent: "#ff2f9e",
-  accent2: "#ff5fb8",
-  accentSoft: "rgba(255,47,158,0.12)",
-  accentLine: "rgba(255,47,158,0.40)",
-  green: "#0d7a51", // AA-contrast on bg0–bg2 (was #12a06a, ~3.1:1 as text)
-  amber: "#96600e", // AA-contrast on bg0–bg2 (was #cc7d1c, ~3.0:1 as text)
-  red: "#d02545", // AA-contrast on bg0–bg2 (was #e0294f, ~4.2:1 as text)
-  purple: "#9b5fff",
-  glow: "rgba(255,47,158,0.28)",
-  shadow: "0 18px 50px -12px rgba(176,106,255,0.28), 0 0 0 1px rgba(176,106,255,0.10)",
-  accentGradient: "linear-gradient(90deg,#ff5fb8,#b06aff 55%,#5ec7ff)",
-  // Deep plum ink: ≥4.65:1 on every gradient stop (#ff5fb8 / #b06aff / #5ec7ff)
-  // and on the solid accent — white only reached ~1.9:1 on the cyan end.
-  accentInk: "#3d1035",
-  dangerInk: "#ffffff", // white clears AA on this red (5.21:1); the plum ink is 2.75:1
+  bg2: "#fff3f8",
+  bg3: "#ffd0e8",
+  bg4: "#ffb8d8",
+  line: "rgba(224,33,138,0.14)",
+  line2: "rgba(224,33,138,0.30)",
+  txt: "#2b0518",
+  txt2: "#8c2c5a",
+  txt3: "#a1517b", // AA on bg0–bg2; the nominal #c16e96 is ~3.1:1 as body text
+  accent: "#f0339b",
+  accent2: "#ff6ec7",
+  accentSoft: "rgba(240,51,155,0.13)",
+  accentLine: "rgba(240,51,155,0.40)",
+  green: "#128a4f",
+  amber: "#96600e", // AA-legible on the pale pink; #f59e0b sits at ~1.9:1
+  red: "#d6003c",
+  purple: "#b5179e",
+  glow: "rgba(240,51,155,0.28)",
+  shadow: "0 18px 50px -12px rgba(224,33,138,0.26), 0 0 0 1px rgba(224,33,138,0.10)",
+  accentGradient: "linear-gradient(90deg,#e0218a,#ff6ec7)",
+  // Near-ink plum: clears AA on the solid accent AND on both gradient stops.
+  // White reaches only ~2.5:1 on the light end, so it cannot be the shared ink.
+  accentInk: "#2b0518",
+  dangerInk: "#ffffff", // white clears AA on this red (5.35:1)
 };
 
-export const CANDY_DARK: AuthoredPalette = {
-  name: "candy-dark",
-  desk: "#180a1e",
-  bg0: "#1e0f26",
-  bg1: "#251330",
-  bg2: "#2c1638",
-  bg3: "#351a44",
-  bg4: "#43215a",
-  line: "rgba(255,140,220,0.10)",
-  line2: "rgba(255,140,220,0.22)",
-  txt: "#fbeaf6",
-  txt2: "#d3a8cf",
-  txt3: "#aa7ead", // AA-contrast down to bg3 (was #a578a8, ~4.6:1 on bg2 — no headroom)
-  accent: "#ff5fb8",
-  accent2: "#ff86cc",
-  accentSoft: "rgba(255,95,184,0.15)",
-  accentLine: "rgba(255,95,184,0.42)",
-  green: "#4fe0b0",
+export const BARBIE_DARK: AuthoredPalette = {
+  name: "barbie-dark",
+  desk: "#17060f",
+  bg0: "#1d0813",
+  bg1: "#240b18",
+  bg2: "#2c0e1e",
+  bg3: "#351125",
+  bg4: "#45172f",
+  line: "rgba(255,110,199,0.10)",
+  line2: "rgba(255,110,199,0.22)",
+  txt: "#ffeaf4",
+  txt2: "#e2a9c6",
+  txt3: "#b8809d",
+  accent: "#ff5cae",
+  accent2: "#ff8fd0",
+  accentSoft: "rgba(255,92,174,0.15)",
+  accentLine: "rgba(255,92,174,0.42)",
+  green: "#4fd8a4",
   amber: "#ffcf6a",
   red: "#ff6b8f",
-  purple: "#b06aff",
-  glow: "rgba(176,106,255,0.35)",
-  shadow: "0 24px 70px -12px rgba(120,40,160,0.5), 0 0 0 1px rgba(255,140,220,0.08)",
-  accentGradient: "linear-gradient(90deg,#ff5fb8,#b06aff 55%,#5ec7ff)",
-  accentInk: "#3d1035", // same ink as candy-light — the gradient is shared
-  dangerInk: "#3d1035", // white fails AA on this pastel red (2.71:1); plum is 5.86:1
+  purple: "#c86ae0",
+  glow: "rgba(240,51,155,0.35)",
+  shadow: "0 24px 70px -12px rgba(150,20,90,0.5), 0 0 0 1px rgba(255,110,199,0.08)",
+  accentGradient: "linear-gradient(90deg,#e0218a,#ff6ec7)",
+  accentInk: "#2b0518", // same ink as the light twin — the gradient is shared
+  dangerInk: "#2b0518", // white fails AA on this pastel red; the plum clears it
 };
 
 // ── Mono — the minimalist DEFAULT family ───────────────────────
@@ -366,8 +369,8 @@ export const TERM_THEMES: TermTheme[] = [
   { id: "solarized", name: "Solarized Dark", bg: "#002b36", fg: "#93a1a1", dimc: "#586e75", green: "#859900", blue: "#268bd2", cyan: "#2aa198", red: "#dc322f", yellow: "#b58900", purple: "#6c71c4", white: "#ffffff", sel: "rgba(38,139,210,0.22)" },
   { id: "tokyo", name: "Tokyo Night", bg: "#1a1b26", fg: "#c0caf5", dimc: "#565f89", green: "#9ece6a", blue: "#7aa2f7", cyan: "#7dcfff", red: "#f7768e", yellow: "#e0af68", purple: "#bb9af7", white: "#ffffff", sel: "rgba(122,162,247,0.22)" },
   { id: "solight", name: "Solarized Light", light: true, bg: "#fdf6e3", fg: "#586e75", dimc: "#93a1a1", green: "#859900", blue: "#268bd2", cyan: "#2aa198", red: "#dc322f", yellow: "#b58900", purple: "#6c71c4", white: "#eee8d5", sel: "rgba(38,139,210,0.15)" },
-  { id: "candy-light", name: "Candy Holo Light", light: true, bg: "#fff2fb", fg: "#4a1440", dimc: "#a2628c", green: "#0e8055", blue: "#8552db", cyan: "#1c7994", red: "#e0294f", yellow: "#cc7d1c", purple: "#cf2680", white: "#4a1440", sel: "rgba(217,40,134,0.20)" },
-  { id: "candy-dark", name: "Candy Holo Dark", bg: "#160a1e", fg: "#fbeaf6", dimc: "#a578a8", green: "#4fe0b0", blue: "#b06aff", cyan: "#5ec7ff", red: "#ff6b8f", yellow: "#ffcf6a", purple: "#ff5fb8", white: "#fbeaf6", sel: "rgba(255,95,184,0.28)" },
+  { id: "barbie-light", name: "Barbie Light", light: true, bg: "#fff2f8", fg: "#2b0518", dimc: "#a1517b", green: "#0e7a4a", blue: "#9333c7", cyan: "#1c7994", red: "#d6003c", yellow: "#96600e", purple: "#e0218a", white: "#2b0518", sel: "rgba(224,33,138,0.20)" },
+  { id: "barbie-dark", name: "Barbie Dark", bg: "#1a0711", fg: "#ffeaf4", dimc: "#b8809d", green: "#4fd8a4", blue: "#c86ae0", cyan: "#5ec7ff", red: "#ff6b8f", yellow: "#ffcf6a", purple: "#ff6ec7", white: "#ffeaf4", sel: "rgba(255,92,174,0.28)" },
   { id: "catppuccin-mocha", name: "Catppuccin Mocha", bg: "#1e1e2e", fg: "#cdd6f4", dimc: "#585b70", green: "#a6e3a1", blue: "#89b4fa", cyan: "#94e2d5", red: "#f38ba8", yellow: "#f9e2af", purple: "#cba6f7", white: "#bac2de", sel: "rgba(137,180,250,0.24)" },
   { id: "catppuccin-latte", name: "Catppuccin Latte", light: true, bg: "#eff1f5", fg: "#4c4f69", dimc: "#9ca0b0", green: "#40a02b", blue: "#1e66f5", cyan: "#179299", red: "#d20f39", yellow: "#df8e1d", purple: "#8839ef", white: "#5c5f77", sel: "rgba(30,102,245,0.16)" },
   { id: "rose-pine", name: "Rosé Pine", bg: "#191724", fg: "#e0def4", dimc: "#6e6a86", green: "#31748f", blue: "#9ccfd8", cyan: "#ebbcba", red: "#eb6f92", yellow: "#f6c177", purple: "#c4a7e7", white: "#e0def4", sel: "rgba(196,167,231,0.24)" },
@@ -463,18 +466,18 @@ export const ACCENT_KEYS: AccentKey[] = ["blue", "green", "violet", "amber", "ro
 /** Walk the accent toward the ink end of its own hue until it clears AA as body
  *  text on BOTH base surfaces, and return it unchanged when it already does — which
  *  is the mono family, whose accent is ink by design. This is what lets a saturated
- *  brand accent (candy's #ff2f9e is 3.41:1 on white) still label something without
+ *  brand accent (barbie's #f0339b is 3.4:1 on white) still label something without
  *  either failing AA or being flattened to plain grey. */
 function accentTextFor(accent: string, surfaces: string[], mode: EffMode): string {
   // EVERY surface tier, not just the base ones. bg3/bg4 are the hover/selected
   // tiers — a highlighted row, the current item in a menu — which is exactly where
   // an accent-coloured label or check glyph lands, and in the light twins they are
   // the darkest of the ladder, so they are what actually fails: derived against
-  // bg0..bg2 alone, candy's accentText sat at 3.87:1 on bg4.
+  // bg0..bg2 alone, the pink accentText sat at 3.87:1 on bg4.
   const ok = (c: string) => surfaces.every((s) => contrastRatio(c, s) >= 4.5);
   let c = accent;
   // 4% per step. `darken` scales R/G/B uniformly, which leaves HSV hue and
-  // saturation untouched — the walk deepens the colour without muddying it (candy
+  // saturation untouched — the walk deepens the colour without muddying it (barbie
   // #ff2f9e H328 S82 -> #b1216d H328 S81 in 9 steps). `lighten` does desaturate
   // toward white, but no dark-mode accent ever iterates: they all pass at i=0.
   for (let i = 0; i < 30 && !ok(c); i++) c = mode === "dark" ? lighten(c, 0.04) : darken(c, 0.04);
@@ -509,7 +512,7 @@ export function buildPalette(mode: EffMode, accentKey: AccentKey = "blue"): Pale
 }
 
 // ── Named app themes ───────────────────────────────────────────
-// Nebula keeps the base+accent machinery above; named themes ("candy") own a full
+// Nebula keeps the base+accent machinery above; named themes ("barbie") own a full
 // palette per effective mode. resolveAppPalette is the single entry point the
 // ThemeProvider uses instead of calling buildPalette directly.
 export const APP_THEMES: Record<
@@ -517,7 +520,7 @@ export const APP_THEMES: Record<
   { dark: AuthoredPalette; light: AuthoredPalette }
 > = {
   mono: { dark: MONO_DARK, light: MONO_LIGHT },
-  candy: { dark: CANDY_DARK, light: CANDY_LIGHT },
+  barbie: { dark: BARBIE_DARK, light: BARBIE_LIGHT },
 };
 
 export function resolveAppPalette(
@@ -539,7 +542,7 @@ export function resolveAppPalette(
 export const TERM_LINK: Record<AppThemeFamily, { dark: string; light: string }> = {
   mono: { dark: "nebula", light: "solight" },
   nebula: { dark: "nebula", light: "solight" },
-  candy: { dark: "candy-dark", light: "candy-light" },
+  barbie: { dark: "barbie-dark", light: "barbie-light" },
 };
 
 /** Map a terminal theme to an xterm.js ITheme.

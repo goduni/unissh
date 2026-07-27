@@ -284,7 +284,7 @@ function SettingsAppearance() {
           options={[
             { value: "mono", label: t("settings.themeFamilyMono") },
             { value: "nebula", label: t("settings.themeFamilyNebula") },
-            { value: "candy", label: t("settings.themeFamilyCandy") },
+            { value: "barbie", label: t("settings.themeFamilyBarbie") },
           ]}
         />
       </SettingRow>

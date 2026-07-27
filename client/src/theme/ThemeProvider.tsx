@@ -157,10 +157,13 @@ function lsSet(key: string, val: string) {
 // initializers read migrated values. The legacy default unissh.term="nebula" means
 // "never chose one" → treat as unset (follow the theme link); any other value becomes
 // a manual override on the side matching that theme's light/dark flag.
-function migrateThemeStore() {
+/** Exported for the test: this migration was once dead for its entire audience
+ *  (an early-return threshold left behind a version bump), and a rename that
+ *  silently resets a user's chosen theme is invisible until someone complains. */
+export function migrateThemeStore() {
   try {
     const v = Number(lsGet("unissh.themeV", "1"));
-    if (v >= 3) return;
+    if (v >= 4) return;
     // v1 → v2: adopt the family + per-mode-terminal-override model. The legacy
     // default unissh.term="nebula" means "never chose one" → follow the theme link;
     // any other value becomes a manual override on the matching light/dark side.
@@ -173,20 +176,35 @@ function migrateThemeStore() {
       }
     }
     // v2 → v3: the minimalist "mono" family becomes the default. Flip the old
-    // default (nebula) and any unset value to mono; preserve an explicit "candy"
-    // (only ever a deliberate opt-in). The theme manager still lets a user switch
-    // back at any time, so this is a reversible default change, not a lock-in.
-    const fam = lsGet("unissh.appTheme", "");
-    if (fam === "" || fam === "nebula") lsSet("unissh.appTheme", "mono");
-    // Density split: the old unissh.density ("cards"|"list") was really a Hosts
-    // LAYOUT choice → move it to unissh.hostsLayout, and reset the new spacing axis
-    // (unissh.density = comfortable|compact) to its default.
-    const oldDensity = lsGet("unissh.density", "");
-    if (oldDensity === "cards" || oldDensity === "list") {
-      lsSet("unissh.hostsLayout", oldDensity);
-      lsSet("unissh.density", "comfortable");
+    // default (nebula) and any unset value to mono; an explicit named family
+    // (only ever a deliberate opt-in) is preserved.
+    //
+    // Gated on the version, and that gate is load-bearing: without it, a later
+    // step raising the ceiling would re-run this on someone who deliberately
+    // picked nebula *after* v3 and silently flip them to mono.
+    if (v < 3) {
+      const fam = lsGet("unissh.appTheme", "");
+      if (fam === "" || fam === "nebula") lsSet("unissh.appTheme", "mono");
+      // Density split: the old unissh.density ("cards"|"list") was really a Hosts
+      // LAYOUT choice → move it to unissh.hostsLayout, and reset the new spacing
+      // axis (unissh.density = comfortable|compact) to its default.
+      const oldDensity = lsGet("unissh.density", "");
+      if (oldDensity === "cards" || oldDensity === "list") {
+        lsSet("unissh.hostsLayout", oldDensity);
+        lsSet("unissh.density", "comfortable");
+      }
     }
-    lsSet("unissh.themeV", "3");
+    // v3 → v4: the "candy" family is replaced by "barbie". Without this the
+    // rename drops anyone using it back to mono and leaves their terminal
+    // override pointing at an id that no longer exists — two settings they chose
+    // on purpose, reset in silence.
+    if (lsGet("unissh.appTheme", "") === "candy") lsSet("unissh.appTheme", "barbie");
+    for (const k of ["unissh.termOverrideLight", "unissh.termOverrideDark"]) {
+      const t = lsGet(k, "");
+      if (t === "candy-light") lsSet(k, "barbie-light");
+      else if (t === "candy-dark") lsSet(k, "barbie-dark");
+    }
+    lsSet("unissh.themeV", "4");
   } catch {
     /* best-effort: never block boot on a migration hiccup */
   }
@@ -197,11 +215,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [mode, setModeState] = useState<Mode>(() => lsGet("unissh.mode", "auto") as Mode);
   const [family, setFamilyState] = useState<AppThemeFamily>(() => {
     // Default (and fallback for a hand-edited / forward-incompatible value) is now
-    // "mono", the minimalist default family. An explicit "nebula"/"candy" is still
-    // honored so the theme manager round-trips; an unknown value can never reach
-    // resolveAppPalette / TERM_LINK (that would throw).
+    // "mono", the minimalist default family. An explicit "nebula"/"barbie" is
+    // still honored so the theme manager round-trips; an unknown value can never
+    // reach resolveAppPalette / TERM_LINK (that would throw).
     const stored = lsGet("unissh.appTheme", "mono");
-    return stored === "candy" || stored === "nebula" || stored === "mono" ? stored : "mono";
+    return stored === "barbie" || stored === "nebula" || stored === "mono" ? stored : "mono";
   });
   const [accent, setAccentState] = useState<AccentKey>(
     () => lsGet("unissh.accent", "blue") as AccentKey,

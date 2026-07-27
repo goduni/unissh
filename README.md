@@ -50,7 +50,7 @@ UniSSH flips that. It's an open-source SSH client whose **sync backend is a smal
 
 **For** developers, sysadmins, and small teams who want a modern multi-host SSH client **without** renting their secrets to a SaaS vendor.
 
-And it's built to be **one of the best-looking SSH clients around** — a considered, modern interface with a unified light/dark **Theme** picker, hand-tuned accent palettes and the pink **Candy Holo** theme, crisp terminals with linked color schemes, and a drag-first SFTP experience. Self-hosted and zero-knowledge doesn't have to mean spartan.
+And it's built to be **one of the best-looking SSH clients around** — a considered, modern interface with a unified light/dark **Theme** picker, hand-tuned accent palettes and the pink **Barbie** theme, crisp terminals with linked color schemes, and a drag-first SFTP experience. Self-hosted and zero-knowledge doesn't have to mean spartan.
 
 |                         | UniSSH                                  | Typical SaaS SSH client      | Plain `ssh` + dotfiles |
 | ----------------------- | --------------------------------------- | ---------------------------- | ---------------------- |
@@ -110,7 +110,7 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 
 The host library is shown [at the top](#unissh) — dark mode, with the operations rail (terminals, SFTP, run) and the vault & network group (secrets, tunnels, known hosts) on the left, and the selected host's connection, auth, and host-key status on the right.
 
-> _More captures — terminal · SFTP · fleet · the Candy Holo theme — land with the first public release._
+> _More captures — terminal · SFTP · fleet · the Barbie theme — land with the first public release._
 
 ---
 
@@ -428,7 +428,7 @@ There's a thorough, honest **backup & restore** guide (crash vs. disk-loss, the 
 
 - **Secret Key (Emergency Kit)** is stored only in the OS keychain / Secure Enclave — never in plain files or logs.
 - Biometric unlock (Touch ID / mobile biometrics) is wired to real platform APIs (mobile-only).
-- The desktop window, a unified **Theme** picker (dark/light/auto; the **Nebula** base with 5 accent presets, plus the pink **Candy Holo** theme; 9 linked terminal palettes), and clipboard auto-clear are real app settings. See [`client/README.md`](client/README.md).
+- The desktop window, a unified **Theme** picker (dark/light/auto; the **Nebula** base with 5 accent presets, plus the pink **Barbie** theme; 17 linked terminal palettes), and clipboard auto-clear are real app settings. See [`client/README.md`](client/README.md).
 
 ---
 

@@ -2,7 +2,7 @@
 //
 // PRODUCT.md promises AA "in every theme family and accent preset, dark and light".
 // That promise had no enforcement, so it drifted: `accent` is near-ink in the mono
-// family (where it reads fine as text) but saturated in nebula/candy — and text
+// family (where it reads fine as text) but saturated in nebula/barbie — and text
 // coloured with `accent` quietly fails there. This runs the real palettes through
 // the app's own contrastRatio() so a palette or role can't regress unnoticed.
 //
@@ -47,14 +47,14 @@ const hueGap = (a: number, b: number): number => {
   return d > 180 ? 360 - d : d;
 };
 
-/** Every palette the app can actually resolve. mono/candy own a full palette per
+/** Every palette the app can actually resolve. mono/barbie own a full palette per
  *  mode and ignore the accent axis; nebula is the base+accent machinery, so only it
  *  multiplies out across the presets. */
 function allPalettes(): { name: string; p: Palette }[] {
   const out: { name: string; p: Palette }[] = [];
   const modes: EffMode[] = ["light", "dark"];
   for (const mode of modes) {
-    for (const family of ["mono", "candy"] as AppThemeFamily[]) {
+    for (const family of ["mono", "barbie"] as AppThemeFamily[]) {
       out.push({ name: `${family}-${mode}`, p: resolveAppPalette(family, mode) });
     }
     for (const accent of ACCENT_KEYS as AccentKey[]) {
@@ -68,7 +68,7 @@ const PALETTES = allPalettes();
 
 describe("palette contrast (WCAG AA)", () => {
   it("resolves every shipped family x mode x accent", () => {
-    // mono(2) + candy(2) + nebula(2 modes x 5 accents) = 14
+    // mono(2) + barbie(2) + nebula(2 modes x 5 accents) = 14
     expect(PALETTES).toHaveLength(14);
   });
 
