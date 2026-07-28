@@ -417,6 +417,37 @@ async fn remote_forward_on_a_wildcard_bind_delivers() {
     assert_eq!(&buf, b"wildcard-fwd");
 }
 
+/// A free port BELOW the range the kernel hands out for `bind(0)`.
+///
+/// The first cut of this took a port by binding `:0` and letting go — the usual
+/// trick, and the wrong one here. The workspace suite runs in parallel and every
+/// `TestSshd` takes its port the same way, so this test could hand the SSH server
+/// a port another test's sshd was about to bind. That test then failed to listen
+/// and its client got ConnectionRefused, a thousand lines from the cause. It
+/// passed CI three times before it fired.
+///
+/// Picking below `ip_local_port_range` leaves that pool entirely: nothing in the
+/// suite binds a fixed port, so the only racer would be another copy of this
+/// function, and there is one caller.
+fn port_below_the_ephemeral_range() -> u16 {
+    let lo: u16 = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse().ok())
+        .unwrap_or(32768);
+    // Probe downward: bindable now is the best answer available, and nothing else
+    // here competes for this range. Floored at 1024 so a host configured with a
+    // low ephemeral range can never send this into the privileged ports, where a
+    // "free" port means a real service is simply not running yet.
+    let hi = lo.saturating_sub(1);
+    let floor = hi.saturating_sub(2000).max(1024);
+    for candidate in (floor..=hi).rev() {
+        if std::net::TcpListener::bind(("127.0.0.1", candidate)).is_ok() {
+            return candidate;
+        }
+    }
+    panic!("no free port in {floor}..={hi} (ephemeral range starts at {lo})");
+}
+
 /// A remote forward on an EXPLICIT port — what anyone actually asks for, and the
 /// case the two tests above miss by requesting port 0.
 ///
@@ -427,12 +458,7 @@ async fn remote_forward_on_a_wildcard_bind_delivers() {
 #[tokio::test]
 async fn remote_forward_on_an_explicit_port_delivers() {
     let echo_port = spawn_echo().await;
-    // A port that was free a moment ago. Racy in principle; the window is a few
-    // microseconds and nothing else on the runner is opening listeners.
-    let wanted = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
+    let wanted = port_below_the_ephemeral_range();
 
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
