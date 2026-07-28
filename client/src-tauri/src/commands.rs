@@ -399,11 +399,23 @@ pub async fn vault_export_backup(
 /// Read a backup back into a NEW vault. Never overwrites an existing one — the
 /// core refuses a vault id that is already taken, and a restore that silently
 /// replaced a live vault would be a data-loss feature.
+///
+/// `name` is applied AFTER the import, because a backup carries the name the
+/// vault had: the name is a signed record inside the bundle, not a property of
+/// the id it is restored under. Without this the restore silently kept the
+/// source's name, so restoring beside the original — the normal case — produced
+/// two entries called the same thing with no way to tell them apart, and the
+/// "Restore as" field the user had just filled in did nothing.
+///
+/// Renaming here rather than in the frontend so the two are one call: a restore
+/// that succeeded and a rename that never ran would leave exactly the state this
+/// is fixing, and nothing in the UI would say so.
 #[tauri::command]
 pub async fn vault_import_backup(
     path: String,
     passphrase: String,
     new_vault_id: String,
+    name: String,
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
     let core = state.core.clone();
@@ -411,7 +423,15 @@ pub async fn vault_import_backup(
         let bytes = std::fs::read(&path).map_err(|e| FfiError::Other {
             msg: format!("could not read {path}: {e}"),
         })?;
-        core.import_vault(bytes, passphrase, new_vault_id)
+        core.import_vault(bytes, passphrase, new_vault_id.clone())?;
+        core.rename_vault(new_vault_id, name).map_err(|e| {
+            // The vault IS restored at this point. Say so, or the message reads
+            // as "the restore failed" and invites a second attempt that then
+            // collides with the vault this one just created.
+            FfiError::Other {
+                msg: format!("restored, but could not be renamed: {e}"),
+            }
+        })
     })
     .await
 }

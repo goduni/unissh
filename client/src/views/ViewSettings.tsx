@@ -2114,7 +2114,7 @@ function BackupImport({ onClose, onDone }: { onClose: () => void; onDone: () => 
       // carries the id it had, and reusing it would collide with the vault it
       // was taken from — restoring alongside the original is the normal case.
       const vaultId = `${slugName(name)}-${Date.now().toString(36)}`;
-      await api.vaultImportBackup(path, pass, vaultId);
+      await api.vaultImportBackup(path, pass, vaultId, name.trim());
       toast(t("vault.backupRestored"), "ok");
       onDone();
     } catch (e) {

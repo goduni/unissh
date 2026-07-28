@@ -2973,6 +2973,35 @@ fn vault_backup_export_import_round_trip() {
     assert!(core_b
         .import_vault(tampered, "backup-pass".to_string(), "y".to_string())
         .is_err());
+
+    // A restore carries the ORIGINAL vault's name with it — the name is a record
+    // inside the bundle, not a property of the id it is restored under. So a
+    // restore beside its own source produces two entries with identical names and
+    // nothing to tell them apart, which is what "Restore as" is for. Renaming
+    // afterwards is the whole of that feature, so it is checked here: the name
+    // cache is keyed by the RAW vault id, and an id that resolves differently
+    // would leave list_vaults reading the old name back.
+    let named = core_b
+        .list_vaults()
+        .unwrap()
+        .into_iter()
+        .find(|v| v.vault_id == "restored")
+        .expect("the restored vault is listed");
+    assert_eq!(named.name, "V", "the backup carries the source's name");
+
+    core_b
+        .rename_vault("restored".to_string(), "RETEST-restored".to_string())
+        .unwrap();
+    let renamed = core_b
+        .list_vaults()
+        .unwrap()
+        .into_iter()
+        .find(|v| v.vault_id == "restored")
+        .expect("still listed after the rename");
+    assert_eq!(
+        renamed.name, "RETEST-restored",
+        "the restored vault has to answer to the name it was restored as"
+    );
 }
 
 // --- review regressions ---

@@ -110,9 +110,16 @@ export const purgeVault = (vaultId: string) => invoke<void>("purge_vault", { vau
  *  numbers. Returns the size written. */
 export const vaultExportBackup = (vaultId: string, passphrase: string, path: string) =>
   invoke<number>("vault_export_backup", { vaultId, passphrase, path });
-/** Read a backup into a NEW vault. Never overwrites an existing one. */
-export const vaultImportBackup = (path: string, passphrase: string, newVaultId: string) =>
-  invoke<void>("vault_import_backup", { path, passphrase, newVaultId });
+/** Read a backup into a NEW vault under `name`. Never overwrites an existing one.
+ *  The name is applied after the import because the bundle carries the name the
+ *  vault had — restoring beside the original would otherwise produce two entries
+ *  called the same thing. */
+export const vaultImportBackup = (
+  path: string,
+  passphrase: string,
+  newVaultId: string,
+  name: string,
+) => invoke<void>("vault_import_backup", { path, passphrase, newVaultId, name });
 
 // ── items / keys / certs ───────────────────────────────────────
 export const listItems = (vaultId: string) => invoke<ItemInfo[]>("list_items", { vaultId });
