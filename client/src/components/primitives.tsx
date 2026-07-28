@@ -891,11 +891,27 @@ export function Input({
   /** Select the whole value when the field takes focus. For a box that arrives
    *  PREFILLED with a default — a port, a name suggestion. Typing into one of
    *  those means replacing it, but a caret lands wherever the click did, so "22"
-   *  plus "8022" made "228022" and the host silently pointed somewhere else. */
+   *  plus "8022" made "228022" and the host silently pointed somewhere else.
+   *
+   *  Implemented on mousedown, NOT on focus. `onFocus → select()` is the obvious
+   *  version and it does not survive a mouse click: focus fires between mousedown
+   *  and mouseup, and mouseup then collapses the selection to wherever the caret
+   *  was put. Chromium happens to keep the selection anyway; WebKit — which is
+   *  the webview on macOS and iOS — does not, so the first attempt worked in a
+   *  headless test and did nothing in the actual app. Cancelling the default
+   *  mousedown and focusing by hand takes the caret placement out of it entirely,
+   *  and behaves the same in both.
+   *
+   *  Only when the field does NOT already have focus: once you are in the box,
+   *  clicking is how you place a caret or select a word, and stealing that would
+   *  make the field impossible to edit in part. */
   selectOnFocus?: boolean;
   onKeyDown?: (e: React.KeyboardEvent) => void;
 }) {
   const p = usePalette();
+  // Guards the focus handler while the mousedown path is doing the selecting, so
+  // the two do not both call select() on the same click.
+  const selectingRef = React.useRef(false);
   return (
     <div
       style={{
@@ -917,7 +933,28 @@ export function Input({
         placeholder={placeholder}
         type={type || "text"}
         autoFocus={autoFocus}
-        onFocus={selectOnFocus ? (e) => e.currentTarget.select() : undefined}
+        // Keyboard entry (Tab, autoFocus) never reaches the mousedown handler, so
+        // it still needs this; the guard keeps the two from fighting.
+        onFocus={
+          selectOnFocus
+            ? (e) => {
+                if (!selectingRef.current) e.currentTarget.select();
+              }
+            : undefined
+        }
+        onMouseDown={
+          selectOnFocus
+            ? (e) => {
+                const el = e.currentTarget;
+                if (document.activeElement === el) return;
+                e.preventDefault();
+                selectingRef.current = true;
+                el.focus();
+                el.select();
+                selectingRef.current = false;
+              }
+            : undefined
+        }
         onKeyDown={onKeyDown}
         onChange={(e) => onChange?.(e.target.value)}
         style={{

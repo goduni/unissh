@@ -1114,6 +1114,17 @@ export const ru = {
     "clipClearTitle": "Очищать буфер обмена",
     "clipClearDesc": "Через 30 сек после копирования пароля/ключа",
     "sectionMaintenance": "Обслуживание",
+    "dbConsistencyOkTitle": "База согласована",
+    "dbConsistencyFailedTitle": "Проверка согласованности не прошла",
+    "dbFileCorrupt": "SQLite сообщает, что повреждён сам ФАЙЛ базы. Это не устаревшая строка — восстанавливайте из бэкапа, а не правьте вокруг.",
+    "dbIssue": {
+      "orphanItem": "потерянный элемент",
+      "badVersion": "неверная версия",
+      "badAuthorLen": "неверная длина автора",
+      "badSignatureLen": "неверная длина подписи",
+      "tombstoneNotEmpty": "надгробие с содержимым",
+      "staleHistory": "устаревшая строка истории"
+    },
     "dbConsistencyTitle": "Целостность базы",
     "dbConsistencyDesc": "Проверить структуру и подписи локальной базы",
     "check": "Проверить",

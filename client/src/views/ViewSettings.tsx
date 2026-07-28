@@ -42,6 +42,7 @@ import {
   type PairingPayload,
   type ServerStatus,
   type VaultInfo,
+  type DbConsistencyReport,
   type VaultIntegrityReport,
 } from "@/bridge/types";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -934,6 +935,11 @@ function SettingsSecurity() {
   const ctx = useCtx();
   const knownHosts = useApp((s) => s.knownHosts);
   const [changing, setChanging] = useState(false);
+  // Same slot-and-dialog shape as the per-vault integrity check. This was left on
+  // a toast when that one moved off it, which meant the answer to "is my database
+  // sound" still vanished in under three seconds and still named a count instead
+  // of the rows it had just found.
+  const [consistency, setConsistency] = useState<DbConsistencyReport | null>(null);
   const [clip, setClip] = useState<boolean>(() => lsGet("unissh.clipclear", "1") === "1");
 
   const onClip = (v: boolean) => {
@@ -943,9 +949,7 @@ function SettingsSecurity() {
 
   const checkDbConsistency = async () => {
     await guard(async () => {
-      const r = await api.checkConsistency();
-      if (r.ok) toast(t("settings.dbConsistencyOk"), "ok");
-      else toast(t("settings.dbConsistencyFailed", { count: r.issues.length }), "err");
+      setConsistency(await api.checkConsistency());
     });
   };
 
@@ -1025,7 +1029,107 @@ function SettingsSecurity() {
           </Btn>
         </div>
       </div>
+
+      {consistency && (
+        <ConsistencyResult report={consistency} onClose={() => setConsistency(null)} />
+      )}
     </>
+  );
+}
+
+/** The database consistency answer, kept on screen and itemised.
+ *
+ *  Two different questions in one report, and they are not interchangeable:
+ *  `integrityOk` is SQLite saying the FILE is sound, `issues` are rows that are
+ *  individually well-formed but wrong about each other. A corrupt file needs a
+ *  restore; a stale history row does not, and collapsing both into "found 3
+ *  problems" tells you neither. */
+function ConsistencyResult({
+  report,
+  onClose,
+}: {
+  report: DbConsistencyReport;
+  onClose: () => void;
+}) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  return (
+    <Modal
+      icon={report.ok ? "shieldcheck" : "alert"}
+      iconColor={report.ok ? p.green : p.red}
+      title={t(report.ok ? "settings.dbConsistencyOkTitle" : "settings.dbConsistencyFailedTitle")}
+      onClose={onClose}
+      w={520}
+      footer={
+        <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+          <Btn onClick={onClose}>{t("common.done")}</Btn>
+        </div>
+      }
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 13 }}>
+        <div style={{ color: p.txt2 }}>
+          {report.ok
+            ? t("settings.dbConsistencyOk")
+            : t("settings.dbConsistencyFailed", { count: report.issues.length })}
+        </div>
+        {!report.integrityOk && (
+          <div
+            style={{
+              fontSize: 12,
+              color: p.red,
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: rgba(p.red, 0.1),
+              border: `1px solid ${rgba(p.red, 0.4)}`,
+            }}
+          >
+            {t("settings.dbFileCorrupt")}
+          </div>
+        )}
+        {report.issues.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              maxHeight: 280,
+              overflowY: "auto",
+            }}
+          >
+            {report.issues.map((it, i) => (
+              <div
+                key={`${it.kind}-${it.itemIdHex}-${i}`}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 3,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  background: p.bg2,
+                  border: `1px solid ${p.line}`,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontSize: 12, color: p.red, fontWeight: 600 }}>
+                    {t(`settings.dbIssue.${it.kind}`)}
+                  </span>
+                  {/* Hex ids are long and the tail carries no information a human
+                      uses — enough to tell two rows apart is the whole job. */}
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+                    {it.vaultIdHex.slice(0, 8)}/{it.itemIdHex.slice(0, 12)}
+                  </span>
+                </div>
+                {it.detail && (
+                  <span style={{ fontSize: 12, color: p.txt2, overflowWrap: "anywhere" }}>
+                    {it.detail}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 

@@ -1075,6 +1075,17 @@ export const en = {
     "clipClearTitle": "Clear clipboard",
     "clipClearDesc": "30 sec after copying a password or key",
     "sectionMaintenance": "Maintenance",
+    "dbConsistencyOkTitle": "Database consistent",
+    "dbConsistencyFailedTitle": "Consistency check failed",
+    "dbFileCorrupt": "SQLite reports the database FILE itself as damaged. This is not a stale row — restore from a backup rather than editing around it.",
+    "dbIssue": {
+      "orphanItem": "orphan item",
+      "badVersion": "bad version",
+      "badAuthorLen": "bad author length",
+      "badSignatureLen": "bad signature length",
+      "tombstoneNotEmpty": "tombstone carries content",
+      "staleHistory": "stale history row"
+    },
     "dbConsistencyTitle": "Database consistency",
     "dbConsistencyDesc": "Verify the local database structure and signatures",
     "check": "Check",
