@@ -653,6 +653,11 @@ async function runStartupSnippets(
     term.options.cursorBlink = next.cursorBlink;
     term.options.minimumContrastRatio = next.minimumContrastRatio;
     term.options.theme = next.theme;
+    // Applied live like the rest, but this one is destructive downward: xterm trims the
+    // ring buffer immediately, so lowering the limit discards the rows above the new one.
+    // That is the setting doing what it says — the alternative (defer to the next pane)
+    // would leave the memory the user just asked to reclaim allocated until they reconnect.
+    term.options.scrollback = next.scrollback;
     if (!hostLaidOut(hostRef.current)) return;
     try {
       fit.fit();

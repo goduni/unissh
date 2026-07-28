@@ -10,9 +10,12 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TERM_PREFS,
   MONO,
+  TERM_SCROLLBACK_LIMIT,
+  TERM_SCROLLBACK_MIN,
   TERM_THEMES,
   termFontStack,
   termOptions,
+  termScrollbackBytes,
   type TermPrefs,
 } from "./tokens";
 
@@ -31,6 +34,39 @@ describe("termOptions", () => {
     expect(o.minimumContrastRatio).toBe(1.1);
     expect(o.drawBoldTextInBrightColors).toBe(true);
     expect(o.macOptionClickForcesSelection).toBe(true);
+  });
+
+  // The one default that deliberately does NOT match the pre-settings behaviour: panes
+  // used to inherit xterm's own 1000 rows because this file never set the option at all.
+  it("defaults scrollback well above xterm's own 1000", () => {
+    expect(termOptions(DEFAULT_TERM_PREFS, THEME, 14).scrollback).toBe(10_000);
+  });
+
+  // No product ceiling: a big number is passed through, not quietly capped. The only
+  // bound is xterm's own, and it lives in the persisted-prefs clamp, not here.
+  it("passes any chosen scrollback through to xterm, including 0 and 200 000", () => {
+    for (const rows of [TERM_SCROLLBACK_MIN, 1_000, 200_000, TERM_SCROLLBACK_LIMIT]) {
+      expect(termOptions(prefs({ scrollback: rows }), THEME, 14).scrollback).toBe(rows);
+    }
+  });
+});
+
+describe("termScrollbackBytes", () => {
+  it("is zero for no scrollback and never negative", () => {
+    expect(termScrollbackBytes(0)).toBe(0);
+    expect(termScrollbackBytes(-5)).toBe(0);
+  });
+
+  // The estimate is the only thing standing where a ceiling used to, so it has to land in
+  // the right order of magnitude: 100 000 rows is hundreds of MB, not tens.
+  it("puts 100 000 rows in the hundreds of megabytes", () => {
+    const mb = termScrollbackBytes(100_000) / (1024 * 1024);
+    expect(mb).toBeGreaterThan(100);
+    expect(mb).toBeLessThan(1000);
+  });
+
+  it("scales with the column count", () => {
+    expect(termScrollbackBytes(1_000, 240)).toBeGreaterThan(termScrollbackBytes(1_000, 120));
   });
 
   it("uses the theme's own colours when there is no override", () => {

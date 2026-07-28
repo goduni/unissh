@@ -623,6 +623,26 @@ export const TERM_FONTS: { id: TermFontId; name: string; stack: string }[] = [
   { id: "system", name: "System monospace", stack: "ui-monospace, monospace" },
 ];
 
+// Scrollback has no product ceiling on purpose: someone tailing a build log knows better
+// than this file how many rows they need, and a cap set here would just be a number they
+// have to work around. The cost is real, though — xterm keeps every retained row as a
+// Uint32Array of three words per cell, and panes stay alive while you navigate away (see
+// App.tsx), so it is paid per open session rather than per visible one. So the setting
+// spends its ceiling on an estimate instead: termScrollbackBytes() feeds the live "≈ N MB"
+// readout under the field, and the choice stays the user's.
+export const TERM_SCROLLBACK_MIN = 0;
+export const TERM_SCROLLBACK_STEP = 1_000;
+/** xterm's own hard cap (OptionsService clamps to this and throws below 0). Not a policy
+ *  limit — the only value the renderer itself refuses to take. */
+export const TERM_SCROLLBACK_LIMIT = 4_294_967_295;
+
+/** Rough resident cost of a scrollback buffer: 3 uint32 per cell, plus the per-row array
+ *  header. Deliberately approximate — it exists to make a large number feel like a number
+ *  of megabytes, not to be an allocator. 120 columns is a typical maximised pane. */
+export function termScrollbackBytes(rows: number, cols = 120): number {
+  return Math.max(0, rows) * (cols * 12 + 48);
+}
+
 export interface TermPrefs {
   fontId: TermFontId;
   /** CSS family name used when `fontId` is "custom". */
@@ -636,6 +656,9 @@ export interface TermPrefs {
   fg: string | null;
   /** Raise xterm's contrast floor from the cosmetic 1.1 to WCAG AA. */
   minContrast: boolean;
+  /** Rows retained above the viewport, per pane. 0 = none; the only ceiling is xterm's
+   *  own TERM_SCROLLBACK_LIMIT. */
+  scrollback: number;
 }
 
 export const DEFAULT_TERM_PREFS: TermPrefs = {
@@ -647,6 +670,10 @@ export const DEFAULT_TERM_PREFS: TermPrefs = {
   cursorBlink: true,
   fg: null,
   minContrast: false,
+  // Deliberately 10× xterm's own default of 1000, which is the one pre-settings default
+  // this file does not preserve: a thousand rows is less than one `dmesg`, and losing the
+  // top of the output you just ran is the complaint that produced this setting.
+  scrollback: 10_000,
 };
 
 /** A family name is user input that ends up inside a CSS declaration, so anything that
@@ -674,6 +701,7 @@ export function termOptions(prefs: TermPrefs, theme: TermTheme, fontSize: number
     letterSpacing: prefs.letterSpacing,
     cursorStyle: prefs.cursor,
     cursorBlink: prefs.cursorBlink,
+    scrollback: prefs.scrollback,
     theme: prefs.fg ? { ...base, foreground: prefs.fg, cursor: prefs.fg } : base,
     // Render bold text in the (distinct) bright palette and nudge any too-low-contrast
     // glyph so nothing comes out unreadable.

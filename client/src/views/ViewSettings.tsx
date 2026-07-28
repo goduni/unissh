@@ -6,7 +6,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { ACCENT_KEYS, ACCENTS, MONO, TERM_FONTS, UI, rgba, toHexInput } from "@/theme/tokens";
+import {
+  ACCENT_KEYS,
+  ACCENTS,
+  MONO,
+  TERM_FONTS,
+  TERM_SCROLLBACK_LIMIT,
+  TERM_SCROLLBACK_MIN,
+  TERM_SCROLLBACK_STEP,
+  UI,
+  rgba,
+  termScrollbackBytes,
+  toHexInput,
+} from "@/theme/tokens";
 import type {
   AppThemeFamily,
   Density,
@@ -246,6 +258,7 @@ function SettingsAppearance() {
     setTermPrefs,
     resetTermPrefs,
   } = useTheme();
+  const { fmtSize } = useFmt();
   const installedFonts = useInstalledFonts();
   const [showAllThemes, setShowAllThemes] = useState(false);
   // Themes for the mode you are actually in first — at 17 cards, a dark-theme user
@@ -550,6 +563,46 @@ function SettingsAppearance() {
           onChange={(v) => setTermPrefs({ minContrast: v })}
           aria-label={t("settings.termMinContrastTitle")}
         />
+      </SettingRow>
+
+      {/* A number box rather than a slider: there is no ceiling to slide to, and someone
+          who wants 200 000 rows should be able to say so instead of dragging to a stop we
+          invented. The estimate below carries what the missing ceiling used to. */}
+      <SettingRow title={t("settings.termScrollbackTitle")} desc={t("settings.termScrollbackDesc")}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <input
+            type="number"
+            min={TERM_SCROLLBACK_MIN}
+            max={TERM_SCROLLBACK_LIMIT}
+            step={TERM_SCROLLBACK_STEP}
+            value={termPrefs.scrollback}
+            onChange={(e) => {
+              // Empty box / mid-edit garbage must not reach xterm: a NaN here throws in the
+              // option setter and takes the pane with it. Keep the last good value instead.
+              const n = parseInt(e.target.value, 10);
+              if (!Number.isFinite(n)) return;
+              setTermPrefs({
+                scrollback: Math.min(TERM_SCROLLBACK_LIMIT, Math.max(TERM_SCROLLBACK_MIN, n)),
+              });
+            }}
+            aria-label={t("settings.termScrollbackTitle")}
+            style={{
+              fontFamily: MONO,
+              fontSize: 13,
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: `1px solid ${p.line2}`,
+              background: p.bg2,
+              color: p.txt,
+              width: 110,
+            }}
+          />
+          <span style={{ fontSize: 12, color: p.txt3 }}>
+            {t("settings.termScrollbackEstimate", {
+              size: fmtSize(termScrollbackBytes(termPrefs.scrollback)),
+            })}
+          </span>
+        </div>
       </SettingRow>
 
       <div style={{ display: "flex", justifyContent: "flex-end", padding: "12px 0" }}>

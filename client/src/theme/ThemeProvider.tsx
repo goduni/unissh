@@ -19,6 +19,8 @@ import {
   resolveAppPalette,
   TERM_FONTS,
   TERM_LINK,
+  TERM_SCROLLBACK_LIMIT,
+  TERM_SCROLLBACK_MIN,
   TERM_THEMES,
   TermFontId,
   TermPrefs,
@@ -131,6 +133,12 @@ function loadTermPrefs(): TermPrefs {
       cursorBlink: typeof o.cursorBlink === "boolean" ? o.cursorBlink : true,
       fg: isHexColor(o.fg) ? (o.fg as string) : null,
       minContrast: o.minContrast === true,
+      // Rounded and bounded only by what xterm itself accepts — a negative value makes the
+      // option setter throw, and a fractional one sizes a ring buffer to a fraction of a
+      // row. How much memory the chosen number costs is the user's call, not this clamp's.
+      scrollback: Math.round(
+        num(o.scrollback, TERM_SCROLLBACK_MIN, TERM_SCROLLBACK_LIMIT, DEFAULT_TERM_PREFS.scrollback),
+      ),
     };
   } catch {
     return DEFAULT_TERM_PREFS;
