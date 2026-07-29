@@ -9,6 +9,7 @@ import { useTranslation } from "@/i18n";
 import { Icon } from "@/components/primitives";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Sidebar, TitleBar } from "@/shell/Shell";
+import { ResizeEdges } from "@/shell/WindowChrome";
 import { useUpdate } from "@/store/update";
 import { BOOT_CHECK_DELAY_MS, PERIODIC_CHECK_MS } from "@/bridge/updater";
 
@@ -407,7 +408,6 @@ export function App() {
         <EntryOverlays />
         {showApp && <Modals />}
         {showApp && <AuthPrompt />}
-      {showApp && <AgentApproval />}
         {showApp && <AgentApproval />}
         {showApp && <CommandPalette />}
         {showApp && <ImportPreview />}
@@ -434,8 +434,11 @@ export function App() {
         overflow: "hidden",
       }}
     >
-      {/* in-app toolbar — window chrome is native (tauri decorations: true) */}
+      {/* in-app toolbar doubling as the title bar — the window is frameless
+          (tauri decorations: false; macOS overlays its traffic lights here).
+          data-tauri-drag-region gives back dragging + dblclick-maximize. */}
       <div
+        data-tauri-drag-region
         style={{
           height: 44,
           flexShrink: 0,
@@ -492,6 +495,7 @@ export function App() {
       <ConfirmDialog />
       <ShortcutsHelp />
       <ToastHost />
+      <ResizeEdges />
     </div>
   );
 }

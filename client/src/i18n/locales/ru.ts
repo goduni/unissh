@@ -16,6 +16,9 @@ export const ru = {
     delete: "Удалить",
     remove: "Убрать",
     close: "Закрыть",
+    minimize: "Свернуть",
+    maximize: "Развернуть",
+    restore: "Восстановить",
     confirm: "Подтвердить",
     done: "Готово",
     back: "Назад",
@@ -32,8 +35,6 @@ export const ru = {
     all: "Все",
     clear: "Очистить",
     search: "Поиск",
-    minimize: "Свернуть",
-    maximize: "Развернуть",
   },
 
   // ── Pluralized counts (the declension core) ──────────────────────────────

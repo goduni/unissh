@@ -10,6 +10,8 @@ import { BTN_RESET, Icon, IconName, Logo, ResizeHandle, VaultBadge } from "@/com
 import { FlatAvatar, SyncBadge } from "@/components/mono";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
+import { isMac } from "@/bridge/platform";
+import { useMaximized } from "@/shell/WindowChrome";
 import { useNarrow } from "@/store/responsive";
 import type { Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -152,12 +154,14 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
   );
 }
 
-/** Custom min/maximize/close controls for Windows/Linux (macOS uses native
- *  traffic lights). Rendered at the far right of the title bar. */
+/** Custom close/min/maximize controls for Windows/Linux, sitting left of the
+ *  logo. macOS never renders these: it keeps its native traffic lights,
+ *  overlaid on the same spot (titleBarStyle: Overlay). */
 export function WindowControls() {
   const p = usePalette();
   const { t } = useTranslation();
   const win = getCurrentWindow();
+  const maximized = useMaximized();
   const Btn = ({
     onClick,
     danger,
@@ -210,15 +214,18 @@ export function WindowControls() {
     </svg>
   );
   return (
-    <div style={{ display: "flex", gap: 2, marginLeft: 6 }}>
+    <div style={{ display: "flex", gap: 2 }}>
+      <Btn title={t("common.close")} danger onClick={() => void win.close()}>
+        {line("M2 2l7 7M9 2l-7 7")}
+      </Btn>
       <Btn title={t("common.minimize")} onClick={() => void win.minimize()}>
         {line("M1.5 5.5h8")}
       </Btn>
-      <Btn title={t("common.maximize")} onClick={() => void win.toggleMaximize()}>
-        {line("M2 2h7v7h-7z")}
-      </Btn>
-      <Btn title={t("common.close")} danger onClick={() => void win.close()}>
-        {line("M2 2l7 7M9 2l-7 7")}
+      <Btn
+        title={maximized ? t("common.restore") : t("common.maximize")}
+        onClick={() => void win.toggleMaximize()}
+      >
+        {line(maximized ? "M3.8 3.5V1.8h5.4v5.4H7.5M2 3.5h5.5v5.5H2z" : "M2 2h7v7h-7z")}
       </Btn>
     </div>
   );
@@ -232,10 +239,15 @@ export function TitleBar() {
   const ctx = useCtx();
   return (
     <>
-      <div style={{ marginLeft: 4 }}>
+      {/* pointerEvents none lets a mousedown on the spacer/logo fall through to
+          the toolbar behind them, which carries data-tauri-drag-region — the
+          attribute only triggers on the exact element under the cursor. */}
+      {isMac() ? <div style={{ width: 52, pointerEvents: "none" }} aria-hidden /> : <WindowControls />}
+      <div style={{ marginLeft: 4, display: "flex", pointerEvents: "none" }}>
         <Logo size={18} />
       </div>
       <div
+        data-tauri-drag-region
         style={{
           flex: 1,
           display: "flex",

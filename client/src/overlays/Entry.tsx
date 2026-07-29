@@ -9,6 +9,8 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, UI, rgba } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
+import { isMac } from "@/bridge/platform";
+import { WindowControls } from "@/shell/Shell";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
@@ -55,6 +57,22 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
           background: p.name === "dark" ? "rgba(6,7,11,0.6)" : "rgba(255,255,255,0.5)",
         }}
       />
+      {/* This overlay covers the frameless window's own title bar, so it must
+          carry a drag strip and (non-mac) window controls of its own — without
+          them a locked window could be neither moved nor closed. */}
+      {!isMobile && (
+        <>
+          <div
+            data-tauri-drag-region
+            style={{ position: "absolute", top: 0, left: 0, right: 0, height: 44 }}
+          />
+          {!isMac() && (
+            <div style={{ position: "absolute", top: 7, left: 16, zIndex: 1 }}>
+              <WindowControls />
+            </div>
+          )}
+        </>
+      )}
       <div
         className="uh-view"
         style={{

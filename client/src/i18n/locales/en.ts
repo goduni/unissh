@@ -9,6 +9,9 @@ export const en = {
     delete: "Delete",
     remove: "Remove",
     close: "Close",
+    minimize: "Minimize",
+    maximize: "Maximize",
+    restore: "Restore",
     confirm: "Confirm",
     done: "Done",
     back: "Back",
@@ -25,8 +28,6 @@ export const en = {
     all: "All",
     clear: "Clear",
     search: "Search",
-    minimize: "Minimize",
-    maximize: "Maximize",
   },
 
   count: {
