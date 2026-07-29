@@ -8,8 +8,9 @@ import { useCtx } from "@/store/ctx";
 import { useTranslation } from "@/i18n";
 import { Icon } from "@/components/primitives";
 import { UpdateBanner } from "@/components/UpdateBanner";
-import { Sidebar, TitleBar } from "@/shell/Shell";
+import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
 import { ResizeEdges } from "@/shell/WindowChrome";
+import { isDesktopOs, isMac } from "@/bridge/platform";
 import { useUpdate } from "@/store/update";
 import { BOOT_CHECK_DELAY_MS, PERIODIC_CHECK_MS } from "@/bridge/updater";
 
@@ -404,6 +405,30 @@ export function App() {
   if (device === "mobile") {
     return (
       <>
+        {/* Phone-shell PREVIEW on a desktop OS (Ctrl/Cmd+Shift+M): a real phone
+            has no window chrome, but the frameless desktop window still needs
+            drag + controls — without this strip the toggled window could be
+            neither moved nor closed. MobileApp shifts down 36px to match. */}
+        {isDesktopOs() && (
+          <div
+            data-tauri-drag-region
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 36,
+              display: "flex",
+              alignItems: "center",
+              padding: "0 10px",
+              background: p.bg1,
+              borderBottom: `1px solid ${p.line}`,
+              zIndex: 10,
+            }}
+          >
+            {!isMac() && <WindowControls />}
+          </div>
+        )}
         {showApp && <MobileApp />}
         <EntryOverlays />
         {showApp && <Modals />}
@@ -418,6 +443,7 @@ export function App() {
         <ConfirmDialog />
         <ShortcutsHelp />
         <ToastHost />
+        <ResizeEdges />
       </>
     );
   }

@@ -37,8 +37,9 @@ body {
    against the large/fixed viewport and leaves a dead band (~20% of the screen)
    where the browser chrome would be; `100dvh` tracks the currently-visible
    viewport, so the shell fills exactly what the user sees on every device.
-   `100vh` is the pre-`dvh` fallback (iOS < 15.4). Desktop never gets this class
-   — it renders the desktop Shell, not MobileApp — so this can't affect desktop. */
+   `100vh` is the pre-`dvh` fallback (iOS < 15.4). Desktop reaches this class
+   only via the phone-shell preview (Ctrl/Cmd+Shift+M), where MobileApp overrides
+   top/height inline to sit below the frameless window's 36px chrome strip. */
 .mobile-shell {
   position: fixed;
   top: 0;

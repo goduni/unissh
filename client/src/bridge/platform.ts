@@ -15,3 +15,12 @@ export function osPlatform(): string {
 
 /** macOS shows native traffic lights; other desktops need custom controls. */
 export const isMac = (): boolean => osPlatform() === "macos";
+
+/** False in a plain browser preview, where every window API would throw. */
+export const isTauri = (): boolean => osPlatform() !== "unknown";
+
+/** Running as a desktop binary — even while the UI previews the phone shell
+ *  (Ctrl/Cmd+Shift+M), the frameless window still needs its own drag regions
+ *  and window controls. */
+export const isDesktopOs = (): boolean =>
+  isTauri() && osPlatform() !== "android" && osPlatform() !== "ios";

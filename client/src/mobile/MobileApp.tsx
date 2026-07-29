@@ -17,6 +17,7 @@ import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { BottomSheet } from "@/components/Modal";
 import { MONO, RADIUS, SIZE, UI } from "@/theme/tokens";
 import { useApp } from "@/store/app";
+import { isDesktopOs } from "@/bridge/platform";
 import { useKeyboardInset, useLandscape } from "@/store/responsive";
 import { useTranslation, tDyn } from "@/i18n";
 import { useCtx } from "@/store/ctx";
@@ -937,6 +938,10 @@ export function MobileApp() {
         // SFTP right under the home indicator. The keyboard, when up, supersedes it.
         paddingBottom: kbInset || "env(safe-area-inset-bottom)",
         overflow: "hidden",
+        // Desktop preview of the phone shell: the frameless window's chrome
+        // strip (App.tsx) owns the top 36px — start below it instead of
+        // pinning to the viewport top like on a real phone.
+        ...(isDesktopOs() ? { top: 36, height: "calc(100% - 36px)" } : null),
       }}
     >
       {/* On every tab, not just Hosts: the vault you're in and the way to LOCK are

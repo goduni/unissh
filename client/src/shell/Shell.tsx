@@ -10,7 +10,7 @@ import { BTN_RESET, Icon, IconName, Logo, ResizeHandle, VaultBadge } from "@/com
 import { FlatAvatar, SyncBadge } from "@/components/mono";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
-import { isMac } from "@/bridge/platform";
+import { isMac, isTauri } from "@/bridge/platform";
 import { useMaximized } from "@/shell/WindowChrome";
 import { useNarrow } from "@/store/responsive";
 import type { Route } from "@/store/app";
@@ -160,8 +160,12 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
 export function WindowControls() {
   const p = usePalette();
   const { t } = useTranslation();
-  const win = getCurrentWindow();
   const maximized = useMaximized();
+  // After the hooks, before any window API: in a plain browser preview
+  // getCurrentWindow() throws, and with no ErrorBoundary that takes the whole
+  // tree down — render no chrome there instead.
+  if (!isTauri()) return null;
+  const win = getCurrentWindow();
   const Btn = ({
     onClick,
     danger,
@@ -259,7 +263,10 @@ export function TitleBar() {
       >
         <SearchBar onClick={ctx.openPalette} />
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {/* data-tauri-drag-region: the 8px gaps between the icon buttons belong to
+          this container's own box, so they drag the window; the buttons still
+          win, since a clickable element in the event path blocks dragging. */}
+      <div data-tauri-drag-region style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <TitleIconBtn icon="moon" onClick={toggleTwin} title={t("shell.appTheme")} />
         <TitleIconBtn
           icon="sliders"

@@ -6,23 +6,32 @@
 
 import React, { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { osPlatform } from "@/bridge/platform";
+import { isTauri, osPlatform } from "@/bridge/platform";
 
 type ResizeDirection = Parameters<ReturnType<typeof getCurrentWindow>["startResizeDragging"]>[0];
 
 export function useMaximized(): boolean {
   const [max, setMax] = useState(false);
   useEffect(() => {
+    if (!isTauri()) return; // plain browser preview: nothing to subscribe to
     const win = getCurrentWindow();
     let alive = true;
+    let t: ReturnType<typeof setTimeout> | undefined;
     const update = () =>
       void win.isMaximized().then((m) => {
         if (alive) setMax(m);
       });
+    // onResized fires once per frame during an interactive resize, but the
+    // maximized flag only flips at the ends — coalesce the IPC round-trips.
+    const lazy = () => {
+      clearTimeout(t);
+      t = setTimeout(update, 120);
+    };
     update();
-    const unlisten = win.onResized(update);
+    const unlisten = win.onResized(lazy);
     return () => {
       alive = false;
+      clearTimeout(t);
       void unlisten.then((f) => f());
     };
   }, []);

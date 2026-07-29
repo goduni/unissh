@@ -9,7 +9,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, UI, rgba } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
-import { isMac } from "@/bridge/platform";
+import { isDesktopOs, isMac } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { toast } from "@/store/toast";
@@ -47,7 +47,10 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
           ? {
               padding: "calc(env(safe-area-inset-top) + 20px) 16px calc(env(safe-area-inset-bottom) + 16px)",
             }
-          : null),
+          : // Keep the centered card out of the top 44px chrome band: at the
+            // minimum window size the card would otherwise slide under the drag
+            // strip and the floating window controls.
+            { padding: "44px 0 16px" }),
       }}
     >
       <div
@@ -59,8 +62,10 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
       />
       {/* This overlay covers the frameless window's own title bar, so it must
           carry a drag strip and (non-mac) window controls of its own — without
-          them a locked window could be neither moved nor closed. */}
-      {!isMobile && (
+          them a locked window could be neither moved nor closed. Gated on the
+          BINARY's platform, not the device flag: the phone-shell preview on a
+          desktop OS still is a frameless window. */}
+      {isDesktopOs() && (
         <>
           <div
             data-tauri-drag-region
