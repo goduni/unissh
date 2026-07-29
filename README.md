@@ -79,9 +79,17 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 **Connectivity**
 - Auth by **key** (via a built-in in-memory agent — the private key never leaves the core), **password** (inline or from the vault), or **certificate**. Two-factor logins work: `keyboard-interactive` prompts that no stored secret can answer — a one-time code, a push confirmation — are put to you.
 - **Hardware keys via the system ssh-agent**, per host: FIDO/U2F tokens, PKCS#11 smart cards, Secure Enclave keys, 1Password and gpg-agent all sign through the OS agent, and UniSSH stores only which identity to ask for. The trade is explicit — for such a host the key is outside the vault, by definition, since that is what makes a token usable.
+- **Agent forwarding**, per host and **off by default**, because while the session lives anything running as you on that machine can ask your agent to sign. When it is on, **every signature is confirmed individually**, naming the host that asked — the behaviour of `ssh-add -c`, rather than the silent `ForwardAgent yes` that made the feature notorious.
 - Interactive **PTY** sessions with resize; **streaming `exec`** with separate stdout/stderr; **auto-reconnect** with backoff (and a hard stop on MITM/host-key change).
 - **TOFU** host-key pinning; a `HostKeyMismatch` is always surfaced to you, never trusted silently.
 - **Post-quantum key exchange by default**: the transport negotiates the hybrid `mlkem768x25519-sha256` (ML-KEM-768 + X25519, NIST FIPS 203) ahead of classical curve25519, and falls back cleanly on servers that don't offer it. Hybrid means a future quantum adversary must break *both* halves — and it defeats "harvest now, decrypt later" against traffic recorded today.
+- An optional **modern-only algorithm policy**: post-quantum key exchange required with no classical fallback, Ed25519 host keys, AEAD ciphers only. Off by default, because a server without ML-KEM then stops connecting — which is the point when the requirement is "prove the weak suites cannot be negotiated".
+
+**Terminal & workflow**
+- **Snippets** — a command library that is vault content, so it is encrypted at rest and syncs like everything else. Reachable from the command palette, where picking one *types* it into the active pane without running it; linkable per host as startup commands, where they do run, in the order you chose.
+- **Session recording** as [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/), per host, **encrypted in the vault** rather than dropped on disk as a plaintext log. Exportable to a file that plays in `asciinema`, because a recording only its own tool can read is not evidence anyone else can check. Capped at 8 MB per session, and a recording that reaches the cap says so instead of ending quietly.
+- **Shell integration (OSC 133)**: jump between prompts, and a gutter mark on a prompt whose command failed. Nothing is inferred — a shell that emits no marks produces no marks.
+- **GPU terminal rendering** on desktop (opt-in; phones already had it), and a scrollback limit you set, with no ceiling imposed.
 
 **Fleet operations**
 - Multi-host `exec` with a concurrency limit and per-host timeout; target by **group**, by **tags**, by **hand-picked hosts** (an in-grid multi-select target picker), or **dry-run** first.
@@ -93,7 +101,8 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 - **Tunnels**: local, remote, and dynamic (**SOCKS5**); **ProxyJump** chains.
 
 **Interop & portability**
-- Import/export `~/.ssh/config`; import `~/.ssh/known_hosts`; import **PuTTY** sessions (`.reg`).
+- Import/export `~/.ssh/config` — applying `HostName`, `Port`, `User`, `IdentityFile`, `ProxyJump`, all three forward directives, `SetEnv`, `ServerAliveInterval`, `ConnectTimeout` and `Compression`, following `Include`, and **naming every directive it could not apply, with its line number**. A real config is mostly directives UniSSH does not implement (`Match` and `ProxyCommand` among them); importing in silence left people believing otherwise.
+- Import `~/.ssh/known_hosts`; import **PuTTY** sessions (`.reg`).
 - Portable **encrypted vault backup** (export/import under a passphrase + Argon2id), re-encrypted to the target instance's keys on import.
 
 **Integrity & audit (local)**

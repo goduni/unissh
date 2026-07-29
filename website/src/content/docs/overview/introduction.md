@@ -27,7 +27,9 @@ Teams and engineers working from places with good infrastructure — their own b
 ## What you get
 
 - **End-to-end encrypted vaults** holding SSH keys, host profiles, server passwords, encrypted notes, and host groups.
-- **Real terminals** — interactive PTY sessions backed by [`russh`](https://crates.io/crates/russh), streaming exec with separate stdout/stderr, and auto-reconnect.
+- **Real terminals** — interactive PTY sessions backed by [`russh`](https://crates.io/crates/russh), streaming exec with separate stdout/stderr, auto-reconnect, shell integration (OSC 133) and optional GPU rendering.
+- **Logins that survive real infrastructure** — two-factor `keyboard-interactive` prompts put to you rather than answered from storage, hardware keys through the system ssh-agent (FIDO/U2F, PKCS#11, Secure Enclave, 1Password, gpg-agent), agent forwarding that confirms every individual signature, and post-quantum key exchange negotiated by default.
+- **Snippets and session recording**, both as vault content — so a command library and a recorded session are encrypted and synced like any other secret, instead of sitting on disk as plaintext. Recordings export as [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) and play in `asciinema`.
 - **Run a command across hosts** — one screen with two modes: multi-host exec with concurrency limits and per-host timeouts (by host group or tag, with dry-run target resolution), or broadcast — one input fanned out to N live PTYs. Plus fleet file push over SFTP. The core exposes fleet and broadcast as separate APIs; the client presents them as one destination.
 - **SFTP** with resumable transfers, progress, and cancellation.
 - **Tunnels** — local, remote, and dynamic (SOCKS5) forwards, including `ProxyJump` chains.
@@ -64,7 +66,7 @@ UniSSH is a monorepo. The Rust core is the shared foundation; the server, client
 | `client/` | Cross-platform SSH client (desktop/mobile) | Tauri 2 + React + Vite |
 | `server-ui/` | Self-hosted admin panel | React + Vite + wasm |
 
-Continue to [Install & prerequisites](../install/), then run the [local quickstart](../quickstart/). [Connecting to hosts](../connecting/) covers the per-host options — two-factor logins, hardware keys, agent forwarding, persistent sessions, recording — and says what each one costs as well as what it does. To understand the design, read the [System overview](../../architecture/system-overview/) and the [Security & zero-knowledge model](../../architecture/zero-knowledge-model/).
+Continue to [Install & prerequisites](../install/), then run the [local quickstart](../quickstart/). [Connecting to hosts](../connecting/) covers the per-host options — two-factor logins, hardware keys, agent forwarding, snippets and startup commands, session recording, algorithm policy and `~/.ssh/config` import — and says what each one costs as well as what it does. To understand the design, read the [System overview](../../architecture/system-overview/) and the [Security & zero-knowledge model](../../architecture/zero-knowledge-model/).
 
 ## License
 
