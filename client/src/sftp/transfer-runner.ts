@@ -10,6 +10,8 @@ import type { Entry, Transfer } from "@/store/sftp-types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
 import { canResume, collectTree, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
 import { dedupeName } from "@/sftp/paths";
+import { join, tempDir } from "@tauri-apps/api/path";
+import { copyFile, remove, stat } from "@tauri-apps/plugin-fs";
 
 export interface ConflictResolution {
   choice: "overwrite" | "skip" | "keepboth" | "resume";
@@ -116,8 +118,6 @@ async function fileLeg(
     }
     if (from.kind === "remote" && to.kind === "remote") {
       // No direct server→server relay in the core: hop through a local temp file.
-      const { tempDir, join } = await import("@tauri-apps/api/path");
-      const { remove } = await import("@tauri-apps/plugin-fs");
       const tmp = await join(await tempDir(), `unissh-sftp-${cancelId}.part`);
       try {
         const down = await api.sftpDownload(
@@ -150,7 +150,6 @@ async function fileLeg(
       }
     }
     // local → local
-    const { copyFile, stat } = await import("@tauri-apps/plugin-fs");
     await copyFile(fromPath, toPath);
     const s = await stat(toPath).catch(() => null);
     onProgress(s?.size ?? 0, s?.size ?? 0);

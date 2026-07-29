@@ -15,6 +15,8 @@ import type { KnownHostInfo } from "@/bridge/types";
 import { useTranslation, Trans } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import { useNarrow } from "@/store/responsive";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 
 // ── helpers ────────────────────────────────────────────────────
 /** Split a stored host key string ("ssh-ed25519 AAAA…") into algo + fingerprint. */
@@ -52,8 +54,6 @@ export function ViewKnown() {
 
   const importKnown = async () => {
     await guard(async () => {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const { readTextFile } = await import("@tauri-apps/plugin-fs");
       const selected = await open({
         multiple: false,
         directory: false,

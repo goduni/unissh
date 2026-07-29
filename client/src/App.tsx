@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { platform } from "@tauri-apps/plugin-os";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePalette } from "@/theme/ThemeProvider";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -288,7 +290,6 @@ export function App() {
     const confirmedClose = { current: false };
     void (async () => {
       try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const win = getCurrentWindow();
         const u = await win.onCloseRequested(async (event) => {
           if (confirmedClose.current) return; // our own close — let it through
@@ -305,7 +306,6 @@ export function App() {
           event.preventDefault();
           let ok = false;
           try {
-            const { confirm } = await import("@tauri-apps/plugin-dialog");
             ok = await confirm(t("quit.body", { count: live }), {
               title: t("quit.title"),
               kind: "warning",

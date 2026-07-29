@@ -12,6 +12,9 @@ import { useTranslation } from "@/i18n";
 import { useApp } from "@/store/app";
 import { toast } from "@/store/toast";
 import { writeText as clipboardWrite } from "@tauri-apps/plugin-clipboard-manager";
+import { open } from "@tauri-apps/plugin-dialog";
+import { copyFile } from "@tauri-apps/plugin-fs";
+import { basename, documentDir, homeDir, join } from "@tauri-apps/api/path";
 import { apiErrorMessage } from "@/bridge/types";
 import type { ConnectionProfile } from "@/bridge/types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
@@ -124,8 +127,7 @@ export function ViewSftp() {
   useEffect(() => {
     (async () => {
       try {
-        const path = await import("@tauri-apps/api/path");
-        localCwd.current = isMobile ? await path.documentDir() : await path.homeDir();
+        localCwd.current = isMobile ? await documentDir() : await homeDir();
       } catch {
         /* keep previous */
       }
@@ -367,12 +369,9 @@ export function ViewSftp() {
   async function importFromFiles(slot: SlotCtl) {
     if (slot.location.kind !== "local" || !slot.source) return;
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
       const picked = await open({ multiple: true });
       if (!picked) return;
       const files = Array.isArray(picked) ? picked : [picked];
-      const { copyFile } = await import("@tauri-apps/plugin-fs");
-      const { basename, join } = await import("@tauri-apps/api/path");
       // Don't clobber existing files: de-dupe the target name (keep both).
       const taken = new Set((await slot.source.list(slot.cwd)).map((e) => e.name));
       for (const src of files) {

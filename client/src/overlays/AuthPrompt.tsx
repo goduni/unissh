@@ -10,6 +10,7 @@
 // is a secret.
 
 import React, { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "@/i18n";
 import { Modal } from "@/components/Modal";
@@ -52,7 +53,6 @@ export function AuthPrompt() {
     let dispose: (() => void) | undefined;
     let alive = true;
     (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
       const un = await listen<PromptRequest>("auth-prompt", (e) => {
         const next = e.payload;
         // A round with no fields AND no text is not a question. RFC 4256 allows

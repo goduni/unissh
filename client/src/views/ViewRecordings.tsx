@@ -20,6 +20,8 @@ import { toast } from "@/store/toast";
 import { useApp } from "@/store/app";
 import { useNarrow } from "@/store/responsive";
 import { exportPath } from "@/support/paths";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 
 /** One asciicast event: [seconds since start, stream, payload]. */
 type CastEvent = [number, string, string];
@@ -180,8 +182,6 @@ export function ViewRecordings() {
   const exportOne = async (m: api.RecordingMeta) => {
     try {
       const cast = await api.getRecording(vaultId, m.recordingId);
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
       const path = await save({
         defaultPath: await exportPath(`${m.label.replace(/[^\w.-]+/g, "_")}-${m.startedUnix}.cast`),
         filters: [{ name: "asciicast", extensions: ["cast"] }],

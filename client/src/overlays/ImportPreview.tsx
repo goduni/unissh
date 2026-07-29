@@ -16,6 +16,9 @@ import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
 import * as api from "@/bridge/api";
+import { homeDir, join } from "@tauri-apps/api/path";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 
 interface ParsedHost {
   host: string;
@@ -197,9 +200,6 @@ function ImportPreviewBody() {
     (async () => {
       setLoading(true);
       try {
-        const { open } = await import("@tauri-apps/plugin-dialog");
-        const { readTextFile } = await import("@tauri-apps/plugin-fs");
-        const { homeDir, join } = await import("@tauri-apps/api/path");
         let defaultPath: string | undefined;
         try {
           defaultPath = await join(await homeDir(), ".ssh", "config");
@@ -288,8 +288,6 @@ function ImportPreviewBody() {
         // it has none — from the standard default ~/.ssh keys, exactly as ssh does.
         const targets = rows.filter((h) => selectedSet.has(h.host) && createdSet.has(h.host));
         if (targets.length) {
-          const { readTextFile } = await import("@tauri-apps/plugin-fs");
-          const { homeDir, join } = await import("@tauri-apps/api/path");
           let home = "";
           try {
             home = await homeDir();

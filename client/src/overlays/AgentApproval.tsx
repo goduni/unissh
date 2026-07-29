@@ -10,6 +10,7 @@
 // the prompt decorative.
 
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
@@ -43,7 +44,6 @@ export function AgentApproval() {
     let dispose: (() => void) | undefined;
     let alive = true;
     (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
       const un = await listen<ApprovalRequest>("agent-approval", (e) => {
         const next = e.payload;
         setReq((cur) => {

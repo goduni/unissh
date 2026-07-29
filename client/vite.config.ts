@@ -28,5 +28,16 @@ export default defineConfig({
   build: {
     minify: !process.env.TAURI_DEBUG,
     sourcemap: !!process.env.TAURI_DEBUG,
+    // The 500 kB default warns about *download* cost over a network. This bundle
+    // is read from the local filesystem by a WebView that Tauri ships it to, so
+    // that cost does not exist here; what remains is parse time, and splitting
+    // moves it around rather than removing it. The floor is xterm + React +
+    // the always-mounted views (Hosts, Terminal, SFTP — SFTP stays mounted on
+    // purpose, see App.tsx), which clears 500 kB on its own, so no amount of
+    // lazy-loading would silence this. Raised deliberately rather than chased.
+    // If startup on a low-end Android WebView ever becomes the complaint, the
+    // answer is React.lazy on Settings/Secrets/Recordings — measured, not
+    // guessed — and this number stays where it is.
+    chunkSizeWarningLimit: 1600,
   },
 });

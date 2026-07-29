@@ -5,6 +5,7 @@
 // transfers between them.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { documentDir, homeDir } from "@tauri-apps/api/path";
 import { useIsMobile } from "@/store/responsive";
 import { apiErrorMessage } from "@/bridge/types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
@@ -95,10 +96,9 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
           dir = sessions.find((s) => s.id === location.sessionId)?.home ?? "/";
         } else {
           try {
-            const path = await import("@tauri-apps/api/path");
             // Mobile (iOS) can't browse the OS filesystem — root the local tab at
             // the app's documents sandbox instead of the home directory.
-            dir = isMobile ? await path.documentDir() : await path.homeDir();
+            dir = isMobile ? await documentDir() : await homeDir();
           } catch {
             dir = "/";
           }

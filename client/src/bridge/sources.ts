@@ -8,6 +8,8 @@ import * as api from "@/bridge/api";
 import { apiErrorMessage, type SftpEntry } from "@/bridge/types";
 import type { Entry, LocationRef, SftpSession } from "@/store/sftp-types";
 import { breadcrumbSegments, isSafeName, remoteJoin, remoteParent, type Crumb } from "@/sftp/paths";
+import { dirname, join } from "@tauri-apps/api/path";
+import { mkdir, readTextFile, remove, rename, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 
 /** An error that looks like the SFTP channel/connection dropped (server reaped
  *  an idle channel, EOF, broken pipe, "channel closed") rather than a real
@@ -169,7 +171,6 @@ class LocalSource implements FileSource {
   }
   async stat(path: string): Promise<Entry | null> {
     try {
-      const { stat } = await import("@tauri-apps/plugin-fs");
       const s = await stat(path);
       return {
         name: baseName(path),
@@ -185,36 +186,28 @@ class LocalSource implements FileSource {
     return path;
   }
   async mkdir(path: string): Promise<void> {
-    const { mkdir } = await import("@tauri-apps/plugin-fs");
     await mkdir(path);
   }
   async remove(path: string): Promise<void> {
-    const { remove } = await import("@tauri-apps/plugin-fs");
     await remove(path);
   }
   async rmdir(path: string): Promise<void> {
-    const { remove } = await import("@tauri-apps/plugin-fs");
     await remove(path, { recursive: true });
   }
   async rename(from: string, to: string): Promise<void> {
-    const { rename } = await import("@tauri-apps/plugin-fs");
     await rename(from, to);
   }
   async readText(path: string): Promise<string> {
-    const { readTextFile } = await import("@tauri-apps/plugin-fs");
     return readTextFile(path);
   }
   async writeText(path: string, text: string): Promise<void> {
-    const { writeTextFile } = await import("@tauri-apps/plugin-fs");
     await writeTextFile(path, text);
   }
   async join(base: string, name: string): Promise<string> {
     if (name === "..") return this.parent(base);
-    const { join } = await import("@tauri-apps/api/path");
     return join(base, name);
   }
   async parent(path: string): Promise<string> {
-    const { dirname } = await import("@tauri-apps/api/path");
     try {
       return await dirname(path);
     } catch {

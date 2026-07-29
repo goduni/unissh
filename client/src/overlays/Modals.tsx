@@ -4,8 +4,8 @@
 // component self-gates on store.modal and renders nothing when no modal is open.
 
 import React, { useEffect, useRef, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTranslation, tDyn } from "@/i18n";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import {
@@ -2765,8 +2765,6 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
 
   const exportJson = async () => {
     await guard(async () => {
-      const { save: saveDialog } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
       const base = pal.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
       const path = await saveDialog({
         defaultPath: await exportPath(`${base || "unissh-theme"}.json`),
@@ -2780,9 +2778,7 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
 
   const doImport = async () => {
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const { readTextFile } = await import("@tauri-apps/plugin-fs");
-      const selected = await open({
+      const selected = await openDialog({
         multiple: false,
         directory: false,
         filters: [{ name: "JSON", extensions: ["json"] }],

@@ -5,6 +5,7 @@
 
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
+import { locale } from "@tauri-apps/plugin-os";
 import { ru } from "./locales/ru";
 import { en } from "./locales/en";
 import { logError } from "@/bridge/log";
@@ -79,7 +80,6 @@ export function setLang(l: Lang) {
 export async function refineLangFromSystem(): Promise<void> {
   if (lsGet()) return; // explicit preference wins
   try {
-    const { locale } = await import("@tauri-apps/plugin-os");
     const loc = await locale();
     const want: Lang = loc?.toLowerCase().startsWith("ru") ? "ru" : "en";
     if (want !== currentLang()) {

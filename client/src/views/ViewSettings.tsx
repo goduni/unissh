@@ -62,7 +62,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeSecretToClipboard } from "@/bridge/clipboard";
 import { readSecretKeyOnce } from "@/bridge/secretKey";
 import { getVersion } from "@tauri-apps/api/app";
-import { platform, version as osVersion } from "@tauri-apps/plugin-os";
+import { arch, platform, version as osVersion } from "@tauri-apps/plugin-os";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
 import { useTranslation, setLang, currentLang, tDyn, LANGS, LANG_LABELS } from "@/i18n";
 import type { Lang } from "@/i18n";
 import { useFmt } from "@/i18n/format";
@@ -1309,10 +1311,9 @@ function SettingsAbout() {
     let alive = true;
     (async () => {
       try {
-        const { platform, arch, version } = await import("@tauri-apps/plugin-os");
         const plat = platform();
         const a = arch();
-        const v = version();
+        const v = osVersion();
         if (!alive) return;
         setPlatformStr(`${plat} · ${a}`);
         setEngineStr(`Tauri 2.0 · ${plat} ${v}`);
@@ -2067,7 +2068,6 @@ function BackupExport({ vault, onClose }: { vault: VaultInfo; onClose: () => voi
   const run = async () => {
     setBusy(true);
     try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
       const name = `${vault.name.replace(/[^\w.-]+/g, "_") || "vault"}.unisshbak`;
       const path = await save({
         defaultPath: await exportPath(name),
@@ -2141,7 +2141,6 @@ function BackupImport({ onClose, onDone }: { onClose: () => void; onDone: () => 
 
   const pick = async () => {
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
       const picked = await open({
         multiple: false,
         directory: false,
@@ -2577,8 +2576,6 @@ function CloudConnectForm({
   // other import flows (known-hosts, ssh config), but readFile (binary) not readTextFile.
   const pickKitFile = async () => {
     await guard(async () => {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const { readFile } = await import("@tauri-apps/plugin-fs");
       const selected = await open({
         multiple: false,
         directory: false,
