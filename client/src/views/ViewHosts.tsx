@@ -68,6 +68,7 @@ function HostCard({
   // still has a mouse, and keying this off useNarrow() made it lose its hover
   // affordances for no reason. Only a real touch shell needs them laid out.
   const touch = useIsMobile();
+  const compact = useTheme().density === "compact";
   const [hover, setHover] = useState(false);
   // Hover-only affordances (checkbox, Connect) also appear while the card or
   // anything inside it holds keyboard focus, so they stay reachable by Tab.
@@ -262,7 +263,18 @@ function HostCard({
 
       {!touch && show && (
         <div
-          style={{ position: "absolute", right: 12, bottom: 11, zIndex: 3, display: "flex", gap: 6 }}
+          style={{
+            position: "absolute",
+            right: 12,
+            // Center the ~27px buttons on the L3 meta row for BOTH densities:
+            // the row sits on the bottom padding (18 comfortable / 13 compact),
+            // so one fixed offset tuned for comfortable rode 5px high in
+            // compact and the Connect button broke out of its row.
+            bottom: compact ? 7 : 11,
+            zIndex: 3,
+            display: "flex",
+            gap: 6,
+          }}
         >
           <Btn
             size="sm"
