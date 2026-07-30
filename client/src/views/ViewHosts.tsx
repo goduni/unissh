@@ -336,10 +336,13 @@ function HostRow({
         // Density is the spacing axis: compact packs the rows tighter.
         height: compact ? 38 : 46,
         cursor: "pointer",
-        // Hairline row: no per-row box/radius/side-stripe. Selection = faint neutral
-        // fill; rows share one 1px line between them (all but the first).
+        // Hairline row: no per-row box/radius/side-stripe. Selection = an inset
+        // accentLine frame, NOT a fill — the bg2 tint recoloured the row itself
+        // (matches Card); the fill stays hover-only. Inset ring: no layout shift,
+        // and it reads over the shared hairlines.
         borderTop: first ? "none" : `1px solid ${p.line}`,
-        background: active || selected ? p.bg2 : hover ? p.bg2 : "transparent",
+        background: hover ? p.bg2 : "transparent",
+        boxShadow: active || selected ? `inset 0 0 0 2px ${p.accentLine}` : "none",
       }}
     >
       <Checkbox

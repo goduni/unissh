@@ -30,17 +30,19 @@ export function Card({
   const compact = useTheme().density === "compact";
   // Flat card: a 1px hairline, NO drop shadow. A soft shadow reads muddy/grey and
   // turns into visual noise across a grid of dozens of cards. Density changes size
-  // only (comfortable 16/18, compact 11/13). Selected = faint fill + a slightly
-  // stronger border (no shadow ring, no layout shift).
+  // only (comfortable 16/18, compact 11/13). Selected = a frame, NOT a fill: the
+  // bg2 tint recoloured the object itself (lightened in dark, darkened in light),
+  // which read as the card changing state rather than being chosen. The frame is
+  // border + an inset ring of the same accentLine (2px visual, no layout shift).
   return (
     <div
       onClick={onClick}
       style={{
-        background: active ? p.bg2 : p.bg0,
-        border: `1px solid ${active ? p.line2 : p.line}`,
+        background: p.bg0,
+        border: `1px solid ${active ? p.accentLine : p.line}`,
         borderRadius: compact ? RADIUS.cardCompact : RADIUS.card,
         padding: compact ? 13 : 18,
-        boxShadow: "none",
+        boxShadow: active ? `inset 0 0 0 1px ${p.accentLine}` : "none",
         cursor: onClick ? "pointer" : undefined,
         ...style,
       }}
