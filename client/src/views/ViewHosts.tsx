@@ -9,6 +9,7 @@ import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, RADIUS, SIZE, SPACE, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot, Spinner, NO_AUTOCORRECT } from "@/components/primitives";
 import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
+import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
@@ -49,6 +50,7 @@ function HostCard({
   onOpen,
   onConnect,
   onSftp,
+  onMenu,
 }: {
   h: ConnectionProfile;
   selected: boolean;
@@ -58,6 +60,7 @@ function HostCard({
   onOpen: () => void;
   onConnect: () => void;
   onSftp: () => void;
+  onMenu: (e: React.MouseEvent) => void;
 }) {
   const p = usePalette();
   const { t, i18n } = useTranslation();
@@ -79,6 +82,7 @@ function HostCard({
       active={active || selected}
       onClick={onOpen}
       onDoubleClick={onConnect}
+      onContextMenu={onMenu}
       // not a <button>: the card nests interactive controls (checkbox, Connect)
       role="button"
       tabIndex={0}
@@ -298,6 +302,7 @@ function HostRow({
   onToggle,
   onOpen,
   onConnect,
+  onMenu,
 }: {
   h: ConnectionProfile;
   selected: boolean;
@@ -307,6 +312,7 @@ function HostRow({
   onToggle: () => void;
   onOpen: () => void;
   onConnect: () => void;
+  onMenu: (e: React.MouseEvent) => void;
 }) {
   const p = usePalette();
   const { t } = useTranslation();
@@ -326,6 +332,7 @@ function HostRow({
       }}
       onClick={onOpen}
       onDoubleClick={onConnect}
+      onContextMenu={onMenu}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -1158,6 +1165,13 @@ export function ViewHosts() {
   const terminals = useApp((s) => s.terminals);
   const hostFilter = useApp((s) => s.hostFilter);
   const setHostFilter = useApp((s) => s.setHostFilter);
+  const addHostsToGroup = useApp((s) => s.addHostsToGroup);
+  const removeHostsFromGroup = useApp((s) => s.removeHostsFromGroup);
+  const setGroupsModal = useApp((s) => s.setGroupsModal);
+  // Right-click menu on a host card/row. `sub` = the group picker page: the shared
+  // ContextMenu is a flat list, so "Add to group" swaps the items in place (its
+  // row handler closes-then-clicks, and the batched setMenu wins over onClose).
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string; sub: boolean } | null>(null);
   // When the sidebar selects a GROUP, hostFilter holds a groupId (not a tag), so
   // none of the tag chips highlight — surface the active group as its own visible,
   // dismissable scope token so the filter is never invisible.
@@ -2048,6 +2062,10 @@ export function ViewHosts() {
                   onOpen={() => openHost(h.profileId)}
                   onConnect={() => ctx.connect(h)}
                   onSftp={() => void ctx.connectSftp(h)}
+                  onMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, id: h.profileId, sub: false });
+                  }}
                 />
               ))}
             </div>
@@ -2064,6 +2082,10 @@ export function ViewHosts() {
                   onToggle={() => toggle(h.profileId)}
                   onOpen={() => openHost(h.profileId)}
                   onConnect={() => ctx.connect(h)}
+                  onMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, id: h.profileId, sub: false });
+                  }}
                 />
               ))}
             </div>
@@ -2297,6 +2319,59 @@ export function ViewHosts() {
           </div>
         </div>
       )}
+
+      {(() => {
+        if (!menu) return null;
+        const mh = hosts.find((h) => h.profileId === menu.id);
+        if (!mh) return null;
+        const toggleGroup = (g: (typeof groups)[number], member: boolean) => {
+          const op = member
+            ? removeHostsFromGroup(g.groupId, [mh.profileId]).then(() =>
+                ctx.toast(t("hosts.bulk.removedFromGroup", { name: g.label }), "ok"),
+              )
+            : addHostsToGroup(g.groupId, [mh.profileId]).then(() =>
+                ctx.toast(t("hosts.bulk.addedToGroup", { name: g.label }), "ok"),
+              );
+          void op.catch((e) => ctx.toast(apiErrorMessage(e), "err"));
+        };
+        const items: MenuItem[] = menu.sub
+          ? [
+              { icon: "cl", label: t("common.back"), onClick: () => setMenu({ ...menu, sub: false }) },
+              // ✓ = already a member; clicking toggles (bulk-bar semantics: a host
+              // may sit in several groups, so this adds/removes, never moves).
+              ...groups.map((g): MenuItem => {
+                const member = g.memberIds.includes(mh.profileId);
+                return {
+                  icon: member ? "check" : "folder",
+                  label: g.label,
+                  onClick: () => toggleGroup(g, member),
+                };
+              }),
+              {
+                icon: "sliders",
+                label: t("hosts.menu.manageGroups"),
+                onClick: () => setGroupsModal(true),
+              },
+            ]
+          : [
+              { icon: "terminal", label: t("hosts.connect"), onClick: () => ctx.connect(mh) },
+              { icon: "folders", label: t("nav.sftp"), onClick: () => void ctx.connectSftp(mh) },
+              {
+                icon: "folder",
+                label: t("hosts.menu.addToGroup"),
+                onClick: () => setMenu({ ...menu, sub: true }),
+              },
+            ];
+        return (
+          <ContextMenu
+            x={menu.x}
+            y={menu.y}
+            title={mh.label}
+            items={items}
+            onClose={() => setMenu(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

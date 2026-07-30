@@ -505,6 +505,10 @@ export const en = {
     "title": "Hosts",
     "searchPlaceholder": "Filter by name, address or tag",
     "connect": "Connect",
+    "menu": {
+      "addToGroup": "Add to group\u2026",
+      "manageGroups": "Manage groups\u2026"
+    },
     "newHost": "New host",
     "linkIdentity": "Link identity",
     "importSshConfig": "Import ~/.ssh/config",
