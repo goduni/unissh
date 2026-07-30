@@ -29,7 +29,7 @@ One file carries two flows:
 - **CI** — on pull requests and pushes to `main`: build the desktop bundles to validate they compile and bundle. No GitHub Release is created.
 - **Release** — on a `v*` tag: build release bundles and attach them to a GitHub Release.
 
-It builds on a matrix of `ubuntu-22.04` (pinned for webkit2gtk-4.1 availability and broad AppImage glibc compatibility → `.deb`/`.rpm`/`.AppImage`), `windows-latest` (`.msi` via WiX + NSIS `.exe`), and `macos-latest` (`.dmg`/`.app`). Node 22 + the repo-root pinned Rust toolchain are used; the client's path dependency on `../../rust-core/crates/ffi` resolves inside the single checkout (no cross-repo checkout, no PAT).
+It builds on a five-way matrix: `ubuntu-22.04` and `ubuntu-22.04-arm` (the version is pinned for webkit2gtk-4.1 availability and broad AppImage glibc compatibility → `.deb`/`.rpm`/`.AppImage`), `windows-latest` and `windows-11-arm` (`.msi` via WiX + NSIS `.exe`), and `macos-latest` building `--target universal-apple-darwin` (`.dmg`/`.app` for Apple Silicon and Intel in one bundle). Both ARM legs build natively rather than cross-compiling, which is what keeps the vendored-OpenSSL and webkit dependencies straightforward. Node 22 + the repo-root pinned Rust toolchain are used; the client's path dependency on `../../rust-core/crates/ffi` resolves inside the single checkout (no cross-repo checkout, no PAT).
 
 Each tagged release also gets a **`SHA256SUMS`** file, a **`SHA256SUMS.minisig`** detached signature over it, and a **build-provenance attestation** (`actions/attest-build-provenance`) for the bundles — verifiable with `gh attestation verify <file> --repo goduni/unissh`, which needs GitHub CLI 2.49 or newer (see [Install from a release](../../overview/install/)).
 

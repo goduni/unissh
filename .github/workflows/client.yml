@@ -101,6 +101,10 @@ jobs:
           # webkit/AppImage dependency step was written that way, so adding the
           # arm runner without this would have skipped its system deps and failed
           # deep inside the bundler instead of at the missing package.
+          # The rule is "use the predicate you actually mean", not "never look at
+          # the label": the three steps that DO test a label — the frontend
+          # tests, the Tauri lint, and the NASM pair — mean one specific runner or
+          # one specific architecture, and each says so where it is written.
           #
           # ubuntu-22.04 pinned (both architectures): webkit2gtk-4.1 availability
           # + broad AppImage glibc compatibility. Produces .deb / .rpm / .AppImage.
@@ -117,6 +121,29 @@ jobs:
             args: ""
           # .msi (WiX) + NSIS .exe
           - platform: windows-latest
+            os: windows
+            args: ""
+          # Windows on ARM, built NATIVELY rather than cross-compiled: this
+          # runner's own host triple is aarch64-pc-windows-msvc, so there is no
+          # `--target` to pass and matrix.args stays empty — the bundler reads
+          # the arch off the host and emits `_arm64-setup.exe` / `_arm64_en-US.msi`
+          # by itself. (Cross-compiling from the x64 runner would also have to
+          # cross-build vendored OpenSSL, which is the part that goes wrong.)
+          # The runner is free for public repositories, same as the arm64 Linux
+          # one above and the ones publish-images.yml uses.
+          #
+          # Worth a leg of its own even though ARM Windows emulates x64 happily:
+          # emulation is a tax on exactly the two things this app does all day,
+          # vault crypto and terminal I/O.
+          #
+          # PURELY ADDITIVE for the installed base — this cannot strand anyone.
+          # tauri-action derives the updater key from the runner's own arch
+          # (utils.ts getTargetInfo: process.arch 'arm64', normalized to
+          # 'aarch64'), so it ADDS `windows-aarch64` to latest.json and rewrites
+          # no existing key. An x64 install sitting on an ARM machine keeps
+          # polling `windows-x86_64`, because the updater matches the arch the
+          # binary was COMPILED for, not the one it happens to be running on.
+          - platform: windows-11-arm
             os: windows
             args: ""
           # .dmg / .app. `macos-latest` has been Apple Silicon since early 2025,
@@ -160,7 +187,7 @@ jobs:
         # NAME, finds no variable called `GITHUB_REF_NAME#v`, and substitutes an
         # empty string. The guard then "failed" on every Windows tag build with an
         # empty version instead of checking anything. Same fix, and same reason, as
-        # the npm-install step below: Git Bash ships on all three runners.
+        # the npm-install step below: Git Bash ships on every runner here.
         shell: bash
         run: |
           # `python3` is not dependable under Git Bash on the Windows runner
@@ -223,7 +250,7 @@ jobs:
         # forces npm to resolve THIS runner's optionals from scratch.
         # `rm -rf` needs a POSIX shell: on windows-latest the default `run:` shell
         # is PowerShell, where `rm -rf` errors out (`rm`->Remove-Item has no -rf).
-        # Git Bash ships on all three runners, so pin bash for this one step.
+        # Git Bash ships on every runner here, so pin bash for this one step.
         shell: bash
         run: |
           rm -rf node_modules package-lock.json
@@ -233,10 +260,10 @@ jobs:
       # Frontend unit tests. Run once (Linux) rather than per-platform: they are
       # pure logic with no platform surface, and the node/npm setup above is
       # already paid for here. `tsc --noEmit` is covered separately by the
-      # beforeBuildCommand that tauri-action runs on all three.
+      # beforeBuildCommand that tauri-action runs on every leg.
       # Pinned to ONE job on purpose, and to the platform rather than the os:
-      # these tests are platform-independent, so running them on all four
-      # bundlers would just buy the same result four times.
+      # these tests are platform-independent, so running them on all five
+      # bundler legs would just buy the same result five times.
       - name: Test (frontend)
         if: matrix.platform == 'ubuntu-22.04'
         run: npm test
@@ -256,16 +283,36 @@ jobs:
           cargo clippy --all-targets -- -D warnings
         working-directory: client/src-tauri
 
-      # Windows-only: SQLCipher vendors + statically links OpenSSL there (no system
-      # OpenSSL on Windows, and the shipped .exe must be self-contained — see
-      # rust-core/crates/storage/Cargo.toml). Building OpenSSL from source
-      # (openssl-src) needs NASM to assemble its crypto; Perl ships on the runner.
-      - name: Install NASM (Windows OpenSSL vendored build)
-        if: matrix.os == 'windows'
+      # Windows vendors + statically links OpenSSL for SQLCipher (no system
+      # OpenSSL there, and the shipped .exe must be self-contained — see
+      # rust-core/crates/storage/Cargo.toml). Building it from source
+      # (openssl-src) uses NASM to assemble its crypto; Perl ships on the runner.
+      #
+      # This pair of steps keys on the RUNNER LABEL rather than on `os`, which is
+      # the opposite of the rule the matrix comment lays down — deliberately, and
+      # for the reason that rule exists: the predicate here is genuinely the
+      # architecture, not the operating system. NASM assembles x86; ARM64 cannot
+      # use a line of what it produces.
+      - name: Install NASM (Windows x64 OpenSSL vendored build)
+        if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           choco install nasm -y --no-progress
           "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      # ARM64 has no NASM path at all — openssl-src configures this target as
+      # VC-WIN64-ARM, whose assembly belongs to armasm64. The trap is that
+      # openssl-src decides asm-vs-no-asm for EVERY msvc target the same way: it
+      # shells out to `where nasm` (lib.rs, is_nasm_ready). So a NASM that merely
+      # happens to be on PATH — not today's image, but any future one — would
+      # switch on an assembly path this target cannot build, and it would fail
+      # deep inside nmake rather than anywhere near this file. Pin the answer
+      # rather than inherit it: `0` is openssl-src's documented force-disable,
+      # and OpenSSL falls back to its portable C crypto.
+      - name: Build the vendored OpenSSL without assembly (Windows ARM)
+        if: matrix.platform == 'windows-11-arm'
+        shell: bash
+        run: echo "OPENSSL_RUST_USE_NASM=0" >> "$GITHUB_ENV"
 
       - name: Build & bundle (Tauri)
         uses: tauri-apps/tauri-action@v1
@@ -309,14 +356,16 @@ jobs:
           # latest.json no client ever sees.
           prerelease: false
           # latest.json — the manifest the updater polls. Default-true, named here
-          # because it is load-bearing rather than incidental. All three desktop
+          # because it is load-bearing rather than incidental. All five desktop
           # jobs upload it for the same tag; tauri-action merges each platform's
           # entry into the existing asset instead of overwriting it. VERIFY on the
-          # first real release that latest.json ends up with darwin-aarch64,
-          # darwin-x86_64, windows-x86_64, linux-x86_64 AND linux-aarch64 — if a
-          # job overwrote it, platforms would silently never see an update again. The two
-          # darwin keys both point at the ONE universal .app.tar.gz and share its
-          # signature; that is tauri-action's universal handling, not a bug.
+          # first real release that latest.json ends up with ALL SIX keys —
+          # darwin-aarch64, darwin-x86_64, windows-x86_64, windows-aarch64,
+          # linux-x86_64, linux-aarch64 — because if a job overwrote the asset
+          # instead of merging into it, whichever platforms are missing from the
+          # result would silently never see an update again. The two darwin keys
+          # both point at the ONE universal .app.tar.gz and share its signature;
+          # that is tauri-action's universal handling, not a bug.
           # The input is `uploadUpdaterJson` as of tauri-action v1, which renamed it
           # from `includeUpdaterJson`. Both names must stay on the maintainer's radar
           # because an unknown input is only a WARNING, never an error: whichever name
@@ -329,7 +378,7 @@ jobs:
           # (generateReleaseNotes) and the release-integrity job appends the
           # download/verify footer once, at the end. Setting a body here would
           # (a) push the changelog below a wall of boilerplate, since GitHub
-          # PRE-pends the body to what it generates, and (b) have all three
+          # PRE-pends the body to what it generates, and (b) have all five
           # desktop jobs race to write the same field.
           generateReleaseNotes: true
 
@@ -392,7 +441,7 @@ jobs:
         # NAME, finds no variable called `GITHUB_REF_NAME#v`, and substitutes an
         # empty string. The guard then "failed" on every Windows tag build with an
         # empty version instead of checking anything. Same fix, and same reason, as
-        # the npm-install step below: Git Bash ships on all three runners.
+        # the npm-install step below: Git Bash ships on every runner here.
         shell: bash
         run: |
           # `python3` is not dependable under Git Bash on the Windows runner
@@ -657,7 +706,7 @@ jobs:
         # NAME, finds no variable called `GITHUB_REF_NAME#v`, and substitutes an
         # empty string. The guard then "failed" on every Windows tag build with an
         # empty version instead of checking anything. Same fix, and same reason, as
-        # the npm-install step below: Git Bash ships on all three runners.
+        # the npm-install step below: Git Bash ships on every runner here.
         shell: bash
         run: |
           # `python3` is not dependable under Git Bash on the Windows runner
@@ -835,12 +884,15 @@ jobs:
       # What survives the "does this change per release, or is it needed at the very
       # moment of downloading?" filter is only: the changelog, which file is yours
       # (a dozen-plus artifacts with non-obvious names), and one line each for the
-      # unsigned first launch, verification, and auto-update. The architectures a
-      # release does NOT cover are named here too — an absent artifact is otherwise
-      # indistinguishable from one the reader failed to spot.
+      # unsigned first launch, verification, and auto-update. Architecture coverage
+      # is stated outright rather than left to be inferred from the table: a reader
+      # who does not find their arch cannot tell "not built" from "missed it", and
+      # now that every desktop platform ships both, the line that used to warn about
+      # the Windows gap earns its place by telling ARM users not to take the x86-64
+      # file out of habit.
       #
       # This runs in release-integrity rather than the build matrix because that job
-      # is the only one that runs exactly once — the three desktop jobs would
+      # is the only one that runs exactly once — the five desktop jobs would
       # otherwise race each other for the same field.
       - name: Write the release notes
         env:
@@ -867,14 +919,16 @@ jobs:
           | --- | --- |
           | **macOS** (Apple Silicon *and* Intel) | \`UniSSH_${VERSION}_universal.dmg\` |
           | **Windows** (x86-64) | \`UniSSH_${VERSION}_x64-setup.exe\` — or the \`.msi\` |
+          | **Windows** (ARM64) | \`UniSSH_${VERSION}_arm64-setup.exe\` — or the \`.msi\` |
           | **Linux** (x86-64) | \`UniSSH_${VERSION}_amd64.AppImage\` · \`.deb\` · \`.rpm\` |
           | **Linux** (ARM64) | \`UniSSH_${VERSION}_aarch64.AppImage\` · \`arm64.deb\` · \`.rpm\` |
           | **Android** (sideload) | \`UniSSH_${VERSION}_universal.apk\` — works on any device |
           | ↳ smaller, if you know your ABI | \`_arm64\` · \`_armv7\` · \`_x86_64\` · \`_x86\` \`.apk\` |
           | **iOS** (sideload, unsigned) | \`UniSSH_${VERSION}_ios-sideload.ipa\` |
 
-          **Windows is x86-64 only** — there is no ARM build for it. Every other
-          platform here covers both architectures.
+          **Every platform above ships both architectures**, Windows included — so if
+          your machine is ARM, take the ARM file rather than letting it emulate the
+          x86-64 one. Nothing here is 32-bit for desktop.
 
           **Does this break anything you already have?** The changelog answers that
           per release, including whether the vault format or server protocol moved:

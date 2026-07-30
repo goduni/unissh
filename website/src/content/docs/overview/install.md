@@ -11,9 +11,10 @@ The [latest release](https://github.com/goduni/unissh/releases/latest) carries d
 
 | Platform | Download |
 | --- | --- |
-| **macOS** (Apple Silicon) | `.dmg` |
-| **Windows** (x64) | `.msi`, or the `.exe` (NSIS) installer |
-| **Linux** (x64) | `.deb`, `.rpm`, or `.AppImage` |
+| **macOS** (Apple Silicon *and* Intel) | `.dmg` — one universal bundle for both |
+| **Windows** (x64 *and* ARM64) | `.msi`, or the `.exe` (NSIS) installer |
+| **Linux** (x64 *and* ARM64) | `.deb`, `.rpm`, or `.AppImage` |
+| **Android / iOS** (sideload) | `.apk` / unsigned `.ipa` |
 
 The `.AppImage` is self-contained: `chmod +x` it and run.
 
@@ -21,7 +22,7 @@ The `.AppImage` is self-contained: `chmod +x` it and run.
 **Builds are unsigned.** The release workflow ships no Apple Developer identity and no Windows code-signing certificate, so macOS Gatekeeper and Windows SmartScreen will warn on first launch. This is deliberate — see the workflow's own note — but it means the binaries are not notarized. If that is a dealbreaker, build from source.
 :::
 
-Intel Macs, ARM Linux, ARM Windows, and both mobile platforms are **not** in the release matrix — build those from source.
+Every desktop platform above ships **both architectures**, so take the ARM file on an ARM machine rather than letting it emulate the x86-64 one. Nothing is 32-bit for desktop; build from source if you need an architecture the matrix does not cover.
 
 ### Staying up to date
 

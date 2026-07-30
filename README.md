@@ -197,18 +197,22 @@ The fastest path to a working setup: **(A)** get the desktop client — download
 | --- | --- | --- |
 | macOS | Apple Silicon **and** Intel | `UniSSH_<version>_universal.dmg` (drag to Applications) |
 | Windows | x86-64 | `UniSSH_<version>_x64-setup.exe` or `.msi` |
+| Windows | ARM64 | `UniSSH_<version>_arm64-setup.exe` or `_arm64_en-US.msi` |
 | Linux | x86-64 | `UniSSH_<version>_amd64.AppImage` (portable) or `.deb` / `.rpm` |
 | Linux | ARM64 | `UniSSH_<version>_aarch64.AppImage` or `_arm64.deb` / `.rpm` |
 | Android | any (universal) | `UniSSH_<version>_universal.apk` — [sideload](#android) |
 | Android | pick your own | `_arm64` / `_armv7` / `_x86_64` / `_x86` `.apk` — smaller |
 | iOS | Apple Silicon | `UniSSH_<version>_ios-sideload.ipa` — unsigned, [sideload](#ios) |
 
-**Architectures that are not built**, so you know before you look: **Windows** is
-x86-64 only, and nothing here ships 32-bit for desktop. Everything else covers both
-architectures — [build from source](#build-from-source) if you need one that is
-missing. Linux ARM64 exists because that is where an SSH client actually gets used
-on ARM: Asahi, ARM laptops, a Raspberry Pi on a desk. ARM *servers* are served by
-the [container images](#b-self-host-a-sync-server-optional), which are multi-arch.
+**Every desktop platform here covers both architectures**, so take the ARM file on
+an ARM machine instead of letting it emulate the x86-64 one — Windows on ARM will
+happily run the x64 build, and the emulation tax lands squarely on vault crypto and
+terminal I/O. **What is not built**, so you know before you look: nothing here ships
+32-bit for desktop; [build from source](#build-from-source) if you need one that is
+missing. The ARM builds exist because that is where an SSH client actually gets used
+on ARM: Asahi, ARM laptops, Snapdragon Windows machines, a Raspberry Pi on a desk.
+ARM *servers* are served by the [container images](#b-self-host-a-sync-server-optional),
+which are multi-arch.
 
 Release builds are **unsigned**. On desktop that means a one-time warning and a ten-second "open anyway" — on **Android** it means a permanent Play Protect warning, and on **iOS** it means re-signing the `.ipa` with your own Apple ID before it will run at all. The steps for all five platforms are in [Installing unsigned builds](#installing-unsigned-builds). Always [verify the download](#verifying-release-integrity) against the published checksum first.
 

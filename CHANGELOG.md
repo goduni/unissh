@@ -30,6 +30,30 @@ starts with `0.`:
 - **Server and client are versioned together but deploy separately.** Upgrade the
   server first; a newer server serves older clients, the reverse is not promised.
 
+## [Unreleased]
+
+### Added
+
+- **Windows builds for ARM64** (`_arm64-setup.exe` and `_arm64_en-US.msi`),
+  alongside the existing x86-64 ones. Windows on ARM already ran the x64 build
+  under emulation, so this is a performance gap rather than a coverage one — but
+  emulation taxes exactly the two things this app does continuously, vault crypto
+  and terminal I/O. Every desktop platform now ships both architectures. The
+  bundles are built natively on `windows-11-arm` rather than cross-compiled,
+  because cross-compiling would also have to cross-build the vendored OpenSSL
+  that SQLCipher links on Windows.
+
+### Compatibility
+
+Vault format unchanged. Server protocol unchanged.
+
+`latest.json` gains a `windows-aarch64` key alongside `windows-x86_64`; the two
+are separate entries and neither displaces the other. **An existing x64 install
+on an ARM machine does not switch feeds and is not stranded** — the updater
+matches the architecture a binary was compiled for, not the one it is running
+on, so it keeps following `windows-x86_64` and keeps updating. Moving to the
+native build is a deliberate, manual reinstall.
+
 ## [0.2.0] — 2026-07-30
 
 ### Breaking changes
