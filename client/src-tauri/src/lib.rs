@@ -134,6 +134,38 @@ pub fn run() {
             }));
             app.manage(app_state);
 
+            // macOS 26 (Tahoe): an app built against SDK 26 gets the redesigned,
+            // noticeably larger control-size metrics — the traffic lights render
+            // ~16pt instead of the classic ~14pt and read as oversized next to
+            // the 44px toolbar (and they throw off the trafficLightPosition
+            // centering math, which tao derives from the live button frame).
+            // Opt the content view back into compact metrics. The selector only
+            // exists on macOS 26+, so probe first: older systems never show the
+            // large controls and the call is simply skipped there.
+            #[cfg(target_os = "macos")]
+            {
+                use objc2::runtime::AnyObject;
+                use objc2::{msg_send, sel};
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Ok(ns_win) = window.ns_window() {
+                        let ns_win = ns_win as *mut AnyObject;
+                        if !ns_win.is_null() {
+                            unsafe {
+                                let content: *mut AnyObject = msg_send![ns_win, contentView];
+                                let responds: bool = if content.is_null() {
+                                    false
+                                } else {
+                                    msg_send![content, respondsToSelector: sel!(setPrefersCompactControlSizeMetrics:)]
+                                };
+                                if responds {
+                                    let _: () = msg_send![content, setPrefersCompactControlSizeMetrics: true];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // iOS: by default WKWebView adjusts its scroll-view content insets for
             // the safe area, which confines the web layout to (screen − safe
             // insets) — e.g. 839 of a 932px screen — and leaves a dead band below

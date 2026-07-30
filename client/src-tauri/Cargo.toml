@@ -70,6 +70,10 @@ tauri-plugin-process = "2"
 # OS keychain for the Secret Key (per-platform native backend; no extra C deps).
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+# Raw objc2 message-send to opt the content view back into compact control-size
+# metrics on macOS 26 Tahoe (see run()): built against SDK 26 the traffic lights
+# otherwise render at the enlarged Liquid Glass size. Same major as iOS below.
+objc2 = "0.6"
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 [target.'cfg(target_os = "linux")'.dependencies]
