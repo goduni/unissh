@@ -30,7 +30,18 @@ starts with `0.`:
 - **Server and client are versioned together but deploy separately.** Upgrade the
   server first; a newer server serves older clients, the reverse is not promised.
 
-## [Unreleased]
+## [0.2.0] — 2026-07-30
+
+### Breaking changes
+
+- **The per-host tmux toggle is gone.** It was typed, not executed: the attach
+  went out as text into the PTY the moment the shell opened, which raced slow
+  logins, landed blind on endpoints that are not a POSIX shell, and re-ran into
+  whatever a reattached pane was already running. The replacement is honest
+  about being a command: add a **startup snippet** with `tmux new -A -s main`
+  (or your variant) to the same host. Profiles that carried the old flag keep
+  it, inert — the field round-trips unknown, nothing needs migrating — but
+  sessions stop self-attaching until you add the snippet.
 
 ### Added
 
@@ -47,6 +58,51 @@ starts with `0.`:
   becomes usable at all. For such a host the key lives outside the vault, by
   definition; [`THREAT_MODEL.md`](THREAT_MODEL.md) states that plainly. What is
   stored is the public key, which is a handle.
+- **Agent forwarding — one key, one confirmation at a time.** Off by default,
+  per host. It exists so that git or ssh running *on* that machine can use your
+  key without the key being copied there — the case ProxyJump cannot help with.
+  Deliberately narrower than OpenSSH's: only the key this connection
+  authenticated with is offered (the full agent is a map of everywhere you log
+  in), and every signature raises a prompt that names where it would log in.
+- **A portable, encrypted backup of the whole vault.** Export writes a
+  `.unisshbak` that opens with its passphrase *alone* — no keyset, no account,
+  no server — and restore, beside "Create vault", always creates a **new**
+  vault next to the original rather than replacing anything live. The
+  passphrase is asked for twice and never stored, and the dialog says what that
+  buys and costs in those terms: a bundle any instance can open, and a typo you
+  will not notice for months is an unrecoverable file. This is also the
+  documented way *out* — the README now says so where it compares vendors.
+- **Version history for passwords and notes.** The vault kept every earlier
+  value all along; nothing in the app called the API, so overwriting a secret
+  looked exactly like destroying it. A clock button now lists versions, newest
+  first, live one marked — and each old value reveals on its own, through the
+  same deliberate control as a live one, instead of sitting decrypted in a
+  dialog.
+- **The window chrome is ours.** The native title bar is gone; the app's own
+  toolbar is the title bar. Windows and Linux get close/minimize/maximize to
+  the left of the logo; macOS keeps its native traffic lights — untouched, with
+  the zoom button's tiling menu intact — and the bar shapes itself to them
+  instead of the other way round, collapsing the reserved space when native
+  fullscreen hides the lights. A locked window still drags and closes, and an
+  undecorated Linux window keeps its resize borders, invisibly.
+- **Right-click a host.** Connect, SFTP, and group membership — a checkmark per
+  group, click to add or remove, "Manage groups…" for the rest — titled with
+  the host's name. The first per-host path to groups that does not detour
+  through the editor or multi-select.
+- **Terminal scrollback is a setting**, default 10 000 rows, with no ceiling
+  beyond xterm's own — a live "≈ N MB per session" readout spends the honesty
+  budget where a cap would have spent a workaround.
+- **Authentication is a list, not five tiles.** Each auth kind carries its
+  one-line description in the picker — "Personal" and "System agent" finally
+  explain themselves — and the long switch copy for recording and forwarding
+  moved behind a "?" instead of turning the switches into footnotes.
+- **An expired access token rotates itself.** Meeting one is routine — they are
+  short-lived on purpose — so sync refreshes and retries instead of failing
+  with an error whose manual remedy only appeared to work on the second try.
+- **Barbie** replaced Candy Holo as the opt-in theme family: same slot, pink
+  light hero, dark twin, its own terminal palettes — with three colours
+  deepened past their nominal values because the contrast is measured, not
+  eyeballed.
 - **Snippets** — a command library that is vault content, so it is encrypted at
   rest and syncs. Reachable from ⌘K, where selecting one types it into the
   active pane without running it, and linkable per host as startup commands,
@@ -105,12 +161,60 @@ starts with `0.`:
 
 ### Changed
 
+- **A chosen host is framed, not filled.** The selection tint recoloured the
+  card itself — lightened in dark mode, darkened in light — which read as the
+  object changing state rather than being chosen. Selection is now marked
+  around the object, in the same voice as the active nav tick; hover keeps its
+  faint fill, because pointer feedback is transient and state is not.
+- **Sidebar numbers mean "running now", not "stored total".** Open terminals
+  and active tunnels count, green-dotted, hidden at zero; the Secrets and
+  Known-hosts inventory figures are gone; hosts and groups keep their filter
+  counts. A tunnel you forgot you left open is exactly what a sidebar should
+  hold in your peripheral vision — how many notes you own is not.
 - Release notes and the README download table now name the **architecture** of
   every artifact, and name the architectures that are deliberately not built
   (Windows is x86-64 only; nothing ships 32-bit for desktop).
 
 ### Fixed
 
+- **A remote forward (`-R`) bound its port and refused every connection to
+  it.** RFC 4254 puts a port in the `tcpip-forward` reply only when the request
+  asked for port 0; for a named port the reply is empty, and the delivery table
+  was keyed on that emptiness — so the far side listened and every connection
+  came back reset while `-L` on the same port worked.
+- **Closing a tab threw the session recording away.** Ending the same session
+  with `exit` saved it; the ✕ aborted the reader task that delivers the close
+  event, and the close event is where recordings are written — deliberately,
+  because a dropped connection is exactly the session you want the recording
+  of.
+- **⌘K opened the palette everywhere except the terminal** — the one place a
+  snippet library is any use — and ⌘N, ⌘T, ⌘L, zoom and ⌘1–9 were equally dead
+  while a pane had focus. xterm cancels every key it recognises before a
+  bubble-phase listener can see it.
+- **"Restore as" named the new vault after the source.** The name is a signed
+  record inside the bundle, so restoring "Personal" beside the original
+  produced two entries called Personal and the field you had just typed into
+  did nothing but mint an invisible id. The restore now renames the vault to
+  the entered name as part of the same operation — and if that half fails, the
+  message leads with "restored, but", because "could not restore" would invite
+  a second attempt against the vault the first one just created.
+- **A recording could corrupt non-ASCII output at chunk boundaries.** A
+  character split across two PTY reads is reassembled instead of becoming a
+  replacement character; a genuinely invalid byte is still passed through
+  rather than waited on, because a continuation that never comes would stall
+  the recording for the rest of the session.
+- In the host editor, adding a second new group reopened the input pre-filled
+  with the first one's name — and typing then renamed it live. The input edits
+  a draft now; Escape discards it, and the committed name only changes on
+  Enter.
+- Clicking the empty space around the auth picker activated it: the `<label>`
+  wrapping the section forwarded every stray click to its first control.
+- A fresh key claimed it was "updated 57 years ago" — seconds read as
+  milliseconds land in January 1970 — plus five more small findings from the
+  same test pass, and two earlier fixes that had only reached one of their two
+  call sites.
+- In compact density, the hover Connect button rode out of the row it belongs
+  to: its offset was tuned for the comfortable card's padding.
 - Android ships a real two-layer adaptive icon instead of Tauri's placeholder,
   with a CI check that proves the replacement happened.
 - Release notes describe the release they are attached to.
@@ -148,6 +252,11 @@ starts with `0.`:
 **Vault format extended, additively. Server protocol unchanged.** Two new item
 types — snippets and session recordings — and four new connection-profile fields
 (startup snippets, session recording, agent forwarding, system-agent identity).
+One field is retired: the per-host tmux attach (see Breaking changes). A profile
+that still carries it round-trips with the key intact and inert, through the
+same `extra`-map path that protects fields in the other direction. The
+`.unisshbak` backup bundle is a new, self-contained format — it is opened by
+its passphrase alone and does not touch the vault scheme.
 
 Nothing breaks, and the discipline that makes that true is worth stating rather
 than asserting: an older client filters items by type, so it ignores the two new
