@@ -510,6 +510,37 @@ jobs:
           fi
           echo "clean: no libwayland-*.so in the bundle"
 
+      # Desktop bundles as a downloadable artifact — the only way to hand someone a
+      # build WITHOUT cutting a release. Until this existed the mobile legs uploaded
+      # theirs and the five desktop legs built theirs and threw them away, so the
+      # answer to "can you send me a build to test?" was "only by tagging a release",
+      # which is a terrible reason to burn a version number and puts an untested
+      # build in front of every existing user's updater.
+      #
+      # Non-tag runs only: on a tag these same files are already on the release, and
+      # duplicating a few hundred MB per leg into artifact storage buys nothing.
+      #
+      # Paths are named per bundle type rather than globbing the bundle directory,
+      # which also contains the bundler's scratch (the multi-hundred-MB *.AppDir
+      # tree the AppImage is packed from). macOS is separate because
+      # `--target universal-apple-darwin` puts its output under the target triple.
+      # `if-no-files-found: error` on purpose: a silently empty artifact is worse
+      # than a failed job, because it is only discovered by whoever downloads it.
+      - name: Upload the desktop bundles (share a build without a release)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            client/src-tauri/target/release/bundle/appimage/*.AppImage
+            client/src-tauri/target/release/bundle/deb/*.deb
+            client/src-tauri/target/release/bundle/rpm/*.rpm
+            client/src-tauri/target/release/bundle/msi/*.msi
+            client/src-tauri/target/release/bundle/nsis/*.exe
+            client/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
   # ---------------------------------------------------------------------------
   # Android: arm64 sideload APK, signed by an identity-free self-signed key
   # (see the header). gen/android is gitignored by design, so the project is
