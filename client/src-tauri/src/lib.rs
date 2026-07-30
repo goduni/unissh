@@ -137,11 +137,12 @@ pub fn run() {
             // macOS 26 (Tahoe): an app built against SDK 26 gets the redesigned,
             // noticeably larger control-size metrics — the traffic lights render
             // ~16pt instead of the classic ~14pt and read as oversized next to
-            // the 44px toolbar (and they throw off the trafficLightPosition
-            // centering math, which tao derives from the live button frame).
-            // Opt the content view back into compact metrics. The selector only
-            // exists on macOS 26+, so probe first: older systems never show the
-            // large controls and the call is simply skipped there.
+            // the toolbar. Opt back into compact metrics on the window's ROOT
+            // view (the content view's superview, the frame that also hosts the
+            // titlebar): the property propagates down a view's subtree, so
+            // setting it on the content view alone never reached the buttons.
+            // The selector only exists on macOS 26+, so probe first: older
+            // systems never show the large controls and the call is skipped.
             #[cfg(target_os = "macos")]
             {
                 use objc2::runtime::AnyObject;
@@ -152,13 +153,18 @@ pub fn run() {
                         if !ns_win.is_null() {
                             unsafe {
                                 let content: *mut AnyObject = msg_send![ns_win, contentView];
-                                let responds: bool = if content.is_null() {
+                                let root: *mut AnyObject = if content.is_null() {
+                                    content
+                                } else {
+                                    msg_send![content, superview]
+                                };
+                                let responds: bool = if root.is_null() {
                                     false
                                 } else {
-                                    msg_send![content, respondsToSelector: sel!(setPrefersCompactControlSizeMetrics:)]
+                                    msg_send![root, respondsToSelector: sel!(setPrefersCompactControlSizeMetrics:)]
                                 };
                                 if responds {
-                                    let _: () = msg_send![content, setPrefersCompactControlSizeMetrics: true];
+                                    let _: () = msg_send![root, setPrefersCompactControlSizeMetrics: true];
                                 }
                             }
                         }

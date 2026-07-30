@@ -38,6 +38,29 @@ export function useMaximized(): boolean {
   return max;
 }
 
+/** macOS hides its overlay traffic lights in native fullscreen (they live in the
+ *  auto-revealed menu bar there), so the toolbar must collapse the space it
+ *  reserves for them — pass enabled=isMac() and skip the subscription elsewhere. */
+export function useFullscreen(enabled: boolean = true): boolean {
+  const [fs, setFs] = useState(false);
+  useEffect(() => {
+    if (!enabled || !isTauri()) return;
+    const win = getCurrentWindow();
+    let alive = true;
+    const update = () =>
+      void win.isFullscreen().then((f) => {
+        if (alive) setFs(f);
+      });
+    update();
+    const unlisten = win.onResized(update);
+    return () => {
+      alive = false;
+      void unlisten.then((f) => f());
+    };
+  }, [enabled]);
+  return fs;
+}
+
 const EDGE = 4;
 const CORNER = 12;
 

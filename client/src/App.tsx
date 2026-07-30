@@ -462,11 +462,14 @@ export function App() {
     >
       {/* in-app toolbar doubling as the title bar — the window is frameless
           (tauri decorations: false; macOS overlays its traffic lights here).
-          data-tauri-drag-region gives back dragging + dblclick-maximize. */}
+          data-tauri-drag-region gives back dragging + dblclick-maximize.
+          macOS runs the bar slightly shorter: the native lights sit on the OS's
+          own line (we never move them), and 38px puts the bar's centerline on
+          that line instead of 5px below it. */}
       <div
         data-tauri-drag-region
         style={{
-          height: 44,
+          height: isMac() ? 38 : 44,
           flexShrink: 0,
           display: "flex",
           alignItems: "center",

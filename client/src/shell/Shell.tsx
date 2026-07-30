@@ -11,7 +11,7 @@ import { FlatAvatar, SyncBadge } from "@/components/mono";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { isMac, isTauri } from "@/bridge/platform";
-import { useMaximized } from "@/shell/WindowChrome";
+import { useFullscreen, useMaximized } from "@/shell/WindowChrome";
 import { useNarrow } from "@/store/responsive";
 import type { Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -241,12 +241,21 @@ export function TitleBar() {
   const route = useApp((s) => s.route);
   const server = useApp((s) => s.serverStatus);
   const ctx = useCtx();
+  // Native fullscreen hides the overlay traffic lights (they move into the
+  // auto-revealed menu bar), so the reserved space collapses with them.
+  const macFullscreen = useFullscreen(isMac());
   return (
     <>
       {/* pointerEvents none lets a mousedown on the spacer/logo fall through to
           the toolbar behind them, which carries data-tauri-drag-region — the
-          attribute only triggers on the exact element under the cursor. */}
-      {isMac() ? <div style={{ width: 52, pointerEvents: "none" }} aria-hidden /> : <WindowControls />}
+          attribute only triggers on the exact element under the cursor. The
+          spacer clears the DEFAULT traffic-light span: the buttons are never
+          repositioned (tao's inset surgery broke hit-testing on Tahoe). */}
+      {isMac() ? (
+        macFullscreen ? null : <div style={{ width: 60, pointerEvents: "none" }} aria-hidden />
+      ) : (
+        <WindowControls />
+      )}
       <div style={{ marginLeft: 4, display: "flex", pointerEvents: "none" }}>
         <Logo size={18} />
       </div>
