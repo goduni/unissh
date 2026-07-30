@@ -15,7 +15,7 @@ import { useMaximized } from "@/shell/WindowChrome";
 import { useNarrow } from "@/store/responsive";
 import type { Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import { ItemType, type VaultInfo } from "@/bridge/types";
+import { type VaultInfo } from "@/bridge/types";
 import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { useTranslation, tDyn } from "@/i18n";
 
@@ -798,9 +798,8 @@ export function Sidebar({
   const route = useApp((s) => s.route);
   const hosts = useApp((s) => s.hosts);
   const groups = useApp((s) => s.groups);
-  const items = useApp((s) => s.items);
-  const knownHosts = useApp((s) => s.knownHosts);
   const terminals = useApp((s) => s.terminals);
+  const tunnels = useApp((s) => s.tunnels);
   const hostFilter = useApp((s) => s.hostFilter);
   const ctx = useCtx();
 
@@ -808,10 +807,6 @@ export function Sidebar({
     return <SidebarRail onExpand={winW >= 880 ? onToggleCollapse : undefined} />;
 
   const onHosts = route === "hosts";
-  const keysN = items.filter((i) => i.itemType === ItemType.SshKey).length;
-  const passN = items.filter((i) => i.itemType === ItemType.Password).length;
-  const notesN = items.filter((i) => i.itemType === ItemType.Note).length;
-  const identN = items.filter((i) => i.itemType === ItemType.Identity).length;
   const hostCount = hosts.length;
 
   return (
@@ -887,18 +882,27 @@ export function Sidebar({
           <NavItem icon="radio" label={t("nav.run")} active={RUN_ROUTES.includes(route)} onClick={() => ctx.go("run")} />
         </NavGroup>
         <NavGroup label={t("shell.vaultNetworkHeader")}>
+          {/* Sidebar numbers are LIVE state (open terminals, active tunnels) or
+              host-filter cardinality — never inventory size. Secrets/Known counts
+              were shelf-stock trivia; an active tunnel is something running that
+              you may have forgotten about, so it earns both number and dot. */}
           <NavItem
             icon="key"
             label={t("nav.secrets")}
-            count={keysN + passN + identN + notesN}
             active={VAULT_ROUTES.includes(route)}
             onClick={() => ctx.go("keys")}
           />
-          <NavItem icon="branch" label={t("nav.tunnels")} active={route === "tunnels"} onClick={() => ctx.go("tunnels")} />
+          <NavItem
+            icon="branch"
+            label={t("nav.tunnels")}
+            count={tunnels.length || undefined}
+            badge={tunnels.length ? p.green : undefined}
+            active={route === "tunnels"}
+            onClick={() => ctx.go("tunnels")}
+          />
           <NavItem
             icon="shieldcheck"
             label={t("nav.known")}
-            count={knownHosts.length}
             active={route === "known"}
             onClick={() => ctx.go("known")}
           />
