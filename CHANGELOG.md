@@ -42,13 +42,15 @@ starts with `0.`:
   bundles are built natively on `windows-11-arm` rather than cross-compiled,
   because cross-compiling would also have to cross-build the vendored OpenSSL
   that SQLCipher links on Windows.
-- **The window frame can now be left to your window manager** — Settings →
-  Appearance → *Draw our own title bar*. Until you touch it, the answer follows
-  your desktop: off under a tiling window manager (niri, sway, Hyprland, river,
-  i3 and friends), which draws no title bar and closes windows from the
-  keyboard, and on everywhere else, so no existing desktop changes shape. Off
-  removes the bar entirely rather than emptying it, and hands the frame back to
-  the compositor.
+- **The window frame can now be left to your window manager** — on Linux,
+  Settings → Appearance → *Draw our own title bar*. Until you touch it, the
+  answer follows your desktop: off under a tiling window manager (niri, sway,
+  Hyprland, river, i3 and friends), which draws no title bar and closes windows
+  from the keyboard, and on everywhere else, so no existing desktop changes
+  shape. Off removes the bar entirely rather than emptying it, and hands the
+  frame back to the compositor. macOS and Windows are untouched by this and do
+  not show the setting: on macOS the traffic lights are drawn by the system over
+  our bar, and it is our bar that reserves the strip they sit in.
 
 ### Fixed
 

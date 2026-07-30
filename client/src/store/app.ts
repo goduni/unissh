@@ -6,6 +6,7 @@ import { create } from "zustand";
 import * as api from "@/bridge/api";
 import { onVaultMutated } from "@/bridge/sync-hook";
 import { clearSecretKey } from "@/bridge/secretKey";
+import { osPlatform } from "@/bridge/platform";
 import { i18n, refineLangFromSystem } from "@/i18n";
 
 /** Sentinel for the "all hosts" filter — decoupled from its display label so the
@@ -564,8 +565,19 @@ const lsCustomChrome = (): boolean | null => {
 /** Hand the frame to the window manager, or take it back. Best-effort by
  *  design: on a browser preview there is no window to decorate, and a compositor
  *  is free to ignore the request — neither is worth failing a boot over, and the
- *  title bar we draw is already correct for whichever answer we get. */
+ *  title bar we draw is already correct for whichever answer we get.
+ *
+ *  LINUX ONLY, and that is not caution, it is a bug this already caused. On
+ *  macOS `decorations: false` in tauri.conf is NOT the same state as calling
+ *  `setDecorations(false)` at runtime: the window created from the config keeps
+ *  the real traffic lights and the rounded corners (which is exactly why
+ *  `isMac()` suppresses our own controls everywhere), while the runtime call
+ *  drops the window to a borderless style mask and takes both away — a square
+ *  window with no close button. Windows is excluded for a weaker reason: the
+ *  swap has no reported use there and is untested, and the macOS lesson is that
+ *  runtime decoration changes are not the portable no-op they look like. */
 const applyWindowDecorations = async (customChrome: boolean): Promise<void> => {
+  if (osPlatform() !== "linux") return;
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().setDecorations(!customChrome);
@@ -667,7 +679,13 @@ export const useApp = create<AppStore>((set, get) => ({
   // Provisional: the current look, so a browser preview and the first paint on
   // every non-tiling desktop are right without waiting on IPC. `boot` replaces
   // it with the detected answer when the user has never chosen.
-  customChrome: lsCustomChrome() ?? true,
+  //
+  // Pinned to `true` off Linux, and not merely defaulted to it: on macOS the
+  // traffic lights are drawn by the OS over our bar and the bar is what reserves
+  // their 38px strip, so a `false` here would leave them floating on top of
+  // content. The setting is hidden there for the same reason — this line is what
+  // makes a stale localStorage value from another machine harmless too.
+  customChrome: osPlatform() === "linux" ? (lsCustomChrome() ?? true) : true,
   sftpParallelism: lsSftpParallelism(),
   lastConnected: lsLastConnected(),
   tunnels: [],
@@ -693,21 +711,29 @@ export const useApp = create<AppStore>((set, get) => ({
 
   boot: async () => {
     void refineLangFromSystem(); // refine language from OS locale on first run
-    // Window chrome. Only when the user has never chosen — an explicit setting is
-    // never second-guessed by detection, on this boot or any later one. Deliberately
-    // NOT persisted: leaving the key unset keeps the answer live, so moving the same
-    // vault between a tiling session and a plain desktop keeps doing the right thing
-    // instead of freezing whatever ran first.
-    if (lsCustomChrome() === null) {
-      void api
-        .tilingSession()
-        .then((tiling) => {
-          set({ customChrome: !tiling });
-          return applyWindowDecorations(!tiling);
-        })
-        .catch((e) => logWarn(`boot: window chrome detection failed: ${apiErrorMessage(e)}`));
-    } else {
-      void applyWindowDecorations(get().customChrome);
+    // Window chrome — Linux only, matching where the state can vary at all (see
+    // the initial value). Off Linux this whole block is skipped rather than
+    // relying on the detector returning false and the apply being a no-op:
+    // two layers agreeing by accident is how the macOS window ended up square
+    // and buttonless in the first place.
+    //
+    // Only when the user has never chosen — an explicit setting is never
+    // second-guessed by detection, on this boot or any later one. Deliberately
+    // NOT persisted: leaving the key unset keeps the answer live, so moving the
+    // same vault between a tiling session and a plain desktop keeps doing the
+    // right thing instead of freezing whatever ran first.
+    if (osPlatform() === "linux") {
+      if (lsCustomChrome() === null) {
+        void api
+          .tilingSession()
+          .then((tiling) => {
+            set({ customChrome: !tiling });
+            return applyWindowDecorations(!tiling);
+          })
+          .catch((e) => logWarn(`boot: window chrome detection failed: ${apiErrorMessage(e)}`));
+      } else {
+        void applyWindowDecorations(get().customChrome);
+      }
     }
     // Push the persisted keepalive interval to the core before any connection.
     void api

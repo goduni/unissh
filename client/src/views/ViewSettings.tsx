@@ -395,10 +395,15 @@ function SettingsAppearance() {
         />
       </SettingRow>
 
-      {/* Desktop only — a phone window has no frame to hand anywhere. Until this
-          is touched the answer comes from the window manager on every boot; the
-          first toggle freezes it to a choice. */}
-      {!isPhone && (
+      {/* Linux desktop only. A phone window has no frame to hand anywhere; macOS
+          has one it must keep, because the traffic lights are drawn by the OS on
+          top of our bar and it is our bar that reserves their strip — turning it
+          off there leaves them floating over content, and the runtime decoration
+          call that would compensate instead strips the window bare. Windows is
+          left out as untested rather than impossible. Until this is touched the
+          answer comes from the window manager on every boot; the first toggle
+          freezes it to a choice. */}
+      {!isPhone && osPlatform() === "linux" && (
         <SettingRow title={t("settings.customChromeTitle")} desc={t("settings.customChromeDesc")}>
           <Toggle checked={customChrome} onChange={setCustomChrome} />
         </SettingRow>
