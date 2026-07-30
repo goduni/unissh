@@ -25,6 +25,7 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
   const p = usePalette();
   const isMobile = useIsMobile();
   const narrow = useNarrow();
+  const customChrome = useApp((s) => s.customChrome);
   return (
     <div
       style={{
@@ -64,8 +65,13 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
           carry a drag strip and (non-mac) window controls of its own — without
           them a locked window could be neither moved nor closed. Gated on the
           BINARY's platform, not the device flag: the phone-shell preview on a
-          desktop OS still is a frameless window. */}
-      {isDesktopOs() && (
+          desktop OS still is a frameless window.
+          `customChrome` matters MORE here than on the main shell: this overlay is
+          what a user sees at launch, so it is where an imposed title bar is met
+          first and where leaving it behind would make the setting look broken.
+          With a real frame there is nothing to substitute for — the window
+          manager is already drawing the thing this strip exists to replace. */}
+      {isDesktopOs() && customChrome && (
         <>
           <div
             data-tauri-drag-region

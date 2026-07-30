@@ -234,30 +234,32 @@ jobs:
       # means anything. `GDK_BACKEND=x11` (which the AppRun hook forces) steers only
       # GTK, never Mesa.
       #
+      # WHAT THIS TRADES AWAY, stated plainly: the bundled libgdk-3 and
+      # libwebkit2gtk carry hard DT_NEEDED entries on libwayland-client, -cursor,
+      # -egl and -server, so after this the HOST must provide all four or the app
+      # will not load at all. That is a real dependency we are taking on, and it is
+      # acceptable only because of who needs them: the first three are required by
+      # GTK3 itself, so any host that can run any GTK3 application already has
+      # them, and libwayland-server arrives with Mesa's libgbm, i.e. with hardware
+      # GL. A host missing these cannot run this app bundled or not.
+      #
       # The hook: tauri-bundler downloads this plugin to ~/.cache/tauri and skips
       # the download when the file already exists (bundle/linux/appimage/linuxdeploy.rs),
       # so seeding our own copy is the supported-by-construction way in. We append
       # rather than vendor the 326-line script, so upstream keeps flowing and the
-      # diff stays this one deletion. The `verify` step after the build is the
-      # tripwire: if Tauri ever moves the cache or the seeding silently stops
-      # working, that step fails instead of shipping a broken AppImage again.
+      # diff stays this one deletion. Both edits are ASSERTED below rather than
+      # assumed: a `sed` that matches nothing exits 0, so without the assertions an
+      # upstream reword would turn either edit into a silent no-op — which is the
+      # exact failure mode that shipped the broken AppImage in the first place.
       - name: Seed the AppImage GTK plugin (drop bundled libwayland)
         if: matrix.os == 'linux'
         run: |
+          PLUGIN=~/.cache/tauri/linuxdeploy-plugin-gtk.sh
           mkdir -p ~/.cache/tauri
           curl -fsSL --retry 3 \
             https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh \
-            -o ~/.cache/tauri/linuxdeploy-plugin-gtk.sh
-          cat >> ~/.cache/tauri/linuxdeploy-plugin-gtk.sh <<'PLUGIN_EOF'
+            -o "$PLUGIN"
 
-          # --- appended by UniSSH CI: see "KEEP libwayland OUT OF THE APPIMAGE" ---
-          # Runs last in the plugin, after linuxdeploy has resolved and copied the
-          # GTK dependency tree, and before the appimage output plugin packs the
-          # AppDir. The host's libwayland is ABI-correct for the host's Mesa; ours
-          # is only ever wrong.
-          echo "unissh: removing bundled libwayland-* (breaks EGL on modern Wayland hosts)"
-          rm -fv "$APPDIR"/usr/lib/libwayland-*.so* || true
-          PLUGIN_EOF
           # Let a user override the backend. The plugin writes a bare
           # `export GDK_BACKEND=x11` into the AppRun hook, which does not just pick
           # a default — it overwrites whatever the user exported, so the usual first
@@ -265,10 +267,37 @@ jobs:
           # tauri's own copy of this template already uses the `:-` form; the fork
           # that actually gets downloaded has not caught up. The DEFAULT is
           # unchanged (still x11, still the safe answer for GTK on Wayland) — this
-          # only stops us from welding it shut.
-          sed -i 's/^export GDK_BACKEND=x11$/export GDK_BACKEND="${GDK_BACKEND:-x11}"/' \
-            ~/.cache/tauri/linuxdeploy-plugin-gtk.sh
-          chmod +x ~/.cache/tauri/linuxdeploy-plugin-gtk.sh
+          # only stops us from welding it shut. `.*` because that line carries a
+          # trailing comment: anchoring on `x11$` matches nothing at all.
+          sed -i 's|^export GDK_BACKEND=x11.*|export GDK_BACKEND="${GDK_BACKEND:-x11}" # default unchanged, override allowed (UniSSH)|' "$PLUGIN"
+
+          cat >> "$PLUGIN" <<'PLUGIN_EOF'
+
+          # --- appended by UniSSH CI: see "KEEP libwayland OUT OF THE APPIMAGE" ---
+          # Runs last in the plugin, after linuxdeploy has resolved and copied the
+          # GTK dependency tree, and before the appimage output plugin packs the
+          # AppDir. The host's libwayland matches the host's Mesa; ours cannot.
+          # The guard is not redundant with the plugin's own `[ "$APPDIR" == "" ]`
+          # check far above: this is an `rm -f` with a variable in the path, and an
+          # empty APPDIR would aim it at the build machine's own /usr/lib.
+          if [ -n "$APPDIR" ]; then
+            echo "unissh: removing bundled libwayland-* (breaks EGL on modern Wayland hosts)"
+            rm -fv "$APPDIR"/usr/lib/libwayland-*.so* || true
+          else
+            echo "unissh: APPDIR unset — refusing to run the libwayland cleanup" >&2
+            exit 1
+          fi
+          PLUGIN_EOF
+          chmod +x "$PLUGIN"
+
+          # Assert both edits landed. Neither `sed` nor `cat >>` fails when it
+          # achieves nothing, so this is the only thing standing between an
+          # upstream reword and a silently unpatched bundle.
+          grep -q 'GDK_BACKEND:-x11' "$PLUGIN" \
+            || { echo "::error::GDK_BACKEND patch did not apply — upstream reworded that line."; exit 1; }
+          grep -q 'removing bundled libwayland' "$PLUGIN" \
+            || { echo "::error::libwayland cleanup was not appended to the GTK plugin."; exit 1; }
+          echo "GTK plugin seeded and both edits verified"
 
       # A universal bundle is two real compilations `lipo`'d together, so BOTH
       # targets must exist before the bundler runs — the runner's default only
@@ -451,20 +480,35 @@ jobs:
       - name: Verify no libwayland got bundled into the AppImage
         if: matrix.os == 'linux'
         run: |
+          # Absolute up front: the extract has to run from inside the scratch dir
+          # (--appimage-extract always writes ./squashfs-root, with no way to aim
+          # it elsewhere), and a relative path would break the moment we cd.
           APPIMAGE=$(find client/src-tauri/target -name '*.AppImage' -print -quit)
           if [ -z "$APPIMAGE" ]; then
-            echo "no .AppImage produced — nothing to verify"; exit 1
+            echo "::error::no .AppImage produced — nothing to verify"; exit 1
           fi
+          APPIMAGE=$(realpath "$APPIMAGE")
           echo "checking $APPIMAGE"
+          chmod +x "$APPIMAGE"
           WORK=$(mktemp -d)
-          ( cd "$WORK" && "$OLDPWD/$APPIMAGE" --appimage-extract >/dev/null ) || true
-          if find "$WORK/squashfs-root" -name 'libwayland-*' -print -quit | grep -q .; then
-            echo "::error::libwayland-* is back in the AppImage — the GTK-plugin seeding stopped working."
-            echo "This AppImage will fail to start on Wayland with EGL_BAD_PARAMETER."
-            find "$WORK/squashfs-root" -name 'libwayland-*'
+          ( cd "$WORK" && "$APPIMAGE" --appimage-extract >/dev/null ) || true
+          if [ ! -d "$WORK/squashfs-root" ]; then
+            echo "::error::could not extract the AppImage — the check below would pass vacuously."
             exit 1
           fi
-          echo "clean: no libwayland-* in the bundle"
+          # The pattern must mirror the cleanup's glob EXACTLY, `.so*` included.
+          # A bare `libwayland-*` also matches the packages' documentation
+          # directories under usr/share/doc, which are inert and which the arm64
+          # runner image happens to carry while the x86-64 one does not — so the
+          # looser pattern failed every ARM build and passed every other one,
+          # for a difference that has nothing to do with what is being checked.
+          if find "$WORK/squashfs-root" -name 'libwayland-*.so*' -print -quit | grep -q .; then
+            echo "::error::libwayland-*.so is back in the AppImage — the GTK-plugin seeding stopped working."
+            echo "This AppImage will fail to start on Wayland with EGL_BAD_PARAMETER."
+            find "$WORK/squashfs-root" -name 'libwayland-*.so*'
+            exit 1
+          fi
+          echo "clean: no libwayland-*.so in the bundle"
 
   # ---------------------------------------------------------------------------
   # Android: arm64 sideload APK, signed by an identity-free self-signed key

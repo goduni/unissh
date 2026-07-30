@@ -440,8 +440,11 @@ export function App() {
         {/* Phone-shell PREVIEW on a desktop OS (Ctrl/Cmd+Shift+M): a real phone
             has no window chrome, but the frameless desktop window still needs
             drag + controls — without this strip the toggled window could be
-            neither moved nor closed. MobileApp shifts down 36px to match. */}
-        {isDesktopOs() && (
+            neither moved nor closed. MobileApp shifts down 36px to match.
+            Also gated on customChrome: with a real frame the window manager
+            already provides both, and MobileApp's 36px offset is keyed to the
+            same condition. */}
+        {isDesktopOs() && customChrome && (
           <div
             data-tauri-drag-region
             style={{

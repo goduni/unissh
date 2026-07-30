@@ -770,6 +770,7 @@ export function MobileApp() {
   const ctx = useCtx();
   const vaultId = useApp((s) => s.vaultId);
   const vaults = useApp((s) => s.vaults);
+  const customChrome = useApp((s) => s.customChrome);
 
   const [tab, setTab] = useState<TabId>("hosts");
   const [stack, setStack] = useState<Frame[]>([]);
@@ -940,8 +941,11 @@ export function MobileApp() {
         overflow: "hidden",
         // Desktop preview of the phone shell: the frameless window's chrome
         // strip (App.tsx) owns the top 36px — start below it instead of
-        // pinning to the viewport top like on a real phone.
-        ...(isDesktopOs() ? { top: 36, height: "calc(100% - 36px)" } : null),
+        // pinning to the viewport top like on a real phone. The condition must
+        // stay identical to the one that renders that strip, customChrome
+        // included: with a real window frame there is no strip, and reserving
+        // 36px for it would leave a dead band across the top of the shell.
+        ...(isDesktopOs() && customChrome ? { top: 36, height: "calc(100% - 36px)" } : null),
       }}
     >
       {/* On every tab, not just Hosts: the vault you're in and the way to LOCK are
