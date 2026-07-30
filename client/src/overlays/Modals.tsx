@@ -536,6 +536,11 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   // create until save means a cancelled modal never leaves an orphan empty group.
   const [newGroupName, setNewGroupName] = useState("");
   const [addingGroup, setAddingGroup] = useState(false);
+  // The input edits a DRAFT, never newGroupName itself: newGroupName is the
+  // committed pending-group label (what the chip shows and save consumes), so
+  // typing must not rename the chip live, "+" must open blank rather than
+  // pre-filled with the previous group, and Escape can discard cleanly.
+  const [groupDraft, setGroupDraft] = useState("");
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   const [recordSessions, setRecordSessions] = useState<boolean>(edit?.recordSessions ?? false);
   const [agentForward, setAgentForward] = useState<boolean>(edit?.agentForward ?? false);
@@ -662,10 +667,24 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
     setNewGroupName("");
     setAddingGroup(false);
   };
+  // "+" starts a fresh group; clicking the pending chip edits the existing one.
+  const openNewGroup = () => {
+    setGroupDraft("");
+    setAddingGroup(true);
+  };
+  const openEditGroup = () => {
+    setGroupDraft(newGroupName);
+    setAddingGroup(true);
+  };
   const confirmNewGroup = () => {
-    if (newGroupName.trim()) setGroupId(NEW_GROUP);
-    else setGroupId("");
+    const name = groupDraft.trim();
     setAddingGroup(false);
+    // A blank commit (blur of an untouched input, Enter on empty) is an
+    // abandoned draft: the committed name, the chip and the selection — real
+    // OR pending — stay exactly as they were before the input opened.
+    if (!name) return;
+    setNewGroupName(name);
+    setGroupId(NEW_GROUP);
   };
 
   const addTag = () => {
@@ -1521,12 +1540,13 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     </button>
                   );
                 })}
-                {/* pending new group (created on save) shown as a selected chip */}
-                {groupId === NEW_GROUP && newGroupName.trim() && (
+                {/* pending new group (created on save) shown as a selected chip;
+                    hidden while the input is open so typing never mirrors into it */}
+                {groupId === NEW_GROUP && newGroupName.trim() && !addingGroup && (
                   <button
                     type="button"
                     aria-pressed={true}
-                    onClick={() => setAddingGroup(true)}
+                    onClick={openEditGroup}
                     title={t("modals.host.editNewGroup")}
                     style={{
                       display: "inline-flex",
@@ -1553,17 +1573,18 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   <input
                     {...NO_AUTOCORRECT}
                     autoFocus
-                    value={newGroupName}
+                    value={groupDraft}
                     placeholder={t("modals.host.newGroupPlaceholder")}
-                    onChange={(e) => setNewGroupName(e.target.value)}
+                    onChange={(e) => setGroupDraft(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
                         confirmNewGroup();
                       } else if (e.key === "Escape") {
+                        // Discard the draft: the committed name (and selection)
+                        // stay exactly as they were before the input opened.
                         e.preventDefault();
                         setAddingGroup(false);
-                        if (groupId === NEW_GROUP && !newGroupName.trim()) setGroupId("");
                       }
                     }}
                     onBlur={confirmNewGroup}
@@ -1583,7 +1604,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setAddingGroup(true)}
+                    onClick={openNewGroup}
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
