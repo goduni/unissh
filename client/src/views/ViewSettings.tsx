@@ -234,6 +234,8 @@ function SettingsAppearance() {
   const isPhone = useIsMobile();
   const gpuRendering = useApp((s) => s.gpuRendering);
   const setGpuRendering = useApp((s) => s.setGpuRendering);
+  const customChrome = useApp((s) => s.customChrome);
+  const setCustomChrome = useApp((s) => s.setCustomChrome);
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
@@ -392,6 +394,15 @@ function SettingsAppearance() {
           ]}
         />
       </SettingRow>
+
+      {/* Desktop only — a phone window has no frame to hand anywhere. Until this
+          is touched the answer comes from the window manager on every boot; the
+          first toggle freezes it to a choice. */}
+      {!isPhone && (
+        <SettingRow title={t("settings.customChromeTitle")} desc={t("settings.customChromeDesc")}>
+          <Toggle checked={customChrome} onChange={setCustomChrome} />
+        </SettingRow>
+      )}
 
       <SectionLabel>{t("settings.sectionTerminal")}</SectionLabel>
       {/* device, not window width: a desktop user with a narrow window must not

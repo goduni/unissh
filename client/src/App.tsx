@@ -124,6 +124,7 @@ export function App() {
   const { t } = useTranslation();
   const route = useApp((s) => s.route);
   const device = useApp((s) => s.device);
+  const customChrome = useApp((s) => s.customChrome);
   const overlay = useApp((s) => s.overlay);
   const unlocked = useApp((s) => s.unlocked);
   const autolockMin = useApp((s) => s.autolockMin);
@@ -133,7 +134,15 @@ export function App() {
   // Seconds left before an idle auto-lock, or null when no warning is showing.
   const [lockWarnSec, setLockWarnSec] = useState<number | null>(null);
   const rearmLockRef = useRef<() => void>(() => {});
-  const [winW, setWinW] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
+  // The BOOLEAN, not the width. Only one question is ever asked of the window
+  // width (Shell.tsx Sidebar: is there room for the full sidebar, or the rail?),
+  // and holding the raw pixel value in root state answered it at a ruinous price:
+  // the number changes on every pixel, so every frame of an interactive resize
+  // re-rendered App and with it the entire tree. A boolean changes twice in the
+  // life of a drag, and React drops the rest. This was felt as resize lag, and
+  // felt worst under tiling compositors, where windows are resized constantly
+  // rather than only when someone grabs an edge.
+  const [wide, setWide] = useState(typeof window !== "undefined" ? window.innerWidth >= 880 : true);
   const [sbCollapsed, setSbCollapsed] = useState(() => {
     try {
       return localStorage.getItem("unissh.sidebarCollapsed") === "1";
@@ -217,7 +226,8 @@ export function App() {
   }, [boot]);
 
   useEffect(() => {
-    const on = () => setWinW(window.innerWidth);
+    const on = () => setWide(window.innerWidth >= 880);
+    on();
     window.addEventListener("resize", on);
     return () => window.removeEventListener("resize", on);
   }, []);
@@ -293,6 +303,16 @@ export function App() {
     void (async () => {
       try {
         const win = getCurrentWindow();
+        // EVERYTHING below runs inside Tauri's close path, which is unforgiving:
+        // window.js does `await handler(evt)` and only then
+        // `if (!evt.isPreventDefault()) await this.destroy()`, with no catch and
+        // no timeout. So a handler that throws, or that simply never settles,
+        // does not merely skip the confirmation — it permanently disables closing
+        // the window, by our own button, by the WM hotkey and by the compositor
+        // alike, leaving Ctrl+C in the launching terminal as the only way out.
+        // Hence: no bare property access, no unbounded await. Every failure here
+        // fails OPEN, because a lost confirmation dialog is survivable and an
+        // unquittable window is not.
         const u = await win.onCloseRequested(async (event) => {
           if (confirmedClose.current) return; // our own close — let it through
           let wantConfirm = true;
@@ -301,19 +321,31 @@ export function App() {
           } catch {
             /* default on */
           }
-          const s = useApp.getState();
-          const live =
-            s.terminals.length + s.tunnels.length + s.broadcasts.length + s.sftpSessions.length;
+          let live = 0;
+          try {
+            const s = useApp.getState();
+            live =
+              s.terminals.length + s.tunnels.length + s.broadcasts.length + s.sftpSessions.length;
+          } catch {
+            live = 0; // store unreadable — treat as nothing to lose, never trap
+          }
           if (!wantConfirm || live === 0) return; // nothing to lose — close normally
           event.preventDefault();
           let ok = false;
           try {
-            ok = await confirm(t("quit.body", { count: live }), {
-              title: t("quit.title"),
-              kind: "warning",
-              okLabel: t("quit.confirm"),
-              cancelLabel: t("common.cancel"),
-            });
+            // Race the dialog against a deadline. A native dialog that never
+            // resolves is not hypothetical on Linux — an undecorated window under
+            // a compositor that declines to map the transient would hang this
+            // await forever, and the close is already prevented by this point.
+            ok = await Promise.race([
+              confirm(t("quit.body", { count: live }), {
+                title: t("quit.title"),
+                kind: "warning",
+                okLabel: t("quit.confirm"),
+                cancelLabel: t("common.cancel"),
+              }),
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 10_000)),
+            ]);
           } catch {
             // If the dialog can't be shown, fail open: we already prevented the
             // close, so not re-closing would trap the user in an unquittable window.
@@ -466,27 +498,33 @@ export function App() {
           macOS runs the bar slightly shorter: the native lights sit on the OS's
           own line (we never move them), and 38px puts the bar's centerline on
           that line instead of 5px below it. */}
-      <div
-        data-tauri-drag-region
-        style={{
-          height: isMac() ? 38 : 44,
-          flexShrink: 0,
-          display: "flex",
-          alignItems: "center",
-          padding: "0 16px",
-          gap: 14,
-          borderBottom: `1px solid ${p.line}`,
-          background: p.bg1,
-        }}
-      >
-        <TitleBar />
-      </div>
+      {/* Gone entirely when the window manager owns the frame — not hidden, not
+          collapsed to zero height. A tiling WM gives the window every pixel it
+          has and expects the app to use them; leaving a 44px strip of our own
+          chrome up there would be the exact thing the setting exists to remove. */}
+      {customChrome && (
+        <div
+          data-tauri-drag-region
+          style={{
+            height: isMac() ? 38 : 44,
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 16px",
+            gap: 14,
+            borderBottom: `1px solid ${p.line}`,
+            background: p.bg1,
+          }}
+        >
+          <TitleBar />
+        </div>
+      )}
 
       {/* body */}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         {showApp && (
           <Sidebar
-            winW={winW}
+            wide={wide}
             collapsed={sbCollapsed}
             width={sbW}
             onToggleCollapse={toggleSidebar}

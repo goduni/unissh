@@ -1023,6 +1023,8 @@ export const en = {
     "hostsLayoutCards": "Cards",
     "hostsLayoutList": "List",
     "sectionTerminal": "Terminal",
+    "customChromeTitle": "Draw our own title bar",
+    "customChromeDesc": "Off hands the window frame to your window manager instead. Left alone, this follows your desktop: off under a tiling window manager, which draws no title bar and closes windows from the keyboard, on everywhere else. Changing it here settles the question for good.",
     "gpuRenderingTitle": "GPU rendering",
     "gpuRenderingDesc": "Draw the terminal with WebGL instead of the DOM. Smoother on long, fast output. Some graphics drivers render nothing at all with it — if the terminal goes blank, turn this back off. Takes effect on newly opened panes.",
     "termFontTitle": "Terminal font size",

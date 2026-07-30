@@ -141,6 +141,61 @@ pub async fn reset_instance(state: State<'_, AppState>) -> ApiResult<()> {
     Ok(())
 }
 
+/// True when the session is run by a tiling window manager.
+///
+/// Decides only the DEFAULT for the custom window chrome, never the final answer
+/// — an explicit user choice always wins (see `lsCustomChrome` on the JS side).
+/// Under a tiling WM the app's own title bar is worse than useless: it spends a
+/// row of a deliberately dense layout on a drag handle that cannot drag, next to
+/// buttons for maximize and minimize that the compositor does not implement, in
+/// a session whose whole premise is that the user closes windows from the
+/// keyboard. Every other desktop keeps the current look.
+///
+/// Detected from the environment rather than by asking the compositor: each of
+/// these exports something unmistakable, and a wrong guess is cosmetic and
+/// one toggle away from being fixed. The socket variables come first because
+/// they are set by the compositor process itself; XDG_CURRENT_DESKTOP is a
+/// fallback since a display manager can rewrite it.
+///
+/// No cfg gate and no mobile twin, unlike `reveal_log_dir` below: this reads
+/// nothing but environment variables, so one body is correct everywhere and
+/// simply answers `false` off Linux.
+#[tauri::command]
+pub fn tiling_session() -> bool {
+    if !cfg!(target_os = "linux") && !cfg!(target_os = "freebsd") {
+        return false;
+    }
+    let has = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    if has("NIRI_SOCKET") || has("SWAYSOCK") || has("HYPRLAND_INSTANCE_SIGNATURE") || has("I3SOCK")
+    {
+        return true;
+    }
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP")
+        .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
+        .or_else(|_| std::env::var("DESKTOP_SESSION"))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    [
+        "niri",
+        "sway",
+        "hyprland",
+        "river",
+        "wayfire",
+        "dwl",
+        "i3",
+        "bspwm",
+        "xmonad",
+        "awesome",
+        "qtile",
+        "dwm",
+        "herbstluftwm",
+        "leftwm",
+        "spectrwm",
+    ]
+    .iter()
+    .any(|wm| desktop.split(':').any(|part| part.trim() == *wm))
+}
+
 /// Absolute path to the per-OS application log directory (where the rotating log
 /// file lives). Shown in Settings so the user can find their logs.
 #[tauri::command]

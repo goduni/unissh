@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri, osPlatform } from "@/bridge/platform";
+import { useApp } from "@/store/app";
 
 type ResizeDirection = Parameters<ReturnType<typeof getCurrentWindow>["startResizeDragging"]>[0];
 
@@ -76,10 +77,15 @@ const ZONES: { dir: ResizeDirection; cursor: string; at: React.CSSProperties }[]
 ];
 
 /** Mounted once at the app root, above every overlay (lock screen included) so
- *  the window stays resizable while locked. Hidden when maximized. */
+ *  the window stays resizable while locked. Hidden when maximized, and absent
+ *  whenever the window manager owns the frame — these zones exist only to
+ *  replace native resize borders an undecorated GTK window does not have, and
+ *  with a real frame they would sit on top of the WM's own edges and steal the
+ *  drag from a compositor that does it better. */
 export function ResizeEdges() {
   const maximized = useMaximized();
-  if (osPlatform() !== "linux" || maximized) return null;
+  const customChrome = useApp((s) => s.customChrome);
+  if (osPlatform() !== "linux" || maximized || !customChrome) return null;
   const win = getCurrentWindow();
   return (
     <>

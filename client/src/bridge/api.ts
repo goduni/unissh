@@ -79,6 +79,10 @@ export const resetInstance = () => invoke<void>("reset_instance");
 export const logDir = () => invoke<string>("log_dir");
 /** Open the log directory in the OS file manager. */
 export const revealLogDir = () => invoke<void>("reveal_log_dir");
+/** True when a tiling window manager runs the session — the DEFAULT for whether
+ *  to draw our own title bar, overridable by the user. False everywhere but
+ *  Linux/BSD. */
+export const tilingSession = () => invoke<boolean>("tiling_session");
 export const createAccount = (password: string | null) =>
   invoke<string>("create_account", { password });
 export const unlock = (password: string | null, secretKeyHex: string) =>

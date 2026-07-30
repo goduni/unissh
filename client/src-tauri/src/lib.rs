@@ -211,6 +211,7 @@ pub fn run() {
             commands::reset_instance,
             commands::log_dir,
             commands::reveal_log_dir,
+            commands::tiling_session,
             commands::create_account,
             commands::unlock,
             commands::lock,

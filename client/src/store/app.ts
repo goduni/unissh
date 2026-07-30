@@ -375,6 +375,12 @@ interface AppStore {
   setModernAlgorithms: (on: boolean) => void;
   gpuRendering: boolean;
   setGpuRendering: (on: boolean) => void;
+  /** Draw our own title bar (and leave the window undecorated), rather than
+   *  handing the frame to the window manager. Resolved at boot: an explicit
+   *  choice if the user made one, otherwise off under a tiling WM and on
+   *  everywhere else. */
+  customChrome: boolean;
+  setCustomChrome: (on: boolean) => void;
   setSftpParallelism: (n: number) => void;
 
   // group / tag membership (bulk — driven by the host multi-select bar)
@@ -540,6 +546,34 @@ const lsGpuRendering = (): boolean => {
   }
 };
 
+/** The user's EXPLICIT choice about the custom title bar, or `null` for "never
+ *  said" — which is the whole point of the tri-state. A plain boolean default
+ *  cannot express it: we need to tell "wants the bar" apart from "has not
+ *  answered, so ask the window manager", and only the second may be overridden
+ *  by detection at boot. Starts as the current look on every desktop that isn't
+ *  tiling, so nobody's window changes shape under them on upgrade. */
+const lsCustomChrome = (): boolean | null => {
+  try {
+    const v = localStorage.getItem("unissh.customChrome");
+    return v === null ? null : v === "1";
+  } catch {
+    return null;
+  }
+};
+
+/** Hand the frame to the window manager, or take it back. Best-effort by
+ *  design: on a browser preview there is no window to decorate, and a compositor
+ *  is free to ignore the request — neither is worth failing a boot over, and the
+ *  title bar we draw is already correct for whichever answer we get. */
+const applyWindowDecorations = async (customChrome: boolean): Promise<void> => {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().setDecorations(!customChrome);
+  } catch {
+    /* not in a Tauri context, or the compositor declined */
+  }
+};
+
 /** Bounds for the SFTP channel-pool size (parallel transfers). Kept modest: each
  *  channel costs a per-channel SSH window of memory, and most servers throttle a
  *  single connection's aggregate anyway. */
@@ -630,6 +664,10 @@ export const useApp = create<AppStore>((set, get) => ({
   keepaliveSecs: lsKeepaliveSecs(),
   modernAlgorithms: lsModernAlgorithms(),
   gpuRendering: lsGpuRendering(),
+  // Provisional: the current look, so a browser preview and the first paint on
+  // every non-tiling desktop are right without waiting on IPC. `boot` replaces
+  // it with the detected answer when the user has never chosen.
+  customChrome: lsCustomChrome() ?? true,
   sftpParallelism: lsSftpParallelism(),
   lastConnected: lsLastConnected(),
   tunnels: [],
@@ -655,6 +693,22 @@ export const useApp = create<AppStore>((set, get) => ({
 
   boot: async () => {
     void refineLangFromSystem(); // refine language from OS locale on first run
+    // Window chrome. Only when the user has never chosen — an explicit setting is
+    // never second-guessed by detection, on this boot or any later one. Deliberately
+    // NOT persisted: leaving the key unset keeps the answer live, so moving the same
+    // vault between a tiling session and a plain desktop keeps doing the right thing
+    // instead of freezing whatever ran first.
+    if (lsCustomChrome() === null) {
+      void api
+        .tilingSession()
+        .then((tiling) => {
+          set({ customChrome: !tiling });
+          return applyWindowDecorations(!tiling);
+        })
+        .catch((e) => logWarn(`boot: window chrome detection failed: ${apiErrorMessage(e)}`));
+    } else {
+      void applyWindowDecorations(get().customChrome);
+    }
     // Push the persisted keepalive interval to the core before any connection.
     void api
       .setKeepaliveSecs(get().keepaliveSecs)
@@ -1080,6 +1134,21 @@ export const useApp = create<AppStore>((set, get) => ({
     } catch {
       /* ignore */
     }
+  },
+  setCustomChrome: (on) => {
+    set({ customChrome: on });
+    try {
+      // Writing this key is also what ends the auto-detection: from here on the
+      // answer is the user's, and boot stops asking the window manager.
+      localStorage.setItem("unissh.customChrome", on ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+    // The frame is the inverse of the bar: if we stop drawing our own, something
+    // has to draw one, and the window manager is the only other candidate. On a
+    // tiling WM that draws no title bar at all this is exactly the bare window
+    // the user already has for everything else.
+    void applyWindowDecorations(on);
   },
   setKeepaliveSecs: (secs) => {
     const v = Number.isFinite(secs) && secs >= 0 ? Math.round(secs) : 15;

@@ -217,6 +217,59 @@ jobs:
             pkg-config \
             xdg-utils
 
+      # KEEP libwayland OUT OF THE APPIMAGE. Without this the AppImage does not
+      # start at all on a current Wayland desktop: it dies before any window with
+      #     Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...
+      #
+      # Mesa is NOT bundled — libEGL/libgbm/libdrm come from the host — but
+      # libwayland-* IS, and linuxdeploy puts $APPDIR/usr/lib first on
+      # LD_LIBRARY_PATH. So the host's own Mesa resolves its `libwayland-client.so.0`
+      # to OUR Ubuntu 22.04 copy instead of the one it was built against, and EGL
+      # init fails. Confirmed both ways on a reporter's Arch/niri box: deleting these
+      # four files from an extracted AppImage fixes it outright.
+      #
+      # THERE IS NO ENV-VAR WORKAROUND, which is why this is fixed in the bundle
+      # rather than documented. `EGL_PLATFORM=x11` was tested and does NOT help —
+      # the mismatch bites when Mesa loads the library, before the platform choice
+      # means anything. `GDK_BACKEND=x11` (which the AppRun hook forces) steers only
+      # GTK, never Mesa.
+      #
+      # The hook: tauri-bundler downloads this plugin to ~/.cache/tauri and skips
+      # the download when the file already exists (bundle/linux/appimage/linuxdeploy.rs),
+      # so seeding our own copy is the supported-by-construction way in. We append
+      # rather than vendor the 326-line script, so upstream keeps flowing and the
+      # diff stays this one deletion. The `verify` step after the build is the
+      # tripwire: if Tauri ever moves the cache or the seeding silently stops
+      # working, that step fails instead of shipping a broken AppImage again.
+      - name: Seed the AppImage GTK plugin (drop bundled libwayland)
+        if: matrix.os == 'linux'
+        run: |
+          mkdir -p ~/.cache/tauri
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh \
+            -o ~/.cache/tauri/linuxdeploy-plugin-gtk.sh
+          cat >> ~/.cache/tauri/linuxdeploy-plugin-gtk.sh <<'PLUGIN_EOF'
+
+          # --- appended by UniSSH CI: see "KEEP libwayland OUT OF THE APPIMAGE" ---
+          # Runs last in the plugin, after linuxdeploy has resolved and copied the
+          # GTK dependency tree, and before the appimage output plugin packs the
+          # AppDir. The host's libwayland is ABI-correct for the host's Mesa; ours
+          # is only ever wrong.
+          echo "unissh: removing bundled libwayland-* (breaks EGL on modern Wayland hosts)"
+          rm -fv "$APPDIR"/usr/lib/libwayland-*.so* || true
+          PLUGIN_EOF
+          # Let a user override the backend. The plugin writes a bare
+          # `export GDK_BACKEND=x11` into the AppRun hook, which does not just pick
+          # a default — it overwrites whatever the user exported, so the usual first
+          # thing anyone tries on a Wayland desktop silently does nothing. Upstream
+          # tauri's own copy of this template already uses the `:-` form; the fork
+          # that actually gets downloaded has not caught up. The DEFAULT is
+          # unchanged (still x11, still the safe answer for GTK on Wayland) — this
+          # only stops us from welding it shut.
+          sed -i 's/^export GDK_BACKEND=x11$/export GDK_BACKEND="${GDK_BACKEND:-x11}"/' \
+            ~/.cache/tauri/linuxdeploy-plugin-gtk.sh
+          chmod +x ~/.cache/tauri/linuxdeploy-plugin-gtk.sh
+
       # A universal bundle is two real compilations `lipo`'d together, so BOTH
       # targets must exist before the bundler runs — the runner's default only
       # covers its own arm64. Explicit here rather than relying on tauri-action
@@ -381,6 +434,37 @@ jobs:
           # PRE-pends the body to what it generates, and (b) have all five
           # desktop jobs race to write the same field.
           generateReleaseNotes: true
+
+      # The tripwire for the seeding step above. That step works by a mechanism
+      # tauri-bundler never promised — it skips the download when ~/.cache/tauri
+      # already holds the plugin — so the day it moves that cache, the seeding
+      # stops silently and the AppImage goes back to being unlaunchable on Wayland
+      # with nothing in the log to say so. This turns that silence into a failed
+      # job. `|| true` on the extract because a `set -e` shell would otherwise
+      # abort before the check that produces the useful message.
+      #
+      # Runs after tauri-action rather than before, because tauri-action builds and
+      # uploads in one step and there is no seam between them. On a tag that means
+      # the bad artifact is already on the release when this fires — a loud failure
+      # to act on, not a gate. Fixing that properly means driving `tauri build`
+      # ourselves, which costs more than it buys today.
+      - name: Verify no libwayland got bundled into the AppImage
+        if: matrix.os == 'linux'
+        run: |
+          APPIMAGE=$(find client/src-tauri/target -name '*.AppImage' -print -quit)
+          if [ -z "$APPIMAGE" ]; then
+            echo "no .AppImage produced — nothing to verify"; exit 1
+          fi
+          echo "checking $APPIMAGE"
+          WORK=$(mktemp -d)
+          ( cd "$WORK" && "$OLDPWD/$APPIMAGE" --appimage-extract >/dev/null ) || true
+          if find "$WORK/squashfs-root" -name 'libwayland-*' -print -quit | grep -q .; then
+            echo "::error::libwayland-* is back in the AppImage — the GTK-plugin seeding stopped working."
+            echo "This AppImage will fail to start on Wayland with EGL_BAD_PARAMETER."
+            find "$WORK/squashfs-root" -name 'libwayland-*'
+            exit 1
+          fi
+          echo "clean: no libwayland-* in the bundle"
 
   # ---------------------------------------------------------------------------
   # Android: arm64 sideload APK, signed by an identity-free self-signed key

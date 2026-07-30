@@ -42,6 +42,41 @@ starts with `0.`:
   bundles are built natively on `windows-11-arm` rather than cross-compiled,
   because cross-compiling would also have to cross-build the vendored OpenSSL
   that SQLCipher links on Windows.
+- **The window frame can now be left to your window manager** — Settings →
+  Appearance → *Draw our own title bar*. Until you touch it, the answer follows
+  your desktop: off under a tiling window manager (niri, sway, Hyprland, river,
+  i3 and friends), which draws no title bar and closes windows from the
+  keyboard, and on everywhere else, so no existing desktop changes shape. Off
+  removes the bar entirely rather than emptying it, and hands the frame back to
+  the compositor.
+
+### Fixed
+
+- **The AppImage would not start at all on a current Wayland desktop**, dying
+  before any window with `Could not create default EGL display: EGL_BAD_PARAMETER`.
+  We bundled `libwayland-*`, and because the AppImage puts its own libraries
+  first on the search path, the host's Mesa — which we do *not* bundle — loaded
+  our copy instead of the one it was built against. The bundle no longer ships
+  those four files; the host's are correct by construction. Worth stating plainly
+  because the workarounds circulating for this error do not work: neither
+  `EGL_PLATFORM=x11` nor `WEBKIT_DISABLE_DMABUF_RENDERER` helps, since the
+  mismatch bites when Mesa loads the library, before any of those settings mean
+  anything.
+- **The window could become impossible to close** — not by the button, not by a
+  WM hotkey, not by the compositor, leaving `Ctrl+C` in the launching terminal as
+  the only way out. Tauri hands the close decision to the app and destroys the
+  window only once our handler returns; it neither catches exceptions nor times
+  out, so any failure inside it disabled closing permanently rather than merely
+  skipping the confirmation. Every path through that handler now fails open.
+- **Resizing the window was laggy.** The root component kept the window width in
+  state as a pixel value, so every frame of a resize re-rendered the entire app —
+  though the only question ever asked of that number was whether the sidebar
+  fits. It now holds the answer instead of the width. Most visible under tiling
+  window managers, which resize windows constantly rather than only on a drag.
+- `GDK_BACKEND` is no longer forced in the AppImage launcher. It still *defaults*
+  to `x11`, which remains the right default for GTK on Wayland — but the launcher
+  used to overwrite the variable outright, so exporting it yourself silently did
+  nothing.
 
 ### Compatibility
 
@@ -53,6 +88,12 @@ on an ARM machine does not switch feeds and is not stranded** — the updater
 matches the architecture a binary was compiled for, not the one it is running
 on, so it keeps following `windows-x86_64` and keeps updating. Moving to the
 native build is a deliberate, manual reinstall.
+
+The window-chrome setting is stored locally, per install, alongside the other
+appearance preferences — it is not part of the vault and does not sync. Leaving
+it untouched keeps the detection live on every boot, which is what makes the
+same vault behave correctly on a tiling session and a plain desktop; setting it
+once freezes the answer for that install.
 
 ## [0.2.0] — 2026-07-30
 

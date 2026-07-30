@@ -789,14 +789,17 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
   );
 }
 
+/** Window wide enough for the full sidebar rather than the icon rail. Takes the
+ *  ANSWER, not the width: the caller holds this in root state, and a pixel value
+ *  there re-renders the whole app on every frame of a resize (see App.tsx). */
 export function Sidebar({
-  winW,
+  wide,
   collapsed,
   width,
   onToggleCollapse,
   onResize,
 }: {
-  winW: number;
+  wide: boolean;
   collapsed: boolean;
   width: number;
   onToggleCollapse: () => void;
@@ -812,8 +815,7 @@ export function Sidebar({
   const hostFilter = useApp((s) => s.hostFilter);
   const ctx = useCtx();
 
-  if (winW < 880 || collapsed)
-    return <SidebarRail onExpand={winW >= 880 ? onToggleCollapse : undefined} />;
+  if (!wide || collapsed) return <SidebarRail onExpand={wide ? onToggleCollapse : undefined} />;
 
   const onHosts = route === "hosts";
   const hostCount = hosts.length;
