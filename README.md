@@ -46,6 +46,8 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 
 Most polished SSH clients with sync (think Termius) make a trade you can't undo: your hosts, keys, and connection metadata live on **someone else's** servers, under **their** account system, readable under **their** terms.
 
+And "can't undo" is often literal. These products compete on how much they can **import** — SSH config, PuTTY, a rival's export, a dozen paths in — while the way back **out** goes undocumented or unbuilt. Check before you commit a fleet to one: if there is no export, the data is only nominally yours, and leaving means retyping every host by hand. UniSSH's answer is a [portable encrypted backup](#features) of the whole vault, restorable into any instance, including one that isn't ours.
+
 UniSSH flips that. It's an open-source SSH client whose **sync backend is a small server you run yourself**, and the data it syncs is **end-to-end encrypted on your devices before it ever leaves them**. The server is deliberately "honest-but-curious": it stores ciphertext and a bit of routing metadata, coordinates your devices and team, and **never holds the keys to decrypt anything**.
 
 **For** developers, sysadmins, and small teams who want a modern multi-host SSH client **without** renting their secrets to a SaaS vendor.
