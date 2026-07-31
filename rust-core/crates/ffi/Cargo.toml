@@ -23,6 +23,7 @@ path = "src/bin/uniffi-bindgen.rs"
 [dependencies]
 unissh-crypto = { path = "../crypto" }
 unissh-keychain = { path = "../keychain" }
+unissh-local-pty = { path = "../local-pty" }
 unissh-storage = { path = "../storage" }
 unissh-vault = { path = "../vault" }
 unissh-ssh-agent = { path = "../ssh-agent" }
@@ -47,6 +48,9 @@ serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
+# The local-terminal tests assert on the OS user the recording is stamped with,
+# and that name has exactly one definition.
+unissh-local-pty = { path = "../local-pty" }
 # In-process SSH server for password-authentication tests (hermetic).
 russh = "0.62"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }

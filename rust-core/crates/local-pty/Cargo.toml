@@ -1,0 +1,27 @@
+[package]
+name = "unissh-local-pty"
+version.workspace = true
+description = "UniSSH local terminal: a PTY with an interactive shell on the user's own machine (unix openpty / Windows ConPTY)."
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+# One API over unix `openpty` and Windows ConPTY (wezterm's, MIT). Writing this
+# twice by hand — including the ConPTY dance — is exactly the kind of platform
+# code that is better borrowed than owned.
+portable-pty = "0.9"
+# Shell-word splitting for the user's argument string, so `-l -c "echo hi"`
+# means what it means in a shell rather than being split on spaces.
+shell-words = "1"
+# `gethostname(2)` on every platform without unsafe code here. The machine's
+# name is what tells a local pane apart from a remote one in the status line.
+gethostname = "1"
+thiserror = "2"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
