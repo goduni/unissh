@@ -34,6 +34,36 @@ starts with `0.`:
 
 ### Added
 
+- **A local terminal** on desktop: a shell on your own machine in a tab, living
+  by the same rules as an SSH session — splits, zoom, search, themes,
+  copy/paste, snippets, session recording. Four ways in: the `+` picker in the
+  tab strip, `⌘⇧S` / `Ctrl+Shift+S` from anywhere (**S** for shell — `L` is
+  "lock the instance" and a security control keeps its key; the Shift is because
+  a bare `⌘S` saves in the SFTP file editor), *Local terminal* in the sidebar,
+  and *Split → local shell* in a pane's menu. Settings → General picks
+  the shell, its arguments and the starting directory; leave any of them empty
+  and it follows the system (`$SHELL` → your `/etc/passwd` entry → `/bin/sh`;
+  `pwsh` → `powershell` → `cmd` on Windows).
+
+  A local pane is **always marked as local** — a laptop icon in the tab and the
+  session rail, and the machine's own name with the word *local* in the status
+  bar. Running the right command on the wrong machine is exactly the failure
+  this feature could otherwise introduce, so telling the two apart is not left
+  to memory. A local shell also never auto-reconnects: it does not drop off the
+  network, it exits, and the pane offers **Restart** in the same place.
+
+  Auto-lock closes local tabs along with everything else and terminates the
+  processes running in them — Settings says so rather than leaving you to find
+  out. Recording local sessions is off by default and, when switched on, writes
+  to your **personal** vault where you have one, so a recording of your own
+  machine does not sync to a shared team vault; if there is no personal vault,
+  Settings names the vault it would use instead.
+
+  **Not on mobile.** On iOS this is not a matter of effort: the sandbox forbids
+  `fork`/`exec` and there is no shell in the bundle — which is why terminal apps
+  there either link commands as a library or ship an x86 emulator. Android could
+  do it and deliberately does not. The entry points are hidden there and the
+  core answers "not available on this platform".
 - **Windows builds for ARM64** (`_arm64-setup.exe` and `_arm64_en-US.msi`),
   alongside the existing x86-64 ones. Windows on ARM already ran the x64 build
   under emulation, so this is a performance gap rather than a coverage one — but
@@ -82,7 +112,10 @@ starts with `0.`:
 
 ### Compatibility
 
-Vault format unchanged. Server protocol unchanged.
+Vault format unchanged. Server protocol unchanged. A recording of a local
+session is an ordinary recording item — same type, same asciicast v2 document,
+stamped `localhost` and your OS account — so an older client lists and plays it
+without knowing where it came from.
 
 `latest.json` gains a `windows-aarch64` key alongside `windows-x86_64`; the two
 are separate entries and neither displaces the other. **An existing x64 install

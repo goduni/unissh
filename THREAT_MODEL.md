@@ -204,6 +204,37 @@ In decreasing order of importance:
    the nonce key-binding and the ZK boundary mean it **cannot** decrypt vaults or
    re-bind a stolen id_token to another keyset (see *SSO / OIDC*).
 
+## The local terminal: a process on your machine, not a new trust boundary
+
+The desktop client can open a shell on the machine it is running on. That is a
+code-execution surface, so it is stated plainly rather than left implicit.
+
+- **It runs as you, and only on your action.** The shell is an ordinary child
+  process of the app with the app's own environment, privileges and user. There
+  is no privilege escalation, no setuid path, and no way to run it as another
+  account. Nothing that arrives over the network — not a synced vault item, not a
+  server response, not a remote host's output — can open one; the only trigger is
+  a click or a keystroke in the UI.
+- **It is gated on unlock, like every session.** A locked instance has no
+  terminal view to open one from, and auto-lock closes local tabs along with SSH
+  ones, terminating the processes in them. Settings says so in as many words.
+- **The shell path is client-side configuration, which does not widen anything.**
+  It lives in the webview's `localStorage`, so "whoever can write `localStorage`
+  can choose what gets executed" is true — and already true of the same webview,
+  which can call `ssh_exec` and `session_write` directly. An attacker with script
+  execution in the webview has code execution regardless; this setting adds no
+  capability they did not already have. It is deliberately **not** vault content:
+  a shell path is a fact about one machine, and syncing it would let a
+  compromised server influence what a client starts.
+- **Recordings of local sessions are encrypted like any other**, in the vault,
+  through the same recorder. They default to the *personal* vault where one is
+  configured, because a recording of your own machine synced into a shared team
+  vault is a disclosure the toggle never asked for; when there is no personal
+  vault, Settings names the shared vault it would go to instead.
+
+Not protected, and not claimed to be: the local terminal does not sandbox,
+restrict or audit what you type into your own shell. It is your machine.
+
 ## Metadata visible by design
 
 A UniSSH server is, by definition, a store of opaque ciphertext **plus open
