@@ -36,11 +36,13 @@ starts with `0.`:
 
 - **A local terminal** on desktop: a shell on your own machine in a tab, living
   by the same rules as an SSH session — splits, zoom, search, themes,
-  copy/paste, snippets, session recording. Four ways in: the `+` picker in the
+  copy/paste, snippets, session recording. Three ways in: the `+` picker in the
   tab strip, `⌘⇧S` / `Ctrl+Shift+S` from anywhere (**S** for shell — `L` is
   "lock the instance" and a security control keeps its key; the Shift is because
-  a bare `⌘S` saves in the SFTP file editor), *Local terminal* in the sidebar,
-  and *Split → local shell* in a pane's menu. Settings → General picks
+  a bare `⌘S` saves in the SFTP file editor), and *Split → local shell* in a
+  pane's menu. Not in the sidebar: every row there is a destination you return
+  to, and a local shell is an action that opens a new tab each time. Settings →
+  General picks
   the shell, its arguments and the starting directory; leave any of them empty
   and it follows the system (`$SHELL` → your `/etc/passwd` entry → `/bin/sh`;
   `pwsh` → `powershell` → `cmd` on Windows).

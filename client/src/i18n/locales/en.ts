@@ -116,7 +116,6 @@ export const en = {
     allHosts: "All hosts",
     terminals: "Terminals",
     terminal: "Terminal",
-    localTerminal: "Local terminal",
     keys: "Keys",
     passwords: "Passwords",
     identities: "Identities",

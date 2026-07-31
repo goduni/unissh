@@ -145,7 +145,6 @@ export const ru = {
     allHosts: "Все хосты",
     terminals: "Терминалы",
     terminal: "Терминал",
-    localTerminal: "Локальный терминал",
     keys: "Ключи",
     passwords: "Пароли",
     identities: "Идентичности",
