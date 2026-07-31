@@ -330,6 +330,9 @@ const shortcutList = (): [string, string][] => {
     [`${mod}K`, "feedback.shortcut.commandPalette"],
     [`${mod}N`, "feedback.shortcut.newHost"],
     [`${mod}T`, "feedback.shortcut.goToTerminal"],
+    // The one chord that carries its own Shift on macOS too: a bare ⌘S saves in
+    // the SFTP file editor, so this one is ⌘⇧S there and Ctrl+Shift+S elsewhere.
+    [isMac() ? "⌘⇧S" : "Ctrl+Shift+S", "feedback.shortcut.localTerminal"],
     [`${mod}L`, "feedback.shortcut.lockInstance"],
     [`${mod}1–9`, "feedback.shortcut.switchSections"],
     [`${mod}+/−/0`, "feedback.shortcut.termZoom"],

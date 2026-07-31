@@ -17,6 +17,10 @@ const APP_CHORD_KEYS = new Set([
   "n", // new host
   "t", // go to terminal
   "l", // lock
+  // New local terminal, ⌘⇧S / Ctrl+Shift+S. S for shell: L is lock, and lock
+  // keeps its key. Listed unqualified because this set is about which *letters*
+  // the app claims — the Shift is checked where the shortcut is handled.
+  "s",
   "m", // desktop/mobile preview
   "/",
   ".", // shortcuts help

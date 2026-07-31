@@ -1259,6 +1259,51 @@ pub async fn session_open_reconnecting(
     Ok(id)
 }
 
+/// Open a shell on this machine, in the same session id space as SSH panes.
+///
+/// `spec` is already resolved by the frontend (see `local_shell_default`), so
+/// the program is always a concrete path — the wrapper does not reinterpret the
+/// user's settings.
+#[tauri::command]
+pub async fn local_session_open(
+    spec: dto::LocalSpec,
+    cols: u32,
+    rows: u32,
+    on_event: Channel<TermEvent>,
+    recording: Option<dto::RecordingRequest>,
+    state: State<'_, AppState>,
+) -> ApiResult<String> {
+    let core = state.core.clone();
+    let spec = spec.into();
+    let obs: Arc<dyn SessionObserver> = Arc::new(ChannelSessionObserver { chan: on_event });
+    let rec = recording.map(Into::into);
+    let session = blocking(move || core.open_local_session(spec, cols, rows, obs, rec)).await?;
+    let id = new_id();
+    state
+        .sessions
+        .insert(id.clone(), LiveSession::Local(session));
+    Ok(id)
+}
+
+/// The shell a local terminal would start by default, and who/where this machine
+/// is. Feeds both the Settings placeholder and the actual open.
+#[tauri::command]
+pub async fn local_shell_default(state: State<'_, AppState>) -> ApiResult<dto::LocalShellInfo> {
+    let core = state.core.clone();
+    blocking_ok(move || core.local_shell_default().into()).await
+}
+
+/// Split an argument string into words the way a shell would. `null` when it
+/// does not parse (an unbalanced quote), so Settings can say so.
+#[tauri::command]
+pub async fn local_shell_split_args(
+    text: String,
+    state: State<'_, AppState>,
+) -> ApiResult<Option<Vec<String>>> {
+    let core = state.core.clone();
+    blocking_ok(move || core.local_shell_split_args(text)).await
+}
+
 #[tauri::command]
 pub async fn session_write(id: String, data: Vec<u8>, state: State<'_, AppState>) -> ApiResult<()> {
     // Clone the handle out so the DashMap shard lock isn't held across the call.

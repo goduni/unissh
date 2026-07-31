@@ -16,16 +16,19 @@ import { MONO, rgba, termOptions } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, StatusDot, type IconName } from "@/components/primitives";
 import { ReconnectBanner } from "@/components/ReconnectBanner";
 import { useTranslation, Trans } from "@/i18n";
-import { useApp, type PendingMismatch, type TerminalPaneState, type TermLayout } from "@/store/app";
-import { useIsMobile } from "@/store/responsive";
-import { useCtx } from "@/store/ctx";
-import * as api from "@/bridge/api";
 import {
-  apiErrorMessage,
-  isApiError,
-  type ConnectionProfile,
-  type TermEvent,
-} from "@/bridge/types";
+  paneProfile,
+  useApp,
+  type PendingMismatch,
+  type TerminalPaneState,
+  type TermLayout,
+} from "@/store/app";
+import { useIsMobile } from "@/store/responsive";
+import { splitLocalTerminal, useCtx } from "@/store/ctx";
+import { localRecordingRequest, useLocalMachine } from "@/store/localShell";
+import { createPaneEvents, type PaneEvents } from "@/views/terminal/paneSession";
+import * as api from "@/bridge/api";
+import { apiErrorMessage, isApiError, type ConnectionProfile } from "@/bridge/types";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { isMac } from "@/bridge/platform";
 import { isAppChord } from "@/support/hotkeys";
@@ -289,24 +292,24 @@ function TerminalPane({
   // and last-online time live on the pane (store) so they survive a pane remount
   // and stay consistent across shells — see store TerminalPaneState.reconnects.
   const autoTimerRef = useRef<number | null>(null);
-  const previewBufRef = useRef("");
-  const previewTimerRef = useRef<number | null>(null);
+  // The live session's event plumbing (preview accumulation + its debounce), so
+  // an unmount can drop a pending preview push into a pane that no longer exists.
+  const eventsRef = useRef<PaneEvents | null>(null);
   // Held outside the init effect so the cleanup can reach it; the effect owns the
   // array's contents.
   const shellMarksRef = useRef<
     { marker: IMarker; exit?: number; decoration?: IDisposable }[] | null
   >(null);
-  const decoderRef = useRef<TextDecoder | null>(null);
-  const previewLinesRef = useRef<string[]>([]);
   const updatePane = useApp((s) => s.updatePane);
   const reconnectPane = useApp((s) => s.reconnectPane);
   const setActivePane = useApp((s) => s.setActivePane);
   const splitPane = useApp((s) => s.splitPane);
+  const setPaneTitle = useApp((s) => s.setPaneTitle);
   const closePane = useApp((s) => s.closePane);
   const termZoom = useApp((s) => s.termZoom);
   const isMobile = useIsMobile();
   const needsPassword =
-    pane.profile?.auth.type === "promptPassword" &&
+    paneProfile(pane)?.auth.type === "promptPassword" &&
     !pane.sessionId &&
     (pane.status === "connecting" || pane.status === "error");
   const [pw, setPw] = useState<string | null>(null);
@@ -581,6 +584,19 @@ async function runStartupSnippets(
       if (id) void api.sessionWrite(id, Array.from(new TextEncoder().encode(data)));
     });
 
+    // Window title (OSC 0/2), local panes only. Two shells on the same machine
+    // are otherwise indistinguishable — "zsh" and "zsh" — while a prompt that
+    // sets its title (starship, oh-my-zsh) names them by what they are doing.
+    // Not turned on for SSH panes: those are already named by their host, and
+    // changing what every existing tab is called is a separate decision from
+    // this feature. A tab the user renamed keeps their name — see setPaneTitle.
+    if (pane.target.kind === "local") {
+      term.onTitleChange((title) => {
+        const clean = title.trim().slice(0, 120);
+        if (clean) setPaneTitle(pane.id, clean);
+      });
+    }
+
     // While the pane is hidden (display:none on a route/tab switch) its host box
     // collapses to 0×0. FitAddon then clamps to its 2×1 minimum and rewraps the
     // whole scrollback to 2 columns — lossily, so returning leaves the last line
@@ -626,10 +642,8 @@ async function runStartupSnippets(
       disposeMarks();
       shellMarksRef.current = null;
       term.dispose();
-      if (previewTimerRef.current != null) {
-        clearTimeout(previewTimerRef.current);
-        previewTimerRef.current = null;
-      }
+      eventsRef.current?.dispose();
+      eventsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -671,8 +685,9 @@ async function runStartupSnippets(
   // open the session (once we have auth). Re-runs on a reconnect (pane.gen bumped),
   // re-opening in the SAME pane so the xterm scrollback is preserved.
   useEffect(() => {
-    if (!pane.profile) return;
-    if (pane.profile.auth.type === "promptPassword" && pw == null) return;
+    const target = pane.target;
+    if (target.kind === "ssh" && target.profile.auth.type === "promptPassword" && pw == null)
+      return;
     const term = xtermRef.current;
     if (!term) return;
     // A reconnect bumps pane.gen; the store has already closed the previous backend
@@ -706,7 +721,8 @@ async function runStartupSnippets(
     }
     if (pane.gen > 0) {
       term.writeln("");
-      term.writeln(`\x1b[2m— ${t("terminal.reconnecting")} —\x1b[0m`);
+      const again = target.kind === "local" ? "terminal.restarting" : "terminal.reconnecting";
+      term.writeln(`\x1b[2m— ${t(again)} —\x1b[0m`);
     }
     // Schedule the next auto-reconnect attempt (backoff + cap), with the budget
     // read/written on the pane. Used by both a drop and a failed reopen.
@@ -723,99 +739,78 @@ async function runStartupSnippets(
         useApp.getState().reconnectPane(tabId, pane.id);
       }, delay);
     };
-    const profile = pane.profile;
     const vaultId = useApp.getState().vaultId || "";
-    // Keep a rolling window of recent output lines so the hosts-rail shows a
-    // stable multi-line preview (real output, debounced — not just the latest
-    // tail, which at an idle prompt would collapse to one line).
-    const stripAnsi = (str: string) =>
-      str
-        .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "") // OSC
-        .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "") // CSI
-        .replace(/\x1b[@-Z\\-_]/g, "") // other escapes
-        .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ""); // stray controls
-    const lastLine = (s: string) => (s.includes("\r") ? s.slice(s.lastIndexOf("\r") + 1) : s);
-    const capturePreview = (bytes: Uint8Array) => {
-      if (!decoderRef.current) decoderRef.current = new TextDecoder();
-      const parts = (
-        previewBufRef.current + decoderRef.current.decode(bytes, { stream: true })
-      )
-        .replace(/\r\n/g, "\n") // PTY uses CRLF; normalize so lines aren't lost
-        .split("\n");
-      previewBufRef.current = (parts.pop() ?? "").slice(-2000); // incomplete trailing line
-      for (const raw of parts) {
-        const clean = stripAnsi(lastLine(raw)).replace(/\s+$/, "");
-        if (clean.trim().length) {
-          previewLinesRef.current.push(clean);
-          if (previewLinesRef.current.length > 6) previewLinesRef.current.shift();
-        }
-      }
-      if (previewTimerRef.current != null) return;
-      previewTimerRef.current = window.setTimeout(() => {
-        previewTimerRef.current = null;
-        const partial = stripAnsi(lastLine(previewBufRef.current)).replace(/\s+$/, "");
-        const all = partial.trim().length
-          ? [...previewLinesRef.current, partial]
-          : previewLinesRef.current;
-        updatePane(tabId, pane.id, { preview: all.slice(-3) });
-      }, 500);
-    };
-    const onEvent = (e: TermEvent) => {
-      if (cancelled) return; // superseded / torn-down pane — ignore late events
-      if (e.type === "data") {
-        const bytes = new Uint8Array(e.bytes);
-        term.write(bytes);
-        capturePreview(bytes);
-      } else {
-        // exit < 0 ⇒ no clean exit status (peer died / keepalive gave up) ⇒ a drop
-        // we can auto-recover. A clean shell `exit` (code ≥ 0) stays closed.
-        const dropped = e.exit < 0;
-        term.writeln("");
-        term.writeln(`\x1b[2m${t("terminal.sessionClosed", { code: e.exit })}\x1b[0m`);
+    const cols = term.cols || 80;
+    const rows = term.rows || 24;
+    // Output handling, preview accumulation and the close path are the same for
+    // both kinds of session — see views/terminal/paneSession.ts. The previous
+    // run's plumbing goes first, so a debounced preview from the session we just
+    // replaced cannot land on top of the new one.
+    eventsRef.current?.dispose();
+    const events = createPaneEvents({
+      term,
+      cancelled: () => cancelled,
+      onPreview: (lines) => updatePane(tabId, pane.id, { preview: lines }),
+      closedText: (code) => t("terminal.sessionClosed", { code }),
+      onClosed: (_exit, dropped) => {
         const old = sessionIdRef.current;
         sessionIdRef.current = null;
         // Evict the now-dead session from the core's map so reconnects don't leak it.
         if (old) void api.sessionClose(old).catch(() => {});
         updatePane(tabId, pane.id, { status: "closed", sessionId: null });
-        if (dropped) {
-          // A session that stayed online a while earns a fresh attempt budget.
-          const lt = useApp.getState().terminals.flatMap((x) => x.panes).find((x) => x.id === pane.id);
-          if (lt?.lastOnlineAt && Date.now() - lt.lastOnlineAt > STABLE_ONLINE_MS)
-            updatePane(tabId, pane.id, { reconnects: 0 });
-          scheduleAutoReconnect();
-        }
-      }
-    };
-    // Personal profiles resolve their credential in-core (binding + anti-redirect)
-    // before connecting; everything else uses the stored ProfileAuth.
-    void api
-      .resolveConnectAuth(profile, vaultId, pw ?? undefined)
-      .then(({ user, auth }) =>
-        api.sessionOpen(
-          {
-            host: profile.host,
-            port: profile.port,
-            user,
-            auth,
-            jumps: profile.jumps,
-            term: "xterm-256color",
-            cols: term.cols || 80,
-            rows: term.rows || 24,
-          },
-          onEvent,
-          // A recording per connection, not per pane: a reconnect is a new
-          // session with its own start time, and appending it to the previous
-          // document would produce one recording whose timeline lies.
-          profile.recordSessions && vaultId
-            ? {
-                vaultId,
-                recordingId: `rec-${profile.profileId}-${Date.now()}`,
-                label: profile.label,
-              }
-            : undefined,
-          profile.agentForward,
-        ),
-      )
+        if (!dropped) return;
+        // A session that stayed online a while earns a fresh attempt budget.
+        const lt = useApp.getState().terminals.flatMap((x) => x.panes).find((x) => x.id === pane.id);
+        if (lt?.lastOnlineAt && Date.now() - lt.lastOnlineAt > STABLE_ONLINE_MS)
+          updatePane(tabId, pane.id, { reconnects: 0 });
+        scheduleAutoReconnect();
+      },
+    });
+    eventsRef.current = events;
+
+    const opened =
+      target.kind === "local"
+        ? // Local sessions record under one global switch: a local pane has no
+          // profile to carry `recordSessions`. The recording lands in the
+          // personal vault when there is one — a local session pushed into a
+          // shared team vault would sync a recording of the user's own machine
+          // to their colleagues.
+          localRecordingRequest(target.spec, vaultId).then((recording) =>
+            api.localSessionOpen(target.spec, cols, rows, events.onEvent, recording),
+          )
+        : // Personal profiles resolve their credential in-core (binding +
+          // anti-redirect) before connecting; everything else uses the stored
+          // ProfileAuth.
+          api
+            .resolveConnectAuth(target.profile, vaultId, pw ?? undefined)
+            .then(({ user, auth }) =>
+              api.sessionOpen(
+                {
+                  host: target.profile.host,
+                  port: target.profile.port,
+                  user,
+                  auth,
+                  jumps: target.profile.jumps,
+                  term: "xterm-256color",
+                  cols,
+                  rows,
+                },
+                events.onEvent,
+                // A recording per connection, not per pane: a reconnect is a new
+                // session with its own start time, and appending it to the previous
+                // document would produce one recording whose timeline lies.
+                target.profile.recordSessions && vaultId
+                  ? {
+                      vaultId,
+                      recordingId: `rec-${target.profile.profileId}-${Date.now()}`,
+                      label: target.profile.label,
+                    }
+                  : undefined,
+                target.profile.agentForward,
+              ),
+            );
+
+    void opened
       .then((id) => {
         // The pane was torn down or superseded by another reconnect while this
         // connect was in flight → close the just-opened session instead of leaking
@@ -825,17 +820,28 @@ async function runStartupSnippets(
           return;
         }
         sessionIdRef.current = id;
-        lastSentSizeRef.current = { cols: term.cols || 80, rows: term.rows || 24 };
+        lastSentSizeRef.current = { cols, rows };
         updatePane(tabId, pane.id, { sessionId: id, status: "online", lastOnlineAt: Date.now() });
-        // Refresh the host's "recently connected" timestamp on every (re)connect.
-        if (profile) useApp.getState().markConnected(profile.profileId);
         term.focus();
-        void runStartupSnippets(id, profile, vaultId);
+        if (target.kind === "local") return;
+        // Refresh the host's "recently connected" timestamp on every (re)connect.
+        useApp.getState().markConnected(target.profile.profileId);
+        void runStartupSnippets(id, target.profile, vaultId);
       })
       .catch((err) => {
         if (cancelled) return;
-        term.writeln(`\x1b[31m${apiErrorMessage(err)}\x1b[0m`);
+        const message = apiErrorMessage(err);
+        term.writeln(`\x1b[31m${message}\x1b[0m`);
         sessionIdRef.current = null;
+        if (target.kind === "local") {
+          // A shell that won't start is a settings problem — a wrong path, no
+          // execute permission, a starting directory that isn't there. Retrying
+          // cannot fix any of those, so the pane says what happened and points
+          // at the setting instead of looping.
+          updatePane(tabId, pane.id, { status: "error", error: message });
+          return;
+        }
+        const profile = target.profile;
         const lt = useApp.getState().terminals.flatMap((x) => x.panes).find((x) => x.id === pane.id);
         // Host-key mismatch is a security stop, not a connectivity failure: surface
         // the Accept/Reject ceremony (in-pane card + the Known hosts banner) instead
@@ -849,7 +855,7 @@ async function runStartupSnippets(
                 fingerprint: err.fingerprint ?? "",
               }
             : undefined;
-        updatePane(tabId, pane.id, { status: "error", error: apiErrorMessage(err), mismatch });
+        updatePane(tabId, pane.id, { status: "error", error: message, mismatch });
         if (mismatch) {
           useApp.getState().setPendingMismatch(mismatch);
           return;
@@ -1221,6 +1227,17 @@ async function runStartupSnippets(
             { icon: "clipboard", label: t("terminal.menu.paste"), onClick: () => void pasteClipboard() },
             { icon: "grid", label: t("terminal.menu.splitRight"), onClick: () => splitPane(tabId, pane.id, "row") },
             { icon: "list", label: t("terminal.menu.splitDown"), onClick: () => splitPane(tabId, pane.id, "col") },
+            // Split into a shell on this machine, rather than another of
+            // whatever this pane is. Desktop only, like every other way in.
+            ...(isMobile
+              ? []
+              : [
+                  {
+                    icon: "laptop" as IconName,
+                    label: t("terminal.menu.splitLocal"),
+                    onClick: () => void splitLocalTerminal(tabId, pane.id, "row"),
+                  },
+                ]),
             { icon: "x", label: t("terminal.menu.closePane"), danger: true, onClick: () => closePane(tabId, pane.id) },
           ]}
         />
@@ -1363,6 +1380,67 @@ function Divider({ tabId, split, lineColor }: { tabId: string; split: SplitRect;
   );
 }
 
+/** Who the focused pane is talking to, in the status bar.
+ *
+ * A local pane must never be mistakable for a production host — running the
+ * wrong command in the wrong place is exactly the failure "trust is visible" is
+ * there to prevent. So a local pane says so in words, with the machine's own
+ * name and the OS account, next to a laptop rather than the usual host text. */
+function PaneIdentity({ pane }: { pane: TerminalPaneState }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const machine = useLocalMachine();
+  const local = pane.target.kind === "local";
+  const profile = paneProfile(pane);
+  if (!local && !profile) return null;
+
+  // Ellipsize so a long user@host token can't push the theme/settings control
+  // off the fixed-height bar.
+  const text = local
+    ? machine
+      ? `${machine.user}@${machine.hostname}`
+      : ""
+    : profile!.user
+      ? `${profile!.user}@${profile!.host}`
+      : profile!.host;
+
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        color: p.txt2,
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {local && <Icon name="laptop" size={12} color={p.txt3} />}
+      {text}
+      {local && (
+        // The word, not just the icon: an icon alone is a thing to learn, and
+        // the cost of not learning it is running something on the wrong machine.
+        <span
+          style={{
+            flexShrink: 0,
+            padding: "1px 6px",
+            borderRadius: 6,
+            border: `1px solid ${p.line2}`,
+            color: p.txt3,
+            fontSize: 10,
+            letterSpacing: 0.4,
+            textTransform: "uppercase",
+          }}
+        >
+          {t("terminal.localBadge")}
+        </span>
+      )}
+    </span>
+  );
+}
+
 type DropDir = "left" | "right" | "top" | "bottom";
 
 /** Which edge of a pane the pointer is nearest — picks the split direction when a
@@ -1499,6 +1577,7 @@ export function ViewTerminal() {
           }}
           onReorder={moveTerminal}
           onPickHost={(h) => ctx.connect(h)}
+          onPickLocal={ctx.openLocal}
         />
       )}
 
@@ -1620,22 +1699,7 @@ export function ViewTerminal() {
             label={statusWord}
             srLabel={focusedPane?.status}
           />
-          {focusedPane?.profile && (
-            // Ellipsize the host so a long user@host token can't push the theme/settings control off the fixed-height bar.
-            <span
-              style={{
-                color: p.txt2,
-                minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {focusedPane.profile.user
-                ? `${focusedPane.profile.user}@${focusedPane.profile.host}`
-                : focusedPane.profile.host}
-            </span>
-          )}
+          {focusedPane && <PaneIdentity pane={focusedPane} />}
           {active && focusedPane && (
             <>
               <button

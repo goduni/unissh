@@ -317,7 +317,10 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
   // one tap: re-open the session in the SAME tab (keeps the scrollback) instead of
   // spawning a fresh tab and discarding it.
   const reconnect = () => {
-    if (!active || !activePane?.profile) return;
+    // The local terminal is desktop-only, so a pane here is always an SSH one —
+    // but this reads the target rather than assuming it, so a future mobile
+    // local pane would restart correctly instead of silently doing nothing.
+    if (!active || !activePane) return;
     reconnectPane(active.id, activePane.id, true); // manual: fresh auto-reconnect budget
   };
 

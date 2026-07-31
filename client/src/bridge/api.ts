@@ -31,6 +31,8 @@ import type {
   JumpHost,
   KnownHostInfo,
   KnownHostsImport,
+  LocalPaneSpec,
+  LocalShellInfo,
   MemberInfo,
   MemberRole,
   MultiExecResult,
@@ -476,6 +478,31 @@ export async function sessionOpenReconnecting(
   ch.onmessage = onEvent;
   return invoke<string>("session_open_reconnecting", { ...a, onEvent: ch, agentForward });
 }
+/** Open a shell on this machine. Shares the session id space with SSH panes, so
+ *  sessionWrite/sessionResize/sessionClose drive it unchanged. */
+export async function localSessionOpen(
+  spec: LocalPaneSpec,
+  cols: number,
+  rows: number,
+  onEvent: (e: TermEvent) => void,
+  recording?: RecordingRequest,
+): Promise<string> {
+  const ch = new Channel<TermEvent>();
+  ch.onmessage = onEvent;
+  return invoke<string>("local_session_open", {
+    spec: { program: spec.shell, args: spec.args, cwd: spec.cwd ?? null },
+    cols,
+    rows,
+    onEvent: ch,
+    recording: recording ?? null,
+  });
+}
+/** The default shell for this machine (also the Settings placeholder). */
+export const localShellDefault = () => invoke<LocalShellInfo>("local_shell_default");
+/** Split an argument string shell-style; null when it doesn't parse. */
+export const localShellSplitArgs = (text: string) =>
+  invoke<string[] | null>("local_shell_split_args", { text });
+
 export const sessionWrite = (id: string, data: number[]) =>
   invoke<void>("session_write", { id, data });
 export const sessionResize = (id: string, cols: number, rows: number) =>

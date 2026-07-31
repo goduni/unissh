@@ -100,7 +100,10 @@ export function TextEditor({
       if (e.key === "Escape") {
         e.preventDefault();
         requestClose();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "s") {
+        // Not with Shift: ⌘⇧S / Ctrl+Shift+S opens a local terminal (see
+        // shell/useTerminalShortcuts.ts). Save is the bare chord, precisely,
+        // rather than everything that happens to contain an S.
         e.preventDefault();
         if (editable && dirty && !saving) void save();
       }

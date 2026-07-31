@@ -889,6 +889,16 @@ export function Sidebar({
               terminals.some((tm) => tm.panes.some((pp) => pp.status === "online")) ? p.green : undefined
             }
           />
+          {/* Every click opens a NEW local tab rather than switching to an
+              existing one: it reads as "open", like everything else in this
+              group, and two local terminals is an ordinary thing to want.
+              Deliberately not a card in the hosts grid — that grid carries
+              multi-select, tags, groups, a context menu and hand-off to Fleet
+              and SFTP, and a local shell would have to be excluded from each.
+              This sidebar is the desktop shell (App.tsx renders MobileApp
+              instead on phones), which is where the feature is hidden on
+              mobile. */}
+          <NavItem icon="laptop" label={t("nav.localTerminal")} onClick={ctx.openLocal} />
           <NavItem icon="folders" label={t("nav.sftp")} active={route === "sftp"} onClick={() => ctx.go("sftp")} />
           <NavItem icon="radio" label={t("nav.run")} active={RUN_ROUTES.includes(route)} onClick={() => ctx.go("run")} />
         </NavGroup>

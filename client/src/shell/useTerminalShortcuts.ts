@@ -6,13 +6,30 @@
 // Modifier scheme (avoids clobbering the shell):
 //   macOS      → Cmd (metaKey)
 //   others     → Ctrl+Shift  (so a bare Ctrl+<key> still reaches the shell)
-// Shortcuts: new tab (T), close pane/tab (W), split right (D) / down (E),
-//   jump to tab N (1..8, 9=last), focus prev/next pane (Arrows). Tab cycling is
-//   Ctrl+Tab / Ctrl+Shift+Tab on every platform.
+// Shortcuts: new tab (T), local shell (⇧S), close pane/tab (W), split right (D)
+//   / down (E), jump to tab N (1..8, 9=last), focus prev/next pane (Arrows). Tab
+//   cycling is Ctrl+Tab / Ctrl+Shift+Tab on every platform.
+//
+// The local shell is ⌘⇧S / Ctrl+Shift+S, and both halves of that are deliberate.
+// Not L (the obvious mnemonic): ⌘L / Ctrl+Shift+L is "lock the instance", and a
+// security control does not give up its key to a convenience. S for shell, with
+// Shift because a bare ⌘S / Ctrl+S saves in the SFTP file editor.
 
 import { useEffect } from "react";
 import { useApp, layoutPaneOrder } from "@/store/app";
+import { openLocalTerminal } from "@/store/ctx";
 import { isMac } from "@/bridge/platform";
+
+/** True for a real text field the user is typing into.
+ *
+ *  xterm's hidden helper textarea is excluded on purpose: it is not a text field
+ *  in this sense, it *is* the terminal, and the shortcuts have to work there. */
+function inTextField(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "INPUT") return true;
+  return el.tagName === "TEXTAREA" && !el.classList.contains("xterm-helper-textarea");
+}
 
 export function useTerminalShortcuts(enabled: boolean): void {
   useEffect(() => {
@@ -20,6 +37,29 @@ export function useTerminalShortcuts(enabled: boolean): void {
     const mac = isMac();
     const onKey = (e: KeyboardEvent) => {
       const st = useApp.getState();
+      const chord = mac
+        ? e.metaKey && !e.ctrlKey && !e.altKey
+        : e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey;
+
+      // A shell on this machine opens from anywhere: it creates its own tab and
+      // routes to the terminal, so requiring you to already be there would make
+      // the chord useless exactly where it is most useful. Every other shortcut
+      // here acts on an existing tab and stays route-scoped.
+      //
+      // `e.code` as well as `e.key`, because on macOS ⇧ turns the key into "S"
+      // and on some layouts into something else entirely.
+      if (
+        chord &&
+        e.shiftKey &&
+        (e.key.toLowerCase() === "s" || e.code === "KeyS") &&
+        !inTextField(e.target)
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        void openLocalTerminal();
+        return;
+      }
+
       if (st.route !== "terminal") return;
       const tabs = st.terminals;
       const active = tabs.find((t) => t.id === st.activeTermId) ?? tabs[tabs.length - 1];
@@ -36,10 +76,7 @@ export function useTerminalShortcuts(enabled: boolean): void {
         return;
       }
 
-      const primary = mac
-        ? e.metaKey && !e.ctrlKey && !e.altKey
-        : e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey;
-      if (!primary) return;
+      if (!chord) return;
 
       // Jump to tab N (1..8), 9 = last. e.code so Shift+digit symbols still map.
       const digit = /^Digit([1-9])$/.exec(e.code);

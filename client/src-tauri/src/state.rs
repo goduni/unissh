@@ -9,19 +9,25 @@ use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use unissh_ffi::{
-    BroadcastSession, CancelToken, Core, ExecHandleFfi, FfiError, ReconnectingSession, SftpFfi,
-    SshSession, SshTunnel,
+    BroadcastSession, CancelToken, Core, ExecHandleFfi, FfiError, LocalSession,
+    ReconnectingSession, SftpFfi, SshSession, SshTunnel,
 };
 
 use crate::cloud::CloudState;
 
-/// A live interactive PTY — either a plain session or an auto-reconnecting one.
-/// `Clone` is cheap (clones the inner `Arc`) and lets commands lift the handle
-/// out of the `DashMap` so the shard lock isn't held across a blocking core call.
+/// A live interactive PTY — a plain SSH session, an auto-reconnecting one, or a
+/// shell on this machine. `Clone` is cheap (clones the inner `Arc`) and lets
+/// commands lift the handle out of the `DashMap` so the shard lock isn't held
+/// across a blocking core call.
+///
+/// One enum, one id space: `session_write` / `session_resize` / `session_close`
+/// serve all three, which is what lets the whole terminal UI — snippets, splits,
+/// the command palette — work on a local pane without knowing it is one.
 #[derive(Clone)]
 pub enum LiveSession {
     Plain(Arc<SshSession>),
     Reconnecting(Arc<ReconnectingSession>),
+    Local(Arc<LocalSession>),
 }
 
 impl LiveSession {
@@ -29,12 +35,14 @@ impl LiveSession {
         match self {
             LiveSession::Plain(s) => s.write(data),
             LiveSession::Reconnecting(s) => s.write(data),
+            LiveSession::Local(s) => s.write(data),
         }
     }
     pub fn resize(&self, cols: u32, rows: u32) -> Result<(), FfiError> {
         match self {
             LiveSession::Plain(s) => s.resize(cols, rows),
             LiveSession::Reconnecting(s) => s.resize(cols, rows),
+            LiveSession::Local(s) => s.resize(cols, rows),
         }
     }
     pub fn close(&self) {
@@ -43,6 +51,7 @@ impl LiveSession {
                 let _ = s.close();
             }
             LiveSession::Reconnecting(s) => s.close(),
+            LiveSession::Local(s) => s.close(),
         }
     }
 }
