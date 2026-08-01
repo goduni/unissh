@@ -1303,6 +1303,46 @@ impl From<RecordingRequest> for ffi::RecordingRequest {
     }
 }
 
+// ---------- local terminal ----------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSpec {
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+}
+
+impl From<LocalSpec> for ffi::LocalSpec {
+    fn from(s: LocalSpec) -> Self {
+        ffi::LocalSpec {
+            program: s.program,
+            args: s.args,
+            cwd: s.cwd,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalShellInfo {
+    pub program: String,
+    pub args: Vec<String>,
+    pub user: String,
+    pub hostname: String,
+}
+
+impl From<ffi::LocalShellInfo> for LocalShellInfo {
+    fn from(i: ffi::LocalShellInfo) -> Self {
+        LocalShellInfo {
+            program: i.program,
+            args: i.args,
+            user: i.user,
+            hostname: i.hostname,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingMeta {

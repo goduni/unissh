@@ -11,11 +11,16 @@ import type { ConnectionProfile } from "@/bridge/types";
 export function HostMenu({
   hosts,
   onPick,
+  onPickLocal,
   onClose,
   align = "right",
 }: {
   hosts: ConnectionProfile[];
   onPick: (h: ConnectionProfile) => void;
+  /** Offer "shell on this machine" above the hosts. Optional because this menu
+   *  is also the SFTP picker, where a local shell would mean nothing — passing
+   *  it is what makes it a terminal picker. */
+  onPickLocal?: () => void;
   onClose: () => void;
   /** Which edge of the "+" to anchor to. Right (default) for a flush-right "+"
    *  (SFTP); left when the "+" sits just after the tabs (terminal), so the menu
@@ -52,6 +57,12 @@ export function HostMenu({
     ? hosts.filter((h) => `${h.label} ${h.user}@${h.host}:${h.port}`.toLowerCase().includes(ql))
     : hosts;
   const showSearch = hosts.length > 6;
+  // The local entry filters like every other row rather than staying pinned
+  // through a search: a list being narrowed that keeps one row regardless reads
+  // as a bug, not as an action.
+  const showLocal =
+    !!onPickLocal &&
+    (!ql || `${t("terminal.localShell")} ${t("terminal.localShellHint")}`.toLowerCase().includes(ql));
 
   // Nudge the menu back inside the viewport if the anchor edge would push it off
   // (e.g. a left-anchored terminal "+" sitting far right, or vice-versa).
@@ -106,6 +117,41 @@ export function HostMenu({
           }}
         />
       )}
+      {showLocal && (
+        <>
+          <button
+            onClick={onPickLocal}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 9,
+              width: "100%",
+              padding: "7px 9px",
+              borderRadius: 8,
+              border: "1px solid transparent",
+              background: "transparent",
+              color: p.txt,
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = p.bg2)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <Icon name="laptop" size={15} color={p.txt3} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
+                {t("terminal.localShell")}
+              </span>
+              <span style={{ display: "block", fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+                {t("terminal.localShellHint")}
+              </span>
+            </span>
+          </button>
+          {/* Separated, not just listed first: this one does not go over the
+              network, and the list below is entirely about things that do. */}
+          <div style={{ height: 1, background: p.line2, margin: "5px 4px" }} />
+        </>
+      )}
       {hosts.length === 0 && (
         <button
           onClick={() => {
@@ -133,7 +179,7 @@ export function HostMenu({
           {t("sftp.addHost")}
         </button>
       )}
-      {ql && filtered.length === 0 && hosts.length > 0 && (
+      {ql && filtered.length === 0 && !showLocal && hosts.length > 0 && (
         <div style={{ padding: "8px 10px", fontSize: 13, color: p.txt3 }}>{t("sftp.noMatches", { q })}</div>
       )}
       {filtered.map((h) => (

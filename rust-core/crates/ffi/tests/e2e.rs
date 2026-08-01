@@ -4261,3 +4261,293 @@ fn system_agent_missing_key_is_named() {
         "the error must say the agent lacks the key, got: {msg}"
     );
 }
+
+// ── local terminal ─────────────────────────────────────────────
+//
+// The point of these is the wiring, not the pty (that is `unissh-local-pty`'s
+// own test suite): that a local session reaches the same observer, the same
+// recorder and the same vault as an SSH one, and is described honestly when it
+// lands there. unix-only, like the crate's tests, because CI runs the workspace
+// suite on ubuntu and a Windows-named test nobody runs would be worse than an
+// admitted gap.
+
+#[cfg(unix)]
+#[test]
+fn local_session_streams_output_and_exit_code() {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    struct Obs {
+        buf: std::sync::Mutex<Vec<u8>>,
+        exit: AtomicI32,
+    }
+    impl unissh_ffi::SessionObserver for Obs {
+        fn on_data(&self, data: Vec<u8>) {
+            self.buf.lock().unwrap().extend_from_slice(&data);
+        }
+        fn on_close(&self, exit_status: i32) {
+            self.exit.store(exit_status, Ordering::SeqCst);
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+
+    let obs = Arc::new(Obs {
+        buf: std::sync::Mutex::new(Vec::new()),
+        exit: AtomicI32::new(i32::MIN),
+    });
+    let session = core
+        .open_local_session(
+            unissh_ffi::LocalSpec {
+                program: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "echo local-marker; exit 3".to_string()],
+                cwd: None,
+            },
+            80,
+            24,
+            obs.clone(),
+            None,
+        )
+        .expect("a local session must open on a desktop platform");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while obs.exit.load(Ordering::SeqCst) == i32::MIN {
+        assert!(Instant::now() <= deadline, "the shell never closed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        contains(&obs.buf.lock().unwrap(), b"local-marker"),
+        "the shell's output never reached the observer"
+    );
+    // Never negative: the UI reads a negative code as "the link dropped, offer
+    // to reconnect", and a local shell has no link to drop.
+    assert_eq!(obs.exit.load(Ordering::SeqCst), 3);
+    session.close();
+}
+
+#[cfg(unix)]
+#[test]
+fn local_session_records_into_the_vault() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    struct Obs(AtomicBool);
+    impl unissh_ffi::SessionObserver for Obs {
+        fn on_data(&self, _data: Vec<u8>) {}
+        fn on_close(&self, _exit_status: i32) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+
+    let obs = Arc::new(Obs(AtomicBool::new(false)));
+    let session = core
+        .open_local_session(
+            unissh_ffi::LocalSpec {
+                program: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "echo recorded-locally".to_string()],
+                cwd: None,
+            },
+            80,
+            24,
+            obs.clone(),
+            Some(unissh_ffi::RecordingRequest {
+                vault_id: "v".to_string(),
+                recording_id: "rec-local".to_string(),
+                label: "sh".to_string(),
+            }),
+        )
+        .expect("a local session must open on a desktop platform");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let meta = loop {
+        if let Some(m) = core
+            .list_recordings("v".to_string())
+            .unwrap()
+            .into_iter()
+            .next()
+        {
+            break m;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the local recording was never written"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    assert_eq!(meta.recording_id, "rec-local");
+    assert_eq!(meta.label, "sh");
+    // What a local session ran against, said plainly — and what lets
+    // ViewRecordings list it with no special case at all.
+    assert_eq!(meta.host, "localhost");
+    assert_eq!(meta.user, unissh_local_pty::os_username());
+    assert!(!meta.truncated);
+
+    let body = core
+        .get_recording("v".to_string(), "rec-local".to_string())
+        .unwrap();
+    assert!(
+        body.contains("recorded-locally"),
+        "the recording is missing the output it was made of"
+    );
+    assert!(
+        body.lines()
+            .next()
+            .unwrap_or_default()
+            .contains("\"version\":2"),
+        "a local recording must be the same asciicast v2 document as any other, got: {}",
+        body.lines().next().unwrap_or_default()
+    );
+    session.close();
+}
+
+#[cfg(unix)]
+#[test]
+fn local_session_rejects_a_zero_terminal_size() {
+    use std::sync::Arc;
+
+    struct Obs;
+    impl unissh_ffi::SessionObserver for Obs {
+        fn on_data(&self, _data: Vec<u8>) {}
+        fn on_close(&self, _exit_status: i32) {}
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+
+    // `LocalSession` is not Debug (nor is `SshSession`), so unwrap the error by
+    // hand rather than through expect_err.
+    let err = match core.open_local_session(
+        unissh_ffi::LocalSpec {
+            program: "/bin/sh".to_string(),
+            args: vec![],
+            cwd: None,
+        },
+        0,
+        24,
+        Arc::new(Obs),
+        None,
+    ) {
+        Ok(_) => panic!("a 0-column terminal is not a terminal"),
+        Err(e) => e,
+    };
+    assert!(format!("{err}").contains("non-zero"), "got: {err}");
+}
+
+#[test]
+fn local_shell_default_is_usable_as_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    let info = core.local_shell_default();
+    // The Settings placeholder shows this, and an empty shell field falls back
+    // to it — so "" here would mean a pane that cannot open and a placeholder
+    // that says nothing.
+    assert!(!info.program.is_empty(), "no default shell was resolved");
+    assert!(!info.user.is_empty());
+    assert!(!info.hostname.is_empty());
+}
+
+#[test]
+fn local_shell_split_args_parses_like_a_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    assert_eq!(
+        core.local_shell_split_args("-c \"echo hi\"".to_string()),
+        Some(vec!["-c".to_string(), "echo hi".to_string()])
+    );
+    // An unbalanced quote is a mistake to surface, not to guess at.
+    assert_eq!(core.local_shell_split_args("\"oops".to_string()), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_local_recording_survives_the_auto_lock_that_kills_it() {
+    // The scenario the synchronous close exists for. Auto-lock drops every live
+    // session and *then* locks the vault (`commands.rs::lock`), so a session's
+    // recording has to be written in the window between those two steps. If it
+    // is not, the user loses the recording of the session auto-lock ended —
+    // which is exactly the session they are most likely to want back.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    struct Obs {
+        seen: std::sync::Mutex<Vec<u8>>,
+        closed: AtomicBool,
+    }
+    impl unissh_ffi::SessionObserver for Obs {
+        fn on_data(&self, data: Vec<u8>) {
+            self.seen.lock().unwrap().extend_from_slice(&data);
+        }
+        fn on_close(&self, _exit_status: i32) {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    let secret = core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+
+    let obs = Arc::new(Obs {
+        seen: std::sync::Mutex::new(Vec::new()),
+        closed: AtomicBool::new(false),
+    });
+    let session = core
+        .open_local_session(
+            unissh_ffi::LocalSpec {
+                program: "/bin/sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "echo before-the-lock; sleep 120".to_string(),
+                ],
+                cwd: None,
+            },
+            80,
+            24,
+            obs.clone(),
+            Some(unissh_ffi::RecordingRequest {
+                vault_id: "v".to_string(),
+                recording_id: "rec-locked".to_string(),
+                label: "sh".to_string(),
+            }),
+        )
+        .expect("a local session must open on a desktop platform");
+
+    // Wait until the shell has actually produced output, so there is a recording
+    // worth losing.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !contains(&obs.seen.lock().unwrap(), b"before-the-lock") {
+        assert!(Instant::now() <= deadline, "the shell never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Exactly what auto-lock does, in the same order and with nothing in between.
+    drop(session);
+    core.lock();
+
+    core.unlock(None, secret).unwrap();
+    let list = core.list_recordings("v".to_string()).unwrap();
+    assert_eq!(
+        list.len(),
+        1,
+        "the recording was lost to the lock that followed the close"
+    );
+    let body = core
+        .get_recording("v".to_string(), "rec-locked".to_string())
+        .unwrap();
+    assert!(
+        body.contains("before-the-lock"),
+        "the recording exists but is missing what the session printed"
+    );
+}

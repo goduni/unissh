@@ -16,6 +16,7 @@ import { BOOT_CHECK_DELAY_MS, PERIODIC_CHECK_MS } from "@/bridge/updater";
 
 import { ViewHosts } from "@/views/ViewHosts";
 import { ViewTerminal } from "@/views/ViewTerminal";
+import { shouldRetryOnResume } from "@/views/terminal/paneSession";
 import { ViewRun } from "@/views/ViewRun";
 import { ViewSftp } from "@/views/sftp/ViewSftp";
 import { ViewTunnels } from "@/views/ViewTunnels";
@@ -197,16 +198,7 @@ export function App() {
       if (!st.unlocked) return;
       for (const tab of st.terminals) {
         for (const pane of tab.panes) {
-          // "closed" is an exited shell — the user's own `exit`, not a drop.
-          // Reconnecting that would resurrect a session they deliberately ended.
-          //
-          // A host-key mismatch is also status "error", and must never be
-          // retried: the attempt cannot succeed, and each one re-offers a
-          // possibly hostile key for acceptance. That decision belongs to the
-          // Accept/Reject ceremony, not to a resume.
-          if (pane.status === "error" && !pane.mismatch) {
-            st.reconnectPane(tab.id, pane.id, true);
-          }
+          if (shouldRetryOnResume(pane)) st.reconnectPane(tab.id, pane.id, true);
         }
       }
     };

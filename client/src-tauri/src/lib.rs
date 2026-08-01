@@ -296,6 +296,10 @@ pub fn run() {
             commands::session_write,
             commands::session_resize,
             commands::session_close,
+            // local terminal (write/resize/close are the session_* ones above)
+            commands::local_session_open,
+            commands::local_shell_default,
+            commands::local_shell_split_args,
             // broadcast
             commands::broadcast_open,
             commands::broadcast_write_all,

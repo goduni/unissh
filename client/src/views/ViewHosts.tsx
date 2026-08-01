@@ -11,7 +11,7 @@ import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, 
 import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { pressActivate, useMenu } from "@/components/a11y";
-import { useApp, HOST_FILTER_ALL } from "@/store/app";
+import { useApp, paneProfile, HOST_FILTER_ALL } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useCtx } from "@/store/ctx";
 import * as api from "@/bridge/api";
@@ -768,7 +768,8 @@ function SessionsRail() {
         id: tab.id,
         title: tab.title,
         status: online ? "online" : connecting ? "connecting" : "closed",
-        profile: pane?.profile,
+        profile: pane ? paneProfile(pane) : null,
+        local: pane?.target.kind === "local",
         preview: pane?.preview,
       };
     })
@@ -785,13 +786,18 @@ function SessionsRail() {
         const online = t.status === "online";
         const color = online ? p.green : p.amber;
         const statusLabel = tr(online ? "terminal.status.online" : "terminal.status.connecting");
+        // The laptop icon is aria-hidden, so the label carries the local marker
+        // too — which session runs on which machine must not need eyesight.
+        const cardLabel = t.local
+          ? `${t.title} · ${tr("terminal.localBadge")} — ${statusLabel}`
+          : `${t.title} — ${statusLabel}`;
         return (
           <div
             key={t.id}
             role="button"
             tabIndex={0}
-            title={`${t.title} — ${statusLabel}`}
-            aria-label={`${t.title} — ${statusLabel}`}
+            title={cardLabel}
+            aria-label={cardLabel}
             onKeyDown={pressActivate(() => {
               useApp.getState().setActiveTerm(t.id);
               ctx.go("terminal");
@@ -822,13 +828,19 @@ function SessionsRail() {
                   boxSizing: "border-box",
                 }}
               />
+              {/* A local session is marked here too: this rail is the list you
+                  scan to find "the one I was working in", and picking the wrong
+                  one is picking the wrong machine. */}
+              {t.local && <Icon name="laptop" size={13} color={p.txt3} />}
               <span style={{ fontSize: 13, fontWeight: 700 }}>{t.title}</span>
               <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
-                {t.profile
-                  ? t.profile.user
-                    ? `${t.profile.user}@${t.profile.host}`
-                    : t.profile.host
-                  : "pty"}
+                {t.local
+                  ? tr("terminal.localShell")
+                  : t.profile
+                    ? t.profile.user
+                      ? `${t.profile.user}@${t.profile.host}`
+                      : t.profile.host
+                    : "pty"}
               </span>
               <div style={{ flex: 1 }} />
               <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
@@ -1339,8 +1351,9 @@ export function ViewHosts() {
       new Set(
         terminals
           .flatMap((t) => t.panes)
-          .filter((pp) => pp.status === "online" && pp.profile)
-          .map((pp) => pp.profile!.profileId),
+          .filter((pp) => pp.status === "online")
+          .map((pp) => paneProfile(pp)?.profileId)
+          .filter((id): id is string => !!id),
       ),
     [terminals],
   );

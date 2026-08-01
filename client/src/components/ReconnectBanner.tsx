@@ -7,7 +7,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { rgba } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
 import { useTranslation } from "@/i18n";
-import type { TerminalPaneState } from "@/store/app";
+import { useApp, type TerminalPaneState } from "@/store/app";
 
 export function ReconnectBanner({
   pane,
@@ -23,6 +23,11 @@ export function ReconnectBanner({
   const isError = pane.status === "error";
   const message = isError ? pane.error || t("terminal.status.closed") : t("terminal.status.closed");
   const float = variant === "float";
+  // A local shell did not lose a connection — it exited, or never started. The
+  // action is the same one (re-open in this pane, keeping the scrollback); the
+  // word for it is not, and calling it "Reconnect" would describe a network
+  // event that never happened.
+  const local = pane.target.kind === "local";
 
   const floatStyle: CSSProperties = {
     position: "absolute",
@@ -65,8 +70,16 @@ export function ReconnectBanner({
       >
         {message}
       </span>
+      {/* A local shell that would not start failed for a reason the settings
+          hold — a wrong path, no execute permission, a directory that isn't
+          there. Point at the place that fixes it, next to the retry that won't. */}
+      {local && isError && (
+        <Btn size="sm" variant="ghost" icon="sliders" onClick={() => useApp.getState().go("settings")}>
+          {t("nav.settings")}
+        </Btn>
+      )}
       <Btn size="sm" icon="refresh" onClick={onReconnect}>
-        {t("terminal.reconnect")}
+        {t(local ? "terminal.restart" : "terminal.reconnect")}
       </Btn>
     </div>
   );

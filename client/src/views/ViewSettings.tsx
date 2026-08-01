@@ -35,6 +35,7 @@ import { ServerVaultsSection } from "./ServerVaultsSection";
 import { Modal } from "@/components/Modal";
 import type { IconName } from "@/components/primitives";
 import { useApp } from "@/store/app";
+import { localShellSettings, setLocalShellSetting, useLocalMachine } from "@/store/localShell";
 import { useCtx } from "@/store/ctx";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
@@ -778,6 +779,7 @@ function SettingsGeneral() {
   const setModernAlgorithms = useApp((s) => s.setModernAlgorithms);
   const sftpParallelism = useApp((s) => s.sftpParallelism);
   const setSftpParallelism = useApp((s) => s.setSftpParallelism);
+  const isMobile = useIsMobile();
 
   // Master-password instances can't auto-unlock at startup (the password is
   // stored nowhere), so gate the "start unlocked" option honestly. Treat the
@@ -896,6 +898,10 @@ function SettingsGeneral() {
         />
       </SettingRow>
 
+      {/* Desktop-only, like the feature: the mobile shell has no local terminal
+          to configure, and settings for something that cannot exist are noise. */}
+      {!isMobile && <SettingsLocalTerminal />}
+
       <SectionLabel>{t("settings.sectionBehavior")}</SectionLabel>
       <SettingRow title={t("settings.confirmQuitTitle")} desc={t("settings.confirmQuitDesc")}>
         <Toggle checked={confirmQuit} onChange={onConfirmQuit} />
@@ -913,6 +919,149 @@ function SettingsGeneral() {
           </Btn>
         </div>
       </SettingRow>
+    </>
+  );
+}
+
+// ── Local terminal ─────────────────────────────────────────────
+//
+// These four live in localStorage, not the vault: a shell path is a fact about
+// one machine, and syncing "/opt/homebrew/bin/fish" to a Windows laptop would be
+// worse than useless. Read once per pane, so editing them never rewrites what a
+// running pane is doing — the next terminal you open picks them up.
+function SettingsLocalTerminal() {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const vaults = useApp((s) => s.vaults);
+  const vaultId = useApp((s) => s.vaultId);
+  const machine = useLocalMachine();
+  const [shell, setShell] = useState(() => localShellSettings().shell);
+  const [args, setArgs] = useState(() => localShellSettings().args);
+  const [cwd, setCwd] = useState(() => localShellSettings().cwd);
+  const [record, setRecord] = useState(() => localShellSettings().record);
+  // Whether the argument string parses. Checked by the same splitter that will
+  // run at open time, so the warning can't disagree with the behaviour.
+  const [argsOk, setArgsOk] = useState(true);
+  const [personalVault, setPersonalVault] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .getPersonalVault()
+      .then((v) => {
+        if (alive) setPersonalVault(v);
+      })
+      .catch(() => {
+        /* no personal vault configured; the shared-vault note applies */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    if (!args.trim()) {
+      setArgsOk(true);
+      return;
+    }
+    api
+      .localShellSplitArgs(args)
+      .then((parsed) => {
+        if (alive) setArgsOk(parsed !== null);
+      })
+      .catch(() => {
+        /* leave the last verdict rather than flag a valid string on an IPC blip */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [args]);
+
+  const onShell = (v: string) => {
+    setShell(v);
+    setLocalShellSetting("shell", v);
+  };
+  const onArgs = (v: string) => {
+    setArgs(v);
+    setLocalShellSetting("args", v);
+  };
+  const onCwd = (v: string) => {
+    setCwd(v);
+    setLocalShellSetting("cwd", v);
+  };
+  const onRecord = (v: boolean) => {
+    setRecord(v);
+    setLocalShellSetting("record", v ? "1" : "0");
+  };
+
+  // Name the vault a recording would actually land in. The toggle is not
+  // blocked either way — it is the user's machine and their choice — but which
+  // vault it syncs to is not something to discover afterwards.
+  // The vault may not be in the list yet (a reload in flight). Naming it by id
+  // is less useful than naming it by name, but a sentence with a blank where the
+  // vault should be is worse than either.
+  const selectedVaultName = vaults.find((v) => v.vaultId === vaultId)?.name || vaultId;
+  const recordNote = personalVault
+    ? t("settings.localRecordVaultPersonal")
+    : selectedVaultName
+      ? t("settings.localRecordVaultShared", { vault: selectedVaultName })
+      : t("settings.localRecordVaultNone");
+
+  return (
+    <>
+      <SectionLabel>{t("settings.sectionLocalTerminal")}</SectionLabel>
+      <SettingRow title={t("settings.localShellTitle")} desc={t("settings.localShellDesc")}>
+        <input
+          value={shell}
+          onChange={(e) => onShell(e.target.value)}
+          placeholder={
+            machine ? t("settings.localShellAuto", { program: machine.program }) : undefined
+          }
+          {...NO_AUTOCORRECT}
+          style={{ ...inputStyle(p, true), maxWidth: 340 }}
+        />
+      </SettingRow>
+      <SettingRow
+        title={t("settings.localArgsTitle")}
+        desc={argsOk ? t("settings.localArgsDesc") : t("settings.localArgsInvalid")}
+      >
+        <input
+          value={args}
+          onChange={(e) => onArgs(e.target.value)}
+          placeholder={
+            machine
+              ? machine.args.length
+                ? t("settings.localArgsAuto", { args: machine.args.join(" ") })
+                : t("settings.localArgsAutoNone")
+              : undefined
+          }
+          {...NO_AUTOCORRECT}
+          style={{
+            ...inputStyle(p, true),
+            maxWidth: 340,
+            borderColor: argsOk ? p.line2 : p.red,
+          }}
+        />
+      </SettingRow>
+      <SettingRow title={t("settings.localCwdTitle")} desc={t("settings.localCwdDesc")}>
+        <input
+          value={cwd}
+          onChange={(e) => onCwd(e.target.value)}
+          placeholder={t("settings.localCwdAuto")}
+          {...NO_AUTOCORRECT}
+          style={{ ...inputStyle(p, true), maxWidth: 340 }}
+        />
+      </SettingRow>
+      <SettingRow
+        title={t("settings.localRecordTitle")}
+        desc={`${t("settings.localRecordDesc")} ${recordNote}`}
+      >
+        <Toggle checked={record} onChange={onRecord} />
+      </SettingRow>
+      <div style={{ fontSize: 12, color: p.txt3, marginTop: 12 }}>
+        {t("settings.localLockNote")}
+      </div>
     </>
   );
 }

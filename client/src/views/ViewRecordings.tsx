@@ -211,7 +211,20 @@ export function ViewRecordings() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    // `flex: 1`, not `height: 100%` — see ViewSnippets. The route slot is a flex
+    // ROW, and a child without a basis is sized by its content, so the header
+    // re-laid out the moment the list underneath it arrived.
+    <div
+      className="uh-view"
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        background: p.bg0,
+        overflow: "hidden",
+      }}
+    >
       <div
         style={{
           display: "flex",
@@ -231,6 +244,7 @@ export function ViewRecordings() {
       </div>
 
       <div
+        className="uh-stagger"
         style={{
           flex: 1,
           overflow: "auto",

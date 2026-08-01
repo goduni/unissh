@@ -26,6 +26,12 @@ function tabState(tab: TerminalTab): TabState {
   if (st.includes("connecting")) return "connecting";
   return "closed";
 }
+/** A tab is local when every pane in it is — a mixed split keeps the plain look
+ *  and lets each pane's own status line say where it runs. */
+function isLocalTab(tab: TerminalTab): boolean {
+  return tab.panes.length > 0 && tab.panes.every((p) => p.target.kind === "local");
+}
+
 const TAB_STATE_KEY: Record<TabState, string> = {
   online: "terminal.status.online",
   error: "terminal.status.error",
@@ -47,6 +53,7 @@ export function TermTabStrip({
   onReconnect,
   onReorder,
   onPickHost,
+  onPickLocal,
 }: {
   terminals: TerminalTab[];
   activeId: string | null;
@@ -61,6 +68,8 @@ export function TermTabStrip({
   onReconnect: (id: string) => void;
   onReorder: (id: string, toIndex: number) => void;
   onPickHost: (h: ConnectionProfile) => void;
+  /** Open a shell on this machine from the "+" menu. */
+  onPickLocal: () => void;
 }) {
   const p = usePalette();
   const { t } = useTranslation();
@@ -143,6 +152,13 @@ export function TermTabStrip({
           const state = tabState(tab);
           const stateLabel = tDyn(TAB_STATE_KEY[state]);
           const dotColor = state === "online" ? p.green : state === "error" ? p.red : p.txt3;
+          const local = isLocalTab(tab);
+          // The local marker belongs in the label too, not only in the icon: an
+          // icon is `aria-hidden`, and "which machine is this" is exactly the
+          // thing a screen-reader user must not have to infer.
+          const label = local
+            ? `${tab.title} · ${t("terminal.localBadge")} — ${stateLabel}`
+            : `${tab.title} — ${stateLabel}`;
           return (
             <div
               key={tab.id}
@@ -150,8 +166,8 @@ export function TermTabStrip({
               role="tab"
               aria-selected={on}
               tabIndex={0}
-              title={`${tab.title} — ${stateLabel}`}
-              aria-label={`${tab.title} — ${stateLabel}`}
+              title={label}
+              aria-label={label}
               onKeyDown={pressActivate(() => onActivate(tab.id))}
               draggable={renaming !== tab.id}
               onDragStart={(e) => {
@@ -221,6 +237,9 @@ export function TermTabStrip({
                   boxSizing: "border-box",
                 }}
               />
+              {/* A local tab is marked, always. Two tabs called "zsh" and
+                  "web-prod-01" must not be one glance apart. */}
+              {local && <Icon name="laptop" size={13} style={{ opacity: 0.75 }} />}
               {renaming === tab.id ? (
                 <input
                   autoFocus
@@ -326,6 +345,10 @@ export function TermTabStrip({
             onPick={(h) => {
               setAdding(false);
               onPickHost(h);
+            }}
+            onPickLocal={() => {
+              setAdding(false);
+              onPickLocal();
             }}
           />
         )}

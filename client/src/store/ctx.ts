@@ -2,9 +2,10 @@
 // prototype's `ctx` DI object so ported views read almost 1:1.
 
 import { useTheme } from "@/theme/ThemeProvider";
-import type { ConnectionProfile } from "@/bridge/types";
+import { apiErrorMessage, type ConnectionProfile } from "@/bridge/types";
 import { openSession } from "@/views/sftp/session";
-import { useApp, makePane, mkTabId, type ModalKind, type Route } from "./app";
+import { useApp, makeLocalPane, makePane, mkTabId, type ModalKind, type Route } from "./app";
+import { resolveLocalPaneSpec } from "./localShell";
 import { toast } from "./toast";
 
 /** Open a new terminal tab (single pane) for a saved host profile. The Terminal
@@ -26,6 +27,43 @@ export function connectById(profileId: string) {
   const s = useApp.getState();
   const profile = s.hosts.find((h) => h.profileId === profileId);
   if (profile) connectProfile(profile);
+}
+
+/** Open a new tab running a shell on this machine.
+ *
+ *  The spec is resolved first, so the pane is born with a concrete program and a
+ *  real title — a pane holding "" as its shell would have nothing to put in the
+ *  tab, nothing to restart, and nothing to name in an error. A failure to even
+ *  resolve it (the core is unreachable) surfaces as a toast rather than a dead
+ *  pane, because at that point there is no pane to put the message in. */
+export async function openLocalTerminal(): Promise<void> {
+  const spec = await resolveLocalPaneSpec().catch((e) => {
+    toast(apiErrorMessage(e), "err");
+    return null;
+  });
+  if (!spec) return;
+  const pane = makeLocalPane(spec);
+  useApp.getState().addTerminal({
+    id: mkTabId("local"),
+    title: spec.label,
+    panes: [pane],
+    layout: { kind: "pane", paneId: pane.id },
+    activePaneId: pane.id,
+  });
+}
+
+/** Split a pane, putting a local shell in the new half. */
+export async function splitLocalTerminal(
+  tabId: string,
+  paneId: string,
+  dir: "row" | "col",
+): Promise<void> {
+  const spec = await resolveLocalPaneSpec().catch((e) => {
+    toast(apiErrorMessage(e), "err");
+    return null;
+  });
+  if (!spec) return;
+  useApp.getState().splitPane(tabId, paneId, dir, { kind: "local", spec });
 }
 
 /** Quick SFTP: open an SFTP session to a host and jump to the SFTP view with the
@@ -57,6 +95,8 @@ export interface Ctx {
   connect: (profile: ConnectionProfile) => void;
   connectSftp: (profile: ConnectionProfile) => Promise<void>;
   connectById: (id: string) => void;
+  /** Open a new tab with a shell on this machine (desktop only). */
+  openLocal: () => void;
   reloadVault: () => Promise<void>;
   termThemeId: string;
 }
@@ -82,6 +122,7 @@ export function useCtx(): Ctx {
     connect: connectProfile,
     connectSftp,
     connectById,
+    openLocal: () => void openLocalTerminal(),
     reloadVault: s.reloadVault,
     termThemeId: theme.termThemeId,
   };

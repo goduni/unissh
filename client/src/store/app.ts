@@ -16,6 +16,7 @@ import type {
   ConnectionProfile,
   ItemInfo,
   KnownHostInfo,
+  LocalPaneSpec,
   ServerGroup,
   ServerStatus,
   SyncReport,
@@ -77,6 +78,22 @@ export type Device = "desktop" | "mobile";
 
 export type TermStatus = "connecting" | "online" | "closed" | "error";
 
+/** What a pane's PTY is: a saved host across SSH, or a shell on this machine.
+ *
+ *  A tagged union rather than an optional `local` field on purpose. Every place
+ *  that used to write `if (!src?.profile) return` is a place where a local pane
+ *  would silently do nothing — split and duplicate among them. Making the two
+ *  cases explicit means the compiler names those places instead of the user
+ *  finding them. */
+export type PaneTarget =
+  | { kind: "ssh"; profile: ConnectionProfile }
+  | { kind: "local"; spec: LocalPaneSpec };
+
+/** The host profile behind a pane, or null when it is a local shell. For the
+ *  many read-only call sites that only care about the SSH case. */
+export const paneProfile = (pane: TerminalPaneState): ConnectionProfile | null =>
+  pane.target.kind === "ssh" ? pane.target.profile : null;
+
 /** A single terminal session: one xterm bound to one backend PTY. The pane is the
  *  unit that connects/reconnects; a tab arranges one or more panes in a layout.
  *  (Was `TerminalTab` before split support — the fields are unchanged.) */
@@ -84,7 +101,7 @@ export interface TerminalPaneState {
   id: string; // local pane id
   sessionId: string | null; // backend session id (null until opened)
   title: string;
-  profile?: ConnectionProfile;
+  target: PaneTarget;
   status: TermStatus;
   error?: string;
   /** Set when a connect attempt failed with a host-key mismatch. Drives the
@@ -129,11 +146,27 @@ export const mkSplitId = (): string => `split-${(splitSeq += 1)}-${performance.n
 
 /** Build a fresh connecting pane for a host profile. */
 export function makePane(profile: ConnectionProfile): TerminalPaneState {
+  return makeTargetPane({ kind: "ssh", profile });
+}
+
+/** Build a fresh pane for a shell on this machine. The spec is already
+ *  resolved — see `store/localShell.ts` — so the title is a real program name. */
+export function makeLocalPane(spec: LocalPaneSpec): TerminalPaneState {
+  return makeTargetPane({ kind: "local", spec });
+}
+
+/** Build a pane for either kind of target. Split/duplicate go through this, so
+ *  copying a pane never has to know which kind it copied. */
+export function makeTargetPane(target: PaneTarget): TerminalPaneState {
+  const [seed, title] =
+    target.kind === "ssh"
+      ? [target.profile.profileId, target.profile.label]
+      : ["local", target.spec.label];
   return {
-    id: mkPaneId(profile.profileId),
+    id: mkPaneId(seed),
     sessionId: null,
-    title: profile.label,
-    profile,
+    title,
+    target,
     status: "connecting",
     gen: 0,
     reconnects: 0,
@@ -412,7 +445,7 @@ interface AppStore {
     targetPaneId: string,
     dir: "left" | "right" | "top" | "bottom",
   ) => void;
-  duplicateTerminal: (id: string) => void; // new tab, same host as the active pane
+  duplicateTerminal: (id: string) => void; // new tab, same target as the active pane
   renameTerminal: (id: string, title: string) => void;
   closeOtherTerminals: (id: string) => void;
   closeTerminalsToRight: (id: string) => void;
@@ -421,9 +454,16 @@ interface AppStore {
 
   // terminals — panes within a tab (split support)
   updatePane: (tabId: string, paneId: string, patch: Partial<TerminalPaneState>) => void;
+  /** A shell named its own window (OSC 0/2). Renames the pane, and the tab with
+   *  it when this is the tab's focused pane — unless the user has renamed the
+   *  tab, in which case their name wins and nothing overrides it. */
+  setPaneTitle: (paneId: string, title: string) => void;
   setActivePane: (tabId: string, paneId: string) => void;
-  /** Split the pane: duplicate its host into a new pane beside/below it. */
-  splitPane: (tabId: string, paneId: string, dir: "row" | "col") => void;
+  /** Split the pane: put a new pane beside/below it. `target` omitted = another
+   *  of whatever this pane already is (a second connection to the same host, or
+   *  a second local shell); pass one to split into something else, which is how
+   *  "Split → Local shell" works. */
+  splitPane: (tabId: string, paneId: string, dir: "row" | "col", target?: PaneTarget) => void;
   /** Close one pane (its session); collapses the split, or closes the tab if last. */
   closePane: (tabId: string, paneId: string) => void;
   setSplitRatio: (tabId: string, splitId: string, ratio: number) => void;
@@ -1352,11 +1392,13 @@ export const useApp = create<AppStore>((set, get) => ({
     set((s) => {
       const tab = s.terminals.find((t) => t.id === id);
       const src = tab?.panes.find((p) => p.id === tab.activePaneId) ?? tab?.panes[0];
-      if (!tab || !src?.profile) return {};
-      const pane = makePane(src.profile);
+      if (!tab || !src) return {};
+      // Duplicates whatever the source pane is — a second shell on this machine
+      // is as reasonable a thing to want as a second connection to a host.
+      const pane = makeTargetPane(src.target);
       const newTab: TerminalTab = {
-        id: mkTabId(src.profile.profileId),
-        title: tab.customTitle ? tab.title : src.profile.label,
+        id: mkTabId(src.target.kind === "ssh" ? src.target.profile.profileId : "local"),
+        title: tab.customTitle ? tab.title : pane.title,
         customTitle: tab.customTitle,
         panes: [pane],
         layout: { kind: "pane", paneId: pane.id },
@@ -1403,17 +1445,31 @@ export const useApp = create<AppStore>((set, get) => ({
           : t,
       ),
     })),
+  setPaneTitle: (paneId, title) =>
+    set((s) => ({
+      // Addressed by pane id, like updatePane: a drag-merge moves a pane to a
+      // tab the caller never knew about.
+      terminals: s.terminals.map((t) => {
+        if (!t.panes.some((p) => p.id === paneId)) return t;
+        const panes = t.panes.map((p) => (p.id === paneId ? { ...p, title } : p));
+        // A split shows one title; it belongs to the focused pane. And a tab the
+        // user named keeps that name, whatever the shell says about itself.
+        const takesTab = !t.customTitle && t.activePaneId === paneId;
+        return { ...t, panes, title: takesTab ? title : t.title };
+      }),
+    })),
   setActivePane: (tabId, paneId) =>
     set((s) => ({
       terminals: s.terminals.map((t) => (t.id === tabId ? { ...t, activePaneId: paneId } : t)),
     })),
-  splitPane: (tabId, paneId, dir) =>
+  splitPane: (tabId, paneId, dir, target) =>
     set((s) => ({
       terminals: s.terminals.map((tab) => {
         if (tab.id !== tabId) return tab;
         const src = tab.panes.find((p) => p.id === paneId);
-        if (!src?.profile) return tab; // can only duplicate a real host pane
-        const pane = makePane(src.profile);
+        if (!src) return tab;
+        // No target given = split into another of whatever this pane already is.
+        const pane = makeTargetPane(target ?? src.target);
         const splitNode: TermLayout = {
           kind: "split",
           id: mkSplitId(),

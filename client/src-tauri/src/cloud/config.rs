@@ -252,22 +252,34 @@ impl CloudState {
             active: Mutex::new(active),
             refresh_gate: Mutex::new(()),
         };
+        // Drop orphaned refresh tokens for the duplicate links we collapsed.
+        //
+        // On a THREAD, and that is not tidiness. This constructor runs inside
+        // Tauri's `setup`, on the main thread, before there is a window: on Linux
+        // a keychain call is a Secret Service round trip that can raise the
+        // keyring's own unlock prompt, and doing that on the main thread before
+        // the app has a UI is how a launch hangs. Nothing waits on this cleanup —
+        // an orphan left behind is unreferenced, not harmful — so it is the one
+        // keychain touch here that can simply be moved off the path.
+        //
+        // (The pre-multi-server global refresh token is NOT migrated here for the
+        // same reason. `tokens::load_refresh` picks it up on first read instead,
+        // which is both off the main thread and exactly where it is needed.)
+        if !dropped.is_empty() {
+            let orphans = dropped.clone();
+            std::thread::spawn(move || {
+                for id in &orphans {
+                    if let Err(e) = tokens::delete_refresh(id) {
+                        log::warn!(
+                            "cloud: failed to drop refresh token for duplicate link {id}: {e}"
+                        );
+                    }
+                }
+            });
+        }
         // A legacy/partial sidecar minted fresh ids on load. Persist immediately
         // so the id is STABLE across boots — otherwise every launch re-mints it
-        // and `server_login` leaks a new keychain refresh-token entry. Also move
-        // the pre-multi-server global refresh token onto the per-server account
-        // so an upgrading single-server user keeps their session.
-        if migrated {
-            if let Some(id) = state.active.lock().unwrap().clone() {
-                tokens::migrate_legacy(&id);
-            }
-        }
-        // Drop orphaned refresh tokens for the duplicate links we collapsed.
-        for id in &dropped {
-            if let Err(e) = tokens::delete_refresh(id) {
-                log::warn!("cloud: failed to drop refresh token for duplicate link {id}: {e}");
-            }
-        }
+        // and `server_login` leaks a new keychain refresh-token entry.
         if migrated || deduped {
             let _ = state.persist();
         }

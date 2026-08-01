@@ -34,6 +34,38 @@ starts with `0.`:
 
 ### Added
 
+- **A local terminal** on desktop: a shell on your own machine in a tab, living
+  by the same rules as an SSH session — splits, zoom, search, themes,
+  copy/paste, snippets, session recording. Three ways in: the `+` picker in the
+  tab strip, `⌘⇧S` / `Ctrl+Shift+S` from anywhere (**S** for shell — `L` is
+  "lock the instance" and a security control keeps its key; the Shift is because
+  a bare `⌘S` saves in the SFTP file editor), and *Split → local shell* in a
+  pane's menu. Not in the sidebar: every row there is a destination you return
+  to, and a local shell is an action that opens a new tab each time. Settings →
+  General picks
+  the shell, its arguments and the starting directory; leave any of them empty
+  and it follows the system (`$SHELL` → your `/etc/passwd` entry → `/bin/sh`;
+  `pwsh` → `powershell` → `cmd` on Windows).
+
+  A local pane is **always marked as local** — a laptop icon in the tab and the
+  session rail, and the machine's own name with the word *local* in the status
+  bar. Running the right command on the wrong machine is exactly the failure
+  this feature could otherwise introduce, so telling the two apart is not left
+  to memory. A local shell also never auto-reconnects: it does not drop off the
+  network, it exits, and the pane offers **Restart** in the same place.
+
+  Auto-lock closes local tabs along with everything else and terminates the
+  processes running in them — Settings says so rather than leaving you to find
+  out. Recording local sessions is off by default and, when switched on, writes
+  to your **personal** vault where you have one, so a recording of your own
+  machine does not sync to a shared team vault; if there is no personal vault,
+  Settings names the vault it would use instead.
+
+  **Not on mobile.** On iOS this is not a matter of effort: the sandbox forbids
+  `fork`/`exec` and there is no shell in the bundle — which is why terminal apps
+  there either link commands as a library or ship an x86 emulator. Android could
+  do it and deliberately does not. The entry points are hidden there and the
+  core answers "not available on this platform".
 - **Windows builds for ARM64** (`_arm64-setup.exe` and `_arm64_en-US.msi`),
   alongside the existing x86-64 ones. Windows on ARM already ran the x64 build
   under emulation, so this is a performance gap rather than a coverage one — but
@@ -64,12 +96,45 @@ starts with `0.`:
   `EGL_PLATFORM=x11` nor `WEBKIT_DISABLE_DMABUF_RENDERER` helps, since the
   mismatch bites when Mesa loads the library, before any of those settings mean
   anything.
-- **The window could become impossible to close** — not by the button, not by a
-  WM hotkey, not by the compositor, leaving `Ctrl+C` in the launching terminal as
-  the only way out. Tauri hands the close decision to the app and destroys the
-  window only once our handler returns; it neither catches exceptions nor times
-  out, so any failure inside it disabled closing permanently rather than merely
-  skipping the confirmation. Every path through that handler now fails open.
+- **The window could not be closed at all** — not by the button, not by a WM
+  hotkey, not by the compositor, leaving `Ctrl+C` in the launching terminal or
+  killing the process as the only way out. Two separate causes, both fixed.
+
+  The one that bit every platform: asking for the confirm-on-quit prompt is not a
+  passive subscription. Once the app listens for the close, Tauri stops closing
+  the window itself and waits for the app to finish the job — and finishing it
+  needs a permission that *closing* does not, which we had never granted. So the
+  final step was refused every time, silently, on every route out of the window.
+  It went unnoticed for as long as it did because `⌘Q` on macOS quits the app
+  without going through the window at all, and because on Linux the app drew its
+  own close button until this release handed the frame to tiling window managers
+  — which is how it surfaced, from an Arch/niri desktop where the compositor is
+  the only way to close a window.
+
+  The second: Tauri destroys the window only once our handler returns, and it
+  neither catches exceptions nor times out, so any failure inside it disabled
+  closing permanently rather than merely skipping the confirmation. Every path
+  through that handler now fails open.
+- **On Linux the Secret Key was remembered in the wrong place.** "Remember on
+  this device" wrote to the kernel keyutils facility, which is a cache: it is
+  held in memory, it is cleared by a reboot, and nothing in it appears in
+  Seahorse, KWalletManager or any other tool where you would look for — or
+  revoke — a stored credential. It now uses the Secret Service (GNOME Keyring,
+  KWallet, or whatever your desktop provides), which is the actual counterpart of
+  the macOS Keychain and the Windows Credential Manager: it survives a reboot and
+  it is visible and revocable where you expect. A key an older build left in
+  keyutils is moved across the first time it is read, so upgrading in a session
+  you have not rebooted keeps your key; upgrading after a reboot means entering
+  it once more, which was already true every time you rebooted. On a desktop
+  running no Secret Service at all the feature cannot work and now says so in the
+  log instead of appearing to work until the next boot.
+- **"New snippet" jumped across the header one frame after opening Snippets**,
+  and Recordings had the same defect. Both views sized themselves by their own
+  content instead of filling the window, so the header was laid out twice: once
+  against the width of the header alone, then again once the list underneath it
+  arrived. One frame, but a very visible one on a fast display. Snippets,
+  Recordings and Tunnels also gained the entry motion the rest of the app has
+  had — they were the three views still appearing without any.
 - **Resizing the window was laggy.** The root component kept the window width in
   state as a pixel value, so every frame of a resize re-rendered the entire app —
   though the only question ever asked of that number was whether the sidebar
@@ -82,7 +147,10 @@ starts with `0.`:
 
 ### Compatibility
 
-Vault format unchanged. Server protocol unchanged.
+Vault format unchanged. Server protocol unchanged. A recording of a local
+session is an ordinary recording item — same type, same asciicast v2 document,
+stamped `localhost` and your OS account — so an older client lists and plays it
+without knowing where it came from.
 
 `latest.json` gains a `windows-aarch64` key alongside `windows-x86_64`; the two
 are separate entries and neither displaces the other. **An existing x64 install
@@ -96,6 +164,15 @@ appearance preferences — it is not part of the vault and does not sync. Leavin
 it untouched keeps the detection live on every boot, which is what makes the
 same vault behave correctly on a tiling session and a plain desktop; setting it
 once freezes the answer for that install.
+
+**Linux only:** the store behind "remember the Secret Key on this device"
+changes (see Fixed), and the cloud refresh token moves with it. Nothing in the
+vault or on the wire is affected, and no other platform is touched. Whatever the
+old build left in keyutils is carried across on first read, so upgrading in a
+session you have not rebooted keeps both your Secret Key and your server
+session; if keyutils had already been cleared — by a reboot, which is what
+keyutils does — you enter the Secret Key and sign in once more, and after that
+they last.
 
 ## [0.2.0] — 2026-07-30
 

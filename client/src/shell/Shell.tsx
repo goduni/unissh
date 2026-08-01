@@ -889,6 +889,11 @@ export function Sidebar({
               terminals.some((tm) => tm.panes.some((pp) => pp.status === "online")) ? p.green : undefined
             }
           />
+          {/* No local-terminal item here on purpose. Every other row in this
+              nav is a destination you return to; a local shell is an action
+              that spawns a new tab each time, which made it the odd one out.
+              It is reached from the "+" picker, ⌘⇧S / Ctrl+Shift+S, and a
+              pane's Split menu. */}
           <NavItem icon="folders" label={t("nav.sftp")} active={route === "sftp"} onClick={() => ctx.go("sftp")} />
           <NavItem icon="radio" label={t("nav.run")} active={RUN_ROUTES.includes(route)} onClick={() => ctx.go("run")} />
         </NavGroup>

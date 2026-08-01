@@ -178,8 +178,8 @@ export function ViewTunnels() {
   const activeCount = tunnels.filter((tun) => tun.on).length;
 
   return (
-    // Entry motion comes from the uh-stagger row rise below — no root fade on top.
     <div
+      className="uh-view"
       style={{
         flex: 1,
         display: "flex",
@@ -217,7 +217,11 @@ export function ViewTunnels() {
         </Btn>
       </div>
 
+      {/* The stagger sits on the scroll body, not on the row list alone: the empty
+          state and the footer note are body content too, and animating only the
+          rows left them popping in against a body that was still rising. */}
       <div
+        className="uh-stagger"
         style={{
           flex: 1,
           overflow: "auto",
@@ -264,7 +268,7 @@ export function ViewTunnels() {
             </Btn>
           </div>
         ) : (
-          <div className="uh-stagger" style={{ display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", flexDirection: "column" }}>
             {tunnels.map((tun, i) => (
               <TunnelRow key={tun.id} t={tun} first={i === 0} />
             ))}

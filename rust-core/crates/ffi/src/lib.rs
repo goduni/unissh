@@ -43,6 +43,7 @@ use unissh_keychain::{
     store_account_id, unlock_account, unlock_account_migrating, EncryptedKeyset, KdfParams,
     OnboardInitiator, OnboardResponder, SecretKey, ServerAuthChallenge,
 };
+use unissh_local_pty::{LocalPty, PtySink};
 use unissh_ssh_agent::{generate_ed25519_openssh, InMemoryAgent};
 use unissh_ssh_transport::{
     canonical_host_key, trust_host_key, Auth, ConnectOptions, ExecHandle, ForwardGuard, OutputSink,
@@ -3256,6 +3257,8 @@ impl Core {
                         started_unix,
                     }),
                     saved: std::sync::atomic::AtomicBool::new(false),
+                    // SSH: on_close lands on a tokio worker — see the field.
+                    write_inline: false,
                 })
             }
         };
@@ -3269,6 +3272,102 @@ impl Core {
             shell,
             rt: self.rt.clone(),
         }))
+    }
+
+    /// Opens an interactive PTY session with a shell on **this** machine.
+    ///
+    /// Same shape as [`Core::open_session`] — same observer, same optional
+    /// recording, same session id space in the UI — with no network in it. The
+    /// output goes through the identical sink chain, which is why a local
+    /// recording is an ordinary recording that [`Core::list_recordings`] and the
+    /// player pick up without knowing the difference.
+    ///
+    /// Returns `FfiError::Other` on iOS and Android — see `LOCAL_TERMINAL_SUPPORTED`.
+    ///
+    /// Not gated on unlock by itself; the UI reaches it only from an unlocked
+    /// window, and a recording (which does need the vault) fails on its own terms
+    /// if the core is locked. Nothing reachable from the network can call this:
+    /// spawning a process happens only on a user action in the UI.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_local_session(
+        &self,
+        spec: LocalSpec,
+        cols: u32,
+        rows: u32,
+        observer: Arc<dyn SessionObserver>,
+        recording: Option<RecordingRequest>,
+    ) -> Result<Arc<LocalSession>, FfiError> {
+        if !LOCAL_TERMINAL_SUPPORTED {
+            return Err(FfiError::Other {
+                msg: "local terminal is not available on this platform".to_string(),
+            });
+        }
+        check_term_size(cols, rows)?;
+        let sink: Arc<dyn OutputSink> = match recording {
+            None => Arc::new(ObserverSink(observer)),
+            Some(req) => {
+                let started_unix = unix_now();
+                let recorder = Arc::new(SessionRecorder::new(cols, rows, &req.label, started_unix));
+                Arc::new(RecordingSink {
+                    inner: Arc::new(ObserverSink(observer)),
+                    recorder,
+                    saver: Arc::new(RecordingSaver {
+                        state: self.state.clone(),
+                        vault_id: req.vault_id,
+                        recording_id: req.recording_id,
+                        label: req.label,
+                        // What a local session ran against, said plainly: this
+                        // machine, as this OS account. `ViewRecordings` needs no
+                        // special case to list it.
+                        host: "localhost".to_string(),
+                        user: unissh_local_pty::os_username(),
+                        started_unix,
+                    }),
+                    saved: std::sync::atomic::AtomicBool::new(false),
+                    // Local: on_close lands on the pty's waiter thread, which
+                    // `close` is already waiting for — and auto-lock is right
+                    // behind it. See the field.
+                    write_inline: true,
+                })
+            }
+        };
+        let pty = LocalPty::spawn(
+            unissh_local_pty::LocalSpec {
+                program: spec.program,
+                args: spec.args,
+                cwd: spec.cwd.filter(|d| !d.is_empty()).map(PathBuf::from),
+                cols: narrow_term(cols),
+                rows: narrow_term(rows),
+            },
+            Arc::new(PtySinkBridge(sink)),
+        )
+        .map_err(FfiError::other)?;
+        Ok(Arc::new(LocalSession { pty }))
+    }
+
+    /// The shell a local terminal starts when the user has not chosen one, plus
+    /// who and where this machine is.
+    ///
+    /// Serves two callers at once: the placeholder in Settings (so the field can
+    /// say what "auto" resolves to instead of leaving the user guessing) and the
+    /// actual program used when that field is empty.
+    pub fn local_shell_default(&self) -> LocalShellInfo {
+        let choice = unissh_local_pty::resolve_default_shell();
+        LocalShellInfo {
+            program: choice.program,
+            args: choice.args,
+            user: unissh_local_pty::os_username(),
+            hostname: unissh_local_pty::machine_name(),
+        }
+    }
+
+    /// Splits the user's argument string into words the way a shell would, so
+    /// `-c "echo hi"` is two arguments rather than three.
+    ///
+    /// `None` when the string does not parse (an unbalanced quote) — a mistake
+    /// the settings field should show rather than silently reinterpret.
+    pub fn local_shell_split_args(&self, text: String) -> Option<Vec<String>> {
+        unissh_local_pty::split_args(&text)
     }
 
     /// Opens an interactive PTY session with auto-reconnect: on a drop (a `write`
@@ -6234,6 +6333,21 @@ fn jump_to_stored(j: JumpHost) -> Result<StoredJump, FfiError> {
     })
 }
 
+/// Whether [`Core::open_local_session`] can do anything on this platform.
+///
+/// iOS forbids `fork`/`exec` outright and ships no shell to run — which is why
+/// the terminal apps there either link commands as a library or carry an x86
+/// emulator. Android could do it (toybox + bionic's `openpty`) and deliberately
+/// does not.
+///
+/// A runtime constant rather than `#[cfg]` around the implementation: the pty
+/// crate compiles for both mobile targets, so gating the *code* would buy
+/// nothing and cost a platform-specific build to get wrong. The method, the
+/// types and the generated bindings are identical everywhere — bindings that
+/// differ per platform are the worst kind of difference to debug — and the UI
+/// hides the entry points on mobile rather than relying on this error.
+const LOCAL_TERMINAL_SUPPORTED: bool = !cfg!(any(target_os = "ios", target_os = "android"));
+
 /// Validates a terminal size at the FFI boundary: both dimensions > 0, otherwise garbage
 /// (e.g. 0×0 from an uninitialized UI) would go to the server.
 fn check_term_size(cols: u32, rows: u32) -> Result<(), FfiError> {
@@ -6661,6 +6775,39 @@ pub struct RecordingRequest {
     pub recording_id: String,
     /// Human-readable label.
     pub label: String,
+}
+
+/// What to start in a local terminal.
+///
+/// A snapshot, not a reference to the settings: a pane restarted an hour later
+/// brings up the same shell it was opened with, and editing the settings does
+/// not silently rewrite what a live pane is running.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct LocalSpec {
+    /// Absolute path to the shell binary. Already resolved by the caller — see
+    /// [`Core::local_shell_default`] — so it is never empty.
+    pub program: String,
+    /// Arguments, already split into words (see [`Core::local_shell_split_args`]).
+    pub args: Vec<String>,
+    /// Starting directory. Empty or absent = the user's home, which is where a
+    /// terminal is expected to open — not wherever the app bundle was launched
+    /// from.
+    pub cwd: Option<String>,
+}
+
+/// The default shell for this machine, and who/where the machine is.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct LocalShellInfo {
+    /// Absolute path to the shell that would be used.
+    pub program: String,
+    /// The arguments that come with it (`-l` on macOS, where a login shell is
+    /// the norm and without it `~/.zprofile` never runs).
+    pub args: Vec<String>,
+    /// The OS account this app runs as.
+    pub user: String,
+    /// This machine's hostname — what tells a local pane apart from a remote one
+    /// in the status line.
+    pub hostname: String,
 }
 
 /// A reusable command.
@@ -7098,6 +7245,23 @@ struct RecordingSink {
     recorder: Arc<SessionRecorder>,
     saver: Arc<RecordingSaver>,
     saved: std::sync::atomic::AtomicBool,
+    /// Write the recording on the thread that reported the close, instead of a
+    /// detached one.
+    ///
+    /// Whose thread it is decides this, and the two session kinds differ:
+    ///
+    /// - **SSH** delivers `on_close` on a tokio worker (the channel reader
+    ///   task). Writing to the vault needs the core lock, which a concurrent
+    ///   connect holds across its `block_on` — blocking a worker here would
+    ///   starve the very runtime that connect is waiting on, and with few cores
+    ///   that is a deadlock, not a delay. So: detached.
+    /// - **Local** delivers it from the pty's own waiter thread, which
+    ///   `LocalPty::close` is already blocked on and *means* to block on. And
+    ///   the write must finish there: auto-lock drops every live session and
+    ///   then locks the vault, so a detached write is racing a lock that is
+    ///   already on its way — a race it loses every time. Pinned by
+    ///   `a_local_recording_survives_the_auto_lock_that_kills_it`.
+    write_inline: bool,
 }
 
 impl OutputSink for RecordingSink {
@@ -7110,15 +7274,14 @@ impl OutputSink for RecordingSink {
         // closing, the transport dropping — which is why the write happens here
         // rather than in an explicit close(): a dropped connection is exactly the
         // session someone will want the recording of.
-        //
-        // On a dedicated thread, and that is not an optimisation. This runs on a
-        // tokio worker (the channel reader task), while writing to the vault
-        // needs the core lock — which a concurrent connect holds across its
-        // `block_on`. Blocking workers here would starve the very runtime that
-        // connect is waiting on, and with few cores that is a deadlock, not a
-        // delay. Detached because nothing waits for the result: the session is
-        // over, and the observer below must be told immediately either way.
         if !self.saved.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            if self.write_inline {
+                // The observer first: the pane should go "closed" the moment the
+                // shell is gone, not once the vault write has landed.
+                self.inner.on_close(exit_status);
+                self.saver.save(&self.recorder);
+                return;
+            }
             let saver = Arc::clone(&self.saver);
             let recorder = Arc::clone(&self.recorder);
             std::thread::spawn(move || saver.save(&recorder));
@@ -7135,6 +7298,28 @@ impl OutputSink for ObserverSink {
     }
     fn on_close(&self, exit_status: Option<u32>) {
         self.0.on_close(exit_status.map(|c| c as i32).unwrap_or(-1));
+    }
+}
+
+/// Feeds a local pty's output into the ordinary session sink chain.
+///
+/// The chain (observer, optionally wrapped by the recorder) is typed on the SSH
+/// transport's `OutputSink` because that is what the recorder was built around;
+/// the local pty declares its own trait rather than depending on the SSH stack.
+/// Ten lines here are what keeps both of those true, and is why a local
+/// recording needs no separate recorder.
+struct PtySinkBridge(Arc<dyn OutputSink>);
+
+impl PtySink for PtySinkBridge {
+    fn on_data(&self, data: Vec<u8>) {
+        self.0.on_data(data);
+    }
+    fn on_close(&self, exit_status: i32) {
+        // `None` here means "no exit status", which `ObserverSink` reports to the
+        // UI as -1 — its signal for "the link dropped, offer to reconnect". A
+        // local shell has no link to drop, so it always carries a real code, and
+        // `max(0)` makes that structural rather than a promise.
+        self.0.on_close(Some(exit_status.max(0) as u32));
     }
 }
 
@@ -7225,6 +7410,49 @@ impl SshSession {
     pub fn close(&self) -> Result<(), FfiError> {
         self.rt.block_on(self.shell.close()).map_err(FfiError::ssh)
     }
+}
+
+/// An interactive session with a shell on this machine.
+///
+/// The same three verbs as [`SshSession`], and deliberately nothing else: there
+/// is no runtime to drive and no reconnect to offer. A local shell does not drop
+/// off the network — it exits, and the UI answers that with **Restart**.
+#[derive(uniffi::Object)]
+pub struct LocalSession {
+    pty: LocalPty,
+}
+
+#[uniffi::export]
+impl LocalSession {
+    /// Sends input (keystrokes) to the shell.
+    pub fn write(&self, data: Vec<u8>) -> Result<(), FfiError> {
+        self.pty.write(&data).map_err(FfiError::other)
+    }
+
+    /// Changes the terminal window size. `cols`/`rows` must be > 0.
+    pub fn resize(&self, cols: u32, rows: u32) -> Result<(), FfiError> {
+        check_term_size(cols, rows)?;
+        self.pty
+            .resize(narrow_term(cols), narrow_term(rows))
+            .map_err(FfiError::other)
+    }
+
+    /// Kills the shell and waits for it to be gone.
+    ///
+    /// Infallible, unlike its SSH counterpart: there is no peer that can refuse.
+    /// Synchronous, because auto-lock depends on it — see `LocalPty::close`.
+    pub fn close(&self) {
+        self.pty.close();
+    }
+}
+
+/// Narrows a UI-supplied terminal dimension to what a pty accepts.
+///
+/// The FFI takes `u32` by convention across every terminal call; a pty's winsize
+/// is 16-bit. A value that large is a bug in the caller, not a size anyone
+/// wants, so it saturates rather than wrapping around to something small.
+fn narrow_term(v: u32) -> u16 {
+    u16::try_from(v).unwrap_or(u16::MAX)
 }
 
 /// Handle of a streaming exec: stdin, completion polling, close. Output goes to

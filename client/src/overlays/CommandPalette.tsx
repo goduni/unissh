@@ -24,7 +24,7 @@ interface ActionCmd {
   icon: IconName;
   labelKey: string;
   subKey: string;
-  action: "newhost" | "newkey" | "newtunnel" | "import" | "groups" | "sync" | "lock";
+  action: "newhost" | "newkey" | "newtunnel" | "import" | "groups" | "sync" | "lock" | "local";
 }
 
 const CMD_NAV: NavCmd[] = [
@@ -44,6 +44,11 @@ const CMD_NAV: NavCmd[] = [
   { id: "n-settings", icon: "sliders", labelKey: "nav.settings", subKey: "command.nav.settings", route: "settings" },
 ];
 const CMD_ACTIONS: ActionCmd[] = [
+  // First, and an action rather than a host: it opens a session like picking a
+  // host does, but it is not one, and the Hosts group is where a name means
+  // "somewhere else". Same strings as the "+" picker, so the same thing is
+  // called the same thing in both places.
+  { id: "a-local", icon: "laptop", labelKey: "terminal.localShell", subKey: "terminal.localShellHint", action: "local" },
   { id: "a-newhost", icon: "plus", labelKey: "command.action.newHost", subKey: "command.action.newHostSub", action: "newhost" },
   { id: "a-newkey", icon: "key", labelKey: "command.action.newKey", subKey: "command.action.newKeySub", action: "newkey" },
   { id: "a-newtunnel", icon: "branch", labelKey: "command.action.newTunnel", subKey: "command.action.newTunnelSub", action: "newtunnel" },
@@ -72,6 +77,7 @@ export function CommandPalette() {
   const setPalette = useApp((s) => s.setPalette);
   const hosts = useApp((s) => s.hosts);
   const vaultId = useApp((s) => s.vaultId);
+  const device = useApp((s) => s.device);
 
   // Loaded when the palette opens rather than kept in the store: the library is
   // small, and reading it on demand means a snippet saved on another device
@@ -125,14 +131,20 @@ export function CommandPalette() {
       kind: "nav" as const,
       route: c.route,
     })).filter((c) => match(c.label) || match(c.sub));
-    const actItems: FlatItem[] = CMD_ACTIONS.map((c) => ({
-      id: c.id,
-      icon: c.icon,
-      label: tDyn(c.labelKey),
-      sub: tDyn(c.subKey),
-      kind: "action" as const,
-      action: c.action,
-    })).filter((c) => match(c.label) || match(c.sub));
+    const actItems: FlatItem[] = CMD_ACTIONS
+      // The local terminal is desktop-only, and the palette is one of the few
+      // surfaces the phone shell shares — so it is filtered here rather than
+      // relying on the entry simply failing if tapped.
+      .filter((c) => c.action !== "local" || device !== "mobile")
+      .map((c) => ({
+        id: c.id,
+        icon: c.icon,
+        label: tDyn(c.labelKey),
+        sub: tDyn(c.subKey),
+        kind: "action" as const,
+        action: c.action,
+      }))
+      .filter((c) => match(c.label) || match(c.sub));
 
     const snippetItems: FlatItem[] = snippets
       .filter((sn) => match(sn.label) || match(sn.command) || sn.tags.some(match))
@@ -154,7 +166,7 @@ export function CommandPalette() {
       { title: t("command.group.actions"), items: actItems },
       { title: t("command.group.go"), items: navItems },
     ].filter((g) => g.items.length);
-  }, [ql, hosts, snippets, t]);
+  }, [ql, hosts, snippets, device, t]);
 
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
 
@@ -191,7 +203,8 @@ export function CommandPalette() {
       ctx.go(it.route);
     } else {
       setPalette(false);
-      if (it.action === "newhost") ctx.openModal({ kind: "host" });
+      if (it.action === "local") ctx.openLocal();
+      else if (it.action === "newhost") ctx.openModal({ kind: "host" });
       else if (it.action === "newkey") ctx.openModal({ kind: "key" });
       else if (it.action === "newtunnel") ctx.openModal({ kind: "tunnel" });
       else if (it.action === "import") ctx.openImport();

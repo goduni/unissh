@@ -1443,12 +1443,14 @@ pub async fn server_onboard_complete(
     // shared key across all devices). Read it from the OS keychain in Rust — it
     // never enters JS. Absent (e.g. on mobile, where it isn't stored) → a clear
     // error: initiate "Add device" from a desktop that has the key stored.
-    let secret_key_hex = crate::keychain::keychain_get_secret_key()?.ok_or_else(|| {
-        ApiError::other(
-            "no Secret Key stored on this device to share — start \"Add device\" from a \
+    let secret_key_hex = crate::keychain::keychain_get_secret_key()
+        .await?
+        .ok_or_else(|| {
+            ApiError::other(
+                "no Secret Key stored on this device to share — start \"Add device\" from a \
              desktop device that has your Secret Key in its keychain",
-        )
-    })?;
+            )
+        })?;
     let core = state.core.clone();
     let base = cfg.base_url;
     blocking_api(move || {

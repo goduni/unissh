@@ -311,6 +311,32 @@ export interface OpenedBroadcast {
   statuses: BroadcastHostStatus[];
 }
 
+/** The shell a local terminal would start by default, plus who and where this
+ *  machine is. Feeds the Settings placeholder and the actual open. */
+export interface LocalShellInfo {
+  program: string;
+  args: string[];
+  /** OS account this app runs as — half of the local pane's status line. */
+  user: string;
+  /** This machine's hostname — the other half, and what tells a local pane apart
+   *  from a remote one at a glance. */
+  hostname: string;
+}
+
+/** What a local pane runs, resolved once when the pane is created.
+ *
+ *  A snapshot, not a live read of the settings: Restart brings up the same shell
+ *  the pane was opened with, and editing the settings does not rewrite what is
+ *  already running. */
+export interface LocalPaneSpec {
+  /** Absolute path — the empty "auto" setting is resolved before this exists. */
+  shell: string;
+  args: string[];
+  cwd?: string;
+  /** Bare program name ("zsh", "pwsh") — the tab's title until the shell sets one. */
+  label: string;
+}
+
 export interface InstanceStatus {
   exists: boolean;
   /** Exactly one of the instance's two files (DB / keyset) is present on disk —
