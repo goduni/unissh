@@ -96,12 +96,25 @@ starts with `0.`:
   `EGL_PLATFORM=x11` nor `WEBKIT_DISABLE_DMABUF_RENDERER` helps, since the
   mismatch bites when Mesa loads the library, before any of those settings mean
   anything.
-- **The window could become impossible to close** — not by the button, not by a
-  WM hotkey, not by the compositor, leaving `Ctrl+C` in the launching terminal as
-  the only way out. Tauri hands the close decision to the app and destroys the
-  window only once our handler returns; it neither catches exceptions nor times
-  out, so any failure inside it disabled closing permanently rather than merely
-  skipping the confirmation. Every path through that handler now fails open.
+- **The window could not be closed at all** — not by the button, not by a WM
+  hotkey, not by the compositor, leaving `Ctrl+C` in the launching terminal or
+  killing the process as the only way out. Two separate causes, both fixed.
+
+  The one that bit every platform: asking for the confirm-on-quit prompt is not a
+  passive subscription. Once the app listens for the close, Tauri stops closing
+  the window itself and waits for the app to finish the job — and finishing it
+  needs a permission that *closing* does not, which we had never granted. So the
+  final step was refused every time, silently, on every route out of the window.
+  It went unnoticed for as long as it did because `⌘Q` on macOS quits the app
+  without going through the window at all, and because on Linux the app drew its
+  own close button until this release handed the frame to tiling window managers
+  — which is how it surfaced, from an Arch/niri desktop where the compositor is
+  the only way to close a window.
+
+  The second: Tauri destroys the window only once our handler returns, and it
+  neither catches exceptions nor times out, so any failure inside it disabled
+  closing permanently rather than merely skipping the confirmation. Every path
+  through that handler now fails open.
 - **Resizing the window was laggy.** The root component kept the window width in
   state as a pixel value, so every frame of a resize re-rendered the entire app —
   though the only question ever asked of that number was whether the sidebar

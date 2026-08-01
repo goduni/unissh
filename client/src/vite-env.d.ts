@@ -16,3 +16,11 @@ declare module "*.astro?raw" {
   const content: string;
   export default content;
 }
+
+// Same trick for our own sources, used by the window-close test to check that the
+// code still registers the listener whose existence is what makes the capability
+// mandatory. Reading the file beats mocking Tauri to observe the registration.
+declare module "*.tsx?raw" {
+  const content: string;
+  export default content;
+}
