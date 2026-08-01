@@ -137,7 +137,7 @@ pub async fn reset_instance(state: State<'_, AppState>) -> ApiResult<()> {
     let _ = std::fs::remove_file(std::path::PathBuf::from(bak));
     // Forget cloud links + the stale keychain Secret Key so re-onboarding is clean.
     state.cloud.clear_all();
-    let _ = crate::keychain::keychain_delete_secret_key();
+    let _ = crate::keychain::keychain_delete_secret_key().await;
     Ok(())
 }
 

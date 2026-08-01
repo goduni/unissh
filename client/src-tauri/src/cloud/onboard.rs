@@ -94,7 +94,7 @@ pub fn responder_join(
     // unlocks (and auto-unlock) work. Stays inside Rust — never returned to JS.
     // Best-effort: a keychain-write failure (or a no-op on mobile) just means the
     // user re-enters their account Secret Key next launch; the join itself stands.
-    if let Err(e) = crate::keychain::keychain_save_secret_key(secret_key_hex) {
+    if let Err(e) = crate::keychain::save_secret_key_now(&secret_key_hex) {
         log::warn!("onboard: failed to persist shared Secret Key to keychain: {e:?}");
     }
     Ok(())

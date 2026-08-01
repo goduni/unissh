@@ -115,6 +115,19 @@ starts with `0.`:
   neither catches exceptions nor times out, so any failure inside it disabled
   closing permanently rather than merely skipping the confirmation. Every path
   through that handler now fails open.
+- **On Linux the Secret Key was remembered in the wrong place.** "Remember on
+  this device" wrote to the kernel keyutils facility, which is a cache: it is
+  held in memory, it is cleared by a reboot, and nothing in it appears in
+  Seahorse, KWalletManager or any other tool where you would look for — or
+  revoke — a stored credential. It now uses the Secret Service (GNOME Keyring,
+  KWallet, or whatever your desktop provides), which is the actual counterpart of
+  the macOS Keychain and the Windows Credential Manager: it survives a reboot and
+  it is visible and revocable where you expect. A key an older build left in
+  keyutils is moved across the first time it is read, so upgrading in a session
+  you have not rebooted keeps your key; upgrading after a reboot means entering
+  it once more, which was already true every time you rebooted. On a desktop
+  running no Secret Service at all the feature cannot work and now says so in the
+  log instead of appearing to work until the next boot.
 - **"New snippet" jumped across the header one frame after opening Snippets**,
   and Recordings had the same defect. Both views sized themselves by their own
   content instead of filling the window, so the header was laid out twice: once
@@ -151,6 +164,15 @@ appearance preferences — it is not part of the vault and does not sync. Leavin
 it untouched keeps the detection live on every boot, which is what makes the
 same vault behave correctly on a tiling session and a plain desktop; setting it
 once freezes the answer for that install.
+
+**Linux only:** the store behind "remember the Secret Key on this device"
+changes (see Fixed), and the cloud refresh token moves with it. Nothing in the
+vault or on the wire is affected, and no other platform is touched. Whatever the
+old build left in keyutils is carried across on first read, so upgrading in a
+session you have not rebooted keeps both your Secret Key and your server
+session; if keyutils had already been cleared — by a reboot, which is what
+keyutils does — you enter the Secret Key and sign in once more, and after that
+they last.
 
 ## [0.2.0] — 2026-07-30
 

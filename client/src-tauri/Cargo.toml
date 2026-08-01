@@ -77,7 +77,31 @@ objc2 = "0.6"
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["linux-native"] }
+# The Secret Service (GNOME Keyring / KWallet / any freedesktop provider) — the
+# actual analogue of the macOS Keychain, and the only Linux store that survives a
+# reboot. NOT `linux-native`, which this used to be: that is the kernel keyutils
+# facility, which the crate's own docs describe as a cache ("completely in-memory
+# and will not persist across reboots"). It also holds nothing a user can see or
+# revoke in Seahorse or KWalletManager. A "remember the Secret Key on this device"
+# that quietly forgets on the next boot is worse than one that says it cannot.
+#
+# `async-io`, not `tokio`, is deliberate: keyring's own docs warn that the async
+# secret-service on a tokio runtime deadlocks when called from the main thread,
+# and this app has a tokio runtime. async-io keeps zbus on its own executor. Both
+# it and `crypto-rust` also keep this pure Rust — no libdbus and no OpenSSL to
+# find at build time or ship in the AppImage, which is the trap the bundled
+# libwayland already taught us once.
+#
+# `linux-native` stays enabled alongside, and NOT as the store: with both on, the
+# secret service is the default and keyutils is reachable only where we name it —
+# which is exactly one place, the one-time carry-over of a key an older build left
+# in keyutils (see `carry_over_from_keyutils`).
+keyring = { version = "3", features = [
+    "async-secret-service",
+    "async-io",
+    "crypto-rust",
+    "linux-native",
+] }
 # iOS reuses the same `keyring` code as desktop (Apple Security framework backend).
 [target.'cfg(target_os = "ios")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
