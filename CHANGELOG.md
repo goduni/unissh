@@ -32,6 +32,10 @@ starts with `0.`:
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] — 2026-08-01
+
 ### Added
 
 - **A local terminal** on desktop: a shell on your own machine in a tab, living
@@ -512,7 +516,9 @@ The baseline everything below is measured against: local storage schema
 version 9, server HTTP surface `/v1`. Both are unchanged as of 0.1.3 — no
 release so far has broken a vault or a deployed server.
 
-[Unreleased]: https://github.com/goduni/unissh/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/goduni/unissh/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/goduni/unissh/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/goduni/unissh/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/goduni/unissh/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/goduni/unissh/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/goduni/unissh/compare/v0.1.0...v0.1.1
