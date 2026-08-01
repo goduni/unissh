@@ -115,6 +115,13 @@ starts with `0.`:
   neither catches exceptions nor times out, so any failure inside it disabled
   closing permanently rather than merely skipping the confirmation. Every path
   through that handler now fails open.
+- **"New snippet" jumped across the header one frame after opening Snippets**,
+  and Recordings had the same defect. Both views sized themselves by their own
+  content instead of filling the window, so the header was laid out twice: once
+  against the width of the header alone, then again once the list underneath it
+  arrived. One frame, but a very visible one on a fast display. Snippets,
+  Recordings and Tunnels also gained the entry motion the rest of the app has
+  had — they were the three views still appearing without any.
 - **Resizing the window was laggy.** The root component kept the window width in
   state as a pixel value, so every frame of a resize re-rendered the entire app —
   though the only question ever asked of that number was whether the sidebar

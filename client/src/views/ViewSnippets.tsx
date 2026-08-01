@@ -180,7 +180,23 @@ export function ViewSnippets() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    // `flex: 1`, not `height: 100%`. The route slot is a flex ROW, so a child
+    // without a flex basis is sized by its own content — which starts as just this
+    // header and only reaches full width once the list below (minWidth 640) has
+    // loaded. The header's spacer is measured against that width, so "New snippet"
+    // rendered next to the title on the first frame and jumped to the right edge on
+    // the second. One frame, but a very visible one on a fast display.
+    <div
+      className="uh-view"
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        background: p.bg0,
+        overflow: "hidden",
+      }}
+    >
       <div
         style={{
           display: "flex",
@@ -202,6 +218,7 @@ export function ViewSnippets() {
       </div>
 
       <div
+        className="uh-stagger"
         style={{
           flex: 1,
           overflow: "auto",
