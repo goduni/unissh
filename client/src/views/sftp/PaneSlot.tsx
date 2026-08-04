@@ -15,6 +15,8 @@ import type { ConnectionProfile } from "@/bridge/types";
 import type { Entry, SortKey } from "@/store/sftp-types";
 import type { SlotCtl } from "./useSlot";
 import { TabStrip, type TabInfo } from "./TabStrip";
+import { HostList } from "./hostpicker";
+import { useVolumes, VolumePicker } from "./volumes";
 import { Breadcrumb } from "./Breadcrumb";
 import { FileList } from "./FileList";
 import { dragCtx } from "./drag";
@@ -69,6 +71,8 @@ export function PaneSlot({
   const src = slot.source;
   const crumbs = src ? src.crumbs(slot.cwd) : [];
   const selCount = slot.selection.size;
+  // Drives are a local-pane idea only; a remote slot browses one filesystem.
+  const { volumes, reload: reloadVolumes } = useVolumes(slot.location.kind === "local" && !isMobile);
 
   // Sort menu (mobile has no column header to sort by).
   const colKey = (k: SortKey): "name" | "size" | "modified" | "perms" =>
@@ -139,35 +143,46 @@ export function PaneSlot({
       />
 
       {slot.location.kind === "none" ? (
+        // An empty slot shows the hosts themselves, not a pointer at the "+".
+        // This pane exists to be filled, and the list IS the empty state — one
+        // click to a session instead of find-the-plus, open, then click.
         <div
           style={{
             flex: 1,
             display: "flex",
             flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 10,
-            padding: 24,
-            textAlign: "center",
+            padding: "18px 14px",
             minHeight: isMobile ? "52vh" : 0,
+            overflow: "auto",
           }}
         >
-          <span
-            style={{
-              width: 48,
-              height: 48,
-              borderRadius: 16,
-              background: p.bg2,
-              border: `1px solid ${p.line}`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Icon name="server" size={22} color={p.txt3} />
-          </span>
-          <div style={{ fontSize: 14, fontWeight: 700, color: p.txt }}>{t("sftp.selectHost")}</div>
-          <div style={{ fontSize: 13, color: p.txt3, maxWidth: 220 }}>{t("sftp.addFirstHint")}</div>
+          {/* margin:auto centres a short list without justifyContent, which would
+              clip the top of a long one once it starts scrolling. */}
+          <div style={{ margin: "auto 0", width: "100%", maxWidth: 320, alignSelf: "center" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, textAlign: "center" }}>
+              <span
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 14,
+                  background: p.bg2,
+                  border: `1px solid ${p.line}`,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon name="server" size={19} color={p.txt3} />
+              </span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: p.txt }}>{t("sftp.selectHost")}</div>
+              <div style={{ fontSize: 13, color: p.txt3, maxWidth: 260 }}>
+                {hosts.length ? t("sftp.pickHostHint") : t("sftp.addFirstHint")}
+              </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <HostList hosts={hosts} onPick={onPickHost} />
+            </div>
+          </div>
         </div>
       ) : (
         <>
@@ -239,7 +254,18 @@ export function PaneSlot({
         />
       </div>
 
-      <Breadcrumb crumbs={crumbs} onNavigate={slot.goTo} onGoToPath={slot.goTo} />
+      <Breadcrumb
+        crumbs={crumbs}
+        onNavigate={slot.goTo}
+        onGoToPath={slot.goTo}
+        // Only when there is a choice: a single-volume machine keeps the plain
+        // breadcrumb it has today.
+        leading={
+          volumes.length > 1 ? (
+            <VolumePicker volumes={volumes} cwd={slot.cwd} onPick={slot.goTo} onOpen={reloadVolumes} />
+          ) : null
+        }
+      />
 
       <div
         onContextMenu={(e) => {

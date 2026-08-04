@@ -1160,6 +1160,8 @@ export const en = {
     "clearQueue": "Clear",
     "waiting": "waiting",
     "addLocation": "Add location",
+    "drives": "Drives",
+    "driveFree": "{{free}} free of {{total}}",
     "addHost": "Add a host…",
     "searchHosts": "Search hosts…",
     "closeTab": "Close",
@@ -1174,7 +1176,8 @@ export const en = {
     "send": "Send",
     "rowActions": "Actions",
     "noLocations": "No locations open",
-    "addFirstHint": "Add a location with + to browse and transfer files",
+    "addFirstHint": "Add a host to browse and transfer files",
+    "pickHostHint": "Pick a host to browse and transfer files",
     "col": {
       "name": "Name",
       "size": "Size",

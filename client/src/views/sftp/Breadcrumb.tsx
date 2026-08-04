@@ -12,10 +12,15 @@ export function Breadcrumb({
   crumbs,
   onNavigate,
   onGoToPath,
+  leading,
 }: {
   crumbs: Crumb[];
   onNavigate: (path: string) => void;
   onGoToPath: (path: string) => void;
+  /** Rendered before the path, outside the scrolling row (the local pane's
+   *  volume picker) — a control that scrolls away with a long path would be
+   *  worse than no control. */
+  leading?: React.ReactNode;
 }) {
   const p = usePalette();
   const { t } = useTranslation();
@@ -78,6 +83,7 @@ export function Breadcrumb({
 
   return (
     <div style={{ display: "flex", alignItems: "center", borderBottom: `1px solid ${p.line}` }}>
+      {leading && <div style={{ display: "flex", alignItems: "center", paddingLeft: 8 }}>{leading}</div>}
       <div
         ref={rowRef}
         onClick={startEdit}
