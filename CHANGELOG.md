@@ -32,6 +32,8 @@ starts with `0.`:
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-08-10
+
 ### Added
 
 - **SFTP: the saved hosts are in the empty pane.** A pane slot with nothing in
@@ -549,7 +551,8 @@ The baseline everything below is measured against: local storage schema
 version 9, server HTTP surface `/v1`. Both are unchanged as of 0.1.3 — no
 release so far has broken a vault or a deployed server.
 
-[Unreleased]: https://github.com/goduni/unissh/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/goduni/unissh/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/goduni/unissh/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/goduni/unissh/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/goduni/unissh/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/goduni/unissh/compare/v0.1.2...v0.1.3
