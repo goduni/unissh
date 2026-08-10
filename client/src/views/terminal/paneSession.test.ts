@@ -86,6 +86,66 @@ describe("createPreviewCapture", () => {
     vi.runAllTimers();
     expect(emit).not.toHaveBeenCalled();
   });
+
+  it("emits as many lines as the caller asked for", () => {
+    // The broadcast grid mirrors a deeper tail than the hosts rail does.
+    const emit = vi.fn();
+    const cap = createPreviewCapture(emit, { show: 6 });
+    cap.push(enc("a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\n"));
+    vi.runAllTimers();
+    expect(emit).toHaveBeenCalledWith(["c", "d", "e", "f", "g", "h"]);
+  });
+
+  it("emits on the caller's debounce, not the rail's", () => {
+    // The broadcast grid is a live mirror; the rail is glanced at. Same pipeline,
+    // different cadence.
+    const emit = vi.fn();
+    const cap = createPreviewCapture(emit, { debounceMs: 100 });
+    cap.push(enc("quick\r\n"));
+    vi.advanceTimersByTime(100);
+    expect(emit).toHaveBeenCalledWith(["quick"]);
+  });
+
+  it("defaults to the rail's slower cadence", () => {
+    const emit = vi.fn();
+    const cap = createPreviewCapture(emit);
+    cap.push(enc("slow\r\n"));
+    vi.advanceTimersByTime(100);
+    expect(emit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(400);
+    expect(emit).toHaveBeenCalledWith(["slow"]);
+  });
+
+  it("mirrors a real send: echo, output and prompt redraw, no control codes", () => {
+    // What a bash host actually writes back after a broadcast send — bracketed
+    // paste off/on, an OSC title, a colour-coded prompt, and a \r-rewritten
+    // progress line. None of it may reach a plain-text tile as literal text.
+    const emit = vi.fn();
+    const cap = createPreviewCapture(emit, { show: 6 });
+    cap.push(enc("uptime\r\n\x1b[?2004l\r"));
+    cap.push(enc(" 14:22:01 up 12 days,  3:11,  2 users\r\n"));
+    cap.push(enc("sync: 10%\rsync: 60%\rsync: 100%\r\n"));
+    cap.push(enc("\x1b]0;root@web-01: ~\x07\x1b[?2004h\x1b[01;32mroot@web-01\x1b[00m:~$ "));
+    vi.runAllTimers();
+    expect(emit).toHaveBeenCalledWith([
+      "uptime",
+      " 14:22:01 up 12 days,  3:11,  2 users",
+      "sync: 100%",
+      "root@web-01:~$",
+    ]);
+  });
+
+  it("decodes multi-byte characters split across reads", () => {
+    // A PTY read can end mid-character; decoding each chunk on its own turns
+    // the halves into U+FFFD.
+    const emit = vi.fn();
+    const cap = createPreviewCapture(emit);
+    const utf8 = enc("Загрузка\r\n");
+    cap.push(utf8.slice(0, 5));
+    cap.push(utf8.slice(5));
+    vi.runAllTimers();
+    expect(emit).toHaveBeenCalledWith(["Загрузка"]);
+  });
 });
 
 describe("createPaneEvents", () => {
