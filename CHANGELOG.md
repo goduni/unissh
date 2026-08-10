@@ -50,6 +50,21 @@ starts with `0.`:
   (`/media`, `/run/media`, `/mnt`); the list is re-read each time it opens, so a
   stick plugged in after the fact shows up without a restart.
 
+### Changed
+
+- **One app icon everywhere.** The desktop, iOS and Android icons, the site
+  favicon and the mark inside the app were four separate pieces of artwork that
+  had drifted apart — the in-app one was a mono-font `›_` set as text, the
+  favicon was a different colour scheme entirely. All of them are now rendered
+  from a single master: a superellipse tile (continuous curvature, rather than a
+  rounded rectangle's straight-then-arc corner) under a `>_` in white. The mark
+  no longer follows the theme accent — it is the brand, and it should look the
+  same whichever accent you picked; the `SSH` in the wordmark still does.
+  Platform conventions are respected rather than flattened: iOS and the Windows
+  tiles get full-bleed square art because the OS applies its own mask, and the
+  Android adaptive layers stay split into a plain gradient background and a
+  transparent foreground whose glyph fits the 66dp safe zone.
+
 Vault format and server protocol: unchanged.
 
 ## [0.3.0] — 2026-08-01

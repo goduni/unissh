@@ -5,6 +5,7 @@ import React, { CSSProperties, useEffect, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, RADIUS, SIZE, UI, AUTH_LABEL_KEY, Palette } from "@/theme/tokens";
 import { useIsMobile } from "@/store/responsive";
+import { LogoMark } from "@/components/LogoMark";
 import { tDyn } from "@/i18n";
 
 // Spread onto any text <input>/<textarea> to stop the WebView from spell-checking,
@@ -492,36 +493,15 @@ export function Btn({
   );
 }
 
+/** The mark plus the wordmark. The mark itself is fixed — it is the same artwork
+ *  the OS and the site show, so it does not follow the theme accent; the wordmark
+ *  still does. `color` overrides that accent for callers on a coloured ground. */
 export function Logo({ size = 22, color }: { size?: number; color?: string }) {
   const p = usePalette();
   const c = color || p.accent;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 9 }}>
-      <span style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
-        <span
-          style={{
-            position: "absolute",
-            inset: 0,
-            borderRadius: size * 0.28,
-            background: c,
-          }}
-        />
-        <span
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#fff",
-            fontFamily: MONO,
-            fontWeight: 700,
-            fontSize: size * 0.5,
-          }}
-        >
-          ›_
-        </span>
-      </span>
+      <LogoMark size={size} />
       <span style={{ fontWeight: 700, fontSize: size * 0.74, letterSpacing: -0.3 }}>
         Uni<span style={{ color: c }}>SSH</span>
       </span>
