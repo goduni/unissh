@@ -9,7 +9,7 @@ rust-version = "1.85"
 # One product version for everything in this workspace. The client and server-ui sit
 # outside it and carry their own — scripts/bump-version.py is the only thing that moves
 # any of them (see `just release`).
-version = "0.3.0"
+version = "0.3.1"
 authors = ["UniSSH"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/goduni/unissh"
