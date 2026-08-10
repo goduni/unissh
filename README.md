@@ -12,6 +12,7 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 [![Server: zero-knowledge](https://img.shields.io/badge/server-zero--knowledge-2ecc71.svg)](#security--privacy)
 [![CI](https://img.shields.io/github/actions/workflow/status/goduni/unissh/ci.yml?branch=main)](https://github.com/goduni/unissh/actions)
 [![Release](https://img.shields.io/github/v/release/goduni/unissh?display_name=tag)](https://github.com/goduni/unissh/releases)
+[![Telegram](https://img.shields.io/badge/Telegram-%40unissh-26A5E4?logo=telegram&logoColor=white)](https://t.me/unissh)
 [![Stars](https://img.shields.io/github/stars/goduni/unissh?style=social)](https://github.com/goduni/unissh)
 
 <br/>
