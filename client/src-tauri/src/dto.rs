@@ -1070,6 +1070,20 @@ pub struct LocalEntry {
     pub size: u64,
     pub mtime: u64,
 }
+
+/// One mounted volume the SFTP local pane can jump to: a Windows drive letter,
+/// a macOS /Volumes entry, a Linux mount point. `label` is the human name where
+/// the OS has one (a Windows volume label, a USB stick's name) and empty where
+/// it doesn't — the client falls back to the path.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalVolume {
+    pub label: String,
+    pub path: String,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub removable: bool,
+}
 impl From<ffi::SftpFileStat> for SftpFileStat {
     fn from(s: ffi::SftpFileStat) -> Self {
         SftpFileStat {

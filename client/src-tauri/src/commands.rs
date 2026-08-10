@@ -1576,6 +1576,111 @@ pub async fn local_list_dir(path: String) -> ApiResult<Vec<dto::LocalEntry>> {
     .await?
 }
 
+/// Mounted volumes, for the SFTP local pane's drive picker. Desktop only —
+/// mobile is sandboxed to one directory, so it answers with an empty list and
+/// the picker never appears.
+///
+/// The filtering is deliberately about what a person would call a drive: Linux
+/// in particular mounts a great deal that is not one (every snap is a loop
+/// device, containers bring their own overlays), and a picker listing 40 entries
+/// of which 2 are real would be worse than the current no picker at all.
+#[tauri::command]
+pub async fn local_volumes() -> ApiResult<Vec<dto::LocalVolume>> {
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        Ok(Vec::new())
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            let disks = sysinfo::Disks::new_with_refreshed_list();
+            let mut out: Vec<dto::LocalVolume> = Vec::new();
+            for d in disks.list() {
+                let mount = d.mount_point();
+                let path = mount.to_string_lossy().into_owned();
+                if path.is_empty() || d.total_space() == 0 {
+                    continue;
+                }
+                // A bind-mounted FILE is a mount point too (containers do this
+                // to /etc/hosts); a place you can browse to is a directory.
+                if !mount.is_dir() {
+                    continue;
+                }
+                if !is_browsable_volume(&path, d.is_removable()) {
+                    continue;
+                }
+                let label = d.name().to_string_lossy().trim().to_owned();
+                out.push(dto::LocalVolume {
+                    // A Linux disk names itself by device ("/dev/sda2"), which is
+                    // not a name for a place — drop it and let the client show the
+                    // mount point. Windows/macOS give a real volume label.
+                    label: if label.starts_with("/dev/") {
+                        String::new()
+                    } else {
+                        label
+                    },
+                    path,
+                    total_bytes: d.total_space(),
+                    free_bytes: d.available_space(),
+                    removable: d.is_removable(),
+                });
+            }
+            // Shortest path first: "/" and "C:\" lead, their nested mounts follow.
+            out.sort_by(|a, b| a.path.len().cmp(&b.path.len()).then(a.path.cmp(&b.path)));
+            // One row per actual volume. The same filesystem surfaces under
+            // several mount points (macOS lists the boot disk as both "/" and
+            // "/Volumes/Macintosh HD"; bind mounts and btrfs subvolumes do the
+            // same on Linux), and two rows that go to the same files are a
+            // choice the user cannot make. Identity is name+capacity, and the
+            // shortest path — the one sorted first — wins. Free space moves
+            // constantly, so two genuinely different disks agreeing on label,
+            // total AND free at the same instant is not a case worth designing
+            // around; a duplicated boot volume on every Mac is.
+            let mut seen: Vec<(String, u64, u64)> = Vec::new();
+            out.retain(|v| {
+                let id = (v.label.clone(), v.total_bytes, v.free_bytes);
+                if seen.contains(&id) {
+                    return false;
+                }
+                seen.push(id);
+                true
+            });
+            Ok(out)
+        })
+        .await?
+    }
+}
+
+/// Whether a mount point is a "drive" in the sense the picker means: somewhere a
+/// person keeps files and would switch to on purpose.
+///
+/// An allowlist, not a blacklist of noise. A Unix box mounts a great deal that
+/// is not a drive — every snap is a loop device, containers bind-mount their own
+/// roots, systemd mounts a dozen tmpfs — and each new source of noise would need
+/// another blacklist entry, whereas the places removable and secondary media
+/// actually appear are few and stable.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn is_browsable_volume(path: &str, removable: bool) -> bool {
+    // Windows: every mount point is a drive letter (or a folder someone mounted
+    // a volume into, which is equally a place to browse).
+    if cfg!(target_os = "windows") {
+        return true;
+    }
+    if path == "/" {
+        return true;
+    }
+    // Anything the OS considers removable is worth listing wherever it landed —
+    // that is the USB stick the picker exists for.
+    if removable {
+        return true;
+    }
+    // Where macOS and the Linux desktops mount secondary and external media.
+    const MEDIA_ROOTS: &[&str] = &["/Volumes", "/media", "/run/media", "/mnt"];
+    MEDIA_ROOTS
+        .iter()
+        .any(|r| path.starts_with(&format!("{r}/")))
+}
+
 #[tauri::command]
 pub async fn sftp_stat(
     id: String,

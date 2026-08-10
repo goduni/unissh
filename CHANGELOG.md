@@ -32,7 +32,25 @@ starts with `0.`:
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **SFTP: the saved hosts are in the empty pane.** A pane slot with nothing in
+  it used to show a line of advice pointing at the `+` in its tab strip; it now
+  lists the hosts themselves, one click from a session. The `+` still works and
+  still opens the same list — this only stops the empty state from being a
+  signpost to a control instead of the thing itself.
+- **SFTP: a drive picker in the local pane.** A machine with more than one disk
+  had no way to reach the others: the pane opens in your home directory and
+  *up* bottoms out at that volume's root, so `D:\` or a mounted USB stick was
+  reachable only by typing its path into the breadcrumb. The breadcrumb now
+  leads with the current volume, and the button lists the rest with their free
+  and total space. It appears only when there is more than one volume, so a
+  single-disk machine sees the breadcrumb it has today. Windows drive letters,
+  `/Volumes` on macOS, and removable and secondary media on Linux
+  (`/media`, `/run/media`, `/mnt`); the list is re-read each time it opens, so a
+  stick plugged in after the fact shows up without a restart.
+
+Vault format and server protocol: unchanged.
 
 ## [0.3.0] — 2026-08-01
 

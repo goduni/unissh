@@ -62,6 +62,12 @@ tauri-plugin-biometric = "2"
 # distributable safely updatable (see .github/workflows/client.yml).
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 tauri-plugin-updater = "2"
+# Mounted volumes for the SFTP local pane's drive picker (Windows drive letters
+# with their labels, /Volumes on macOS, mount points on Linux). Desktop-only:
+# neither mobile OS lets the app browse outside its sandbox, so there is nothing
+# to switch between there. `disk` is the only feature we need — the default set
+# also pulls process/CPU/network collection we would never call.
+sysinfo = { version = "0.38", default-features = false, features = ["disk"] }
 # Only used to relaunch into the freshly installed version once the updater has
 # swapped the bundle on disk. Pulled in beside the updater rather than globally:
 # nothing else in the app restarts the process.

@@ -313,6 +313,7 @@ pub fn run() {
             // sftp
             commands::sftp_open,
             commands::local_list_dir,
+            commands::local_volumes,
             commands::sftp_list_dir,
             commands::sftp_stat,
             commands::sftp_realpath,

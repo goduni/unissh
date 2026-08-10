@@ -294,6 +294,17 @@ export interface LocalEntry {
   mtime: number;
 }
 
+/** A mounted volume the SFTP local pane can jump to. `label` is the OS's name
+ *  for it where there is one (Windows volume label, a USB stick's name) and ""
+ *  where there isn't — show `path` then. */
+export interface LocalVolume {
+  label: string;
+  path: string;
+  totalBytes: number;
+  freeBytes: number;
+  removable: boolean;
+}
+
 export interface BroadcastHostStatus {
   host: string;
   index: number;

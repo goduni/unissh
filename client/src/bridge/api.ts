@@ -49,6 +49,7 @@ import type {
   SftpEntry,
   SftpFileStat,
   LocalEntry,
+  LocalVolume,
   SshExecResult,
   ServerVault,
   SyncReport,
@@ -567,6 +568,8 @@ export const sftpOpen = (a: ConnectArgs, parallelism: number) =>
 export const sftpListDir = (id: string, path: string) =>
   invoke<SftpEntry[]>("sftp_list_dir", { id, path });
 export const localListDir = (path: string) => invoke<LocalEntry[]>("local_list_dir", { path });
+/** Mounted volumes (drives) — empty on mobile, where there is nothing to pick. */
+export const localVolumes = () => invoke<LocalVolume[]>("local_volumes");
 export const sftpStat = (id: string, path: string) =>
   invoke<SftpFileStat>("sftp_stat", { id, path });
 export const sftpRealpath = (id: string, path: string) =>
