@@ -32,8 +32,9 @@ export function shouldRetryOnResume(pane: TerminalPaneState): boolean {
 /** How many recent output lines the rail preview keeps, and how many it shows. */
 const PREVIEW_KEEP = 6;
 const PREVIEW_SHOW = 3;
-/** Debounce for pushing the preview into the store — a busy session would
- *  otherwise re-render the hosts rail on every read. */
+/** Default debounce for pushing the preview into the store — a busy session
+ *  would otherwise re-render the hosts rail on every read. Callers that render
+ *  a live mirror rather than a glanceable preview override it. */
 const PREVIEW_DEBOUNCE_MS = 500;
 
 const stripAnsi = (str: string): string =>
@@ -54,10 +55,26 @@ export interface PreviewCapture {
   dispose: () => void;
 }
 
+export interface PreviewOptions {
+  /** How many lines each emit carries. Defaults to the hosts rail's three; the
+   *  broadcast grid mirrors a deeper tail into a taller tile. */
+  show?: number;
+  /** How long output is batched before an emit. The default suits a surface
+   *  glanced at from the side; a live mirror wants a shorter one, and pays for
+   *  it in re-renders. */
+  debounceMs?: number;
+}
+
 /** Keeps a rolling window of recent output lines so the hosts-rail shows a
  *  stable multi-line preview: real output, debounced, rather than the latest
  *  tail (which at an idle prompt would collapse to one line). */
-export function createPreviewCapture(emit: (lines: string[]) => void): PreviewCapture {
+export function createPreviewCapture(
+  emit: (lines: string[]) => void,
+  opts: PreviewOptions = {},
+): PreviewCapture {
+  const show = opts.show ?? PREVIEW_SHOW;
+  const keep = Math.max(PREVIEW_KEEP, show);
+  const debounceMs = opts.debounceMs ?? PREVIEW_DEBOUNCE_MS;
   const decoder = new TextDecoder();
   let partial = ""; // an incomplete trailing line, carried to the next read
   let lines: string[] = [];
@@ -75,7 +92,7 @@ export function createPreviewCapture(emit: (lines: string[]) => void): PreviewCa
         const clean = stripAnsi(lastLine(raw)).replace(/\s+$/, "");
         if (clean.trim().length) {
           lines.push(clean);
-          if (lines.length > PREVIEW_KEEP) lines = lines.slice(-PREVIEW_KEEP);
+          if (lines.length > keep) lines = lines.slice(-keep);
         }
       }
       if (timer != null) return;
@@ -83,8 +100,8 @@ export function createPreviewCapture(emit: (lines: string[]) => void): PreviewCa
         timer = null;
         const tail = stripAnsi(lastLine(partial)).replace(/\s+$/, "");
         const all = tail.trim().length ? [...lines, tail] : lines;
-        emit(all.slice(-PREVIEW_SHOW));
-      }, PREVIEW_DEBOUNCE_MS);
+        emit(all.slice(-show));
+      }, debounceMs);
     },
     dispose() {
       if (timer != null) {

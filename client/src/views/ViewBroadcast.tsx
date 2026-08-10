@@ -6,8 +6,14 @@
 // tile mirrors its host's live PTY output; the bottom bar fans the typed command
 // out to all open hosts via api.broadcastWriteAll. Status comes ONLY from the
 // live terminals (statuses[i].connected) — no fake online/ping/cipher.
+//
+// A tile is plain text, not a terminal emulator, so raw PTY bytes cannot go into
+// it as-is: they carry colour/OSC escapes, rewrite lines with bare CRs, and split
+// multi-byte characters across reads. Each host therefore gets its own
+// createPreviewCapture — the same decode/strip/CR pipeline the hosts rail uses,
+// asked for a deeper tail — rather than a fourth hand-rolled parser here.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO } from "@/theme/tokens";
@@ -16,6 +22,7 @@ import { useApp, type PendingMismatch } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
+import { createPreviewCapture, type PreviewCapture } from "@/views/terminal/paneSession";
 import * as api from "@/bridge/api";
 import {
   apiErrorMessage,
@@ -30,18 +37,18 @@ const TERM = "xterm-256color";
 const COLS = 80;
 const ROWS = 24;
 const TAIL_LINES = 6;
+/** Stable empty tail, so a host that hasn't spoken yet keeps a stable prop. */
+const EMPTY_LINES: string[] = [];
+// A live mirror, not a glanceable preview: the rail's half-second reads as lag
+// when you are watching your own keystrokes land. Still batched, because one
+// broadcast command makes every host talk at once — this cuts the great majority
+// of the re-renders a per-read update would cause, without being visible.
+const MIRROR_DEBOUNCE_MS = 100;
 
 // Obviously-destructive verbs — typing one into a fan-out-to-many-live-hosts bar
 // always re-confirms, even after the session's first send has been confirmed.
 const BROADCAST_DANGER =
   /(\brm\s+-\w*[rf]|\breboot\b|\bshutdown\b|\bhalt\b|\bpoweroff\b|\bmkfs|\bdd\s+if=|:\(\)\s*\{|>\s*\/dev\/)/i;
-
-/** Keep only the last N non-trailing-empty lines of a mirrored buffer. */
-function tail(buf: string, n: number): string[] {
-  const lines = buf.split(/\r?\n/);
-  while (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-  return lines.slice(-n);
-}
 
 interface OpenedHost {
   index: number;
@@ -49,13 +56,17 @@ interface OpenedHost {
   status: BroadcastHostStatus;
 }
 
-function HostTile({
+// Memoised: every host answers a broadcast at once, so an unmemoised tile makes
+// each host's update re-render all N of them. Holds because a data event touches
+// only that host's `mirrored` array — `host` and the callback keep their identity.
+const HostTile = memo(function HostTile({
   host,
-  output,
+  mirrored,
   onReviewMismatch,
 }: {
   host: OpenedHost;
-  output: string;
+  /** The host's last mirrored lines, already decoded and stripped of escapes. */
+  mirrored: string[];
   /** The host failed to open because its pinned key changed — offer the Known
    *  hosts ceremony with the PARSED failing-hop host/port/fingerprint (a jump
    *  host isn't the profile), so the caller pins the right key. */
@@ -64,7 +75,7 @@ function HostTile({
   const p = usePalette();
   const { t } = useTranslation();
   const off = !host.status.connected;
-  const lines = off ? [] : tail(output, TAIL_LINES);
+  const lines = off ? [] : mirrored;
   const mismatch = off ? mismatchFromError(host.status.error) : null;
   return (
     <div
@@ -148,7 +159,7 @@ function HostTile({
       </div>
     </div>
   );
-}
+});
 
 export function ViewBroadcast() {
   const p = usePalette();
@@ -182,13 +193,21 @@ export function ViewBroadcast() {
 
   const [bcId, setBcId] = useState<string | null>(null);
   const [opened, setOpened] = useState<OpenedHost[]>([]);
-  const [outputs, setOutputs] = useState<Record<number, string>>({});
+  const [outputs, setOutputs] = useState<Record<number, string[]>>({});
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [caret, setCaret] = useState(true);
 
   const bcIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // One capture per host index, created on that host's first byte. Each owns a
+  // streaming decoder and a debounce timer, so they must be disposed whenever
+  // the session they belong to goes away.
+  const capturesRef = useRef(new Map<number, PreviewCapture>());
+  const disposeCaptures = useCallback(() => {
+    capturesRef.current.forEach((c) => c.dispose());
+    capturesRef.current.clear();
+  }, []);
 
   // blinking caret (prototype cadence)
   useEffect(() => {
@@ -199,13 +218,14 @@ export function ViewBroadcast() {
   // close the broadcast on unmount
   useEffect(() => {
     return () => {
+      disposeCaptures();
       const id = bcIdRef.current;
       if (id) {
         void api.broadcastClose(id);
         useApp.getState().removeBroadcast(id);
       }
     };
-  }, []);
+  }, [disposeCaptures]);
 
   // Guard nav away from this view while any host is live: leaving unmounts the view
   // and tears the whole broadcast down, so route it through a confirm first. Cleared
@@ -243,12 +263,13 @@ export function ViewBroadcast() {
     }
     const id = bcIdRef.current;
     if (id) useApp.getState().removeBroadcast(id); // already closed by setVault
+    disposeCaptures();
     bcIdRef.current = null;
     setBcId(null);
     setOpened([]);
     setOutputs({});
     setTyped("");
-  }, [vaultId]);
+  }, [vaultId, disposeCaptures]);
 
   const liveCount = opened.filter((h) => h.status.connected).length;
   // Hosts the Connect action will actually open — the button carries this count.
@@ -319,8 +340,15 @@ export function ViewBroadcast() {
       await guard(async () => {
         const onEvent = (e: BroadcastEvent) => {
           if (e.type === "data") {
-            const text = new TextDecoder().decode(new Uint8Array(e.bytes));
-            setOutputs((prev) => ({ ...prev, [e.index]: (prev[e.index] ?? "") + text }));
+            let cap = capturesRef.current.get(e.index);
+            if (!cap) {
+              cap = createPreviewCapture(
+                (lines) => setOutputs((prev) => ({ ...prev, [e.index]: lines })),
+                { show: TAIL_LINES, debounceMs: MIRROR_DEBOUNCE_MS },
+              );
+              capturesRef.current.set(e.index, cap);
+            }
+            cap.push(new Uint8Array(e.bytes));
           } else {
             setOpened((prev) =>
               prev.map((h) =>
@@ -337,6 +365,8 @@ export function ViewBroadcast() {
         // one (the vault-change effect already reset our local state).
         if (useApp.getState().vaultId !== vaultId) {
           void api.broadcastClose(res.id);
+          // Captures the abandoned hosts may already have created during the open.
+          disposeCaptures();
           return;
         }
         const map = new Map(res.statuses.map((s) => [s.index, s]));
@@ -547,7 +577,7 @@ export function ViewBroadcast() {
               <HostTile
                 key={h.index}
                 host={h}
-                output={outputs[h.index] ?? ""}
+                mirrored={outputs[h.index] ?? EMPTY_LINES}
                 onReviewMismatch={onReviewMismatch}
               />
             ))}
