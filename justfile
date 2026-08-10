@@ -49,14 +49,28 @@ dev-ui:
     cd server-ui && npm run dev
 
 # ---------- iOS (mobile · macOS only) ----------
-# Generate the iOS Xcode project, then apply the post-gen fixups that the
-# cargo-mobile2 template otherwise breaks on recent Xcode (script-sandboxing
-# off, deployment target = tauri.conf.json minimum). Use this instead of a bare
-# `tauri ios init` — gen/apple is gitignored/regenerated, so the fixups must
-# follow every init (they survive `ios build`/`ios dev`).
+# Generate the iOS Xcode project, put OUR icons in it, then apply the post-gen
+# fixups that the cargo-mobile2 template otherwise breaks on recent Xcode
+# (script-sandboxing off, deployment target = tauri.conf.json minimum). Use this
+# instead of a bare `tauri ios init` — gen/apple is gitignored/regenerated, so
+# both the icons and the fixups must follow every init (they survive
+# `ios build`/`ios dev`).
+#
+# The icon step is not optional and its ORDER matters: `ios init` scaffolds the
+# asset catalog with TAURI'S OWN default icons, and `tauri icon` is what replaces
+# them — run the other way round there is nothing to overwrite yet. Leaving it
+# out builds an app wearing someone else's logo, which is easy to miss because
+# nothing fails. The CI job does the same two calls and then verifies every
+# scaffolded file changed (scripts/assert-icons-replaced.py); locally there is no
+# such guard, so the step lives here where it cannot be forgotten.
 ios-init:
     cd client && npm run tauri ios init
+    cd client && npm run tauri icon src-tauri/app-icon.json
     bash scripts/ios-fix-xcodeproj.sh
+# Re-apply just the icons, for a gen/apple that already exists (e.g. after Xcode
+# or Tauri reset the asset catalog).
+ios-icons:
+    cd client && npm run tauri icon src-tauri/app-icon.json
 # Re-apply the iOS Xcode-project fixups without regenerating (e.g. after Xcode
 # or Tauri reset the project).
 ios-fix:
