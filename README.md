@@ -12,6 +12,7 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 [![Server: zero-knowledge](https://img.shields.io/badge/server-zero--knowledge-2ecc71.svg)](#security--privacy)
 [![CI](https://img.shields.io/github/actions/workflow/status/goduni/unissh/ci.yml?branch=main)](https://github.com/goduni/unissh/actions)
 [![Release](https://img.shields.io/github/v/release/goduni/unissh?display_name=tag)](https://github.com/goduni/unissh/releases)
+[![Discord](https://img.shields.io/badge/Discord-unissh-5865F2?logo=discord&logoColor=white)](https://discord.gg/x4JXMSCeRH)
 [![Telegram](https://img.shields.io/badge/Telegram-%40unissh-26A5E4?logo=telegram&logoColor=white)](https://t.me/unissh)
 [![Stars](https://img.shields.io/github/stars/goduni/unissh?style=social)](https://github.com/goduni/unissh)
 
@@ -549,8 +550,10 @@ Full guidelines are in [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [`CODE_OF_CO
 
 ## Community
 
-Two places, on purpose:
+Three places, on purpose:
 
+- **Discord — [unissh](https://discord.gg/x4JXMSCeRH)** — threads that outlive a scroll:
+  setup help, feature talk, and anything worth more than a few lines.
 - **Telegram — [@unissh](https://t.me/unissh)** — quick questions, release notes, and the
   fastest way to reach other users.
 - **[GitHub Discussions](https://github.com/goduni/unissh/discussions)** — the canonical
