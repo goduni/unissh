@@ -124,7 +124,25 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 
 The host library is shown [at the top](#unissh) — dark mode, with the operations rail (terminals, SFTP, run) and the vault & network group (secrets, tunnels, known hosts) on the left, and the selected host's connection, auth, and host-key status on the right.
 
-> _More captures — terminal · SFTP · fleet · the Barbie theme — land with the first public release._
+**SFTP, two panes.** Any pane can hold any location — a different host in each, or your own machine
+alongside a remote one. Permissions and modification times are shown for what they are: read-only
+facts about the file, not fields to edit here.
+
+<img src="docs/screenshots/sftp-dark.png" alt="UniSSH SFTP — two panes, each browsing a different host" width="900">
+
+**Broadcast.** One synchronized input mirrored to every live host at once, each tile showing that
+host's own output. Destructive commands re-confirm before they fan out.
+
+<img src="docs/screenshots/broadcast-dark.png" alt="UniSSH Broadcast — one input mirrored to three live hosts" width="900">
+
+**Fleet exec.** The same command run across a selection, with each host's exit code and timing
+reported separately — bounded concurrency, and a stop that actually skips hosts that have not started.
+
+<img src="docs/screenshots/fleet-exec-dark.png" alt="UniSSH Fleet exec — one command across three hosts with per-host exit codes" width="900">
+
+The rest of the client — terminal, secrets, tunnels, known hosts, recordings, snippets — and the
+server's admin panel are captured in [`docs/screenshots/`](docs/screenshots), viewable in the browser
+without cloning anything.
 
 ---
 
