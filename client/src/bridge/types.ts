@@ -40,6 +40,26 @@ export interface JumpHost {
   hopRef?: HopRef | null;
 }
 
+/** Outbound proxy protocol (issue #27). */
+export type ProxyKind = "http" | "socks4" | "socks5";
+
+/** Proxy password: a vault reference (storable) or an inline value
+ *  (connect-time only — the core refuses to save it into a profile). */
+export type ProxyPassword =
+  | { type: "vault"; vaultId: string; passwordItemId: string }
+  | { type: "inline"; password: string };
+
+/** How to reach a host through an http/socks4/socks5 proxy. Applies to the
+ *  FIRST TCP hop only: the target, or hop #1 of the jump chain — later hops
+ *  ride direct-tcpip channels inside SSH and cannot be proxied. */
+export interface ProxyConfig {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  username?: string | null;
+  password?: ProxyPassword | null;
+}
+
 export interface ConnectionProfile {
   profileId: string;
   /** Immutable profile uid (minted by core on create; preserved on edit).
@@ -56,6 +76,8 @@ export interface ConnectionProfile {
    *  covered by the anti-redirect destination pin. */
   usernameTemplate?: string | null;
   jumps: JumpHost[];
+  /** Outbound proxy for the first TCP hop; composes with `jumps`. */
+  proxy?: ProxyConfig | null;
   tags: string[];
   /** Snippet ids typed into the shell right after connecting, in order.
    *  Kept on the profile rather than as a flag on the snippet: "run on connect"
@@ -240,6 +262,7 @@ export interface MultiExecTarget {
   user: string;
   auth: AuthMethod;
   jumps: JumpHost[];
+  proxy?: ProxyConfig | null;
 }
 
 export interface MultiExecResult {

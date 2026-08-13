@@ -481,6 +481,7 @@ export function ViewFleet() {
             user,
             auth,
             jumps: h.jumps,
+            proxy: h.proxy,
           };
           const out = await api.sshExecMulti([target], cmd, 0, EXEC_TIMEOUT_SECS);
           r = out[0] ?? {

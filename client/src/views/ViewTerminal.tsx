@@ -819,6 +819,7 @@ async function runStartupSnippets(
                   user,
                   auth,
                   jumps: target.profile.jumps,
+                  proxy: target.profile.proxy,
                   term: "xterm-256color",
                   cols,
                   rows,

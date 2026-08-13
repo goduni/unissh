@@ -27,6 +27,7 @@ export async function openSession(profile: ConnectionProfile): Promise<string | 
         user,
         auth,
         jumps: profile.jumps,
+        proxy: profile.proxy,
       },
       st.sftpParallelism,
     );

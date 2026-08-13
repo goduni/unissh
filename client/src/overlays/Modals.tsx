@@ -47,6 +47,8 @@ import type {
   IdentityBinding,
   JumpHost,
   ProfileAuth,
+  ProxyConfig,
+  ProxyKind,
   ServerGroup,
   SpaceInfo,
   SyncTarget,
@@ -530,6 +532,19 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   // stale hopRef over the user's typed inline input.
   const jumpIsRef = jMode === "ref" && refHosts.length > 0;
 
+  // Outbound http/socks4/socks5 proxy (issue #27). Applies to the first TCP
+  // hop and composes with the jump chain (proxy → bastion → target). The
+  // password is a vault-item reference only — an inline secret can't be stored
+  // in a profile, so the form never offers one.
+  const [useProxy, setUseProxy] = useState(!!edit?.proxy);
+  const [pxKind, setPxKind] = useState<ProxyKind>(edit?.proxy?.kind ?? "socks5");
+  const [pxHost, setPxHost] = useState(edit?.proxy?.host ?? "");
+  const [pxPort, setPxPort] = useState(edit?.proxy ? String(edit.proxy.port) : "1080");
+  const [pxUser, setPxUser] = useState(edit?.proxy?.username ?? "");
+  const [pxPwId, setPxPwId] = useState(
+    edit?.proxy?.password?.type === "vault" ? edit.proxy.password.passwordItemId : "",
+  );
+
   const [groupId, setGroupId] = useState(initialGroup);
   // Inline "create a new group" inside the host modal. `groupId === NEW_GROUP`
   // means "assign to a group named newGroupName, created on save" — deferring the
@@ -850,6 +865,23 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       }
     }
 
+    // Mirror the render: no host typed → no proxy saved (the toggle alone is
+    // not a configuration). SOCKS4 has no password in the protocol, so a
+    // picked password item is dropped rather than stored dead.
+    const proxy: ProxyConfig | null =
+      useProxy && pxHost.trim()
+        ? {
+            kind: pxKind,
+            host: pxHost.trim(),
+            port: parseInt(pxPort, 10) || 1080,
+            username: pxUser.trim() ? pxUser.trim() : null,
+            password:
+              pxPwId && pxKind !== "socks4"
+                ? { type: "vault", vaultId: vault, passwordItemId: pxPwId }
+                : null,
+          }
+        : null;
+
     const profileId = edit?.profileId || `${slug(label)}-${Date.now()}`;
     const profile: ConnectionProfile = {
       profileId,
@@ -864,6 +896,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
       user: user.trim(),
       auth: profileAuth,
       jumps,
+      proxy,
       tags,
       startupSnippetIds,
       recordSessions,
@@ -887,6 +920,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               profile.port,
               profile.usernameTemplate,
               profile.jumps,
+              profile.proxy,
             );
             const existing = await api.getBinding(bindVault, vault, uid).catch(() => null);
             await api.setBinding(
@@ -1503,6 +1537,76 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     </div>
                   </>
                 )}
+              </div>
+            )}
+          </div>
+
+          {/* outbound proxy (issue #27) */}
+          <div style={{ borderTop: `1px solid ${p.line}`, paddingTop: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Toggle
+                checked={useProxy}
+                onChange={setUseProxy}
+                aria-label={t("modals.host.proxy")}
+              />
+              <Icon name="globe" size={15} color={useProxy ? p.txt2 : p.txt3} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{t("modals.host.proxy")}</div>
+                <div style={{ fontSize: 11, color: p.txt3 }}>{t("modals.host.proxyDesc")}</div>
+              </div>
+            </div>
+            {useProxy && (
+              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {(["http", "socks4", "socks5"] as const).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setPxKind(k)}
+                      style={{
+                        flex: 1,
+                        padding: "7px 10px",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                        fontSize: 13,
+                        fontWeight: pxKind === k ? 700 : 600,
+                        // De-decor: active proxy-kind = neutral raised tile + ink text.
+                        background: pxKind === k ? p.bg4 : p.bg2,
+                        color: pxKind === k ? p.txt : p.txt2,
+                        border: `1px solid ${pxKind === k ? p.line2 : p.line}`,
+                      }}
+                    >
+                      {k.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
+                  <Field label={t("modals.host.proxyHost")} w="100%">
+                    <Input value={pxHost} placeholder="proxy.corp.net" mono onChange={setPxHost} />
+                  </Field>
+                  <Field label={t("modals.host.port")} w={narrow ? "100%" : "96px"}>
+                    <Input value={pxPort} mono selectOnFocus onChange={setPxPort} />
+                  </Field>
+                </div>
+                <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
+                  <Field label={t("modals.host.proxyUsername")} w="100%">
+                    <Input value={pxUser} placeholder="" mono onChange={setPxUser} />
+                  </Field>
+                  {/* SOCKS4 carries no password (the username is its ident). */}
+                  {pxKind !== "socks4" && (
+                    <Field label={t("modals.host.proxyPassword")} w="100%">
+                      <NHSelect
+                        value={pxPwId}
+                        onChange={setPxPwId}
+                        options={[
+                          { value: "", label: t("modals.host.proxyNoPassword") },
+                          ...pwItems.map((k) => ({ value: k.itemId, label: k.itemId })),
+                        ]}
+                        empty={t("modals.host.proxyNoPassword")}
+                      />
+                    </Field>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -2206,6 +2310,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
         user,
         auth,
         jumps: via.jumps,
+        proxy: via.proxy,
       };
       let opened: { id: string; bindAddress: string };
       let route: string;
@@ -2996,6 +3101,7 @@ function CopyKeyToServerModal({
             user: h.user,
             auth: profileToAuth(h.auth, vault, needsPw(h) ? pw : undefined),
             jumps: h.jumps,
+            proxy: h.proxy,
           };
           const r = await api.sshExec(args, cmd);
           if (r.exitStatus === 0) ok++;
@@ -3306,6 +3412,7 @@ function BindHostModal({
           host.port,
           host.usernameTemplate,
           host.jumps,
+          host.proxy,
         );
         // Re-binding (an existing binding present) is an explicit user action here,
         // so allow a changed destination pin; a first bind never needs the flag.
