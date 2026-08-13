@@ -27,6 +27,7 @@ import { useIsMobile } from "@/store/responsive";
 import { splitLocalTerminal, useCtx } from "@/store/ctx";
 import { localRecordingRequest, useLocalMachine } from "@/store/localShell";
 import { createPaneEvents, type PaneEvents } from "@/views/terminal/paneSession";
+import { parseOsc52 } from "@/views/terminal/osc52";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, isApiError, type ConnectionProfile } from "@/bridge/types";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
@@ -520,6 +521,16 @@ async function runStartupSnippets(
       return true;
     });
 
+    // OSC 52 — the remote side (zellij, tmux `set-clipboard on`, nvim) writing
+    // its copy into the system clipboard. Before this handler the sequence was
+    // silently dropped, and a multiplexer's own "copied to clipboard" was a lie.
+    // Write-only: the "?" read query never gets an answer (see osc52.ts).
+    term.parser.registerOscHandler(52, (data) => {
+      const text = parseOsc52(data);
+      if (text) void writeText(text);
+      return true;
+    });
+
     // Cmd+F (macOS) / Ctrl+Shift+F opens find; plain Ctrl+F is left to the shell
     // (readline forward-char). Escape closes it. attachCustomKeyEventHandler runs
     // only while THIS terminal has focus, so other panes/tabs are unaffected.
@@ -575,6 +586,17 @@ async function runStartupSnippets(
           term.clearSelection();
           return false;
         }
+      }
+      // Keyboard paste. macOS keeps ⌘V (the webview's native paste event feeds
+      // xterm) and is left alone — a second handler there would double-paste.
+      // On Linux/Windows both Ctrl+V and Ctrl+Shift+V paste: WebView2 never
+      // delivers a native paste to the xterm textarea, so Windows had no
+      // keyboard paste at all (#29), and returning false stops the platforms
+      // that DO have a native path from pasting twice. This spends readline's
+      // quoted-insert (^V) — deliberate, the Termius trade.
+      if (!isMac() && (ev.key === "v" || ev.key === "V") && ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+        if (ev.type === "keydown") void pasteClipboard();
+        return false;
       }
       return true;
     });
