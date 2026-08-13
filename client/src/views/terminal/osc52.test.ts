@@ -6,7 +6,7 @@
 // accept/reject line is worth pinning.
 
 import { describe, expect, it } from "vitest";
-import { parseOsc52, OSC52_MAX_B64 } from "./osc52";
+import { parseOsc52 } from "./osc52";
 
 const b64 = (s: string): string => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 
@@ -47,8 +47,12 @@ describe("parseOsc52", () => {
     expect(parseOsc52("aGk=")).toBeNull();
   });
 
-  it("ignores an oversized payload", () => {
-    const big = "A".repeat(OSC52_MAX_B64 + 4);
-    expect(parseOsc52(`c;${big}`)).toBeNull();
+  it("decodes a multi-megabyte payload (xterm's parser is the only ceiling)", () => {
+    // 8 MiB of base64 → 6 MiB of text. Payloads this size survive xterm's
+    // 10 MB OSC PAYLOAD_LIMIT, so they must reach the clipboard — a size cap
+    // here would silently drop a copy the multiplexer already reported done.
+    const out = parseOsc52(`c;${"YWFh".repeat(2 * 1024 * 1024)}`);
+    expect(out?.length).toBe(6 * 1024 * 1024);
+    expect(out?.[0]).toBe("a");
   });
 });

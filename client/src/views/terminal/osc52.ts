@@ -4,17 +4,19 @@
 // answer it. Anything malformed is ignored rather than clearing or clobbering
 // whatever the user has in the clipboard.
 
-/** Longest base64 payload we accept — ~5 MiB decoded. tmux caps its own OSC 52
- *  writes far below this; anything bigger is not a human copying text. */
-export const OSC52_MAX_B64 = 7 * 1024 * 1024;
+// No size cap of our own: xterm's parser already aborts OSC payloads over
+// 10 MB (PAYLOAD_LIMIT) before they reach any handler, clipboard clobbering
+// is size-independent, and a cap here would silently drop a copy the
+// multiplexer already reported as done — the exact lie this module exists
+// to kill.
 
 /** `Pc;Pd` → the decoded text to put in the system clipboard, or null when the
- *  sequence should be ignored (query, empty, malformed, oversized). */
+ *  sequence should be ignored (query, empty, malformed). */
 export function parseOsc52(data: string): string | null {
   const sep = data.indexOf(";");
   if (sep < 0) return null;
   const payload = data.slice(sep + 1).replace(/\s+/g, "");
-  if (!payload || payload === "?" || payload.length > OSC52_MAX_B64) return null;
+  if (!payload || payload === "?") return null;
   let bin: string;
   try {
     bin = atob(payload);
