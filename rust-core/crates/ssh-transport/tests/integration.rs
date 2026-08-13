@@ -1021,6 +1021,24 @@ async fn connect_via_socks5_proxy_with_auth() {
 }
 
 #[tokio::test]
+async fn connect_via_socks5_proxy_password_only() {
+    // A password with no username still means "authenticate" (RFC 1929 allows
+    // a zero-length field) — it must not be silently dropped.
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[15u8; 32]).unwrap();
+    let proxy_port = fake_socks5(Some(("", "sekret")), false);
+
+    let mut proxy = proxy_opts(ProxyKind::Socks5, proxy_port);
+    proxy.password = Some(zeroize::Zeroizing::new("sekret".into()));
+    let client = SshClient::connect(&key_opts(sshd.port).with_proxy(proxy), &agent, &storage)
+        .await
+        .unwrap();
+    assert_eq!(client.exec("true").await.unwrap().exit_status, Some(0));
+}
+
+#[tokio::test]
 async fn connect_via_socks4_proxy() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);

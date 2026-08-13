@@ -124,10 +124,16 @@ async fn http_handshake<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let auth = proxy
-        .username
-        .as_deref()
-        .map(|u| (u, proxy.password.as_deref().map_or("", |p| p.as_str())));
+    // Either credential alone still means "authenticate": a password-only
+    // proxy account is unusual but legal in Basic (empty user-id), and
+    // silently dropping the password would read as a proxy rejecting good
+    // credentials.
+    let auth = (proxy.username.is_some() || proxy.password.is_some()).then(|| {
+        (
+            proxy.username.as_deref().unwrap_or(""),
+            proxy.password.as_deref().map_or("", |p| p.as_str()),
+        )
+    });
     let request = http_connect_request(dest_host, dest_port, auth);
     stream.write_all(request.as_bytes()).await?;
 
@@ -298,8 +304,10 @@ where
 {
     // Greeting: offer username/password only when we actually hold credentials,
     // so an anonymous proxy never sees the method and a credentialed one can
-    // pick it.
-    let have_creds = proxy.username.is_some();
+    // pick it. Either credential alone counts — RFC 1929 permits a zero-length
+    // field, and dropping a configured password because the username box was
+    // left empty would read as the proxy rejecting good credentials.
+    let have_creds = proxy.username.is_some() || proxy.password.is_some();
     let greeting: &[u8] = if have_creds {
         &[5, 2, 0x00, 0x02]
     } else {
