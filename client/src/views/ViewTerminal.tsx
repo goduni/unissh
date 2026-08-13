@@ -28,6 +28,7 @@ import { splitLocalTerminal, useCtx } from "@/store/ctx";
 import { localRecordingRequest, useLocalMachine } from "@/store/localShell";
 import { createPaneEvents, type PaneEvents } from "@/views/terminal/paneSession";
 import { parseOsc52 } from "@/views/terminal/osc52";
+import { resetStaleAppModes } from "@/views/terminal/staleModes";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, isApiError, type ConnectionProfile } from "@/bridge/types";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
@@ -742,6 +743,11 @@ async function runStartupSnippets(
       autoTimerRef.current = null;
     }
     if (pane.gen > 0) {
+      // The dead session's app may have left bracketed paste, mouse tracking,
+      // the alt screen etc. switched on in this reused xterm; the fresh shell
+      // starts from defaults, and the mismatch garbles pastes (#30) and eats
+      // clicks. Reset the app-owned modes without touching the scrollback.
+      void resetStaleAppModes(term);
       term.writeln("");
       const again = target.kind === "local" ? "terminal.restarting" : "terminal.reconnecting";
       term.writeln(`\x1b[2m— ${t(again)} —\x1b[0m`);
