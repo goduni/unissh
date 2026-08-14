@@ -71,13 +71,33 @@ TLS is controlled by a single env knob, `UNISSH_TLS_DIRECTIVE`:
   leave it empty for ACME without an account email). Caddy gets a public cert
   (Let's Encrypt / ZeroSSL via HTTP-01 or TLS-ALPN-01). Port 80 must be reachable
   for the challenge + HTTP→HTTPS redirect.
+- **Certificates you already have:** set
+  `UNISSH_TLS_DIRECTIVE="tls /certs/fullchain.pem /certs/privkey.pem"` and mount
+  the directory with the `compose.tls-files.yml` override in this folder:
+  `docker compose -f compose.prod.yml -f deploy/compose.tls-files.yml up -d`.
+  Caddy reloads the files in place when they are renewed.
 - **LAN / air-gapped (self-signed internal CA):** set `UNISSH_DOMAIN` to a local
   host (e.g. `unissh.local`) or an IP and set `UNISSH_TLS_DIRECTIVE="tls internal"`
-  in `.env`. Caddy issues a cert from its own internal CA. Trust Caddy's root CA
-  on clients (export it from the `caddy-data` volume at
-  `/data/caddy/pki/authorities/local/root.crt`) or accept the self-signed cert.
+  in `.env`. Caddy issues a cert from its own internal CA — and every client
+  machine must then TRUST that root (export it from the `caddy-data` volume at
+  `/data/caddy/pki/authorities/local/root.crt` and install it in the OS trust
+  store). The client verifies against the OS store, has no "accept anyway"
+  prompt, and refuses plain `http://` to a non-loopback host. The
+  `"certutil" is not available` line in Caddy's log is about trusting the root
+  *inside the container* and is unrelated.
 
 The `caddy-data` volume persists issued certs / the internal CA root — keep it.
+
+## Other front doors
+
+- `compose.tls-files.yml` — Caddy, but with certificate files you supply.
+- `compose.reverse-proxy.yml` — no bundled Caddy; publishes the API on
+  `127.0.0.1:8443` for your own nginx/HAProxy/Traefik.
+- `nginx/unissh.conf` — a complete nginx server block (TLS + SPA + API proxy)
+  equivalent to the Caddyfile.
+
+Full write-up, including client-side CA trust and a no-proxy variant:
+<https://unissh.dev/operations/deploy-scenarios/>.
 
 ## Content Security Policy / wasm
 

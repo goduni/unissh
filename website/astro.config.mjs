@@ -72,6 +72,7 @@ export default defineConfig({
             { label: 'Build from source', slug: 'operations/build' },
             { label: 'Server configuration', slug: 'operations/configuration' },
             { label: 'Docker Compose deployment', slug: 'operations/deploy' },
+            { label: 'Deployment scenarios', slug: 'operations/deploy-scenarios' },
             { label: 'CI/CD & releases', slug: 'operations/ci-cd' },
             { label: 'Backups & anti-rollback restore', slug: 'operations/backups' },
           ],

@@ -1,0 +1,45 @@
+# =============================================================================
+# UniSSH — compose OVERRIDE: bring your OWN reverse proxy (nginx, HAProxy,
+# Traefik, an appliance…) instead of the bundled Caddy.
+#
+# It does two things:
+#   * parks the `caddy` service behind a profile that is never enabled, so
+#     `up -d` no longer starts it and ports 80/443 stay free for your proxy;
+#   * publishes the server's API on 127.0.0.1:8443 — LOOPBACK ONLY, plain HTTP,
+#     for the proxy on the same host to forward to. It is NOT reachable off-box.
+#
+#   docker compose -f compose.prod.yml -f deploy/compose.reverse-proxy.yml up -d
+#   curl http://127.0.0.1:8443/readyz
+#
+# Your proxy MUST terminate TLS: the client refuses a plaintext http:// server
+# URL to anything but loopback, because the bearer tokens ride that connection.
+# A ready-made nginx server block is in deploy/nginx/unissh.conf.
+#
+# The admin SPA is inside the caddy image, which is no longer running — serve
+# its files from your proxy instead (extract them once with `docker create` +
+# `docker cp`; see deploy/nginx/unissh.conf and
+# https://unissh.dev/operations/deploy-scenarios/). Serving the SPA from the
+# SAME origin as /v1 is what keeps CORS off.
+#
+# If the proxy runs in Docker rather than on the host, drop the `ports:` block
+# below, attach that container to the `unissh` network, and forward to
+# http://server:8443 by service name — then nothing is host-published at all.
+#
+# trust_proxy stays true (set in the base file): the server reads the RIGHTMOST
+# X-Forwarded-For element as the client IP for rate limiting, so the proxy must
+# append the real peer — and must not let a client-supplied value through as the
+# last hop.
+# =============================================================================
+
+name: unissh
+
+services:
+  caddy:
+    # A profile nobody enables = a service compose never starts. (Overrides can
+    # add to a service but cannot delete one, so this is how a bundled service
+    # gets switched off.)
+    profiles: ["bundled-caddy"]
+
+  server:
+    ports:
+      - "127.0.0.1:8443:8443"

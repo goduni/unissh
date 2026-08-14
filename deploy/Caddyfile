@@ -11,6 +11,9 @@
 #       ""                      automatic public ACME, no account email (default)
 #       "tls you@example.com"   automatic public ACME with an account email
 #       "tls internal"          Caddy internal CA / self-signed (LAN, air-gapped)
+#       "tls /certs/fullchain.pem /certs/privkey.pem"
+#                               certificate files you already have (mount them
+#                               with deploy/compose.tls-files.yml)
 #
 # TLS modes:
 #   ACME: Caddy obtains a public cert automatically (Let's Encrypt / ZeroSSL via
@@ -18,8 +21,17 @@
 #         HTTP->HTTPS redirect; 443 serves the app. Supplying an email via
 #         "tls you@example.com" enables expiry notices.
 #   internal ("tls internal"): Caddy issues a cert from its own internal CA
-#         (self-signed). Trust Caddy's root on clients, or accept the cert. Use
-#         for LAN hosts (*.local) or IPs with no public DNS.
+#         (self-signed). Use for LAN hosts (*.local) or IPs with no public DNS.
+#         Every client machine must then TRUST that CA root — the desktop client
+#         verifies against the OS trust store and has no "accept anyway" prompt,
+#         and it refuses plain http:// to a non-loopback host. Export the root
+#         from the caddy-data volume (/data/caddy/pki/authorities/local/root.crt)
+#         and install it. The "certutil is not available" line in Caddy's log is
+#         only about trusting the root INSIDE this container — it is unrelated,
+#         and installing certutil there fixes nothing for clients.
+#   files ("tls <cert> <key>"): certificates you already hold (internal CA,
+#         commercial wildcard, DNS-01, certbot on the host). Caddy reloads them
+#         in place on renewal.
 # This single placeholder covers every mode with no image rebuild.
 # =============================================================================
 {$UNISSH_DOMAIN} {
