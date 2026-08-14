@@ -9758,11 +9758,6 @@ mod tests {
         );
     }
 
-    /// Anti-redirect over the OUTBOUND PROXY (issue #27): pointing a shared
-    /// Personal profile at `socks5://attacker` must change the pin exactly like
-    /// inserting a MITM jump would. No proxy yields the previous string
-    /// (backward compatibility with old pins).
-    #[test]
     /// The proxy rules hold at every boundary that accepts one, not only in
     /// the desktop form: a CRLF in the host would smuggle headers into an HTTP
     /// CONNECT request, and a SOCKS4 password would unseal a vault secret for
@@ -9816,6 +9811,10 @@ mod tests {
         .is_ok());
     }
 
+    /// Anti-redirect over the OUTBOUND PROXY (issue #27): pointing a shared
+    /// Personal profile at `socks5://attacker` must change the pin exactly like
+    /// inserting a MITM jump would. No proxy yields the previous string
+    /// (backward compatibility with old pins).
     #[test]
     fn proxy_is_part_of_the_destination_pin() {
         let nj: &[JumpHost] = &[];
