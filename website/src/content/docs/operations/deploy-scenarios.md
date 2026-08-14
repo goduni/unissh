@@ -91,7 +91,16 @@ docker compose -f compose.yml -f deploy/compose.tls-files.yml up -d --build
 
 Relative host paths in the override resolve against the **first** `-f` file's directory (the repository root), which is why the default is `./certs` and not `../certs`.
 
-**Renewal.** Caddy watches the files: rewrite `fullchain.pem` / `privkey.pem` in place and it picks up the new certificate without a restart. A certbot deploy hook only has to `cp` the files — no `docker compose` command is needed.
+:::danger[Renewal does not happen by itself]
+Caddy loads these files **once**. Rewriting them on disk changes nothing — the old certificate keeps being served, and plain `caddy reload` is a no-op because the config is unchanged. (Both verified against a running container: after swapping the files, the original certificate was still on the wire.) Every renewal must be followed by:
+
+```bash
+docker compose exec caddy caddy reload --force --config /etc/caddy/Caddyfile
+# or: docker compose restart caddy
+```
+
+Put that in the certbot/acme.sh **deploy hook**. Otherwise the instance serves an expired certificate — and because the client has no "accept anyway", that is a full outage, not a warning.
+:::
 
 ---
 
@@ -276,7 +285,17 @@ UNISSH__SERVER__TLS_KEY=/certs/privkey.pem
 UNISSH__SERVER__TRUST_PROXY=false        # nothing in front; XFF must not be trusted
 ```
 
-In Docker, mount the files and publish the port (the container runs as the distroless nonroot user, uid **65532** — the key must be readable by it):
+In Docker, mount the files and publish the port. The container runs as the distroless nonroot user, uid **65532**, so the key has to be readable by that uid — a root-owned `chmod 600` key (what a certbot copy leaves you with) makes the server exit at startup with:
+
+```
+Error: load TLS cert/key: failed to read from file `/certs/privkey.pem`: Permission denied (os error 13)
+```
+
+```bash
+sudo chown 65532:65532 certs/privkey.pem
+sudo chmod 600 certs/privkey.pem
+```
+
 
 ```yaml
 services:
@@ -356,6 +375,10 @@ Point `[db].url` at `/var/lib/unissh/unissh.db` (the `StateDirectory`), and reme
 **Caddy cannot get an ACME certificate** — port 80 must be reachable from the internet for HTTP-01, and public DNS must resolve to this host. On a private network, use scenario 2 or 4 instead.
 
 **The admin panel loads but never unlocks** — the `.wasm` file is being served with the wrong content type. Check `curl -I https://<host>/assets/*.wasm | grep content-type`; it must be `application/wasm` ([scenario 3b](#scenario-3b--the-proxy-replaces-caddy-one-hop)).
+
+**A renewed certificate is still showing as the old one** — the file-based Caddy modes load the certificate once; `caddy reload --force` or a container restart is required after every renewal ([scenario 2](#scenario-2--caddy-with-certificates-you-already-have)).
+
+**The server exits with `Permission denied (os error 13)` on the key** — the key is not readable by uid 65532 in [scenario 5](#scenario-5--no-proxy-the-server-terminates-tls-itself). `chown 65532:65532` it.
 
 **Pushes fail with 413** — the proxy's body limit is below the server's `limits.max_body_bytes` (16 MiB default). Raise `client_max_body_size` (nginx) to match.
 

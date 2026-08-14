@@ -21,9 +21,17 @@
 # Relative host paths resolve against the FIRST -f file's directory (the repo
 # root), not against deploy/ — hence ./certs, not ../certs.
 #
-# The mount is read-only. Caddy watches the files and picks up a renewed cert
-# without a restart, so a renewal on the host only has to rewrite these two
-# paths (`cp` the new files in place); no `docker compose` command is needed.
+# The mount is read-only.
+#
+# RENEWAL IS NOT AUTOMATIC. Caddy loads these files once and keeps serving the
+# certificate it loaded: rewriting them on disk changes nothing, and neither
+# does `caddy reload` (the config is unchanged, so it is a no-op). Verified by
+# swapping the files under a running container — the old cert was still served.
+# After a renewal you MUST do one of:
+#   docker compose exec caddy caddy reload --force --config /etc/caddy/Caddyfile
+#   docker compose restart caddy
+# Wire that into your certbot/acme.sh deploy hook, or the instance goes on
+# serving an expired certificate until someone notices.
 # =============================================================================
 
 name: unissh

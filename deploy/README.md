@@ -75,7 +75,9 @@ TLS is controlled by a single env knob, `UNISSH_TLS_DIRECTIVE`:
   `UNISSH_TLS_DIRECTIVE="tls /certs/fullchain.pem /certs/privkey.pem"` and mount
   the directory with the `compose.tls-files.yml` override in this folder:
   `docker compose -f compose.prod.yml -f deploy/compose.tls-files.yml up -d`.
-  Caddy reloads the files in place when they are renewed.
+  Renewal is NOT picked up on its own — after replacing the files run
+  `docker compose exec caddy caddy reload --force --config /etc/caddy/Caddyfile`
+  (or `docker compose restart caddy`).
 - **LAN / air-gapped (self-signed internal CA):** set `UNISSH_DOMAIN` to a local
   host (e.g. `unissh.local`) or an IP and set `UNISSH_TLS_DIRECTIVE="tls internal"`
   in `.env`. Caddy issues a cert from its own internal CA — and every client
