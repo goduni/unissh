@@ -237,7 +237,7 @@ sudo security add-trusted-cert -d -r trustRoot \
 Import-Certificate -FilePath unissh-root.crt -CertStoreLocation Cert:\LocalMachine\Root
 ```
 
-Confirm from the client before opening the app — `curl` reads the same store:
+The Linux paths are verified against a clean Debian and Fedora; the macOS and Windows lines are the vendor-documented ones. Confirm from the client before opening the app — `curl` reads the same store:
 
 ```bash
 curl -v https://unissh.local/readyz     # must succeed with NO -k
@@ -353,5 +353,3 @@ Create the user first (`sudo useradd -r -s /usr/sbin/nologin unissh`) and make t
 - [Docker Compose deployment](../deploy/) — the full stack, profiles, first-run claim, backups.
 - [Server configuration](../configuration/) — every `config.toml` key and its environment override.
 - [Backups & anti-rollback restore](../backups/).
-
-<small>Every recipe on this page was run end to end against the published images, except the macOS and Windows trust-store commands, which are the vendor-documented ones.</small>
