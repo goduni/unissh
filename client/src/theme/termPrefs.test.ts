@@ -31,7 +31,10 @@ describe("termOptions", () => {
     expect(o.letterSpacing).toBe(0);
     expect(o.cursorBlink).toBe(true);
     expect(o.cursorStyle).toBe("block");
-    expect(o.minimumContrastRatio).toBe(1.1);
+    // Exactly 1 — xterm's sentinel for "leave colours alone". Anything above it
+    // turns on the per-cell contrast pass, which mis-renders inverse-video runs
+    // (a shell's bracketed-paste highlight) as text on same-coloured text (#38).
+    expect(o.minimumContrastRatio).toBe(1);
     expect(o.drawBoldTextInBrightColors).toBe(true);
     expect(o.macOptionClickForcesSelection).toBe(true);
   });
