@@ -583,6 +583,8 @@ export const sftpRealpath = (id: string, path: string) =>
   invoke<string>("sftp_realpath", { id, path });
 export const sftpReopen = (id: string) => invoke<void>("sftp_reopen", { id });
 export const sftpMkdir = (id: string, path: string) => invoke<void>("sftp_mkdir", { id, path });
+export const sftpCreateNewFile = (id: string, path: string) =>
+  invoke<void>("sftp_create_new_file", { id, path });
 export const sftpRmdir = (id: string, path: string) => invoke<void>("sftp_rmdir", { id, path });
 export const sftpRmdirRecursive = (id: string, path: string) =>
   invoke<void>("sftp_rmdir_recursive", { id, path });

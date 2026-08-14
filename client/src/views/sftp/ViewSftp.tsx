@@ -320,9 +320,9 @@ export function ViewSftp() {
     if (!slot.source) return;
     try {
       const path = await slot.source.join(slot.cwd, name);
-      // The dialog only knows the names it listed. Re-check against the server:
-      // writing truncates, so an entry that appeared meanwhile — or one hidden
-      // from the listing — would lose its contents without this.
+      // The dialog only knows the names it listed, so check the real thing. This
+      // is for the message, not for safety: createNew is exclusive, so losing
+      // the race costs an error rather than someone else's file.
       if (await slot.source.stat(path)) {
         // The listing is stale by definition here — show the entry we refused to
         // clobber, or the message reads as the pane contradicting itself.
@@ -330,7 +330,7 @@ export function ViewSftp() {
         toast(t("sftp.toast.nameTaken", { name }), "err");
         return;
       }
-      await slot.source.writeText(path, "");
+      await slot.source.createNew(path);
       slot.refresh();
       toast(t("sftp.toast.fileCreated"), "ok");
     } catch (e) {

@@ -1750,6 +1750,16 @@ pub async fn sftp_mkdir(id: String, path: String, state: State<'_, AppState>) ->
 }
 
 #[tauri::command]
+pub async fn sftp_create_new_file(
+    id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let s = get_sftp(&state, &id)?;
+    blocking(move || s.create_new_file(path)).await
+}
+
+#[tauri::command]
 pub async fn sftp_rmdir(id: String, path: String, state: State<'_, AppState>) -> ApiResult<()> {
     let s = get_sftp(&state, &id)?;
     blocking(move || s.rmdir(path)).await

@@ -9,7 +9,7 @@ import { apiErrorMessage, type SftpEntry } from "@/bridge/types";
 import type { Entry, LocationRef, SftpSession } from "@/store/sftp-types";
 import { breadcrumbSegments, isSafeName, remoteJoin, remoteParent, type Crumb } from "@/sftp/paths";
 import { dirname, join } from "@tauri-apps/api/path";
-import { mkdir, readTextFile, remove, rename, stat, writeTextFile } from "@tauri-apps/plugin-fs";
+import { mkdir, open as fsOpen, readTextFile, remove, rename, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 
 /** An error that looks like the SFTP channel/connection dropped (server reaped
  *  an idle channel, EOF, broken pipe, "channel closed") rather than a real
@@ -45,6 +45,8 @@ export interface FileSource {
   stat(path: string): Promise<Entry | null>;
   realpath(path: string): Promise<string>;
   mkdir(path: string): Promise<void>;
+  /** Create an empty file, failing if the path is already taken. */
+  createNew(path: string): Promise<void>;
   /** Remove a file. */
   remove(path: string): Promise<void>;
   /** Remove a directory (local: recursive; remote: empty-only until Phase 2). */
@@ -121,6 +123,9 @@ class RemoteSource implements FileSource {
   mkdir(path: string): Promise<void> {
     return this.withReopen(() => api.sftpMkdir(this.id, path));
   }
+  createNew(path: string): Promise<void> {
+    return this.withReopen(() => api.sftpCreateNewFile(this.id, path));
+  }
   remove(path: string): Promise<void> {
     return this.withReopen(() => api.sftpRemove(this.id, path));
   }
@@ -187,6 +192,11 @@ class LocalSource implements FileSource {
   }
   async mkdir(path: string): Promise<void> {
     await mkdir(path);
+  }
+  async createNew(path: string): Promise<void> {
+    // O_CREAT|O_EXCL. writeTextFile would truncate an existing file instead.
+    const fh = await fsOpen(path, { write: true, createNew: true });
+    await fh.close();
   }
   async remove(path: string): Promise<void> {
     await remove(path);
