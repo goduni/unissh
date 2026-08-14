@@ -35,6 +35,7 @@ export function PaneSlot({
   onRowContext,
   onEmptyContext,
   onNewFolder,
+  onNewFile,
   onImport,
   onDropHere,
   onTabDrop,
@@ -55,6 +56,7 @@ export function PaneSlot({
   onRowContext: (entry: Entry, x: number, y: number) => void;
   onEmptyContext: (x: number, y: number) => void;
   onNewFolder: () => void;
+  onNewFile: () => void;
   onImport?: () => void;
   onDropHere: (targetCwd: string) => void;
   onTabDrop: (tabId: string) => void;
@@ -245,6 +247,7 @@ export function PaneSlot({
         {isMobile && <IconBtn icon="list" size={40} title={t("sftp.sortBy")} onClick={() => setSortMenu(true)} />}
         {onImport && <IconBtn icon="enter" size={isMobile ? 40 : 26} title={t("sftp.menu.import")} onClick={onImport} />}
         <IconBtn icon="folders" size={isMobile ? 40 : 26} title={t("sftp.menu.newFolder")} onClick={onNewFolder} />
+        <IconBtn icon="file" size={isMobile ? 40 : 26} title={t("sftp.menu.newFile")} onClick={onNewFile} />
         <IconBtn
           icon="refresh"
           size={isMobile ? 40 : 26}
