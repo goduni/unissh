@@ -221,10 +221,59 @@ fn retry_after_secs(resp: &Response) -> u64 {
 }
 
 fn transport_err(e: reqwest::Error) -> ApiError {
+    let mut message = e.to_string();
+    if let Some(hint) = tls_hint(&error_chain(&e)) {
+        message.push_str(" — ");
+        message.push_str(hint);
+    }
     ApiError::Server {
         code: "network".into(),
-        message: e.to_string(),
+        message,
     }
+}
+
+/// Flatten an error and its `source()` chain into one lowercase haystack. The
+/// outer Display of a failed request is only "error sending request for url
+/// (...)"; the reason (rustls' certificate verdict) lives several sources down.
+fn error_chain(e: &dyn std::error::Error) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let mut cur = Some(e);
+    while let Some(err) = cur {
+        let _ = write!(out, "{err}; ");
+        cur = err.source();
+    }
+    out.to_ascii_lowercase()
+}
+
+/// Turn a TLS verification failure into an instruction. Self-hosting behind a
+/// private CA is a supported deployment, and it is the one case where the raw
+/// message ("invalid peer certificate: unknownissuer") names the symptom and
+/// nothing else — the operator has to already know that the fix is a trust-store
+/// install. The client verifies against the OS trust store (rustls
+/// platform-verifier), so that is where the CA root has to go.
+fn tls_hint(chain: &str) -> Option<&'static str> {
+    if !chain.contains("certificate") {
+        return None;
+    }
+    if chain.contains("unknownissuer") || chain.contains("unknown issuer") {
+        return Some(
+            "the server's TLS certificate is not trusted by this machine. \
+             If it is self-signed or issued by an internal CA (e.g. Caddy's \
+             \"tls internal\"), install that CA's root certificate into this \
+             machine's system trust store: https://unissh.dev/operations/deploy-scenarios/",
+        );
+    }
+    if chain.contains("notvalidforname") {
+        return Some(
+            "the server's TLS certificate is not valid for this hostname — \
+             use the exact hostname the certificate was issued for",
+        );
+    }
+    if chain.contains("expired") {
+        return Some("the server's TLS certificate has expired (or this machine's clock is wrong)");
+    }
+    None
 }
 
 /// Map `{error:{code,message,retry_after}}` → `ApiError::Server`. Falls back to the
@@ -295,6 +344,36 @@ mod base_url_tests {
         assert!(validate_base_url("ftp://cloud.example.com").is_err());
         assert!(validate_base_url("cloud.example.com").is_err());
         assert!(validate_base_url("https://").is_err());
+    }
+}
+
+#[cfg(test)]
+mod tls_hint_tests {
+    use super::tls_hint;
+
+    /// The strings are what rustls actually produces, lowercased by
+    /// `error_chain`: a private-CA server is the case the hint exists for.
+    #[test]
+    fn untrusted_issuer_gets_the_trust_store_instruction() {
+        let chain = "error sending request for url (https://unissh.local/v1/health); \
+                     invalid peer certificate: unknownissuer; ";
+        assert!(tls_hint(chain).unwrap().contains("system trust store"));
+    }
+
+    #[test]
+    fn hostname_mismatch_and_expiry_are_distinguished() {
+        assert!(tls_hint("invalid peer certificate: notvalidforname; ")
+            .unwrap()
+            .contains("hostname"));
+        assert!(tls_hint("invalid peer certificate: expired; ")
+            .unwrap()
+            .contains("expired"));
+    }
+
+    #[test]
+    fn ordinary_transport_failures_get_no_hint() {
+        assert!(tls_hint("error sending request; connection refused; ").is_none());
+        assert!(tls_hint("operation timed out; ").is_none());
     }
 }
 
