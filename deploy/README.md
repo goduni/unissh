@@ -71,13 +71,45 @@ TLS is controlled by a single env knob, `UNISSH_TLS_DIRECTIVE`:
   leave it empty for ACME without an account email). Caddy gets a public cert
   (Let's Encrypt / ZeroSSL via HTTP-01 or TLS-ALPN-01). Port 80 must be reachable
   for the challenge + HTTP→HTTPS redirect.
+- **Certificates you already have:** set
+  `UNISSH_TLS_DIRECTIVE="tls /certs/fullchain.pem /certs/privkey.pem"` and mount
+  the directory with the `compose.tls-files.yml` override in this folder:
+  `docker compose -f compose.prod.yml -f deploy/compose.tls-files.yml up -d`.
+  Renewal is NOT picked up on its own — after replacing the files run
+  `docker compose exec caddy caddy reload --force --config /etc/caddy/Caddyfile`
+  (or `docker compose restart caddy`).
 - **LAN / air-gapped (self-signed internal CA):** set `UNISSH_DOMAIN` to a local
   host (e.g. `unissh.local`) or an IP and set `UNISSH_TLS_DIRECTIVE="tls internal"`
-  in `.env`. Caddy issues a cert from its own internal CA. Trust Caddy's root CA
-  on clients (export it from the `caddy-data` volume at
-  `/data/caddy/pki/authorities/local/root.crt`) or accept the self-signed cert.
+  in `.env`. Caddy issues a cert from its own internal CA — and every client
+  machine must then TRUST that root (export it from the `caddy-data` volume at
+  `/data/caddy/pki/authorities/local/root.crt` and install it in the OS trust
+  store). The client verifies against the OS store, has no "accept anyway"
+  prompt, and refuses plain `http://` to a non-loopback host. The
+  `"certutil" is not available` line older images logged was about trusting the
+  root *inside the container* — unrelated to clients, and suppressed now via
+  `skip_install_trust` in the Caddyfile.
 
 The `caddy-data` volume persists issued certs / the internal CA root — keep it.
+
+## Other front doors
+
+- `compose.tls-files.yml` — Caddy, but with certificate files you supply.
+- `compose.behind-proxy.yml` — Caddy stays as a PLAIN-HTTP front on
+  `127.0.0.1:8080` (SPA + API), for a proxy you already run to terminate TLS in
+  front of. Recommended: the panel keeps travelling with the image, so upgrades
+  need no file syncing.
+- `compose.traefik.yml` — the same, published through an existing Traefik by
+  labels over a shared Docker network; nothing host-published.
+- `compose.reverse-proxy.yml` — no bundled Caddy at all; publishes the API on
+  `127.0.0.1:8443` for a proxy that will also serve the SPA itself.
+- `nginx/unissh.conf` — TLS + one proxy_pass to the stack (pairs with
+  compose.behind-proxy.yml).
+- `nginx/unissh-static-spa.conf` — nginx doing the Caddyfile's whole job: TLS,
+  the SPA from disk, the API proxied straight to the server (pairs with
+  compose.reverse-proxy.yml). One hop, so the server sees real client IPs.
+
+Full write-up, including client-side CA trust and a no-proxy variant:
+<https://unissh.dev/operations/deploy-scenarios/>.
 
 ## Content Security Policy / wasm
 

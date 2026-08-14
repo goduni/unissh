@@ -1,0 +1,45 @@
+# =============================================================================
+# UniSSH — compose OVERRIDE: put the whole stack behind a proxy you already run
+# (nginx, Traefik, HAProxy, a Cloudflare tunnel, an appliance…).
+#
+# The bundled Caddy STAYS — it just stops doing TLS and stops taking 80/443.
+# Setting its site address to ":80" makes it a plain-HTTP front on loopback:
+# still serving the admin SPA, still proxying /v1 /healthz /readyz to the
+# server. Your proxy terminates TLS and forwards everything to it:
+#
+#   client ──TLS──► your proxy ──HTTP──► 127.0.0.1:8080 (caddy) ──► server:8443
+#
+#   docker compose -f compose.prod.yml -f deploy/compose.behind-proxy.yml up -d
+#   curl -i http://127.0.0.1:8080/          # SPA
+#   curl -i http://127.0.0.1:8080/readyz    # proxied to the server
+#
+# Prefer this over serving the SPA from your proxy's own docroot: the panel is
+# versioned with the server, so a docroot copy has to be re-synced on every
+# upgrade and silently skews if it isn't. Here `docker compose pull && up -d`
+# upgrades both at once. Forward ALL paths to it, not just /v1 — it is the
+# origin for the SPA too, and same-origin is what keeps CORS off.
+#
+# Keep UNISSH_DOMAIN set to your REAL public hostname in .env (compose still
+# interpolates it, and UNISSH__SERVER__PUBLIC_URL should match what users type).
+# The override below is what actually decides Caddy's listener.
+#
+# `!override` replaces the base file's published ports instead of appending to
+# them — a plain list would leave 80/443 mapped as well. It needs Compose
+# v2.24+; on an older one, use deploy/compose.reverse-proxy.yml instead.
+#
+# If your proxy runs in Docker too, drop the ports block below, attach the proxy
+# to the `unissh` network, and forward to http://caddy:80 by service name —
+# then nothing is host-published at all.
+# =============================================================================
+
+name: unissh
+
+services:
+  caddy:
+    environment:
+      # ":80" = listen on port 80, plain HTTP, no ACME, no internal CA. The
+      # public hostname is your proxy's business now.
+      UNISSH_DOMAIN: ":80"
+      UNISSH_TLS_DIRECTIVE: ""
+    ports: !override
+      - "127.0.0.1:8080:80"

@@ -85,6 +85,10 @@ services:
       UNISSH__SERVER__TLS_CERT: ""
       UNISSH__SERVER__TLS_KEY: ""
       UNISSH__SERVER__TRUST_PROXY: "true"
+      # External base URL, used to render invite links ({public_url}/join#…).
+      # Empty => invites come back without a ready-made URL. Set it in .env
+      # to the address users actually type, including a non-standard port.
+      UNISSH__SERVER__PUBLIC_URL: "${UNISSH__SERVER__PUBLIC_URL:-}"
       # acme left unset/false on purpose: acme=true is a hard startup error.
       # --- Database (SQLite default; Postgres via the `postgres` profile + .env override) ---
       UNISSH__DB__BACKEND: "${UNISSH__DB__BACKEND:-sqlite}"

@@ -56,7 +56,10 @@ Caddy is the **only** TLS terminator and the only host-exposed service. The UniS
 TLS is controlled by one env knob, `UNISSH_TLS_DIRECTIVE`:
 
 - **Public domain (automatic ACME):** set `UNISSH_DOMAIN` to your real domain and `UNISSH_TLS_DIRECTIVE="tls you@example.com"` (the email enables expiry notices; leave it empty for ACME without an account email). Caddy gets a public cert (Let's Encrypt / ZeroSSL via HTTP-01 or TLS-ALPN-01). Port 80 must be reachable for the challenge and the HTTP→HTTPS redirect.
-- **LAN / air-gapped (self-signed internal CA):** set `UNISSH_DOMAIN` to a local host (e.g. `unissh.local`) or an IP and `UNISSH_TLS_DIRECTIVE="tls internal"`. Caddy issues a cert from its own internal CA — trust Caddy's root CA on clients (export it from the `caddy-data` volume at `/data/caddy/pki/authorities/local/root.crt`) or accept the self-signed cert.
+- **Certificates you already have:** set `UNISSH_TLS_DIRECTIVE="tls /certs/fullchain.pem /certs/privkey.pem"` and mount them with the `deploy/compose.tls-files.yml` override. Renewal needs an explicit `caddy reload --force` — see [Deployment scenarios](../deploy-scenarios/).
+- **LAN / air-gapped (self-signed internal CA):** set `UNISSH_DOMAIN` to a local host (e.g. `unissh.local`) or an IP and `UNISSH_TLS_DIRECTIVE="tls internal"`. Caddy issues a cert from its own internal CA — every client machine must then **trust that root** (export it from the `caddy-data` volume at `/data/caddy/pki/authorities/local/root.crt`). The client verifies against the OS trust store and has no "accept anyway" prompt, and it refuses plain `http://` to a non-loopback host.
+
+For certificates you already hold, an existing nginx in front, a LAN with no public DNS, or no proxy at all, see **[Deployment scenarios](../deploy-scenarios/)** — with a tested nginx server block and the client-side trust steps.
 
 :::tip[Keep the `caddy-data` volume]
 The `caddy-data` volume persists issued certs and the internal CA root. Keep it.

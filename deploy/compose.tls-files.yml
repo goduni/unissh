@@ -1,0 +1,44 @@
+# =============================================================================
+# UniSSH — compose OVERRIDE: serve TLS from certificate files you already have.
+#
+# Use this when the certificate does NOT come from ACME: a corporate/internal CA,
+# a wildcard bought from a commercial CA, a cert issued out-of-band by DNS-01, or
+# one managed on the host by certbot/acme.sh. Caddy stays the front door (it
+# still serves the SPA and proxies the API) — only the source of the cert
+# changes, so nothing about the topology or the server config moves.
+#
+#   1. Put the chain + key where this file expects them (repo root by default):
+#        ./certs/fullchain.pem     server cert + intermediates, leaf FIRST
+#        ./certs/privkey.pem       its private key (PKCS#8 or PKCS#1, unencrypted)
+#      Or point UNISSH_CERTS_DIR at any directory holding those two names.
+#   2. In .env:
+#        UNISSH_DOMAIN=unissh.example.com
+#        UNISSH_TLS_DIRECTIVE=tls /certs/fullchain.pem /certs/privkey.pem
+#   3. Start with BOTH files (the override must come second):
+#        docker compose -f compose.yml      -f deploy/compose.tls-files.yml up -d --build
+#        docker compose -f compose.prod.yml -f deploy/compose.tls-files.yml up -d
+#
+# Relative host paths resolve against the FIRST -f file's directory (the repo
+# root), not against deploy/ — hence ./certs, not ../certs.
+#
+# The mount is read-only.
+#
+# RENEWAL IS NOT AUTOMATIC. Caddy loads these files once and keeps serving the
+# certificate it loaded: rewriting them on disk changes nothing, and neither
+# does `caddy reload` (the config is unchanged, so it is a no-op). Verified by
+# swapping the files under a running container — the old cert was still served.
+# After a renewal you MUST do one of:
+#   docker compose exec caddy caddy reload --force --config /etc/caddy/Caddyfile
+#   docker compose restart caddy
+# Wire that into your certbot/acme.sh deploy hook, or the instance goes on
+# serving an expired certificate until someone notices.
+# =============================================================================
+
+name: unissh
+
+services:
+  caddy:
+    volumes:
+      # Merged with the base file's caddy-data/caddy-config mounts (compose
+      # unions service volumes by container path).
+      - "${UNISSH_CERTS_DIR:-./certs}:/certs:ro"

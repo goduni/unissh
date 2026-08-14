@@ -11,6 +11,9 @@
 #       ""                      automatic public ACME, no account email (default)
 #       "tls you@example.com"   automatic public ACME with an account email
 #       "tls internal"          Caddy internal CA / self-signed (LAN, air-gapped)
+#       "tls /certs/fullchain.pem /certs/privkey.pem"
+#                               certificate files you already have (mount them
+#                               with deploy/compose.tls-files.yml)
 #
 # TLS modes:
 #   ACME: Caddy obtains a public cert automatically (Let's Encrypt / ZeroSSL via
@@ -18,10 +21,35 @@
 #         HTTP->HTTPS redirect; 443 serves the app. Supplying an email via
 #         "tls you@example.com" enables expiry notices.
 #   internal ("tls internal"): Caddy issues a cert from its own internal CA
-#         (self-signed). Trust Caddy's root on clients, or accept the cert. Use
-#         for LAN hosts (*.local) or IPs with no public DNS.
+#         (self-signed). Use for LAN hosts (*.local) or IPs with no public DNS.
+#         Every client machine must then TRUST that CA root — the desktop client
+#         verifies against the OS trust store and has no "accept anyway" prompt,
+#         and it refuses plain http:// to a non-loopback host. Export the root
+#         from the caddy-data volume (/data/caddy/pki/authorities/local/root.crt)
+#         and install it. (The "certutil is not available" line older images
+#         logged was about trusting the root INSIDE this container — unrelated
+#         to clients; see skip_install_trust in the global block below.)
+#   files ("tls <cert> <key>"): certificates you already hold (internal CA,
+#         commercial wildcard, DNS-01, certbot on the host). These are loaded
+#         ONCE — after a renewal, rewriting the files is not enough; reload with
+#         `caddy reload --force` or restart the container (see
+#         deploy/compose.tls-files.yml).
 # This single placeholder covers every mode with no image rebuild.
 # =============================================================================
+{
+	# Don't try to install the internal CA root into THIS CONTAINER's trust
+	# store. Nothing in the container consumes it — the root has to be trusted
+	# on the machines running the client — so the attempt only ever produced a
+	# scary-looking log line that sent operators chasing the wrong thing:
+	#   warning: "certutil" is not available, install "certutil" with
+	#   "apt install libnss3-tools" or "yum install nss-tools" and try again
+	# Skipping it changes nothing else: the CA is still created, certificates
+	# are still issued, and the root is still exportable from the caddy-data
+	# volume at /data/caddy/pki/authorities/local/root.crt. No-op for the ACME
+	# and file-certificate modes, which never install anything locally.
+	skip_install_trust
+}
+
 {$UNISSH_DOMAIN} {
 	# --- TLS mode (see header) — empty in ACME-without-email mode. ---
 	{$UNISSH_TLS_DIRECTIVE}
