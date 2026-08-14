@@ -13,11 +13,11 @@
 #
 # Your proxy MUST terminate TLS: the client refuses a plaintext http:// server
 # URL to anything but loopback, because the bearer tokens ride that connection.
-# A ready-made nginx server block is in deploy/nginx/unissh.conf.
+# A ready-made nginx server block is in deploy/nginx/unissh-static-spa.conf.
 #
 # The admin SPA is inside the caddy image, which is no longer running — serve
 # its files from your proxy instead (extract them once with `docker create` +
-# `docker cp`; see deploy/nginx/unissh.conf and
+# `docker cp`; see deploy/nginx/unissh-static-spa.conf and
 # https://unissh.dev/operations/deploy-scenarios/). Serving the SPA from the
 # SAME origin as /v1 is what keeps CORS off.
 #
