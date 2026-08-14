@@ -113,6 +113,12 @@ pub enum TransportError {
     /// SOCKS protocol error (dynamic forward).
     #[error("socks protocol error")]
     Socks,
+
+    /// The outbound proxy (http/socks4/socks5) refused or broke the tunnel
+    /// handshake. Its own variant so "the proxy said no" never reads as an SSH
+    /// failure on the destination host.
+    #[error("proxy error: {0}")]
+    Proxy(String),
 }
 
 // Required for russh::auth::Signer (type Error: From<russh::SendError>).

@@ -48,6 +48,10 @@ fn conv_jumps(j: Vec<dto::JumpHost>) -> Vec<unissh_ffi::JumpHost> {
     j.into_iter().map(Into::into).collect()
 }
 
+fn conv_proxy(p: Option<dto::ProxyConfig>) -> Option<unissh_ffi::ProxyConfig> {
+    p.map(Into::into)
+}
+
 // ---------- account / instance ----------
 
 #[derive(serde::Serialize)]
@@ -911,13 +915,18 @@ pub async fn personal_destination(
     port: u16,
     username_template: Option<String>,
     jumps: Vec<dto::JumpHost>,
+    proxy: Option<dto::ProxyConfig>,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     // jumps are part of the pin (anti-redirect along the ProxyJump chain) — we convert them into
     // the core type with the same conv_jumps as save_connection/connect.
-    Ok(state
-        .core
-        .personal_destination(host, port, username_template, conv_jumps(jumps)))
+    Ok(state.core.personal_destination(
+        host,
+        port,
+        username_template,
+        conv_jumps(jumps),
+        conv_proxy(proxy),
+    ))
 }
 
 #[tauri::command]
@@ -1055,12 +1064,14 @@ pub async fn ssh_exec(
     auth: dto::AuthMethod,
     command: String,
     jumps: Vec<dto::JumpHost>,
+    proxy: Option<dto::ProxyConfig>,
     state: State<'_, AppState>,
 ) -> ApiResult<dto::SshExecResult> {
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
-    let r = blocking(move || core.ssh_exec(host, port, user, auth, command, jumps)).await?;
+    let proxy = conv_proxy(proxy);
+    let r = blocking(move || core.ssh_exec(host, port, user, auth, command, jumps, proxy)).await?;
     Ok(r.into())
 }
 
@@ -1132,15 +1143,18 @@ pub async fn exec_stream_open(
     auth: dto::AuthMethod,
     command: String,
     jumps: Vec<dto::JumpHost>,
+    proxy: Option<dto::ProxyConfig>,
     on_event: Channel<ExecEvent>,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
+    let proxy = conv_proxy(proxy);
     let obs: Arc<dyn ExecObserver> = Arc::new(ChannelExecObserver { chan: on_event });
     let handle =
-        blocking(move || core.ssh_exec_stream(host, port, user, auth, command, jumps, obs)).await?;
+        blocking(move || core.ssh_exec_stream(host, port, user, auth, command, jumps, proxy, obs))
+            .await?;
     let id = new_id();
     state.exec_handles.insert(id.clone(), handle);
     Ok(id)
@@ -1178,6 +1192,7 @@ pub async fn session_open(
     user: String,
     auth: dto::AuthMethod,
     jumps: Vec<dto::JumpHost>,
+    proxy: Option<dto::ProxyConfig>,
     term: String,
     cols: u32,
     rows: u32,
@@ -1189,6 +1204,7 @@ pub async fn session_open(
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
+    let proxy = conv_proxy(proxy);
     let obs: Arc<dyn SessionObserver> = Arc::new(ChannelSessionObserver { chan: on_event });
     let rec = recording.map(Into::into);
     let session = blocking(move || {
@@ -1198,6 +1214,7 @@ pub async fn session_open(
             user,
             auth,
             jumps,
+            proxy,
             term,
             cols,
             rows,
@@ -1222,6 +1239,7 @@ pub async fn session_open_reconnecting(
     user: String,
     auth: dto::AuthMethod,
     jumps: Vec<dto::JumpHost>,
+    proxy: Option<dto::ProxyConfig>,
     term: String,
     cols: u32,
     rows: u32,
@@ -1234,6 +1252,7 @@ pub async fn session_open_reconnecting(
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
+    let proxy = conv_proxy(proxy);
     let obs: Arc<dyn SessionObserver> = Arc::new(ChannelSessionObserver { chan: on_event });
     let session = blocking(move || {
         core.open_reconnecting_session(
@@ -1242,6 +1261,7 @@ pub async fn session_open_reconnecting(
             user,
             auth,
             jumps,
+            proxy,
             term,
             cols,
             rows,
@@ -1412,6 +1432,7 @@ pub async fn tunnel_open_local(
     user: String,
     auth: dto::AuthMethod,
     jumps: Vec<dto::JumpHost>,
+    proxy: Option<dto::ProxyConfig>,
     local_bind: String,
     remote_host: String,
     remote_port: u16,
@@ -1420,6 +1441,7 @@ pub async fn tunnel_open_local(
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
+    let proxy = conv_proxy(proxy);
     let t = blocking(move || {
         core.open_local_forward(
             host,
@@ -1427,6 +1449,7 @@ pub async fn tunnel_open_local(
             user,
             auth,
             jumps,
+            proxy,
             local_bind,
             remote_host,
             remote_port,
@@ -1447,14 +1470,18 @@ pub async fn tunnel_open_dynamic(
     user: String,
     auth: dto::AuthMethod,
     jumps: Vec<dto::JumpHost>,
+    proxy: Option<dto::ProxyConfig>,
     local_bind: String,
     state: State<'_, AppState>,
 ) -> ApiResult<dto::OpenedTunnel> {
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
-    let t = blocking(move || core.open_dynamic_forward(host, port, user, auth, jumps, local_bind))
-        .await?;
+    let proxy = conv_proxy(proxy);
+    let t = blocking(move || {
+        core.open_dynamic_forward(host, port, user, auth, jumps, proxy, local_bind)
+    })
+    .await?;
     let bind_address = t.bind_address();
     let id = new_id();
     state.tunnels.insert(id.clone(), t);
@@ -1469,6 +1496,7 @@ pub async fn tunnel_open_remote(
     user: String,
     auth: dto::AuthMethod,
     jumps: Vec<dto::JumpHost>,
+    proxy: Option<dto::ProxyConfig>,
     remote_bind: String,
     remote_port: u16,
     local_host: String,
@@ -1478,6 +1506,7 @@ pub async fn tunnel_open_remote(
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
+    let proxy = conv_proxy(proxy);
     let t = blocking(move || {
         core.open_remote_forward(
             host,
@@ -1485,6 +1514,7 @@ pub async fn tunnel_open_remote(
             user,
             auth,
             jumps,
+            proxy,
             remote_bind,
             remote_port,
             local_host,
@@ -1508,6 +1538,7 @@ pub async fn tunnel_close(id: String, state: State<'_, AppState>) -> ApiResult<(
 
 // ---------- SFTP ----------
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn sftp_open(
     host: String,
@@ -1515,13 +1546,16 @@ pub async fn sftp_open(
     user: String,
     auth: dto::AuthMethod,
     jumps: Vec<dto::JumpHost>,
+    proxy: Option<dto::ProxyConfig>,
     parallelism: u32,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
-    let sftp = blocking(move || core.open_sftp(host, port, user, auth, jumps, parallelism)).await?;
+    let proxy = conv_proxy(proxy);
+    let sftp =
+        blocking(move || core.open_sftp(host, port, user, auth, jumps, proxy, parallelism)).await?;
     let id = new_id();
     state.sftp.insert(id.clone(), sftp);
     Ok(id)

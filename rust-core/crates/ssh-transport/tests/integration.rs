@@ -15,7 +15,9 @@ use unissh_ssh_agent::ssh_key::Algorithm;
 use unissh_ssh_agent::{
     generate_ed25519_openssh, generate_openssh, normalize_private_key_to_openssh, InMemoryAgent,
 };
-use unissh_ssh_transport::{trust_host_key, Auth, ConnectOptions, SshClient};
+use unissh_ssh_transport::{
+    trust_host_key, Auth, ConnectOptions, ProxyKind, ProxyOptions, SshClient,
+};
 use unissh_storage::Storage;
 
 /// An sshd instance brought up for the duration of the test.
@@ -769,3 +771,457 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
 -----END RSA PRIVATE KEY-----";
 
 const RSA_PUB: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDQ3PqqT7IWgQveAGLGcOJ2TiMsQi8OTbk7nJOkQyaYgdr+jzExV3WliRduHYhnDL9KtPJSpYO8CJ/kyifO62LuRP/T9UyV2bhf8k2F+vor6nlj6gnrVwcw3Nb49V79IUJ2ph4Vlpri/R95Ip9zel1NrCtXKikZD06eP9bZBLk4Z3AVuWrOrNokplYD2q8XL3SqZOmWJLHGvuZjkL9EzCqJe337gO094kFEr0E1nwCQwZvCA/z9ZbrKpgN3UvrYDEsD643KZBZ/q32dZpJ/TeZER7XNVdL8cUhV5I8EN6PzSBQt8m3d+2NA1N6bo/FKoA50dYFLY8K2tFUKUxKcty8/";
+
+// ---------------------------------------------------------------------------
+// Outbound proxy (http/socks4/socks5): fake in-process proxies in front of a
+// real sshd, exercising the client side of each handshake.
+// ---------------------------------------------------------------------------
+
+fn key_opts(port: u16) -> ConnectOptions {
+    ConnectOptions::new(
+        "127.0.0.1",
+        port,
+        "root",
+        Auth::Agent {
+            key_id: b"k".to_vec(),
+        },
+    )
+}
+
+fn proxy_opts(kind: ProxyKind, port: u16) -> ProxyOptions {
+    ProxyOptions {
+        kind,
+        host: "127.0.0.1".into(),
+        port,
+        username: None,
+        password: None,
+    }
+}
+
+async fn relay(mut inbound: tokio::net::TcpStream, dest: (String, u16)) {
+    let mut outbound = tokio::net::TcpStream::connect(dest).await.unwrap();
+    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+}
+
+/// A SOCKS5 proxy: optionally demands RFC 1929 credentials, refuses when
+/// `refuse` is set, otherwise tunnels to the requested destination.
+fn fake_socks5(creds: Option<(&'static str, &'static str)>, refuse: bool) -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            tokio::spawn(async move {
+                let mut head = [0u8; 2];
+                s.read_exact(&mut head).await.unwrap();
+                assert_eq!(head[0], 5);
+                let mut methods = vec![0u8; head[1] as usize];
+                s.read_exact(&mut methods).await.unwrap();
+                if let Some((user, pass)) = creds {
+                    assert!(methods.contains(&0x02), "client must offer user/pass");
+                    s.write_all(&[5, 0x02]).await.unwrap();
+                    let mut ver_ulen = [0u8; 2];
+                    s.read_exact(&mut ver_ulen).await.unwrap();
+                    let mut u = vec![0u8; ver_ulen[1] as usize];
+                    s.read_exact(&mut u).await.unwrap();
+                    let mut plen = [0u8; 1];
+                    s.read_exact(&mut plen).await.unwrap();
+                    let mut p = vec![0u8; plen[0] as usize];
+                    s.read_exact(&mut p).await.unwrap();
+                    if u != user.as_bytes() || p != pass.as_bytes() {
+                        s.write_all(&[1, 1]).await.unwrap();
+                        return;
+                    }
+                    s.write_all(&[1, 0]).await.unwrap();
+                } else {
+                    assert!(methods.contains(&0x00));
+                    s.write_all(&[5, 0x00]).await.unwrap();
+                }
+                let mut req = [0u8; 4];
+                s.read_exact(&mut req).await.unwrap();
+                assert_eq!(&req[..3], &[5, 1, 0]);
+                let host = match req[3] {
+                    0x01 => {
+                        let mut a = [0u8; 4];
+                        s.read_exact(&mut a).await.unwrap();
+                        format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3])
+                    }
+                    0x03 => {
+                        let mut len = [0u8; 1];
+                        s.read_exact(&mut len).await.unwrap();
+                        let mut dn = vec![0u8; len[0] as usize];
+                        s.read_exact(&mut dn).await.unwrap();
+                        String::from_utf8(dn).unwrap()
+                    }
+                    other => panic!("unexpected atyp {other}"),
+                };
+                let mut port = [0u8; 2];
+                s.read_exact(&mut port).await.unwrap();
+                let port = u16::from_be_bytes(port);
+                if refuse {
+                    s.write_all(&[5, 0x05, 0, 1, 0, 0, 0, 0, 0, 0])
+                        .await
+                        .unwrap();
+                    return;
+                }
+                s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await.unwrap();
+                relay(s, (host, port)).await;
+            });
+        }
+    });
+    port
+}
+
+/// A SOCKS4/4a proxy that records nothing and tunnels; asserts the userid.
+fn fake_socks4(expect_userid: &'static str) -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            tokio::spawn(async move {
+                let mut head = [0u8; 8];
+                s.read_exact(&mut head).await.unwrap();
+                assert_eq!(head[0], 4);
+                assert_eq!(head[1], 1);
+                let port = u16::from_be_bytes([head[2], head[3]]);
+                let ip = [head[4], head[5], head[6], head[7]];
+                let mut userid = Vec::new();
+                loop {
+                    let mut b = [0u8; 1];
+                    s.read_exact(&mut b).await.unwrap();
+                    if b[0] == 0 {
+                        break;
+                    }
+                    userid.push(b[0]);
+                }
+                assert_eq!(userid, expect_userid.as_bytes());
+                let host = if ip[..3] == [0, 0, 0] && ip[3] != 0 {
+                    // SOCKS4a: hostname follows.
+                    let mut name = Vec::new();
+                    loop {
+                        let mut b = [0u8; 1];
+                        s.read_exact(&mut b).await.unwrap();
+                        if b[0] == 0 {
+                            break;
+                        }
+                        name.push(b[0]);
+                    }
+                    String::from_utf8(name).unwrap()
+                } else {
+                    format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3])
+                };
+                s.write_all(&[0, 90, 0, 0, 0, 0, 0, 0]).await.unwrap();
+                relay(s, (host, port)).await;
+            });
+        }
+    });
+    port
+}
+
+/// An HTTP CONNECT proxy; when `require_basic` is set the exact
+/// `Proxy-Authorization` header must be present, otherwise it answers 407.
+fn fake_http_proxy(require_basic: Option<&'static str>) -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            tokio::spawn(async move {
+                let mut req = Vec::new();
+                while !req.ends_with(b"\r\n\r\n") {
+                    let mut b = [0u8; 1];
+                    s.read_exact(&mut b).await.unwrap();
+                    req.push(b[0]);
+                }
+                let text = String::from_utf8(req).unwrap();
+                let first = text.lines().next().unwrap();
+                assert!(first.starts_with("CONNECT "), "got: {first}");
+                let authority = first.split_whitespace().nth(1).unwrap();
+                if let Some(basic) = require_basic {
+                    let header = format!("Proxy-Authorization: Basic {basic}");
+                    if !text.lines().any(|l| l == header) {
+                        s.write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+                            .await
+                            .unwrap();
+                        return;
+                    }
+                }
+                let (host, port) = authority.rsplit_once(':').unwrap();
+                let port: u16 = port.parse().unwrap();
+                s.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                    .await
+                    .unwrap();
+                relay(s, (host.to_string(), port)).await;
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test]
+async fn connect_via_socks5_proxy() {
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[8u8; 32]).unwrap();
+    let proxy_port = fake_socks5(None, false);
+
+    let opts = key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, proxy_port));
+    let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+    let out = client.exec("echo via-socks5").await.unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "via-socks5");
+    // TOFU pins against the DESTINATION host:port, not the proxy.
+    assert!(storage
+        .get_known_host("127.0.0.1", sshd.port)
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn connect_via_socks5_proxy_with_auth() {
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[9u8; 32]).unwrap();
+    let proxy_port = fake_socks5(Some(("joe", "sekret")), false);
+
+    let mut proxy = proxy_opts(ProxyKind::Socks5, proxy_port);
+    proxy.username = Some("joe".into());
+    proxy.password = Some(zeroize::Zeroizing::new("sekret".into()));
+    let opts = key_opts(sshd.port).with_proxy(proxy);
+    let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+    assert_eq!(client.exec("true").await.unwrap().exit_status, Some(0));
+
+    // Wrong password → a proxy error, not an SSH one.
+    let mut bad = proxy_opts(ProxyKind::Socks5, proxy_port);
+    bad.username = Some("joe".into());
+    bad.password = Some(zeroize::Zeroizing::new("wrong".into()));
+    let err = match SshClient::connect(&key_opts(sshd.port).with_proxy(bad), &agent, &storage).await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("connect with wrong proxy password unexpectedly succeeded"),
+    };
+    assert!(err.to_string().contains("proxy"), "unexpected error: {err}");
+}
+
+#[tokio::test]
+async fn connect_via_socks5_proxy_password_only() {
+    // A password with no username still means "authenticate" (RFC 1929 allows
+    // a zero-length field) — it must not be silently dropped.
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[15u8; 32]).unwrap();
+    let proxy_port = fake_socks5(Some(("", "sekret")), false);
+
+    let mut proxy = proxy_opts(ProxyKind::Socks5, proxy_port);
+    proxy.password = Some(zeroize::Zeroizing::new("sekret".into()));
+    let client = SshClient::connect(&key_opts(sshd.port).with_proxy(proxy), &agent, &storage)
+        .await
+        .unwrap();
+    assert_eq!(client.exec("true").await.unwrap().exit_status, Some(0));
+}
+
+#[tokio::test]
+async fn connect_via_socks4_proxy() {
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[10u8; 32]).unwrap();
+    let proxy_port = fake_socks4("ident-user");
+
+    let mut proxy = proxy_opts(ProxyKind::Socks4, proxy_port);
+    proxy.username = Some("ident-user".into());
+    let opts = key_opts(sshd.port).with_proxy(proxy);
+    let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+    let out = client.exec("echo via-socks4").await.unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "via-socks4");
+}
+
+#[tokio::test]
+async fn connect_via_http_proxy() {
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[11u8; 32]).unwrap();
+    let proxy_port = fake_http_proxy(None);
+
+    let opts = key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Http, proxy_port));
+    let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+    let out = client.exec("echo via-http").await.unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "via-http");
+}
+
+#[tokio::test]
+async fn connect_via_http_proxy_with_basic_auth() {
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[12u8; 32]).unwrap();
+    // base64("aladdin:opensesame")
+    let proxy_port = fake_http_proxy(Some("YWxhZGRpbjpvcGVuc2VzYW1l"));
+
+    let mut proxy = proxy_opts(ProxyKind::Http, proxy_port);
+    proxy.username = Some("aladdin".into());
+    proxy.password = Some(zeroize::Zeroizing::new("opensesame".into()));
+    let client = SshClient::connect(&key_opts(sshd.port).with_proxy(proxy), &agent, &storage)
+        .await
+        .unwrap();
+    assert_eq!(client.exec("true").await.unwrap().exit_status, Some(0));
+
+    // No credentials → 407 → a proxy error naming authentication.
+    let err = match SshClient::connect(
+        &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Http, proxy_port)),
+        &agent,
+        &storage,
+    )
+    .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("connect without proxy credentials unexpectedly succeeded"),
+    };
+    assert!(
+        err.to_string().contains("authentication"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn socks5_refusal_is_a_proxy_error() {
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[13u8; 32]).unwrap();
+    let proxy_port = fake_socks5(None, true);
+
+    let err = match SshClient::connect(
+        &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, proxy_port)),
+        &agent,
+        &storage,
+    )
+    .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("connect through a refusing proxy unexpectedly succeeded"),
+    };
+    let text = err.to_string();
+    assert!(
+        text.contains("proxy") && text.contains("refused"),
+        "unexpected error: {text}"
+    );
+}
+
+#[tokio::test]
+async fn socks5_minimal_refusal_is_reported_as_a_refusal() {
+    // Some proxies answer a refusal with a truncated body (ATYP=0, no bound
+    // address). Reading the address before the reply code turned that into a
+    // bogus "bad address type" or an io error — the refusal must survive.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut head = [0u8; 2];
+                s.read_exact(&mut head).await.unwrap();
+                let mut methods = vec![0u8; head[1] as usize];
+                s.read_exact(&mut methods).await.unwrap();
+                s.write_all(&[5, 0]).await.unwrap();
+                let mut req = [0u8; 4];
+                s.read_exact(&mut req).await.unwrap();
+                let mut rest = vec![0u8; if req[3] == 3 { 0 } else { 6 }];
+                if req[3] == 3 {
+                    let mut len = [0u8; 1];
+                    s.read_exact(&mut len).await.unwrap();
+                    rest = vec![0u8; len[0] as usize + 2];
+                }
+                let _ = s.read_exact(&mut rest).await;
+                // Refusal with no bound address at all, then hang up.
+                s.write_all(&[5, 0x05, 0x00, 0x00]).await.unwrap();
+            });
+        }
+    });
+
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[16u8; 32]).unwrap();
+    let err = match SshClient::connect(
+        &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, proxy_port)),
+        &agent,
+        &storage,
+    )
+    .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("a refused connection unexpectedly succeeded"),
+    };
+    let text = err.to_string();
+    assert!(
+        text.contains("refused") && text.contains("connection refused"),
+        "a truncated refusal must still name the reply code: {text}"
+    );
+}
+
+#[tokio::test]
+async fn unreachable_proxy_names_the_proxy() {
+    // A dead proxy used to surface as a bare io error indistinguishable from
+    // one on the destination host, sending the reader to the wrong machine.
+    let dead = free_port();
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[17u8; 32]).unwrap();
+    let err = match SshClient::connect(
+        &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, dead)),
+        &agent,
+        &storage,
+    )
+    .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("connect through a dead proxy unexpectedly succeeded"),
+    };
+    let text = err.to_string();
+    assert!(
+        text.contains("proxy") && text.contains(&dead.to_string()),
+        "the error must name the proxy and its port: {text}"
+    );
+}
+
+#[tokio::test]
+async fn proxy_then_jump_chain() {
+    // proxy → bastion → target: the proxy wraps only the first TCP hop.
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let jump = TestSshd::start(&pub_ssh);
+    let target = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[14u8; 32]).unwrap();
+    let proxy_port = fake_socks5(None, false);
+
+    let jump_opts = key_opts(jump.port).with_proxy(proxy_opts(ProxyKind::Socks5, proxy_port));
+    let target_opts = key_opts(target.port);
+    let client = SshClient::connect_through(&[jump_opts], &target_opts, &agent, &storage)
+        .await
+        .unwrap();
+    let out = client.exec("echo proxy-then-jump").await.unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "proxy-then-jump"
+    );
+}

@@ -308,6 +308,10 @@ pub struct ConnectionProfile {
     pub username_template: Option<String>,
     /// ProxyJump chain.
     pub jumps: Vec<JumpHost>,
+    /// Outbound http/socks4/socks5 proxy for the first TCP hop (issue #27).
+    /// Composes with `jumps`: the proxy wraps the dial to hop #1 (or to the
+    /// target when the chain is empty).
+    pub proxy: Option<ProxyConfig>,
     /// Tags for organizing/selecting targets (e.g. `prod`, `web`, `eu`). This is
     /// a selection filter, not access rights (RBAC is server Milestone 2).
     pub tags: Vec<String>,
@@ -519,13 +523,32 @@ fn canonical_jumps(jumps: &[JumpHost]) -> String {
         .join(">")
 }
 
+/// Canonical PROXY string for anti-redirect: `kind://[user@]host:port`.
+/// The username is part of it (a different proxy identity is a different
+/// route); the password reference is not — rotating a password item is not a
+/// redirect.
+fn canonical_proxy(p: &ProxyConfig) -> String {
+    let kind = match p.kind {
+        ProxyKind::Http => "http",
+        ProxyKind::Socks4 => "socks4",
+        ProxyKind::Socks5 => "socks5",
+    };
+    match p.username.as_deref().filter(|u| !u.is_empty()) {
+        Some(u) => format!("{kind}://{u}@{}:{}", p.host, p.port),
+        None => format!("{kind}://{}:{}", p.host, p.port),
+    }
+}
+
 /// Canonical string destination for pinning/checking (anti-redirect).
 /// INCLUDES the username template (`host:port#template`) so that editing it
 /// changes the destination and triggers Redirected. ALSO includes the ProxyJump chain
 /// (`|via=...`) when it is non-empty — otherwise a team admin could insert a MITM jump into
 /// a shared Personal profile (host:port unchanged → the pin would still match) and siphon off
-/// a member's personal credential through their own machine. Hosts without jumps yield the previous string
-/// (backward compatibility with old pins); the appearance of a jump → Redirected →
+/// a member's personal credential through their own machine. The outbound proxy (issue #27)
+/// is included as `|proxy=...` for exactly the same reason: pointing a shared profile at
+/// `socks5://attacker` routes the member's traffic through the attacker while host:port
+/// stays untouched. Hosts without jumps or a proxy yield the previous string
+/// (backward compatibility with old pins); the appearance of either → Redirected →
 /// refusal (fail-safe), not a leak. The client renders with this both the pin at bind time and
 /// `current_destination` at connect time — the formats are guaranteed to match.
 fn personal_destination(
@@ -533,15 +556,20 @@ fn personal_destination(
     port: u16,
     username_template: Option<&str>,
     jumps: &[JumpHost],
+    proxy: Option<&ProxyConfig>,
 ) -> String {
     let base = match username_template {
         Some(t) if !t.trim().is_empty() => format!("{host}:{port}#{}", t.trim()),
         _ => format!("{host}:{port}"),
     };
-    if jumps.is_empty() {
+    let base = if jumps.is_empty() {
         base
     } else {
         format!("{base}|via={}", canonical_jumps(jumps))
+    };
+    match proxy {
+        Some(p) => format!("{base}|proxy={}", canonical_proxy(p)),
+        None => base,
     }
 }
 
@@ -622,6 +650,10 @@ struct StoredProfile {
     #[serde(default)]
     username_template: Option<String>,
     jumps: Vec<StoredJump>,
+    /// Outbound proxy (issue #27). Omitted when absent so existing signed
+    /// items keep their exact bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy: Option<StoredProxy>,
     #[serde(default)]
     tags: Vec<String>,
     /// Omitted when empty so existing signed items keep their exact bytes.
@@ -717,6 +749,38 @@ struct StoredJump {
     /// merge-on-save (as in [`StoredProfile::extra`]) is NOT performed for hops
     /// — jump-level future fields survive only a pure sync (raw bytes),
     /// not an FFI edit. Acceptable: hops rarely gain new synced fields.
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// Serializable proxy kind. Deliberately STRICT: a kind this build does not
+/// know fails the whole profile's deserialization, so an older client hides
+/// the profile (exactly as it would an unparseable future profile) instead of
+/// silently connecting PAST the proxy — for a host that routes through a
+/// proxy, "quietly direct" is the one wrong default.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum StoredProxyKind {
+    Http,
+    Socks4,
+    Socks5,
+}
+
+/// Serializable proxy config (issue #27). The password is stored as a
+/// vault-relative item reference only, like [`StoredJump`]; an inline
+/// password is impossible here by construction ([`proxy_to_stored`] rejects
+/// it).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredProxy {
+    kind: StoredProxyKind,
+    host: String,
+    port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password_item_id: Option<String>,
+    /// Forward compatibility at the serde round-trip level; the same caveat as
+    /// [`StoredJump::extra`] applies (rebuilt on an FFI edit).
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -833,6 +897,59 @@ pub struct HopRef {
     pub profile_uid: String,
 }
 
+/// Outbound proxy protocol (issue #27).
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProxyKind {
+    /// HTTP CONNECT (optionally with Basic authentication).
+    Http,
+    /// SOCKS4/4a. The username, if any, travels as the SOCKS4 `USERID`;
+    /// the protocol has no password.
+    Socks4,
+    /// SOCKS5, anonymous or with username/password (RFC 1929).
+    Socks5,
+}
+
+/// Password for an authenticating proxy. Mirrors [`AuthMethod`]'s split: a
+/// stored profile may only carry a vault REFERENCE (the core decrypts it at
+/// connect time; the plaintext never crosses the FFI), while an inline
+/// password is allowed for a direct, unsaved connection only —
+/// [`Core::save_connection`] rejects it.
+#[derive(uniffi::Enum, Clone)]
+pub enum ProxyPassword {
+    /// A password item in the vault.
+    Vault {
+        /// The vault where the password item lives.
+        vault_id: String,
+        /// Id of the password item.
+        password_item_id: String,
+    },
+    /// A password supplied for this connection only (never stored).
+    Inline {
+        /// The password.
+        password: String,
+    },
+}
+
+/// How to reach a host through an http/socks4/socks5 proxy (issue #27).
+///
+/// Applies to the FIRST TCP hop of the connection: the target itself, or hop
+/// #1 of a ProxyJump chain (`proxy → bastion → target`). Later hops ride
+/// `direct-tcpip` channels inside SSH and cannot be proxied.
+#[derive(uniffi::Record, Clone)]
+pub struct ProxyConfig {
+    /// Protocol.
+    pub kind: ProxyKind,
+    /// Proxy host.
+    pub host: String,
+    /// Proxy port.
+    pub port: u16,
+    /// Username, when the proxy wants one. Not a secret — stored in the clear
+    /// inside the (encrypted) profile body, like a host's username.
+    pub username: Option<String>,
+    /// Password, when the proxy wants one.
+    pub password: Option<ProxyPassword>,
+}
+
 /// Result of executing an SSH command.
 #[derive(Debug, uniffi::Record)]
 pub struct SshExecResult {
@@ -857,6 +974,8 @@ pub struct MultiExecTarget {
     pub auth: AuthMethod,
     /// ProxyJump chain (may be empty).
     pub jumps: Vec<JumpHost>,
+    /// Outbound proxy for the first TCP hop (may be absent).
+    pub proxy: Option<ProxyConfig>,
 }
 
 /// Category of a structural DB-integrity violation (FFI mirror of `ConsistencyKind`).
@@ -3149,10 +3268,11 @@ impl Core {
         auth: AuthMethod,
         command: String,
         jumps: Vec<JumpHost>,
+        proxy: Option<ProxyConfig>,
     ) -> Result<SshExecResult, FfiError> {
         // Connect + authentication — under the Core lock (agent+storage are needed). Then
         // we release the lock and run the command without it.
-        let client = self.connect_session(&auth, &jumps, host, port, user)?;
+        let client = self.connect_session(&auth, &jumps, proxy.as_ref(), host, port, user)?;
         let output = self
             .rt
             .block_on(client.exec(&command))
@@ -3178,9 +3298,10 @@ impl Core {
         auth: AuthMethod,
         command: String,
         jumps: Vec<JumpHost>,
+        proxy: Option<ProxyConfig>,
         observer: Arc<dyn ExecObserver>,
     ) -> Result<Arc<ExecHandleFfi>, FfiError> {
-        let client = self.connect_session(&auth, &jumps, host, port, user)?;
+        let client = self.connect_session(&auth, &jumps, proxy.as_ref(), host, port, user)?;
         let sink: Arc<dyn unissh_ssh_transport::ExecSink> = Arc::new(ExecSinkBridge(observer));
         let handle = self
             .rt
@@ -3226,6 +3347,7 @@ impl Core {
         user: String,
         auth: AuthMethod,
         jumps: Vec<JumpHost>,
+        proxy: Option<ProxyConfig>,
         term: String,
         cols: u32,
         rows: u32,
@@ -3236,8 +3358,15 @@ impl Core {
         check_term_size(cols, rows)?;
         let host_for_record = host.clone();
         let user_for_record = user.clone();
-        let client =
-            self.connect_session_forwarding(&auth, &jumps, host, port, user, agent_forward)?;
+        let client = self.connect_session_forwarding(
+            &auth,
+            &jumps,
+            proxy.as_ref(),
+            host,
+            port,
+            user,
+            agent_forward,
+        )?;
 
         let sink: Arc<dyn OutputSink> = match recording {
             None => Arc::new(ObserverSink(observer)),
@@ -3383,6 +3512,7 @@ impl Core {
         user: String,
         auth: AuthMethod,
         jumps: Vec<JumpHost>,
+        proxy: Option<ProxyConfig>,
         term: String,
         cols: u32,
         rows: u32,
@@ -3403,6 +3533,7 @@ impl Core {
             user,
             auth,
             jumps,
+            proxy,
             term,
             cols,
             rows,
@@ -3440,7 +3571,14 @@ impl Core {
         let mut connected: Vec<(String, SshClient)> = Vec::new();
         let mut results: Vec<MultiExecResult> = Vec::new();
         for t in &targets {
-            match self.connect_session(&t.auth, &t.jumps, t.host.clone(), t.port, t.user.clone()) {
+            match self.connect_session(
+                &t.auth,
+                &t.jumps,
+                t.proxy.as_ref(),
+                t.host.clone(),
+                t.port,
+                t.user.clone(),
+            ) {
                 Ok(client) => connected.push((t.host.clone(), client)),
                 Err(e) => results.push(MultiExecResult {
                     host: t.host.clone(),
@@ -3555,6 +3693,7 @@ impl Core {
                         p.port,
                         p.username_template.clone(),
                         p.jumps.clone(),
+                        p.proxy.clone(),
                     );
                     if let Ok(pa) = self.resolve_personal_auth(
                         vault_id.clone(),
@@ -3570,6 +3709,7 @@ impl Core {
                             user,
                             auth: pa.auth,
                             jumps: p.jumps,
+                            proxy: p.proxy,
                         });
                     }
                 }
@@ -3616,7 +3756,14 @@ impl Core {
         let mut connected: Vec<(String, SshClient)> = Vec::new();
         let mut results: Vec<SftpPutResult> = Vec::new();
         for t in &targets {
-            match self.connect_session(&t.auth, &t.jumps, t.host.clone(), t.port, t.user.clone()) {
+            match self.connect_session(
+                &t.auth,
+                &t.jumps,
+                t.proxy.as_ref(),
+                t.host.clone(),
+                t.port,
+                t.user.clone(),
+            ) {
                 Ok(client) => connected.push((t.host.clone(), client)),
                 Err(e) => results.push(SftpPutResult {
                     host: t.host.clone(),
@@ -3695,7 +3842,14 @@ impl Core {
         let mut statuses: Vec<BroadcastHostStatus> = Vec::new();
         for (i, t) in targets.iter().enumerate() {
             let index = i as u32;
-            match self.connect_session(&t.auth, &t.jumps, t.host.clone(), t.port, t.user.clone()) {
+            match self.connect_session(
+                &t.auth,
+                &t.jumps,
+                t.proxy.as_ref(),
+                t.host.clone(),
+                t.port,
+                t.user.clone(),
+            ) {
                 Ok(client) => {
                     let sink: Arc<dyn OutputSink> = Arc::new(TaggedSink {
                         observer: observer.clone(),
@@ -4166,11 +4320,12 @@ impl Core {
         user: String,
         auth: AuthMethod,
         jumps: Vec<JumpHost>,
+        proxy: Option<ProxyConfig>,
         local_bind: String,
         remote_host: String,
         remote_port: u16,
     ) -> Result<Arc<SshTunnel>, FfiError> {
-        let client = self.connect_session(&auth, &jumps, host, port, user)?;
+        let client = self.connect_session(&auth, &jumps, proxy.as_ref(), host, port, user)?;
         let guard = self
             .rt
             .block_on(client.local_forward(&local_bind, &remote_host, remote_port))
@@ -4194,9 +4349,10 @@ impl Core {
         user: String,
         auth: AuthMethod,
         jumps: Vec<JumpHost>,
+        proxy: Option<ProxyConfig>,
         local_bind: String,
     ) -> Result<Arc<SshTunnel>, FfiError> {
-        let client = self.connect_session(&auth, &jumps, host, port, user)?;
+        let client = self.connect_session(&auth, &jumps, proxy.as_ref(), host, port, user)?;
         let guard = self
             .rt
             .block_on(client.dynamic_forward(&local_bind))
@@ -4221,12 +4377,13 @@ impl Core {
         user: String,
         auth: AuthMethod,
         jumps: Vec<JumpHost>,
+        proxy: Option<ProxyConfig>,
         remote_bind: String,
         remote_port: u16,
         local_host: String,
         local_port: u16,
     ) -> Result<Arc<SshTunnel>, FfiError> {
-        let client = self.connect_session(&auth, &jumps, host, port, user)?;
+        let client = self.connect_session(&auth, &jumps, proxy.as_ref(), host, port, user)?;
         let assigned = self
             .rt
             .block_on(client.remote_forward(&remote_bind, remote_port, &local_host, local_port))
@@ -4255,9 +4412,17 @@ impl Core {
         user: String,
         auth: AuthMethod,
         jumps: Vec<JumpHost>,
+        proxy: Option<ProxyConfig>,
         parallelism: u32,
     ) -> Result<Arc<SftpFfi>, FfiError> {
-        let client = self.connect_session(&auth, &jumps, host.clone(), port, user.clone())?;
+        let client = self.connect_session(
+            &auth,
+            &jumps,
+            proxy.as_ref(),
+            host.clone(),
+            port,
+            user.clone(),
+        )?;
         let sftp = self
             .rt
             .block_on(client.open_sftp())
@@ -4284,6 +4449,7 @@ impl Core {
             user,
             auth,
             jumps,
+            proxy,
             reconnect_lock: Mutex::new(()),
         }))
     }
@@ -4310,6 +4476,7 @@ impl Core {
                 auth,
                 username_template,
                 jumps,
+                proxy,
                 tags,
                 startup_snippet_ids,
                 record_sessions,
@@ -4349,6 +4516,7 @@ impl Core {
                     .into_iter()
                     .map(jump_to_stored)
                     .collect::<Result<_, _>>()?,
+                proxy: proxy.map(proxy_to_stored).transpose()?,
                 tags,
                 startup_snippet_ids,
                 record_sessions,
@@ -4875,8 +5043,15 @@ impl Core {
         port: u16,
         username_template: Option<String>,
         jumps: Vec<JumpHost>,
+        proxy: Option<ProxyConfig>,
     ) -> String {
-        personal_destination(&host, port, username_template.as_deref(), &jumps)
+        personal_destination(
+            &host,
+            port,
+            username_template.as_deref(),
+            &jumps,
+            proxy.as_ref(),
+        )
     }
 
     /// The final connect username per the template (`%u` → base_user), or
@@ -4968,6 +5143,7 @@ impl Core {
                     personal: false,
                     username_template: None,
                     jumps: parse_proxy_jump(s.proxy_jump.as_deref()),
+                    proxy: None,
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
@@ -5100,7 +5276,9 @@ impl Core {
 
     /// Imports a PuTTY session export (`.reg`): each SSH session becomes
     /// a connection profile. Non-SSH sessions, ones without a host, and id collisions are skipped.
-    /// `ProxyMethod=6` (SSH) with `ProxyHost` becomes a single jump hop.
+    /// `ProxyMethod=6` (SSH) with `ProxyHost` becomes a single jump hop;
+    /// `ProxyMethod` 1/2/3 (SOCKS4/SOCKS5/HTTP) becomes the profile's outbound
+    /// proxy (the proxy password is not imported — see below).
     pub fn import_putty_sessions(
         &self,
         vault_id: String,
@@ -5152,6 +5330,32 @@ impl Core {
                 } else {
                     Vec::new()
                 };
+                // ProxyMethod 1/2/3 (SOCKS4/SOCKS5/HTTP): the proxy comes across as a
+                // profile proxy (issue #27). PuTTY's `ProxyPassword` does not: an
+                // inline password cannot live in profile JSON by construction, and
+                // minting a vault item behind the user's back would be a surprise —
+                // the same "reference it yourself" rule every stored password follows.
+                let proxy = match s.proxy_method {
+                    1..=3 if !s.proxy_host.is_empty() => Some(StoredProxy {
+                        kind: match s.proxy_method {
+                            1 => StoredProxyKind::Socks4,
+                            2 => StoredProxyKind::Socks5,
+                            _ => StoredProxyKind::Http,
+                        },
+                        host: s.proxy_host.clone(),
+                        // A dword out of port range is a corrupt/hand-edited
+                        // .reg: fall back to the default rather than truncate
+                        // it into a valid-looking wrong port.
+                        port: u16::try_from(s.proxy_port)
+                            .ok()
+                            .filter(|p| *p != 0)
+                            .unwrap_or(1080),
+                        username: Some(s.proxy_user.clone()).filter(|u| !u.is_empty()),
+                        password_item_id: None,
+                        extra: std::collections::BTreeMap::new(),
+                    }),
+                    _ => None,
+                };
                 let stored = StoredProfile {
                     uid: Some(mint_profile_uid()),
                     label: s.name.clone(),
@@ -5163,6 +5367,7 @@ impl Core {
                     personal: false,
                     username_template: None,
                     jumps,
+                    proxy,
                     tags: Vec::new(),
                     startup_snippet_ids: Vec::new(),
                     record_sessions: false,
@@ -5405,13 +5610,14 @@ impl Core {
         &self,
         auth: &AuthMethod,
         jumps: &[JumpHost],
+        proxy: Option<&ProxyConfig>,
         host: String,
         port: u16,
         user: String,
     ) -> Result<SshClient, FfiError> {
         // No forwarding: this is the path exec, fleet and SFTP take, and none of
         // them runs a program on the far side that would look for an agent.
-        self.connect_session_forwarding(auth, jumps, host, port, user, false)
+        self.connect_session_forwarding(auth, jumps, proxy, host, port, user, false)
     }
 
     /// As [`Self::connect_session`], but able to serve a forwarded agent. Only
@@ -5422,6 +5628,7 @@ impl Core {
         &self,
         auth: &AuthMethod,
         jumps: &[JumpHost],
+        proxy: Option<&ProxyConfig>,
         host: String,
         port: u16,
         user: String,
@@ -5434,6 +5641,7 @@ impl Core {
             &self.approver,
             auth,
             jumps,
+            proxy,
             host,
             port,
             user,
@@ -5525,6 +5733,7 @@ impl Core {
                         p.port,
                         p.username_template.clone(),
                         p.jumps.clone(),
+                        p.proxy.clone(),
                     );
                     match self.resolve_personal_auth(
                         vault_id.to_string(),
@@ -5548,6 +5757,7 @@ impl Core {
                                 user,
                                 auth: pa.auth,
                                 jumps: p.jumps.clone(),
+                                proxy: p.proxy.clone(),
                             });
                         }
                         Err(_) => {
@@ -5678,6 +5888,7 @@ fn connect_with_state(
     approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
     auth: &AuthMethod,
     jumps: &[JumpHost],
+    proxy: Option<&ProxyConfig>,
     host: String,
     port: u16,
     user: String,
@@ -5690,12 +5901,19 @@ fn connect_with_state(
     let mut guard = lock_recover(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;
     let mut chain = Vec::with_capacity(jumps.len());
-    for j in jumps {
+    // A referenced bastion (B2.2) carries its own proxy: if hop #1 is only
+    // reachable through one, that is the proxy the first TCP dial needs. Kept
+    // aside here and used below only when the connection itself names none.
+    let mut first_hop_proxy: Option<ProxyConfig> = None;
+    for (idx, j) in jumps.iter().enumerate() {
         // Host-chain (B2.2): a ref hop is resolved from another bastion profile (host/
         // port/user/auth are taken from there); a normal hop is inline, as before.
         let (host, port, user, auth) = match &j.hop_ref {
             Some(hr) => {
                 let prof = resolve_profile_by_uid(st, &hr.vault_id, &hr.profile_uid)?;
+                if idx == 0 {
+                    first_hop_proxy = prof.proxy.clone();
+                }
                 let auth = match prof.auth {
                     ProfileAuth::Key { key_item_id } => AuthMethod::Agent {
                         vault_id: hr.vault_id.clone(),
@@ -5731,6 +5949,18 @@ fn connect_with_state(
         ConnectOptions::new(host.clone(), port, user, target_auth),
         prompter.as_ref(),
     );
+
+    // The proxy wraps the first TCP dial: hop #1 of the chain, or the target
+    // itself for a direct connection. The connection's own proxy wins; a
+    // referenced bastion's proxy applies only when the connection names none
+    // (otherwise editing the target's proxy could not override the route).
+    if let Some(p) = proxy.or(first_hop_proxy.as_ref()) {
+        let opts = resolve_proxy(st, p)?;
+        match chain.first_mut() {
+            Some(first) => first.proxy = Some(opts),
+            None => target.proxy = Some(opts),
+        }
+    }
 
     // Only the target, never a hop: a bastion is exactly the machine ProxyJump
     // exists to keep the key away from, and forwarding to one would undo that.
@@ -5806,6 +6036,77 @@ fn retry_backoff_ms(attempt: u32, base_ms: u32) -> u64 {
 
 /// Translates the FFI authentication method into a transport one: the key is loaded into the agent,
 /// a vault password is decrypted into `Zeroizing` (the plaintext never leaves the core).
+/// Translates the FFI proxy config into a transport one: a vault password
+/// reference is decrypted into `Zeroizing` here, under the state lock (the
+/// plaintext never leaves the core), an inline one is moved into `Zeroizing`.
+fn resolve_proxy(
+    state: &mut CoreState,
+    p: &ProxyConfig,
+) -> Result<unissh_ssh_transport::ProxyOptions, FfiError> {
+    check_proxy(p)?;
+    let password = match &p.password {
+        Some(ProxyPassword::Vault {
+            vault_id,
+            password_item_id,
+        }) => Some(read_password_item(state, vault_id, password_item_id)?),
+        Some(ProxyPassword::Inline { password }) => Some(Zeroizing::new(password.clone())),
+        None => None,
+    };
+    Ok(unissh_ssh_transport::ProxyOptions {
+        kind: match p.kind {
+            ProxyKind::Http => unissh_ssh_transport::ProxyKind::Http,
+            ProxyKind::Socks4 => unissh_ssh_transport::ProxyKind::Socks4,
+            ProxyKind::Socks5 => unissh_ssh_transport::ProxyKind::Socks5,
+        },
+        host: p.host.clone(),
+        port: p.port,
+        username: p.username.clone(),
+        password,
+    })
+}
+
+/// Validates a proxy config at every boundary that accepts one (save, connect,
+/// import) rather than in one UI — a rule enforced by a single form is not a
+/// rule, and the layers below would each disagree about it.
+///
+/// `host` is checked because it is interpolated verbatim into an HTTP CONNECT
+/// request line: a CR/LF in it would let a synced (attacker-authored) profile
+/// smuggle extra headers or a second request past a corporate proxy. SOCKS4 is
+/// refused a password because the protocol has none — accepting one would
+/// unseal a vault secret for a handshake that cannot send it, and leave the
+/// user believing proxy auth is configured.
+fn check_proxy(p: &ProxyConfig) -> Result<(), FfiError> {
+    let host = p.host.trim();
+    if host.is_empty() {
+        return Err(FfiError::other("proxy host must not be empty"));
+    }
+    if host.len() > 255 {
+        return Err(FfiError::other("proxy host is longer than 255 bytes"));
+    }
+    if host
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || c == '\0')
+    {
+        return Err(FfiError::other(
+            "proxy host must not contain spaces or control characters",
+        ));
+    }
+    if p.port == 0 {
+        return Err(FfiError::other("proxy port must not be 0"));
+    }
+    if let Some(u) = p.username.as_deref() {
+        if u.len() > 255 || u.chars().any(|c| c.is_control() || c == '\0') {
+            return Err(FfiError::other("proxy username is invalid"));
+        }
+    }
+    if p.kind == ProxyKind::Socks4 && p.password.is_some() {
+        return Err(FfiError::other(
+            "socks4 has no password in the protocol; use socks5 or http, or clear the password",
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_auth(state: &mut CoreState, auth: &AuthMethod) -> Result<Auth, FfiError> {
     Ok(match auth {
         AuthMethod::Agent {
@@ -5989,6 +6290,7 @@ fn profile_to_target(vault_id: &str, p: ConnectionProfile) -> MultiExecTarget {
         user: p.user,
         auth: profile_auth_to_method(vault_id, p.auth),
         jumps: p.jumps,
+        proxy: p.proxy,
     }
 }
 
@@ -6333,6 +6635,58 @@ fn jump_to_stored(j: JumpHost) -> Result<StoredJump, FfiError> {
     })
 }
 
+/// An inline proxy password → an error, same rule as [`jump_to_stored`]: the
+/// secret must not end up in the profile's JSON (for a stored password there
+/// is the `ProxyPassword::Vault` reference). The reference's `vault_id` is
+/// dropped: a stored proxy is vault-relative, the profile's own `vault_id` is
+/// restored on read in [`stored_to_profile`].
+fn proxy_to_stored(p: ProxyConfig) -> Result<StoredProxy, FfiError> {
+    check_proxy(&p)?;
+    let password_item_id =
+        match p.password {
+            Some(ProxyPassword::Vault {
+                password_item_id, ..
+            }) => Some(password_item_id),
+            Some(ProxyPassword::Inline { .. }) => return Err(FfiError::other(
+                "an inline proxy password cannot be stored in a profile; save it as a vault item",
+            )),
+            None => None,
+        };
+    Ok(StoredProxy {
+        kind: match p.kind {
+            ProxyKind::Http => StoredProxyKind::Http,
+            ProxyKind::Socks4 => StoredProxyKind::Socks4,
+            ProxyKind::Socks5 => StoredProxyKind::Socks5,
+        },
+        host: p.host,
+        port: p.port,
+        username: p.username.filter(|u| !u.is_empty()),
+        password_item_id,
+        extra: std::collections::BTreeMap::new(),
+    })
+}
+
+/// Stored proxy → FFI config; the profile's `vault_id` qualifies the password
+/// reference (stored proxies are vault-relative, like stored jumps).
+fn stored_proxy_to_config(vault_id: &str, s: StoredProxy) -> ProxyConfig {
+    ProxyConfig {
+        kind: match s.kind {
+            StoredProxyKind::Http => ProxyKind::Http,
+            StoredProxyKind::Socks4 => ProxyKind::Socks4,
+            StoredProxyKind::Socks5 => ProxyKind::Socks5,
+        },
+        host: s.host,
+        port: s.port,
+        username: s.username,
+        password: s
+            .password_item_id
+            .map(|password_item_id| ProxyPassword::Vault {
+                vault_id: vault_id.to_string(),
+                password_item_id,
+            }),
+    }
+}
+
 /// Whether [`Core::open_local_session`] can do anything on this platform.
 ///
 /// iOS forbids `fork`/`exec` outright and ships no shell to run — which is why
@@ -6473,6 +6827,7 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
                 }),
             })
             .collect(),
+        proxy: s.proxy.map(|p| stored_proxy_to_config(vault_id, p)),
     }
 }
 
@@ -7517,6 +7872,7 @@ pub struct ReconnectingSession {
     user: String,
     auth: AuthMethod,
     jumps: Vec<JumpHost>,
+    proxy: Option<ProxyConfig>,
     term: String,
     cols: u32,
     rows: u32,
@@ -7538,6 +7894,7 @@ impl ReconnectingSession {
             &self.approver,
             &self.auth,
             &self.jumps,
+            self.proxy.as_ref(),
             self.host.clone(),
             self.port,
             self.user.clone(),
@@ -7973,6 +8330,7 @@ pub struct SftpFfi {
     user: String,
     auth: AuthMethod,
     jumps: Vec<JumpHost>,
+    proxy: Option<ProxyConfig>,
     // Serializes reopen(): two racing callers must not fan out into two full
     // reconnects (would orphan a connection). Mirrors ReconnectingSession.
     reconnect_lock: Mutex<()>,
@@ -8129,6 +8487,7 @@ impl SftpFfi {
             &self.approver,
             &self.auth,
             &self.jumps,
+            self.proxy.as_ref(),
             self.host.clone(),
             self.port,
             self.user.clone(),
@@ -8857,6 +9216,7 @@ mod tests {
     #[test]
     fn vault_password_profile_roundtrip() {
         let prof = ConnectionProfile {
+            proxy: None,
             profile_id: "p".to_string(),
             uid: "uid-fixed".to_string(),
             label: "L".to_string(),
@@ -8890,6 +9250,7 @@ mod tests {
             | ProfileAuth::SystemAgent { .. } => (None, None),
         };
         let stored = StoredProfile {
+            proxy: None,
             uid: Some(prof.uid.clone()),
             label: prof.label.clone(),
             host: prof.host.clone(),
@@ -8987,6 +9348,7 @@ mod tests {
         let stored = jump_to_stored(j).unwrap();
         assert!(stored.hop_ref.is_some());
         let sp = StoredProfile {
+            proxy: None,
             uid: Some("u".into()),
             label: "L".into(),
             host: "h".into(),
@@ -9023,6 +9385,7 @@ mod tests {
         core.save_connection(
             "v".into(),
             ConnectionProfile {
+                proxy: None,
                 profile_id: "bastion".into(),
                 uid: String::new(),
                 label: "B".into(),
@@ -9217,6 +9580,7 @@ mod tests {
         core.save_connection(
             "v".into(),
             ConnectionProfile {
+                proxy: None,
                 profile_id: "p".into(),
                 uid: String::new(),
                 label: "L".into(),
@@ -9344,12 +9708,12 @@ mod tests {
     fn username_template_render_destination_and_username() {
         let nj: &[JumpHost] = &[];
         // Without a template: plain host:port and the base username.
-        assert_eq!(personal_destination("h", 22, None, nj), "h:22");
-        assert_eq!(personal_destination("h", 22, Some(""), nj), "h:22");
+        assert_eq!(personal_destination("h", 22, None, nj, None), "h:22");
+        assert_eq!(personal_destination("h", 22, Some(""), nj, None), "h:22");
         assert_eq!(apply_username_template("alice", None), "alice");
         // With a template: it is part of the destination, and %u expands into the username.
         assert_eq!(
-            personal_destination("gw", 22, Some("%u:prod-db"), nj),
+            personal_destination("gw", 22, Some("%u:prod-db"), nj, None),
             "gw:22#%u:prod-db"
         );
         assert_eq!(
@@ -9363,8 +9727,8 @@ mod tests {
         );
         // Different templates → different destinations (an edit is caught by anti-redirect).
         assert_ne!(
-            personal_destination("gw", 22, Some("%u:prod-db"), nj),
-            personal_destination("gw", 22, Some("%u:prod-web"), nj)
+            personal_destination("gw", 22, Some("%u:prod-db"), nj, None),
+            personal_destination("gw", 22, Some("%u:prod-web"), nj, None)
         );
         // trim at the edges.
         assert_eq!(apply_username_template("alice", Some("  %u:x ")), "alice:x");
@@ -9382,15 +9746,118 @@ mod tests {
             },
             hop_ref: None,
         };
-        assert_eq!(personal_destination("h", 22, None, nj), "h:22");
+        assert_eq!(personal_destination("h", 22, None, nj, None), "h:22");
         assert_ne!(
-            personal_destination("h", 22, None, nj),
-            personal_destination("h", 22, None, std::slice::from_ref(&jump)),
+            personal_destination("h", 22, None, nj, None),
+            personal_destination("h", 22, None, std::slice::from_ref(&jump), None),
             "the appearance of a jump must change the pin (fail-safe anti-redirect)"
         );
         assert!(
-            personal_destination("h", 22, None, std::slice::from_ref(&jump))
+            personal_destination("h", 22, None, std::slice::from_ref(&jump), None)
                 .starts_with("h:22|via=")
+        );
+    }
+
+    /// The proxy rules hold at every boundary that accepts one, not only in
+    /// the desktop form: a CRLF in the host would smuggle headers into an HTTP
+    /// CONNECT request, and a SOCKS4 password would unseal a vault secret for
+    /// a handshake that cannot carry it.
+    #[test]
+    fn proxy_config_is_validated() {
+        let ok = ProxyConfig {
+            kind: ProxyKind::Socks5,
+            host: "proxy.corp".into(),
+            port: 1080,
+            username: None,
+            password: None,
+        };
+        assert!(check_proxy(&ok).is_ok());
+
+        let crlf = ProxyConfig {
+            host: "a.com:22 HTTP/1.1\r\nX-Evil: 1".into(),
+            ..ok.clone()
+        };
+        assert!(
+            check_proxy(&crlf).is_err(),
+            "CRLF in the host must be refused"
+        );
+        assert!(check_proxy(&ProxyConfig {
+            host: String::new(),
+            ..ok.clone()
+        })
+        .is_err());
+        assert!(check_proxy(&ProxyConfig {
+            port: 0,
+            ..ok.clone()
+        })
+        .is_err());
+
+        // SOCKS4 has no password in the protocol.
+        let socks4_pw = ProxyConfig {
+            kind: ProxyKind::Socks4,
+            password: Some(ProxyPassword::Vault {
+                vault_id: "v".into(),
+                password_item_id: "pw".into(),
+            }),
+            ..ok.clone()
+        };
+        assert!(check_proxy(&socks4_pw).is_err());
+        // …but SOCKS4 with only a username (its ident) is fine.
+        assert!(check_proxy(&ProxyConfig {
+            kind: ProxyKind::Socks4,
+            username: Some("joe".into()),
+            ..ok
+        })
+        .is_ok());
+    }
+
+    /// Anti-redirect over the OUTBOUND PROXY (issue #27): pointing a shared
+    /// Personal profile at `socks5://attacker` must change the pin exactly like
+    /// inserting a MITM jump would. No proxy yields the previous string
+    /// (backward compatibility with old pins).
+    #[test]
+    fn proxy_is_part_of_the_destination_pin() {
+        let nj: &[JumpHost] = &[];
+        let proxy = ProxyConfig {
+            kind: ProxyKind::Socks5,
+            host: "attacker.com".into(),
+            port: 1080,
+            username: None,
+            password: None,
+        };
+        assert_eq!(personal_destination("h", 22, None, nj, None), "h:22");
+        assert_eq!(
+            personal_destination("h", 22, None, nj, Some(&proxy)),
+            "h:22|proxy=socks5://attacker.com:1080"
+        );
+        // The proxy username is part of the route; the password reference is not
+        // (rotating a password item is not a redirect).
+        let named = ProxyConfig {
+            username: Some("joe".into()),
+            password: Some(ProxyPassword::Vault {
+                vault_id: "v".into(),
+                password_item_id: "pw".into(),
+            }),
+            ..proxy.clone()
+        };
+        assert_eq!(
+            personal_destination("h", 22, None, nj, Some(&named)),
+            "h:22|proxy=socks5://joe@attacker.com:1080"
+        );
+        // Proxy composes with the jump chain in the pin.
+        let jump = JumpHost {
+            host: "bastion".into(),
+            port: 22,
+            user: "x".into(),
+            auth: AuthMethod::Agent {
+                vault_id: "v".into(),
+                key_item_id: "k".into(),
+            },
+            hop_ref: None,
+        };
+        assert_eq!(
+            personal_destination("h", 22, None, std::slice::from_ref(&jump), Some(&proxy)),
+            "h:22|via=bastion:22:x|proxy=socks5://attacker.com:1080"
         );
     }
 
@@ -9549,6 +10016,7 @@ mod tests {
         core.create_account(None).unwrap();
         core.create_vault("v".into(), "V".into()).unwrap();
         let mk = |id: &str, host: &str, auth: ProfileAuth| ConnectionProfile {
+            proxy: None,
             profile_id: id.into(),
             uid: String::new(),
             label: id.into(),
@@ -9629,6 +10097,7 @@ mod tests {
         )
         .unwrap();
         let mk = |id: &str, host: &str, auth: ProfileAuth| ConnectionProfile {
+            proxy: None,
             profile_id: id.into(),
             uid: String::new(),
             label: id.into(),
@@ -9665,6 +10134,7 @@ mod tests {
             ph.port,
             ph.username_template.clone(),
             ph.jumps.clone(),
+            None,
         );
         core.set_binding(
             pv.into(),

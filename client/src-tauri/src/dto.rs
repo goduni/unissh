@@ -210,6 +210,112 @@ impl From<ffi::JumpHost> for JumpHost {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyKind {
+    Http,
+    Socks4,
+    Socks5,
+}
+impl From<ProxyKind> for ffi::ProxyKind {
+    fn from(k: ProxyKind) -> Self {
+        match k {
+            ProxyKind::Http => ffi::ProxyKind::Http,
+            ProxyKind::Socks4 => ffi::ProxyKind::Socks4,
+            ProxyKind::Socks5 => ffi::ProxyKind::Socks5,
+        }
+    }
+}
+impl From<ffi::ProxyKind> for ProxyKind {
+    fn from(k: ffi::ProxyKind) -> Self {
+        match k {
+            ffi::ProxyKind::Http => ProxyKind::Http,
+            ffi::ProxyKind::Socks4 => ProxyKind::Socks4,
+            ffi::ProxyKind::Socks5 => ProxyKind::Socks5,
+        }
+    }
+}
+
+/// Proxy password: a vault reference (storable) or an inline value (connect-time
+/// only; `save_connection` rejects it core-side).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ProxyPassword {
+    #[serde(rename_all = "camelCase")]
+    Vault {
+        vault_id: String,
+        password_item_id: String,
+    },
+    Inline {
+        password: String,
+    },
+}
+impl From<ProxyPassword> for ffi::ProxyPassword {
+    fn from(p: ProxyPassword) -> Self {
+        match p {
+            ProxyPassword::Vault {
+                vault_id,
+                password_item_id,
+            } => ffi::ProxyPassword::Vault {
+                vault_id,
+                password_item_id,
+            },
+            ProxyPassword::Inline { password } => ffi::ProxyPassword::Inline { password },
+        }
+    }
+}
+impl From<ffi::ProxyPassword> for ProxyPassword {
+    fn from(p: ffi::ProxyPassword) -> Self {
+        match p {
+            ffi::ProxyPassword::Vault {
+                vault_id,
+                password_item_id,
+            } => ProxyPassword::Vault {
+                vault_id,
+                password_item_id,
+            },
+            // Never carries a real secret on the read-back path: an inline
+            // password cannot be stored, so this arm is only ever a round-trip
+            // of what the frontend itself just sent.
+            ffi::ProxyPassword::Inline { password } => ProxyPassword::Inline { password },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyConfig {
+    pub kind: ProxyKind,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<ProxyPassword>,
+}
+impl From<ProxyConfig> for ffi::ProxyConfig {
+    fn from(p: ProxyConfig) -> Self {
+        ffi::ProxyConfig {
+            kind: p.kind.into(),
+            host: p.host,
+            port: p.port,
+            username: p.username,
+            password: p.password.map(Into::into),
+        }
+    }
+}
+impl From<ffi::ProxyConfig> for ProxyConfig {
+    fn from(p: ffi::ProxyConfig) -> Self {
+        ProxyConfig {
+            kind: p.kind.into(),
+            host: p.host,
+            port: p.port,
+            username: p.username,
+            password: p.password.map(Into::into),
+        }
+    }
+}
+
 /// `AuthMethod` as read back from a stored profile/jump — inline passwords are
 /// never stored, so this is a lossless view that elides any password value.
 enum AuthMethodOut {
@@ -307,6 +413,9 @@ pub struct ConnectionProfile {
     pub username_template: Option<String>,
     #[serde(default)]
     pub jumps: Vec<JumpHost>,
+    /// Outbound http/socks4/socks5 proxy for the first TCP hop.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
     #[serde(default)]
     pub tags: Vec<String>,
     /// Snippets typed into the shell right after connecting, in order.
@@ -332,6 +441,7 @@ impl From<ConnectionProfile> for ffi::ConnectionProfile {
             auth: p.auth.into(),
             username_template: p.username_template,
             jumps: p.jumps.into_iter().map(Into::into).collect(),
+            proxy: p.proxy.map(Into::into),
             tags: p.tags,
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
@@ -351,6 +461,7 @@ impl From<ffi::ConnectionProfile> for ConnectionProfile {
             auth: p.auth.into(),
             username_template: p.username_template,
             jumps: p.jumps.into_iter().map(Into::into).collect(),
+            proxy: p.proxy.map(Into::into),
             tags: p.tags,
             startup_snippet_ids: p.startup_snippet_ids,
             record_sessions: p.record_sessions,
@@ -507,6 +618,8 @@ pub struct MultiExecTarget {
     pub auth: AuthMethod,
     #[serde(default)]
     pub jumps: Vec<JumpHost>,
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 impl From<MultiExecTarget> for ffi::MultiExecTarget {
     fn from(t: MultiExecTarget) -> Self {
@@ -516,6 +629,7 @@ impl From<MultiExecTarget> for ffi::MultiExecTarget {
             user: t.user,
             auth: t.auth.into(),
             jumps: t.jumps.into_iter().map(Into::into).collect(),
+            proxy: t.proxy.map(Into::into),
         }
     }
 }

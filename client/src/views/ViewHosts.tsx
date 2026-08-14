@@ -145,6 +145,7 @@ function HostCard({
           {h.label}
         </span>
         {h.jumps.length > 0 && <Icon name="branch" size={12} color={p.txt3} stroke={1.8} />}
+        {h.proxy && <Icon name="globe" size={12} color={p.txt3} stroke={1.8} />}
       </div>
 
       {/* L2 — address (mono, txt2) */}
@@ -580,6 +581,21 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
             {t("hosts.jump")}
           </span>
         )}
+        {h.proxy && (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 3,
+              fontSize: 11,
+              color: p.txt3,
+              flexShrink: 0,
+            }}
+          >
+            <Icon name="globe" size={12} color={p.txt3} />
+            {t("hosts.proxyBadge")}
+          </span>
+        )}
         <div style={{ flex: 1, minWidth: 8 }} />
         {h.auth.type === "personal" && vault && (
           <IconBtn
@@ -666,6 +682,12 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       {firstJump && (
         <DetailRow label="ProxyJump" mono>
           {firstJump.user}@{firstJump.host}:{firstJump.port}
+        </DetailRow>
+      )}
+      {h.proxy && (
+        <DetailRow label="Proxy" mono>
+          {h.proxy.kind}://{h.proxy.username ? `${h.proxy.username}@` : ""}
+          {h.proxy.host}:{h.proxy.port}
         </DetailRow>
       )}
       {lc != null && lc > 0 && (

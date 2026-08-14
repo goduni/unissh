@@ -29,6 +29,7 @@ import type {
   EscrowParamsInfo,
   ItemInfo,
   JumpHost,
+  ProxyConfig,
   KnownHostInfo,
   KnownHostsImport,
   LocalPaneSpec,
@@ -257,6 +258,7 @@ export const personalDestination = (
   port: number,
   usernameTemplate: string | null | undefined,
   jumps: JumpHost[],
+  proxy?: ProxyConfig | null,
 ) =>
   invoke<string>("personal_destination", {
     host,
@@ -264,7 +266,9 @@ export const personalDestination = (
     usernameTemplate: usernameTemplate ?? null,
     // Anti-redirect pins the ProxyJump chain too — a mutated chain must change
     // the destination so a bound personal credential isn't routed via a MITM hop.
+    // The outbound proxy is pinned for the same reason.
     jumps,
+    proxy: proxy ?? null,
   });
 /** Final connect username: applies the username template (`%u`→baseUser), else `baseUser`. */
 export const applyUsernameTemplate = (baseUser: string, usernameTemplate?: string | null) =>
@@ -287,6 +291,7 @@ export async function resolveConnectAuth(
       profile.port,
       profile.usernameTemplate,
       profile.jumps,
+      profile.proxy,
     );
     const pa = await resolvePersonalAuth(vaultId, profile.uid, dest, profile.user);
     const user = await applyUsernameTemplate(pa.user, profile.usernameTemplate);
@@ -367,6 +372,8 @@ export interface ConnectArgs {
   user: string;
   auth: AuthMethod;
   jumps: JumpHost[];
+  /** Outbound http/socks4/socks5 proxy for the first TCP hop (issue #27). */
+  proxy?: ProxyConfig | null;
 }
 export const sshExec = (a: ConnectArgs, command: string) =>
   invoke<SshExecResult>("ssh_exec", { ...a, command });

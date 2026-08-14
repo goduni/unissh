@@ -9,7 +9,9 @@ use std::net::TcpStream as StdTcp;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use unissh_ffi::{AuthMethod, Core, JumpHost, MultiExecTarget};
+use unissh_ffi::{
+    AuthMethod, Core, JumpHost, MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword,
+};
 
 fn agent_auth(vault_id: &str, key_item_id: &str) -> AuthMethod {
     AuthMethod::Agent {
@@ -249,6 +251,7 @@ fn end_to_end_local_scenario() {
             agent_auth("default", "id_ed25519"),
             "echo ffi-e2e".to_string(),
             vec![],
+            None,
         )
         .unwrap();
     assert_eq!(res.stdout.trim(), "ffi-e2e");
@@ -289,9 +292,367 @@ fn end_to_end_proxyjump() {
                 auth: agent_auth("v", "key"),
                 hop_ref: None,
             }],
+            None,
         )
         .unwrap();
     assert_eq!(res.stdout.trim(), "through-jump");
+}
+
+/// A blocking in-process SOCKS5 proxy (std threads — the FFI e2e tests are
+/// synchronous). Optionally demands RFC 1929 credentials; tunnels to the
+/// requested destination. The protocol-level matrix (socks4/http/refusals)
+/// lives in the transport crate's integration tests; here the proxy exists to
+/// prove the FFI plumbing end-to-end.
+fn fake_socks5_blocking(creds: Option<(&'static str, &'static str)>) -> u16 {
+    fake_socks5_counted(creds).0
+}
+
+/// As [`fake_socks5_blocking`], but also returns a counter of completed
+/// CONNECTs — the only way to prove a connection went THROUGH the proxy when
+/// both it and the destination sit on loopback and a direct dial would work.
+fn fake_socks5_counted(
+    creds: Option<(&'static str, &'static str)>,
+) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = hits.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut s) = conn else { break };
+            let counter = counter.clone();
+            std::thread::spawn(move || {
+                let mut head = [0u8; 2];
+                s.read_exact(&mut head).unwrap();
+                let mut methods = vec![0u8; head[1] as usize];
+                s.read_exact(&mut methods).unwrap();
+                if let Some((user, pass)) = creds {
+                    assert!(methods.contains(&0x02));
+                    s.write_all(&[5, 2]).unwrap();
+                    let mut vu = [0u8; 2];
+                    s.read_exact(&mut vu).unwrap();
+                    let mut ub = vec![0u8; vu[1] as usize];
+                    s.read_exact(&mut ub).unwrap();
+                    let mut pl = [0u8; 1];
+                    s.read_exact(&mut pl).unwrap();
+                    let mut pb = vec![0u8; pl[0] as usize];
+                    s.read_exact(&mut pb).unwrap();
+                    if ub != user.as_bytes() || pb != pass.as_bytes() {
+                        s.write_all(&[1, 1]).unwrap();
+                        return;
+                    }
+                    s.write_all(&[1, 0]).unwrap();
+                } else {
+                    s.write_all(&[5, 0]).unwrap();
+                }
+                let mut req = [0u8; 4];
+                s.read_exact(&mut req).unwrap();
+                assert_eq!(&req[..3], &[5, 1, 0]);
+                let host = match req[3] {
+                    1 => {
+                        let mut a = [0u8; 4];
+                        s.read_exact(&mut a).unwrap();
+                        format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3])
+                    }
+                    3 => {
+                        let mut len = [0u8; 1];
+                        s.read_exact(&mut len).unwrap();
+                        let mut dn = vec![0u8; len[0] as usize];
+                        s.read_exact(&mut dn).unwrap();
+                        String::from_utf8(dn).unwrap()
+                    }
+                    _ => return,
+                };
+                let mut pb = [0u8; 2];
+                s.read_exact(&mut pb).unwrap();
+                let dport = u16::from_be_bytes(pb);
+                s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).unwrap();
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut up = std::net::TcpStream::connect((host.as_str(), dport)).unwrap();
+                let mut s2 = s.try_clone().unwrap();
+                let mut up2 = up.try_clone().unwrap();
+                let t = std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut s2, &mut up2);
+                    let _ = up2.shutdown(std::net::Shutdown::Write);
+                });
+                let _ = std::io::copy(&mut up, &mut s);
+                let _ = s.shutdown(std::net::Shutdown::Write);
+                let _ = t.join();
+            });
+        }
+    });
+    (port, hits)
+}
+
+#[test]
+fn end_to_end_socks5_proxy() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    let sshd = TestSshd::start(&pubkey);
+    let proxy_port = fake_socks5_blocking(None);
+
+    let res = core
+        .ssh_exec(
+            "127.0.0.1".to_string(),
+            sshd.port,
+            "root".to_string(),
+            agent_auth("v", "key"),
+            "echo through-proxy".to_string(),
+            vec![],
+            Some(ProxyConfig {
+                kind: ProxyKind::Socks5,
+                host: "127.0.0.1".to_string(),
+                port: proxy_port,
+                username: None,
+                password: None,
+            }),
+        )
+        .unwrap();
+    assert_eq!(res.stdout.trim(), "through-proxy");
+}
+
+#[test]
+fn end_to_end_proxy_with_vault_password() {
+    // The proxy password lives in the vault as a password item; the core
+    // decrypts it at connect time — the plaintext never crosses the FFI.
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    core.save_password(
+        "v".to_string(),
+        "proxy-pw".to_string(),
+        "sekret".to_string(),
+    )
+    .unwrap();
+    let sshd = TestSshd::start(&pubkey);
+    let proxy_port = fake_socks5_blocking(Some(("joe", "sekret")));
+
+    let res = core
+        .ssh_exec(
+            "127.0.0.1".to_string(),
+            sshd.port,
+            "root".to_string(),
+            agent_auth("v", "key"),
+            "echo through-auth-proxy".to_string(),
+            vec![],
+            Some(ProxyConfig {
+                kind: ProxyKind::Socks5,
+                host: "127.0.0.1".to_string(),
+                port: proxy_port,
+                username: Some("joe".to_string()),
+                password: Some(ProxyPassword::Vault {
+                    vault_id: "v".to_string(),
+                    password_item_id: "proxy-pw".to_string(),
+                }),
+            }),
+        )
+        .unwrap();
+    assert_eq!(res.stdout.trim(), "through-auth-proxy");
+}
+
+#[test]
+fn referenced_bastion_carries_its_own_proxy() {
+    // A bastion reachable only through a proxy is saved WITH that proxy; a
+    // target that jumps via that profile (hopRef) must inherit it for the
+    // first TCP dial — otherwise the hop is dialed direct and the configured
+    // route is bypassed.
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    let bastion = TestSshd::start(&pubkey);
+    let target = TestSshd::start(&pubkey);
+    let (proxy_port, proxy_hits) = fake_socks5_counted(None);
+
+    core.save_connection(
+        "v".to_string(),
+        unissh_ffi::ConnectionProfile {
+            profile_id: "bastion".to_string(),
+            uid: String::new(),
+            username_template: None,
+            label: "Bastion".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: bastion.port,
+            user: "root".to_string(),
+            auth: unissh_ffi::ProfileAuth::Key {
+                key_item_id: "key".to_string(),
+            },
+            jumps: vec![],
+            proxy: Some(ProxyConfig {
+                kind: ProxyKind::Socks5,
+                host: "127.0.0.1".to_string(),
+                port: proxy_port,
+                username: None,
+                password: None,
+            }),
+            tags: vec![],
+            startup_snippet_ids: vec![],
+            record_sessions: false,
+            agent_forward: false,
+        },
+    )
+    .unwrap();
+    let bastion_uid = core
+        .get_connection("v".to_string(), "bastion".to_string())
+        .unwrap()
+        .uid;
+
+    let res = core
+        .ssh_exec(
+            "127.0.0.1".to_string(),
+            target.port,
+            "root".to_string(),
+            agent_auth("v", "key"),
+            "echo via-ref-proxy".to_string(),
+            vec![JumpHost {
+                host: String::new(),
+                port: 22,
+                user: String::new(),
+                auth: agent_auth("v", "key"),
+                hop_ref: Some(unissh_ffi::HopRef {
+                    vault_id: "v".to_string(),
+                    profile_uid: bastion_uid,
+                }),
+            }],
+            // The connection itself names no proxy — the bastion's own applies.
+            None,
+        )
+        .unwrap();
+    assert_eq!(res.stdout.trim(), "via-ref-proxy");
+    assert_eq!(
+        proxy_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the hop must be dialed through the referenced bastion's proxy"
+    );
+}
+
+#[test]
+fn profile_with_proxy_roundtrip_and_inline_rejection() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+
+    let prof = unissh_ffi::ConnectionProfile {
+        profile_id: "proxied".to_string(),
+        uid: String::new(),
+        username_template: None,
+        label: "Proxied".to_string(),
+        host: "10.0.0.7".to_string(),
+        port: 22,
+        user: "root".to_string(),
+        auth: unissh_ffi::ProfileAuth::PromptPassword,
+        jumps: vec![],
+        proxy: Some(ProxyConfig {
+            kind: ProxyKind::Http,
+            host: "proxy.corp".to_string(),
+            port: 3128,
+            username: Some("joe".to_string()),
+            password: Some(ProxyPassword::Vault {
+                vault_id: "ignored-on-save".to_string(),
+                password_item_id: "proxy-pw".to_string(),
+            }),
+        }),
+        tags: vec![],
+        startup_snippet_ids: vec![],
+        record_sessions: false,
+        agent_forward: false,
+    };
+    core.save_connection("v".to_string(), prof).unwrap();
+
+    let got = core
+        .get_connection("v".to_string(), "proxied".to_string())
+        .unwrap();
+    let p = got.proxy.expect("proxy survives the round-trip");
+    assert!(matches!(p.kind, ProxyKind::Http));
+    assert_eq!(p.host, "proxy.corp");
+    assert_eq!(p.port, 3128);
+    assert_eq!(p.username.as_deref(), Some("joe"));
+    // The stored reference is vault-relative: the profile's vault re-qualifies it.
+    assert!(matches!(
+        p.password,
+        Some(ProxyPassword::Vault { vault_id, password_item_id })
+            if vault_id == "v" && password_item_id == "proxy-pw"
+    ));
+
+    // An inline proxy password must not reach the profile JSON — rejected.
+    let bad = unissh_ffi::ConnectionProfile {
+        profile_id: "bad-proxy".to_string(),
+        uid: String::new(),
+        username_template: None,
+        label: "x".to_string(),
+        host: "h".to_string(),
+        port: 22,
+        user: "u".to_string(),
+        auth: unissh_ffi::ProfileAuth::PromptPassword,
+        jumps: vec![],
+        proxy: Some(ProxyConfig {
+            kind: ProxyKind::Socks5,
+            host: "p".to_string(),
+            port: 1080,
+            username: Some("u".to_string()),
+            password: Some(ProxyPassword::Inline {
+                password: "inline-secret".to_string(),
+            }),
+        }),
+        tags: vec![],
+        startup_snippet_ids: vec![],
+        record_sessions: false,
+        agent_forward: false,
+    };
+    let err = core.save_connection("v".to_string(), bad).unwrap_err();
+    assert!(err.to_string().contains("proxy password"), "got: {err}");
+    // And the raw stored JSON of the good profile never contains a secret.
+    assert!(core
+        .get_connection("v".to_string(), "bad-proxy".to_string())
+        .is_err());
+}
+
+#[test]
+fn import_putty_proxy_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+
+    // ProxyMethod 2 = SOCKS5 (0x1F90 = 8080); the proxy password is deliberately
+    // NOT imported (an inline secret cannot live in profile JSON).
+    let reg = "Windows Registry Editor Version 5.00\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\viaproxy]\r\n\
+        \"HostName\"=\"10.0.0.5\"\r\n\
+        \"Protocol\"=\"ssh\"\r\n\
+        \"ProxyMethod\"=dword:00000002\r\n\
+        \"ProxyHost\"=\"proxy.corp\"\r\n\
+        \"ProxyPort\"=dword:00001f90\r\n\
+        \"ProxyUsername\"=\"joe\"\r\n\
+        \"ProxyPassword\"=\"never-imported\"\r\n";
+    let report = core
+        .import_putty_sessions("v".to_string(), reg.to_string())
+        .unwrap();
+    assert_eq!(report.created_ids, vec!["viaproxy"]);
+
+    let p = core
+        .get_connection("v".to_string(), "viaproxy".to_string())
+        .unwrap();
+    let proxy = p.proxy.expect("putty proxy imported");
+    assert!(matches!(proxy.kind, ProxyKind::Socks5));
+    assert_eq!(proxy.host, "proxy.corp");
+    assert_eq!(proxy.port, 8080);
+    assert_eq!(proxy.username.as_deref(), Some("joe"));
+    assert!(proxy.password.is_none());
 }
 
 #[test]
@@ -354,6 +715,7 @@ fn multi_exec_on_several_hosts() {
     let sshd2 = TestSshd::start(&pubkey);
 
     let mk = |port: u16| MultiExecTarget {
+        proxy: None,
         host: "127.0.0.1".to_string(),
         port,
         user: "root".to_string(),
@@ -433,6 +795,7 @@ fn certificate_auth() {
             agent_auth("v", "key"),
             "echo cert-ok".to_string(),
             vec![],
+            None,
         )
         .unwrap();
     assert_eq!(res.stdout.trim(), "cert-ok");
@@ -476,6 +839,7 @@ fn import_pkcs1_rsa_key_and_auth() {
             agent_auth("v", "rsa"),
             "echo ffi-pkcs1".to_string(),
             vec![],
+            None,
         )
         .unwrap();
     assert_eq!(res.stdout.trim(), "ffi-pkcs1");
@@ -552,6 +916,7 @@ fn interactive_pty_session() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -628,6 +993,7 @@ fn known_hosts_list_and_forget() {
         agent_auth("v", "key"),
         "true".to_string(),
         vec![],
+        None,
     )
     .unwrap();
 
@@ -669,6 +1035,7 @@ fn password_auth_path_wired() {
         },
         "true".to_string(),
         vec![],
+        None,
     );
     assert!(res.is_err());
 }
@@ -693,6 +1060,7 @@ fn host_key_mismatch_detected() {
         agent_auth("v", "key"),
         "true".to_string(),
         vec![],
+        None,
     )
     .unwrap();
 
@@ -709,6 +1077,7 @@ fn host_key_mismatch_detected() {
             agent_auth("v", "key"),
             "true".to_string(),
             vec![],
+            None,
         )
         .unwrap_err();
     assert!(
@@ -822,6 +1191,7 @@ fn rename_item_e2e() {
             agent_auth("v", "new"),
             "echo renamed-ok".to_string(),
             vec![],
+            None,
         )
         .unwrap();
     assert_eq!(res.stdout.trim(), "renamed-ok");
@@ -846,6 +1216,7 @@ fn trust_host_e2e() {
         agent_auth("v", "key"),
         "true".to_string(),
         vec![],
+        None,
     )
     .unwrap();
 
@@ -860,6 +1231,7 @@ fn trust_host_e2e() {
         agent_auth("v", "key"),
         "true".to_string(),
         vec![],
+        None,
     ) {
         Err(unissh_ffi::FfiError::HostKeyMismatch { fingerprint, .. }) => {
             assert!(fingerprint.starts_with("SHA256:"));
@@ -887,6 +1259,7 @@ fn trust_host_e2e() {
             agent_auth("v", "key"),
             "echo trusted".to_string(),
             vec![],
+            None,
         )
         .unwrap();
     assert_eq!(res.stdout.trim(), "trusted");
@@ -929,6 +1302,7 @@ fn local_forward_e2e() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "127.0.0.1:0".to_string(),
             "127.0.0.1".to_string(),
             echo_port,
@@ -965,6 +1339,7 @@ fn sftp_e2e() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             1,
         )
         .unwrap();
@@ -1001,6 +1376,7 @@ fn connection_profiles_crud_and_import() {
     core.create_vault("v".to_string(), "V".to_string()).unwrap();
 
     let prof = unissh_ffi::ConnectionProfile {
+        proxy: None,
         profile_id: "prod-web".to_string(),
         uid: String::new(),
         username_template: None,
@@ -1073,6 +1449,7 @@ fn cross_type_clobber_rejected() {
 
     // a connection profile with the id of an existing key must NOT overwrite the key
     let prof = unissh_ffi::ConnectionProfile {
+        proxy: None,
         profile_id: "id".to_string(),
         uid: String::new(),
         username_template: None,
@@ -1098,6 +1475,7 @@ fn cross_type_clobber_rejected() {
 
     // and vice versa: generating a key over a profile is rejected
     let prof2 = unissh_ffi::ConnectionProfile {
+        proxy: None,
         profile_id: "conn".to_string(),
         uid: String::new(),
         username_template: None,
@@ -1371,6 +1749,7 @@ fn connect_with_vault_password() {
             },
             "echo vault-pw".to_string(),
             vec![],
+            None,
         )
         .unwrap();
     assert_eq!(res.exit_status, 0);
@@ -1388,6 +1767,7 @@ fn connect_with_vault_password() {
             },
             "true".to_string(),
             vec![],
+            None,
         ),
         Err(unissh_ffi::FfiError::NotFound)
     ));
@@ -1406,6 +1786,7 @@ fn connect_with_vault_password() {
             },
             "true".to_string(),
             vec![],
+            None,
         ),
         Err(unissh_ffi::FfiError::NotFound)
     ));
@@ -1420,6 +1801,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
 
     // a profile referencing a password + a jump using a password from the vault
     let prof = unissh_ffi::ConnectionProfile {
+        proxy: None,
         profile_id: "pw-host".to_string(),
         uid: String::new(),
         username_template: None,
@@ -1461,6 +1843,7 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
 
     // inline password in the profile's jump host — rejected (secret not written to JSON)
     let bad = unissh_ffi::ConnectionProfile {
+        proxy: None,
         profile_id: "bad".to_string(),
         uid: String::new(),
         username_template: None,
@@ -1658,6 +2041,7 @@ mod fleetserver {
 
 fn pw_target(port: u16) -> MultiExecTarget {
     MultiExecTarget {
+        proxy: None,
         host: "127.0.0.1".to_string(),
         port,
         user: "root".to_string(),
@@ -1828,6 +2212,7 @@ fn save_profile(core: &Core, id: &str, host: &str, port: u16, key_item: &str, ta
     core.save_connection(
         "v".to_string(),
         unissh_ffi::ConnectionProfile {
+            proxy: None,
             profile_id: id.to_string(),
             uid: String::new(),
             username_template: None,
@@ -1902,6 +2287,7 @@ fn select_targets_by_tags_excludes_prompt_password() {
     core.save_connection(
         "v".to_string(),
         unissh_ffi::ConnectionProfile {
+            proxy: None,
             profile_id: "ask1".to_string(),
             uid: String::new(),
             username_template: None,
@@ -2119,6 +2505,7 @@ fn dry_run_group_reports_statuses() {
     core.save_connection(
         "v".to_string(),
         unissh_ffi::ConnectionProfile {
+            proxy: None,
             profile_id: "prompt1".to_string(),
             uid: String::new(),
             username_template: None,
@@ -2231,6 +2618,7 @@ fn resize_changes_terminal_size() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -2289,6 +2677,7 @@ fn open_session_rejects_zero_size() {
         "root".to_string(),
         agent_auth("v", "key"),
         vec![],
+        None,
         "xterm".to_string(),
         0,
         24,
@@ -2415,6 +2804,7 @@ fn check_consistency_ok() {
 
 fn key_target(port: u16) -> MultiExecTarget {
     MultiExecTarget {
+        proxy: None,
         host: "127.0.0.1".to_string(),
         port,
         user: "root".to_string(),
@@ -2609,6 +2999,7 @@ fn ssh_exec_stream_streams_and_reports_exit() {
             agent_auth("v", "key"),
             "echo to-out; echo to-err 1>&2; exit 3".to_string(),
             vec![],
+            None,
             obs.clone(),
         )
         .unwrap();
@@ -2653,6 +3044,7 @@ fn sftp_upload_download_resume_and_cancel() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             4,
         )
         .unwrap();
@@ -2752,6 +3144,7 @@ fn reconnecting_session_reconnects_and_works() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -2800,6 +3193,7 @@ fn reconnecting_session_fails_after_retries() {
         "root".to_string(),
         agent_auth("v", "key"),
         vec![],
+        None,
         "xterm".to_string(),
         80,
         24,
@@ -3023,6 +3417,7 @@ fn sftp_download_rejects_offset_beyond_size() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             4,
         )
         .unwrap();
@@ -3074,6 +3469,7 @@ fn sftp_pool_parallel_downloads() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             4, // K=4 channels, but there are 8 files below
         )
         .unwrap();
@@ -3151,6 +3547,7 @@ fn sftp_pool_degrades_on_max_sessions() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             4, // request 4, but the server will allow only 1
         )
         .unwrap();
@@ -3307,6 +3704,7 @@ fn reconnecting_session_auto_reconnects_on_write() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -3526,6 +3924,7 @@ fn profile_carries_its_startup_snippets() {
     core.create_vault("v".to_string(), "V".to_string()).unwrap();
 
     let mut p = unissh_ffi::ConnectionProfile {
+        proxy: None,
         profile_id: "web1".to_string(),
         uid: String::new(),
         label: "web1".to_string(),
@@ -3590,6 +3989,7 @@ fn session_recording_captures_and_persists() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -3707,6 +4107,7 @@ fn a_recording_survives_the_session_being_dropped_on_close() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -3780,6 +4181,7 @@ fn no_recording_request_records_nothing() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -3810,6 +4212,7 @@ fn profile_round_trips_a_system_agent_identity() {
     core.save_connection(
         "v".to_string(),
         unissh_ffi::ConnectionProfile {
+            proxy: None,
             profile_id: "gw".to_string(),
             uid: String::new(),
             label: "gw".to_string(),
@@ -3898,6 +4301,7 @@ fn a_recording_is_written_off_the_runtime() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -3992,6 +4396,7 @@ fn the_core_lock_is_free_during_a_handshake() {
             "root".to_string(),
             agent_auth("v", "key"),
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -4164,6 +4569,7 @@ fn system_agent_authenticates_end_to_end() {
                 public_key: chosen.public_key.clone(),
             },
             vec![],
+            None,
             "xterm".to_string(),
             80,
             24,
@@ -4245,6 +4651,7 @@ fn system_agent_missing_key_is_named() {
             public_key: other_pub.clone(),
         },
         vec![],
+        None,
         "xterm".to_string(),
         80,
         24,

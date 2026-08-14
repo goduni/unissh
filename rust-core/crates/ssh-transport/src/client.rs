@@ -109,6 +109,14 @@ pub struct ConnectOptions {
     /// every process running as you there, not only root. Hence per host, one
     /// key only, and a confirmation for each signature.
     pub agent_forward: Option<Arc<crate::forward::ForwardedAgent>>,
+    /// Reach this host through an http/socks4/socks5 proxy.
+    ///
+    /// Honored only where the connection begins with a real TCP dial: a direct
+    /// connect, or the FIRST hop of a ProxyJump chain. Later hops arrive
+    /// through `direct-tcpip` channels inside the previous SSH session — there
+    /// is no TCP dial there to wrap, so the field is meaningless for them (the
+    /// FFI layer only ever sets it on the first-dialed options).
+    pub proxy: Option<crate::proxy::ProxyOptions>,
 }
 
 impl ConnectOptions {
@@ -121,7 +129,15 @@ impl ConnectOptions {
             auth,
             prompter: None,
             agent_forward: None,
+            proxy: None,
         }
+    }
+
+    /// Reaches the host through the given proxy (first TCP hop only).
+    #[must_use]
+    pub fn with_proxy(mut self, proxy: crate::proxy::ProxyOptions) -> Self {
+        self.proxy = Some(proxy);
+        self
     }
 
     /// Serves a forwarded agent to this host, under the policy in `agent`.
@@ -155,6 +171,7 @@ impl core::fmt::Debug for ConnectOptions {
             .field("auth", &self.auth)
             .field("prompter", &self.prompter.is_some())
             .field("agent_forward", &self.agent_forward.is_some())
+            .field("proxy", &self.proxy)
             .finish()
     }
 }
@@ -462,7 +479,7 @@ impl SshClient {
     ) -> Result<Self, TransportError> {
         log::info!("ssh connect {}@{}:{}", opts.user, opts.host, opts.port);
         let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
-        let mut handle = establish_tcp(opts, known_hosts, remote_forwards.clone()).await?;
+        let mut handle = establish_first(opts, known_hosts, remote_forwards.clone()).await?;
         authenticate(&mut handle, opts, agent).await?;
         Ok(SshClient {
             handle: Arc::new(handle),
@@ -494,9 +511,9 @@ impl SshClient {
         let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
         let mut handles: Vec<Handle<ClientHandler>> = Vec::new();
 
-        // The first jump — over TCP.
+        // The first jump — over TCP (possibly through a proxy).
         let mut first =
-            establish_tcp(&chain[0], known_hosts, Arc::new(Mutex::new(HashMap::new()))).await?;
+            establish_first(&chain[0], known_hosts, Arc::new(Mutex::new(HashMap::new()))).await?;
         authenticate(&mut first, &chain[0], agent).await?;
         handles.push(first);
 
@@ -975,6 +992,23 @@ fn client_config(algorithms: AlgorithmPolicy) -> Arc<Config> {
         window_size: 8 * 1024 * 1024,
         ..Config::default()
     })
+}
+
+/// Establishes the FIRST session of a connection — the one that begins with a
+/// real TCP dial. Direct: russh dials itself ([`establish_tcp`]). Through a
+/// proxy: we dial and run the proxy handshake, then hand russh the stream.
+async fn establish_first(
+    opts: &ConnectOptions,
+    known_hosts: &dyn KnownHosts,
+    remote_forwards: RemoteForwards,
+) -> Result<Handle<ClientHandler>, TransportError> {
+    match &opts.proxy {
+        Some(proxy) => {
+            let stream = crate::proxy::dial(proxy, &opts.host, opts.port).await?;
+            establish_stream(stream, opts, known_hosts, remote_forwards).await
+        }
+        None => establish_tcp(opts, known_hosts, remote_forwards).await,
+    }
 }
 
 async fn establish_tcp(

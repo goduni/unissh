@@ -32,6 +32,39 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Added
+
+- **Connect through an HTTP, SOCKS4 or SOCKS5 proxy.** A host can now carry an
+  outbound proxy alongside (or instead of) a jump host: the proxy wraps the
+  first TCP hop — the target, or the first bastion of a `ProxyJump` chain, so
+  `proxy → bastion → target` works. Authentication is supported where the
+  protocol has it (HTTP Basic, SOCKS5 RFC 1929; SOCKS4 sends the username as
+  its ident and has no password). The proxy password is stored the way every
+  other stored secret is — a reference to a vault password item, decrypted in
+  the core at connect time — so a profile never carries the secret itself.
+  Importing PuTTY sessions now brings `ProxyMethod` 1/2/3 across as well, where
+  before they were dropped in silence. The CLI gains
+  `--proxy scheme://[user[:pass]@]host:port`.
+- **The proxy is part of the anti-redirect pin.** For a shared host that a
+  member logs into with their personal identity, repointing the profile at a
+  different proxy now changes the pinned destination and is refused as a
+  redirect, exactly as inserting a jump host already was — the threat is the
+  same one: routing someone else's credential through a machine of your
+  choosing while `host:port` stays untouched. Existing pins are byte-identical
+  and keep matching; only adding a proxy changes one.
+
+Vault format: unchanged (the proxy is a new optional field inside the profile's
+existing encrypted body; profiles without one serialize byte-for-byte as
+before). Server protocol: unchanged.
+
+**Mixed-version caveat, if you sync a vault to a team.** A client older than
+this release reads a proxied profile without error and connects **directly**,
+ignoring the proxy — its forward-compatibility rule is to preserve fields it
+does not understand, not to refuse the record. Where the proxy is the mandated
+egress path rather than a convenience, upgrade everyone who uses that vault
+before setting one; this build refuses to connect past a proxy it cannot
+understand, but it cannot make an older build do the same.
+
 ## [0.3.1] — 2026-08-10
 
 ### Added

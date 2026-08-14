@@ -15,13 +15,17 @@
 //! unissh exec         --secret-key <hex> --vault default --item id_ed25519 \
 //!                     --host 10.0.0.5 --user deploy --command "uname -a" \
 //!                     --jump bastion:22:admin:id_ed25519                      # ProxyJump (repeatable)
+//!                     --proxy socks5://127.0.0.1:1080                         # http/socks4/socks5 proxy
 //! ```
 
 use std::error::Error;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use unissh_ffi::{AuthMethod, Core, JumpHost, MultiExecTarget, SessionObserver};
+use unissh_ffi::{
+    AuthMethod, Core, JumpHost, MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword,
+    SessionObserver,
+};
 
 /// Authentication method from flags: `--password` takes precedence over `--item`.
 /// `--item <id>` — a key from the vault; `--item pw:<id>` — a password item from the vault.
@@ -160,6 +164,10 @@ enum Cmd {
         /// Jump host `host:port:user:keyitem` (repeatable, in order).
         #[arg(long = "jump")]
         jumps: Vec<String>,
+        /// Outbound proxy `scheme://[user[:pass]@]host:port` (scheme:
+        /// http|socks4|socks5). Applies to the first TCP hop.
+        #[arg(long = "proxy")]
+        proxy: Option<String>,
     },
     /// Import a user certificate (OpenSSH) and bind it to a key.
     ImportCert {
@@ -310,6 +318,10 @@ enum Cmd {
         /// Jump host `host:port:user:keyitem` (repeatable).
         #[arg(long = "jump")]
         jumps: Vec<String>,
+        /// Outbound proxy `scheme://[user[:pass]@]host:port` (scheme:
+        /// http|socks4|socks5). Applies to the first TCP hop.
+        #[arg(long = "proxy")]
+        proxy: Option<String>,
     },
     /// Rename a vault.
     RenameVault {
@@ -477,6 +489,10 @@ struct SftpTarget {
     user: String,
     #[arg(long = "jump")]
     jumps: Vec<String>,
+    /// Outbound proxy `scheme://[user[:pass]@]host:port` (scheme:
+    /// http|socks4|socks5). Applies to the first TCP hop.
+    #[arg(long = "proxy")]
+    proxy: Option<String>,
 }
 
 /// Session observer: prints PTY output to stdout, signals on close.
@@ -557,11 +573,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             user,
             command,
             jumps,
+            proxy,
         } => {
             do_unlock(&core, &unlock)?;
             let auth = build_auth(&vault, item, ssh_password)?;
             let jumps = parse_jumps(&vault, &jumps)?;
-            let res = core.ssh_exec(host, port, user, auth, command, jumps)?;
+            let proxy = parse_proxy(proxy.as_deref())?;
+            let res = core.ssh_exec(host, port, user, auth, command, jumps, proxy)?;
             print!("{}", res.stdout);
             eprint!("{}", res.stderr);
             std::process::exit(res.exit_status);
@@ -600,6 +618,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     user: parts[2].to_string(),
                     auth: build_auth(&vault, item.clone(), ssh_password.clone())?,
                     jumps: vec![],
+                    proxy: None,
                 });
             }
             print_multi(core.ssh_exec_multi(targets, command, max_concurrency, timeout)?);
@@ -715,10 +734,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             port,
             user,
             jumps,
+            proxy,
         } => {
             do_unlock(&core, &unlock)?;
             let auth = build_auth(&vault, item, ssh_password)?;
             let jumps = parse_jumps(&vault, &jumps)?;
+            let proxy = parse_proxy(proxy.as_deref())?;
             let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let observer: Arc<dyn SessionObserver> =
                 Arc::new(StdoutObserver { done: done.clone() });
@@ -728,6 +749,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 user,
                 auth,
                 jumps,
+                proxy,
                 "xterm-256color".to_string(),
                 80,
                 24,
@@ -932,12 +954,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             do_unlock(&core, &target.unlock)?;
             let auth = build_auth(&target.vault, target.item, target.ssh_password)?;
             let jumps = parse_jumps(&target.vault, &target.jumps)?;
+            let proxy = parse_proxy(target.proxy.as_deref())?;
             let tunnel = core.open_local_forward(
                 target.host,
                 target.port,
                 target.user,
                 auth,
                 jumps,
+                proxy,
                 local_bind,
                 remote_host,
                 remote_port,
@@ -956,12 +980,14 @@ fn open_sftp(core: &Core, target: SftpTarget) -> Result<Arc<unissh_ffi::SftpFfi>
     do_unlock(core, &target.unlock)?;
     let auth = build_auth(&target.vault, target.item, target.ssh_password)?;
     let jumps = parse_jumps(&target.vault, &target.jumps)?;
+    let proxy = parse_proxy(target.proxy.as_deref())?;
     Ok(core.open_sftp(
         target.host,
         target.port,
         target.user,
         auth,
         jumps,
+        proxy,
         4, // parallelism: a reasonable default for CLI folder transfers
     )?)
 }
@@ -969,6 +995,55 @@ fn open_sftp(core: &Core, target: SftpTarget) -> Result<Arc<unissh_ffi::SftpFfi>
 fn do_unlock(core: &Core, args: &UnlockArgs) -> Result<(), Box<dyn Error>> {
     core.unlock(args.password.clone(), args.secret_key.clone())?;
     Ok(())
+}
+
+/// Parses `--proxy scheme://[user[:pass]@]host:port`. The password here is
+/// inline (ephemeral, CLI-only) — nothing is stored, so the "vault reference
+/// only" rule for profiles does not apply.
+fn parse_proxy(spec: Option<&str>) -> Result<Option<ProxyConfig>, Box<dyn Error>> {
+    let Some(spec) = spec else { return Ok(None) };
+    let err = || format!("bad --proxy '{spec}', expected scheme://[user[:pass]@]host:port");
+    let (scheme, rest) = spec.split_once("://").ok_or_else(err)?;
+    let kind = match scheme {
+        "http" => ProxyKind::Http,
+        "socks4" => ProxyKind::Socks4,
+        "socks5" => ProxyKind::Socks5,
+        _ => return Err(err().into()),
+    };
+    let (userinfo, hostport) = match rest.rsplit_once('@') {
+        Some((u, h)) => (Some(u), h),
+        None => (None, rest),
+    };
+    let (host, port) = hostport.rsplit_once(':').ok_or_else(err)?;
+    // `[::1]:1080` — the URL form for an IPv6 literal. The brackets are syntax,
+    // not part of the address: std's resolver rejects them and would fall back
+    // to a DNS lookup of "[::1]".
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if host.is_empty() {
+        return Err(err().into());
+    }
+    let (username, password) = match userinfo {
+        Some(u) => match u.split_once(':') {
+            Some((name, pass)) => (
+                Some(name.to_string()),
+                Some(ProxyPassword::Inline {
+                    password: pass.to_string(),
+                }),
+            ),
+            None => (Some(u.to_string()), None),
+        },
+        None => (None, None),
+    };
+    Ok(Some(ProxyConfig {
+        kind,
+        host: host.to_string(),
+        port: port.parse()?,
+        username,
+        password,
+    }))
 }
 
 fn parse_jumps(vault: &str, specs: &[String]) -> Result<Vec<JumpHost>, Box<dyn Error>> {
@@ -990,4 +1065,51 @@ fn parse_jumps(vault: &str, specs: &[String]) -> Result<Vec<JumpHost>, Box<dyn E
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_proxy_forms() {
+        assert!(parse_proxy(None).unwrap().is_none());
+
+        let p = parse_proxy(Some("socks5://proxy.corp:1080"))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(p.kind, ProxyKind::Socks5));
+        assert_eq!(p.host, "proxy.corp");
+        assert_eq!(p.port, 1080);
+        assert!(p.username.is_none() && p.password.is_none());
+
+        let p = parse_proxy(Some("http://joe:sekret@10.0.0.1:3128"))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(p.kind, ProxyKind::Http));
+        assert_eq!(p.username.as_deref(), Some("joe"));
+        assert!(matches!(p.password, Some(ProxyPassword::Inline { .. })));
+
+        // A username with no password (SOCKS4 ident, and legal elsewhere).
+        let p = parse_proxy(Some("socks4://ident@10.0.0.1:1080"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.username.as_deref(), Some("ident"));
+        assert!(p.password.is_none());
+
+        // IPv6 literals arrive bracketed (URL syntax); the brackets are not
+        // part of the address and must not reach the resolver.
+        let p = parse_proxy(Some("socks5://[::1]:1080")).unwrap().unwrap();
+        assert_eq!(p.host, "::1");
+        assert_eq!(p.port, 1080);
+
+        for bad in [
+            "socks5://proxy.corp",
+            "ftp://proxy.corp:1080",
+            "proxy.corp:1080",
+            "socks5://:1080",
+        ] {
+            assert!(parse_proxy(Some(bad)).is_err(), "should reject {bad}");
+        }
+    }
 }

@@ -6,6 +6,8 @@
 //! ## Features
 //! - Connection and authentication **with a key from the embedded agent** or a password.
 //! - **ProxyJump and chains** of jump hosts ([`SshClient::connect_through`]).
+//! - **Outbound http/socks4/socks5 proxy** for the first TCP hop
+//!   ([`ConnectOptions::with_proxy`]).
 //! - Forwards: **local** ([`SshClient::local_forward`]), **dynamic SOCKS5**
 //!   ([`SshClient::dynamic_forward`]), **remote** ([`SshClient::remote_forward`]).
 //! - **Host key TOFU + pinning**: on the first connect the key is pinned in
@@ -42,6 +44,7 @@ mod client;
 mod config;
 mod error;
 mod forward;
+mod proxy;
 mod sftp;
 
 pub use client::system_agent_keys;
@@ -54,4 +57,5 @@ pub use client::{
 pub use config::{HostSettings, SkipReason, SkippedDirective, SshConfig};
 pub use error::TransportError;
 pub use forward::{AgentApproval, ForwardedAgent};
+pub use proxy::{ProxyKind, ProxyOptions};
 pub use sftp::{DirEntry, FileStat, Sftp, SftpCancel, SftpProgress, TransferOutcome};
