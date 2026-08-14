@@ -193,6 +193,11 @@ export function PaneSlot({
         style={{
           display: "flex",
           alignItems: "center",
+          // The action icons hold their touch size, and the pane clips its
+          // overflow — so on a phone-width pane they have to wrap to a second
+          // row rather than fall off the edge. The filter box has flex-basis 0,
+          // so nothing wraps while the row still fits.
+          flexWrap: "wrap",
           gap: 8,
           padding: "7px 10px",
           borderBottom: `1px solid ${p.line}`,
