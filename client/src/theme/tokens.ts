@@ -711,7 +711,9 @@ export function termOptions(prefs: TermPrefs, theme: TermTheme, fontSize: number
     // runs (how shells highlight a bracketed paste) as text on text of the same
     // colour (#38). ANSI black already gets its own lifted tone in termToXterm,
     // which is where that concern actually belongs. Raising the floor stays an
-    // explicit accessibility choice.
+    // explicit accessibility choice — with the caveat that turning it on brings
+    // the #38 rendering back for inverse-video runs (white on the inverted
+    // background there). That half is xterm's bug to fix, not ours.
     minimumContrastRatio: prefs.minContrast ? 4.5 : 1,
     allowProposedApi: true,
     // When a TUI turns on mouse reporting, a plain drag no longer selects text. macOS
