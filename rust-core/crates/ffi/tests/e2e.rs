@@ -304,12 +304,24 @@ fn end_to_end_proxyjump() {
 /// lives in the transport crate's integration tests; here the proxy exists to
 /// prove the FFI plumbing end-to-end.
 fn fake_socks5_blocking(creds: Option<(&'static str, &'static str)>) -> u16 {
+    fake_socks5_counted(creds).0
+}
+
+/// As [`fake_socks5_blocking`], but also returns a counter of completed
+/// CONNECTs — the only way to prove a connection went THROUGH the proxy when
+/// both it and the destination sit on loopback and a direct dial would work.
+fn fake_socks5_counted(
+    creds: Option<(&'static str, &'static str)>,
+) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = hits.clone();
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(mut s) = conn else { break };
+            let counter = counter.clone();
             std::thread::spawn(move || {
                 let mut head = [0u8; 2];
                 s.read_exact(&mut head).unwrap();
@@ -356,6 +368,7 @@ fn fake_socks5_blocking(creds: Option<(&'static str, &'static str)>) -> u16 {
                 s.read_exact(&mut pb).unwrap();
                 let dport = u16::from_be_bytes(pb);
                 s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).unwrap();
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let mut up = std::net::TcpStream::connect((host.as_str(), dport)).unwrap();
                 let mut s2 = s.try_clone().unwrap();
                 let mut up2 = up.try_clone().unwrap();
@@ -369,7 +382,7 @@ fn fake_socks5_blocking(creds: Option<(&'static str, &'static str)>) -> u16 {
             });
         }
     });
-    port
+    (port, hits)
 }
 
 #[test]
@@ -445,6 +458,85 @@ fn end_to_end_proxy_with_vault_password() {
         )
         .unwrap();
     assert_eq!(res.stdout.trim(), "through-auth-proxy");
+}
+
+#[test]
+fn referenced_bastion_carries_its_own_proxy() {
+    // A bastion reachable only through a proxy is saved WITH that proxy; a
+    // target that jumps via that profile (hopRef) must inherit it for the
+    // first TCP dial — otherwise the hop is dialed direct and the configured
+    // route is bypassed.
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let pubkey = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    let bastion = TestSshd::start(&pubkey);
+    let target = TestSshd::start(&pubkey);
+    let (proxy_port, proxy_hits) = fake_socks5_counted(None);
+
+    core.save_connection(
+        "v".to_string(),
+        unissh_ffi::ConnectionProfile {
+            profile_id: "bastion".to_string(),
+            uid: String::new(),
+            username_template: None,
+            label: "Bastion".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: bastion.port,
+            user: "root".to_string(),
+            auth: unissh_ffi::ProfileAuth::Key {
+                key_item_id: "key".to_string(),
+            },
+            jumps: vec![],
+            proxy: Some(ProxyConfig {
+                kind: ProxyKind::Socks5,
+                host: "127.0.0.1".to_string(),
+                port: proxy_port,
+                username: None,
+                password: None,
+            }),
+            tags: vec![],
+            startup_snippet_ids: vec![],
+            record_sessions: false,
+            agent_forward: false,
+        },
+    )
+    .unwrap();
+    let bastion_uid = core
+        .get_connection("v".to_string(), "bastion".to_string())
+        .unwrap()
+        .uid;
+
+    let res = core
+        .ssh_exec(
+            "127.0.0.1".to_string(),
+            target.port,
+            "root".to_string(),
+            agent_auth("v", "key"),
+            "echo via-ref-proxy".to_string(),
+            vec![JumpHost {
+                host: String::new(),
+                port: 22,
+                user: String::new(),
+                auth: agent_auth("v", "key"),
+                hop_ref: Some(unissh_ffi::HopRef {
+                    vault_id: "v".to_string(),
+                    profile_uid: bastion_uid,
+                }),
+            }],
+            // The connection itself names no proxy — the bastion's own applies.
+            None,
+        )
+        .unwrap();
+    assert_eq!(res.stdout.trim(), "via-ref-proxy");
+    assert_eq!(
+        proxy_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the hop must be dialed through the referenced bastion's proxy"
+    );
 }
 
 #[test]

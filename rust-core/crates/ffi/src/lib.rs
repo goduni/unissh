@@ -5343,11 +5343,13 @@ impl Core {
                             _ => StoredProxyKind::Http,
                         },
                         host: s.proxy_host.clone(),
-                        port: if s.proxy_port == 0 {
-                            1080
-                        } else {
-                            s.proxy_port as u16
-                        },
+                        // A dword out of port range is a corrupt/hand-edited
+                        // .reg: fall back to the default rather than truncate
+                        // it into a valid-looking wrong port.
+                        port: u16::try_from(s.proxy_port)
+                            .ok()
+                            .filter(|p| *p != 0)
+                            .unwrap_or(1080),
                         username: Some(s.proxy_user.clone()).filter(|u| !u.is_empty()),
                         password_item_id: None,
                         extra: std::collections::BTreeMap::new(),
@@ -5899,12 +5901,19 @@ fn connect_with_state(
     let mut guard = lock_recover(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;
     let mut chain = Vec::with_capacity(jumps.len());
-    for j in jumps {
+    // A referenced bastion (B2.2) carries its own proxy: if hop #1 is only
+    // reachable through one, that is the proxy the first TCP dial needs. Kept
+    // aside here and used below only when the connection itself names none.
+    let mut first_hop_proxy: Option<ProxyConfig> = None;
+    for (idx, j) in jumps.iter().enumerate() {
         // Host-chain (B2.2): a ref hop is resolved from another bastion profile (host/
         // port/user/auth are taken from there); a normal hop is inline, as before.
         let (host, port, user, auth) = match &j.hop_ref {
             Some(hr) => {
                 let prof = resolve_profile_by_uid(st, &hr.vault_id, &hr.profile_uid)?;
+                if idx == 0 {
+                    first_hop_proxy = prof.proxy.clone();
+                }
                 let auth = match prof.auth {
                     ProfileAuth::Key { key_item_id } => AuthMethod::Agent {
                         vault_id: hr.vault_id.clone(),
@@ -5942,29 +5951,11 @@ fn connect_with_state(
     );
 
     // The proxy wraps the first TCP dial: hop #1 of the chain, or the target
-    // itself for a direct connection. A vault password reference is decrypted
-    // here, while the state lock is held — the plaintext goes into `Zeroizing`
-    // inside the options, never across the FFI.
-    if let Some(p) = proxy {
-        let password = match &p.password {
-            Some(ProxyPassword::Vault {
-                vault_id,
-                password_item_id,
-            }) => Some(read_password_item(st, vault_id, password_item_id)?),
-            Some(ProxyPassword::Inline { password }) => Some(Zeroizing::new(password.clone())),
-            None => None,
-        };
-        let opts = unissh_ssh_transport::ProxyOptions {
-            kind: match p.kind {
-                ProxyKind::Http => unissh_ssh_transport::ProxyKind::Http,
-                ProxyKind::Socks4 => unissh_ssh_transport::ProxyKind::Socks4,
-                ProxyKind::Socks5 => unissh_ssh_transport::ProxyKind::Socks5,
-            },
-            host: p.host.clone(),
-            port: p.port,
-            username: p.username.clone(),
-            password,
-        };
+    // itself for a direct connection. The connection's own proxy wins; a
+    // referenced bastion's proxy applies only when the connection names none
+    // (otherwise editing the target's proxy could not override the route).
+    if let Some(p) = proxy.or(first_hop_proxy.as_ref()) {
+        let opts = resolve_proxy(st, p)?;
         match chain.first_mut() {
             Some(first) => first.proxy = Some(opts),
             None => target.proxy = Some(opts),
@@ -6045,6 +6036,77 @@ fn retry_backoff_ms(attempt: u32, base_ms: u32) -> u64 {
 
 /// Translates the FFI authentication method into a transport one: the key is loaded into the agent,
 /// a vault password is decrypted into `Zeroizing` (the plaintext never leaves the core).
+/// Translates the FFI proxy config into a transport one: a vault password
+/// reference is decrypted into `Zeroizing` here, under the state lock (the
+/// plaintext never leaves the core), an inline one is moved into `Zeroizing`.
+fn resolve_proxy(
+    state: &mut CoreState,
+    p: &ProxyConfig,
+) -> Result<unissh_ssh_transport::ProxyOptions, FfiError> {
+    check_proxy(p)?;
+    let password = match &p.password {
+        Some(ProxyPassword::Vault {
+            vault_id,
+            password_item_id,
+        }) => Some(read_password_item(state, vault_id, password_item_id)?),
+        Some(ProxyPassword::Inline { password }) => Some(Zeroizing::new(password.clone())),
+        None => None,
+    };
+    Ok(unissh_ssh_transport::ProxyOptions {
+        kind: match p.kind {
+            ProxyKind::Http => unissh_ssh_transport::ProxyKind::Http,
+            ProxyKind::Socks4 => unissh_ssh_transport::ProxyKind::Socks4,
+            ProxyKind::Socks5 => unissh_ssh_transport::ProxyKind::Socks5,
+        },
+        host: p.host.clone(),
+        port: p.port,
+        username: p.username.clone(),
+        password,
+    })
+}
+
+/// Validates a proxy config at every boundary that accepts one (save, connect,
+/// import) rather than in one UI — a rule enforced by a single form is not a
+/// rule, and the layers below would each disagree about it.
+///
+/// `host` is checked because it is interpolated verbatim into an HTTP CONNECT
+/// request line: a CR/LF in it would let a synced (attacker-authored) profile
+/// smuggle extra headers or a second request past a corporate proxy. SOCKS4 is
+/// refused a password because the protocol has none — accepting one would
+/// unseal a vault secret for a handshake that cannot send it, and leave the
+/// user believing proxy auth is configured.
+fn check_proxy(p: &ProxyConfig) -> Result<(), FfiError> {
+    let host = p.host.trim();
+    if host.is_empty() {
+        return Err(FfiError::other("proxy host must not be empty"));
+    }
+    if host.len() > 255 {
+        return Err(FfiError::other("proxy host is longer than 255 bytes"));
+    }
+    if host
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || c == '\0')
+    {
+        return Err(FfiError::other(
+            "proxy host must not contain spaces or control characters",
+        ));
+    }
+    if p.port == 0 {
+        return Err(FfiError::other("proxy port must not be 0"));
+    }
+    if let Some(u) = p.username.as_deref() {
+        if u.len() > 255 || u.chars().any(|c| c.is_control() || c == '\0') {
+            return Err(FfiError::other("proxy username is invalid"));
+        }
+    }
+    if p.kind == ProxyKind::Socks4 && p.password.is_some() {
+        return Err(FfiError::other(
+            "socks4 has no password in the protocol; use socks5 or http, or clear the password",
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_auth(state: &mut CoreState, auth: &AuthMethod) -> Result<Auth, FfiError> {
     Ok(match auth {
         AuthMethod::Agent {
@@ -6579,6 +6641,7 @@ fn jump_to_stored(j: JumpHost) -> Result<StoredJump, FfiError> {
 /// dropped: a stored proxy is vault-relative, the profile's own `vault_id` is
 /// restored on read in [`stored_to_profile`].
 fn proxy_to_stored(p: ProxyConfig) -> Result<StoredProxy, FfiError> {
+    check_proxy(&p)?;
     let password_item_id =
         match p.password {
             Some(ProxyPassword::Vault {
@@ -9699,6 +9762,60 @@ mod tests {
     /// Personal profile at `socks5://attacker` must change the pin exactly like
     /// inserting a MITM jump would. No proxy yields the previous string
     /// (backward compatibility with old pins).
+    #[test]
+    /// The proxy rules hold at every boundary that accepts one, not only in
+    /// the desktop form: a CRLF in the host would smuggle headers into an HTTP
+    /// CONNECT request, and a SOCKS4 password would unseal a vault secret for
+    /// a handshake that cannot carry it.
+    #[test]
+    fn proxy_config_is_validated() {
+        let ok = ProxyConfig {
+            kind: ProxyKind::Socks5,
+            host: "proxy.corp".into(),
+            port: 1080,
+            username: None,
+            password: None,
+        };
+        assert!(check_proxy(&ok).is_ok());
+
+        let crlf = ProxyConfig {
+            host: "a.com:22 HTTP/1.1\r\nX-Evil: 1".into(),
+            ..ok.clone()
+        };
+        assert!(
+            check_proxy(&crlf).is_err(),
+            "CRLF in the host must be refused"
+        );
+        assert!(check_proxy(&ProxyConfig {
+            host: String::new(),
+            ..ok.clone()
+        })
+        .is_err());
+        assert!(check_proxy(&ProxyConfig {
+            port: 0,
+            ..ok.clone()
+        })
+        .is_err());
+
+        // SOCKS4 has no password in the protocol.
+        let socks4_pw = ProxyConfig {
+            kind: ProxyKind::Socks4,
+            password: Some(ProxyPassword::Vault {
+                vault_id: "v".into(),
+                password_item_id: "pw".into(),
+            }),
+            ..ok.clone()
+        };
+        assert!(check_proxy(&socks4_pw).is_err());
+        // …but SOCKS4 with only a username (its ident) is fine.
+        assert!(check_proxy(&ProxyConfig {
+            kind: ProxyKind::Socks4,
+            username: Some("joe".into()),
+            ..ok
+        })
+        .is_ok());
+    }
+
     #[test]
     fn proxy_is_part_of_the_destination_pin() {
         let nj: &[JumpHost] = &[];

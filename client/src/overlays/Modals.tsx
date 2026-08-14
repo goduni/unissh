@@ -873,7 +873,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
         ? {
             kind: pxKind,
             host: pxHost.trim(),
-            port: parseInt(pxPort, 10) || 1080,
+            // Clamped, not just defaulted: the field is a u16 across the FFI,
+            // so an out-of-range value would surface as a serde error naming
+            // no field at all.
+            port: Math.min(65535, Math.max(1, parseInt(pxPort, 10) || 1080)),
             username: pxUser.trim() ? pxUser.trim() : null,
             password:
               pxPwId && pxKind !== "socks4"

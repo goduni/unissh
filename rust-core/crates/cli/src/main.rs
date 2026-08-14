@@ -1015,6 +1015,13 @@ fn parse_proxy(spec: Option<&str>) -> Result<Option<ProxyConfig>, Box<dyn Error>
         None => (None, rest),
     };
     let (host, port) = hostport.rsplit_once(':').ok_or_else(err)?;
+    // `[::1]:1080` — the URL form for an IPv6 literal. The brackets are syntax,
+    // not part of the address: std's resolver rejects them and would fall back
+    // to a DNS lookup of "[::1]".
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
     if host.is_empty() {
         return Err(err().into());
     }
@@ -1058,4 +1065,51 @@ fn parse_jumps(vault: &str, specs: &[String]) -> Result<Vec<JumpHost>, Box<dyn E
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_proxy_forms() {
+        assert!(parse_proxy(None).unwrap().is_none());
+
+        let p = parse_proxy(Some("socks5://proxy.corp:1080"))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(p.kind, ProxyKind::Socks5));
+        assert_eq!(p.host, "proxy.corp");
+        assert_eq!(p.port, 1080);
+        assert!(p.username.is_none() && p.password.is_none());
+
+        let p = parse_proxy(Some("http://joe:sekret@10.0.0.1:3128"))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(p.kind, ProxyKind::Http));
+        assert_eq!(p.username.as_deref(), Some("joe"));
+        assert!(matches!(p.password, Some(ProxyPassword::Inline { .. })));
+
+        // A username with no password (SOCKS4 ident, and legal elsewhere).
+        let p = parse_proxy(Some("socks4://ident@10.0.0.1:1080"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.username.as_deref(), Some("ident"));
+        assert!(p.password.is_none());
+
+        // IPv6 literals arrive bracketed (URL syntax); the brackets are not
+        // part of the address and must not reach the resolver.
+        let p = parse_proxy(Some("socks5://[::1]:1080")).unwrap().unwrap();
+        assert_eq!(p.host, "::1");
+        assert_eq!(p.port, 1080);
+
+        for bad in [
+            "socks5://proxy.corp",
+            "ftp://proxy.corp:1080",
+            "proxy.corp:1080",
+            "socks5://:1080",
+        ] {
+            assert!(parse_proxy(Some(bad)).is_err(), "should reject {bad}");
+        }
+    }
 }

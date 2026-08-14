@@ -97,15 +97,35 @@ async fn dial_inner(
         dest_host,
         dest_port
     );
-    let mut stream = TcpStream::connect((proxy.host.as_str(), proxy.port)).await?;
+    // Every failure from here on names the proxy. Without this the io error of
+    // an unreachable proxy is indistinguishable from one on the destination
+    // host, and whoever reads it goes to debug the wrong machine's sshd —
+    // which is the entire reason `TransportError::Proxy` exists.
+    let mut stream = TcpStream::connect((proxy.host.as_str(), proxy.port))
+        .await
+        .map_err(|e| {
+            proxy_err(format!(
+                "cannot reach proxy {}:{}: {e}",
+                proxy.host, proxy.port
+            ))
+        })?;
     // russh sets nodelay itself when it owns the dial; for a handed-in stream
     // (connect_stream) nobody else will.
     stream.set_nodelay(true)?;
-    match proxy.kind {
-        ProxyKind::Http => http_handshake(&mut stream, proxy, dest_host, dest_port).await?,
-        ProxyKind::Socks4 => socks4_handshake(&mut stream, proxy, dest_host, dest_port).await?,
-        ProxyKind::Socks5 => socks5_handshake(&mut stream, proxy, dest_host, dest_port).await?,
-    }
+    let handshake = match proxy.kind {
+        ProxyKind::Http => http_handshake(&mut stream, proxy, dest_host, dest_port).await,
+        ProxyKind::Socks4 => socks4_handshake(&mut stream, proxy, dest_host, dest_port).await,
+        ProxyKind::Socks5 => socks5_handshake(&mut stream, proxy, dest_host, dest_port).await,
+    };
+    // A bare `?` inside a handshake yields an io error that reads like the
+    // destination's; relabel it here so every proxy-phase failure says so.
+    handshake.map_err(|e| match e {
+        TransportError::Io(io) => proxy_err(format!(
+            "proxy {}:{} broke off the handshake: {io}",
+            proxy.host, proxy.port
+        )),
+        other => other,
+    })?;
     Ok(stream)
 }
 
@@ -360,6 +380,21 @@ where
         .read_exact(&mut head)
         .await
         .map_err(|_| proxy_err("socks5 proxy: connection closed during connect"))?;
+    if head[0] != 5 {
+        return Err(proxy_err("socks5 proxy: bad reply version"));
+    }
+    // REP first, BND after. A refusal is the reply we most need to report
+    // faithfully, and some proxies answer one with a truncated or ATYP=0 body
+    // — parsing that body first turns "connection refused" into a bogus
+    // address-type complaint, or into an io error when the peer hangs up.
+    // Nothing is read past a refusal because the stream is dropped anyway.
+    if head[1] != 0x00 {
+        return Err(proxy_err(format!(
+            "socks5 proxy refused the connection: {}",
+            socks5_reply_text(head[1])
+        )));
+    }
+    // Success: consume the bound address so the SSH banner starts the stream.
     let addr_len = match head[3] {
         0x01 => 4,
         0x04 => 16,
@@ -372,13 +407,7 @@ where
     };
     let mut rest = vec![0u8; addr_len + 2];
     stream.read_exact(&mut rest).await?;
-    match head[1] {
-        0x00 => Ok(()),
-        code => Err(proxy_err(format!(
-            "socks5 proxy refused the connection: {}",
-            socks5_reply_text(code)
-        ))),
-    }
+    Ok(())
 }
 
 /// Builds the RFC 1929 username/password auth request. Both fields ride a

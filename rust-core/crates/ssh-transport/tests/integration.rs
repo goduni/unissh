@@ -1128,6 +1128,83 @@ async fn socks5_refusal_is_a_proxy_error() {
 }
 
 #[tokio::test]
+async fn socks5_minimal_refusal_is_reported_as_a_refusal() {
+    // Some proxies answer a refusal with a truncated body (ATYP=0, no bound
+    // address). Reading the address before the reply code turned that into a
+    // bogus "bad address type" or an io error — the refusal must survive.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut head = [0u8; 2];
+                s.read_exact(&mut head).await.unwrap();
+                let mut methods = vec![0u8; head[1] as usize];
+                s.read_exact(&mut methods).await.unwrap();
+                s.write_all(&[5, 0]).await.unwrap();
+                let mut req = [0u8; 4];
+                s.read_exact(&mut req).await.unwrap();
+                let mut rest = vec![0u8; if req[3] == 3 { 0 } else { 6 }];
+                if req[3] == 3 {
+                    let mut len = [0u8; 1];
+                    s.read_exact(&mut len).await.unwrap();
+                    rest = vec![0u8; len[0] as usize + 2];
+                }
+                let _ = s.read_exact(&mut rest).await;
+                // Refusal with no bound address at all, then hang up.
+                s.write_all(&[5, 0x05, 0x00, 0x00]).await.unwrap();
+            });
+        }
+    });
+
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[16u8; 32]).unwrap();
+    let err = match SshClient::connect(
+        &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, proxy_port)),
+        &agent,
+        &storage,
+    )
+    .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("a refused connection unexpectedly succeeded"),
+    };
+    let text = err.to_string();
+    assert!(
+        text.contains("refused") && text.contains("connection refused"),
+        "a truncated refusal must still name the reply code: {text}"
+    );
+}
+
+#[tokio::test]
+async fn unreachable_proxy_names_the_proxy() {
+    // A dead proxy used to surface as a bare io error indistinguishable from
+    // one on the destination host, sending the reader to the wrong machine.
+    let dead = free_port();
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[17u8; 32]).unwrap();
+    let err = match SshClient::connect(
+        &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, dead)),
+        &agent,
+        &storage,
+    )
+    .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("connect through a dead proxy unexpectedly succeeded"),
+    };
+    let text = err.to_string();
+    assert!(
+        text.contains("proxy") && text.contains(&dead.to_string()),
+        "the error must name the proxy and its port: {text}"
+    );
+}
+
+#[tokio::test]
 async fn proxy_then_jump_chain() {
     // proxy → bastion → target: the proxy wraps only the first TCP hop.
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
