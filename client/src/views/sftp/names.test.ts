@@ -30,7 +30,7 @@ describe("validateEntryName", () => {
   });
 
   it("reports duplicates before separators so the message is the specific one", () => {
-    expect(validateEntryName("dup", ["dup"]).error).toBe("dup");
+    expect(validateEntryName("a/b", ["a/b"]).error).toBe("dup");
   });
 
   describe("rename mode", () => {

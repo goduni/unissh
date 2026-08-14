@@ -324,6 +324,9 @@ export function ViewSftp() {
       // writing truncates, so an entry that appeared meanwhile — or one hidden
       // from the listing — would lose its contents without this.
       if (await slot.source.stat(path)) {
+        // The listing is stale by definition here — show the entry we refused to
+        // clobber, or the message reads as the pane contradicting itself.
+        slot.refresh();
         toast(t("sftp.toast.nameTaken", { name }), "err");
         return;
       }
