@@ -1,0 +1,61 @@
+# =============================================================================
+# UniSSH — compose OVERRIDE: publish through a Traefik you already run.
+#
+# Same idea as compose.behind-proxy.yml (the bundled Caddy stays, as a plain
+# HTTP front serving the SPA and proxying the API), except nothing is published
+# on the host at all: Traefik reaches Caddy over a shared Docker network and
+# terminates TLS with whatever resolver/certificate you already have.
+#
+#   client ──TLS──► traefik ──HTTP──► caddy:80 ──► server:8443
+#
+#   # .env: TRAEFIK_NETWORK=<the network your traefik container is on>
+#   #       UNISSH_HOST=unissh.example.com
+#   #       UNISSH_CERTRESOLVER=<your traefik certresolver name>
+#   docker compose -f compose.prod.yml -f deploy/compose.traefik.yml up -d
+#
+# The four labels below are the whole integration and were verified end to end
+# (SPA, deep links, API, and the stack's security headers all survive the hop).
+# Adjust the router/service name (`unissh`) if it collides with something.
+#
+# Traefik's `websecure` entrypoint and the certresolver are YOUR Traefik's
+# config, not this file's — if your entrypoint is named differently, change it
+# here. If Traefik already terminates TLS through Cloudflare or another
+# certresolver, drop the tls.certresolver label.
+#
+# Caveat, same as any two-hop layout: the server sees Caddy's peer (Traefik) as
+# the client address, so the per-IP rate limit applies instance-wide rather than
+# per client. Raise limits.rate_limit_per_ip_rps, or run the one-hop layout
+# (deploy/compose.reverse-proxy.yml + deploy/nginx/unissh-static-spa.conf).
+# =============================================================================
+
+name: unissh
+
+services:
+  caddy:
+    environment:
+      # Plain HTTP on :80, no ACME, no internal CA — TLS is Traefik's job.
+      UNISSH_DOMAIN: ":80"
+      UNISSH_TLS_DIRECTIVE: ""
+    # `!override` REPLACES the base file's 80/443 mappings (a plain list would
+    # append). Nothing is host-published: Traefik reaches Caddy over the network.
+    ports: !override []
+    networks:
+      - unissh
+      - traefik
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "${TRAEFIK_NETWORK:?set TRAEFIK_NETWORK in .env}"
+      traefik.http.routers.unissh.rule: "Host(`${UNISSH_HOST:?set UNISSH_HOST in .env}`)"
+      traefik.http.routers.unissh.entrypoints: "websecure"
+      traefik.http.routers.unissh.tls: "true"
+      # DELETE this line if your Traefik gets its certificates some other way
+      # (a static cert store, a Cloudflare origin cert…) — an empty resolver
+      # name is not the same as no resolver.
+      traefik.http.routers.unissh.tls.certresolver: "${UNISSH_CERTRESOLVER:?set UNISSH_CERTRESOLVER in .env, or delete this label}"
+      # The port INSIDE the caddy container, not a host port.
+      traefik.http.services.unissh.loadbalancer.server.port: "80"
+
+networks:
+  traefik:
+    name: "${TRAEFIK_NETWORK:?set TRAEFIK_NETWORK in .env}"
+    external: true

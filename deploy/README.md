@@ -91,10 +91,19 @@ The `caddy-data` volume persists issued certs / the internal CA root — keep it
 ## Other front doors
 
 - `compose.tls-files.yml` — Caddy, but with certificate files you supply.
-- `compose.reverse-proxy.yml` — no bundled Caddy; publishes the API on
-  `127.0.0.1:8443` for your own nginx/HAProxy/Traefik.
-- `nginx/unissh.conf` — a complete nginx server block (TLS + SPA + API proxy)
-  equivalent to the Caddyfile.
+- `compose.behind-proxy.yml` — Caddy stays as a PLAIN-HTTP front on
+  `127.0.0.1:8080` (SPA + API), for a proxy you already run to terminate TLS in
+  front of. Recommended: the panel keeps travelling with the image, so upgrades
+  need no file syncing.
+- `compose.traefik.yml` — the same, published through an existing Traefik by
+  labels over a shared Docker network; nothing host-published.
+- `compose.reverse-proxy.yml` — no bundled Caddy at all; publishes the API on
+  `127.0.0.1:8443` for a proxy that will also serve the SPA itself.
+- `nginx/unissh.conf` — TLS + one proxy_pass to the stack (pairs with
+  compose.behind-proxy.yml).
+- `nginx/unissh-static-spa.conf` — nginx doing the Caddyfile's whole job: TLS,
+  the SPA from disk, the API proxied straight to the server (pairs with
+  compose.reverse-proxy.yml). One hop, so the server sees real client IPs.
 
 Full write-up, including client-side CA trust and a no-proxy variant:
 <https://unissh.dev/operations/deploy-scenarios/>.
