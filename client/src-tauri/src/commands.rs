@@ -1538,6 +1538,7 @@ pub async fn tunnel_close(id: String, state: State<'_, AppState>) -> ApiResult<(
 
 // ---------- SFTP ----------
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn sftp_open(
     host: String,
