@@ -85,8 +85,9 @@ TLS is controlled by a single env knob, `UNISSH_TLS_DIRECTIVE`:
   `/data/caddy/pki/authorities/local/root.crt` and install it in the OS trust
   store). The client verifies against the OS store, has no "accept anyway"
   prompt, and refuses plain `http://` to a non-loopback host. The
-  `"certutil" is not available` line in Caddy's log is about trusting the root
-  *inside the container* and is unrelated.
+  `"certutil" is not available` line older images logged was about trusting the
+  root *inside the container* — unrelated to clients, and suppressed now via
+  `skip_install_trust` in the Caddyfile.
 
 The `caddy-data` volume persists issued certs / the internal CA root — keep it.
 

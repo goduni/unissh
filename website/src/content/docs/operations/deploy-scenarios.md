@@ -243,8 +243,8 @@ The Linux paths are verified against a clean Debian and Fedora; the macOS and Wi
 curl -v https://unissh.local/readyz     # must succeed with NO -k
 ```
 
-:::note[`certutil is not available` in the Caddy log is a red herring]
-That is Caddy trying to install its root into the trust store **inside its own container**, where nothing consumes it. Installing `certutil` there fixes nothing and has no bearing on whether clients trust the certificate.
+:::note[If you see `certutil is not available` in the Caddy log]
+It is harmless and unrelated to client trust: Caddy was trying to install its root into the trust store **inside its own container**, where nothing consumes it. Installing `certutil` there fixes nothing. Newer images no longer attempt it (`skip_install_trust` in the shipped Caddyfile), so the line only appears on images built before that.
 :::
 
 :::caution[Mobile clients cannot use a private CA]
@@ -340,7 +340,7 @@ Create the user first (`sudo useradd -r -s /usr/sbin/nologin unissh`) and make t
 | `certificate is not valid for this hostname` | The certificate's names don't include the address you typed. Certificates for a bare IP are rare; issue for a hostname. |
 | A renewed certificate still shows as the old one | File-based certificates load once. `caddy reload --force` or restart ([2](#2--your-own-certificate)). |
 | Server exits with `Permission denied (os error 13)` on the key | The key is not readable by uid 65532 ([5](#5--no-proxy-at-all)). `chown 65532:65532`. |
-| Caddy logs `"certutil" is not available` | Harmless, and unrelated to client trust ([4](#4--private-ca-lan--air-gapped)). |
+| Caddy logs `"certutil" is not available` | Harmless, unrelated to client trust, and gone in current images ([4](#4--private-ca-lan--air-gapped)). |
 | Caddy cannot get an ACME certificate | Port 80 must be reachable and public DNS must resolve here. On a private network use scenario 2 or 4. |
 | The panel loads but never unlocks | The `.wasm` file is served with the wrong content type. `curl -I …/assets/*.wasm` must show `application/wasm` ([3b](#3b--your-proxy-replaces-caddy)). |
 | The panel is a version behind the server | A docroot copy that wasn't refreshed after an upgrade ([3b](#3b--your-proxy-replaces-caddy)). |
