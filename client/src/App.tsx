@@ -4,9 +4,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   purgeExternalEditScratch,
   resumeExternalEdits,
+  setSourceResolver,
   stopAllExternalEdits,
   useExternalEdits,
 } from "@/sftp/external-edit";
+import { sourceFor } from "@/bridge/sources";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePalette } from "@/theme/ThemeProvider";
 import { useApp } from "@/store/app";
@@ -411,6 +413,25 @@ export function App() {
   useEffect(() => {
     if (unlocked) resumeExternalEdits();
   }, [unlocked]);
+
+  // Registered HERE rather than in the SFTP view: an overlay (the recovery kit,
+  // say) unmounts that view while the sessions behind it are perfectly alive,
+  // and a resolver that disappeared with it would strand every live edit in
+  // "session closed" a minute later.
+  const sftpSessions = useApp((s) => s.sftpSessions);
+  useEffect(() => {
+    setSourceResolver((sessionId, profileId) => {
+      const session =
+        sftpSessions.find((s) => s.id === sessionId) ??
+        sftpSessions.find((s) => s.profileId === profileId && profileId);
+      if (!session) return null;
+      try {
+        return { source: sourceFor({ kind: "remote", sessionId: session.id }, sftpSessions), sessionId: session.id };
+      } catch {
+        return null;
+      }
+    });
+  }, [sftpSessions]);
 
   // Anything left in the external-edit scratch directory is from a previous run
   // — a crash, a kill -9, a close that timed out — and holds decrypted remote

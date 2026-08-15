@@ -130,10 +130,13 @@ const runRoot = async (): Promise<string> => join(await scratchRoot(), runId);
  *  Kept close to the beat interval because this purge is what collects copies
  *  left by an exit we could not run cleanup on (macOS Cmd+Q, an updater
  *  relaunch) — a wide window means those sit in $TEMP across launches. */
-// Generous on purpose. Timers stop across system sleep and are throttled in a
-// backgrounded webview, so a short window would let a second instance mistake a
-// sleeping one for a dead one and delete the copies its editor still has open.
-// Losing work is worse than a leftover living until a later start.
+/** How long without a heartbeat before a run counts as gone.
+ *
+ *  Generous on purpose, and deliberately far above the beat interval: timers
+ *  stop across system sleep and are throttled in a backgrounded webview, so a
+ *  tight window would let a second instance mistake a sleeping one for a dead
+ *  one and delete copies its editor still has open. A leftover living until a
+ *  later start is the cheaper mistake. */
 const ALIVE_STALE_MS = 10 * 60 * 1000;
 const HEARTBEAT_MS = 20 * 1000;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -287,6 +290,10 @@ export async function startExternalEdit(
     // row is a leftover, and re-matching it would fail on the same missing path
     // forever. Drop it and start again.
     if (await localStamp(existing.localPath)) {
+      // Re-opening a parked edit is the natural "start it again" gesture, so
+      // treat it as one. Without this the row stays errored, the tick keeps
+      // skipping it, and every later save goes nowhere in silence.
+      if (existing.state === "error") retryExternalEdit(existing.id);
       await openPath(existing.localPath);
       return existing.id;
     }
@@ -310,6 +317,11 @@ export async function startExternalEdit(
     const localDir = dir;
     const localPath = await join(localDir, name);
 
+    // Minted before the row exists: the row is stoppable the moment it appears,
+    // and a stop that found no token yet would delete the directory while the
+    // core kept streaming into it — then blame the user with an error toast.
+    const cancelId = await api.cancelNew();
+
     // Listed BEFORE the copy starts: a large file takes minutes, and a menu item
     // that shows nothing for minutes reads as broken. The tick ignores
     // `downloading`, so nothing acts on the row until there is a file.
@@ -324,17 +336,13 @@ export async function startExternalEdit(
         localPath,
         name,
         state: "downloading",
+        cancelId,
         base: remote ?? undefined,
         local: { size: 0, mtime: 0 },
         saves: 0,
       },
     ]);
 
-    // Cancellable: stopping a `downloading` row has to stop the transfer too,
-    // or the core keeps streaming into a file we have already deleted — holding
-    // a channel and the bandwidth for a download nobody wants.
-    const cancelId = await api.cancelNew();
-    patch(id, { cancelId });
     try {
       await api.sftpDownload(sessionId, remotePath, localPath, 0, null, () => {}, cancelId);
     } finally {
@@ -408,16 +416,27 @@ export async function stopAllExternalEdits(): Promise<void> {
  *
  *  Deliberately NOT the whole root: another UniSSH may be running with files
  *  open in an editor right now, and deleting those would destroy work that only
- *  exists there. A run that has not touched its heartbeat in five minutes is
- *  gone, and its copies are the leftovers this is for. */
+ *  exists there. A run silent for `ALIVE_STALE_MS` is gone, and its copies are
+ *  the leftovers this is for. */
 export async function purgeExternalEditScratch(): Promise<void> {
+  const root = await scratchRoot();
+  try {
+    // BEFORE touching anything. This function recursively deletes directories
+    // it finds by walking the root, and it runs at every launch — so if the
+    // root is a symlink somebody planted in a shared /tmp, walking it would
+    // aim that delete at whatever they pointed it to. `scratchDir` checks the
+    // same thing, but it only runs once an edit is opened, which is far too
+    // late to be the only check.
+    await assertSafeRoot(root);
+  } catch {
+    return;
+  }
   try {
     await remove(await runRoot(), { recursive: true });
   } catch {
     /* nothing of ours to remove */
   }
   try {
-    const root = await scratchRoot();
     for (const entry of await readDir(root)) {
       if (!entry.isDirectory || entry.name === runId) continue;
       const dir = await join(root, entry.name);
@@ -472,7 +491,10 @@ export async function resolveConflict(id: string, choice: ConflictChoice, sessio
     // open, and most editors save by path — renaming it under them would leave
     // them re-creating the old name, which we would no longer be watching, and
     // every later save would vanish. The strip labels the two separately.
-    patch(id, { remotePath: await source.join(dir, copyName), name: copyName });
+    // `base` described the ORIGINAL path; against the copy it means nothing, and
+    // keeping it would raise a conflict against our own upload if this one fails
+    // partway and gets retried.
+    patch(id, { remotePath: await source.join(dir, copyName), name: copyName, base: undefined });
   }
   await push(id, source, true);
 }

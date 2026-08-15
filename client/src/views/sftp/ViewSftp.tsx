@@ -24,7 +24,7 @@ import { PaneSlot } from "./PaneSlot";
 import type { TabInfo } from "./TabStrip";
 import { TransferQueue } from "./TransferQueue";
 import { ExternalEdits } from "./ExternalEdits";
-import { setSourceResolver, startExternalEdit, type ResolvedSession } from "@/sftp/external-edit";
+import { startExternalEdit } from "@/sftp/external-edit";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConflictDialog, ChmodDialog } from "./dialogs";
 import { TextEditor } from "./TextEditor";
@@ -508,9 +508,10 @@ export function ViewSftp() {
   const dialogExisting = (slot: SlotCtl) => slot.entries.map((e) => e.name);
 
   // A live external edit outlives the pane that started it, so the watcher can't
-  // hold a source: it asks for one each time it needs to push, and gets null once
-  // the session is gone.
-  const remoteSourceFor = (sessionId: string, profileId: string): ResolvedSession | null => {
+  // hold a source: it asks for one each time it needs to push. This copy feeds
+  // the strip below; the watcher's own resolver is registered in App, which no
+  // overlay can unmount.
+  const remoteSourceFor = (sessionId: string, profileId: string) => {
     // Prefer the original session; fall back to any live one for the same host,
     // because a reconnect mints a new id and the edit would otherwise be
     // stranded with a file it can no longer send anywhere.
@@ -523,17 +524,6 @@ export function ViewSftp() {
       return null;
     }
   };
-  useEffect(() => {
-    setSourceResolver(remoteSourceFor);
-    // Drop it on unmount (locking the vault unmounts this view): a retained
-    // closure would keep handing out sources for sessions the core has already
-    // destroyed, turning the designed "reconnect the host, then Retry" path into
-    // a raw bridge error.
-    return () => setSourceResolver(() => null);
-    // remoteSourceFor closes over `sessions` — re-register whenever they change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions]);
-
   return (
     <div
       className="uh-view"

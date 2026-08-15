@@ -257,10 +257,12 @@ export async function installUpdate(): Promise<InstallResult> {
   pending = null;
   try {
     const { relaunch } = await import("@tauri-apps/plugin-process");
-    // The process is replaced here, so nothing after it runs — including the
-    // window close handler that deletes the decrypted external-edit copies.
-    const { stopAllExternalEdits } = await import("@/sftp/external-edit");
-    await stopAllExternalEdits();
+    // The process is replaced here, so the close handler that removes the
+    // decrypted external-edit copies never runs. Deliberately NOT deleting them
+    // anyway: the quit path asks first, precisely because a copy can hold the
+    // only version of someone's work, and there is nowhere to ask from here.
+    // The copies stop being watched with the process and are collected by a
+    // later start, which is what the note under the list promises.
     await relaunch();
   } catch (e) {
     // The new version is already on disk; only the restart failed. Telling the
