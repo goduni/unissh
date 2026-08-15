@@ -308,6 +308,10 @@ interface AppStore {
   /** How many files to transfer in parallel over one SFTP connection (channel
    *  pool size). 1 = strictly sequential. Persisted; passed to sftpOpen. */
   sftpParallelism: number;
+  /** Double-clicking a remote file opens it in the OS editor instead of the
+   *  in-app one (persisted; desktop-only, the mobile shell has nothing to open
+   *  a copy with). The context-menu entries offer both either way. */
+  sftpExternalEditDefault: boolean;
   /** profileId → epoch ms of the last connect (persisted; drives recent sort). */
   lastConnected: Record<string, number>;
 
@@ -416,6 +420,7 @@ interface AppStore {
   customChrome: boolean;
   setCustomChrome: (on: boolean) => void;
   setSftpParallelism: (n: number) => void;
+  setSftpExternalEditDefault: (v: boolean) => void;
 
   // group / tag membership (bulk — driven by the host multi-select bar)
   addHostsToGroup: (groupId: string, profileIds: string[]) => Promise<void>;
@@ -635,6 +640,14 @@ const SFTP_PARALLELISM_DEFAULT = 4;
 
 /** How many files to transfer concurrently over one SFTP connection. Persisted
  *  locally (device-local UX/perf knob, not vault data); clamped to [MIN, MAX]. */
+const lsExternalEditDefault = (): boolean => {
+  try {
+    return localStorage.getItem("unissh.sftpExternalEditDefault") === "1";
+  } catch {
+    return false;
+  }
+};
+
 const lsSftpParallelism = (): number => {
   try {
     const n = parseInt(
@@ -727,6 +740,7 @@ export const useApp = create<AppStore>((set, get) => ({
   // makes a stale localStorage value from another machine harmless too.
   customChrome: osPlatform() === "linux" ? (lsCustomChrome() ?? true) : true,
   sftpParallelism: lsSftpParallelism(),
+  sftpExternalEditDefault: lsExternalEditDefault(),
   lastConnected: lsLastConnected(),
   tunnels: [],
   broadcasts: [],
@@ -1227,6 +1241,14 @@ export const useApp = create<AppStore>((set, get) => ({
     // Push to the core; surface a failure (don't silently leave UI and core out of
     // sync) — the value still persists so the next boot retries the push.
     void api.setKeepaliveSecs(v).catch((e) => logWarn(`setKeepaliveSecs: ${apiErrorMessage(e)}`));
+  },
+  setSftpExternalEditDefault: (v) => {
+    set({ sftpExternalEditDefault: v });
+    try {
+      localStorage.setItem("unissh.sftpExternalEditDefault", v ? "1" : "0");
+    } catch {
+      /* ignore (private mode / quota) */
+    }
   },
   setSftpParallelism: (n) => {
     const v = Number.isFinite(n)

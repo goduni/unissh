@@ -1046,6 +1046,8 @@ export const en = {
     "keepaliveDesc": "Ping idle connections so they aren't dropped by NAT/firewall timeouts. Applies to new connections.",
     "keepaliveOff": "Off",
     "keepaliveSec": "{{n}}s",
+    "sftpExternalEditTitle": "Open files in an external editor",
+    "sftpExternalEditDesc": "Makes Open in the SFTP menu hand the file to your system editor instead of the built-in one. A remote file is copied locally, and every save you make is sent back until you stop editing. Both entries stay in the menu either way.",
     "sftpParallelismTitle": "Parallel transfers",
     "sftpParallelismDesc": "How many files to transfer at once over one SFTP connection. Higher is much faster for many small files; lower is gentler on the server. Applies to SFTP tabs opened after the change.",
     "sftpParallelismOff": "1",
@@ -1199,6 +1201,8 @@ export const en = {
       "delete": "Delete",
       "newFolder": "New folder",
       "newFile": "New file",
+      "openExternal": "Open in external editor",
+      "openInApp": "Open in UniSSH",
       "copyPath": "Copy path",
       "properties": "Properties",
       "permissions": "Permissions…",
@@ -1264,6 +1268,21 @@ export const en = {
         "error": "failed",
         "cancelled": "cancelled"
       }
+    },
+    "extEdit": {
+      "section": "Editing externally",
+      "watching": "watching",
+      "uploading": "sending…",
+      "savedCount": "sent {{count}}×",
+      "changedOnServer": "changed on the server",
+      "failed": "failed",
+      "resolve": "Resolve",
+      "stop": "Stop editing",
+      "sessionClosed": "That SFTP session is closed",
+      "conflictTitle": "Changed on the server",
+      "conflictBody": "Someone else wrote to this file after you opened it. Overwriting discards their version; Keep both saves yours beside it and follows the copy from now on.",
+      "keepServer": "Keep theirs",
+      "plaintextNote": "Copies are stored unencrypted and deleted when you stop editing or quit."
     },
     "toast": {
       "noVault": "No vault selected",

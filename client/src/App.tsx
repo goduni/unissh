@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { platform } from "@tauri-apps/plugin-os";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { purgeExternalEditScratch, stopAllExternalEdits } from "@/sftp/external-edit";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePalette } from "@/theme/ThemeProvider";
 import { useApp } from "@/store/app";
@@ -344,6 +345,19 @@ export function App() {
             ok = true;
           }
           if (ok) {
+            // Remove the external-edit copies before the window goes: they are
+            // remote file contents in the clear. Bounded and caught, like
+            // everything else on this path — a cleanup that hangs must not be
+            // what makes the window unquittable. Whatever survives is removed at
+            // the next launch (see the purge effect below).
+            try {
+              await Promise.race([
+                stopAllExternalEdits(),
+                new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+              ]);
+            } catch {
+              /* ignore — the startup purge is the backstop */
+            }
             confirmedClose.current = true;
             void win.close();
           }
@@ -359,6 +373,13 @@ export function App() {
       unlisten?.();
     };
   }, [t]);
+
+  // Anything left in the external-edit scratch directory is from a previous run
+  // — a crash, a kill -9, a close that timed out — and holds decrypted remote
+  // file contents. Nothing can be watching it yet, so it all goes.
+  useEffect(() => {
+    void purgeExternalEditScratch();
+  }, []);
 
   // global keyboard shortcuts (desktop)
   useEffect(() => {
