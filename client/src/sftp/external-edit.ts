@@ -26,19 +26,25 @@ import { dedupeName, remoteParent } from "@/sftp/paths";
 const POLL_MS = 500;
 /** Consecutive identical readings before a change counts as "the editor is done". */
 const SETTLE_TICKS = 2;
-/** Consecutive readings where the copy is missing before we give up on it. Not
- *  every editor renames over the target — some unlink and recreate, which leaves
- *  a real window where the path does not exist. */
-const MAX_MISSES = 6;
+// Every budget below is WALL-CLOCK, not a tick count. A hidden webview's timers
+// are throttled to roughly one a minute, and this window is hidden for most of
+// an external edit by definition — the user is in another application. Counting
+// ticks would stretch "three seconds" into six minutes without a word of it
+// showing up anywhere.
+
+/** How long the copy may stay missing before we give up on it. Not every editor
+ *  renames over the target — some unlink and recreate, which leaves a real
+ *  window where the path does not exist. */
+const MISSING_GRACE_MS = 3_000;
 /** How long to wait for a host to come back before parking the edit. Unlocking
- *  the vault drops every SFTP session, so without this grace the first tick
- *  after an unlock would error out every edit before the user could reconnect
- *  — and an errored edit no longer re-binds itself. */
-const MAX_SESSION_MISSES = 120; // ≈60s at 500ms
+ *  the vault drops every SFTP session, so without this grace an edit would be
+ *  errored out before the user could reconnect — and an errored edit no longer
+ *  re-binds itself. */
+const SESSION_GRACE_MS = 60_000;
 /** How long a copy must stay empty before we believe emptying it was the point.
  *  Long enough to outlast an in-place truncate that stalls, short enough that
  *  deleting a file's contents still reaches the server while you watch. */
-const ZERO_SETTLE_TICKS = 20; // ≈10s at 500ms
+const ZERO_HOLD_MS = 10_000;
 
 export type EditState = "downloading" | "watching" | "uploading" | "conflict" | "error";
 
@@ -72,12 +78,12 @@ export interface LiveEdit {
   local: Stamp;
   /** Candidate local stamp, waiting to repeat before we trust it. */
   settling?: Stamp & { ticks: number };
-  /** Consecutive ticks that could not see the copy at all. */
-  misses?: number;
-  /** Consecutive ticks with no live session for this host. */
-  sessionMisses?: number;
-  /** Consecutive ticks where the copy has been empty and the remote is not. */
-  zeroTicks?: number;
+  /** When the copy first went missing (epoch ms). */
+  missingSince?: number;
+  /** When this host first had no live session (epoch ms). */
+  sessionLostSince?: number;
+  /** When the copy first read as empty while the remote is not (epoch ms). */
+  zeroSince?: number;
   /** A remote path this edit has already claimed with an exclusive create, so a
    *  retry after a failed copy-upload reuses it rather than reserving another. */
   reservedPath?: string;
@@ -122,6 +128,10 @@ const find = (id: string): LiveEdit | undefined => useExternalEdits.getState().e
 let editSeq = 0;
 /** `sessionId\0remotePath` of every edit whose download is still in flight. */
 const starting = new Set<string>();
+/** Scratch directories whose edit was stopped while an upload was reading from
+ *  them. Removed once the upload returns — deleting a file the core is
+ *  streaming would leave the remote half-rewritten and the local one gone. */
+const removeAfterUpload = new Set<string>();
 
 /** The scratch root. NOT under $APPLOCALDATA: the fs plugin's default permission
  *  set pulls in `deny-webview-data-linux`, whose `$APPLOCALDATA/**` deny has no
@@ -216,6 +226,11 @@ async function scratchDir(id: string): Promise<string> {
   const root = await scratchRoot();
   await assertSafeRoot(root);
   await mkdir(root, { recursive: true, mode: 0o700 });
+  // Again, after creating it: the check and the mkdir are two syscalls, and on
+  // a shared /tmp the root can be swapped for a symlink in between — which
+  // `create_dir_all` would follow, putting every decrypted copy in somebody
+  // else's tree.
+  await assertSafeRoot(root);
   const mine = await runRoot();
   await mkdir(mine, { recursive: true, mode: 0o700 });
   // Awaited: an instance launching right now purges directories with no
@@ -260,12 +275,12 @@ async function confirmedAbsent(source: FileSource, path: string): Promise<boolea
 
 /** What to do about a copy that currently reads as empty. */
 export type ZeroHold =
-  /** Not the empty case, and the counter needs clearing. */
+  /** Not the empty case, and the mark needs clearing. */
   | { action: "reset" }
   /** Not the empty case, nothing to clear. */
   | { action: "none" }
-  /** Empty and not yet trusted — wait. */
-  | { action: "hold"; zeroTicks: number };
+  /** Empty and not yet trusted — wait, having first started the clock. */
+  | { action: "hold"; since: number };
 
 /**
  * An editor that truncates in place and then stalls reads as a settled 0-byte
@@ -278,10 +293,15 @@ export type ZeroHold =
  * here would wipe the settling progress on the following tick and the push
  * would never be reached.
  */
-export function zeroHold(nowSize: number, uploadedSize: number, zeroTicks: number | undefined): ZeroHold {
-  if (nowSize !== 0 || uploadedSize === 0) return zeroTicks ? { action: "reset" } : { action: "none" };
-  const next = (zeroTicks ?? 0) + 1;
-  return next < ZERO_SETTLE_TICKS ? { action: "hold", zeroTicks: next } : { action: "none" };
+export function zeroHold(
+  nowSize: number,
+  uploadedSize: number,
+  since: number | undefined,
+  now: number,
+): ZeroHold {
+  if (nowSize !== 0 || uploadedSize === 0) return since ? { action: "reset" } : { action: "none" };
+  if (since === undefined) return { action: "hold", since: now };
+  return now - since < ZERO_HOLD_MS ? { action: "hold", since } : { action: "none" };
 }
 
 /** What a tick concluded about one edit. */
@@ -466,7 +486,15 @@ export function retryExternalEdit(id: string): void {
   // Clear the counters too: the error message tells the user to reconnect and
   // then Retry, so arriving here with the grace already spent would re-error on
   // the first tick — exactly when the reconnect is still in flight.
-  patch(id, { state: "watching", error: undefined, errorKey: undefined, misses: 0, sessionMisses: 0, settling: undefined });
+  patch(id, {
+    state: "watching",
+    error: undefined,
+    errorKey: undefined,
+    missingSince: undefined,
+    sessionLostSince: undefined,
+    zeroSince: undefined,
+    settling: undefined,
+  });
   ensurePolling();
 }
 
@@ -476,6 +504,12 @@ export async function stopExternalEdit(id: string): Promise<void> {
   setEdits((edits) => edits.filter((e) => e.id !== id));
   stopPollingIfIdle();
   if (!edit) return;
+  if (edit.state === "uploading") {
+    // The upload is reading this exact file. Let it finish and clean up after
+    // itself; taking the file away mid-stream damages both copies.
+    removeAfterUpload.add(edit.localDir);
+    return;
+  }
   if (edit.cancelId) {
     // Cancellation is cooperative — the core notices between chunks — so the
     // directory must NOT be removed here: on Windows the removal would fail
@@ -605,10 +639,19 @@ export async function resolveConflict(
 ): Promise<boolean> {
   const edit = find(id);
   if (!edit || edit.state !== "conflict") return false;
+  // Synchronously, before the first await. "Keep both" lists the directory
+  // first — hundreds of milliseconds over SFTP — and a second click in that
+  // window would reserve a second name, leaving the first as litter, and start
+  // a rival upload.
+  patch(id, { state: "uploading" });
   const source = session.source;
   // The dialog may have been open across a reconnect: push through whatever
   // session the host has now, not the one the conflict was raised on.
   if (session.sessionId !== edit.sessionId) patch(id, { sessionId: session.sessionId });
+  const giveUp = (): false => {
+    patch(id, { state: "conflict" });
+    return false;
+  };
   if (choice === "cancel") {
     // Adopt the current local stamp as the baseline: the edit the user declined
     // to push must not re-trigger the prompt on the next tick.
@@ -617,7 +660,7 @@ export async function resolveConflict(
     // old value would be wrong in the one direction that matters: the next tick
     // would treat the file as freshly changed and push it — over the very
     // version they just chose to keep. Leave the conflict standing instead.
-    if (!local) return false;
+    if (!local) return giveUp();
     const base = await remoteStamp(source, edit.remotePath);
     patch(id, { state: "watching", local, base: base ?? undefined });
     return true;
@@ -711,7 +754,14 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
     const sent = (await localStamp(edit.localPath)) ?? edit.local;
     await api.sftpUpload(edit.sessionId, edit.localPath, edit.remotePath, 0, () => {});
     const current = find(id);
-    if (!current) return; // stopped mid-upload
+    if (!current) {
+      // Stopped mid-upload. The upload has returned, so the directory is safe
+      // to remove now — which stopExternalEdit deliberately deferred.
+      if (removeAfterUpload.delete(edit.localDir)) {
+        await remove(edit.localDir, { recursive: true }).catch(() => {});
+      }
+      return;
+    }
     // Deliberately not falling back to the old baseline: it describes the file
     // as it was BEFORE our upload, so keeping it would make the next save report
     // a conflict against our own write. Unknown is the honest value, and the
@@ -728,13 +778,18 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
       error: undefined,
       errorKey: undefined,
       settling: undefined,
-      misses: 0,
     });
   } catch (e) {
     // The upload opens the remote with TRUNC at offset 0, so a drop partway
     // leaves it rewritten in part. Our baseline described the file BEFORE that,
     // and keeping it would make Retry conflict against our own half-write. If
     // nothing was written, the baseline is still good.
+    if (!find(id)) {
+      if (removeAfterUpload.delete(edit.localDir)) {
+        await remove(edit.localDir, { recursive: true }).catch(() => {});
+      }
+      return;
+    }
     patch(id, {
       state: "error",
       error: apiErrorMessage(e),
@@ -783,6 +838,7 @@ export function suspendExternalEdits(): void {
   if (timer !== null) {
     clearInterval(timer);
     timer = null;
+    document.removeEventListener("visibilitychange", pollOnReturn);
   }
 }
 
@@ -794,12 +850,22 @@ export function resumeExternalEdits(): void {
 function ensurePolling(): void {
   if (timer !== null) return;
   timer = setInterval(() => void tick(), POLL_MS);
+  // A hidden window's timers are throttled to roughly one a minute, and this
+  // window is hidden for most of an external edit. Nothing here can make the
+  // OS run our timer faster, but coming back to UniSSH should not then wait on
+  // a throttled tick: catch up at once.
+  document.addEventListener("visibilitychange", pollOnReturn);
 }
+
+const pollOnReturn = () => {
+  if (document.visibilityState === "visible") void tick();
+};
 
 function stopPollingIfIdle(): void {
   if (timer !== null && useExternalEdits.getState().edits.length === 0) {
     clearInterval(timer);
     timer = null;
+    document.removeEventListener("visibilitychange", pollOnReturn);
   }
 }
 
@@ -830,35 +896,38 @@ async function stepEdit(editId: string): Promise<void> {
     if (!now) {
       // Not necessarily gone: an editor that unlinks and recreates instead of
       // renaming leaves a real gap here. Only give up once it persists.
-      const misses = (edit.misses ?? 0) + 1;
-      if (misses < MAX_MISSES) patch(edit.id, { misses });
+      const since = edit.missingSince ?? Date.now();
+      if (Date.now() - since < MISSING_GRACE_MS) patch(edit.id, { missingSince: since });
       else {
         patch(edit.id, { state: "error", errorKey: "localGone" });
         toast(tDyn("sftp.extEdit.err.localGone"), "err");
       }
       continue;
     }
-    if (edit.misses) patch(edit.id, { misses: 0 });
-    const zero = zeroHold(now.size, edit.local.size, edit.zeroTicks);
-    if (zero.action === "hold") {
-      patch(edit.id, { zeroTicks: zero.zeroTicks, settling: undefined });
-      continue;
-    }
-    if (zero.action === "reset") patch(edit.id, { zeroTicks: 0 });
+    if (edit.missingSince) patch(edit.id, { missingSince: undefined });
+    const zero = zeroHold(now.size, edit.local.size, edit.zeroSince, Date.now());
+    if (zero.action === "reset") patch(edit.id, { zeroSince: undefined });
     // Resolved every tick, not only when there is something to push: an edit
     // whose host went away is not "watching" anything, and saying so only at
     // the next save means the row and the rail badge both lie until then.
     const resolved = resolveSource?.(edit.sessionId, edit.profileId);
     if (!resolved) {
-      const sessionMisses = (edit.sessionMisses ?? 0) + 1;
-      if (sessionMisses < MAX_SESSION_MISSES) patch(edit.id, { sessionMisses });
+      const since = edit.sessionLostSince ?? Date.now();
+      if (Date.now() - since < SESSION_GRACE_MS) patch(edit.id, { sessionLostSince: since });
       else {
         patch(edit.id, { state: "error", errorKey: "sessionClosed" });
         toast(tDyn("sftp.extEdit.err.sessionClosed"), "warn");
       }
       continue;
     }
-    if (edit.sessionMisses) patch(edit.id, { sessionMisses: 0 });
+    if (edit.sessionLostSince) patch(edit.id, { sessionLostSince: undefined });
+
+    // AFTER the session check, so a host that went away is still noticed while
+    // an empty copy is being held.
+    if (zero.action === "hold") {
+      patch(edit.id, { zeroSince: zero.since, settling: undefined });
+      continue;
+    }
 
     const step = settleStep(edit.local, edit.settling, now);
     if (step.action === "none") continue;

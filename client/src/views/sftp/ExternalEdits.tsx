@@ -124,11 +124,14 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
           // Stopping deletes the copy. That is harmless while saves are landing,
           // but an errored edit is precisely the case where the copy holds work
           // the server has never seen — so that one asks first.
-          // A conflict is by definition an edit the server has not seen either.
+          // Ask unless there is provably nothing to lose. A conflict has never
+          // reached the server by definition; an upload is in flight; and even
+          // a plain "watching" row may hold a save made in the last second, or
+          // one being held back because the file currently reads as empty.
           onClick={() =>
-            (edit.state === "error" && edit.errorKey !== "localGone") || edit.state === "conflict"
-              ? setConfirmStop(true)
-              : void stopExternalEdit(edit.id)
+            edit.errorKey === "localGone" || edit.state === "downloading"
+              ? void stopExternalEdit(edit.id)
+              : setConfirmStop(true)
           }
         />
       </div>

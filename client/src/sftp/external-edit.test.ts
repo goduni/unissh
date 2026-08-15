@@ -70,34 +70,40 @@ describe("settleStep", () => {
 });
 
 describe("zeroHold", () => {
+  const T0 = 1_000_000;
+
   it("ignores a copy that isn't empty", () => {
-    expect(zeroHold(120, 100, undefined)).toEqual({ action: "none" });
+    expect(zeroHold(120, 100, undefined, T0)).toEqual({ action: "none" });
   });
 
-  it("clears a stale count once the copy has content again", () => {
-    expect(zeroHold(120, 100, 5)).toEqual({ action: "reset" });
+  it("clears a stale mark once the copy has content again", () => {
+    expect(zeroHold(120, 100, T0 - 500, T0)).toEqual({ action: "reset" });
   });
 
-  it("holds an empty copy back at first", () => {
-    expect(zeroHold(0, 100, undefined)).toEqual({ action: "hold", zeroTicks: 1 });
+  it("starts the clock the first time the copy reads as empty", () => {
+    expect(zeroHold(0, 100, undefined, T0)).toEqual({ action: "hold", since: T0 });
   });
 
-  it("eventually lets a deliberate truncation through", () => {
-    // The bug this guards: resetting the counter on the way out cleared the
-    // settling progress every time, so an emptied file was never pushed at all.
-    let ticks: number | undefined;
-    for (let i = 0; i < 200; i++) {
-      const step = zeroHold(0, 100, ticks);
-      if (step.action !== "hold") {
-        expect(i).toBeGreaterThan(0);
-        return;
-      }
-      ticks = step.zeroTicks;
-    }
-    throw new Error("an empty copy was held forever");
+  it("keeps holding while the wait is unserved", () => {
+    expect(zeroHold(0, 100, T0, T0 + 1_000)).toEqual({ action: "hold", since: T0 });
+  });
+
+  it("lets a deliberate truncation through once the wait is served", () => {
+    // The bug this guards: the old tick-counting version reset its own counter
+    // on the way out, wiping the settling progress every time, so an emptied
+    // file was never pushed at all.
+    expect(zeroHold(0, 100, T0, T0 + 60_000)).toEqual({ action: "none" });
+  });
+
+  it("measures the wait in wall-clock, so a throttled poll can't stretch it", () => {
+    // Two ticks a minute apart are enough; the old version needed twenty of
+    // them, which under a hidden window's throttling was twenty minutes.
+    const first = zeroHold(0, 100, undefined, T0);
+    if (first.action !== "hold") throw new Error("expected hold");
+    expect(zeroHold(0, 100, first.since, T0 + 60_000)).toEqual({ action: "none" });
   });
 
   it("never holds when the file was already empty on the server", () => {
-    expect(zeroHold(0, 0, undefined)).toEqual({ action: "none" });
+    expect(zeroHold(0, 0, undefined, T0)).toEqual({ action: "none" });
   });
 });
