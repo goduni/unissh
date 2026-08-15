@@ -27,7 +27,7 @@ import { logWarn, logError, logDebug } from "@/bridge/log";
 import type { TermTheme } from "@/theme/tokens";
 import type { SftpSession, Transfer } from "@/store/sftp-types";
 import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
-import { stopAllExternalEdits } from "@/sftp/external-edit";
+import { resumeExternalEdits, suspendExternalEdits } from "@/sftp/external-edit";
 
 export type Route =
   | "hosts"
@@ -825,6 +825,10 @@ export const useApp = create<AppStore>((set, get) => ({
           /* no key in keychain or unlock failed → fall through to unlock screen */
         }
       }
+      // Watching resumes with the app: anything still listed kept its copy
+      // through the lock and only needs the poll back (and, once the host is
+      // reconnected, a session to push to).
+      if (status.unlocked) resumeExternalEdits();
       set({
         instanceExists: status.exists,
         unlocked: status.unlocked,
@@ -1015,10 +1019,12 @@ export const useApp = create<AppStore>((set, get) => ({
     // Drop the cached Secret Key so a post-lock heap inspection can't recover it.
     clearSecretKey();
     cancelAllTransfers();
-    // External-edit copies are remote file contents in the clear, and locking
-    // hides the strip that would let anyone stop them. Leaving them on disk
-    // (with the poll still running) would make locking the weaker state.
-    void stopAllExternalEdits();
+    // Stop watching, but KEEP the copies. Editing a file externally is exactly
+    // what leaves this window idle long enough to auto-lock, so deleting them
+    // here would delete the file out from under the editor the user is typing
+    // in. The copies still go at quit and at the next startup; a lock is not
+    // worth destroying unsaved work for.
+    suspendExternalEdits();
     set({
       unlocked: false,
       overlay: "unlock",

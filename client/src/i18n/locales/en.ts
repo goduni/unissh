@@ -1276,6 +1276,14 @@ export const en = {
       "savedCount": "sent {{count}}×",
       "changedOnServer": "changed on the server",
       "failed": "failed",
+      "pushFailed": "Couldn’t send «{{name}}» to the server",
+      "conflictToast": "«{{name}}» changed on the server — the save is waiting for you",
+      "err": {
+        "localGone": "The local copy is gone",
+        "sessionClosed": "The SFTP session closed — reconnect the host, then Retry",
+        "checkFailed": "Couldn’t check the file on the server, so nothing was sent",
+        "openFailed": "Couldn’t read the file after copying it"
+      },
       "resolve": "Resolve",
       "retry": "Retry",
       "discardTitle": "Stop and delete the copy?",

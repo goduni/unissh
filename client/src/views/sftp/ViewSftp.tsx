@@ -24,7 +24,7 @@ import { PaneSlot } from "./PaneSlot";
 import type { TabInfo } from "./TabStrip";
 import { TransferQueue } from "./TransferQueue";
 import { ExternalEdits } from "./ExternalEdits";
-import { setSourceResolver, startExternalEdit } from "@/sftp/external-edit";
+import { setSourceResolver, startExternalEdit, type ResolvedSession } from "@/sftp/external-edit";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConflictDialog, ChmodDialog } from "./dialogs";
@@ -404,7 +404,9 @@ export function ViewSftp() {
         return;
       }
       if (slot.location.kind !== "remote") return;
-      await startExternalEdit(slot.source, slot.location.sessionId, path, entry.name);
+      const sessionId = slot.location.sessionId;
+      const profileId = sessions.find((s) => s.id === sessionId)?.profileId ?? "";
+      await startExternalEdit(slot.source, sessionId, profileId, path, entry.name);
     } catch (e) {
       toast(apiErrorMessage(e), "err");
     }
@@ -509,9 +511,15 @@ export function ViewSftp() {
   // A live external edit outlives the pane that started it, so the watcher can't
   // hold a source: it asks for one each time it needs to push, and gets null once
   // the session is gone.
-  const remoteSourceFor = (sessionId: string): FileSource | null => {
+  const remoteSourceFor = (sessionId: string, profileId: string): ResolvedSession | null => {
+    // Prefer the original session; fall back to any live one for the same host,
+    // because a reconnect mints a new id and the edit would otherwise be
+    // stranded with a file it can no longer send anywhere.
+    const session =
+      sessions.find((s) => s.id === sessionId) ?? sessions.find((s) => s.profileId === profileId && profileId);
+    if (!session) return null;
     try {
-      return sourceFor({ kind: "remote", sessionId }, sessions);
+      return { source: sourceFor({ kind: "remote", sessionId: session.id }, sessions), sessionId: session.id };
     } catch {
       return null;
     }

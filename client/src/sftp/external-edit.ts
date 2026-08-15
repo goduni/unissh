@@ -13,10 +13,12 @@
 
 import { create } from "zustand";
 import { mkdir, remove, stat } from "@tauri-apps/plugin-fs";
-import { appLocalDataDir, join } from "@tauri-apps/api/path";
+import { join, tempDir } from "@tauri-apps/api/path";
 import { openPath } from "@tauri-apps/plugin-opener";
 import * as api from "@/bridge/api";
 import { apiErrorMessage } from "@/bridge/types";
+import { toast } from "@/store/toast";
+import { tDyn } from "@/i18n";
 import type { FileSource } from "@/bridge/sources";
 import { dedupeName, remoteParent } from "@/sftp/paths";
 
@@ -57,10 +59,25 @@ export interface LiveEdit {
   settling?: Stamp & { ticks: number };
   /** Consecutive ticks that could not see the copy at all. */
   misses?: number;
+  /** Host the file belongs to. A reconnect mints a new session id, so this is
+   *  what lets an orphaned edit find its way back to a live session. */
+  profileId: string;
+  /** Size of the last upload, kept when the post-upload stat failed: the remote
+   *  file is ours and therefore that long, which is enough to re-derive a
+   *  baseline instead of writing blind. */
+  expectSize?: number;
   /** Successful pushes so far — the only progress this feature has to show. */
   saves: number;
+  /** One of our own failures, as a translation key under `sftp.extEdit.err`. */
+  errorKey?: "localGone" | "sessionClosed" | "checkFailed";
+  /** A message from the bridge, already human-readable and already localised as
+   *  far as it ever will be. */
   error?: string;
 }
+
+/** What the row shows for a failed edit. */
+export const editErrorText = (edit: LiveEdit): string | undefined =>
+  edit.errorKey ? tDyn(`sftp.extEdit.err.${edit.errorKey}`) : edit.error;
 
 interface EditStore {
   edits: LiveEdit[];
@@ -79,12 +96,20 @@ const find = (id: string): LiveEdit | undefined => useExternalEdits.getState().e
 // Crypto-free, like the transfer ids: crypto.randomUUID throws in a webview that
 // isn't a secure context, and an id that throws would strand the whole edit.
 let editSeq = 0;
+/** `sessionId\0remotePath` of every edit whose download is still in flight. */
+const starting = new Set<string>();
 
-/** `<appLocalData>/external-edit/<n>` — one directory per edit, so two files
- *  with the same basename can't collide, and stopping one edit can remove its
+/** The scratch root. NOT under $APPLOCALDATA: the fs plugin's default permission
+ *  set pulls in `deny-webview-data-linux`, whose `$APPLOCALDATA/**` deny has no
+ *  platform key and so applies everywhere — and a deny beats any allow, which
+ *  would make every operation here fail with "path forbidden". */
+const scratchRoot = async (): Promise<string> => join(await tempDir(), "unissh-external-edit");
+
+/** `<temp>/unissh-external-edit/<n>` — one directory per edit, so two files with
+ *  the same basename can't collide, and stopping one edit can remove its
  *  directory whole. */
 async function scratchDir(id: string): Promise<string> {
-  const root = await join(await appLocalDataDir(), "external-edit");
+  const root = await scratchRoot();
   // 0700: the copy is the remote file in the clear, and this is the one place
   // it exists unencrypted. Ignored on Windows, where the profile is already
   // per-user.
@@ -165,6 +190,7 @@ export function settleStep(
 export async function startExternalEdit(
   source: FileSource,
   sessionId: string,
+  profileId: string,
   remotePath: string,
   name: string,
 ): Promise<string | null> {
@@ -177,6 +203,12 @@ export async function startExternalEdit(
     await openPath(existing.localPath);
     return existing.id;
   }
+  // The store check above cannot see an edit whose download is still running,
+  // and a big file makes that window minutes long — during which a second click
+  // would start a rival copy of the same file. Claim the path up front.
+  const claim = `${sessionId}\u0000${remotePath}`;
+  if (starting.has(claim)) return null;
+  starting.add(claim);
 
   const id = `ee${++editSeq}`;
   const dir = await scratchDir(id);
@@ -190,11 +222,23 @@ export async function startExternalEdit(
     // instead — nothing has been handed to an editor yet, so nothing is lost.
     const base = await remoteStamp(source, remotePath);
     const local = await localStamp(localPath);
-    if (!base || !local) throw new Error("could not read the file after copying it");
+    if (!base || !local) throw new Error(tDyn("sftp.extEdit.err.openFailed"));
 
     setEdits((edits) => [
       ...edits,
-      { id, sessionId, remotePath, localDir: dir, localPath, name, state: "watching", base, local, saves: 0 },
+        {
+        id,
+        sessionId,
+        profileId,
+        remotePath,
+        localDir: dir,
+        localPath,
+        name,
+        state: "watching",
+        base,
+        local,
+        saves: 0,
+      },
     ]);
     ensurePolling();
     await openPath(localPath);
@@ -204,6 +248,8 @@ export async function startExternalEdit(
     // directory with us rather than leaving it for the next launch to purge.
     await remove(dir, { recursive: true }).catch(() => {});
     throw e;
+  } finally {
+    starting.delete(claim);
   }
 }
 
@@ -212,7 +258,7 @@ export async function startExternalEdit(
 export function retryExternalEdit(id: string): void {
   const edit = find(id);
   if (!edit || edit.state !== "error") return;
-  patch(id, { state: "watching", error: undefined, misses: 0 });
+  patch(id, { state: "watching", error: undefined, errorKey: undefined, misses: 0 });
   ensurePolling();
 }
 
@@ -242,7 +288,7 @@ export async function stopAllExternalEdits(): Promise<void> {
  *  the app that made it is running, so anything on disk is a leftover. */
 export async function purgeExternalEditScratch(): Promise<void> {
   try {
-    await remove(await join(await appLocalDataDir(), "external-edit"), { recursive: true });
+    await remove(await scratchRoot(), { recursive: true });
   } catch {
     /* nothing to remove */
   }
@@ -283,20 +329,32 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
   if (!edit) return;
   patch(id, { state: "uploading" });
   try {
-    if (!force && edit.base) {
+    if (!force) {
       const now = await remoteStamp(source, edit.remotePath);
-      if (now) {
-        // Somebody else's write. Stop and ask.
-        if (!same(now, edit.base)) {
-          patch(id, { state: "conflict" });
+      if (!now) {
+        // Could not read it, and it is still listed: refuse rather than
+        // overwrite a file whose state we do not know. Genuinely gone is fine —
+        // re-creating it is what saving means.
+        if (!(await confirmedAbsent(source, edit.remotePath))) {
+          patch(id, { state: "error", errorKey: "checkFailed" });
+          announce(edit, "checkFailed");
           return;
         }
-      } else if (!(await confirmedAbsent(source, edit.remotePath))) {
-        // Could not read it, and it is still listed: refuse rather than
-        // overwrite a file whose state we do not know.
-        throw new Error("could not check the file on the server");
+      } else if (edit.base) {
+        if (!same(now, edit.base)) {
+          patch(id, { state: "conflict" });
+          announce(edit, "conflict");
+          return;
+        }
+      } else if (now.size !== edit.expectSize) {
+        // No baseline — the stat after our own upload failed. The remote file
+        // is still ours, and ours was exactly `expectSize` long, so a different
+        // size is somebody else's write. Same length, and we have nothing to go
+        // on but the fact that we wrote it: adopt it and move on.
+        patch(id, { state: "conflict" });
+        announce(edit, "conflict");
+        return;
       }
-      // Genuinely gone — re-creating it is what saving means.
     }
     // Snapshot BEFORE the upload: what we are about to send is this state, not
     // whatever the file looks like when the upload finishes. Reading it after
@@ -314,14 +372,29 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
       state: "watching",
       local: sent,
       base: base ?? undefined,
+      expectSize: sent.size,
       saves: current.saves + 1,
       error: undefined,
+      errorKey: undefined,
       settling: undefined,
       misses: 0,
     });
   } catch (e) {
-    patch(id, { state: "error", error: apiErrorMessage(e) });
+    patch(id, { state: "error", error: apiErrorMessage(e), errorKey: undefined });
+    const current = find(id);
+    if (current) toast(tDyn("sftp.extEdit.pushFailed", { name: current.name }), "err");
   }
+}
+
+/** Say it out loud. The list lives on the SFTP route, and a save that stopped
+ *  reaching the server is not something to discover by navigating back. */
+function announce(edit: LiveEdit, what: "conflict" | "checkFailed"): void {
+  toast(
+    what === "conflict"
+      ? tDyn("sftp.extEdit.conflictToast", { name: edit.name })
+      : tDyn("sftp.extEdit.err.checkFailed"),
+    "warn",
+  );
 }
 
 // ── the tick ───────────────────────────────────────────────────
@@ -329,12 +402,32 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
 // timer each, and it keeps start/stop in one place.
 
 let timer: ReturnType<typeof setInterval> | null = null;
-/** Set by the view, which is the only thing that can resolve a session id to a
- *  live source (sessions live in the app store). */
-let resolveSource: ((sessionId: string) => FileSource | null) | null = null;
+/** A live session for an edit, which may not be the one it started on: a
+ *  reconnect mints a new id, so the resolver matches on the host as well and
+ *  reports which session it actually found. Set by the view — sessions live in
+ *  the app store. */
+export interface ResolvedSession {
+  source: FileSource;
+  sessionId: string;
+}
+let resolveSource: ((sessionId: string, profileId: string) => ResolvedSession | null) | null = null;
 
-export function setSourceResolver(fn: (sessionId: string) => FileSource | null): void {
+export function setSourceResolver(fn: (sessionId: string, profileId: string) => ResolvedSession | null): void {
   resolveSource = fn;
+}
+
+/** Stop the poll without touching the copies — for locking the vault, where
+ *  deleting a file the user still has open in an editor would destroy work. */
+export function suspendExternalEdits(): void {
+  if (timer !== null) {
+    clearInterval(timer);
+    timer = null;
+  }
+}
+
+/** Resume after an unlock. */
+export function resumeExternalEdits(): void {
+  if (useExternalEdits.getState().edits.length > 0) ensurePolling();
 }
 
 function ensurePolling(): void {
@@ -349,7 +442,22 @@ function stopPollingIfIdle(): void {
   }
 }
 
+/** A tick can outlast its interval — every step here is an IPC round trip — and
+ *  two overlapping passes would each see the same edit as `watching` and start
+ *  their own upload of it. */
+let ticking = false;
+
 async function tick(): Promise<void> {
+  if (ticking) return;
+  ticking = true;
+  try {
+    await tickOnce();
+  } finally {
+    ticking = false;
+  }
+}
+
+async function tickOnce(): Promise<void> {
   for (const edit of useExternalEdits.getState().edits) {
     if (edit.state !== "watching") continue;
     const now = await localStamp(edit.localPath);
@@ -358,7 +466,10 @@ async function tick(): Promise<void> {
       // renaming leaves a real gap here. Only give up once it persists.
       const misses = (edit.misses ?? 0) + 1;
       if (misses < MAX_MISSES) patch(edit.id, { misses });
-      else patch(edit.id, { state: "error", error: "local copy disappeared" });
+      else {
+        patch(edit.id, { state: "error", errorKey: "localGone" });
+        toast(tDyn("sftp.extEdit.err.localGone"), "err");
+      }
       continue;
     }
     if (edit.misses) patch(edit.id, { misses: 0 });
@@ -372,14 +483,18 @@ async function tick(): Promise<void> {
       patch(edit.id, { settling: step.settling });
       continue;
     }
-    const source = resolveSource?.(edit.sessionId);
-    if (!source) {
+    const resolved = resolveSource?.(edit.sessionId, edit.profileId);
+    if (!resolved) {
       // Session closed under us. Keep the copy and say so — the edit is not
-      // lost, it just has nowhere to go until the host is reconnected.
-      patch(edit.id, { state: "error", error: "session closed" });
+      // lost, it just has nowhere to go until the host is reconnected. Retry
+      // re-binds it to whatever session that host has by then.
+      patch(edit.id, { state: "error", errorKey: "sessionClosed" });
+      toast(tDyn("sftp.extEdit.err.sessionClosed"), "warn");
       continue;
     }
+    // Rebound to a different session for the same host (a reconnect).
+    if (resolved.sessionId !== edit.sessionId) patch(edit.id, { sessionId: resolved.sessionId });
     patch(edit.id, { settling: undefined });
-    await push(edit.id, source, false);
+    await push(edit.id, resolved.source, false);
   }
 }

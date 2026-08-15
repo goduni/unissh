@@ -11,15 +11,18 @@ import { Modal } from "@/components/Modal";
 import { useTranslation } from "@/i18n";
 import { toast } from "@/store/toast";
 import { apiErrorMessage } from "@/bridge/types";
-import type { FileSource } from "@/bridge/sources";
 import {
+  editErrorText,
   resolveConflict,
   retryExternalEdit,
   stopExternalEdit,
   useExternalEdits,
   type ConflictChoice,
   type LiveEdit,
+  type ResolvedSession,
 } from "@/sftp/external-edit";
+
+type SessionLookup = (sessionId: string, profileId: string) => ResolvedSession | null;
 
 function stateTone(edit: LiveEdit, p: ReturnType<typeof usePalette>): string {
   if (edit.state === "error") return p.red;
@@ -28,7 +31,7 @@ function stateTone(edit: LiveEdit, p: ReturnType<typeof usePalette>): string {
   return p.txt3;
 }
 
-function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: (sessionId: string) => FileSource | null }) {
+function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup }) {
   const p = usePalette();
   const { t } = useTranslation();
   const [asking, setAsking] = useState(false);
@@ -36,7 +39,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: (sessionId: s
 
   const status =
     edit.state === "error"
-      ? (edit.error ?? t("sftp.extEdit.failed"))
+      ? (editErrorText(edit) ?? t("sftp.extEdit.failed"))
       : edit.state === "conflict"
         ? t("sftp.extEdit.changedOnServer")
         : edit.state === "uploading"
@@ -46,14 +49,14 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: (sessionId: s
             : t("sftp.extEdit.watching");
 
   const answer = async (choice: ConflictChoice) => {
-    const source = sourceFor(edit.sessionId);
-    if (!source) {
+    const resolved = sourceFor(edit.sessionId, edit.profileId);
+    if (!resolved) {
       toast(t("sftp.extEdit.sessionClosed"), "err");
       return;
     }
     setAsking(false);
     try {
-      await resolveConflict(edit.id, choice, source);
+      await resolveConflict(edit.id, choice, resolved.source);
     } catch (e) {
       toast(apiErrorMessage(e), "err");
     }
@@ -109,7 +112,12 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: (sessionId: s
           // Stopping deletes the copy. That is harmless while saves are landing,
           // but an errored edit is precisely the case where the copy holds work
           // the server has never seen — so that one asks first.
-          onClick={() => (edit.state === "error" ? setConfirmStop(true) : void stopExternalEdit(edit.id))}
+          // A conflict is by definition an edit the server has not seen either.
+          onClick={() =>
+            edit.state === "error" || edit.state === "conflict"
+              ? setConfirmStop(true)
+              : void stopExternalEdit(edit.id)
+          }
         />
       </div>
 
@@ -177,7 +185,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: (sessionId: s
   );
 }
 
-export function ExternalEdits({ sourceFor }: { sourceFor: (sessionId: string) => FileSource | null }) {
+export function ExternalEdits({ sourceFor }: { sourceFor: SessionLookup }) {
   const p = usePalette();
   const { t } = useTranslation();
   const edits = useExternalEdits((s) => s.edits);

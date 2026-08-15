@@ -308,20 +308,22 @@ export function App() {
         // unquittable window is not.
         const u = await win.onCloseRequested(async (event) => {
           if (confirmedClose.current) return; // our own close — let it through
-          // FIRST, before any branch that may return: the external-edit copies
-          // are remote file contents in the clear, and the paths that skip the
-          // confirmation (quit-confirm off, or nothing else live) are exactly
-          // the ones that used to leave them behind. Bounded and caught, like
-          // everything on this path — a cleanup that hangs must not be what
-          // makes the window unquittable.
-          try {
-            await Promise.race([
-              stopAllExternalEdits(),
-              new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
-            ]);
-          } catch {
-            /* ignore — the startup purge is the backstop */
-          }
+          // Deleting the external-edit copies is irreversible, so it may only
+          // happen once the close is certain — a user who cancels the quit
+          // dialog must still find the file their editor has open. Bounded and
+          // caught, like everything on this path: a cleanup that hangs must not
+          // be what makes the window unquittable, and the startup purge is the
+          // backstop if it does.
+          const cleanup = async () => {
+            try {
+              await Promise.race([
+                stopAllExternalEdits(),
+                new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+              ]);
+            } catch {
+              /* ignore */
+            }
+          };
           let wantConfirm = true;
           try {
             wantConfirm = localStorage.getItem("unissh.confirmquit") !== "0";
@@ -336,7 +338,11 @@ export function App() {
           } catch {
             live = 0; // store unreadable — treat as nothing to lose, never trap
           }
-          if (!wantConfirm || live === 0) return; // nothing to lose — close normally
+          if (!wantConfirm || live === 0) {
+            // Closing for real, just without a prompt.
+            await cleanup();
+            return;
+          }
           event.preventDefault();
           let ok = false;
           try {
@@ -359,6 +365,7 @@ export function App() {
             ok = true;
           }
           if (ok) {
+            await cleanup();
             confirmedClose.current = true;
             void win.close();
           }
