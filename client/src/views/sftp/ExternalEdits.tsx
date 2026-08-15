@@ -56,10 +56,14 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
       toast(t("sftp.extEdit.sessionClosed"), "err");
       return;
     }
-    setAsking(false);
     try {
-      await resolveConflict(edit.id, choice, resolved);
+      // Only close on an answer that took. "Not now" bails when the local copy
+      // can't be read (an editor mid atomic-save), and a dialog that vanished
+      // would read as "dismissed" while the conflict is still standing.
+      if (await resolveConflict(edit.id, choice, resolved)) setAsking(false);
+      else toast(t("sftp.extEdit.tryAgain"), "warn");
     } catch (e) {
+      setAsking(false);
       toast(apiErrorMessage(e), "err");
     }
   };
@@ -105,7 +109,10 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
             {t("sftp.extEdit.resolve")}
           </Btn>
         )}
-        {edit.state === "error" && (
+        {/* Not for a copy that is gone: retrying only spends three seconds
+            rediscovering that, and startExternalEdit already restarts such an
+            edit properly when the file is opened again. */}
+        {edit.state === "error" && edit.errorKey !== "localGone" && (
           <Btn size="sm" variant="outline" icon="refresh" onClick={() => retryExternalEdit(edit.id)}>
             {t("sftp.extEdit.retry")}
           </Btn>
@@ -119,7 +126,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
           // the server has never seen — so that one asks first.
           // A conflict is by definition an edit the server has not seen either.
           onClick={() =>
-            edit.state === "error" || edit.state === "conflict"
+            (edit.state === "error" && edit.errorKey !== "localGone") || edit.state === "conflict"
               ? setConfirmStop(true)
               : void stopExternalEdit(edit.id)
           }

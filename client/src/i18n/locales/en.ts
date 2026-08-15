@@ -1291,6 +1291,7 @@ export const en = {
       },
       "resolve": "Resolve",
       "retry": "Retry",
+      "tryAgain": "Couldn’t read the local copy just now — try again in a moment",
       "discardTitle": "Stop and delete the copy?",
       "discardBody": "This edit stopped before its last change reached the server, so the local copy may hold work that only exists here. Stopping deletes it. Retry first if the server is reachable again.",
       "discard": "Delete anyway",

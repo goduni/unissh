@@ -640,8 +640,6 @@ export const SFTP_PARALLELISM_MIN = 1;
 export const SFTP_PARALLELISM_MAX = 8;
 const SFTP_PARALLELISM_DEFAULT = 4;
 
-/** How many files to transfer concurrently over one SFTP connection. Persisted
- *  locally (device-local UX/perf knob, not vault data); clamped to [MIN, MAX]. */
 /** Whether "Open" reaches for the external editor (persisted, device-local). */
 const lsExternalEditDefault = (): boolean => {
   try {
@@ -651,6 +649,8 @@ const lsExternalEditDefault = (): boolean => {
   }
 };
 
+/** How many files to transfer concurrently over one SFTP connection. Persisted
+ *  locally (device-local UX/perf knob, not vault data); clamped to [MIN, MAX]. */
 const lsSftpParallelism = (): number => {
   try {
     const n = parseInt(

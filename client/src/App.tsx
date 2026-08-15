@@ -353,8 +353,11 @@ export function App() {
           } catch {
             live = 0; // store unreadable — treat as nothing to lose, never trap
           }
-          if (!wantConfirm || live === 0) {
-            // Closing for real, just without a prompt.
+          // "Confirm quit" is an opt-out of the SESSION prompt. It is not
+          // consent to delete files, so an outstanding edit still asks — that
+          // copy can be the only place a change exists.
+          const editCount = useExternalEdits.getState().edits.length;
+          if (editCount === 0 && (!wantConfirm || live === 0)) {
             await cleanup();
             return;
           }
@@ -365,7 +368,7 @@ export function App() {
             // resolves is not hypothetical on Linux — an undecorated window under
             // a compositor that declines to map the transient would hang this
             // await forever, and the close is already prevented by this point.
-            const edits = useExternalEdits.getState().edits.length;
+            const edits = editCount;
             // Both, not one instead of the other: the sessions explain the
             // prompt, the edits explain what confirming destroys.
             const sessions = live - edits;

@@ -126,10 +126,6 @@ const scratchRoot = async (): Promise<string> => join(await tempDir(), "unissh-e
 const runId = `run-${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
 const runRoot = async (): Promise<string> => join(await scratchRoot(), runId);
 
-/** Stale-run threshold: a heartbeat older than this means the run is gone.
- *  Kept close to the beat interval because this purge is what collects copies
- *  left by an exit we could not run cleanup on (macOS Cmd+Q, an updater
- *  relaunch) — a wide window means those sit in $TEMP across launches. */
 /** How long without a heartbeat before a run counts as gone.
  *
  *  Generous on purpose, and deliberately far above the beat interval: timers
@@ -160,9 +156,6 @@ function startHeartbeat(): void {
   });
 }
 
-/** `<temp>/unissh-external-edit/<n>` — one directory per edit, so two files with
- *  the same basename can't collide, and stopping one edit can remove its
- *  directory whole. */
 /** `mkdir` with a mode is a no-op on a directory that already exists, so the
  *  0700 says nothing about a root somebody else created first. On a shared box
  *  $TEMP is /tmp, where anyone can pre-create our root — as a world-writable
@@ -182,6 +175,9 @@ async function assertSafeRoot(root: string): Promise<void> {
   }
 }
 
+/** `<temp>/unissh-external-edit/<run>/<n>` — one directory per edit, so two
+ *  files with the same basename can't collide, and stopping one edit can remove
+ *  its directory whole. */
 async function scratchDir(id: string): Promise<string> {
   // 0700: the copy is the remote file in the clear, and this is the one place
   // it exists unencrypted. Ignored on Windows, where the profile is already
@@ -191,6 +187,9 @@ async function scratchDir(id: string): Promise<string> {
   await mkdir(root, { recursive: true, mode: 0o700 });
   const mine = await runRoot();
   await mkdir(mine, { recursive: true, mode: 0o700 });
+  // Awaited: an instance launching right now purges directories with no
+  // heartbeat, and ours must exist before this returns a path to copy into.
+  await beat();
   startHeartbeat();
   const dir = await join(mine, id);
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -344,7 +343,12 @@ export async function startExternalEdit(
     ]);
 
     try {
-      await api.sftpDownload(sessionId, remotePath, localPath, 0, null, () => {}, cancelId);
+      // Resolves false on cancellation rather than throwing. Stopping the row is
+      // the user's own action, so walk out quietly — reading on would either
+      // blame them with an error toast or, if the directory removal lost the
+      // race, hand an editor a half-downloaded file.
+      const completed = await api.sftpDownload(sessionId, remotePath, localPath, 0, null, () => {}, cancelId);
+      if (!completed) return null;
     } finally {
       patch(id, { cancelId: undefined });
       await api.cancelDispose(cancelId).catch(() => {});
@@ -463,9 +467,13 @@ export type ConflictChoice = "overwrite" | "copy" | "cancel";
  * save follows the copy instead of repeatedly asking about a file the user has
  * already decided not to touch.
  */
-export async function resolveConflict(id: string, choice: ConflictChoice, session: ResolvedSession): Promise<void> {
+export async function resolveConflict(
+  id: string,
+  choice: ConflictChoice,
+  session: ResolvedSession,
+): Promise<boolean> {
   const edit = find(id);
-  if (!edit || edit.state !== "conflict") return;
+  if (!edit || edit.state !== "conflict") return false;
   const source = session.source;
   // The dialog may have been open across a reconnect: push through whatever
   // session the host has now, not the one the conflict was raised on.
@@ -478,10 +486,10 @@ export async function resolveConflict(id: string, choice: ConflictChoice, sessio
     // old value would be wrong in the one direction that matters: the next tick
     // would treat the file as freshly changed and push it — over the very
     // version they just chose to keep. Leave the conflict standing instead.
-    if (!local) return;
+    if (!local) return false;
     const base = await remoteStamp(source, edit.remotePath);
     patch(id, { state: "watching", local, base: base ?? undefined });
-    return;
+    return true;
   }
   if (choice === "copy") {
     const dir = remoteParent(edit.remotePath);
@@ -497,6 +505,7 @@ export async function resolveConflict(id: string, choice: ConflictChoice, sessio
     patch(id, { remotePath: await source.join(dir, copyName), name: copyName, base: undefined });
   }
   await push(id, source, true);
+  return true;
 }
 
 /** Upload the local copy over the remote file. */
