@@ -12,7 +12,7 @@
 // Desktop only. There is nothing on a phone to open the copy with.
 
 import { create } from "zustand";
-import { mkdir, remove, stat } from "@tauri-apps/plugin-fs";
+import { mkdir, readDir, remove, rename, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 import { join, tempDir } from "@tauri-apps/api/path";
 import { openPath } from "@tauri-apps/plugin-opener";
 import * as api from "@/bridge/api";
@@ -105,16 +105,49 @@ const starting = new Set<string>();
  *  would make every operation here fail with "path forbidden". */
 const scratchRoot = async (): Promise<string> => join(await tempDir(), "unissh-external-edit");
 
+/** This run's own subtree. The root is shared with any other UniSSH running on
+ *  the machine — nothing stops a second instance — so a run may only ever delete
+ *  its own directory, plus siblings that have stopped saying they are alive. */
+const runId = `run-${Math.floor(performance.now())}-${editSeqSeed()}`;
+function editSeqSeed(): string {
+  // No crypto.randomUUID (throws outside a secure context) and no Math.random
+  // requirement: two runs started in the same millisecond are the only clash,
+  // and the heartbeat below makes that survivable rather than destructive.
+  return String(Date.now() % 100000);
+}
+const runRoot = async (): Promise<string> => join(await scratchRoot(), runId);
+
+/** Stale-run threshold: a heartbeat older than this means the run is gone. */
+const ALIVE_STALE_MS = 5 * 60 * 1000;
+const HEARTBEAT_MS = 60 * 1000;
+let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+async function beat(): Promise<void> {
+  try {
+    await writeTextFile(await join(await runRoot(), ".alive"), String(Date.now()));
+  } catch {
+    /* the purge treats an unreadable heartbeat as stale, which is the safe side */
+  }
+}
+
+function startHeartbeat(): void {
+  if (heartbeat !== null) return;
+  void beat();
+  heartbeat = setInterval(() => void beat(), HEARTBEAT_MS);
+}
+
 /** `<temp>/unissh-external-edit/<n>` — one directory per edit, so two files with
  *  the same basename can't collide, and stopping one edit can remove its
  *  directory whole. */
 async function scratchDir(id: string): Promise<string> {
-  const root = await scratchRoot();
   // 0700: the copy is the remote file in the clear, and this is the one place
   // it exists unencrypted. Ignored on Windows, where the profile is already
   // per-user.
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const dir = await join(root, id);
+  await mkdir(await scratchRoot(), { recursive: true, mode: 0o700 });
+  const mine = await runRoot();
+  await mkdir(mine, { recursive: true, mode: 0o700 });
+  startHeartbeat();
+  const dir = await join(mine, id);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   return dir;
 }
@@ -194,9 +227,13 @@ export async function startExternalEdit(
   remotePath: string,
   name: string,
 ): Promise<string | null> {
+  // Keyed on the HOST, not the session: the same host open in two panes has two
+  // session ids, and two edits of one remote path would push over each other.
   const existing = useExternalEdits
     .getState()
-    .edits.find((e) => e.sessionId === sessionId && e.remotePath === remotePath);
+    .edits.find(
+      (e) => e.remotePath === remotePath && (profileId ? e.profileId === profileId : e.sessionId === sessionId),
+    );
   if (existing) {
     // Already open — bring the editor forward rather than making a second copy
     // that would race the first one on save.
@@ -206,14 +243,18 @@ export async function startExternalEdit(
   // The store check above cannot see an edit whose download is still running,
   // and a big file makes that window minutes long — during which a second click
   // would start a rival copy of the same file. Claim the path up front.
-  const claim = `${sessionId}\u0000${remotePath}`;
+  const claim = `${profileId || sessionId}\u0000${remotePath}`;
   if (starting.has(claim)) return null;
   starting.add(claim);
 
   const id = `ee${++editSeq}`;
-  const dir = await scratchDir(id);
+  let dir: string | null = null;
   try {
-    const localPath = await join(dir, name);
+    // Inside the try: a mkdir that fails must still release the claim, or this
+    // file becomes silently un-openable for the rest of the process.
+    dir = await scratchDir(id);
+    const localDir = dir;
+    const localPath = await join(localDir, name);
     await api.sftpDownload(sessionId, remotePath, localPath, 0, null, () => {});
 
     // Both stamps are the baselines every later decision is measured against.
@@ -231,7 +272,7 @@ export async function startExternalEdit(
         sessionId,
         profileId,
         remotePath,
-        localDir: dir,
+        localDir,
         localPath,
         name,
         state: "watching",
@@ -246,7 +287,7 @@ export async function startExternalEdit(
   } catch (e) {
     // A half-written copy is still the remote file in the clear. Take the
     // directory with us rather than leaving it for the next launch to purge.
-    await remove(dir, { recursive: true }).catch(() => {});
+    if (dir) await remove(dir, { recursive: true }).catch(() => {});
     throw e;
   } finally {
     starting.delete(claim);
@@ -284,13 +325,34 @@ export async function stopAllExternalEdits(): Promise<void> {
   await purgeExternalEditScratch();
 }
 
-/** Delete the scratch root outright. Safe at startup — an edit only exists while
- *  the app that made it is running, so anything on disk is a leftover. */
+/** Remove this run's copies, plus any left by a run that is no longer beating.
+ *
+ *  Deliberately NOT the whole root: another UniSSH may be running with files
+ *  open in an editor right now, and deleting those would destroy work that only
+ *  exists there. A run that has not touched its heartbeat in five minutes is
+ *  gone, and its copies are the leftovers this is for. */
 export async function purgeExternalEditScratch(): Promise<void> {
   try {
-    await remove(await scratchRoot(), { recursive: true });
+    await remove(await runRoot(), { recursive: true });
   } catch {
-    /* nothing to remove */
+    /* nothing of ours to remove */
+  }
+  try {
+    const root = await scratchRoot();
+    for (const entry of await readDir(root)) {
+      if (!entry.isDirectory || entry.name === runId) continue;
+      const dir = await join(root, entry.name);
+      let stale = true;
+      try {
+        const beat = await stat(await join(dir, ".alive"));
+        stale = Date.now() - (beat.mtime ? beat.mtime.getTime() : 0) > ALIVE_STALE_MS;
+      } catch {
+        stale = true; // no heartbeat at all — from before this scheme, or dead
+      }
+      if (stale) await remove(dir, { recursive: true }).catch(() => {});
+    }
+  } catch {
+    /* no root yet */
   }
 }
 
@@ -303,9 +365,13 @@ export type ConflictChoice = "overwrite" | "copy" | "cancel";
  * save follows the copy instead of repeatedly asking about a file the user has
  * already decided not to touch.
  */
-export async function resolveConflict(id: string, choice: ConflictChoice, source: FileSource): Promise<void> {
+export async function resolveConflict(id: string, choice: ConflictChoice, session: ResolvedSession): Promise<void> {
   const edit = find(id);
   if (!edit || edit.state !== "conflict") return;
+  const source = session.source;
+  // The dialog may have been open across a reconnect: push through whatever
+  // session the host has now, not the one the conflict was raised on.
+  if (session.sessionId !== edit.sessionId) patch(id, { sessionId: session.sessionId });
   if (choice === "cancel") {
     // Adopt the current local stamp as the baseline: the edit the user declined
     // to push must not re-trigger the prompt on the next tick.
@@ -318,7 +384,18 @@ export async function resolveConflict(id: string, choice: ConflictChoice, source
     const dir = remoteParent(edit.remotePath);
     const taken = (await source.list(dir)).map((e) => e.name);
     const copyName = dedupeName(edit.name, taken);
-    patch(id, { remotePath: await source.join(dir, copyName), name: copyName });
+    // Move the local copy alongside, so the path the strip shows still ends in
+    // the name it shows. A rename we cannot do is not worth failing the save
+    // over — the names simply stay apart.
+    let localPath = edit.localPath;
+    try {
+      const moved = await join(edit.localDir, copyName);
+      await rename(edit.localPath, moved);
+      localPath = moved;
+    } catch {
+      /* keep the old local name */
+    }
+    patch(id, { remotePath: await source.join(dir, copyName), name: copyName, localPath });
   }
   await push(id, source, true);
 }
@@ -346,7 +423,7 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
           announce(edit, "conflict");
           return;
         }
-      } else if (now.size !== edit.expectSize) {
+      } else if (edit.expectSize !== undefined && now.size !== edit.expectSize) {
         // No baseline — the stat after our own upload failed. The remote file
         // is still ours, and ours was exactly `expectSize` long, so a different
         // size is somebody else's write. Same length, and we have nothing to go

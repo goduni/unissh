@@ -27,7 +27,7 @@ import { logWarn, logError, logDebug } from "@/bridge/log";
 import type { TermTheme } from "@/theme/tokens";
 import type { SftpSession, Transfer } from "@/store/sftp-types";
 import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
-import { resumeExternalEdits, suspendExternalEdits } from "@/sftp/external-edit";
+import { suspendExternalEdits } from "@/sftp/external-edit";
 
 export type Route =
   | "hosts"
@@ -825,10 +825,6 @@ export const useApp = create<AppStore>((set, get) => ({
           /* no key in keychain or unlock failed → fall through to unlock screen */
         }
       }
-      // Watching resumes with the app: anything still listed kept its copy
-      // through the lock and only needs the poll back (and, once the host is
-      // reconnected, a session to push to).
-      if (status.unlocked) resumeExternalEdits();
       set({
         instanceExists: status.exists,
         unlocked: status.unlocked,

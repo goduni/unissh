@@ -41,6 +41,9 @@
     { "identifier": "fs:allow-mkdir", "allow": [{ "path": "$TEMP/unissh-external-edit" }, { "path": "$TEMP/unissh-external-edit/**" }] },
     { "identifier": "fs:allow-stat", "allow": [{ "path": "$TEMP/unissh-external-edit/**" }] },
     { "identifier": "fs:allow-remove", "allow": [{ "path": "$TEMP/unissh-external-edit" }, { "path": "$TEMP/unissh-external-edit/**" }] },
-    { "identifier": "opener:allow-open-path", "allow": [{ "path": "**" }, { "path": "*:/**" }] }
+    { "identifier": "fs:allow-write-text-file", "allow": [{ "path": "$TEMP/unissh-external-edit/**" }] },
+    { "identifier": "fs:allow-read-dir", "allow": [{ "path": "$TEMP/unissh-external-edit" }] },
+    { "identifier": "fs:allow-rename", "allow": [{ "path": "$TEMP/unissh-external-edit/**" }] },
+    { "identifier": "opener:allow-open-path", "allow": [{ "path": "$TEMP/unissh-external-edit/**" }] }
   ]
 }

@@ -56,7 +56,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
     }
     setAsking(false);
     try {
-      await resolveConflict(edit.id, choice, resolved.source);
+      await resolveConflict(edit.id, choice, resolved);
     } catch (e) {
       toast(apiErrorMessage(e), "err");
     }

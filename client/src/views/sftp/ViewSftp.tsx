@@ -25,7 +25,6 @@ import type { TabInfo } from "./TabStrip";
 import { TransferQueue } from "./TransferQueue";
 import { ExternalEdits } from "./ExternalEdits";
 import { setSourceResolver, startExternalEdit, type ResolvedSession } from "@/sftp/external-edit";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConflictDialog, ChmodDialog } from "./dialogs";
 import { TextEditor } from "./TextEditor";
@@ -393,20 +392,20 @@ export function ViewSftp() {
     const path = await slot.source.join(slot.cwd, entry.name);
     setEditor({ source: slot.source, path, name: entry.name, size: entry.size });
   }
-  /** Hand the file to whatever the OS opens it with. A local file is already
-   *  where the editor needs it; a remote one is copied down and watched. */
+  /** Copy a remote file down, hand it to whatever the OS opens it with, and
+   *  watch it. Remote only — a local file is already open-able by every other
+   *  tool on the machine, and offering it here would mean handing the OS
+   *  launcher an unrestricted path scope for no real gain. */
   async function openExternally(slot: SlotCtl, entry: Entry) {
-    if (!slot.source) return;
+    if (!slot.source || slot.location.kind !== "remote") return;
     try {
       const path = await slot.source.join(slot.cwd, entry.name);
-      if (slot.location.kind === "local") {
-        await openPath(path);
-        return;
-      }
-      if (slot.location.kind !== "remote") return;
       const sessionId = slot.location.sessionId;
       const profileId = sessions.find((s) => s.id === sessionId)?.profileId ?? "";
-      await startExternalEdit(slot.source, sessionId, profileId, path, entry.name);
+      const id = await startExternalEdit(slot.source, sessionId, profileId, path, entry.name);
+      // Refused because a copy of this file is already on its way down. Say so —
+      // silence here reads as a dead menu item.
+      if (!id) toast(t("sftp.extEdit.alreadyOpening"), "info");
     } catch (e) {
       toast(apiErrorMessage(e), "err");
     }
@@ -438,9 +437,9 @@ export function ViewSftp() {
     const entries = slot.selection.has(entry.name) && slot.selection.size > 1 ? slot.selectedEntries() : [entry];
     const items: MenuItem[] = [];
     if (entry.isDir) items.push({ icon: "folderOpen", label: t("common.open"), onClick: () => slot.navigate(entry.name) });
-    else if (isTouch) {
-      // No external editor to hand a copy to, and the receiving app generally
-      // can't write it back — so the entry would only leave plaintext behind.
+    else if (isTouch || slot.location.kind !== "remote") {
+      // A phone has no external editor to hand a copy to (and the receiving app
+      // generally can't write it back); a local file needs no copy at all.
       items.push({ icon: "note", label: t("common.open"), onClick: () => void openEditor(slot, entry) });
     } else if (externalEditDefault) {
       items.push({ icon: "link", label: t("common.open"), onClick: () => void openExternally(slot, entry) });

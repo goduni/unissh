@@ -1292,8 +1292,9 @@ export const en = {
       "stop": "Stop editing",
       "sessionClosed": "That SFTP session is closed",
       "conflictTitle": "Changed on the server",
-      "conflictBody": "Someone else wrote to this file after you opened it. Overwriting discards their version; Keep both saves yours beside it and follows the copy from now on.",
-      "keepServer": "Keep theirs",
+      "conflictBody": "Someone else wrote to this file after you opened it. Overwrite discards their version; Keep both saves yours beside it and follows the copy from now on; Not now sends nothing and leaves your copy as it is — the next save will ask again only if the file changes on the server again.",
+      "keepServer": "Not now",
+      "alreadyOpening": "Already opening that file",
       "plaintextNote": "Copies are stored unencrypted and deleted when you stop editing or quit."
     },
     "toast": {

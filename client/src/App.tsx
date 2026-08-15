@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { platform } from "@tauri-apps/plugin-os";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { purgeExternalEditScratch, stopAllExternalEdits } from "@/sftp/external-edit";
+import { purgeExternalEditScratch, resumeExternalEdits, stopAllExternalEdits } from "@/sftp/external-edit";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePalette } from "@/theme/ThemeProvider";
 import { useApp } from "@/store/app";
@@ -381,6 +381,13 @@ export function App() {
       unlisten?.();
     };
   }, [t]);
+
+  // Locking stops the external-edit poll but keeps the copies; this is what
+  // starts it again. Driven from the unlocked flag rather than from the unlock
+  // screen, so every path that unlocks — keychain, password, repair — resumes.
+  useEffect(() => {
+    if (unlocked) resumeExternalEdits();
+  }, [unlocked]);
 
   // Anything left in the external-edit scratch directory is from a previous run
   // — a crash, a kill -9, a close that timed out — and holds decrypted remote
