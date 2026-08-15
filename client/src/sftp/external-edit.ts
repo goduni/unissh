@@ -248,12 +248,22 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
         return;
       }
     }
+    // Snapshot BEFORE the upload: what we are about to send is this state, not
+    // whatever the file looks like when the upload finishes. Reading it after
+    // would adopt a save made mid-upload as already-sent and silently drop it.
+    const sent = (await localStamp(edit.localPath)) ?? edit.local;
     await api.sftpUpload(edit.sessionId, edit.localPath, edit.remotePath, 0, () => {});
     const current = find(id);
     if (!current) return; // stopped mid-upload
-    const local = (await localStamp(current.localPath)) ?? current.local;
     const base = (await remoteStamp(source, current.remotePath)) ?? current.base;
-    patch(id, { state: "watching", local, base, saves: current.saves + 1, error: undefined, settling: undefined });
+    patch(id, {
+      state: "watching",
+      local: sent,
+      base,
+      saves: current.saves + 1,
+      error: undefined,
+      settling: undefined,
+    });
   } catch (e) {
     patch(id, { state: "error", error: apiErrorMessage(e) });
   }
