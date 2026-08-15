@@ -368,6 +368,7 @@ export function App() {
           }
           event.preventDefault();
           let ok = false;
+          let answered = false;
           try {
             // Race the dialog against a deadline. A native dialog that never
             // resolves is not hypothetical on Linux — an undecorated window under
@@ -383,13 +384,19 @@ export function App() {
             ]
               .filter(Boolean)
               .join("\n\n");
+            // `answered` is set by the DIALOG's own resolution, never by the
+            // deadline — the difference decides whether we may delete anything.
+            const dialog = confirm(body, {
+              title: t("quit.title"),
+              kind: "warning",
+              okLabel: t("quit.confirm"),
+              cancelLabel: t("common.cancel"),
+            }).then((v) => {
+              answered = true;
+              return v;
+            });
             ok = await Promise.race([
-              confirm(body, {
-                title: t("quit.title"),
-                kind: "warning",
-                okLabel: t("quit.confirm"),
-                cancelLabel: t("common.cancel"),
-              }),
+              dialog,
               new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 10_000)),
             ]);
           } catch {
@@ -398,7 +405,12 @@ export function App() {
             ok = true;
           }
           if (ok) {
-            await cleanup();
+            // The 10s deadline exists so an unshowable dialog cannot trap the
+            // user in an unquittable window — it is not an answer. Closing on it
+            // is survivable; DELETING on it is not, because a copy can hold the
+            // only version of a change. So the timeout closes and leaves the
+            // copies for the next start to collect.
+            if (answered) await cleanup();
             confirmedClose.current = true;
             void win.close();
           }

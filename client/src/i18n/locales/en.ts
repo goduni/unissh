@@ -1289,6 +1289,7 @@ export const en = {
         "openFailed": "Couldn’t read the file after copying it",
         "unsafeRoot": "The scratch directory in $TEMP isn’t private — refusing to put a decrypted copy there",
         "tooLarge": "That file is too large to edit externally",
+        "executable": "Your system would RUN that file rather than open it, so UniSSH won’t hand it over. Download it instead if you meant to inspect it.",
         "sizeUnknown": "Couldn’t read that file’s size on the server, so it wasn’t copied",
         "removeFailed": "Couldn’t delete the local copy at {{path}} — remove it yourself if it matters"
       },

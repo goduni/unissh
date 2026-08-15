@@ -39,6 +39,10 @@ const SETTLE_MS = 800;
  *  renames over the target — some unlink and recreate, which leaves a real
  *  window where the path does not exist. */
 const MISSING_GRACE_MS = 3_000;
+/** …re-checked within the tick rather than across them, because the next tick
+ *  can be a throttled minute away and would blow the budget on one sample. */
+const MISSING_RETRIES = 6;
+const MISSING_RETRY_MS = 400;
 /** How long to wait for a host to come back before parking the edit. Unlocking
  *  the vault drops every SFTP session, so without this grace an edit would be
  *  errored out before the user could reconnect — and an errored edit no longer
@@ -50,6 +54,29 @@ const SESSION_GRACE_MS = 60_000;
 const ZERO_HOLD_MS = 10_000;
 
 export type EditState = "downloading" | "watching" | "uploading" | "conflict" | "error";
+
+/** Extensions the OS launcher RUNS rather than opens. Handing one of these to
+ *  `openPath` turns "let me look at this file on the server" into executing
+ *  code from that server as the user — Windows ShellExecute on .exe/.bat/.js/
+ *  .lnk, a Linux .desktop, a macOS .command. An editor is not what would open
+ *  them, so refusing costs nothing this feature is for.
+ *
+ *  A deny-list is the wrong shape in general, but the alternative — allowing
+ *  only known-inert extensions — would refuse the extensionless config files
+ *  that are most of what people edit over SSH. */
+const EXECUTABLE_EXTS = new Set([
+  "action", "apk", "app", "appimage", "bat", "bin", "cmd", "com", "command", "cpl", "deb", "desktop",
+  "dll", "dmg", "exe", "gadget", "hta", "inf", "ins", "ipa", "iso", "jar", "js", "jse", "ksh", "lnk",
+  "msc", "msi", "msp", "mst", "out", "pif", "pkg", "ps1", "psm1", "reg", "rpm", "run", "scf", "scr",
+  "sct", "sh", "shs", "url", "vb", "vbe", "vbs", "wsf", "wsh",
+]);
+
+/** True when the OS would execute `name` rather than open it. */
+export function isExecutableName(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return false; // no extension, or a dotfile like `.bashrc`
+  return EXECUTABLE_EXTS.has(name.slice(dot + 1).toLowerCase());
+}
 
 /** Refuse to copy down something no editor will open anyway. The in-app editor
  *  stops at 2 MiB; this is far looser because an external editor can genuinely
@@ -248,12 +275,18 @@ async function scratchDir(id: string): Promise<string> {
   return dir;
 }
 
-async function localStamp(path: string): Promise<Stamp | null> {
-  try {
-    const s = await stat(path);
-    return { size: s.size, mtime: s.mtime ? s.mtime.getTime() : 0 };
-  } catch {
-    return null;
+/** Re-checks a few times before answering null. An editor that unlinks and
+ *  recreates leaves a gap of milliseconds, and the next poll may be a throttled
+ *  minute away — so the gap has to be ridden out here, not across ticks. */
+async function localStamp(path: string, retries = 0): Promise<Stamp | null> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const s = await stat(path);
+      return { size: s.size, mtime: s.mtime ? s.mtime.getTime() : 0 };
+    } catch {
+      if (attempt >= retries) return null;
+      await new Promise((resolve) => setTimeout(resolve, MISSING_RETRY_MS));
+    }
   }
 }
 
@@ -390,6 +423,8 @@ export async function startExternalEdit(
   // The store check above cannot see an edit whose download is still running,
   // and a big file makes that window minutes long — during which a second click
   // would start a rival copy of the same file. Claim the path up front.
+  if (isExecutableName(name)) throw new Error(tDyn("sftp.extEdit.err.executable"));
+
   const claim = `${profileId || sessionId}\u0000${remotePath}`;
   if (starting.has(claim)) return { ok: false, reason: "already" };
   starting.add(claim);
@@ -664,7 +699,8 @@ export async function resolveConflict(
     // row back somewhere the user can act on. Leaving it "uploading" hides it
     // from the tick, from both buttons, and from the rail badge, and every
     // later save disappears in silence.
-    patch(id, { state: "conflict" });
+    if (find(id)) patch(id, { state: "conflict" });
+    else await drainDeferredRemoval(edit.localDir);
     throw e;
   }
 }
@@ -741,6 +777,15 @@ async function applyConflictChoice(
 }
 
 /** Upload the local copy over the remote file. */
+/** True when the edit was stopped while this push was in its pre-flight — which
+ *  parks the directory removal on us, and means any toast we were about to fire
+ *  would be about something the user just cancelled. */
+async function stoppedDuringPush(id: string, edit: LiveEdit): Promise<boolean> {
+  if (find(id)) return false;
+  await drainDeferredRemoval(edit.localDir);
+  return true;
+}
+
 /** Remove a scratch directory whose edit was stopped while an upload held it. */
 async function drainDeferredRemoval(localDir: string): Promise<void> {
   if (removeAfterUpload.delete(localDir)) {
@@ -770,12 +815,14 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
         // overwrite a file whose state we do not know. Genuinely gone is fine —
         // re-creating it is what saving means.
         if (!(await confirmedAbsent(source, edit.remotePath))) {
+          if (await stoppedDuringPush(id, edit)) return;
           patch(id, { state: "error", errorKey: "checkFailed" });
           announce(edit, "checkFailed");
           return;
         }
       } else if (edit.base) {
         if (!same(now, edit.base)) {
+          if (await stoppedDuringPush(id, edit)) return;
           patch(id, { state: "conflict", conflictReason: "changed" });
           announce(edit, "changed");
           return;
@@ -785,6 +832,7 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
         // know whose version is on the server. Matching sizes would be weak
         // evidence — a one-character edit keeps the length — and this guard
         // exists precisely to stop a blind write. Ask.
+        if (await stoppedDuringPush(id, edit)) return;
         patch(id, { state: "conflict", conflictReason: "unknown" });
         announce(edit, "unknown");
         return;
@@ -931,7 +979,7 @@ async function tick(): Promise<void> {
 async function stepEdit(editId: string): Promise<void> {
   for (const edit of useExternalEdits.getState().edits.filter((e) => e.id === editId)) {
     if (edit.state !== "watching") continue;
-    const now = await localStamp(edit.localPath);
+    const now = await localStamp(edit.localPath, MISSING_RETRIES);
     if (!now) {
       // Not necessarily gone: an editor that unlinks and recreates instead of
       // renaming leaves a real gap here. Only give up once it persists.

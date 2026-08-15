@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { settleStep, zeroHold } from "./external-edit";
+import { isExecutableName, settleStep, zeroHold } from "./external-edit";
 
 const st = (size: number, mtime: number) => ({ size, mtime });
 
@@ -124,5 +124,35 @@ describe("zeroHold", () => {
 
   it("never holds when the file was already empty on the server", () => {
     expect(zeroHold(0, 0, undefined, T0)).toEqual({ action: "none" });
+  });
+});
+
+describe("isExecutableName", () => {
+  it("refuses what the OS would run rather than open", () => {
+    // The threat: "let me peek at this file on the server" becoming code
+    // execution as the user, because openPath hands it to ShellExecute/xdg-open.
+    for (const name of ["setup.exe", "run.BAT", "a.desktop", "x.command", "hook.ps1", "p.jar", "s.sh"]) {
+      expect(isExecutableName(name)).toBe(true);
+    }
+  });
+
+  it("allows the things people actually edit over SSH", () => {
+    for (const name of ["nginx.conf", "docker-compose.yml", "notes.md", "app.py", "index.html", "id_rsa.pub"]) {
+      expect(isExecutableName(name)).toBe(false);
+    }
+  });
+
+  it("treats a dotfile as having no extension", () => {
+    // `.bashrc` must not read as an extension of "bashrc".
+    expect(isExecutableName(".bashrc")).toBe(false);
+    expect(isExecutableName(".vimrc")).toBe(false);
+  });
+
+  it("allows an extensionless file", () => {
+    expect(isExecutableName("Makefile")).toBe(false);
+  });
+
+  it("sees through a double extension", () => {
+    expect(isExecutableName("report.pdf.exe")).toBe(true);
   });
 });
