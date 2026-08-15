@@ -308,6 +308,20 @@ export function App() {
         // unquittable window is not.
         const u = await win.onCloseRequested(async (event) => {
           if (confirmedClose.current) return; // our own close — let it through
+          // FIRST, before any branch that may return: the external-edit copies
+          // are remote file contents in the clear, and the paths that skip the
+          // confirmation (quit-confirm off, or nothing else live) are exactly
+          // the ones that used to leave them behind. Bounded and caught, like
+          // everything on this path — a cleanup that hangs must not be what
+          // makes the window unquittable.
+          try {
+            await Promise.race([
+              stopAllExternalEdits(),
+              new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+            ]);
+          } catch {
+            /* ignore — the startup purge is the backstop */
+          }
           let wantConfirm = true;
           try {
             wantConfirm = localStorage.getItem("unissh.confirmquit") !== "0";
@@ -345,19 +359,6 @@ export function App() {
             ok = true;
           }
           if (ok) {
-            // Remove the external-edit copies before the window goes: they are
-            // remote file contents in the clear. Bounded and caught, like
-            // everything else on this path — a cleanup that hangs must not be
-            // what makes the window unquittable. Whatever survives is removed at
-            // the next launch (see the purge effect below).
-            try {
-              await Promise.race([
-                stopAllExternalEdits(),
-                new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
-              ]);
-            } catch {
-              /* ignore — the startup purge is the backstop */
-            }
             confirmedClose.current = true;
             void win.close();
           }

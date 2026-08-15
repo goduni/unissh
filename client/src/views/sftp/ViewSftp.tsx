@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { Icon, type IconName } from "@/components/primitives";
-import { useNarrow } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
 import { useApp } from "@/store/app";
 import { toast } from "@/store/toast";
@@ -73,6 +73,9 @@ export function ViewSftp() {
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
+  // Platform, not width: a narrowed desktop window still has an external editor,
+  // and a phone still doesn't. Gates the external-editor entries.
+  const isTouch = useIsMobile();
   // Collapse to a single pane based on the CONTENT width, not the raw window width:
   // two panes need ~536px, and a wide sidebar can starve the content area below that
   // while the window is still > the useNarrow breakpoint (otherwise the 2nd pane
@@ -433,7 +436,11 @@ export function ViewSftp() {
     const entries = slot.selection.has(entry.name) && slot.selection.size > 1 ? slot.selectedEntries() : [entry];
     const items: MenuItem[] = [];
     if (entry.isDir) items.push({ icon: "folderOpen", label: t("common.open"), onClick: () => slot.navigate(entry.name) });
-    else if (externalEditDefault) {
+    else if (isTouch) {
+      // No external editor to hand a copy to, and the receiving app generally
+      // can't write it back — so the entry would only leave plaintext behind.
+      items.push({ icon: "note", label: t("common.open"), onClick: () => void openEditor(slot, entry) });
+    } else if (externalEditDefault) {
       items.push({ icon: "link", label: t("common.open"), onClick: () => void openExternally(slot, entry) });
       items.push({ icon: "note", label: t("sftp.menu.openInApp"), onClick: () => void openEditor(slot, entry) });
     } else {

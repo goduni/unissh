@@ -27,6 +27,7 @@ import { logWarn, logError, logDebug } from "@/bridge/log";
 import type { TermTheme } from "@/theme/tokens";
 import type { SftpSession, Transfer } from "@/store/sftp-types";
 import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
+import { stopAllExternalEdits } from "@/sftp/external-edit";
 
 export type Route =
   | "hosts"
@@ -308,9 +309,10 @@ interface AppStore {
   /** How many files to transfer in parallel over one SFTP connection (channel
    *  pool size). 1 = strictly sequential. Persisted; passed to sftpOpen. */
   sftpParallelism: number;
-  /** Double-clicking a remote file opens it in the OS editor instead of the
-   *  in-app one (persisted; desktop-only, the mobile shell has nothing to open
-   *  a copy with). The context-menu entries offer both either way. */
+  /** "Open" in a file's context menu hands it to the OS editor instead of the
+   *  in-app one (persisted; desktop-only, the mobile shell has nothing to open a
+   *  copy with). Both entries stay in the menu either way. Double-click is a
+   *  different action entirely — it sends the file to the other pane. */
   sftpExternalEditDefault: boolean;
   /** profileId → epoch ms of the last connect (persisted; drives recent sort). */
   lastConnected: Record<string, number>;
@@ -640,6 +642,7 @@ const SFTP_PARALLELISM_DEFAULT = 4;
 
 /** How many files to transfer concurrently over one SFTP connection. Persisted
  *  locally (device-local UX/perf knob, not vault data); clamped to [MIN, MAX]. */
+/** Whether "Open" reaches for the external editor (persisted, device-local). */
 const lsExternalEditDefault = (): boolean => {
   try {
     return localStorage.getItem("unissh.sftpExternalEditDefault") === "1";
@@ -1012,6 +1015,10 @@ export const useApp = create<AppStore>((set, get) => ({
     // Drop the cached Secret Key so a post-lock heap inspection can't recover it.
     clearSecretKey();
     cancelAllTransfers();
+    // External-edit copies are remote file contents in the clear, and locking
+    // hides the strip that would let anyone stop them. Leaving them on disk
+    // (with the poll still running) would make locking the weaker state.
+    void stopAllExternalEdits();
     set({
       unlocked: false,
       overlay: "unlock",

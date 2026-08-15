@@ -24,6 +24,10 @@ import { dedupeName, remoteParent } from "@/sftp/paths";
 const POLL_MS = 500;
 /** Consecutive identical readings before a change counts as "the editor is done". */
 const SETTLE_TICKS = 2;
+/** Consecutive readings where the copy is missing before we give up on it. Not
+ *  every editor renames over the target — some unlink and recreate, which leaves
+ *  a real window where the path does not exist. */
+const MAX_MISSES = 6;
 
 export type EditState = "watching" | "uploading" | "conflict" | "error";
 
@@ -44,12 +48,15 @@ export interface LiveEdit {
   name: string;
   state: EditState;
   /** The remote file as we last knew it — set on download, refreshed on upload.
-   *  A remote stamp that no longer matches this is somebody else's write. */
-  base: Stamp;
+   *  A remote stamp that no longer matches this is somebody else's write.
+   *  `undefined` means we could not read it: unknown, not unchanged. */
+  base?: Stamp;
   /** The local copy as of the last upload. A difference is an unsaved edit. */
   local: Stamp;
   /** Candidate local stamp, waiting to repeat before we trust it. */
   settling?: Stamp & { ticks: number };
+  /** Consecutive ticks that could not see the copy at all. */
+  misses?: number;
   /** Successful pushes so far — the only progress this feature has to show. */
   saves: number;
   error?: string;
@@ -102,6 +109,21 @@ async function remoteStamp(source: FileSource, path: string): Promise<Stamp | nu
 }
 
 const same = (a: Stamp, b: Stamp): boolean => a.size === b.size && a.mtime === b.mtime;
+
+/**
+ * Does `path` really not exist, or did we merely fail to look?
+ *
+ * `FileSource.stat` answers null to both, and the difference decides whether a
+ * save may proceed: a deleted file should be re-created, an unreadable one must
+ * not be overwritten blind. Listing the parent separates them — it throws on a
+ * transport failure instead of shrugging.
+ */
+async function confirmedAbsent(source: FileSource, path: string): Promise<boolean> {
+  const dir = remoteParent(path);
+  const name = path.slice(dir === "/" ? 1 : dir.length + 1);
+  const entries = await source.list(dir);
+  return !entries.some((e) => e.name === name);
+}
 
 /** What a tick concluded about one edit. */
 export type SettleStep =
@@ -158,18 +180,40 @@ export async function startExternalEdit(
 
   const id = `ee${++editSeq}`;
   const dir = await scratchDir(id);
-  const localPath = await join(dir, name);
-  await api.sftpDownload(sessionId, remotePath, localPath, 0, null, () => {});
+  try {
+    const localPath = await join(dir, name);
+    await api.sftpDownload(sessionId, remotePath, localPath, 0, null, () => {});
 
-  const base = (await remoteStamp(source, remotePath)) ?? { size: 0, mtime: 0 };
-  const local = (await localStamp(localPath)) ?? { size: 0, mtime: 0 };
-  setEdits((edits) => [
-    ...edits,
-    { id, sessionId, remotePath, localDir: dir, localPath, name, state: "watching", base, local, saves: 0 },
-  ]);
+    // Both stamps are the baselines every later decision is measured against.
+    // A sentinel here would be a lie the first save pays for: a bogus conflict
+    // (remote) or an immediate pointless re-upload (local). Fail the open
+    // instead — nothing has been handed to an editor yet, so nothing is lost.
+    const base = await remoteStamp(source, remotePath);
+    const local = await localStamp(localPath);
+    if (!base || !local) throw new Error("could not read the file after copying it");
+
+    setEdits((edits) => [
+      ...edits,
+      { id, sessionId, remotePath, localDir: dir, localPath, name, state: "watching", base, local, saves: 0 },
+    ]);
+    ensurePolling();
+    await openPath(localPath);
+    return id;
+  } catch (e) {
+    // A half-written copy is still the remote file in the clear. Take the
+    // directory with us rather than leaving it for the next launch to purge.
+    await remove(dir, { recursive: true }).catch(() => {});
+    throw e;
+  }
+}
+
+/** Put an errored edit back under watch. The local copy is untouched, so this
+ *  simply resumes: the next tick sees the unsaved change and pushes it. */
+export function retryExternalEdit(id: string): void {
+  const edit = find(id);
+  if (!edit || edit.state !== "error") return;
+  patch(id, { state: "watching", error: undefined, misses: 0 });
   ensurePolling();
-  await openPath(localPath);
-  return id;
 }
 
 /** Stop watching and delete the local copy. */
@@ -220,8 +264,8 @@ export async function resolveConflict(id: string, choice: ConflictChoice, source
     // Adopt the current local stamp as the baseline: the edit the user declined
     // to push must not re-trigger the prompt on the next tick.
     const local = (await localStamp(edit.localPath)) ?? edit.local;
-    const base = (await remoteStamp(source, edit.remotePath)) ?? edit.base;
-    patch(id, { state: "watching", local, base });
+    const base = await remoteStamp(source, edit.remotePath);
+    patch(id, { state: "watching", local, base: base ?? undefined });
     return;
   }
   if (choice === "copy") {
@@ -239,14 +283,20 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
   if (!edit) return;
   patch(id, { state: "uploading" });
   try {
-    if (!force) {
+    if (!force && edit.base) {
       const now = await remoteStamp(source, edit.remotePath);
-      // A vanished file is not a conflict: re-creating it is what the user
-      // asked for by saving. A changed one is somebody else's work.
-      if (now && !same(now, edit.base)) {
-        patch(id, { state: "conflict" });
-        return;
+      if (now) {
+        // Somebody else's write. Stop and ask.
+        if (!same(now, edit.base)) {
+          patch(id, { state: "conflict" });
+          return;
+        }
+      } else if (!(await confirmedAbsent(source, edit.remotePath))) {
+        // Could not read it, and it is still listed: refuse rather than
+        // overwrite a file whose state we do not know.
+        throw new Error("could not check the file on the server");
       }
+      // Genuinely gone — re-creating it is what saving means.
     }
     // Snapshot BEFORE the upload: what we are about to send is this state, not
     // whatever the file looks like when the upload finishes. Reading it after
@@ -255,14 +305,19 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
     await api.sftpUpload(edit.sessionId, edit.localPath, edit.remotePath, 0, () => {});
     const current = find(id);
     if (!current) return; // stopped mid-upload
-    const base = (await remoteStamp(source, current.remotePath)) ?? current.base;
+    // Deliberately not falling back to the old baseline: it describes the file
+    // as it was BEFORE our upload, so keeping it would make the next save report
+    // a conflict against our own write. Unknown is the honest value, and the
+    // guard skips a baseline it does not have.
+    const base = await remoteStamp(source, current.remotePath);
     patch(id, {
       state: "watching",
       local: sent,
-      base,
+      base: base ?? undefined,
       saves: current.saves + 1,
       error: undefined,
       settling: undefined,
+      misses: 0,
     });
   } catch (e) {
     patch(id, { state: "error", error: apiErrorMessage(e) });
@@ -298,12 +353,15 @@ async function tick(): Promise<void> {
   for (const edit of useExternalEdits.getState().edits) {
     if (edit.state !== "watching") continue;
     const now = await localStamp(edit.localPath);
-    // The copy is gone — the editor moved it, or something cleaned /tmp. Nothing
-    // left to watch, and re-uploading a file we can't read would be a guess.
     if (!now) {
-      patch(edit.id, { state: "error", error: "local copy disappeared" });
+      // Not necessarily gone: an editor that unlinks and recreates instead of
+      // renaming leaves a real gap here. Only give up once it persists.
+      const misses = (edit.misses ?? 0) + 1;
+      if (misses < MAX_MISSES) patch(edit.id, { misses });
+      else patch(edit.id, { state: "error", error: "local copy disappeared" });
       continue;
     }
+    if (edit.misses) patch(edit.id, { misses: 0 });
     const step = settleStep(edit.local, edit.settling, now);
     if (step.action === "none") continue;
     if (step.action === "clear") {

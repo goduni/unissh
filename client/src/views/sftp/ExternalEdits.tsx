@@ -14,6 +14,7 @@ import { apiErrorMessage } from "@/bridge/types";
 import type { FileSource } from "@/bridge/sources";
 import {
   resolveConflict,
+  retryExternalEdit,
   stopExternalEdit,
   useExternalEdits,
   type ConflictChoice,
@@ -31,6 +32,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: (sessionId: s
   const p = usePalette();
   const { t } = useTranslation();
   const [asking, setAsking] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
 
   const status =
     edit.state === "error"
@@ -95,13 +97,51 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: (sessionId: s
             {t("sftp.extEdit.resolve")}
           </Btn>
         )}
+        {edit.state === "error" && (
+          <Btn size="sm" variant="outline" icon="refresh" onClick={() => retryExternalEdit(edit.id)}>
+            {t("sftp.extEdit.retry")}
+          </Btn>
+        )}
         <IconBtn
           icon="x"
           size={26}
           title={t("sftp.extEdit.stop")}
-          onClick={() => void stopExternalEdit(edit.id)}
+          // Stopping deletes the copy. That is harmless while saves are landing,
+          // but an errored edit is precisely the case where the copy holds work
+          // the server has never seen — so that one asks first.
+          onClick={() => (edit.state === "error" ? setConfirmStop(true) : void stopExternalEdit(edit.id))}
         />
       </div>
+
+      {confirmStop && (
+        <Modal
+          icon="trash"
+          iconColor={p.red}
+          title={t("sftp.extEdit.discardTitle")}
+          subtitle={edit.localPath}
+          onClose={() => setConfirmStop(false)}
+          footer={
+            <>
+              <div style={{ flex: 1 }} />
+              <Btn variant="ghost" size="sm" onClick={() => setConfirmStop(false)}>
+                {t("common.cancel")}
+              </Btn>
+              <Btn
+                variant="danger"
+                size="sm"
+                onClick={() => {
+                  setConfirmStop(false);
+                  void stopExternalEdit(edit.id);
+                }}
+              >
+                {t("sftp.extEdit.discard")}
+              </Btn>
+            </>
+          }
+        >
+          <div style={{ fontSize: 13, color: p.txt }}>{t("sftp.extEdit.discardBody")}</div>
+        </Modal>
+      )}
 
       {asking && (
         <Modal
