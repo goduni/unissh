@@ -5,67 +5,86 @@ const st = (size: number, mtime: number) => ({ size, mtime });
 
 describe("settleStep", () => {
   const uploaded = st(100, 1000);
+  const T0 = 1_000_000;
+  /** Comfortably past SETTLE_MS. */
+  const later = T0 + 5_000;
 
   it("does nothing while the copy matches what was uploaded", () => {
-    expect(settleStep(uploaded, undefined, st(100, 1000))).toEqual({ action: "none" });
+    expect(settleStep(uploaded, undefined, st(100, 1000), T0)).toEqual({ action: "none" });
   });
 
-  it("starts counting on the first changed reading rather than pushing at once", () => {
-    expect(settleStep(uploaded, undefined, st(120, 2000))).toEqual({
+  it("starts the clock on the first changed reading rather than pushing at once", () => {
+    expect(settleStep(uploaded, undefined, st(120, 2000), T0)).toEqual({
       action: "wait",
-      settling: { size: 120, mtime: 2000, ticks: 1 },
+      settling: { size: 120, mtime: 2000, since: T0 },
     });
   });
 
-  it("pushes once the same change repeats", () => {
-    const first = settleStep(uploaded, undefined, st(120, 2000));
-    expect(first.action).toBe("wait");
-    if (first.action !== "wait") return;
-    expect(settleStep(uploaded, first.settling, st(120, 2000))).toEqual({ action: "push" });
+  it("pushes once the same change has held still long enough", () => {
+    const first = settleStep(uploaded, undefined, st(120, 2000), T0);
+    if (first.action !== "wait") throw new Error("expected wait");
+    expect(settleStep(uploaded, first.settling, st(120, 2000), later)).toEqual({ action: "push" });
   });
 
-  it("restarts the count while the file is still growing", () => {
-    // A large save streaming to disk: every tick sees a bigger file, and none of
-    // them may be uploaded — that would push a half-written file.
-    let settling: { size: number; mtime: number; ticks: number } | undefined;
+  it("keeps waiting while the change is younger than the settle window", () => {
+    const first = settleStep(uploaded, undefined, st(120, 2000), T0);
+    if (first.action !== "wait") throw new Error("expected wait");
+    expect(settleStep(uploaded, first.settling, st(120, 2000), T0 + 50).action).toBe("wait");
+  });
+
+  it("restarts the clock while the file is still growing", () => {
+    // A large save streaming to disk: every reading is bigger than the last,
+    // and none of them may be uploaded — that would push a half-written file.
+    let settling: { size: number; mtime: number; since: number } | undefined;
+    let t = T0;
     for (const size of [40, 80, 120]) {
-      const step = settleStep(uploaded, settling, st(size, 2000));
+      const step = settleStep(uploaded, settling, st(size, 2000), t);
       expect(step.action).toBe("wait");
       if (step.action !== "wait") return;
-      expect(step.settling.ticks).toBe(1);
+      expect(step.settling.since).toBe(t);
       settling = step.settling;
+      t += 5_000;
     }
-    expect(settleStep(uploaded, settling, st(120, 2000))).toEqual({ action: "push" });
+    expect(settleStep(uploaded, settling, st(120, 2000), t)).toEqual({ action: "push" });
   });
 
   it("treats a write-then-rename save as one change", () => {
     // The rename lands atomically, so both readings after it are identical —
     // exactly the case an inode watcher misses.
     const after = st(133, 2500);
-    const first = settleStep(uploaded, undefined, after);
+    const first = settleStep(uploaded, undefined, after, T0);
     if (first.action !== "wait") throw new Error("expected wait");
-    expect(settleStep(uploaded, first.settling, after)).toEqual({ action: "push" });
+    expect(settleStep(uploaded, first.settling, after, later)).toEqual({ action: "push" });
+  });
+
+  it("measures the wait in wall-clock, so a throttled poll can't stretch it", () => {
+    // Two readings a minute apart — what a hidden window actually gets — must
+    // still push on the second one, not on some later tick.
+    const changed = st(150, 3000);
+    const first = settleStep(uploaded, undefined, changed, T0);
+    if (first.action !== "wait") throw new Error("expected wait");
+    expect(settleStep(uploaded, first.settling, changed, T0 + 60_000)).toEqual({ action: "push" });
   });
 
   it("drops the candidate when the file goes back to what we uploaded", () => {
-    const first = settleStep(uploaded, undefined, st(120, 2000));
+    const first = settleStep(uploaded, undefined, st(120, 2000), T0);
     if (first.action !== "wait") throw new Error("expected wait");
-    expect(settleStep(uploaded, first.settling, uploaded)).toEqual({ action: "clear" });
+    expect(settleStep(uploaded, first.settling, uploaded, later)).toEqual({ action: "clear" });
   });
 
   it("notices a same-size edit through mtime alone", () => {
     const touched = st(100, 5000);
-    const first = settleStep(uploaded, undefined, touched);
+    const first = settleStep(uploaded, undefined, touched, T0);
     if (first.action !== "wait") throw new Error("expected wait");
-    expect(settleStep(uploaded, first.settling, touched)).toEqual({ action: "push" });
+    expect(settleStep(uploaded, first.settling, touched, later)).toEqual({ action: "push" });
   });
 
   it("notices a same-mtime edit through size alone", () => {
     // Coarse mtime resolution on some filesystems: two saves inside one second.
     const grown = st(140, 1000);
-    const first = settleStep(uploaded, undefined, grown);
+    const first = settleStep(uploaded, undefined, grown, T0);
     if (first.action !== "wait") throw new Error("expected wait");
-    expect(settleStep(uploaded, first.settling, grown)).toEqual({ action: "push" });
+    expect(settleStep(uploaded, first.settling, grown, later)).toEqual({ action: "push" });
   });
 });
 

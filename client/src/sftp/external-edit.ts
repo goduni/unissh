@@ -24,8 +24,11 @@ import { dedupeName, remoteParent } from "@/sftp/paths";
 
 /** How often we look at the local copy. */
 const POLL_MS = 500;
-/** Consecutive identical readings before a change counts as "the editor is done". */
-const SETTLE_TICKS = 2;
+/** How long a change must read identically before it counts as finished. Two
+ *  readings are always required — one alone cannot tell a settled file from a
+ *  half-written one — but the wait between them is wall-clock, like every other
+ *  budget here, so a throttled poll does not silently multiply it. */
+const SETTLE_MS = 800;
 // Every budget below is WALL-CLOCK, not a tick count. A hidden webview's timers
 // are throttled to roughly one a minute, and this window is hidden for most of
 // an external edit by definition — the user is in another application. Counting
@@ -76,8 +79,8 @@ export interface LiveEdit {
   base?: Stamp;
   /** The local copy as of the last upload. A difference is an unsaved edit. */
   local: Stamp;
-  /** Candidate local stamp, waiting to repeat before we trust it. */
-  settling?: Stamp & { ticks: number };
+  /** Candidate local stamp, waiting to hold still before we trust it. */
+  settling?: Stamp & { since: number };
   /** When the copy first went missing (epoch ms). */
   missingSince?: number;
   /** When this host first had no live session (epoch ms). */
@@ -158,8 +161,11 @@ const HEARTBEAT_MS = 20 * 1000;
  *  minimised instance dead and delete the copies its editor still has open.
  *  Deleting live work is far worse than a leftover waiting for a later start. */
 const MIN_SILENCE_MS = 5 * 60 * 1000;
-/** And it must stay silent across this probe, which outlasts a throttled beat. */
-const PROBE_MS = 65 * 1000;
+/** And it must stay silent across this probe. Sized well beyond one throttled
+ *  beat: a minimised peer coming out of sleep gets only the beats that fit in
+ *  here to prove it is alive, and the cost of being wrong is deleting files its
+ *  editor has open. The purge is fire-and-forget, so the wait is free. */
+const PROBE_MS = 3 * 60 * 1000;
 /** Deliberately NOT dotted. Tauri's fs scope sets `require_literal_leading_dot`
  *  on unix, so a `**` allow does not match a dot-leading name — a `.alive` here
  *  is unwritable and unreadable, which the purge would read as "this run is
@@ -311,8 +317,8 @@ export type SettleStep =
   /** It moved and moved back — drop the candidate. */
   | { action: "clear" }
   /** Changed, but not yet stable enough to trust. */
-  | { action: "wait"; settling: Stamp & { ticks: number } }
-  /** The same change has now been seen SETTLE_TICKS times: the editor is done. */
+  | { action: "wait"; settling: Stamp & { since: number } }
+  /** The same change has now held still long enough: the editor is done. */
   | { action: "push" };
 
 /**
@@ -325,14 +331,14 @@ export type SettleStep =
  */
 export function settleStep(
   uploaded: Stamp,
-  settling: (Stamp & { ticks: number }) | undefined,
+  settling: (Stamp & { since: number }) | undefined,
   now: Stamp,
+  nowMs: number,
 ): SettleStep {
   if (same(now, uploaded)) return settling ? { action: "clear" } : { action: "none" };
-  // A different reading restarts the count: the file is still being written.
-  if (!settling || !same(settling, now)) return { action: "wait", settling: { ...now, ticks: 1 } };
-  const ticks = settling.ticks + 1;
-  return ticks >= SETTLE_TICKS ? { action: "push" } : { action: "wait", settling: { ...now, ticks } };
+  // A different reading restarts the clock: the file is still being written.
+  if (!settling || !same(settling, now)) return { action: "wait", settling: { ...now, since: nowMs } };
+  return nowMs - settling.since >= SETTLE_MS ? { action: "push" } : { action: "wait", settling };
 }
 
 /**
@@ -460,6 +466,10 @@ export async function startExternalEdit(
     // instead — nothing has been handed to an editor yet, so nothing is lost.
     const base = await remoteStamp(source, remotePath);
     const local = await localStamp(localPath);
+    // Checked again: a Stop landing during those two stats deletes the copy, and
+    // reporting that as "couldn't read the file" blames the user for their own
+    // action.
+    if (!find(id)) return { ok: false, reason: "cancelled" };
     if (!base || !local) throw new Error(tDyn("sftp.extEdit.err.openFailed"));
     patch(id, { state: "watching", base, local });
     ensurePolling();
@@ -644,10 +654,34 @@ export async function resolveConflict(
   // window would reserve a second name, leaving the first as litter, and start
   // a rival upload.
   patch(id, { state: "uploading" });
-  const source = session.source;
   // The dialog may have been open across a reconnect: push through whatever
   // session the host has now, not the one the conflict was raised on.
   if (session.sessionId !== edit.sessionId) patch(id, { sessionId: session.sessionId });
+  try {
+    return await applyConflictChoice(id, edit, choice, session.source);
+  } catch (e) {
+    // Anything here — a dead channel, an unwritable directory — must put the
+    // row back somewhere the user can act on. Leaving it "uploading" hides it
+    // from the tick, from both buttons, and from the rail badge, and every
+    // later save disappears in silence.
+    patch(id, { state: "conflict" });
+    throw e;
+  }
+}
+
+async function applyConflictChoice(
+  id: string,
+  edit: LiveEdit,
+  choice: ConflictChoice,
+  source: FileSource,
+): Promise<boolean> {
+  // Stop can land while this is awaiting — the row goes to "uploading" before
+  // the first await, so stopExternalEdit defers the directory removal to a push
+  // that may never happen. Anything that leaves without pushing must drain it.
+  const gone = async (): Promise<false> => {
+    await drainDeferredRemoval(edit.localDir);
+    return false;
+  };
   const giveUp = (): false => {
     patch(id, { state: "conflict" });
     return false;
@@ -660,6 +694,7 @@ export async function resolveConflict(
     // old value would be wrong in the one direction that matters: the next tick
     // would treat the file as freshly changed and push it — over the very
     // version they just chose to keep. Leave the conflict standing instead.
+    if (!find(id)) return gone();
     if (!local) return giveUp();
     const base = await remoteStamp(source, edit.remotePath);
     patch(id, { state: "watching", local, base: base ?? undefined });
@@ -697,6 +732,7 @@ export async function resolveConflict(
     // `base` described the ORIGINAL path; against the copy it means nothing, and
     // keeping it would raise a conflict against our own upload if this one fails
     // partway and gets retried.
+    if (!find(id)) return gone();
     const reservedPath = await source.join(dir, copyName);
     patch(id, { remotePath: reservedPath, reservedPath, name: copyName, base: undefined });
   }
@@ -705,6 +741,13 @@ export async function resolveConflict(
 }
 
 /** Upload the local copy over the remote file. */
+/** Remove a scratch directory whose edit was stopped while an upload held it. */
+async function drainDeferredRemoval(localDir: string): Promise<void> {
+  if (removeAfterUpload.delete(localDir)) {
+    await remove(localDir, { recursive: true }).catch(() => {});
+  }
+}
+
 async function push(id: string, source: FileSource, force: boolean): Promise<void> {
   const edit = find(id);
   if (!edit) return;
@@ -757,9 +800,7 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
     if (!current) {
       // Stopped mid-upload. The upload has returned, so the directory is safe
       // to remove now — which stopExternalEdit deliberately deferred.
-      if (removeAfterUpload.delete(edit.localDir)) {
-        await remove(edit.localDir, { recursive: true }).catch(() => {});
-      }
+      await drainDeferredRemoval(edit.localDir);
       return;
     }
     // Deliberately not falling back to the old baseline: it describes the file
@@ -785,9 +826,7 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
     // and keeping it would make Retry conflict against our own half-write. If
     // nothing was written, the baseline is still good.
     if (!find(id)) {
-      if (removeAfterUpload.delete(edit.localDir)) {
-        await remove(edit.localDir, { recursive: true }).catch(() => {});
-      }
+      await drainDeferredRemoval(edit.localDir);
       return;
     }
     patch(id, {
@@ -929,7 +968,7 @@ async function stepEdit(editId: string): Promise<void> {
       continue;
     }
 
-    const step = settleStep(edit.local, edit.settling, now);
+    const step = settleStep(edit.local, edit.settling, now, Date.now());
     if (step.action === "none") continue;
     if (step.action === "clear") {
       patch(edit.id, { settling: undefined });
