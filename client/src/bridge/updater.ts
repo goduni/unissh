@@ -257,6 +257,10 @@ export async function installUpdate(): Promise<InstallResult> {
   pending = null;
   try {
     const { relaunch } = await import("@tauri-apps/plugin-process");
+    // The process is replaced here, so nothing after it runs — including the
+    // window close handler that deletes the decrypted external-edit copies.
+    const { stopAllExternalEdits } = await import("@/sftp/external-edit");
+    await stopAllExternalEdits();
     await relaunch();
   } catch (e) {
     // The new version is already on disk; only the restart failed. Telling the

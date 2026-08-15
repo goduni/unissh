@@ -318,6 +318,7 @@ export const en = {
   quit: {
     title: "Quit UniSSH?",
     body: "You have {{count}} live session(s). Closing the window will disconnect them.",
+    bodyEdits: "{{count}} file(s) are open in an external editor. Quitting deletes their local copies — including any change that never reached the server.",
     confirm: "Quit",
   },
 
@@ -1283,7 +1284,9 @@ export const en = {
         "sessionClosed": "The SFTP session closed — reconnect the host, then Retry",
         "checkFailed": "Couldn’t check the file on the server, so nothing was sent",
         "openFailed": "Couldn’t read the file after copying it",
-        "unsafeRoot": "The scratch directory in $TEMP isn’t private — refusing to put a decrypted copy there"
+        "unsafeRoot": "The scratch directory in $TEMP isn’t private — refusing to put a decrypted copy there",
+        "tooLarge": "That file is too large to edit externally",
+        "removeFailed": "Couldn’t delete the local copy at {{path}} — remove it yourself if it matters"
       },
       "resolve": "Resolve",
       "retry": "Retry",
@@ -1297,7 +1300,7 @@ export const en = {
       "keepServer": "Not now",
       "alreadyOpening": "Already opening that file",
       "copyAt": "copy: {{path}}",
-      "plaintextNote": "Copies are stored unencrypted and deleted when you stop editing or quit."
+      "plaintextNote": "Copies are stored unencrypted. They are deleted when you stop editing and when you quit — and if UniSSH is killed instead, at a later start."
     },
     "toast": {
       "noVault": "No vault selected",

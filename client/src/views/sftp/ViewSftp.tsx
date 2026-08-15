@@ -525,6 +525,11 @@ export function ViewSftp() {
   };
   useEffect(() => {
     setSourceResolver(remoteSourceFor);
+    // Drop it on unmount (locking the vault unmounts this view): a retained
+    // closure would keep handing out sources for sessions the core has already
+    // destroyed, turning the designed "reconnect the host, then Retry" path into
+    // a raw bridge error.
+    return () => setSourceResolver(() => null);
     // remoteSourceFor closes over `sessions` — re-register whenever they change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions]);

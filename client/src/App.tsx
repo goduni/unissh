@@ -363,8 +363,9 @@ export function App() {
             // resolves is not hypothetical on Linux — an undecorated window under
             // a compositor that declines to map the transient would hang this
             // await forever, and the close is already prevented by this point.
+            const edits = useExternalEdits.getState().edits.length;
             ok = await Promise.race([
-              confirm(t("quit.body", { count: live }), {
+              confirm(edits > 0 ? t("quit.bodyEdits", { count: edits }) : t("quit.body", { count: live }), {
                 title: t("quit.title"),
                 kind: "warning",
                 okLabel: t("quit.confirm"),
