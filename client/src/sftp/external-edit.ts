@@ -142,11 +142,16 @@ const runRoot = async (): Promise<string> => join(await scratchRoot(), runId);
 /** How often a run says it is still here. The purge samples this twice, so it
  *  also sets how long collecting leftovers takes. */
 const HEARTBEAT_MS = 20 * 1000;
+/** Deliberately NOT dotted. Tauri's fs scope sets `require_literal_leading_dot`
+ *  on unix, so a `**` allow does not match a dot-leading name — a `.alive` here
+ *  is unwritable and unreadable, which the purge would read as "this run is
+ *  dead" and act on. */
+const HEARTBEAT_FILE = "alive";
 let heartbeat: ReturnType<typeof setInterval> | null = null;
 
 async function beat(): Promise<void> {
   try {
-    await writeTextFile(await join(await runRoot(), ".alive"), String(Date.now()));
+    await writeTextFile(await join(await runRoot(), HEARTBEAT_FILE), String(Date.now()));
   } catch {
     /* the purge treats an unreadable heartbeat as stale, which is the safe side */
   }
@@ -243,6 +248,32 @@ async function confirmedAbsent(source: FileSource, path: string): Promise<boolea
   const name = path.slice(dir === "/" ? 1 : dir.length + 1);
   const entries = await source.list(dir);
   return !entries.some((e) => e.name === name);
+}
+
+/** What to do about a copy that currently reads as empty. */
+export type ZeroHold =
+  /** Not the empty case, and the counter needs clearing. */
+  | { action: "reset" }
+  /** Not the empty case, nothing to clear. */
+  | { action: "none" }
+  /** Empty and not yet trusted — wait. */
+  | { action: "hold"; zeroTicks: number };
+
+/**
+ * An editor that truncates in place and then stalls reads as a settled 0-byte
+ * file, and pushing that would empty the remote one until the next save. So an
+ * empty copy waits.
+ *
+ * But only for a while: emptying a file IS a real edit, and a guard with no
+ * bound would drop that change silently and then delete the copy at quit. Once
+ * the wait is served this returns `none`, NOT `reset` — clearing the counter
+ * here would wipe the settling progress on the following tick and the push
+ * would never be reached.
+ */
+export function zeroHold(nowSize: number, uploadedSize: number, zeroTicks: number | undefined): ZeroHold {
+  if (nowSize !== 0 || uploadedSize === 0) return zeroTicks ? { action: "reset" } : { action: "none" };
+  const next = (zeroTicks ?? 0) + 1;
+  return next < ZERO_SETTLE_TICKS ? { action: "hold", zeroTicks: next } : { action: "none" };
 }
 
 /** What a tick concluded about one edit. */
@@ -462,7 +493,15 @@ export async function stopExternalEdit(id: string): Promise<void> {
 export async function stopAllExternalEdits(): Promise<void> {
   const ids = useExternalEdits.getState().edits.map((e) => e.id);
   for (const id of ids) await stopExternalEdit(id);
-  await purgeExternalEditScratch();
+  // Our own subtree, wholesale. Not the sibling sweep — that samples other runs
+  // across a heartbeat interval, and a quit has no time for it. This also
+  // catches an edit still downloading, whose directory `stopExternalEdit`
+  // deliberately leaves to a continuation that a quit never runs.
+  try {
+    await remove(await runRoot(), { recursive: true });
+  } catch {
+    /* nothing to remove */
+  }
 }
 
 /** Remove this run's copies, plus any left by a run that is no longer beating.
@@ -509,8 +548,13 @@ export async function purgeExternalEditScratch(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, HEARTBEAT_MS + 5_000));
 
   for (const { dir, beat } of before) {
+    // Positive evidence of death only. No heartbeat at all means we could not
+    // look — a scope rejection, a permission error, a directory from before
+    // this scheme — and deleting on "we don't know" is how a live instance's
+    // open files get destroyed.
+    if (beat === null) continue;
     const now = await beatAt(dir);
-    if (now !== null && now !== beat) continue; // it moved — somebody is home
+    if (now === null || now !== beat) continue; // it moved, or went unreadable
     await remove(dir, { recursive: true }).catch(() => {});
   }
 }
@@ -518,7 +562,7 @@ export async function purgeExternalEditScratch(): Promise<void> {
 /** Epoch ms of a run directory's last heartbeat, or null if it has none. */
 async function beatAt(dir: string): Promise<number | null> {
   try {
-    const info = await stat(await join(dir, ".alive"));
+    const info = await stat(await join(dir, HEARTBEAT_FILE));
     return info.mtime ? info.mtime.getTime() : 0;
   } catch {
     return null;
@@ -652,6 +696,9 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
       local: sent,
       base: base ?? undefined,
       saves: current.saves + 1,
+      // Spent: a later "Keep both" must reserve a fresh name, not short-circuit
+      // into a forced write over whatever is at this one now.
+      reservedPath: undefined,
       error: undefined,
       errorKey: undefined,
       settling: undefined,
@@ -760,19 +807,12 @@ async function stepEdit(editId: string): Promise<void> {
       continue;
     }
     if (edit.misses) patch(edit.id, { misses: 0 });
-    // An editor that truncates in place and then stalls reads as a settled
-    // 0-byte file, and pushing that would empty the remote one until the next
-    // save. Wait it out — but do NOT wait forever: emptying a file is a real
-    // edit, and a guard that never lets it through would drop the change and
-    // then delete the copy at quit.
-    if (now.size === 0 && edit.local.size > 0) {
-      const zeroTicks = (edit.zeroTicks ?? 0) + 1;
-      if (zeroTicks < ZERO_SETTLE_TICKS) {
-        patch(edit.id, { zeroTicks, settling: undefined });
-        continue;
-      }
+    const zero = zeroHold(now.size, edit.local.size, edit.zeroTicks);
+    if (zero.action === "hold") {
+      patch(edit.id, { zeroTicks: zero.zeroTicks, settling: undefined });
+      continue;
     }
-    if (edit.zeroTicks) patch(edit.id, { zeroTicks: 0 });
+    if (zero.action === "reset") patch(edit.id, { zeroTicks: 0 });
     const step = settleStep(edit.local, edit.settling, now);
     if (step.action === "none") continue;
     if (step.action === "clear") {

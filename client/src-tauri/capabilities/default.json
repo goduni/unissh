@@ -39,11 +39,11 @@
     { "identifier": "fs:allow-remove", "allow": [{ "path": "$HOME" }, { "path": "$HOME/**" }] },
     { "identifier": "fs:allow-copy-file", "allow": [{ "path": "$HOME/**" }] },
     { "identifier": "fs:allow-mkdir", "allow": [{ "path": "$TEMP/unissh-external-edit" }, { "path": "$TEMP/unissh-external-edit/**" }] },
-    { "identifier": "fs:allow-stat", "allow": [{ "path": "$TEMP/unissh-external-edit/**" }] },
+    { "identifier": "fs:allow-stat", "allow": [{ "path": "$TEMP/unissh-external-edit/**" }, { "path": "$TEMP/unissh-external-edit/*/*/.*" }] },
     { "identifier": "fs:allow-remove", "allow": [{ "path": "$TEMP/unissh-external-edit" }, { "path": "$TEMP/unissh-external-edit/**" }] },
     { "identifier": "fs:allow-write-text-file", "allow": [{ "path": "$TEMP/unissh-external-edit/**" }] },
     { "identifier": "fs:allow-read-dir", "allow": [{ "path": "$TEMP/unissh-external-edit" }] },
     { "identifier": "fs:allow-lstat", "allow": [{ "path": "$TEMP/unissh-external-edit" }] },
-    { "identifier": "opener:allow-open-path", "allow": [{ "path": "$TEMP/unissh-external-edit/**" }] }
+    { "identifier": "opener:allow-open-path", "allow": [{ "path": "$TEMP/unissh-external-edit/**" }, { "path": "$TEMP/unissh-external-edit/*/*/.*" }] }
   ]
 }

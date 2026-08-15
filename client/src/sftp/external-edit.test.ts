@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { settleStep } from "./external-edit";
+import { settleStep, zeroHold } from "./external-edit";
 
 const st = (size: number, mtime: number) => ({ size, mtime });
 
@@ -66,5 +66,38 @@ describe("settleStep", () => {
     const first = settleStep(uploaded, undefined, grown);
     if (first.action !== "wait") throw new Error("expected wait");
     expect(settleStep(uploaded, first.settling, grown)).toEqual({ action: "push" });
+  });
+});
+
+describe("zeroHold", () => {
+  it("ignores a copy that isn't empty", () => {
+    expect(zeroHold(120, 100, undefined)).toEqual({ action: "none" });
+  });
+
+  it("clears a stale count once the copy has content again", () => {
+    expect(zeroHold(120, 100, 5)).toEqual({ action: "reset" });
+  });
+
+  it("holds an empty copy back at first", () => {
+    expect(zeroHold(0, 100, undefined)).toEqual({ action: "hold", zeroTicks: 1 });
+  });
+
+  it("eventually lets a deliberate truncation through", () => {
+    // The bug this guards: resetting the counter on the way out cleared the
+    // settling progress every time, so an emptied file was never pushed at all.
+    let ticks: number | undefined;
+    for (let i = 0; i < 200; i++) {
+      const step = zeroHold(0, 100, ticks);
+      if (step.action !== "hold") {
+        expect(i).toBeGreaterThan(0);
+        return;
+      }
+      ticks = step.zeroTicks;
+    }
+    throw new Error("an empty copy was held forever");
+  });
+
+  it("never holds when the file was already empty on the server", () => {
+    expect(zeroHold(0, 0, undefined)).toEqual({ action: "none" });
   });
 });

@@ -445,6 +445,9 @@ export function App() {
   // — a crash, a kill -9, a close that timed out — and holds decrypted remote
   // file contents. Nothing can be watching it yet, so it all goes.
   useEffect(() => {
+    // Deliberately not awaited anywhere: it samples other runs' heartbeats
+    // across an interval, so it takes half a minute by design. Nothing depends
+    // on its result.
     void purgeExternalEditScratch();
   }, []);
 
