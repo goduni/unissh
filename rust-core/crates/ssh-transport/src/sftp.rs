@@ -70,6 +70,7 @@ const FXF_READ: u32 = 0x1;
 const FXF_WRITE: u32 = 0x2;
 const FXF_CREAT: u32 = 0x8;
 const FXF_TRUNC: u32 = 0x10;
+const FXF_EXCL: u32 = 0x20;
 
 // --- ATTRS flags ---
 const ATTR_SIZE: u32 = 0x1;
@@ -211,6 +212,16 @@ where
             self.write_chunk(&handle, offset, chunk).await?;
             offset += chunk.len() as u64;
         }
+        self.close(&handle).await
+    }
+
+    /// Creates an empty file, failing if `path` already exists.
+    ///
+    /// The exclusivity is the server's to enforce: a stat-then-write from the
+    /// caller has a window in which another writer wins the race and gets its
+    /// file truncated. `EXCL` closes it inside the one OPEN.
+    pub async fn create_new(&mut self, path: &str) -> Result<(), TransportError> {
+        let handle = self.open(path, FXF_WRITE | FXF_CREAT | FXF_EXCL).await?;
         self.close(&handle).await
     }
 

@@ -8563,6 +8563,11 @@ impl SftpFfi {
         })
     }
 
+    /// Creates an empty file, failing if the path is already taken.
+    pub fn create_new_file(&self, path: String) -> Result<(), FfiError> {
+        self.with_sftp(|rt, s| rt.block_on(s.create_new(&path)).map_err(map_transport_err))
+    }
+
     /// Deletes a file.
     pub fn remove(&self, path: String) -> Result<(), FfiError> {
         self.with_sftp(|rt, s| rt.block_on(s.remove(&path)).map_err(map_transport_err))

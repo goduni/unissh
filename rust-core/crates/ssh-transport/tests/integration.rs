@@ -591,6 +591,52 @@ async fn sftp_roundtrip_write_read_list_stat_rename_remove() {
 }
 
 #[tokio::test]
+async fn sftp_create_new_refuses_an_existing_path() {
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[23u8; 32]).unwrap();
+
+    let opts = ConnectOptions::new(
+        "127.0.0.1",
+        sshd.port,
+        "root",
+        Auth::Agent {
+            key_id: b"k".to_vec(),
+        },
+    );
+    let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+    let mut sftp = client.open_sftp().await.unwrap();
+
+    let base = format!("/tmp/unissh-sftp-excl-{}", sshd.port);
+    let _ = sftp.remove(&format!("{base}/f.txt")).await;
+    let _ = sftp.rmdir(&base).await;
+    sftp.mkdir(&base).await.unwrap();
+    let f = format!("{base}/f.txt");
+
+    // creates an empty file
+    sftp.create_new(&f).await.unwrap();
+    assert_eq!(sftp.stat(&f).await.unwrap().size, 0);
+
+    // the whole point: a second create fails instead of truncating, and the
+    // contents written in between survive it
+    let payload = b"do not lose me".to_vec();
+    sftp.write_file(&f, &payload).await.unwrap();
+    assert!(sftp.create_new(&f).await.is_err());
+    assert_eq!(sftp.read_file(&f).await.unwrap(), payload);
+
+    // a directory occupies the name just as a file does
+    let d = format!("{base}/sub");
+    sftp.mkdir(&d).await.unwrap();
+    assert!(sftp.create_new(&d).await.is_err());
+
+    // cleanup
+    let _ = sftp.remove(&f).await;
+    let _ = sftp.rmdir(&d).await;
+    let _ = sftp.rmdir(&base).await;
+}
+
+#[tokio::test]
 async fn sftp_remove_tree_deletes_recursively() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);

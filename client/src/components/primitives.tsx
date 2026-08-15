@@ -542,6 +542,9 @@ export function IconBtn({
       style={{
         width: hit,
         height: hit,
+        // The whole point of `hit` is a thumb-sized target: never let a crowded
+        // flex row shrink it back below that.
+        flexShrink: 0,
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",

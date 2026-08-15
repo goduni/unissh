@@ -34,6 +34,7 @@
     { "identifier": "fs:allow-stat", "allow": [{ "path": "$HOME" }, { "path": "$HOME/**" }, { "path": "$HOME/.ssh" }, { "path": "$HOME/.ssh/**" }] },
     { "identifier": "fs:allow-exists", "allow": [{ "path": "$HOME" }, { "path": "$HOME/**" }, { "path": "$HOME/.ssh" }, { "path": "$HOME/.ssh/**" }] },
     { "identifier": "fs:allow-mkdir", "allow": [{ "path": "$HOME/**" }] },
+    { "identifier": "fs:allow-open", "allow": [{ "path": "$HOME/**" }] },
     { "identifier": "fs:allow-rename", "allow": [{ "path": "$HOME/**" }] },
     { "identifier": "fs:allow-remove", "allow": [{ "path": "$HOME" }, { "path": "$HOME/**" }] },
     { "identifier": "fs:allow-copy-file", "allow": [{ "path": "$HOME/**" }] }

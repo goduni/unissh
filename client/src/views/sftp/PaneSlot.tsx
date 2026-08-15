@@ -35,6 +35,7 @@ export function PaneSlot({
   onRowContext,
   onEmptyContext,
   onNewFolder,
+  onNewFile,
   onImport,
   onDropHere,
   onTabDrop,
@@ -55,6 +56,7 @@ export function PaneSlot({
   onRowContext: (entry: Entry, x: number, y: number) => void;
   onEmptyContext: (x: number, y: number) => void;
   onNewFolder: () => void;
+  onNewFile: () => void;
   onImport?: () => void;
   onDropHere: (targetCwd: string) => void;
   onTabDrop: (tabId: string) => void;
@@ -191,6 +193,11 @@ export function PaneSlot({
         style={{
           display: "flex",
           alignItems: "center",
+          // The action icons hold their touch size, and the pane clips its
+          // overflow — so on a phone-width pane they have to wrap to a second
+          // row rather than fall off the edge. The filter box has flex-basis 0,
+          // so nothing wraps while the row still fits.
+          flexWrap: "wrap",
           gap: 8,
           padding: "7px 10px",
           borderBottom: `1px solid ${p.line}`,
@@ -245,6 +252,7 @@ export function PaneSlot({
         {isMobile && <IconBtn icon="list" size={40} title={t("sftp.sortBy")} onClick={() => setSortMenu(true)} />}
         {onImport && <IconBtn icon="enter" size={isMobile ? 40 : 26} title={t("sftp.menu.import")} onClick={onImport} />}
         <IconBtn icon="folders" size={isMobile ? 40 : 26} title={t("sftp.menu.newFolder")} onClick={onNewFolder} />
+        <IconBtn icon="file" size={isMobile ? 40 : 26} title={t("sftp.menu.newFile")} onClick={onNewFile} />
         <IconBtn
           icon="refresh"
           size={isMobile ? 40 : 26}

@@ -320,6 +320,7 @@ pub fn run() {
             commands::sftp_reopen,
             commands::sftp_chmod,
             commands::sftp_mkdir,
+            commands::sftp_create_new_file,
             commands::sftp_rmdir,
             commands::sftp_rmdir_recursive,
             commands::sftp_remove,

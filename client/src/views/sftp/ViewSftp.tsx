@@ -24,7 +24,7 @@ import { PaneSlot } from "./PaneSlot";
 import type { TabInfo } from "./TabStrip";
 import { TransferQueue } from "./TransferQueue";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
-import { NewFolderDialog, RenameDialog, ConfirmDeleteDialog, ConflictDialog, ChmodDialog } from "./dialogs";
+import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConflictDialog, ChmodDialog } from "./dialogs";
 import { TextEditor } from "./TextEditor";
 import { openSession } from "./session";
 import { dragCtx } from "./drag";
@@ -50,6 +50,7 @@ const nextTransferId = (): string => `tf${++transferSeq}`;
 
 type Dialog =
   | { kind: "newfolder"; slot: SlotCtl }
+  | { kind: "newfile"; slot: SlotCtl }
   | { kind: "rename"; slot: SlotCtl; entry: Entry }
   | { kind: "delete"; slot: SlotCtl; entries: Entry[] }
   | { kind: "chmod"; slot: SlotCtl; entry: Entry }
@@ -315,6 +316,27 @@ export function ViewSftp() {
       toast(apiErrorMessage(e), "err");
     }
   }
+  async function doTouch(slot: SlotCtl, name: string) {
+    if (!slot.source) return;
+    try {
+      const path = await slot.source.join(slot.cwd, name);
+      // The dialog only knows the names it listed, so check the real thing. This
+      // is for the message, not for safety: createNew is exclusive, so losing
+      // the race costs an error rather than someone else's file.
+      if (await slot.source.stat(path)) {
+        // The listing is stale by definition here — show the entry we refused to
+        // clobber, or the message reads as the pane contradicting itself.
+        slot.refresh();
+        toast(t("sftp.toast.nameTaken", { name }), "err");
+        return;
+      }
+      await slot.source.createNew(path);
+      slot.refresh();
+      toast(t("sftp.toast.fileCreated"), "ok");
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+    }
+  }
   async function doRename(slot: SlotCtl, oldName: string, newName: string) {
     if (!slot.source) return;
     try {
@@ -412,6 +434,7 @@ export function ViewSftp() {
     setMenu({
       items: [
         { icon: "folders", label: t("sftp.menu.newFolder"), onClick: () => setDialog({ kind: "newfolder", slot }) },
+        { icon: "file", label: t("sftp.menu.newFile"), onClick: () => setDialog({ kind: "newfile", slot }) },
         { icon: "refresh", label: t("common.refresh"), onClick: () => slot.refresh() },
       ],
       x,
@@ -439,6 +462,7 @@ export function ViewSftp() {
     onRowContext: (entry: Entry, x: number, y: number) => rowMenu(entry, slot, x, y),
     onEmptyContext: (x: number, y: number) => emptyMenu(slot, x, y),
     onNewFolder: () => setDialog({ kind: "newfolder", slot }),
+    onNewFile: () => setDialog({ kind: "newfile", slot }),
     onImport: slot.location.kind === "local" ? () => void importFromFiles(slot) : undefined,
     onDropHere: (cwd: string) => void handleDrop(slot.location, cwd),
     onTabDrop: (id: string) => handleTabDrop(slotKey, id),
@@ -481,9 +505,18 @@ export function ViewSftp() {
       {menu && <ContextMenu items={menu.items} title={menu.title} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />}
 
       {dialog?.kind === "newfolder" && (
-        <NewFolderDialog
+        <NewEntryDialog
+          kind="folder"
           existing={dialogExisting(dialog.slot)}
           onSubmit={(name) => doMkdir(dialog.slot, name)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === "newfile" && (
+        <NewEntryDialog
+          kind="file"
+          existing={dialogExisting(dialog.slot)}
+          onSubmit={(name) => void doTouch(dialog.slot, name)}
           onClose={() => setDialog(null)}
         />
       )}

@@ -10,6 +10,7 @@ import { MONO } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import type { ConflictResolution } from "@/sftp/transfer-runner";
+import { validateEntryName, type NameError as NameErrorKind } from "./names";
 
 function TextInput({
   value,
@@ -68,32 +69,44 @@ function TextInput({
   );
 }
 
-export function NewFolderDialog({
+// Only "dup" and "invalid" say anything: an empty box is self-evident, and the
+// disabled Create button already carries the message.
+function NameError({ error }: { error: NameErrorKind }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  if (error !== "dup" && error !== "invalid") return null;
+  return (
+    <div style={{ fontSize: 12, color: p.red }}>
+      {error === "dup" ? t("sftp.dlg.nameTaken") : t("sftp.dlg.invalidName")}
+    </div>
+  );
+}
+
+/** Create an empty entry in the current directory — a folder or a file. */
+export function NewEntryDialog({
+  kind,
   existing,
   onSubmit,
   onClose,
 }: {
+  kind: "folder" | "file";
   existing: string[];
   onSubmit: (name: string) => void;
   onClose: () => void;
 }) {
-  const p = usePalette();
   const { t } = useTranslation();
-  const [name, setName] = useState("");
-  const trimmed = name.trim();
-  const dup = existing.includes(trimmed);
-  const bad = /[/\\]/.test(trimmed);
-  const valid = trimmed.length > 0 && !dup && !bad;
+  const [raw, setRaw] = useState("");
+  const { name, error } = validateEntryName(raw, existing);
   const submit = () => {
-    if (valid) {
-      onSubmit(trimmed);
+    if (error === null) {
+      onSubmit(name);
       onClose();
     }
   };
   return (
     <Modal
-      icon="folders"
-      title={t("sftp.dlg.newFolderTitle")}
+      icon={kind === "folder" ? "folders" : "file"}
+      title={t(kind === "folder" ? "sftp.dlg.newFolderTitle" : "sftp.dlg.newFileTitle")}
       onClose={onClose}
       footer={
         <>
@@ -101,18 +114,19 @@ export function NewFolderDialog({
           <Btn variant="ghost" size="sm" onClick={onClose}>
             {t("common.cancel")}
           </Btn>
-          <Btn size="sm" onClick={submit} disabled={!valid}>
+          <Btn size="sm" onClick={submit} disabled={error !== null}>
             {t("sftp.dlg.create")}
           </Btn>
         </>
       }
     >
-      <TextInput value={name} onChange={setName} onEnter={submit} placeholder={t("sftp.dlg.folderName")} />
-      {(dup || bad) && (
-        <div style={{ fontSize: 12, color: p.red }}>
-          {dup ? t("sftp.dlg.nameTaken") : t("sftp.dlg.invalidName")}
-        </div>
-      )}
+      <TextInput
+        value={raw}
+        onChange={setRaw}
+        onEnter={submit}
+        placeholder={t(kind === "folder" ? "sftp.dlg.folderName" : "sftp.dlg.fileName")}
+      />
+      <NameError error={error} />
     </Modal>
   );
 }
@@ -128,16 +142,12 @@ export function RenameDialog({
   onSubmit: (name: string) => void;
   onClose: () => void;
 }) {
-  const p = usePalette();
   const { t } = useTranslation();
-  const [name, setName] = useState(initial);
-  const trimmed = name.trim();
-  const dup = trimmed !== initial && existing.includes(trimmed);
-  const bad = /[/\\]/.test(trimmed);
-  const valid = trimmed.length > 0 && !dup && !bad && trimmed !== initial;
+  const [raw, setRaw] = useState(initial);
+  const { name, error } = validateEntryName(raw, existing, initial);
   const submit = () => {
-    if (valid) {
-      onSubmit(trimmed);
+    if (error === null) {
+      onSubmit(name);
       onClose();
     }
   };
@@ -153,18 +163,14 @@ export function RenameDialog({
           <Btn variant="ghost" size="sm" onClick={onClose}>
             {t("common.cancel")}
           </Btn>
-          <Btn size="sm" onClick={submit} disabled={!valid}>
+          <Btn size="sm" onClick={submit} disabled={error !== null}>
             {t("sftp.dlg.rename")}
           </Btn>
         </>
       }
     >
-      <TextInput value={name} onChange={setName} onEnter={submit} selectBasename />
-      {(dup || bad) && (
-        <div style={{ fontSize: 12, color: p.red }}>
-          {dup ? t("sftp.dlg.nameTaken") : t("sftp.dlg.invalidName")}
-        </div>
-      )}
+      <TextInput value={raw} onChange={setRaw} onEnter={submit} selectBasename />
+      <NameError error={error} />
     </Modal>
   );
 }
