@@ -1289,6 +1289,7 @@ export const en = {
         "openFailed": "Couldn’t read the file after copying it",
         "unsafeRoot": "The scratch directory in $TEMP isn’t private — refusing to put a decrypted copy there",
         "tooLarge": "That file is too large to edit externally",
+        "sizeUnknown": "Couldn’t read that file’s size on the server, so it wasn’t copied",
         "removeFailed": "Couldn’t delete the local copy at {{path}} — remove it yourself if it matters"
       },
       "resolve": "Resolve",

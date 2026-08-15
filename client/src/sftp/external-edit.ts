@@ -35,6 +35,10 @@ const MAX_MISSES = 6;
  *  after an unlock would error out every edit before the user could reconnect
  *  — and an errored edit no longer re-binds itself. */
 const MAX_SESSION_MISSES = 120; // ≈60s at 500ms
+/** How long a copy must stay empty before we believe emptying it was the point.
+ *  Long enough to outlast an in-place truncate that stalls, short enough that
+ *  deleting a file's contents still reaches the server while you watch. */
+const ZERO_SETTLE_TICKS = 20; // ≈10s at 500ms
 
 export type EditState = "downloading" | "watching" | "uploading" | "conflict" | "error";
 
@@ -72,6 +76,11 @@ export interface LiveEdit {
   misses?: number;
   /** Consecutive ticks with no live session for this host. */
   sessionMisses?: number;
+  /** Consecutive ticks where the copy has been empty and the remote is not. */
+  zeroTicks?: number;
+  /** A remote path this edit has already claimed with an exclusive create, so a
+   *  retry after a failed copy-upload reuses it rather than reserving another. */
+  reservedPath?: string;
   /** Core cancel token, while the copy is still coming down. */
   cancelId?: string;
   /** Host the file belongs to. A reconnect mints a new session id, so this is
@@ -122,37 +131,16 @@ const scratchRoot = async (): Promise<string> => join(await tempDir(), "unissh-e
 
 /** This run's own subtree. The root is shared with any other UniSSH running on
  *  the machine — nothing stops a second instance — so a run may only ever delete
- *  its own directory, plus siblings that have stopped saying they are alive. */
-// Random, not time-derived: a collision means one run deleting another's live
-// copies at startup (the heartbeat check is skipped for our own directory), and
-// clocks at process start are far too similar to rely on. crypto.randomUUID is
-// out — it throws in a webview that isn't a secure context.
+ *  its own directory and ones it has watched fall silent.
+ *
+ *  Random, not time-derived: a collision means one run deleting another's live
+ *  copies, and clocks at process start are far too similar to rely on.
+ *  crypto.randomUUID is out — it throws outside a secure context. */
 const runId = `run-${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
-/** The previous run on this machine, remembered across restarts. It is
- *  definitively ours and definitively dead, which is the only way to collect
- *  copies left by an exit we could not clean up after — a crash, a kill, an
- *  updater relaunch — without guessing from a heartbeat whether some OTHER
- *  instance is merely asleep. */
-const PREV_RUN_KEY = "unissh.externalEdit.prevRun";
-function takePreviousRunId(): string | null {
-  try {
-    const prev = localStorage.getItem(PREV_RUN_KEY);
-    localStorage.setItem(PREV_RUN_KEY, runId);
-    return prev && prev !== runId ? prev : null;
-  } catch {
-    return null;
-  }
-}
 const runRoot = async (): Promise<string> => join(await scratchRoot(), runId);
 
-/** How long without a heartbeat before a run counts as gone.
- *
- *  Very generous, because this is a LAST RESORT: our own predecessor is
- *  collected by name (see `takePreviousRunId`), so the only thing this window
- *  governs is another instance's leftovers. Timers stop across system sleep —
- *  and a suspend is hours, not minutes — so a tight window here would mean
- *  deleting copies an editor on a just-woken machine still has open. */
-const ALIVE_STALE_MS = 12 * 60 * 60 * 1000;
+/** How often a run says it is still here. The purge samples this twice, so it
+ *  also sets how long collecting leftovers takes. */
 const HEARTBEAT_MS = 20 * 1000;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
 
@@ -347,7 +335,8 @@ export async function startExternalEdit(
     const remote = await remoteStamp(source, remotePath);
     // No size means we could not read it, not that it is small. Copying a file
     // of unknown length into $TEMP is exactly what the cap exists to prevent.
-    if (!remote || remote.size > MAX_EDIT_BYTES) throw new Error(tDyn("sftp.extEdit.err.tooLarge"));
+    if (!remote) throw new Error(tDyn("sftp.extEdit.err.sizeUnknown"));
+    if (remote.size > MAX_EDIT_BYTES) throw new Error(tDyn("sftp.extEdit.err.tooLarge"));
     // Inside the try: a mkdir that fails must still release the claim, or this
     // file becomes silently un-openable for the rest of the process.
     dir = await scratchDir(id);
@@ -395,6 +384,15 @@ export async function startExternalEdit(
     } finally {
       patch(id, { cancelId: undefined });
       await api.cancelDispose(cancelId).catch(() => {});
+    }
+
+    // Stop may have landed while the transfer was finishing — cancellation is
+    // cooperative, so the core can still report success. Without this check the
+    // patches below would be silent no-ops and we would hand the user's editor
+    // the very file they just cancelled, with no row left to stop it.
+    if (!find(id)) {
+      await remove(localDir, { recursive: true }).catch(() => {});
+      return { ok: false, reason: "cancelled" };
     }
 
     // Both stamps are the baselines every later decision is measured against.
@@ -486,29 +484,44 @@ export async function purgeExternalEditScratch(): Promise<void> {
   } catch {
     return;
   }
-  for (const dead of [runId, takePreviousRunId()]) {
-    if (!dead) continue;
-    try {
-      await remove(await join(root, dead), { recursive: true });
-    } catch {
-      /* nothing of ours to remove */
-    }
-  }
+
+  // Liveness is OBSERVED, not inferred from a timestamp. Sample every other
+  // run's heartbeat, wait longer than one beat, and sample again: a run that
+  // moved is alive, a run that didn't is gone. This is what makes the check
+  // survive a suspend — if this process is running, the machine is awake, so
+  // any live instance's timer is running too — and it needs no guess about
+  // which directory used to be ours.
+  let before: Array<{ dir: string; beat: number | null }>;
   try {
-    for (const entry of await readDir(root)) {
-      if (!entry.isDirectory || entry.name === runId) continue;
-      const dir = await join(root, entry.name);
-      let stale = true;
-      try {
-        const beat = await stat(await join(dir, ".alive"));
-        stale = Date.now() - (beat.mtime ? beat.mtime.getTime() : 0) > ALIVE_STALE_MS;
-      } catch {
-        stale = true; // no heartbeat at all — from before this scheme, or dead
-      }
-      if (stale) await remove(dir, { recursive: true }).catch(() => {});
-    }
+    before = await Promise.all(
+      (await readDir(root))
+        .filter((e) => e.isDirectory && e.name !== runId)
+        .map(async (e) => {
+          const dir = await join(root, e.name);
+          return { dir, beat: await beatAt(dir) };
+        }),
+    );
   } catch {
-    /* no root yet */
+    return; // no root yet
+  }
+  if (before.length === 0) return;
+
+  await new Promise((resolve) => setTimeout(resolve, HEARTBEAT_MS + 5_000));
+
+  for (const { dir, beat } of before) {
+    const now = await beatAt(dir);
+    if (now !== null && now !== beat) continue; // it moved — somebody is home
+    await remove(dir, { recursive: true }).catch(() => {});
+  }
+}
+
+/** Epoch ms of a run directory's last heartbeat, or null if it has none. */
+async function beatAt(dir: string): Promise<number | null> {
+  try {
+    const info = await stat(await join(dir, ".alive"));
+    return info.mtime ? info.mtime.getTime() : 0;
+  } catch {
+    return null;
   }
 }
 
@@ -546,6 +559,13 @@ export async function resolveConflict(
     return true;
   }
   if (choice === "copy") {
+    // Already reserved on an earlier attempt whose upload failed: reuse it.
+    // Deduping again would leave the previous empty reservation on the server
+    // as litter, once per failed attempt.
+    if (edit.reservedPath === edit.remotePath) {
+      await push(id, source, true);
+      return true;
+    }
     const dir = remoteParent(edit.remotePath);
     const taken = (await source.list(dir)).map((e) => e.name);
     let copyName = dedupeName(edit.name, taken);
@@ -570,7 +590,8 @@ export async function resolveConflict(
     // `base` described the ORIGINAL path; against the copy it means nothing, and
     // keeping it would raise a conflict against our own upload if this one fails
     // partway and gets retried.
-    patch(id, { remotePath: await source.join(dir, copyName), name: copyName, base: undefined });
+    const reservedPath = await source.join(dir, copyName);
+    patch(id, { remotePath: reservedPath, reservedPath, name: copyName, base: undefined });
   }
   await push(id, source, true);
   return true;
@@ -703,23 +724,28 @@ function stopPollingIfIdle(): void {
   }
 }
 
-/** A tick can outlast its interval — every step here is an IPC round trip — and
- *  two overlapping passes would each see the same edit as `watching` and start
- *  their own upload of it. */
-let ticking = false;
+/** Edits currently being processed. Per-edit rather than one global flag: a tick
+ *  can outlast its interval (every step is an IPC round trip, and an upload over
+ *  a black-holed connection can hang for minutes), and a single flag would let
+ *  one stuck file stop every other one from being watched. */
+const inFlight = new Set<string>();
 
 async function tick(): Promise<void> {
-  if (ticking) return;
-  ticking = true;
-  try {
-    await tickOnce();
-  } finally {
-    ticking = false;
-  }
+  await Promise.all(
+    useExternalEdits.getState().edits.map(async (edit) => {
+      if (inFlight.has(edit.id)) return;
+      inFlight.add(edit.id);
+      try {
+        await stepEdit(edit.id);
+      } finally {
+        inFlight.delete(edit.id);
+      }
+    }),
+  );
 }
 
-async function tickOnce(): Promise<void> {
-  for (const edit of useExternalEdits.getState().edits) {
+async function stepEdit(editId: string): Promise<void> {
+  for (const edit of useExternalEdits.getState().edits.filter((e) => e.id === editId)) {
     if (edit.state !== "watching") continue;
     const now = await localStamp(edit.localPath);
     if (!now) {
@@ -735,12 +761,18 @@ async function tickOnce(): Promise<void> {
     }
     if (edit.misses) patch(edit.id, { misses: 0 });
     // An editor that truncates in place and then stalls reads as a settled
-    // 0-byte file, and the upload would empty the remote one until the next
-    // save. Nothing legitimate needs a 1-second round trip to write zero bytes.
+    // 0-byte file, and pushing that would empty the remote one until the next
+    // save. Wait it out — but do NOT wait forever: emptying a file is a real
+    // edit, and a guard that never lets it through would drop the change and
+    // then delete the copy at quit.
     if (now.size === 0 && edit.local.size > 0) {
-      patch(edit.id, { settling: undefined });
-      continue;
+      const zeroTicks = (edit.zeroTicks ?? 0) + 1;
+      if (zeroTicks < ZERO_SETTLE_TICKS) {
+        patch(edit.id, { zeroTicks, settling: undefined });
+        continue;
+      }
     }
+    if (edit.zeroTicks) patch(edit.id, { zeroTicks: 0 });
     const step = settleStep(edit.local, edit.settling, now);
     if (step.action === "none") continue;
     if (step.action === "clear") {
