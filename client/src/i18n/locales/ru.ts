@@ -1312,6 +1312,7 @@ export const ru = {
     "extEdit": {
       "section": "Правится снаружи",
       "watching": "следим",
+      "downloading": "копирование…",
       "uploading": "отправка…",
       "savedCount": "отправлено {{count}}×",
       "changedOnServer": "изменён на сервере",

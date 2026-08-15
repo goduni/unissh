@@ -364,8 +364,17 @@ export function App() {
             // a compositor that declines to map the transient would hang this
             // await forever, and the close is already prevented by this point.
             const edits = useExternalEdits.getState().edits.length;
+            // Both, not one instead of the other: the sessions explain the
+            // prompt, the edits explain what confirming destroys.
+            const sessions = live - edits;
+            const body = [
+              sessions > 0 ? t("quit.body", { count: sessions }) : "",
+              edits > 0 ? t("quit.bodyEdits", { count: edits }) : "",
+            ]
+              .filter(Boolean)
+              .join("\n\n");
             ok = await Promise.race([
-              confirm(edits > 0 ? t("quit.bodyEdits", { count: edits }) : t("quit.body", { count: live }), {
+              confirm(body, {
                 title: t("quit.title"),
                 kind: "warning",
                 okLabel: t("quit.confirm"),

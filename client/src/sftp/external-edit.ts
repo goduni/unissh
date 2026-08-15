@@ -72,6 +72,8 @@ export interface LiveEdit {
   misses?: number;
   /** Consecutive ticks with no live session for this host. */
   sessionMisses?: number;
+  /** Core cancel token, while the copy is still coming down. */
+  cancelId?: string;
   /** Host the file belongs to. A reconnect mints a new session id, so this is
    *  what lets an orphaned edit find its way back to a live session. */
   profileId: string;
@@ -128,7 +130,11 @@ const runRoot = async (): Promise<string> => join(await scratchRoot(), runId);
  *  Kept close to the beat interval because this purge is what collects copies
  *  left by an exit we could not run cleanup on (macOS Cmd+Q, an updater
  *  relaunch) — a wide window means those sit in $TEMP across launches. */
-const ALIVE_STALE_MS = 90 * 1000;
+// Generous on purpose. Timers stop across system sleep and are throttled in a
+// backgrounded webview, so a short window would let a second instance mistake a
+// sleeping one for a dead one and delete the copies its editor still has open.
+// Losing work is worse than a leftover living until a later start.
+const ALIVE_STALE_MS = 10 * 60 * 1000;
 const HEARTBEAT_MS = 20 * 1000;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
 
@@ -144,6 +150,11 @@ function startHeartbeat(): void {
   if (heartbeat !== null) return;
   void beat();
   heartbeat = setInterval(() => void beat(), HEARTBEAT_MS);
+  // Timers do not run while the machine sleeps; beat on the way back so the
+  // gap does not read as a dead run.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void beat();
+  });
 }
 
 /** `<temp>/unissh-external-edit/<n>` — one directory per edit, so two files with
@@ -266,6 +277,11 @@ export async function startExternalEdit(
       (e) => e.remotePath === remotePath && (profileId ? e.profileId === profileId : e.sessionId === sessionId),
     );
   if (existing) {
+    // Still copying: the local path already exists and is GROWING, so neither
+    // branch below is safe — opening it would hand an editor a truncated file
+    // (and a save would push the truncation), and dropping it would delete the
+    // download out from under the first call.
+    if (existing.state === "downloading") return null;
     // Already open — bring the editor forward rather than making a second copy
     // that would race the first one on save. Unless the copy is gone: then the
     // row is a leftover, and re-matching it would fail on the same missing path
@@ -314,7 +330,17 @@ export async function startExternalEdit(
       },
     ]);
 
-    await api.sftpDownload(sessionId, remotePath, localPath, 0, null, () => {});
+    // Cancellable: stopping a `downloading` row has to stop the transfer too,
+    // or the core keeps streaming into a file we have already deleted — holding
+    // a channel and the bandwidth for a download nobody wants.
+    const cancelId = await api.cancelNew();
+    patch(id, { cancelId });
+    try {
+      await api.sftpDownload(sessionId, remotePath, localPath, 0, null, () => {}, cancelId);
+    } finally {
+      patch(id, { cancelId: undefined });
+      await api.cancelDispose(cancelId).catch(() => {});
+    }
 
     // Both stamps are the baselines every later decision is measured against.
     // A sentinel here would be a lie the first save pays for: a bogus conflict
@@ -345,13 +371,17 @@ export async function startExternalEdit(
 export function retryExternalEdit(id: string): void {
   const edit = find(id);
   if (!edit || edit.state !== "error") return;
-  patch(id, { state: "watching", error: undefined, errorKey: undefined, misses: 0 });
+  // Clear the counters too: the error message tells the user to reconnect and
+  // then Retry, so arriving here with the grace already spent would re-error on
+  // the first tick — exactly when the reconnect is still in flight.
+  patch(id, { state: "watching", error: undefined, errorKey: undefined, misses: 0, sessionMisses: 0, settling: undefined });
   ensurePolling();
 }
 
 /** Stop watching and delete the local copy. */
 export async function stopExternalEdit(id: string): Promise<void> {
   const edit = find(id);
+  if (edit?.cancelId) await api.cancelTrigger(edit.cancelId).catch(() => {});
   setEdits((edits) => edits.filter((e) => e.id !== id));
   stopPollingIfIdle();
   if (!edit) return;
@@ -453,6 +483,11 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
   if (!edit) return;
   patch(id, { state: "uploading" });
   try {
+    // A read through the source first: it carries the reopen-and-retry that a
+    // bare api.sftpUpload does not, and external editing is exactly the
+    // long-idle case where the server has reaped the channel. The non-forced
+    // path gets this from its own conflict stat.
+    if (force) await source.stat(edit.remotePath);
     if (!force) {
       const now = await remoteStamp(source, edit.remotePath);
       if (!now) {

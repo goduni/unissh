@@ -1273,6 +1273,7 @@ export const en = {
     "extEdit": {
       "section": "Editing externally",
       "watching": "watching",
+      "downloading": "copying…",
       "uploading": "sending…",
       "savedCount": "sent {{count}}×",
       "changedOnServer": "changed on the server",

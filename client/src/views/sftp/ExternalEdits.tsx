@@ -42,7 +42,9 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
       ? (editErrorText(edit) ?? t("sftp.extEdit.failed"))
       : edit.state === "conflict"
         ? t("sftp.extEdit.changedOnServer")
-        : edit.state === "uploading"
+        : edit.state === "downloading"
+          ? t("sftp.extEdit.downloading")
+          : edit.state === "uploading"
           ? t("sftp.extEdit.uploading")
           : edit.saves > 0
             ? t("sftp.extEdit.savedCount", { count: edit.saves })
