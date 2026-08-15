@@ -142,6 +142,14 @@ const runRoot = async (): Promise<string> => join(await scratchRoot(), runId);
 /** How often a run says it is still here. The purge samples this twice, so it
  *  also sets how long collecting leftovers takes. */
 const HEARTBEAT_MS = 20 * 1000;
+/** How long a run must have been silent before it is even a candidate for
+ *  collection. Webview timers are throttled hard in a hidden window — Chromium
+ *  drops to roughly one per minute — so a window measured in beats would call a
+ *  minimised instance dead and delete the copies its editor still has open.
+ *  Deleting live work is far worse than a leftover waiting for a later start. */
+const MIN_SILENCE_MS = 5 * 60 * 1000;
+/** And it must stay silent across this probe, which outlasts a throttled beat. */
+const PROBE_MS = 65 * 1000;
 /** Deliberately NOT dotted. Tauri's fs scope sets `require_literal_leading_dot`
  *  on unix, so a `**` allow does not match a dot-leading name — a `.alive` here
  *  is unwritable and unreadable, which the purge would read as "this run is
@@ -481,11 +489,14 @@ export async function stopExternalEdit(id: string): Promise<void> {
     // The whole directory: the editor may have left backups (`file~`, `.swp`)
     // beside our copy, and those hold the same plaintext.
     await remove(edit.localDir, { recursive: true });
-  } catch {
-    // Windows will refuse while an editor holds the file open. Say so: the
-    // whole point of this row was telling the user where the plaintext is, and
-    // removing it while the file survives would be the opposite.
-    toast(tDyn("sftp.extEdit.err.removeFailed", { path: edit.localDir }), "warn");
+  } catch (e) {
+    const msg = String(e instanceof Error ? e.message : e).toLowerCase();
+    const absent =
+      msg.includes("not found") || msg.includes("no such file") || msg.includes("os error 2");
+    // Already gone is the outcome we wanted. Windows refusing while an editor
+    // holds the file open is not — say so, because the whole point of this row
+    // was telling the user where the plaintext is.
+    if (!absent) toast(tDyn("sftp.extEdit.err.removeFailed", { path: edit.localDir }), "warn");
   }
 }
 
@@ -511,7 +522,12 @@ export async function stopAllExternalEdits(): Promise<void> {
  *  exists there. A run silent for `ALIVE_STALE_MS` is gone, and its copies are
  *  the leftovers this is for. */
 export async function purgeExternalEditScratch(): Promise<void> {
-  const root = await scratchRoot();
+  let root: string;
+  try {
+    root = await scratchRoot();
+  } catch {
+    return; // no path API — nothing was ever written either
+  }
   try {
     // BEFORE touching anything. This function recursively deletes directories
     // it finds by walking the root, and it runs at every launch — so if the
@@ -545,14 +561,18 @@ export async function purgeExternalEditScratch(): Promise<void> {
   }
   if (before.length === 0) return;
 
-  await new Promise((resolve) => setTimeout(resolve, HEARTBEAT_MS + 5_000));
+  // Only ones already long silent are worth probing at all.
+  const cutoff = Date.now() - MIN_SILENCE_MS;
+  const candidates = before.filter((c) => c.beat !== null && c.beat < cutoff);
+  if (candidates.length === 0) return;
 
-  for (const { dir, beat } of before) {
-    // Positive evidence of death only. No heartbeat at all means we could not
-    // look — a scope rejection, a permission error, a directory from before
-    // this scheme — and deleting on "we don't know" is how a live instance's
-    // open files get destroyed.
-    if (beat === null) continue;
+  await new Promise((resolve) => setTimeout(resolve, PROBE_MS));
+
+  for (const { dir, beat } of candidates) {
+    // Positive evidence of death only. A heartbeat we could not read means we
+    // could not look — a scope rejection, a permission error, a directory from
+    // before this scheme — and deleting on "we don't know" is exactly how a
+    // live instance's open files get destroyed.
     const now = await beatAt(dir);
     if (now === null || now !== beat) continue; // it moved, or went unreadable
     await remove(dir, { recursive: true }).catch(() => {});
@@ -646,6 +666,11 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
   const edit = find(id);
   if (!edit) return;
   patch(id, { state: "uploading" });
+  // Whether we got as far as writing anything. The pre-flight check throws on a
+  // transport failure, and that must NOT be treated like a half-finished
+  // upload: clearing the baseline there would raise a bogus "can't tell what's
+  // on the server" on the next save, for a file nobody else touched.
+  let uploaded = false;
   try {
     // A read through the source first: it carries the reopen-and-retry that a
     // bare api.sftpUpload does not, and external editing is exactly the
@@ -679,6 +704,7 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
         return;
       }
     }
+    uploaded = true;
     // Snapshot BEFORE the upload: what we are about to send is this state, not
     // whatever the file looks like when the upload finishes. Reading it after
     // would adopt a save made mid-upload as already-sent and silently drop it.
@@ -707,8 +733,14 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
   } catch (e) {
     // The upload opens the remote with TRUNC at offset 0, so a drop partway
     // leaves it rewritten in part. Our baseline described the file BEFORE that,
-    // and keeping it would make Retry conflict against our own half-write.
-    patch(id, { state: "error", error: apiErrorMessage(e), errorKey: undefined, base: undefined });
+    // and keeping it would make Retry conflict against our own half-write. If
+    // nothing was written, the baseline is still good.
+    patch(id, {
+      state: "error",
+      error: apiErrorMessage(e),
+      errorKey: undefined,
+      ...(uploaded ? { base: undefined } : {}),
+    });
     const current = find(id);
     if (current) toast(tDyn("sftp.extEdit.pushFailed", { name: current.name }), "err");
   }
@@ -813,6 +845,21 @@ async function stepEdit(editId: string): Promise<void> {
       continue;
     }
     if (zero.action === "reset") patch(edit.id, { zeroTicks: 0 });
+    // Resolved every tick, not only when there is something to push: an edit
+    // whose host went away is not "watching" anything, and saying so only at
+    // the next save means the row and the rail badge both lie until then.
+    const resolved = resolveSource?.(edit.sessionId, edit.profileId);
+    if (!resolved) {
+      const sessionMisses = (edit.sessionMisses ?? 0) + 1;
+      if (sessionMisses < MAX_SESSION_MISSES) patch(edit.id, { sessionMisses });
+      else {
+        patch(edit.id, { state: "error", errorKey: "sessionClosed" });
+        toast(tDyn("sftp.extEdit.err.sessionClosed"), "warn");
+      }
+      continue;
+    }
+    if (edit.sessionMisses) patch(edit.id, { sessionMisses: 0 });
+
     const step = settleStep(edit.local, edit.settling, now);
     if (step.action === "none") continue;
     if (step.action === "clear") {
@@ -823,22 +870,6 @@ async function stepEdit(editId: string): Promise<void> {
       patch(edit.id, { settling: step.settling });
       continue;
     }
-    const resolved = resolveSource?.(edit.sessionId, edit.profileId);
-    if (!resolved) {
-      // No session for this host right now. Unlocking the vault drops them all,
-      // and a reconnect takes a moment, so wait before giving up — an errored
-      // edit stops re-binding itself and needs a manual Retry.
-      const sessionMisses = (edit.sessionMisses ?? 0) + 1;
-      if (sessionMisses < MAX_SESSION_MISSES) patch(edit.id, { sessionMisses });
-      else {
-        // Keep the copy and say so: the edit is not lost, it just has nowhere
-        // to go until the host is back.
-        patch(edit.id, { state: "error", errorKey: "sessionClosed" });
-        toast(tDyn("sftp.extEdit.err.sessionClosed"), "warn");
-      }
-      continue;
-    }
-    if (edit.sessionMisses) patch(edit.id, { sessionMisses: 0 });
     // Rebound to a different session for the same host (a reconnect).
     if (resolved.sessionId !== edit.sessionId) patch(edit.id, { sessionId: resolved.sessionId });
     patch(edit.id, { settling: undefined });
