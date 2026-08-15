@@ -78,8 +78,11 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
           >
             {edit.name}
           </div>
-          {/* The copy's path, in full: the point is that the user can find it,
-              and delete it themselves if they stop trusting us to. */}
+          {/* The copy's path, in full and labelled: the point is that the user
+              can find it and delete it themselves if they stop trusting us to.
+              Labelled because after "Keep both" the remote name and the local
+              file name legitimately differ — the editor keeps the path it
+              opened. */}
           <div
             style={{
               fontSize: 11,
@@ -91,7 +94,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
             }}
             title={edit.localPath}
           >
-            {edit.localPath}
+            {t("sftp.extEdit.copyAt", { path: edit.localPath })}
           </div>
         </div>
         <span style={{ fontSize: 12, color: stateTone(edit, p), flexShrink: 0 }}>{status}</span>

@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { platform } from "@tauri-apps/plugin-os";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { purgeExternalEditScratch, resumeExternalEdits, stopAllExternalEdits } from "@/sftp/external-edit";
+import {
+  purgeExternalEditScratch,
+  resumeExternalEdits,
+  stopAllExternalEdits,
+  useExternalEdits,
+} from "@/sftp/external-edit";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePalette } from "@/theme/ThemeProvider";
 import { useApp } from "@/store/app";
@@ -334,7 +339,15 @@ export function App() {
           try {
             const s = useApp.getState();
             live =
-              s.terminals.length + s.tunnels.length + s.broadcasts.length + s.sftpSessions.length;
+              s.terminals.length +
+              s.tunnels.length +
+              s.broadcasts.length +
+              s.sftpSessions.length +
+              // External edits count as something to lose: quitting deletes
+              // their copies, and an edit whose session already died is exactly
+              // the case where that copy holds the only version of the work —
+              // while contributing nothing to any of the counts above.
+              useExternalEdits.getState().edits.length;
           } catch {
             live = 0; // store unreadable — treat as nothing to lose, never trap
           }

@@ -1282,7 +1282,8 @@ export const en = {
         "localGone": "The local copy is gone",
         "sessionClosed": "The SFTP session closed — reconnect the host, then Retry",
         "checkFailed": "Couldn’t check the file on the server, so nothing was sent",
-        "openFailed": "Couldn’t read the file after copying it"
+        "openFailed": "Couldn’t read the file after copying it",
+        "unsafeRoot": "The scratch directory in $TEMP isn’t private — refusing to put a decrypted copy there"
       },
       "resolve": "Resolve",
       "retry": "Retry",
@@ -1295,6 +1296,7 @@ export const en = {
       "conflictBody": "Someone else wrote to this file after you opened it. Overwrite discards their version; Keep both saves yours beside it and follows the copy from now on; Not now sends nothing and leaves your copy as it is — the next save will ask again only if the file changes on the server again.",
       "keepServer": "Not now",
       "alreadyOpening": "Already opening that file",
+      "copyAt": "copy: {{path}}",
       "plaintextNote": "Copies are stored unencrypted and deleted when you stop editing or quit."
     },
     "toast": {

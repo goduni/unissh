@@ -12,7 +12,7 @@
 // Desktop only. There is nothing on a phone to open the copy with.
 
 import { create } from "zustand";
-import { mkdir, readDir, remove, rename, stat, writeTextFile } from "@tauri-apps/plugin-fs";
+import { lstat, mkdir, readDir, remove, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 import { join, tempDir } from "@tauri-apps/api/path";
 import { openPath } from "@tauri-apps/plugin-opener";
 import * as api from "@/bridge/api";
@@ -108,13 +108,11 @@ const scratchRoot = async (): Promise<string> => join(await tempDir(), "unissh-e
 /** This run's own subtree. The root is shared with any other UniSSH running on
  *  the machine — nothing stops a second instance — so a run may only ever delete
  *  its own directory, plus siblings that have stopped saying they are alive. */
-const runId = `run-${Math.floor(performance.now())}-${editSeqSeed()}`;
-function editSeqSeed(): string {
-  // No crypto.randomUUID (throws outside a secure context) and no Math.random
-  // requirement: two runs started in the same millisecond are the only clash,
-  // and the heartbeat below makes that survivable rather than destructive.
-  return String(Date.now() % 100000);
-}
+// Random, not time-derived: a collision means one run deleting another's live
+// copies at startup (the heartbeat check is skipped for our own directory), and
+// clocks at process start are far too similar to rely on. crypto.randomUUID is
+// out — it throws in a webview that isn't a secure context.
+const runId = `run-${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
 const runRoot = async (): Promise<string> => join(await scratchRoot(), runId);
 
 /** Stale-run threshold: a heartbeat older than this means the run is gone. */
@@ -139,11 +137,32 @@ function startHeartbeat(): void {
 /** `<temp>/unissh-external-edit/<n>` — one directory per edit, so two files with
  *  the same basename can't collide, and stopping one edit can remove its
  *  directory whole. */
+/** `mkdir` with a mode is a no-op on a directory that already exists, so the
+ *  0700 says nothing about a root somebody else created first. On a shared box
+ *  $TEMP is /tmp, where anyone can pre-create our root — as a world-writable
+ *  directory, or as a symlink into one of theirs — and then own the parent of
+ *  every copy this feature decrypts. Check before trusting it. */
+async function assertSafeRoot(root: string): Promise<void> {
+  let info;
+  try {
+    info = await lstat(root);
+  } catch {
+    return; // does not exist yet — mkdir will make it ours, with our mode
+  }
+  if (info.isSymlink || !info.isDirectory) throw new Error(tDyn("sftp.extEdit.err.unsafeRoot"));
+  // Windows reports no mode; there the per-user profile carries the isolation.
+  if (typeof info.mode === "number" && (info.mode & 0o077) !== 0) {
+    throw new Error(tDyn("sftp.extEdit.err.unsafeRoot"));
+  }
+}
+
 async function scratchDir(id: string): Promise<string> {
   // 0700: the copy is the remote file in the clear, and this is the one place
   // it exists unencrypted. Ignored on Windows, where the profile is already
   // per-user.
-  await mkdir(await scratchRoot(), { recursive: true, mode: 0o700 });
+  const root = await scratchRoot();
+  await assertSafeRoot(root);
+  await mkdir(root, { recursive: true, mode: 0o700 });
   const mine = await runRoot();
   await mkdir(mine, { recursive: true, mode: 0o700 });
   startHeartbeat();
@@ -282,7 +301,16 @@ export async function startExternalEdit(
       },
     ]);
     ensurePolling();
-    await openPath(localPath);
+    try {
+      await openPath(localPath);
+    } catch (e) {
+      // Nothing opened — no xdg-open, or no application claims the type. Drop
+      // the row rather than leaving one that will report the copy missing three
+      // seconds from now and charge a confirmation to dismiss.
+      setEdits((edits) => edits.filter((x) => x.id !== id));
+      stopPollingIfIdle();
+      throw e;
+    }
     return id;
   } catch (e) {
     // A half-written copy is still the remote file in the clear. Take the
@@ -384,18 +412,11 @@ export async function resolveConflict(id: string, choice: ConflictChoice, sessio
     const dir = remoteParent(edit.remotePath);
     const taken = (await source.list(dir)).map((e) => e.name);
     const copyName = dedupeName(edit.name, taken);
-    // Move the local copy alongside, so the path the strip shows still ends in
-    // the name it shows. A rename we cannot do is not worth failing the save
-    // over — the names simply stay apart.
-    let localPath = edit.localPath;
-    try {
-      const moved = await join(edit.localDir, copyName);
-      await rename(edit.localPath, moved);
-      localPath = moved;
-    } catch {
-      /* keep the old local name */
-    }
-    patch(id, { remotePath: await source.join(dir, copyName), name: copyName, localPath });
+    // The LOCAL path deliberately stays put. The editor has that exact path
+    // open, and most editors save by path — renaming it under them would leave
+    // them re-creating the old name, which we would no longer be watching, and
+    // every later save would vanish. The strip labels the two separately.
+    patch(id, { remotePath: await source.join(dir, copyName), name: copyName });
   }
   await push(id, source, true);
 }
@@ -423,11 +444,12 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
           announce(edit, "conflict");
           return;
         }
-      } else if (edit.expectSize !== undefined && now.size !== edit.expectSize) {
-        // No baseline — the stat after our own upload failed. The remote file
-        // is still ours, and ours was exactly `expectSize` long, so a different
-        // size is somebody else's write. Same length, and we have nothing to go
-        // on but the fact that we wrote it: adopt it and move on.
+      } else if (edit.expectSize === undefined || now.size !== edit.expectSize) {
+        // No baseline — the stat behind our last decision failed. If we have
+        // ever uploaded, the remote file is ours and exactly `expectSize` long,
+        // so that length is evidence enough to proceed. Without even that we
+        // know nothing about the file, and writing over an unknown is the one
+        // thing this guard exists to prevent: ask.
         patch(id, { state: "conflict" });
         announce(edit, "conflict");
         return;
