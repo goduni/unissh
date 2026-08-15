@@ -402,10 +402,10 @@ export function ViewSftp() {
       const path = await slot.source.join(slot.cwd, entry.name);
       const sessionId = slot.location.sessionId;
       const profileId = sessions.find((s) => s.id === sessionId)?.profileId ?? "";
-      const id = await startExternalEdit(slot.source, sessionId, profileId, path, entry.name);
-      // Refused because a copy of this file is already on its way down. Say so —
-      // silence here reads as a dead menu item.
-      if (!id) toast(t("sftp.extEdit.alreadyOpening"), "info");
+      const started = await startExternalEdit(slot.source, sessionId, profileId, path, entry.name);
+      // Silence would read as a dead menu item — unless the user is the one who
+      // stopped it, in which case a message about their own action is noise.
+      if (!started.ok && started.reason === "already") toast(t("sftp.extEdit.alreadyOpening"), "info");
     } catch (e) {
       toast(apiErrorMessage(e), "err");
     }

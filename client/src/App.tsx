@@ -356,7 +356,12 @@ export function App() {
           // "Confirm quit" is an opt-out of the SESSION prompt. It is not
           // consent to delete files, so an outstanding edit still asks — that
           // copy can be the only place a change exists.
-          const editCount = useExternalEdits.getState().edits.length;
+          let editCount = 0;
+          try {
+            editCount = useExternalEdits.getState().edits.length;
+          } catch {
+            editCount = 0; // unreadable — never trap the window over a count
+          }
           if (editCount === 0 && (!wantConfirm || live === 0)) {
             await cleanup();
             return;

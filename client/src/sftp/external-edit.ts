@@ -79,6 +79,10 @@ export interface LiveEdit {
   profileId: string;
   /** Successful pushes so far — the only progress this feature has to show. */
   saves: number;
+  /** Why the push stopped: somebody else's write, or a baseline we lost and
+   *  therefore cannot compare against. The dialog must not claim the first when
+   *  it means the second. */
+  conflictReason?: "changed" | "unknown";
   /** One of our own failures, as a translation key under `sftp.extEdit.err`. */
   errorKey?: "localGone" | "sessionClosed" | "checkFailed";
   /** A message from the bridge, already human-readable and already localised as
@@ -124,16 +128,31 @@ const scratchRoot = async (): Promise<string> => join(await tempDir(), "unissh-e
 // clocks at process start are far too similar to rely on. crypto.randomUUID is
 // out — it throws in a webview that isn't a secure context.
 const runId = `run-${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
+/** The previous run on this machine, remembered across restarts. It is
+ *  definitively ours and definitively dead, which is the only way to collect
+ *  copies left by an exit we could not clean up after — a crash, a kill, an
+ *  updater relaunch — without guessing from a heartbeat whether some OTHER
+ *  instance is merely asleep. */
+const PREV_RUN_KEY = "unissh.externalEdit.prevRun";
+function takePreviousRunId(): string | null {
+  try {
+    const prev = localStorage.getItem(PREV_RUN_KEY);
+    localStorage.setItem(PREV_RUN_KEY, runId);
+    return prev && prev !== runId ? prev : null;
+  } catch {
+    return null;
+  }
+}
 const runRoot = async (): Promise<string> => join(await scratchRoot(), runId);
 
 /** How long without a heartbeat before a run counts as gone.
  *
- *  Generous on purpose, and deliberately far above the beat interval: timers
- *  stop across system sleep and are throttled in a backgrounded webview, so a
- *  tight window would let a second instance mistake a sleeping one for a dead
- *  one and delete copies its editor still has open. A leftover living until a
- *  later start is the cheaper mistake. */
-const ALIVE_STALE_MS = 10 * 60 * 1000;
+ *  Very generous, because this is a LAST RESORT: our own predecessor is
+ *  collected by name (see `takePreviousRunId`), so the only thing this window
+ *  governs is another instance's leftovers. Timers stop across system sleep —
+ *  and a suspend is hours, not minutes — so a tight window here would mean
+ *  deleting copies an editor on a just-woken machine still has open. */
+const ALIVE_STALE_MS = 12 * 60 * 60 * 1000;
 const HEARTBEAT_MS = 20 * 1000;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
 
@@ -162,13 +181,24 @@ function startHeartbeat(): void {
  *  directory, or as a symlink into one of theirs — and then own the parent of
  *  every copy this feature decrypts. Check before trusting it. */
 async function assertSafeRoot(root: string): Promise<void> {
-  let info;
+  let info: Awaited<ReturnType<typeof lstat>> | null = null;
+  let failure: string | null = null;
   try {
     info = await lstat(root);
-  } catch {
-    return; // does not exist yet — mkdir will make it ours, with our mode
+  } catch (e) {
+    failure = String(e instanceof Error ? e.message : e).toLowerCase();
   }
-  if (info.isSymlink || !info.isDirectory) throw new Error(tDyn("sftp.extEdit.err.unsafeRoot"));
+  if (failure !== null) {
+    // Absent is fine: mkdir will make it ours, with our mode. Anything else —
+    // a permission error, a scope rejection, an I/O failure — means we could
+    // not look, and this is the ONE check between a hostile $TEMP root and a
+    // directory full of decrypted files. Not looking is not the same as safe.
+    const absent =
+      failure.includes("not found") || failure.includes("no such file") || failure.includes("os error 2");
+    if (absent) return;
+    throw new Error(`${tDyn("sftp.extEdit.err.unsafeRoot")} (${failure})`);
+  }
+  if (!info || info.isSymlink || !info.isDirectory) throw new Error(tDyn("sftp.extEdit.err.unsafeRoot"));
   // Windows reports no mode; there the per-user profile carries the isolation.
   if (typeof info.mode === "number" && (info.mode & 0o077) !== 0) {
     throw new Error(tDyn("sftp.extEdit.err.unsafeRoot"));
@@ -264,13 +294,19 @@ export function settleStep(
  * @param source the remote file's source — used for stat and for the copy check
  * @returns the new edit's id, or null if it could not be started
  */
+/** Why an open produced no new edit. `cancelled` is the user's own doing and
+ *  wants no message at all; `already` is worth one. */
+export type StartResult =
+  | { ok: true; id: string }
+  | { ok: false; reason: "already" | "cancelled" };
+
 export async function startExternalEdit(
   source: FileSource,
   sessionId: string,
   profileId: string,
   remotePath: string,
   name: string,
-): Promise<string | null> {
+): Promise<StartResult> {
   // Keyed on the HOST, not the session: the same host open in two panes has two
   // session ids, and two edits of one remote path would push over each other.
   const existing = useExternalEdits
@@ -283,7 +319,7 @@ export async function startExternalEdit(
     // branch below is safe — opening it would hand an editor a truncated file
     // (and a save would push the truncation), and dropping it would delete the
     // download out from under the first call.
-    if (existing.state === "downloading") return null;
+    if (existing.state === "downloading") return { ok: false, reason: "already" };
     // Already open — bring the editor forward rather than making a second copy
     // that would race the first one on save. Unless the copy is gone: then the
     // row is a leftover, and re-matching it would fail on the same missing path
@@ -294,7 +330,7 @@ export async function startExternalEdit(
       // skipping it, and every later save goes nowhere in silence.
       if (existing.state === "error") retryExternalEdit(existing.id);
       await openPath(existing.localPath);
-      return existing.id;
+      return { ok: true, id: existing.id };
     }
     await stopExternalEdit(existing.id);
   }
@@ -302,14 +338,16 @@ export async function startExternalEdit(
   // and a big file makes that window minutes long — during which a second click
   // would start a rival copy of the same file. Claim the path up front.
   const claim = `${profileId || sessionId}\u0000${remotePath}`;
-  if (starting.has(claim)) return null;
+  if (starting.has(claim)) return { ok: false, reason: "already" };
   starting.add(claim);
 
   const id = `ee${++editSeq}`;
   let dir: string | null = null;
   try {
     const remote = await remoteStamp(source, remotePath);
-    if (remote && remote.size > MAX_EDIT_BYTES) throw new Error(tDyn("sftp.extEdit.err.tooLarge"));
+    // No size means we could not read it, not that it is small. Copying a file
+    // of unknown length into $TEMP is exactly what the cap exists to prevent.
+    if (!remote || remote.size > MAX_EDIT_BYTES) throw new Error(tDyn("sftp.extEdit.err.tooLarge"));
     // Inside the try: a mkdir that fails must still release the claim, or this
     // file becomes silently un-openable for the rest of the process.
     dir = await scratchDir(id);
@@ -348,7 +386,12 @@ export async function startExternalEdit(
       // blame them with an error toast or, if the directory removal lost the
       // race, hand an editor a half-downloaded file.
       const completed = await api.sftpDownload(sessionId, remotePath, localPath, 0, null, () => {}, cancelId);
-      if (!completed) return null;
+      if (!completed) {
+        // The user stopped it. The row is already gone; the directory is ours
+        // to remove now that nothing is writing into it.
+        await remove(localDir, { recursive: true }).catch(() => {});
+        return { ok: false, reason: "cancelled" };
+      }
     } finally {
       patch(id, { cancelId: undefined });
       await api.cancelDispose(cancelId).catch(() => {});
@@ -364,7 +407,7 @@ export async function startExternalEdit(
     patch(id, { state: "watching", base, local });
     ensurePolling();
     await openPath(localPath);
-    return id;
+    return { ok: true, id };
   } catch (e) {
     // Anything registered so far goes with the failure: a row nothing is
     // watching would sit there reporting its own copy missing. A half-written
@@ -393,10 +436,18 @@ export function retryExternalEdit(id: string): void {
 /** Stop watching and delete the local copy. */
 export async function stopExternalEdit(id: string): Promise<void> {
   const edit = find(id);
-  if (edit?.cancelId) await api.cancelTrigger(edit.cancelId).catch(() => {});
   setEdits((edits) => edits.filter((e) => e.id !== id));
   stopPollingIfIdle();
   if (!edit) return;
+  if (edit.cancelId) {
+    // Cancellation is cooperative — the core notices between chunks — so the
+    // directory must NOT be removed here: on Windows the removal would fail
+    // while the file is still held, and on Unix it would race the writes and
+    // turn the user's own Stop into an error. `startExternalEdit` cleans up
+    // once the download has actually returned.
+    await api.cancelTrigger(edit.cancelId).catch(() => {});
+    return;
+  }
   try {
     // The whole directory: the editor may have left backups (`file~`, `.swp`)
     // beside our copy, and those hold the same plaintext.
@@ -435,10 +486,13 @@ export async function purgeExternalEditScratch(): Promise<void> {
   } catch {
     return;
   }
-  try {
-    await remove(await runRoot(), { recursive: true });
-  } catch {
-    /* nothing of ours to remove */
+  for (const dead of [runId, takePreviousRunId()]) {
+    if (!dead) continue;
+    try {
+      await remove(await join(root, dead), { recursive: true });
+    } catch {
+      /* nothing of ours to remove */
+    }
   }
   try {
     for (const entry of await readDir(root)) {
@@ -494,7 +548,21 @@ export async function resolveConflict(
   if (choice === "copy") {
     const dir = remoteParent(edit.remotePath);
     const taken = (await source.list(dir)).map((e) => e.name);
-    const copyName = dedupeName(edit.name, taken);
+    let copyName = dedupeName(edit.name, taken);
+    // Reserve it, don't just pick it. The listing is already a moment old, and
+    // the forced push that follows opens with CREAT|TRUNC — so a name taken in
+    // between would be overwritten by the branch that promises to save yours
+    // BESIDE theirs. createNew is O_CREAT|O_EXCL; if it loses, look again.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await source.createNew(await source.join(dir, copyName));
+        break;
+      } catch (e) {
+        if (attempt >= 3) throw e;
+        const again = (await source.list(dir)).map((x) => x.name);
+        copyName = dedupeName(edit.name, again);
+      }
+    }
     // The LOCAL path deliberately stays put. The editor has that exact path
     // open, and most editors save by path — renaming it under them would leave
     // them re-creating the old name, which we would no longer be watching, and
@@ -532,8 +600,8 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
         }
       } else if (edit.base) {
         if (!same(now, edit.base)) {
-          patch(id, { state: "conflict" });
-          announce(edit, "conflict");
+          patch(id, { state: "conflict", conflictReason: "changed" });
+          announce(edit, "changed");
           return;
         }
       } else {
@@ -541,8 +609,8 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
         // know whose version is on the server. Matching sizes would be weak
         // evidence — a one-character edit keeps the length — and this guard
         // exists precisely to stop a blind write. Ask.
-        patch(id, { state: "conflict" });
-        announce(edit, "conflict");
+        patch(id, { state: "conflict", conflictReason: "unknown" });
+        announce(edit, "unknown");
         return;
       }
     }
@@ -569,7 +637,10 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
       misses: 0,
     });
   } catch (e) {
-    patch(id, { state: "error", error: apiErrorMessage(e), errorKey: undefined });
+    // The upload opens the remote with TRUNC at offset 0, so a drop partway
+    // leaves it rewritten in part. Our baseline described the file BEFORE that,
+    // and keeping it would make Retry conflict against our own half-write.
+    patch(id, { state: "error", error: apiErrorMessage(e), errorKey: undefined, base: undefined });
     const current = find(id);
     if (current) toast(tDyn("sftp.extEdit.pushFailed", { name: current.name }), "err");
   }
@@ -577,13 +648,14 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
 
 /** Say it out loud. The list lives on the SFTP route, and a save that stopped
  *  reaching the server is not something to discover by navigating back. */
-function announce(edit: LiveEdit, what: "conflict" | "checkFailed"): void {
-  toast(
-    what === "conflict"
+function announce(edit: LiveEdit, what: "changed" | "unknown" | "checkFailed"): void {
+  const text =
+    what === "changed"
       ? tDyn("sftp.extEdit.conflictToast", { name: edit.name })
-      : tDyn("sftp.extEdit.err.checkFailed"),
-    "warn",
-  );
+      : what === "unknown"
+        ? tDyn("sftp.extEdit.unknownToast", { name: edit.name })
+        : tDyn("sftp.extEdit.err.checkFailed");
+  toast(text, "warn");
 }
 
 // ── the tick ───────────────────────────────────────────────────
@@ -662,6 +734,13 @@ async function tickOnce(): Promise<void> {
       continue;
     }
     if (edit.misses) patch(edit.id, { misses: 0 });
+    // An editor that truncates in place and then stalls reads as a settled
+    // 0-byte file, and the upload would empty the remote one until the next
+    // save. Nothing legitimate needs a 1-second round trip to write zero bytes.
+    if (now.size === 0 && edit.local.size > 0) {
+      patch(edit.id, { settling: undefined });
+      continue;
+    }
     const step = settleStep(edit.local, edit.settling, now);
     if (step.action === "none") continue;
     if (step.action === "clear") {

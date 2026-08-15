@@ -41,7 +41,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
     edit.state === "error"
       ? (editErrorText(edit) ?? t("sftp.extEdit.failed"))
       : edit.state === "conflict"
-        ? t("sftp.extEdit.changedOnServer")
+        ? t(edit.conflictReason === "unknown" ? "sftp.extEdit.stateUnknown" : "sftp.extEdit.changedOnServer")
         : edit.state === "downloading"
           ? t("sftp.extEdit.downloading")
           : edit.state === "uploading"
@@ -167,7 +167,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
         <Modal
           icon="alert"
           iconColor={p.amber}
-          title={t("sftp.extEdit.conflictTitle")}
+          title={t(edit.conflictReason === "unknown" ? "sftp.extEdit.unknownTitle" : "sftp.extEdit.conflictTitle")}
           subtitle={edit.remotePath}
           onClose={() => setAsking(false)}
           footer={
@@ -190,7 +190,9 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
             </>
           }
         >
-          <div style={{ fontSize: 13, color: p.txt }}>{t("sftp.extEdit.conflictBody")}</div>
+          <div style={{ fontSize: 13, color: p.txt }}>
+            {t(edit.conflictReason === "unknown" ? "sftp.extEdit.unknownBody" : "sftp.extEdit.conflictBody")}
+          </div>
         </Modal>
       )}
     </>
