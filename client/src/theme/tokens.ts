@@ -703,10 +703,18 @@ export function termOptions(prefs: TermPrefs, theme: TermTheme, fontSize: number
     cursorBlink: prefs.cursorBlink,
     scrollback: prefs.scrollback,
     theme: prefs.fg ? { ...base, foreground: prefs.fg, cursor: prefs.fg } : base,
-    // Render bold text in the (distinct) bright palette and nudge any too-low-contrast
-    // glyph so nothing comes out unreadable.
+    // Render bold text in the (distinct) bright palette.
     drawBoldTextInBrightColors: true,
-    minimumContrastRatio: prefs.minContrast ? 4.5 : 1.1,
+    // 1 is xterm's "off". The old 1.1 default was a safety net against fg==bg
+    // text, but it never delivered one — it lifted such a glyph to ~1.3:1, still
+    // invisible — while switching on a contrast pass that renders inverse-video
+    // runs (how shells highlight a bracketed paste) as text on text of the same
+    // colour (#38). ANSI black already gets its own lifted tone in termToXterm,
+    // which is where that concern actually belongs. Raising the floor stays an
+    // explicit accessibility choice — with the caveat that turning it on brings
+    // the #38 rendering back for inverse-video runs (white on the inverted
+    // background there). That half is xterm's bug to fix, not ours.
+    minimumContrastRatio: prefs.minContrast ? 4.5 : 1,
     allowProposedApi: true,
     // When a TUI turns on mouse reporting, a plain drag no longer selects text. macOS
     // needs this flag for the Option+drag override (Shift works elsewhere by default).
