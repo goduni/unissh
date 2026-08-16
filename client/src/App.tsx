@@ -19,6 +19,7 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
 import { ResizeEdges } from "@/shell/WindowChrome";
 import { isDesktopOs, isMac } from "@/bridge/platform";
+import { terminalOwnsTabDigits } from "@/support/hotkeys";
 import { useUpdate } from "@/store/update";
 import { BOOT_CHECK_DELAY_MS, PERIODIC_CHECK_MS } from "@/bridge/updater";
 
@@ -501,6 +502,11 @@ export function App() {
         e.preventDefault();
         useApp.getState().resetTermZoom();
       } else if (/[1-9]/.test(k)) {
+        // While the terminal is on screen these digits are its tab switcher, and
+        // both listeners are capture-phase on window — stopPropagation over there
+        // cannot silence this one. Routing anyway is how ⌘1 in a terminal used to
+        // switch to tab 1 and then throw the user out to Hosts.
+        if (terminalOwnsTabDigits(useApp.getState().route, e)) return;
         const r = ROUTES[parseInt(k, 10) - 1];
         if (r) {
           e.preventDefault();

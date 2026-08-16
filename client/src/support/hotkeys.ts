@@ -40,15 +40,36 @@ const APP_CHORD_KEYS = new Set([
   "9", // sections
 ]);
 
-/** Whether a key event is an app-level chord the terminal must let through.
+/** The modifier half of an app chord, without asking which key it is.
  *
  *  ⌘ on macOS; Ctrl+**Shift** everywhere else. Not a bare Ctrl: Ctrl+K, Ctrl+L
  *  and Ctrl+T are readline's kill-line, clear and transpose, and a terminal
  *  that ate them to open a palette would be a worse terminal. Same rule the
- *  find bar already uses (⌘F / Ctrl+Shift+F). */
-export function isAppChord(ev: KeyboardEvent): boolean {
+ *  find bar already uses (⌘F / Ctrl+Shift+F).
+ *
+ *  `mac` is a parameter rather than a call to isMac() so the rule can be tested
+ *  for both platforms from one process. */
+export function hasAppModifier(ev: KeyboardEvent, mac = isMac()): boolean {
   if (ev.altKey) return false;
-  const modifier = isMac() ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && ev.shiftKey;
-  if (!modifier) return false;
+  return mac ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && ev.shiftKey && !ev.metaKey;
+}
+
+/** Whether a key event is an app-level chord the terminal must let through. */
+export function isAppChord(ev: KeyboardEvent): boolean {
+  if (!hasAppModifier(ev)) return false;
   return APP_CHORD_KEYS.has(ev.key.toLowerCase());
+}
+
+/** Whether a digit chord belongs to the terminal's tabs rather than to the
+ *  app's sections.
+ *
+ *  Both listeners sit on `window` in the capture phase, and stopPropagation
+ *  cannot silence a sibling on the same node — so on macOS ⌘1 used to jump to
+ *  terminal tab 1 *and* route the app to Hosts, whichever ran first. App.tsx
+ *  asks this before routing and stands down while the terminal is on screen.
+ *
+ *  Matched on `e.code`, the way useTerminalShortcuts matches it: with Shift
+ *  held, `e.key` is "!@#$%^&*(" on the usual layouts. */
+export function terminalOwnsTabDigits(route: string, ev: KeyboardEvent, mac = isMac()): boolean {
+  return route === "terminal" && hasAppModifier(ev, mac) && /^Digit[1-9]$/.test(ev.code);
 }
