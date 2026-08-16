@@ -363,6 +363,13 @@ export interface TermTheme {
 
 export const TERM_THEMES: TermTheme[] = [
   { id: "nebula", name: "UniSSH Nebula", custom: true, bg: "#0c0e16", fg: "#d8def2", dimc: "#565d78", green: "#3ad29f", blue: "#5b8cff", cyan: "#57c7ff", red: "#ff6b8b", yellow: "#ffcf6b", purple: "#b98cff", white: "#ffffff", sel: "rgba(91,140,255,0.22)" },
+  // The unstyled one, kept second so the app's fallback (TERM_THEMES[0]) stays
+  // Nebula. Every other entry is a designed palette; this is the terminal people
+  // already have in xterm/PuTTY, so the ANSI 16 are xterm's own values written
+  // out in full rather than derived from a base — including the famously dark
+  // blue. `bright*` carries the readable variants, and bold text renders in the
+  // bright ramp (see termToXterm), which is where `ls` gets its directories.
+  { id: "console", name: "Classic Console", bg: "#000000", fg: "#cccccc", dimc: "#7f7f7f", green: "#00cd00", blue: "#0000ee", cyan: "#00cdcd", red: "#cd0000", yellow: "#cdcd00", purple: "#cd00cd", white: "#e5e5e5", sel: "rgba(204,204,204,0.28)", black: "#000000", brightBlack: "#7f7f7f", brightRed: "#ff0000", brightGreen: "#00ff00", brightYellow: "#ffff00", brightBlue: "#5c5cff", brightMagenta: "#ff00ff", brightCyan: "#00ffff", brightWhite: "#ffffff" },
   { id: "dracula", name: "Dracula", bg: "#282a36", fg: "#f8f8f2", dimc: "#6272a4", green: "#50fa7b", blue: "#bd93f9", cyan: "#8be9fd", red: "#ff5555", yellow: "#f1fa8c", purple: "#ff79c6", white: "#ffffff", sel: "rgba(189,147,249,0.25)" },
   { id: "nord", name: "Nord", bg: "#2e3440", fg: "#d8dee9", dimc: "#4c566a", green: "#a3be8c", blue: "#88c0d0", cyan: "#8fbcbb", red: "#bf616a", yellow: "#ebcb8b", purple: "#b48ead", white: "#ffffff", sel: "rgba(136,192,208,0.22)" },
   { id: "gruvbox", name: "Gruvbox Dark", bg: "#282828", fg: "#ebdbb2", dimc: "#928374", green: "#b8bb26", blue: "#83a598", cyan: "#8ec07c", red: "#fb4934", yellow: "#fabd2f", purple: "#d3869b", white: "#ffffff", sel: "rgba(131,165,152,0.22)" },

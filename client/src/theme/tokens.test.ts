@@ -139,8 +139,42 @@ describe("palette contrast (WCAG AA)", () => {
 });
 
 describe("terminal themes", () => {
-  it("ships seventeen built-ins", () => {
-    expect(TERM_THEMES).toHaveLength(17);
+  it("ships eighteen built-ins", () => {
+    expect(TERM_THEMES).toHaveLength(18);
+  });
+
+  // Every other built-in is a designed palette. This one is the escape hatch for
+  // "your colours are strange, give me the terminal I already know": a true-black
+  // background and the unmodified xterm ANSI 16, spelled out rather than derived.
+  describe("Classic Console", () => {
+    const classic = TERM_THEMES.find((t) => t.id === "console");
+
+    it("sits on true black and is not the default", () => {
+      expect(classic?.bg).toBe("#000000");
+      // TERM_THEMES[0] is the app's fallback theme (ThemeProvider) — that stays nebula.
+      expect(TERM_THEMES[0].id).toBe("nebula");
+    });
+
+    it("spells out the standard ANSI 16 instead of deriving them", () => {
+      expect(classic).toMatchObject({
+        black: "#000000",
+        red: "#cd0000",
+        green: "#00cd00",
+        yellow: "#cdcd00",
+        blue: "#0000ee",
+        purple: "#cd00cd",
+        cyan: "#00cdcd",
+        white: "#e5e5e5",
+        brightBlack: "#7f7f7f",
+        brightRed: "#ff0000",
+        brightGreen: "#00ff00",
+        brightYellow: "#ffff00",
+        brightBlue: "#5c5cff",
+        brightMagenta: "#ff00ff",
+        brightCyan: "#00ffff",
+        brightWhite: "#ffffff",
+      });
+    });
   });
 
   it.each(TERM_THEMES.map((t) => [t.name, t] as const))(
