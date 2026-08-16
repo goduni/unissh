@@ -54,7 +54,9 @@ metrics_bind = "127.0.0.1:9090"
 [setup]
 # code = "" → empty → a random setup code is printed to the server log on first
 # boot (while the instance is unclaimed); the first user claims the instance with
-# it. Set a value to pin a deterministic code for IaC/tests. Env: UNISSH__SETUP__CODE=...
+# it. Set a value to pin a deterministic code for IaC/tests — a pinned code is
+# NEVER printed to the log (you already hold it; logging it would only spread it).
+# Env: UNISSH__SETUP__CODE=...
 code = ""
 
 [oidc]
