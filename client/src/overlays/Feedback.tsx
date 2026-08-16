@@ -10,6 +10,7 @@ import { useApp, type ConfirmData } from "@/store/app";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation, tDyn } from "@/i18n";
 import { isMac } from "@/bridge/platform";
+import { shortcutGroups } from "@/support/shortcuts";
 import type { ToastDetail, ToastKind } from "@/store/toast";
 
 interface ToastItem extends ToastDetail {
@@ -322,23 +323,8 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
 // "⌘" was printed on every platform, including the ones without a ⌘ key. The
 // modifier also differs inside the terminal, and deliberately: a bare Ctrl+K/L/T
 // belongs to readline there, so the app takes Ctrl+Shift instead (see
-// support/hotkeys.ts). Both are shown rather than picking one and being wrong
-// half the time.
-const shortcutList = (): [string, string][] => {
-  const mod = isMac() ? "⌘" : "Ctrl+Shift+";
-  return [
-    [`${mod}K`, "feedback.shortcut.commandPalette"],
-    [`${mod}N`, "feedback.shortcut.newHost"],
-    [`${mod}T`, "feedback.shortcut.goToTerminal"],
-    // The one chord that carries its own Shift on macOS too: a bare ⌘S saves in
-    // the SFTP file editor, so this one is ⌘⇧S there and Ctrl+Shift+S elsewhere.
-    [isMac() ? "⌘⇧S" : "Ctrl+Shift+S", "feedback.shortcut.localTerminal"],
-    [`${mod}L`, "feedback.shortcut.lockInstance"],
-    [`${mod}1–9`, "feedback.shortcut.switchSections"],
-    [`${mod}+/−/0`, "feedback.shortcut.termZoom"],
-    [`${mod}/`, "feedback.shortcut.thisHelp"],
-  ];
-};
+// support/hotkeys.ts). The table itself lives in support/shortcuts.ts, where it
+// can be tested without mounting React.
 
 export function ShortcutsHelp() {
   const p = usePalette();
@@ -363,34 +349,62 @@ export function ShortcutsHelp() {
         onClick={(e) => e.stopPropagation()}
         className="uh-view"
         style={{
-          width: 420,
+          // Wider than the eight-row sheet this grew out of: "Ctrl+Shift+←→↑↓"
+          // and a wrapped RU description do not both fit in 420.
+          width: "min(480px, calc(100vw - 32px))",
           background: p.bg1,
           border: `1px solid ${p.line2}`,
           borderRadius: 16,
           padding: 22,
           boxShadow: p.shadow,
+          // The sheet is now taller than a laptop viewport at its smallest —
+          // scroll the list rather than clip rows off the bottom edge.
+          maxHeight: "min(78vh, 640px)",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
-        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>{t("feedback.shortcutsTitle")}</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {shortcutList().map(([k, label]) => (
-            <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-              {/* minWidth:0 lets a long RU shortcut description wrap instead of shoving the keycap */}
-              <span style={{ fontSize: 13, color: p.txt2, minWidth: 0 }}>{tDyn(label)}</span>
-              <span
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, flexShrink: 0 }}>
+          {t("feedback.shortcutsTitle")}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 18, overflowY: "auto", minHeight: 0 }}>
+          {shortcutGroups(isMac()).map((group) => (
+            <div key={group.titleKey} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div
                 style={{
-                  fontFamily: MONO,
-                  fontSize: 12,
-                  padding: "3px 9px",
-                  borderRadius: 6,
-                  background: p.bg3,
-                  border: `1px solid ${p.line2}`,
-                  color: p.txt,
-                  flexShrink: 0, // keycap must never shrink/wrap
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: 0.6,
+                  textTransform: "uppercase",
+                  color: p.txt3,
                 }}
               >
-                {k}
-              </span>
+                {tDyn(group.titleKey)}
+              </div>
+              {group.rows.map((row) => (
+                <div
+                  key={row.labelKey}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}
+                >
+                  {/* minWidth:0 lets a long RU shortcut description wrap instead of shoving the keycap */}
+                  <span style={{ fontSize: 13, color: p.txt2, minWidth: 0 }}>{tDyn(row.labelKey)}</span>
+                  <span
+                    style={{
+                      fontFamily: MONO,
+                      fontSize: 12,
+                      padding: "3px 9px",
+                      borderRadius: 6,
+                      background: p.bg3,
+                      border: `1px solid ${p.line2}`,
+                      color: p.txt,
+                      flexShrink: 0, // keycap must never shrink/wrap
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {row.keys ?? tDyn(row.keysKey!, row.keysVars)}
+                  </span>
+                </div>
+              ))}
             </div>
           ))}
         </div>
