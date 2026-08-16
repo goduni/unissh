@@ -650,7 +650,10 @@ export const ru = {
     "alreadyExists": "уже есть",
     "selectedOf": "Выбрано <b>{{count}}</b> из {{total}}",
     "importN": "Импортировать {{count}}",
+    "intoGroup": "В группу",
+    "intoRoot": "Без группы",
     "imported": "Импортировано {{hosts}}",
+    "importedIntoGroup": "Импортировано {{hosts}} в «{{group}}»",
     "importedWithKeys": "Импортировано {{hosts}} · {{keys}}",
     "keysSkipped": "Пропущено {{keys}}",
     "skipReason": {

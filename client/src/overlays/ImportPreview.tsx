@@ -15,6 +15,7 @@ import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
+import { defaultImportGroup } from "./importTarget";
 import * as api from "@/bridge/api";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -188,6 +189,11 @@ function ImportPreviewBody() {
   const [sel, setSel] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Where the imported hosts land. Defaults to the group the sidebar has open —
+  // picking a group and then importing into the root is the reported bug — but
+  // stays visible and changeable, because the target should never be a guess.
+  const groups = useApp((s) => s.groups);
+  const [target, setTarget] = useState<string | null>(null);
 
   const close = () => setImporting(false);
   useDialogKeys(close);
@@ -246,9 +252,15 @@ function ImportPreviewBody() {
     };
   }, [importing, setImporting, t]);
 
-  // Reset transient state when the overlay closes.
+  // Reset transient state when the overlay closes, and re-read the sidebar
+  // selection when it opens — the user may have switched groups since last time.
   useEffect(() => {
-    if (!importing) {
+    if (importing) {
+      // Read imperatively: keyed on `importing` alone, so a group switch behind
+      // an open overlay cannot move a target the user just chose by hand.
+      const s = useApp.getState();
+      setTarget(defaultImportGroup(s.hostFilter, s.groups));
+    } else {
       setRows([]);
       setSel([]);
       setFileText("");
@@ -381,13 +393,28 @@ function ImportPreviewBody() {
           }
         }
 
+        // 3) Put the new hosts in the chosen group. A group is its own item
+        //    holding member ids, so membership is a second write however it is
+        //    driven; this keeps it on the same path as every other "add hosts to
+        //    group" in the app. If it throws, the hosts are already imported —
+        //    guard() surfaces the error and they sit at the root, recoverable by
+        //    hand rather than lost.
+        const groupLabel = target ? (groups.find((g) => g.groupId === target)?.label ?? null) : null;
+        if (target && created.length) {
+          await useApp.getState().addHostsToGroup(target, created);
+        }
+
         await useApp.getState().reloadVault();
         setImporting(false);
         const hosts = t("count.hosts", { count: created.length });
         toast(
+          // Keys win over the group when both happened: the group is visible in
+          // the sidebar the moment this closes, the imported keys are not.
           keysImported > 0
             ? t("import.importedWithKeys", { hosts, keys: t("count.keys", { count: keysImported }) })
-            : t("import.imported", { hosts }),
+            : groupLabel
+              ? t("import.importedIntoGroup", { hosts, group: groupLabel })
+              : t("import.imported", { hosts }),
           "ok",
         );
         if (skips.length > 0) {
@@ -756,6 +783,46 @@ function ImportPreviewBody() {
               values={{ count, total: rows.length }}
             />
           </span>
+          {/* Stated, not inferred: the import used to land at the root whatever
+              the sidebar had open, and a target you cannot see is one you cannot
+              correct. Hidden when the vault has no groups — there is nothing to
+              choose between. */}
+          {groups.length > 0 && (
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: 13,
+                color: p.txt3,
+                ...(narrow ? null : { marginLeft: 6 }),
+              }}
+            >
+              {t("import.intoGroup")}
+              <select
+                value={target ?? ""}
+                onChange={(e) => setTarget(e.target.value || null)}
+                style={{
+                  height: isMobile ? 44 : 30,
+                  maxWidth: 220,
+                  padding: "0 8px",
+                  borderRadius: 8,
+                  border: `1px solid ${p.line}`,
+                  background: p.bg0,
+                  color: p.txt,
+                  fontSize: 13,
+                  ...(narrow ? { flex: 1, minWidth: 0 } : null),
+                }}
+              >
+                <option value="">{t("import.intoRoot")}</option>
+                {groups.map((g) => (
+                  <option key={g.groupId} value={g.groupId}>
+                    {g.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {!narrow && <div style={{ flex: 1 }} />}
           <Btn
             variant="ghost"

@@ -612,7 +612,10 @@ export const en = {
     "alreadyExists": "already exists",
     "selectedOf": "Selected <b>{{count}}</b> of {{total}}",
     "importN": "Import {{count}}",
+    "intoGroup": "Into group",
+    "intoRoot": "No group",
     "imported": "Imported {{hosts}}",
+    "importedIntoGroup": "Imported {{hosts}} into {{group}}",
     "importedWithKeys": "Imported {{hosts}} · {{keys}}",
     "keysSkipped": "Skipped {{keys}}",
     "skipReason": {
