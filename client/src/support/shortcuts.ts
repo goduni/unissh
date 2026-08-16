@@ -71,19 +71,19 @@ export function shortcutGroups(mac: boolean): ShortcutGroup[] {
         { keys: `${mod}D`, labelKey: "feedback.shortcut.splitRight" },
         { keys: `${mod}E`, labelKey: "feedback.shortcut.splitDown" },
         { keys: `${mod}W`, labelKey: "feedback.shortcut.closePane" },
-        // All four arrows, and with or without Shift: useTerminalShortcuts never
-        // rules Shift out. That is also why prompt jumping (⌘⇧↑↓ / Ctrl+Shift+↑↓,
-        // ViewTerminal's OSC-133 handler) is NOT printed here — this listener is
-        // capture-phase on window and calls stopPropagation, so in any tab with
-        // two or more panes the event never reaches xterm and the jump silently
-        // becomes a pane switch. A row true only in unsplit tabs is worse than no
-        // row; the collision needs fixing in the bindings, not documenting here.
-        { keys: `${mod}←→↑↓`, labelKey: "feedback.shortcut.focusPane" },
+        // Horizontal only, and that is the whole rule: ← → move between panes,
+        // ↑ ↓ move between prompts. They used to be four aliases for two
+        // directions, which left the prompt jump below unreachable in any split
+        // tab — see paneFocusStep in shell/useTerminalShortcuts.
+        { keys: `${mod}←→`, labelKey: "feedback.shortcut.focusPane" },
         { keys: "Ctrl+Tab", labelKey: "feedback.shortcut.cycleTabs" },
         // Bare Ctrl off macOS, not the Ctrl+Shift the rest of the sheet prints:
         // App.tsx binds zoom on meta||ctrl and matches by e.key, and Shift turns
         // 0 into ")" on most layouts — so Ctrl+Shift+0 would not reset anything.
         { keys: mac ? "⌘ +/−/0" : "Ctrl +/−/0", labelKey: "feedback.shortcut.termZoom" },
+        // Only bound when the shell emits OSC 133 marks, hence the caveat in the
+        // label — otherwise these keys keep whatever meaning the shell gives them.
+        { keys: mac ? "⌘⇧↑↓" : "Ctrl+Shift+↑↓", labelKey: "feedback.shortcut.promptJump" },
       ],
     },
     {

@@ -455,6 +455,7 @@ export const en = {
       "closePane": "Close the pane (or the tab)",
       "focusPane": "Focus the previous / next pane",
       "cycleTabs": "Next tab (with ⇧ — previous)",
+      "promptJump": "Previous / next prompt · shells with OSC 133 marks",
       "selectCopies": "Select — it goes to the clipboard on release",
       "forceSelect": "Select inside apps that took the mouse (mc, tmux, vim)",
       "paneMenu": "Menu: copy, paste, split, close"
