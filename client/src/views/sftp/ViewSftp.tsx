@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { Icon, type IconName } from "@/components/primitives";
-import { useNarrow } from "@/store/responsive";
+import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
 import { useApp } from "@/store/app";
 import { toast } from "@/store/toast";
@@ -23,6 +23,8 @@ import { useSlot, type SlotCtl } from "./useSlot";
 import { PaneSlot } from "./PaneSlot";
 import type { TabInfo } from "./TabStrip";
 import { TransferQueue } from "./TransferQueue";
+import { ExternalEdits } from "./ExternalEdits";
+import { startExternalEdit } from "@/sftp/external-edit";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConflictDialog, ChmodDialog } from "./dialogs";
 import { TextEditor } from "./TextEditor";
@@ -70,6 +72,9 @@ export function ViewSftp() {
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
+  // Platform, not width: a narrowed desktop window still has an external editor,
+  // and a phone still doesn't. Gates the external-editor entries.
+  const isTouch = useIsMobile();
   // Collapse to a single pane based on the CONTENT width, not the raw window width:
   // two panes need ~536px, and a wide sidebar can starve the content area below that
   // while the window is still > the useNarrow breakpoint (otherwise the 2nd pane
@@ -87,6 +92,7 @@ export function ViewSftp() {
   }, []);
   const oneCol = isMobile || (paneAreaW > 0 && paneAreaW < 560);
   const sessions = useApp((s) => s.sftpSessions);
+  const externalEditDefault = useApp((s) => s.sftpExternalEditDefault);
   const hosts = useApp((s) => s.hosts);
   const enqueueTransfer = useApp((s) => s.enqueueTransfer);
   const closeSftpSession = useApp((s) => s.closeSftpSession);
@@ -386,6 +392,24 @@ export function ViewSftp() {
     const path = await slot.source.join(slot.cwd, entry.name);
     setEditor({ source: slot.source, path, name: entry.name, size: entry.size });
   }
+  /** Copy a remote file down, hand it to whatever the OS opens it with, and
+   *  watch it. Remote only — a local file is already open-able by every other
+   *  tool on the machine, and offering it here would mean handing the OS
+   *  launcher an unrestricted path scope for no real gain. */
+  async function openExternally(slot: SlotCtl, entry: Entry) {
+    if (!slot.source || slot.location.kind !== "remote") return;
+    try {
+      const path = await slot.source.join(slot.cwd, entry.name);
+      const sessionId = slot.location.sessionId;
+      const profileId = sessions.find((s) => s.id === sessionId)?.profileId ?? "";
+      const started = await startExternalEdit(slot.source, sessionId, profileId, path, entry.name);
+      // Silence would read as a dead menu item — unless the user is the one who
+      // stopped it, in which case a message about their own action is noise.
+      if (!started.ok && started.reason === "already") toast(t("sftp.extEdit.alreadyOpening"), "info");
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+    }
+  }
   /** Pull files into the local pane via the OS document picker — the inbound
    *  path on iOS (where the FS isn't browsable), and a convenience on desktop. */
   async function importFromFiles(slot: SlotCtl) {
@@ -413,7 +437,17 @@ export function ViewSftp() {
     const entries = slot.selection.has(entry.name) && slot.selection.size > 1 ? slot.selectedEntries() : [entry];
     const items: MenuItem[] = [];
     if (entry.isDir) items.push({ icon: "folderOpen", label: t("common.open"), onClick: () => slot.navigate(entry.name) });
-    else items.push({ icon: "note", label: t("common.open"), onClick: () => void openEditor(slot, entry) });
+    else if (isTouch || slot.location.kind !== "remote") {
+      // A phone has no external editor to hand a copy to (and the receiving app
+      // generally can't write it back); a local file needs no copy at all.
+      items.push({ icon: "note", label: t("common.open"), onClick: () => void openEditor(slot, entry) });
+    } else if (externalEditDefault) {
+      items.push({ icon: "link", label: t("common.open"), onClick: () => void openExternally(slot, entry) });
+      items.push({ icon: "note", label: t("sftp.menu.openInApp"), onClick: () => void openEditor(slot, entry) });
+    } else {
+      items.push({ icon: "note", label: t("common.open"), onClick: () => void openEditor(slot, entry) });
+      items.push({ icon: "link", label: t("sftp.menu.openExternal"), onClick: () => void openExternally(slot, entry) });
+    }
     for (const tab of tabs) {
       if (tab.id === keyOf(slot.location)) continue;
       items.push({
@@ -473,6 +507,23 @@ export function ViewSftp() {
 
   const dialogExisting = (slot: SlotCtl) => slot.entries.map((e) => e.name);
 
+  // A live external edit outlives the pane that started it, so the watcher can't
+  // hold a source: it asks for one each time it needs to push. This copy feeds
+  // the strip below; the watcher's own resolver is registered in App, which no
+  // overlay can unmount.
+  const remoteSourceFor = (sessionId: string, profileId: string) => {
+    // Prefer the original session; fall back to any live one for the same host,
+    // because a reconnect mints a new id and the edit would otherwise be
+    // stranded with a file it can no longer send anywhere.
+    const session =
+      sessions.find((s) => s.id === sessionId) ?? sessions.find((s) => s.profileId === profileId && profileId);
+    if (!session) return null;
+    try {
+      return { source: sourceFor({ kind: "remote", sessionId: session.id }, sessions), sessionId: session.id };
+    } catch {
+      return null;
+    }
+  };
   return (
     <div
       className="uh-view"
@@ -499,6 +550,8 @@ export function ViewSftp() {
         <PaneSlot {...paneProps(left, "left", right, setLeftLoc)} />
         {!oneCol && <PaneSlot {...paneProps(right, "right", left, setRightLoc)} />}
       </div>
+
+      <ExternalEdits sourceFor={remoteSourceFor} />
 
       <TransferQueue />
 

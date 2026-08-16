@@ -778,6 +778,8 @@ function SettingsGeneral() {
   const modernAlgorithms = useApp((s) => s.modernAlgorithms);
   const setModernAlgorithms = useApp((s) => s.setModernAlgorithms);
   const sftpParallelism = useApp((s) => s.sftpParallelism);
+  const sftpExternalEditDefault = useApp((s) => s.sftpExternalEditDefault);
+  const setSftpExternalEditDefault = useApp((s) => s.setSftpExternalEditDefault);
   const setSftpParallelism = useApp((s) => s.setSftpParallelism);
   const isMobile = useIsMobile();
 
@@ -882,6 +884,16 @@ function SettingsGeneral() {
           ]}
         />
       </SettingRow>
+      {/* Desktop only: there is no external editor to hand a file to on a phone,
+          and the SFTP pane there offers the in-app one regardless. */}
+      {!isMobile && (
+        <SettingRow
+          title={t("settings.sftpExternalEditTitle")}
+          desc={t("settings.sftpExternalEditDesc")}
+        >
+          <Toggle checked={sftpExternalEditDefault} onChange={setSftpExternalEditDefault} />
+        </SettingRow>
+      )}
       <SettingRow
         title={t("settings.sftpParallelismTitle")}
         desc={t("settings.sftpParallelismDesc")}

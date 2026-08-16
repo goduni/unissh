@@ -27,6 +27,7 @@ import { logWarn, logError, logDebug } from "@/bridge/log";
 import type { TermTheme } from "@/theme/tokens";
 import type { SftpSession, Transfer } from "@/store/sftp-types";
 import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
+import { suspendExternalEdits } from "@/sftp/external-edit";
 
 export type Route =
   | "hosts"
@@ -308,6 +309,11 @@ interface AppStore {
   /** How many files to transfer in parallel over one SFTP connection (channel
    *  pool size). 1 = strictly sequential. Persisted; passed to sftpOpen. */
   sftpParallelism: number;
+  /** "Open" in a file's context menu hands it to the OS editor instead of the
+   *  in-app one (persisted; desktop-only, the mobile shell has nothing to open a
+   *  copy with). Both entries stay in the menu either way. Double-click is a
+   *  different action entirely — it sends the file to the other pane. */
+  sftpExternalEditDefault: boolean;
   /** profileId → epoch ms of the last connect (persisted; drives recent sort). */
   lastConnected: Record<string, number>;
 
@@ -416,6 +422,7 @@ interface AppStore {
   customChrome: boolean;
   setCustomChrome: (on: boolean) => void;
   setSftpParallelism: (n: number) => void;
+  setSftpExternalEditDefault: (v: boolean) => void;
 
   // group / tag membership (bulk — driven by the host multi-select bar)
   addHostsToGroup: (groupId: string, profileIds: string[]) => Promise<void>;
@@ -633,6 +640,15 @@ export const SFTP_PARALLELISM_MIN = 1;
 export const SFTP_PARALLELISM_MAX = 8;
 const SFTP_PARALLELISM_DEFAULT = 4;
 
+/** Whether "Open" reaches for the external editor (persisted, device-local). */
+const lsExternalEditDefault = (): boolean => {
+  try {
+    return localStorage.getItem("unissh.sftpExternalEditDefault") === "1";
+  } catch {
+    return false;
+  }
+};
+
 /** How many files to transfer concurrently over one SFTP connection. Persisted
  *  locally (device-local UX/perf knob, not vault data); clamped to [MIN, MAX]. */
 const lsSftpParallelism = (): number => {
@@ -727,6 +743,7 @@ export const useApp = create<AppStore>((set, get) => ({
   // makes a stale localStorage value from another machine harmless too.
   customChrome: osPlatform() === "linux" ? (lsCustomChrome() ?? true) : true,
   sftpParallelism: lsSftpParallelism(),
+  sftpExternalEditDefault: lsExternalEditDefault(),
   lastConnected: lsLastConnected(),
   tunnels: [],
   broadcasts: [],
@@ -998,6 +1015,12 @@ export const useApp = create<AppStore>((set, get) => ({
     // Drop the cached Secret Key so a post-lock heap inspection can't recover it.
     clearSecretKey();
     cancelAllTransfers();
+    // Stop watching, but KEEP the copies. Editing a file externally is exactly
+    // what leaves this window idle long enough to auto-lock, so deleting them
+    // here would delete the file out from under the editor the user is typing
+    // in. The copies still go at quit and at the next startup; a lock is not
+    // worth destroying unsaved work for.
+    suspendExternalEdits();
     set({
       unlocked: false,
       overlay: "unlock",
@@ -1227,6 +1250,14 @@ export const useApp = create<AppStore>((set, get) => ({
     // Push to the core; surface a failure (don't silently leave UI and core out of
     // sync) — the value still persists so the next boot retries the push.
     void api.setKeepaliveSecs(v).catch((e) => logWarn(`setKeepaliveSecs: ${apiErrorMessage(e)}`));
+  },
+  setSftpExternalEditDefault: (v) => {
+    set({ sftpExternalEditDefault: v });
+    try {
+      localStorage.setItem("unissh.sftpExternalEditDefault", v ? "1" : "0");
+    } catch {
+      /* ignore (private mode / quota) */
+    }
   },
   setSftpParallelism: (n) => {
     const v = Number.isFinite(n)

@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { platform } from "@tauri-apps/plugin-os";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  purgeExternalEditScratch,
+  resumeExternalEdits,
+  setSourceResolver,
+  stopAllExternalEdits,
+  useExternalEdits,
+} from "@/sftp/external-edit";
+import { sourceFor } from "@/bridge/sources";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePalette } from "@/theme/ThemeProvider";
 import { useApp } from "@/store/app";
@@ -307,6 +315,22 @@ export function App() {
         // unquittable window is not.
         const u = await win.onCloseRequested(async (event) => {
           if (confirmedClose.current) return; // our own close — let it through
+          // Deleting the external-edit copies is irreversible, so it may only
+          // happen once the close is certain — a user who cancels the quit
+          // dialog must still find the file their editor has open. Bounded and
+          // caught, like everything on this path: a cleanup that hangs must not
+          // be what makes the window unquittable, and the startup purge is the
+          // backstop if it does.
+          const cleanup = async () => {
+            try {
+              await Promise.race([
+                stopAllExternalEdits(),
+                new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+              ]);
+            } catch {
+              /* ignore */
+            }
+          };
           let wantConfirm = true;
           try {
             wantConfirm = localStorage.getItem("unissh.confirmquit") !== "0";
@@ -317,25 +341,62 @@ export function App() {
           try {
             const s = useApp.getState();
             live =
-              s.terminals.length + s.tunnels.length + s.broadcasts.length + s.sftpSessions.length;
+              s.terminals.length +
+              s.tunnels.length +
+              s.broadcasts.length +
+              s.sftpSessions.length +
+              // External edits count as something to lose: quitting deletes
+              // their copies, and an edit whose session already died is exactly
+              // the case where that copy holds the only version of the work —
+              // while contributing nothing to any of the counts above.
+              useExternalEdits.getState().edits.length;
           } catch {
             live = 0; // store unreadable — treat as nothing to lose, never trap
           }
-          if (!wantConfirm || live === 0) return; // nothing to lose — close normally
+          // "Confirm quit" is an opt-out of the SESSION prompt. It is not
+          // consent to delete files, so an outstanding edit still asks — that
+          // copy can be the only place a change exists.
+          let editCount = 0;
+          try {
+            editCount = useExternalEdits.getState().edits.length;
+          } catch {
+            editCount = 0; // unreadable — never trap the window over a count
+          }
+          if (editCount === 0 && (!wantConfirm || live === 0)) {
+            await cleanup();
+            return;
+          }
           event.preventDefault();
           let ok = false;
+          let answered = false;
           try {
             // Race the dialog against a deadline. A native dialog that never
             // resolves is not hypothetical on Linux — an undecorated window under
             // a compositor that declines to map the transient would hang this
             // await forever, and the close is already prevented by this point.
+            const edits = editCount;
+            // Both, not one instead of the other: the sessions explain the
+            // prompt, the edits explain what confirming destroys.
+            const sessions = live - edits;
+            const body = [
+              sessions > 0 ? t("quit.body", { count: sessions }) : "",
+              edits > 0 ? t("quit.bodyEdits", { count: edits }) : "",
+            ]
+              .filter(Boolean)
+              .join("\n\n");
+            // `answered` is set by the DIALOG's own resolution, never by the
+            // deadline — the difference decides whether we may delete anything.
+            const dialog = confirm(body, {
+              title: t("quit.title"),
+              kind: "warning",
+              okLabel: t("quit.confirm"),
+              cancelLabel: t("common.cancel"),
+            }).then((v) => {
+              answered = true;
+              return v;
+            });
             ok = await Promise.race([
-              confirm(t("quit.body", { count: live }), {
-                title: t("quit.title"),
-                kind: "warning",
-                okLabel: t("quit.confirm"),
-                cancelLabel: t("common.cancel"),
-              }),
+              dialog,
               new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 10_000)),
             ]);
           } catch {
@@ -344,6 +405,12 @@ export function App() {
             ok = true;
           }
           if (ok) {
+            // The 10s deadline exists so an unshowable dialog cannot trap the
+            // user in an unquittable window — it is not an answer. Closing on it
+            // is survivable; DELETING on it is not, because a copy can hold the
+            // only version of a change. So the timeout closes and leaves the
+            // copies for the next start to collect.
+            if (answered) await cleanup();
             confirmedClose.current = true;
             void win.close();
           }
@@ -359,6 +426,42 @@ export function App() {
       unlisten?.();
     };
   }, [t]);
+
+  // Locking stops the external-edit poll but keeps the copies; this is what
+  // starts it again. Driven from the unlocked flag rather than from the unlock
+  // screen, so every path that unlocks — keychain, password, repair — resumes.
+  useEffect(() => {
+    if (unlocked) resumeExternalEdits();
+  }, [unlocked]);
+
+  // Registered HERE rather than in the SFTP view: an overlay (the recovery kit,
+  // say) unmounts that view while the sessions behind it are perfectly alive,
+  // and a resolver that disappeared with it would strand every live edit in
+  // "session closed" a minute later.
+  const sftpSessions = useApp((s) => s.sftpSessions);
+  useEffect(() => {
+    setSourceResolver((sessionId, profileId) => {
+      const session =
+        sftpSessions.find((s) => s.id === sessionId) ??
+        sftpSessions.find((s) => s.profileId === profileId && profileId);
+      if (!session) return null;
+      try {
+        return { source: sourceFor({ kind: "remote", sessionId: session.id }, sftpSessions), sessionId: session.id };
+      } catch {
+        return null;
+      }
+    });
+  }, [sftpSessions]);
+
+  // Anything left in the external-edit scratch directory is from a previous run
+  // — a crash, a kill -9, a close that timed out — and holds decrypted remote
+  // file contents. Nothing can be watching it yet, so it all goes.
+  useEffect(() => {
+    // Deliberately not awaited anywhere: it samples other runs' heartbeats
+    // across an interval, so it takes half a minute by design. Nothing depends
+    // on its result.
+    void purgeExternalEditScratch();
+  }, []);
 
   // global keyboard shortcuts (desktop)
   useEffect(() => {

@@ -8,6 +8,7 @@ import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconName, Logo, ResizeHandle, VaultBadge } from "@/components/primitives";
 import { FlatAvatar, SyncBadge } from "@/components/mono";
+import { useExternalEdits } from "@/sftp/external-edit";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { isMac, isTauri } from "@/bridge/platform";
@@ -653,6 +654,9 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
   const p = usePalette();
   const { t } = useTranslation();
   const route = useApp((s) => s.route);
+  const editsNeedingAttention = useExternalEdits((s) =>
+    s.edits.some((e) => e.state === "conflict" || e.state === "error"),
+  );
   const vaults = useApp((s) => s.vaults);
   const vaultId = useApp((s) => s.vaultId);
   const setVault = useApp((s) => s.setVault);
@@ -737,7 +741,9 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
       <div style={{ width: 24, height: 1, background: p.line, margin: "4px 0" }} />
       {item("server", "hosts")}
       {item("terminal", "terminal", p.green)}
-      {item("folders", "sftp")}
+      {/* An edit that stopped pushing is only actionable in the SFTP view, so
+          the rail is what says so from anywhere else. */}
+      {item("folders", "sftp", editsNeedingAttention ? p.amber : undefined)}
       {item("radio", "run")}
       {item("key", "keys")}
       {item("branch", "tunnels")}
@@ -808,6 +814,9 @@ export function Sidebar({
   const p = usePalette();
   const { t } = useTranslation();
   const route = useApp((s) => s.route);
+  const editsNeedingAttention = useExternalEdits((s) =>
+    s.edits.some((e) => e.state === "conflict" || e.state === "error"),
+  );
   const hosts = useApp((s) => s.hosts);
   const groups = useApp((s) => s.groups);
   const terminals = useApp((s) => s.terminals);
@@ -894,7 +903,13 @@ export function Sidebar({
               that spawns a new tab each time, which made it the odd one out.
               It is reached from the "+" picker, ⌘⇧S / Ctrl+Shift+S, and a
               pane's Split menu. */}
-          <NavItem icon="folders" label={t("nav.sftp")} active={route === "sftp"} onClick={() => ctx.go("sftp")} />
+          <NavItem
+            icon="folders"
+            label={t("nav.sftp")}
+            active={route === "sftp"}
+            badge={editsNeedingAttention ? p.amber : undefined}
+            onClick={() => ctx.go("sftp")}
+          />
           <NavItem icon="radio" label={t("nav.run")} active={RUN_ROUTES.includes(route)} onClick={() => ctx.go("run")} />
         </NavGroup>
         <NavGroup label={t("shell.vaultNetworkHeader")}>
