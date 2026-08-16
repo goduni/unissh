@@ -52,14 +52,21 @@ pub async fn build_state(
     //   * empty + a hash already exists → a code was issued before; keep it (do NOT
     //     regenerate — we only have its hash, not the plaintext).
     //   * empty + no hash yet (first-ever boot) → mint one and print it exactly once.
+    //
+    // The log carries the plaintext ONLY when we minted it, because then the log is
+    // the sole channel it exists on. An operator-pinned code is already in their
+    // hands (env/config/IaC secret store), so printing it would only copy a live
+    // credential into `docker compose logs`, journald and every log shipper
+    // downstream — a leak that buys nothing.
     if instance_row.claimed == 0 {
         if !config.setup.code.is_empty() {
-            let code = config.setup.code.clone();
             store
-                .set_setup_code_hash(&ids::sha256(code.as_bytes()))
+                .set_setup_code_hash(&ids::sha256(config.setup.code.as_bytes()))
                 .await?;
-            tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
-            println!("SETUP CODE: {code}");
+            tracing::warn!(
+                "server unclaimed — claim it from a client with the setup code pinned in your \
+                 configuration ([setup].code / UNISSH__SETUP__CODE). Not logged: you already have it"
+            );
         } else if instance_row.setup_code_hash.is_some() {
             tracing::warn!(
                 "server unclaimed — a setup code was already issued on an earlier boot and is \

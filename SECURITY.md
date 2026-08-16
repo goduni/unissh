@@ -260,8 +260,10 @@ zero-knowledge crypto boundary above is what actually protects vault *contents*.
 The current onboarding / sign-in entry points all verify a **self-attested keyset
 registration** and never see plaintext keys:
 
-- **Claim** (`POST /v1/claim`) — a first-boot **setup code** (printed to the log
-  while the instance is unclaimed, stored only as `sha256`) plus a keyset
+- **Claim** (`POST /v1/claim`) — a first-boot **setup code** (stored only as
+  `sha256`; printed to the log while the instance is unclaimed **only when the
+  server generated it**, since the log is then its sole channel — a code pinned
+  via `[setup].code` / `UNISSH__SETUP__CODE` is never logged) plus a keyset
   registration wins a single-winner claim of the empty instance, creating the
   owner and first space. The code is valid only while unclaimed.
 - **Invite / join** (`POST /v1/invite`, `POST /v1/join`) — a space admin issues a
