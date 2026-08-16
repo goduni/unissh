@@ -427,16 +427,38 @@ export const en = {
   feedback: {
     "toastDismiss": "Dismiss",
     "toastCopy": "Copy message",
-    "shortcutsTitle": "Keyboard shortcuts",
+    "shortcutsTitle": "Keyboard & mouse",
+    "shortcutGroup": {
+      "global": "Anywhere",
+      "terminal": "Terminal",
+      "mouse": "Mouse"
+    },
+    "mouse": {
+      "drag": "drag",
+      "modDrag": "{{mod}} + drag",
+      "rightClick": "right-click"
+    },
     "shortcut": {
       "commandPalette": "Command palette",
       "newHost": "New host",
-      "goToTerminal": "Go to terminal",
+      "goToTerminal": "Go to terminal · new tab when already there",
       "localTerminal": "New local terminal",
       "lockInstance": "Lock instance",
       "switchSections": "Switch sections",
-      "termZoom": "Zoom terminal in / out / reset",
-      "thisHelp": "This help"
+      "termZoom": "Zoom in / out / reset",
+      "thisHelp": "This help",
+      "copy": "Copy the selection",
+      "paste": "Paste",
+      "find": "Find in scrollback",
+      "splitRight": "Split right",
+      "splitDown": "Split down",
+      "closePane": "Close the pane (or the tab)",
+      "focusPane": "Focus the previous / next pane",
+      "cycleTabs": "Next tab (with ⇧ — previous)",
+      "promptJump": "Previous / next prompt · shells with OSC 133 marks",
+      "selectCopies": "Select — it goes to the clipboard on release",
+      "forceSelect": "Select inside apps that took the mouse (mc, tmux, vim)",
+      "paneMenu": "Menu: copy, paste, split, close"
     }
   },
   fleet: {
