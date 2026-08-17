@@ -34,6 +34,15 @@ starts with `0.`:
 
 ### Added
 
+- **The host picker has a search box and a keyboard.** The `+` in the terminal
+  and SFTP tab strips only offered a search past six saved hosts, so anyone with
+  fewer never saw one; it now appears for any non-empty list. The list also
+  answers to the keyboard: ↑/↓ move a highlight that wraps at both ends, Enter
+  opens it, and the row under the pointer is the same highlight, so mouse and
+  keyboard cannot disagree about what Enter would do. On a phone the field no
+  longer grabs the caret on open — that pops the on-screen keyboard over the
+  list before you have decided to type.
+
 - **Connect through an HTTP, SOCKS4 or SOCKS5 proxy.** A host can now carry an
   outbound proxy alongside (or instead of) a jump host: the proxy wraps the
   first TCP hop — the target, or the first bastion of a `ProxyJump` chain, so
