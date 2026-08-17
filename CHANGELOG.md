@@ -43,6 +43,15 @@ starts with `0.`:
   longer grabs the caret on open — that pops the on-screen keyboard over the
   list before you have decided to type.
 
+- **`~/.ssh/config` imports into the group you have open.** Selecting a group
+  and importing put every host at the vault root — the import had no notion of a
+  target at all. The preview now shows where they will land, defaults to the
+  selected group, and lets you change it, including an explicit *No group* which
+  is what the old behaviour was without saying so. Hosts that already belong to
+  another group are **moved**, not added twice: membership is exclusive
+  everywhere else in the app, and a host in two groups is a state the host
+  editor silently repairs by dropping one of them.
+
 - **Connect through an HTTP, SOCKS4 or SOCKS5 proxy.** A host can now carry an
   outbound proxy alongside (or instead of) a jump host: the proxy wraps the
   first TCP hop — the target, or the first bastion of a `ProxyJump` chain, so

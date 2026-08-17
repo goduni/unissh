@@ -28,6 +28,7 @@ import type { TermTheme } from "@/theme/tokens";
 import type { SftpSession, Transfer } from "@/store/sftp-types";
 import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
 import { suspendExternalEdits } from "@/sftp/external-edit";
+import { planGroupMove } from "@/store/groupMove";
 
 export type Route =
   | "hosts"
@@ -426,6 +427,11 @@ interface AppStore {
 
   // group / tag membership (bulk — driven by the host multi-select bar)
   addHostsToGroup: (groupId: string, profileIds: string[]) => Promise<void>;
+  /** Put hosts in a group and take them out of any other — membership is
+   *  exclusive wherever it is edited (see groupMove.ts). Resolves true when it
+   *  wrote something (and therefore reloaded the vault), so a caller that also
+   *  needs a reload can skip a second full decrypt pass. */
+  moveHostsToGroup: (groupId: string, profileIds: string[]) => Promise<boolean>;
   removeHostsFromGroup: (groupId: string, profileIds: string[]) => Promise<void>;
   createGroupWithHosts: (label: string, profileIds: string[]) => Promise<void>;
   addTagToHosts: (tag: string, profileIds: string[]) => Promise<void>;
@@ -1281,6 +1287,17 @@ export const useApp = create<AppStore>((set, get) => ({
     if (memberIds.length === g.memberIds.length) return; // nothing new
     await api.saveGroup(vault, { ...g, memberIds });
     await get().reloadVault();
+  },
+  moveHostsToGroup: async (groupId, profileIds) => {
+    const vault = get().vaultId;
+    if (!vault) return false;
+    // One reload for the whole move, not one per group item: a move can rewrite
+    // several groups, and reloading between them shows the vault mid-move.
+    const writes = planGroupMove(get().groups, groupId, profileIds);
+    if (writes.length === 0) return false;
+    for (const g of writes) await api.saveGroup(vault, g);
+    await get().reloadVault();
+    return true;
   },
   removeHostsFromGroup: async (groupId, profileIds) => {
     const vault = get().vaultId;
