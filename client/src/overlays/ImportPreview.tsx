@@ -193,7 +193,13 @@ function ImportPreviewBody() {
   // picking a group and then importing into the root is the reported bug — but
   // stays visible and changeable, because the target should never be a guess.
   const groups = useApp((s) => s.groups);
-  const [target, setTarget] = useState<string | null>(null);
+  // Read once, at mount: this body only exists while the overlay is open (the
+  // parent gates it), so every open is a fresh mount and a fresh read. Doing it
+  // in an effect instead would paint one frame at the wrong target.
+  const [target, setTarget] = useState<string | null>(() => {
+    const s = useApp.getState();
+    return defaultImportGroup(s.hostFilter, s.groups);
+  });
 
   const close = () => setImporting(false);
   useDialogKeys(close);
@@ -252,21 +258,10 @@ function ImportPreviewBody() {
     };
   }, [importing, setImporting, t]);
 
-  // Reset transient state when the overlay closes, and re-read the sidebar
-  // selection when it opens — the user may have switched groups since last time.
-  useEffect(() => {
-    if (importing) {
-      // Read imperatively: keyed on `importing` alone, so a group switch behind
-      // an open overlay cannot move a target the user just chose by hand.
-      const s = useApp.getState();
-      setTarget(defaultImportGroup(s.hostFilter, s.groups));
-    } else {
-      setRows([]);
-      setSel([]);
-      setFileText("");
-      setPath("~/.ssh/config");
-    }
-  }, [importing]);
+  // (There used to be a "reset transient state when the overlay closes" effect
+  // here. It could never run: ImportPreview unmounts this body the moment
+  // `importing` goes false, so the branch that cleared rows/sel/fileText/path
+  // was dead, and the mount itself is the reset.)
 
   const toggle = (id: string) =>
     setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -393,18 +388,29 @@ function ImportPreviewBody() {
           }
         }
 
-        // 3) Put the new hosts in the chosen group. A group is its own item
-        //    holding member ids, so membership is a second write however it is
-        //    driven; this keeps it on the same path as every other "add hosts to
-        //    group" in the app. If it throws, the hosts are already imported —
-        //    guard() surfaces the error and they sit at the root, recoverable by
-        //    hand rather than lost.
-        const groupLabel = target ? (groups.find((g) => g.groupId === target)?.label ?? null) : null;
+        // 3) Put the new hosts in the chosen group. Its own try/catch, and not
+        //    part of the guard() above: the profiles are already written by now,
+        //    so a failure here must not skip the reload and the close — that
+        //    would leave the hosts imported but invisible, behind an open dialog
+        //    whose obvious next move is to import them all again.
+        let groupLabel: string | null = null;
+        let moved = false;
         if (target && created.length) {
-          await useApp.getState().addHostsToGroup(target, created);
+          try {
+            moved = await useApp.getState().moveHostsToGroup(target, created);
+            // Read AFTER the write, from the live store: a sync could have
+            // deleted the group mid-import, in which case nothing was written
+            // and naming it here would report a placement that never happened.
+            groupLabel = useApp.getState().groups.find((g) => g.groupId === target)?.label ?? null;
+          } catch (e) {
+            toast(apiErrorMessage(e), "err");
+          }
         }
 
-        await useApp.getState().reloadVault();
+        // moveHostsToGroup reloads when it writes; skip the second full decrypt
+        // pass over the vault in that case, but never skip it otherwise — the
+        // imported hosts are not in the store until something reloads.
+        if (!moved) await useApp.getState().reloadVault();
         setImporting(false);
         const hosts = t("count.hosts", { count: created.length });
         toast(
@@ -802,7 +808,14 @@ function ImportPreviewBody() {
               <select
                 value={target ?? ""}
                 onChange={(e) => setTarget(e.target.value || null)}
+                // The running import captured `target` when it started; a select
+                // that keeps moving after that shows a destination the write is
+                // not using. The Import button is already disabled the same way.
+                disabled={busy}
                 style={{
+                  // Themes the native option popup — without it the list renders
+                  // light while the control above it is dark.
+                  colorScheme: p.name === "dark" ? "dark" : "light",
                   height: isMobile ? 44 : 30,
                   maxWidth: 220,
                   padding: "0 8px",
