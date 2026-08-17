@@ -5,7 +5,7 @@ description: The UniSSH cross-platform client — a Tauri 2 + React app wrapping
 
 The UniSSH client is a cross-platform SSH client (macOS / iOS / Linux / Windows / Android) built on **Tauri v2** with a **React 19 + TypeScript** frontend and a **Rust backend** that wraps the existing core (`rust-core`, crate `unissh-ffi`) directly as a path dependency.
 
-The UI is dark-first and premium-technological — Hanken Grotesk + JetBrains Mono, three theme families (**mono** is the default; **nebula** and **barbie** are opt-in), five accent presets, light/dark/auto modes with an AA-verified twin each, **seventeen** terminal themes (five of them light) plus a custom theme editor, a desktop shell and a purpose-built mobile shell.
+The UI is dark-first and premium-technological — Hanken Grotesk + JetBrains Mono, three theme families (**mono** is the default; **nebula** and **barbie** are opt-in), five accent presets, light/dark/auto modes with an AA-verified twin each, **eighteen** terminal themes (five of them light) plus a custom theme editor, a desktop shell and a purpose-built mobile shell.
 
 ## Architecture
 

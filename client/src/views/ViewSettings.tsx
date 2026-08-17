@@ -266,7 +266,7 @@ function SettingsAppearance() {
   const { fmtSize } = useFmt();
   const installedFonts = useInstalledFonts();
   const [showAllThemes, setShowAllThemes] = useState(false);
-  // Themes for the mode you are actually in first — at 17 cards, a dark-theme user
+  // Themes for the mode you are actually in first — at eighteen cards, a dark-theme user
   // scrolling past eight light ones to reach the rest is the whole problem.
   const orderedThemes = useMemo(() => {
     const wantLight = effMode === "light";

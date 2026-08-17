@@ -16,6 +16,8 @@ import {
   hexToRgb,
   resolveAppPalette,
   TERM_THEMES,
+  termToXterm,
+  validateTermThemeImport,
   type AccentKey,
   type AppThemeFamily,
   type EffMode,
@@ -139,8 +141,67 @@ describe("palette contrast (WCAG AA)", () => {
 });
 
 describe("terminal themes", () => {
-  it("ships seventeen built-ins", () => {
-    expect(TERM_THEMES).toHaveLength(17);
+  it("ships eighteen built-ins", () => {
+    expect(TERM_THEMES).toHaveLength(18);
+  });
+
+  // Every other built-in is a designed palette. This one is the escape hatch for
+  // "your colours are strange, give me the terminal I already know": a true-black
+  // background and the unmodified xterm ANSI 16, spelled out rather than derived.
+  describe("Classic Console", () => {
+    const classic = TERM_THEMES.find((t) => t.id === "console");
+
+    it("sits on true black and is not the default", () => {
+      expect(classic?.bg).toBe("#000000");
+      // TERM_THEMES[0] is the app's fallback theme (ThemeProvider) — that stays nebula.
+      expect(TERM_THEMES[0].id).toBe("nebula");
+    });
+
+    // Asserted through termToXterm, not on the record: what matters is the ramp
+    // xterm is handed, and half of it is derived.
+    it("hands xterm the standard ANSI colours", () => {
+      expect(termToXterm(classic!)).toMatchObject({
+        red: "#cd0000",
+        green: "#00cd00",
+        yellow: "#cdcd00",
+        blue: "#0000ee",
+        magenta: "#cd00cd",
+        cyan: "#00cdcd",
+        white: "#e5e5e5",
+        brightBlack: "#7f7f7f",
+        brightRed: "#ff0000",
+        brightGreen: "#00ff00",
+        brightYellow: "#ffff00",
+        brightBlue: "#5c5cff",
+        brightMagenta: "#ff00ff",
+        brightCyan: "#00ffff",
+        brightWhite: "#ffffff",
+      });
+    });
+
+    // A true-black theme is the one place where authoring ANSI black faithfully
+    // (#000000) means authoring invisible text, which is what termToXterm's
+    // derivation exists to prevent — opting out of it here would have reinstated
+    // exactly that bug.
+    it("keeps ANSI black off the background", () => {
+      expect(termToXterm(classic!).black).not.toBe(classic!.bg);
+    });
+  });
+
+  // The explicit ANSI ramp is worth nothing if it cannot survive being saved.
+  // Cloning a built-in into a custom theme round-trips through
+  // validateTermThemeImport on the next launch, which used to keep only the nine
+  // required channels — so a clone of this theme silently re-derived its brights.
+  it("carries an explicit bright ramp through the custom-theme round trip", () => {
+    const classic = TERM_THEMES.find((t) => t.id === "console")!;
+    const { id: _id, custom: _custom, ...palette } = classic;
+    const back = validateTermThemeImport(JSON.parse(JSON.stringify(palette)));
+    expect(back).toMatchObject({
+      brightBlue: "#5c5cff",
+      brightRed: "#ff0000",
+      brightWhite: "#ffffff",
+      white: "#e5e5e5",
+    });
   });
 
   it.each(TERM_THEMES.map((t) => [t.name, t] as const))(

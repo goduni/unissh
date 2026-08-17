@@ -363,6 +363,18 @@ export interface TermTheme {
 
 export const TERM_THEMES: TermTheme[] = [
   { id: "nebula", name: "UniSSH Nebula", custom: true, bg: "#0c0e16", fg: "#d8def2", dimc: "#565d78", green: "#3ad29f", blue: "#5b8cff", cyan: "#57c7ff", red: "#ff6b8b", yellow: "#ffcf6b", purple: "#b98cff", white: "#ffffff", sel: "rgba(91,140,255,0.22)" },
+  // The unstyled one, kept second so the app's fallback (TERM_THEMES[0]) stays
+  // Nebula. Every other entry is a designed palette; this is the terminal people
+  // already have in xterm/PuTTY, so the ANSI 16 are xterm's own values written
+  // out in full rather than derived from a base — including the famously dark
+  // blue. `bright*` carries the readable variants, and bold text renders in the
+  // bright ramp (see termToXterm), which is where `ls` gets its directories.
+  // `black` is deliberately NOT authored: xterm's is #000000, which on a
+  // #000000 background is invisible text — the exact bug termToXterm's
+  // derivation exists to prevent. `brightBlack` is left out too; it defaults to
+  // dimc, which already holds xterm's #7f7f7f, and two fields for one colour
+  // only drift apart.
+  { id: "console", name: "Classic Console", bg: "#000000", fg: "#cccccc", dimc: "#7f7f7f", green: "#00cd00", blue: "#0000ee", cyan: "#00cdcd", red: "#cd0000", yellow: "#cdcd00", purple: "#cd00cd", white: "#e5e5e5", sel: "rgba(204,204,204,0.28)", brightRed: "#ff0000", brightGreen: "#00ff00", brightYellow: "#ffff00", brightBlue: "#5c5cff", brightMagenta: "#ff00ff", brightCyan: "#00ffff", brightWhite: "#ffffff" },
   { id: "dracula", name: "Dracula", bg: "#282a36", fg: "#f8f8f2", dimc: "#6272a4", green: "#50fa7b", blue: "#bd93f9", cyan: "#8be9fd", red: "#ff5555", yellow: "#f1fa8c", purple: "#ff79c6", white: "#ffffff", sel: "rgba(189,147,249,0.25)" },
   { id: "nord", name: "Nord", bg: "#2e3440", fg: "#d8dee9", dimc: "#4c566a", green: "#a3be8c", blue: "#88c0d0", cyan: "#8fbcbb", red: "#bf616a", yellow: "#ebcb8b", purple: "#b48ead", white: "#ffffff", sel: "rgba(136,192,208,0.22)" },
   { id: "gruvbox", name: "Gruvbox Dark", bg: "#282828", fg: "#ebdbb2", dimc: "#928374", green: "#b8bb26", blue: "#83a598", cyan: "#8ec07c", red: "#fb4934", yellow: "#fabd2f", purple: "#d3869b", white: "#ffffff", sel: "rgba(131,165,152,0.22)" },
@@ -745,6 +757,23 @@ export type TermColorField = (typeof TERM_COLOR_FIELDS)[number];
 export const TERM_EDITOR_FIELDS = [...TERM_COLOR_FIELDS, "white"] as const;
 export type TermEditorField = (typeof TERM_EDITOR_FIELDS)[number];
 
+/** Explicit ANSI channels a theme MAY author instead of letting termToXterm
+ *  derive them. Absent is the normal case, so they are not required on import —
+ *  but a theme that does spell them out must not lose them on the way through
+ *  localStorage, or a clone of it silently re-derives a different ramp. */
+export const TERM_OPTIONAL_FIELDS = [
+  "black",
+  "brightBlack",
+  "brightRed",
+  "brightGreen",
+  "brightYellow",
+  "brightBlue",
+  "brightMagenta",
+  "brightCyan",
+  "brightWhite",
+] as const;
+export type TermOptionalField = (typeof TERM_OPTIONAL_FIELDS)[number];
+
 /** True for a `#RGB` or `#RRGGBB` hex colour. (Plain boolean, not a type
  *  predicate: narrowing an already-`string` value with `s is string` would
  *  collapse it to `never` inside a follow-up check.) */
@@ -812,7 +841,15 @@ export function validateTermThemeImport(raw: unknown): TermThemePalette | null {
   // `sel` is the translucent selection highlight — hex or a bounded rgb(a)(...).
   if (!isSelColor(o.sel)) return null;
   const lc = (k: TermColorField) => (o[k] as string).toLowerCase();
+  // Optional explicit ANSI channels, carried through when present and valid.
+  // Dropping them was silent: the theme rendered from the authored ramp until the
+  // next launch, then from a derived one.
+  const optional: Partial<Pick<TermTheme, TermOptionalField>> = {};
+  for (const f of TERM_OPTIONAL_FIELDS) {
+    if (isHexColor(o[f])) optional[f] = (o[f] as string).toLowerCase();
+  }
   return {
+    ...optional,
     name,
     bg: lc("bg"),
     fg: lc("fg"),
