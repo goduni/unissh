@@ -3,11 +3,21 @@
 // renders inline — a pane with nothing in it should already be showing what can
 // go in it, rather than making the hosts a hover away.
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO } from "@/theme/tokens";
 import { Icon, NO_AUTOCORRECT } from "@/components/primitives";
 import { useCtx } from "@/store/ctx";
+import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
 import { nextRow, pickerRows } from "./pickerRows";
 import type { ConnectionProfile } from "@/bridge/types";
@@ -35,38 +45,48 @@ export function HostList({
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
+  const isMobile = useIsMobile();
 
   const [q, setQ] = useState("");
-  // The rows and the keyboard have to be computed from the same list, or Enter
-  // opens something other than what is highlighted. See pickerRows.ts.
-  const rows = pickerRows(
-    hosts,
-    q,
-    onPickLocal ? `${t("terminal.localShell")} ${t("terminal.localShellHint")}` : null,
-  );
+  // Rebuilt only when the inputs change: hover routes through `sel`, so without
+  // this every pointer crossing would re-derive and re-lowercase the whole list.
+  const localLabel = onPickLocal
+    ? `${t("terminal.localShell")} ${t("terminal.localShellHint")}`
+    : null;
+  const rows = useMemo(() => pickerRows(hosts, q, localLabel), [hosts, q, localLabel]);
   const [sel, setSel] = useState(0);
+  // Clamped at RENDER, not only when a key moves it: `hosts` can change under an
+  // open picker (a vault sync, a host deleted in another window), and a highlight
+  // left past the end paints nothing while Enter quietly does nothing either.
+  const active = rows.length === 0 ? -1 : Math.min(sel, rows.length - 1);
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  // The dropdown scrolls at 340px; a highlight the arrows walked off the bottom
-  // of it is a highlight the user cannot see.
-  useEffect(() => {
-    rowRefs.current[sel]?.scrollIntoView({ block: "nearest" });
-  }, [sel]);
+  const listId = useId();
 
   const activate = (row: (typeof rows)[number]) => {
     if (row.kind === "local") onPickLocal?.();
     else onPick(row.host);
   };
+  const move = (delta: number) => {
+    const next = nextRow(active, delta, rows.length);
+    setSel(next);
+    // Scrolling belongs to the arrow keys alone. As an effect on `sel` it would
+    // also fire at mount — yanking the inline pane list, which is deliberately
+    // centred, to its first row — and again on every hover.
+    rowRefs.current[next]?.scrollIntoView({ block: "nearest" });
+  };
   const onSearchKey = (e: React.KeyboardEvent) => {
+    // The Enter that commits an IME candidate is not a request to connect.
+    if (e.nativeEvent.isComposing) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      setSel(nextRow(sel, e.key === "ArrowDown" ? 1 : -1, rows.length));
-    } else if (e.key === "Enter" && rows[sel]) {
+      move(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "Enter" && rows[active]) {
       e.preventDefault();
-      activate(rows[sel]);
+      activate(rows[active]);
     }
   };
 
-  const rowStyle = (active: boolean): CSSProperties => ({
+  const rowStyle = (on: boolean): CSSProperties => ({
     display: "flex",
     alignItems: "center",
     gap: 9,
@@ -74,42 +94,101 @@ export function HostList({
     padding: "7px 9px",
     borderRadius: 8,
     border: "1px solid transparent",
-    background: active ? p.bg2 : "transparent",
+    background: on ? p.bg2 : "transparent",
     color: p.txt,
     cursor: "pointer",
     textAlign: "left",
   });
 
+  // One renderer for both kinds: they differ by an icon and two strings, and a
+  // second copy is how one of them ends up without the aria state or the ref.
+  const renderRow = (row: (typeof rows)[number], i: number) => {
+    const local = row.kind === "local";
+    return (
+      <button
+        key={local ? "local" : row.host.profileId}
+        id={`${listId}-${i}`}
+        role="option"
+        aria-selected={i === active}
+        ref={(el) => {
+          rowRefs.current[i] = el;
+        }}
+        onClick={() => activate(row)}
+        onMouseEnter={() => setSel(i)}
+        style={rowStyle(i === active)}
+      >
+        <Icon name={local ? "laptop" : "server"} size={15} color={p.txt3} />
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
+            {local ? t("terminal.localShell") : row.host.label}
+          </span>
+          <span style={{ display: "block", fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+            {local
+              ? t("terminal.localShellHint")
+              : `${row.host.user}@${row.host.host}:${row.host.port}`}
+          </span>
+        </span>
+      </button>
+    );
+  };
+
   return (
     <>
-      {/* Always shown, not only past some list length: a picker whose search
-          appears at the seventh host reads as a search that is broken at the
-          sixth. It costs one row, and it is where the keyboard enters. */}
-      <input
-        autoFocus={autoFocusSearch}
-        value={q}
-        onChange={(e) => {
-          setQ(e.target.value);
-          // Every keystroke rebuilds the list; the highlight goes back to its top
-          // match rather than to whatever now sits at the old index.
-          setSel(0);
-        }}
-        onKeyDown={onSearchKey}
-        placeholder={t("sftp.searchHosts")}
-        {...NO_AUTOCORRECT}
-        style={{
-          width: "100%",
-          boxSizing: "border-box",
-          marginBottom: 5,
-          padding: "6px 9px",
-          borderRadius: 8,
-          border: `1px solid ${p.line2}`,
-          background: p.bg2,
-          color: p.txt,
-          fontSize: 13,
-          outline: "none",
-        }}
-      />
+      {/* Shown for any non-empty list, not only past six hosts: a picker whose
+          search appears at the seventh reads as one that is broken at the sixth.
+          With no hosts at all there is nothing to search, and the only useful
+          control is the button below. */}
+      {hosts.length > 0 && (
+        <input
+          // A caret on a phone means the on-screen keyboard over a 340px
+          // dropdown before the user has decided to type.
+          autoFocus={autoFocusSearch && !isMobile}
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            // Every keystroke rebuilds the list; the highlight goes back to its
+            // top match rather than to whatever now sits at the old index.
+            setSel(0);
+          }}
+          onKeyDown={onSearchKey}
+          placeholder={t("sftp.searchHosts")}
+          aria-label={t("sftp.searchHosts")}
+          role="combobox"
+          aria-expanded
+          aria-controls={listId}
+          aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
+          {...NO_AUTOCORRECT}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            marginBottom: 5,
+            padding: "6px 9px",
+            borderRadius: 8,
+            border: `1px solid ${p.line2}`,
+            background: p.bg2,
+            color: p.txt,
+            fontSize: 13,
+            outline: "none",
+          }}
+        />
+      )}
+      <div id={listId} role="listbox" aria-label={t("sftp.hostsListLabel")}>
+        {rows.map((row, i) => (
+          <Fragment key={row.kind === "local" ? "local" : row.host.profileId}>
+            {renderRow(row, i)}
+            {/* Separated, not just listed first: this one does not go over the
+                network, and the list below is entirely about things that do. */}
+            {row.kind === "local" && rows.length > 1 && (
+              <div style={{ height: 1, background: p.line2, margin: "5px 4px" }} />
+            )}
+          </Fragment>
+        ))}
+      </div>
+      {rows.length === 0 && hosts.length > 0 && (
+        <div style={{ padding: "8px 10px", fontSize: 13, color: p.txt3 }}>
+          {t("sftp.noHostMatches", { q: q.trim() })}
+        </div>
+      )}
       {hosts.length === 0 && (
         <button
           onClick={() => {
@@ -130,64 +209,17 @@ export function HostList({
             textAlign: "left",
             fontSize: 13,
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = p.bg2)}
+          // Clears the row highlight as well as painting itself: two rows lit at
+          // once says nothing about which one Enter would take.
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = p.bg2;
+            setSel(-1);
+          }}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           <Icon name="plus" size={15} color={p.accentText} />
           {t("sftp.addHost")}
         </button>
-      )}
-      {rows.length === 0 && hosts.length > 0 && (
-        <div style={{ padding: "8px 10px", fontSize: 13, color: p.txt3 }}>{t("sftp.noMatches", { q })}</div>
-      )}
-      {rows.map((row, i) =>
-        row.kind === "local" ? (
-          <div key="local">
-            <button
-              ref={(el) => {
-                rowRefs.current[i] = el;
-              }}
-              onClick={() => activate(row)}
-              onMouseEnter={() => setSel(i)}
-              style={rowStyle(i === sel)}
-            >
-              <Icon name="laptop" size={15} color={p.txt3} />
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
-                  {t("terminal.localShell")}
-                </span>
-                <span style={{ display: "block", fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
-                  {t("terminal.localShellHint")}
-                </span>
-              </span>
-            </button>
-            {/* Separated, not just listed first: this one does not go over the
-                network, and the list below is entirely about things that do. */}
-            {rows.length > 1 && (
-              <div style={{ height: 1, background: p.line2, margin: "5px 4px" }} />
-            )}
-          </div>
-        ) : (
-          <button
-            key={row.host.profileId}
-            ref={(el) => {
-              rowRefs.current[i] = el;
-            }}
-            onClick={() => activate(row)}
-            onMouseEnter={() => setSel(i)}
-            style={rowStyle(i === sel)}
-          >
-            <Icon name="server" size={15} color={p.txt3} />
-            <span style={{ flex: 1, minWidth: 0 }}>
-              <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
-                {row.host.label}
-              </span>
-              <span style={{ display: "block", fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
-                {row.host.user}@{row.host.host}:{row.host.port}
-              </span>
-            </span>
-          </button>
-        ),
       )}
     </>
   );
