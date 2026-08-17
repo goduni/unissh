@@ -16,6 +16,8 @@ import {
   hexToRgb,
   resolveAppPalette,
   TERM_THEMES,
+  termToXterm,
+  validateTermThemeImport,
   type AccentKey,
   type AppThemeFamily,
   type EffMode,
@@ -155,14 +157,15 @@ describe("terminal themes", () => {
       expect(TERM_THEMES[0].id).toBe("nebula");
     });
 
-    it("spells out the standard ANSI 16 instead of deriving them", () => {
-      expect(classic).toMatchObject({
-        black: "#000000",
+    // Asserted through termToXterm, not on the record: what matters is the ramp
+    // xterm is handed, and half of it is derived.
+    it("hands xterm the standard ANSI colours", () => {
+      expect(termToXterm(classic!)).toMatchObject({
         red: "#cd0000",
         green: "#00cd00",
         yellow: "#cdcd00",
         blue: "#0000ee",
-        purple: "#cd00cd",
+        magenta: "#cd00cd",
         cyan: "#00cdcd",
         white: "#e5e5e5",
         brightBlack: "#7f7f7f",
@@ -174,6 +177,30 @@ describe("terminal themes", () => {
         brightCyan: "#00ffff",
         brightWhite: "#ffffff",
       });
+    });
+
+    // A true-black theme is the one place where authoring ANSI black faithfully
+    // (#000000) means authoring invisible text, which is what termToXterm's
+    // derivation exists to prevent — opting out of it here would have reinstated
+    // exactly that bug.
+    it("keeps ANSI black off the background", () => {
+      expect(termToXterm(classic!).black).not.toBe(classic!.bg);
+    });
+  });
+
+  // The explicit ANSI ramp is worth nothing if it cannot survive being saved.
+  // Cloning a built-in into a custom theme round-trips through
+  // validateTermThemeImport on the next launch, which used to keep only the nine
+  // required channels — so a clone of this theme silently re-derived its brights.
+  it("carries an explicit bright ramp through the custom-theme round trip", () => {
+    const classic = TERM_THEMES.find((t) => t.id === "console")!;
+    const { id: _id, custom: _custom, ...palette } = classic;
+    const back = validateTermThemeImport(JSON.parse(JSON.stringify(palette)));
+    expect(back).toMatchObject({
+      brightBlue: "#5c5cff",
+      brightRed: "#ff0000",
+      brightWhite: "#ffffff",
+      white: "#e5e5e5",
     });
   });
 

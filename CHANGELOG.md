@@ -34,6 +34,15 @@ starts with `0.`:
 
 ### Added
 
+- **A "Classic Console" terminal theme.** Every other built-in is a designed
+  palette; this one is the terminal you already have — a true-black background
+  and xterm's own ANSI ramp, written out rather than derived, so colours land
+  where muscle memory expects them. ANSI black is the one deliberate departure:
+  authored faithfully it would be #000000 on a #000000 background, i.e.
+  invisible text, so it keeps the lifted tone every theme here uses. Custom
+  themes cloned from a built-in now also keep an explicit bright ramp across a
+  restart, where before the saved copy silently fell back to a derived one.
+
 - **Connect through an HTTP, SOCKS4 or SOCKS5 proxy.** A host can now carry an
   outbound proxy alongside (or instead of) a jump host: the proxy wraps the
   first TCP hop — the target, or the first bastion of a `ProxyJump` chain, so
