@@ -1199,6 +1199,8 @@ export const en = {
     "driveFree": "{{free}} free of {{total}}",
     "addHost": "Add a host…",
     "searchHosts": "Search hosts…",
+    "hostsListLabel": "Saved hosts",
+    "noHostMatches": "No hosts matching “{{q}}”",
     "closeTab": "Close",
     "goToPath": "Go to path…",
     "filter": "Filter…",

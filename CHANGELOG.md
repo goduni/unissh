@@ -34,6 +34,15 @@ starts with `0.`:
 
 ### Added
 
+- **The host picker has a search box and a keyboard.** The `+` in the terminal
+  and SFTP tab strips only offered a search past six saved hosts, so anyone with
+  fewer never saw one; it now appears for any non-empty list. The list also
+  answers to the keyboard: ↑/↓ move a highlight that wraps at both ends, Enter
+  opens it, and the row under the pointer is the same highlight, so mouse and
+  keyboard cannot disagree about what Enter would do. On a phone the field no
+  longer grabs the caret on open — that pops the on-screen keyboard over the
+  list before you have decided to type.
+
 - **`~/.ssh/config` imports into the group you have open.** Selecting a group
   and importing put every host at the vault root — the import had no notion of a
   target at all. The preview now shows where they will land, defaults to the

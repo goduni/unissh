@@ -1238,6 +1238,8 @@ export const ru = {
     "driveFree": "{{free}} свободно из {{total}}",
     "addHost": "Добавить хост…",
     "searchHosts": "Поиск хостов…",
+    "hostsListLabel": "Сохранённые хосты",
+    "noHostMatches": "Нет хостов по «{{q}}»",
     "closeTab": "Закрыть",
     "goToPath": "Перейти к пути…",
     "filter": "Фильтр…",
