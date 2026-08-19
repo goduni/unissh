@@ -106,7 +106,7 @@ code = ""                        # empty → a random setup code is printed to t
                                  # Env: UNISSH__SETUP__CODE
 ```
 
-The server stores only `sha256(code)`, and the code is valid **only while the instance is unclaimed** — a second claim is refused. Read the printed code with `docker compose logs server 2>&1 | grep -i "setup code"`. Because only the hash is kept, a generated code cannot be printed a second time; if the log is gone, `unissh-server setup-code --rotate` issues a new one without touching any data (a *pinned* code is never printed at all — it came from you). See the [Docker Compose deployment](../deploy/).
+The server stores only `sha256(code)`, and the code is valid **only while the instance is unclaimed** — a second claim is refused. Read the printed code with `docker compose logs server 2>&1 | grep -i "setup code"`. Because only the hash is kept, a generated code cannot be printed a second time; if the log is gone, `unissh-server setup-code --rotate --config <your config>` issues a new one without touching any data (point it at the config you serve with — the default database path is relative, so a different working directory silently creates an empty one) (a *pinned* code is never printed at all — it came from you). See the [Docker Compose deployment](../deploy/).
 
 ### `[oidc]`
 
