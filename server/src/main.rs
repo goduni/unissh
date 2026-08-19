@@ -107,7 +107,8 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("using {} database at {}", config.db.backend, config.db.url);
         let pinned = config.setup.code.trim().to_string();
         let pinned_hash = (!pinned.is_empty()).then(|| ids::sha256(pinned.as_bytes()));
-        let state = setup_code_state(&store, pinned_hash.as_deref()).await?;
+        // `[u8; 32]` is not `Deref`, so `as_deref()` does not apply here.
+        let state = setup_code_state(&store, pinned_hash.as_ref().map(|h| h.as_slice())).await?;
         match (state, rotate) {
             (SetupCodeState::Claimed, false) => println!(
                 "This instance is already claimed — no setup code is live (claiming clears \
