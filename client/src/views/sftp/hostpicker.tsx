@@ -19,7 +19,8 @@ import { Icon, NO_AUTOCORRECT } from "@/components/primitives";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
-import { nextRow, pickerRows } from "./pickerRows";
+import { pickerRows } from "./pickerRows";
+import { nextRow } from "@/support/listNav";
 import type { ConnectionProfile } from "@/bridge/types";
 
 export function HostList({

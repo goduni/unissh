@@ -44,8 +44,3 @@ export function pickerRows<T extends PickerHost>(
   }
   return rows;
 }
-
-// The highlight arithmetic is shared with the Hosts screen's search, which has
-// the same wrap-and-clamp problem. Re-exported so the picker's callers and its
-// tests keep importing it from here.
-export { nextRow } from "@/support/listNav";

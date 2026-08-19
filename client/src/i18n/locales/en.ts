@@ -551,7 +551,7 @@ export const en = {
     "allHostsTagged": "All hosts are tagged",
     "noHostsForTag": "No hosts for filter #{{tag}}",
     "noHostsForQuery": "Nothing matches “{{query}}”",
-    "searchTopMatch": "Top match: {{label}}. Enter opens it, ⌘/Ctrl+Enter connects",
+    "searchHighlighted": "Highlighted: {{label}}. Enter opens it, ⌘/Ctrl+Enter connects",
     "resetFilter": "Reset filter",
     "emptyVaultTitle": "No hosts in this vault yet",
     "emptyVaultHint": "Add a connection manually or import from ssh-config",

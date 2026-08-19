@@ -589,7 +589,7 @@ export const ru = {
     "allHostsTagged": "Все хосты с тегами",
     "noHostsForTag": "Нет хостов по фильтру #{{tag}}",
     "noHostsForQuery": "Ничего не найдено по «{{query}}»",
-    "searchTopMatch": "Первое совпадение: {{label}}. Enter — открыть, ⌘/Ctrl+Enter — подключиться",
+    "searchHighlighted": "Выделено: {{label}}. Enter — открыть, ⌘/Ctrl+Enter — подключиться",
     "resetFilter": "Сбросить фильтр",
     "emptyVaultTitle": "В хранилище пока нет хостов",
     "emptyVaultHint": "Добавьте подключение вручную или импортируйте из ssh-config",

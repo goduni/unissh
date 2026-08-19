@@ -19,7 +19,7 @@ import { profileAuthKind, apiErrorMessage } from "@/bridge/types";
 import type { ConnectionProfile } from "@/bridge/types";
 import { useTranslation, tDyn } from "@/i18n";
 import { nextRow } from "@/support/listNav";
-import { filterHosts } from "./hostsSearch";
+import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
 
 type SortKey = "name" | "added" | "connected";
 type RailTab = "detail" | "sessions";
@@ -106,13 +106,27 @@ function HostCard({
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      aria-current={cursor ? "true" : undefined}
       style={{
         position: "relative",
         cursor: "pointer",
-        // An OUTLINE, outside the box, so it reads as a separate thing from the
-        // inset accent ring that `active`/`selected` already draw.
-        outline: cursor ? `2px solid ${p.accent}` : undefined,
-        outlineOffset: cursor ? 2 : undefined,
+        // A left accent bar, the same language the command palette uses for its
+        // highlight. NOT an outline: `[role="button"]:focus-visible` is already
+        // `2px solid var(--uh-focus)` at offset 2, and --uh-focus IS p.accent
+        // (theme.css / ThemeProvider) — so an outline here was pixel-identical to
+        // "this card has keyboard focus", and being inline it also suppressed the
+        // real focus ring. The active/selected ring is recomposed here because
+        // this style object overrides the one Card sets.
+        ...(cursor || active || selected
+          ? {
+              boxShadow: [
+                cursor ? `inset 3px 0 0 ${p.accent}` : null,
+                active || selected ? `inset 0 0 0 1px ${p.accentLine}` : null,
+              ]
+                .filter(Boolean)
+                .join(", "),
+            }
+          : {}),
       }}
     >
       <Checkbox
@@ -361,6 +375,7 @@ function HostRow({
       role="button"
       tabIndex={0}
       data-host-id={h.profileId}
+      aria-current={cursor ? "true" : undefined}
       onKeyDown={pressActivate(onOpen)}
       onFocus={() => setFocusIn(true)}
       onBlur={(e) => {
@@ -376,9 +391,6 @@ function HostRow({
         alignItems: "center",
         gap: 12,
         padding: "0 4px",
-        // Outside the box, so it never reads as the inset selection ring below.
-        outline: cursor ? `2px solid ${p.accent}` : undefined,
-        outlineOffset: cursor ? -1 : undefined,
         // Density is the spacing axis: compact packs the rows tighter.
         height: compact ? 38 : 46,
         cursor: "pointer",
@@ -388,7 +400,15 @@ function HostRow({
         // and it reads over the shared hairlines.
         borderTop: first ? "none" : `1px solid ${p.line}`,
         background: hover ? p.bg2 : "transparent",
-        boxShadow: active || selected ? `inset 0 0 0 2px ${p.accentLine}` : "none",
+        // Left accent bar for the search highlight (see HostCard: an outline would
+        // be indistinguishable from the focus ring), composed with the selection ring.
+        boxShadow:
+          [
+            cursor ? `inset 3px 0 0 ${p.accent}` : null,
+            active || selected ? `inset 0 0 0 2px ${p.accentLine}` : null,
+          ]
+            .filter(Boolean)
+            .join(", ") || "none",
       }}
     >
       <Checkbox
@@ -1469,13 +1489,18 @@ export function ViewHosts() {
   // arrowing to the fourth result and then typing one more letter would leave the
   // highlight on whatever host happened to land in that slot.
   useEffect(() => setCursor(0), [query, hostFilter, sort]);
+  // ⌘M swaps the whole shell, unmounting the box without a blur event — leaving
+  // `searchFocus` stuck true and a card ringed for keys that can no longer arrive.
+  useEffect(() => setSearchFocus(false), [touch]);
   // Clamped at RENDER: the list shrinks under the highlight on every keystroke,
   // and a highlight left past the end paints nothing while Enter quietly does
   // nothing either — the exact "as if focus is lost" this screen was reported for.
   const cursorIdx = shown.length === 0 ? -1 : Math.min(cursor, shown.length - 1);
-  // Paint the highlight only while the search is in play. A permanently ringed
-  // first card would compete with `open` (the rail's host) for the same meaning.
-  const searching = searchFocus || query.trim() !== "";
+  // Paint the highlight only while the keys that move it will actually arrive:
+  // the box focused AND something typed. A ring left behind after the user clicks
+  // away advertises an Enter that goes nowhere — which is the "как будто теряется
+  // фокус с верхнего совпадения" this screen was reported for to begin with.
+  const searching = searchFocus && query.trim() !== "";
   const moveCursor = (delta: number) => {
     const next = nextRow(cursorIdx, delta, shown.length);
     setCursor(next);
@@ -1488,26 +1513,25 @@ export function ViewHosts() {
         ?.scrollIntoView({ block: "nearest" });
   };
   const onSearchKey = (e: React.KeyboardEvent) => {
-    // The Enter that commits an IME candidate is not a request to open a host.
-    if (e.nativeEvent.isComposing) return;
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      moveCursor(e.key === "ArrowDown" ? 1 : -1);
-    } else if (e.key === "Enter") {
-      const h = shown[cursorIdx];
-      if (!h) return;
-      e.preventDefault();
-      // Enter OPENS the host; ⌘/Ctrl+Enter connects. A filter box that starts an
-      // SSH session on a stray Enter is a worse failure than one that does
-      // nothing, and ⌘K already exists for connect-on-Enter.
-      if (e.metaKey || e.ctrlKey) ctx.connect(h);
-      else openHost(h.profileId);
-    } else if (e.key === "Escape" && query) {
-      // Only with something to clear: on an empty box Escape belongs to whatever
-      // is above (the rail, a dialog stack).
-      e.preventDefault();
-      setQuery("");
-    }
+    const hit = shown[cursorIdx];
+    // The decision itself is a pure function (support/hostsSearch.ts): this repo
+    // has no DOM test harness, so keeping it out of the component is the only way
+    // the behaviour that was reported broken is pinned by a test at all.
+    const action = searchKeyAction(
+      {
+        key: e.key,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        isComposing: e.nativeEvent.isComposing,
+      },
+      { hasQuery: query.trim() !== "", hasHit: !!hit },
+    );
+    if (!action) return;
+    e.preventDefault();
+    if (action.kind === "move") moveCursor(action.delta);
+    else if (action.kind === "clear") setQuery("");
+    else if (action.kind === "connect" && hit) ctx.connect(hit);
+    else if (action.kind === "open" && hit) openHost(hit.profileId);
   };
 
   /** Is the rail on screen? Side-column mode uses the persisted flag; overlay mode
@@ -1581,6 +1605,9 @@ export function ViewHosts() {
         position: "relative",
         flex: touch ? 1 : undefined,
         width: touch ? undefined : tight ? 148 : 224,
+        // The stated width is a floor, not a suggestion: the toolbar wraps, and
+        // without this the box shrinks under its label before the row does.
+        flexShrink: touch ? 1 : 0,
         minWidth: 0,
         display: "flex",
         alignItems: "center",
@@ -1604,7 +1631,6 @@ export function ViewHosts() {
         onBlur={() => setSearchFocus(false)}
         placeholder={t("hosts.searchPlaceholder")}
         aria-label={t("hosts.searchPlaceholder")}
-        aria-describedby={searchStatusId}
         style={{
           flex: 1,
           minWidth: 0,
@@ -1623,7 +1649,9 @@ export function ViewHosts() {
         <button
           onClick={() => {
             setQuery("");
-            searchRef.current?.focus();
+            // Refocusing re-raises the soft keyboard, which is not what tapping ✕
+            // on a phone asks for; on the desktop it keeps typing where it was.
+            if (!touch) searchRef.current?.focus();
           }}
           aria-label={t("common.clear")}
           style={{
@@ -1660,7 +1688,9 @@ export function ViewHosts() {
       >
         {query.trim()
           ? `${t("count.hosts", { count: shown.length })}${
-              shown[cursorIdx] ? `. ${t("hosts.searchTopMatch", { label: shown[cursorIdx].label })}` : ""
+              shown[cursorIdx]
+                ? `. ${t("hosts.searchHighlighted", { label: shown[cursorIdx].label })}`
+                : ""
             }`
           : ""}
       </span>
@@ -1806,9 +1836,13 @@ export function ViewHosts() {
                 whiteSpace: "nowrap",
               }}
             >
-              {/* While a query is narrowing the list, count what is on screen —
-                  "6 hosts" over three visible cards reads as a rendering bug. */}
-              {t("count.hosts", { count: query.trim() ? shown.length : hosts.length })}
+              {/* Whatever narrowed the list — a query or a tag/group chip — count
+                  what is on screen: "6 hosts" over three visible cards reads as a
+                  rendering bug either way. */}
+              {t("count.hosts", {
+                count:
+                  query.trim() || hostFilter !== HOST_FILTER_ALL ? shown.length : hosts.length,
+              })}
               {sessions ? ` · ${t("count.sessions", { count: sessions })}` : ""}
             </span>
           </div>
@@ -2209,7 +2243,7 @@ export function ViewHosts() {
                   variant="ghost"
                   onClick={() => {
                     setQuery("");
-                    searchRef.current?.focus();
+                    if (!touch) searchRef.current?.focus();
                   }}
                 >
                   {t("common.clear")}
