@@ -2,9 +2,9 @@
 
 # UniSSH
 
-**A cross-platform SSH client with end-to-end-encrypted vaults that sync through a server _you_ host.**
+**A cross-platform SSH client with end-to-end-encrypted vaults — local-first, and optionally synced through a server _you_ host.**
 
-_Your keys, your hosts, your server. No cloud account, no vendor lock-in — and a server that can't read a single byte of your data._
+_Your keys, your hosts, your machine. The client is complete on its own — no account, no cloud, **no server required**. Run one only when you want the same vault on a second device or in a team, and even then it can't read a single byte of your data._
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Built with Rust](https://img.shields.io/badge/core-Rust-orange.svg)](#components)
@@ -18,6 +18,12 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 
 <br/>
 
+**[⬇ Download the client](https://github.com/goduni/unissh/releases/latest)** — macOS · Windows · Linux · Android · iOS
+
+[Quick Start](#quick-start) &nbsp;·&nbsp; [Do I need the server?](#faq--troubleshooting)
+
+<br/>
+
 <img src="docs/screenshots/hosts-dark.png" alt="UniSSH desktop client — the host library in dark mode" width="900">
 
 </div>
@@ -26,12 +32,12 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 
 ## Contents
 
+- [Quick Start](#quick-start) — [get the client](#a-get-the-client) · [self-host a server](#b-self-host-a-sync-server-optional) _(optional)_ · [admin panel](#c-open-the-admin-panel)
 - [Why UniSSH?](#why-unissh)
 - [Features](#features)
 - [Screenshots](#screenshots)
 - [How it works](#how-it-works) · [Identity model](#identity-model)
 - [Components](#components)
-- [Quick Start](#quick-start) — [get the client](#a-get-the-client) · [self-host a server](#b-self-host-a-sync-server-optional) · [admin panel](#c-open-the-admin-panel)
 - [Installing unsigned builds](#installing-unsigned-builds) — [macOS](#macos) · [Windows](#windows) · [Linux](#linux) · [Android](#android) · [iOS](#ios)
 - [Configuration](#configuration)
 - [Security & Privacy](#security--privacy)
@@ -41,6 +47,140 @@ _Your keys, your hosts, your server. No cloud account, no vendor lock-in — and
 - [Community](#community) — [supporting the project](#supporting-the-project)
 - [FAQ / Troubleshooting](#faq--troubleshooting)
 - [License](#license)
+
+---
+
+## Quick Start
+
+**(A) is the whole install.** Download the client and open it: the first run creates a **local** vault, and your hosts and keys are encrypted on that device. No account to create, no backend to stand up, and nothing of ours between you and the machines you connect to. (Do write down the Secret Key it shows you — it is what recovers the vault.)
+
+**(B)** and **(C)** exist only if you want the *same* vault on a second device or shared with a team. Everything the client does over SSH — sessions, SFTP, tunnels, fleet commands — behaves identically either way: SSH traffic goes straight from your device to your hosts and never through the sync server.
+
+### A. Get the client
+
+**Download (recommended).** Grab the latest build for your OS from the [**Releases**](https://github.com/goduni/unissh/releases/latest) page:
+
+| OS | Architecture | Artifact |
+| --- | --- | --- |
+| macOS | Apple Silicon **and** Intel | `UniSSH_<version>_universal.dmg` (drag to Applications) |
+| Windows | x86-64 | `UniSSH_<version>_x64-setup.exe` or `.msi` |
+| Windows | ARM64 | `UniSSH_<version>_arm64-setup.exe` or `_arm64_en-US.msi` |
+| Linux | x86-64 | `UniSSH_<version>_amd64.AppImage` (portable) or `.deb` / `.rpm` |
+| Linux | ARM64 | `UniSSH_<version>_aarch64.AppImage` or `_arm64.deb` / `.rpm` |
+| Android | any (universal) | `UniSSH_<version>_universal.apk` — [sideload](#android) |
+| Android | pick your own | `_arm64` / `_armv7` / `_x86_64` / `_x86` `.apk` — smaller |
+| iOS | Apple Silicon | `UniSSH_<version>_ios-sideload.ipa` — unsigned, [sideload](#ios) |
+
+**Every desktop platform here covers both architectures**, so take the ARM file on
+an ARM machine instead of letting it emulate the x86-64 one — Windows on ARM will
+happily run the x64 build, and the emulation tax lands squarely on vault crypto and
+terminal I/O. **What is not built**, so you know before you look: nothing here ships
+32-bit for desktop; [build from source](#build-from-source) if you need one that is
+missing. The ARM builds exist because that is where an SSH client actually gets used
+on ARM: Asahi, ARM laptops, Snapdragon Windows machines, a Raspberry Pi on a desk.
+ARM *servers* are served by the [container images](#b-self-host-a-sync-server-optional),
+which are multi-arch.
+
+Release builds are **unsigned**. On desktop that means a one-time warning and a ten-second "open anyway" — on **Android** it means a permanent Play Protect warning, and on **iOS** it means re-signing the `.ipa` with your own Apple ID before it will run at all. The steps for all five platforms are in [Installing unsigned builds](#installing-unsigned-builds). Always [verify the download](#verifying-release-integrity) against the published checksum first.
+
+<details>
+<summary><b>Build the client from source</b> (also your strongest trust check)</summary>
+
+**Desktop (Tauri — macOS / Windows / Linux):**
+
+```bash
+cd client
+npm install
+npm run tauri dev        # dev run (Vite + the Rust app)   — or: just dev-client
+npm run tauri build      # production bundle: .app/.dmg/.deb/.AppImage/.msi
+```
+
+**Mobile (run `init` once):**
+
+```bash
+npm run tauri ios init      && npm run tauri ios dev
+npm run tauri android init  && npm run tauri android dev
+```
+
+**Prerequisites (clients):** Node 20.19+ / 22.12+ and Rust 1.94+. Linux desktop also needs the WebKitGTK stack: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev libxdo-dev libayatana-appindicator3-dev`. iOS needs Xcode + CocoaPods; Android needs Android Studio + SDK + NDK.
+</details>
+
+On first launch you pick a **Local** or **Cloud** vault. Local needs nothing else — you're done. For **Cloud** sync across devices or a team, stand up a server next.
+
+### B. Self-host a sync server (optional)
+
+**Stop here if one device is all you need** — a local vault is fully functional without any of this, and standing a server up later takes nothing away: the client keeps working exactly as it does now, and a [portable encrypted backup](#features) carries the vault to another machine.
+
+Be aware of what that migration is and isn't, though: a restored backup lands as a **local** vault wherever it goes. Putting existing hosts behind sync today means creating a Cloud vault and moving them into it — there is no in-place local→cloud switch.
+
+Running one buys you exactly four things: the same vault unlocked on your laptop, phone and tablet; hosts and secrets shared with a team, with membership, roles and revocation; a lost device cut off from the vault without re-keying everything; and a server-side audit trail. What it does **not** buy the server is the ability to read any of it — it holds ciphertext and routing metadata, and the keys never leave your devices.
+
+**Docker (recommended).** The top-level `compose.yml` brings up the **server** (plain HTTP, internal-only) behind a bundled **Caddy** reverse proxy that does **TLS 1.3 + automatic HTTPS** for you. The Docker build context is the repo root (so the server image can reach `rust-core/` for its byte-compatibility tests).
+
+```bash
+# from the repository root
+cp deploy/.env.example .env        # then edit: set UNISSH_DOMAIN (+ a TLS directive)
+docker compose up -d --build
+```
+
+Edit `.env` before first boot — the **only required** value is:
+
+- `UNISSH_DOMAIN` — your public domain (→ automatic Let's Encrypt ACME), or a `*.local`/IP host together with `UNISSH_TLS_DIRECTIVE="tls internal"` for a Caddy-issued self-signed cert on a LAN.
+
+**There is no bootstrap token.** On first boot, while the instance is still unclaimed, the server prints a one-time **SETUP CODE** to its log. Grab it:
+
+```bash
+docker compose logs server 2>&1 | grep -i "setup code"
+```
+
+Then open the client (or the admin panel), point it at your instance URL, and **claim** the instance with that code — the first user to claim becomes the **owner**. (For IaC/automation you can pin a deterministic code with `UNISSH__SETUP__CODE=…` instead of the random one.) After that, teammates join via a space-scoped **invite link** or **SSO** — no code needed.
+
+Caddy publishes **:80 / :443** (and `:443/udp` for HTTP/3); the server (`:8443`) and metrics (`:9090`) stay internal to the compose network. SQLite is the default (data persisted in a named Docker volume); the server runs as a non-root user on a read-only rootfs.
+
+Check it's alive (through Caddy):
+
+```bash
+curl -k https://localhost/healthz      # liveness;  /readyz also checks the DB
+```
+
+Switching to **Postgres** is a small `.env` change — enable the `postgres` compose profile and set `POSTGRES_PASSWORD`, `UNISSH__DB__BACKEND=postgres`, and `UNISSH__DB__URL`. The full deployment guide (TLS modes, profiles, backups) is in [`deploy/README.md`](deploy/README.md).
+
+<details>
+<summary><b>Server without Docker (build from source)</b></summary>
+
+```bash
+# from the repository root
+just build-server                                     # → target/release/unissh-server
+cp server/config.example.toml server/config.toml      # then edit
+./target/release/unissh-server migrate --config server/config.toml   # also auto-applied on serve
+./target/release/unissh-server --config server/config.toml
+```
+Requires Rust 1.94+ (`rust-toolchain.toml`) and a C toolchain (for bundled SQLCipher in the dev/test path). Without the bundled Caddy you must terminate TLS yourself — set `tls_cert`/`tls_key` for in-process rustls, or put your own reverse proxy in front and set `trust_proxy=true`.
+</details>
+
+### C. Open the admin panel
+
+The admin panel (`server-ui/`) is a zero-knowledge SPA that talks to your live server. It needs the wasm crypto bundle built once:
+
+```bash
+cd server-ui
+rustup target add wasm32-unknown-unknown    # one-time
+cargo install wasm-pack                      # one-time
+npm run build:wasm                           # → crypto-wasm/pkg/
+npm install
+npm run dev                                  # http://localhost:5180
+```
+
+(Or from the repo root: `just build-ui` then `just dev-ui`.) On the login screen, point it at your instance URL and sign in as the **owner** (or a space admin) — the same account you claimed the instance with:
+
+- **Escrow sign-in** — handle + password + Secret Key. The keyset is recovered and unlocked **in-browser** (it never leaves the page, and never reaches the server); **Lock** wipes it. There is **no `.keyset` file to import** and no ops-token to enter first. A brand-new browser that isn't linked yet is onboarded by **QR-approve** from an already-trusted device.
+- **SSO** — if the instance has `[oidc]` enabled, "Sign in with SSO" runs the browser OIDC flow instead.
+
+If the instance is still **unclaimed**, the login screen offers to claim it with the setup code from the server log (see [above](#b-self-host-a-sync-server-optional)).
+
+The panel's screens include the instance **Overview**, **Spaces**, and the member **Directory**, plus devices/sessions/invites, vaults/grants, objects, and audit. An optional server-trusted **ops** break-glass token (`[ops] token`) unlocks only the infrastructure surface (overview / instance / `seq-bump`) and grants **no** decryption.
+
+For production, build it (`npm run build`) and serve `dist/` behind your reverse proxy.
 
 ---
 
@@ -203,132 +343,6 @@ Supporting directories: **`deploy/`** (the Docker/Caddy/Prometheus deployment st
 **Cargo layout.** The root `Cargo.toml` is a virtual workspace over `rust-core/crates/*` + `server` (one `Cargo.lock`). `client/src-tauri` and `server-ui/crypto-wasm` are separate, **excluded** workspace roots with their own `Cargo.lock` (a Tauri requirement / a dedicated wasm release profile).
 
 **Client platforms:** the Tauri client targets **macOS, Windows, Linux** (desktop) and **iOS, Android** (mobile) from one codebase.
-
----
-
-## Quick Start
-
-The fastest path to a working setup: **(A)** get the desktop client — download a release or build it — then, **only if you want sync** across your devices or a team, **(B)** self-host a server and **(C)** open its admin panel. Local-only operation is the default and needs no server.
-
-### A. Get the client
-
-**Download (recommended).** Grab the latest build for your OS from the [**Releases**](https://github.com/goduni/unissh/releases/latest) page:
-
-| OS | Architecture | Artifact |
-| --- | --- | --- |
-| macOS | Apple Silicon **and** Intel | `UniSSH_<version>_universal.dmg` (drag to Applications) |
-| Windows | x86-64 | `UniSSH_<version>_x64-setup.exe` or `.msi` |
-| Windows | ARM64 | `UniSSH_<version>_arm64-setup.exe` or `_arm64_en-US.msi` |
-| Linux | x86-64 | `UniSSH_<version>_amd64.AppImage` (portable) or `.deb` / `.rpm` |
-| Linux | ARM64 | `UniSSH_<version>_aarch64.AppImage` or `_arm64.deb` / `.rpm` |
-| Android | any (universal) | `UniSSH_<version>_universal.apk` — [sideload](#android) |
-| Android | pick your own | `_arm64` / `_armv7` / `_x86_64` / `_x86` `.apk` — smaller |
-| iOS | Apple Silicon | `UniSSH_<version>_ios-sideload.ipa` — unsigned, [sideload](#ios) |
-
-**Every desktop platform here covers both architectures**, so take the ARM file on
-an ARM machine instead of letting it emulate the x86-64 one — Windows on ARM will
-happily run the x64 build, and the emulation tax lands squarely on vault crypto and
-terminal I/O. **What is not built**, so you know before you look: nothing here ships
-32-bit for desktop; [build from source](#build-from-source) if you need one that is
-missing. The ARM builds exist because that is where an SSH client actually gets used
-on ARM: Asahi, ARM laptops, Snapdragon Windows machines, a Raspberry Pi on a desk.
-ARM *servers* are served by the [container images](#b-self-host-a-sync-server-optional),
-which are multi-arch.
-
-Release builds are **unsigned**. On desktop that means a one-time warning and a ten-second "open anyway" — on **Android** it means a permanent Play Protect warning, and on **iOS** it means re-signing the `.ipa` with your own Apple ID before it will run at all. The steps for all five platforms are in [Installing unsigned builds](#installing-unsigned-builds). Always [verify the download](#verifying-release-integrity) against the published checksum first.
-
-<details>
-<summary><b>Build the client from source</b> (also your strongest trust check)</summary>
-
-**Desktop (Tauri — macOS / Windows / Linux):**
-
-```bash
-cd client
-npm install
-npm run tauri dev        # dev run (Vite + the Rust app)   — or: just dev-client
-npm run tauri build      # production bundle: .app/.dmg/.deb/.AppImage/.msi
-```
-
-**Mobile (run `init` once):**
-
-```bash
-npm run tauri ios init      && npm run tauri ios dev
-npm run tauri android init  && npm run tauri android dev
-```
-
-**Prerequisites (clients):** Node 20.19+ / 22.12+ and Rust 1.94+. Linux desktop also needs the WebKitGTK stack: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev libxdo-dev libayatana-appindicator3-dev`. iOS needs Xcode + CocoaPods; Android needs Android Studio + SDK + NDK.
-</details>
-
-On first launch you pick a **Local** or **Cloud** vault. Local needs nothing else — you're done. For **Cloud** sync across devices or a team, stand up a server next.
-
-### B. Self-host a sync server (optional)
-
-**Docker (recommended).** The top-level `compose.yml` brings up the **server** (plain HTTP, internal-only) behind a bundled **Caddy** reverse proxy that does **TLS 1.3 + automatic HTTPS** for you. The Docker build context is the repo root (so the server image can reach `rust-core/` for its byte-compatibility tests).
-
-```bash
-# from the repository root
-cp deploy/.env.example .env        # then edit: set UNISSH_DOMAIN (+ a TLS directive)
-docker compose up -d --build
-```
-
-Edit `.env` before first boot — the **only required** value is:
-
-- `UNISSH_DOMAIN` — your public domain (→ automatic Let's Encrypt ACME), or a `*.local`/IP host together with `UNISSH_TLS_DIRECTIVE="tls internal"` for a Caddy-issued self-signed cert on a LAN.
-
-**There is no bootstrap token.** On first boot, while the instance is still unclaimed, the server prints a one-time **SETUP CODE** to its log. Grab it:
-
-```bash
-docker compose logs server 2>&1 | grep -i "setup code"
-```
-
-Then open the client (or the admin panel), point it at your instance URL, and **claim** the instance with that code — the first user to claim becomes the **owner**. (For IaC/automation you can pin a deterministic code with `UNISSH__SETUP__CODE=…` instead of the random one.) After that, teammates join via a space-scoped **invite link** or **SSO** — no code needed.
-
-Caddy publishes **:80 / :443** (and `:443/udp` for HTTP/3); the server (`:8443`) and metrics (`:9090`) stay internal to the compose network. SQLite is the default (data persisted in a named Docker volume); the server runs as a non-root user on a read-only rootfs.
-
-Check it's alive (through Caddy):
-
-```bash
-curl -k https://localhost/healthz      # liveness;  /readyz also checks the DB
-```
-
-Switching to **Postgres** is a small `.env` change — enable the `postgres` compose profile and set `POSTGRES_PASSWORD`, `UNISSH__DB__BACKEND=postgres`, and `UNISSH__DB__URL`. The full deployment guide (TLS modes, profiles, backups) is in [`deploy/README.md`](deploy/README.md).
-
-<details>
-<summary><b>Server without Docker (build from source)</b></summary>
-
-```bash
-# from the repository root
-just build-server                                     # → target/release/unissh-server
-cp server/config.example.toml server/config.toml      # then edit
-./target/release/unissh-server migrate --config server/config.toml   # also auto-applied on serve
-./target/release/unissh-server --config server/config.toml
-```
-Requires Rust 1.94+ (`rust-toolchain.toml`) and a C toolchain (for bundled SQLCipher in the dev/test path). Without the bundled Caddy you must terminate TLS yourself — set `tls_cert`/`tls_key` for in-process rustls, or put your own reverse proxy in front and set `trust_proxy=true`.
-</details>
-
-### C. Open the admin panel
-
-The admin panel (`server-ui/`) is a zero-knowledge SPA that talks to your live server. It needs the wasm crypto bundle built once:
-
-```bash
-cd server-ui
-rustup target add wasm32-unknown-unknown    # one-time
-cargo install wasm-pack                      # one-time
-npm run build:wasm                           # → crypto-wasm/pkg/
-npm install
-npm run dev                                  # http://localhost:5180
-```
-
-(Or from the repo root: `just build-ui` then `just dev-ui`.) On the login screen, point it at your instance URL and sign in as the **owner** (or a space admin) — the same account you claimed the instance with:
-
-- **Escrow sign-in** — handle + password + Secret Key. The keyset is recovered and unlocked **in-browser** (it never leaves the page, and never reaches the server); **Lock** wipes it. There is **no `.keyset` file to import** and no ops-token to enter first. A brand-new browser that isn't linked yet is onboarded by **QR-approve** from an already-trusted device.
-- **SSO** — if the instance has `[oidc]` enabled, "Sign in with SSO" runs the browser OIDC flow instead.
-
-If the instance is still **unclaimed**, the login screen offers to claim it with the setup code from the server log (see [above](#b-self-host-a-sync-server-optional)).
-
-The panel's screens include the instance **Overview**, **Spaces**, and the member **Directory**, plus devices/sessions/invites, vaults/grants, objects, and audit. An optional server-trusted **ops** break-glass token (`[ops] token`) unlocks only the infrastructure surface (overview / instance / `seq-bump`) and grants **no** decryption.
-
-For production, build it (`npm run build`) and serve `dist/` behind your reverse proxy.
 
 ---
 
@@ -604,6 +618,9 @@ Donations don't buy priority support or private builds. For anything else, write
 ---
 
 ## FAQ / Troubleshooting
+
+**Do I need the server? Can I run the client on its own?**
+No, and yes. The first run creates a **local** vault and the client is complete from there: hosts, keys, terminals, SFTP, tunnels and fleet commands all work with the vault encrypted on that device, with no account and no service of ours listening for anything. The server is a **sync** backend and nothing else — you only want one to share the same vault across your devices or with a team. Starting local costs you nothing later: a [portable encrypted backup](#features) moves the vault to any instance, including a server-linked one (where it restores as a local vault — sync means creating a Cloud vault and moving the hosts into it). SSH connections never route through the server either way.
 
 **macOS: "UniSSH can't be opened because the developer cannot be verified."**
 Expected — the build is unsigned. Right-click → **Open**, or **System Settings → Privacy & Security → Open Anyway**, or `xattr -dr com.apple.quarantine /Applications/UniSSH.app`. See [Installing unsigned builds](#installing-unsigned-builds).
