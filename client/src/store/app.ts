@@ -906,6 +906,11 @@ export const useApp = create<AppStore>((set, get) => ({
     // at the other five navigation sites), or the panel would stay up over the
     // screen you just navigated to — ⌘1, a palette entry, or a host connecting
     // into a new terminal tab all move the route out from under it.
+    //
+    // `navGuard` is deliberately skipped: the only view that registers one
+    // (ViewBroadcast) does so because LEAVING unmounts it and tears its broadcast
+    // down, and a panel over the top unmounts nothing. Firing that confirm here
+    // would be a false alarm — and confirming it clears the guard for good.
     if (r === "settings" && get().device !== "mobile") {
       set({ settingsOpen: true });
       return;
@@ -932,8 +937,18 @@ export const useApp = create<AppStore>((set, get) => ({
   setDevice: (d) => {
     // The panel only exists in the desktop shell, so carrying `settingsOpen`
     // across the preview toggle would leave a flag nothing renders — and pop
-    // Settings open again on the way back.
-    set({ device: d, settingsOpen: false });
+    // Settings open again on the way back. Coming the other way, a phone sitting
+    // on the `settings` ROUTE would land on the desktop's now-vestigial
+    // full-screen Settings, where opening the panel would mount a second copy of
+    // the same view; carry the intent over as the panel instead.
+    const wasOnSettingsRoute = get().route === "settings";
+    const toDesktop = d !== "mobile";
+    set((s) => ({
+      device: d,
+      settingsOpen: wasOnSettingsRoute && toDesktop,
+      route: wasOnSettingsRoute && toDesktop ? "hosts" : s.route,
+      routeSeq: wasOnSettingsRoute && toDesktop ? s.routeSeq + 1 : s.routeSeq,
+    }));
     try {
       localStorage.setItem("unissh.device", d);
     } catch {
@@ -1059,6 +1074,9 @@ export const useApp = create<AppStore>((set, get) => ({
     set({
       unlocked: false,
       overlay: "unlock",
+      // Locking is not "come back to where you were": Settings should not be
+      // waiting on screen when the vault opens again.
+      settingsOpen: false,
       hosts: [],
       groups: [],
       items: [],

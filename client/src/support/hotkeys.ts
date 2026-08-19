@@ -65,7 +65,10 @@ export function hasAppModifier(ev: KeyboardEvent, mac = isMac()): boolean {
  *  "," on that physical key, still opens Settings. */
 export function opensSettings(ev: KeyboardEvent, mac = isMac()): boolean {
   if (ev.altKey || ev.shiftKey) return false;
-  if (ev.code !== "Comma" && ev.key !== ",") return false;
+  // The PHYSICAL key when the browser reports one, falling back to `key` only
+  // when it doesn't. Matching either way would claim AZERTY's comma — which sits
+  // on `code: "KeyM"` — and quietly take ⌘M's device-preview toggle with it.
+  if (ev.code ? ev.code !== "Comma" : ev.key !== ",") return false;
   return mac ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && !ev.metaKey;
 }
 

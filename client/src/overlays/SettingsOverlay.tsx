@@ -39,7 +39,13 @@ function SettingsPanel() {
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 250,
+        // BELOW the global modal host, not above it. Settings opens ordinary
+        // modals of its own — "New terminal theme", "Edit vault" — and those
+        // render into that host at 150; at 250 the panel covered them, so the
+        // button appeared to do nothing while an invisible dialog ate Escape.
+        // The ladder: Entry 100 (never co-mounted) < THIS < Groups/Import 130 <
+        // Modals 150 < Modal 200 < palette 300 < confirm 350 < prompts 400+.
+        zIndex: 120,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -97,7 +103,12 @@ function SettingsPanel() {
         >
           <Icon name="x" size={16} />
         </button>
-        <ViewSettings />
+        {/* `flex: 1` alone is not enough: as a column-flex item ViewSettings'
+            automatic min-height is its CONTENT height, so a tall tab would push
+            past the card and get clipped instead of scrolling in its own pane. */}
+        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+          <ViewSettings />
+        </div>
       </div>
     </div>
   );

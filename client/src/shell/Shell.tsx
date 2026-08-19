@@ -283,9 +283,15 @@ export function TitleBar() {
         <TitleIconBtn icon="moon" onClick={toggleTwin} title={t("shell.appTheme")} />
         <TitleIconBtn
           icon="sliders"
-          onClick={() => ctx.go("settings")}
+          // A lit button that ignores a click reads as broken, so it closes the
+          // panel it opened — the same toggle the chord and the sheet promise.
+          onClick={() => {
+            const s = useApp.getState();
+            if (s.settingsOpen) s.setSettingsOpen(false);
+            else ctx.go("settings");
+          }}
           active={route === "settings" || settingsOpen}
-          title={t("nav.settings")}
+          title={`${t("nav.settings")} · ${isMac() ? "⌘," : "Ctrl+,"}`}
         />
         <TitleIconBtn icon="lock" onClick={ctx.onLock} title={t("shell.lock")} />
         {/* Account avatar — only for a linked cloud account with a handle. A
