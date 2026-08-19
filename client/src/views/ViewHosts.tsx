@@ -4,7 +4,7 @@
 // real store: hosts = ConnectionProfile[], liveness only from open terminal tabs,
 // no fake ping/cipher/agent-fwd.
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, RADIUS, SIZE, SPACE, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot, Spinner, NO_AUTOCORRECT } from "@/components/primitives";
@@ -18,6 +18,8 @@ import * as api from "@/bridge/api";
 import { profileAuthKind, apiErrorMessage } from "@/bridge/types";
 import type { ConnectionProfile } from "@/bridge/types";
 import { useTranslation, tDyn } from "@/i18n";
+import { nextRow } from "@/support/listNav";
+import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
 
 type SortKey = "name" | "added" | "connected";
 type RailTab = "detail" | "sessions";
@@ -46,6 +48,7 @@ function HostCard({
   selected,
   active,
   session,
+  cursor,
   onToggle,
   onOpen,
   onConnect,
@@ -56,6 +59,11 @@ function HostCard({
   selected: boolean;
   active: boolean;
   session: boolean;
+  /** The search's keyboard highlight — what Enter in the filter box would open.
+   *  Deliberately NOT folded into `active`/`selected`: those already mean "the
+   *  rail is showing this" and "this is in the bulk selection", and three states
+   *  drawn identically tell the user nothing about which key does what. */
+  cursor?: boolean;
   onToggle: () => void;
   onOpen: () => void;
   onConnect: () => void;
@@ -80,6 +88,10 @@ function HostCard({
   const authLabel = tDyn(AUTH_LABEL_KEY[authKind]);
   return (
     <Card
+      // The search's arrow keys scroll the highlight into view by looking the card
+      // up here — a ref map would have to survive every re-order the sort control
+      // and the filters do to this list.
+      data-host-id={h.profileId}
       active={active || selected}
       onClick={onOpen}
       onDoubleClick={onConnect}
@@ -94,7 +106,28 @@ function HostCard({
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{ position: "relative", cursor: "pointer" }}
+      aria-current={cursor ? "true" : undefined}
+      style={{
+        position: "relative",
+        cursor: "pointer",
+        // A left accent bar, the same language the command palette uses for its
+        // highlight. NOT an outline: `[role="button"]:focus-visible` is already
+        // `2px solid var(--uh-focus)` at offset 2, and --uh-focus IS p.accent
+        // (theme.css / ThemeProvider) — so an outline here was pixel-identical to
+        // "this card has keyboard focus", and being inline it also suppressed the
+        // real focus ring. The active/selected ring is recomposed here because
+        // this style object overrides the one Card sets.
+        ...(cursor || active || selected
+          ? {
+              boxShadow: [
+                cursor ? `inset 3px 0 0 ${p.accent}` : null,
+                active || selected ? `inset 0 0 0 1px ${p.accentLine}` : null,
+              ]
+                .filter(Boolean)
+                .join(", "),
+            }
+          : {}),
+      }}
     >
       <Checkbox
         checked={selected}
@@ -312,6 +345,7 @@ function HostRow({
   active,
   session,
   first,
+  cursor,
   onToggle,
   onOpen,
   onConnect,
@@ -322,6 +356,8 @@ function HostRow({
   active: boolean;
   session: boolean;
   first?: boolean;
+  /** The search's keyboard highlight — see HostCard. */
+  cursor?: boolean;
   onToggle: () => void;
   onOpen: () => void;
   onConnect: () => void;
@@ -338,6 +374,8 @@ function HostRow({
     <div
       role="button"
       tabIndex={0}
+      data-host-id={h.profileId}
+      aria-current={cursor ? "true" : undefined}
       onKeyDown={pressActivate(onOpen)}
       onFocus={() => setFocusIn(true)}
       onBlur={(e) => {
@@ -362,7 +400,15 @@ function HostRow({
         // and it reads over the shared hairlines.
         borderTop: first ? "none" : `1px solid ${p.line}`,
         background: hover ? p.bg2 : "transparent",
-        boxShadow: active || selected ? `inset 0 0 0 2px ${p.accentLine}` : "none",
+        // Left accent bar for the search highlight (see HostCard: an outline would
+        // be indistinguishable from the focus ring), composed with the selection ring.
+        boxShadow:
+          [
+            cursor ? `inset 3px 0 0 ${p.accent}` : null,
+            active || selected ? `inset 0 0 0 2px ${p.accentLine}` : null,
+          ]
+            .filter(Boolean)
+            .join(", ") || "none",
       }}
     >
       <Checkbox
@@ -1234,11 +1280,20 @@ export function ViewHosts() {
       /* ignore */
     }
   };
-  // In-list text filter. The desktop reaches hosts through ⌘K, but the palette
-  // CONNECTS on Enter — it's a launcher, not a filter — so on a phone, where ⌘K
-  // needs hardware anyway, "find the host called prod-db and look at it before
-  // touching it" had no non-destructive answer at all.
+  // In-list text filter, on every shell. ⌘K is a launcher — it CONNECTS on Enter
+  // — so "find the host called prod-db and look at it before touching it" had no
+  // non-destructive answer, and on the desktop no answer at all: this box used to
+  // render only on touch, so a report of "Enter does nothing in the Hosts search"
+  // was about a box that wasn't there.
   const [query, setQuery] = useState("");
+  // Which host Enter acts on. Clamped at render (below) rather than only when a
+  // key moves it, because the list shrinks under the highlight on every keystroke.
+  const [cursor, setCursor] = useState(0);
+  const [searchFocus, setSearchFocus] = useState(false);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  // The highlight is painted, so it has to be spoken too: a live region tells a
+  // screen reader how many hosts survived the query and which one Enter takes.
+  const searchStatusId = useId();
   const loading = useApp((s) => s.loading);
   const reloadVault = useApp((s) => s.reloadVault);
   const [sortOpen, setSortOpen] = useState(false);
@@ -1395,16 +1450,7 @@ export function ViewHosts() {
   }, [hosts, groups, hostFilter]);
 
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let arr = [...filtered];
-    if (q)
-      arr = arr.filter(
-        (h) =>
-          h.label.toLowerCase().includes(q) ||
-          h.host.toLowerCase().includes(q) ||
-          h.user.toLowerCase().includes(q) ||
-          h.tags.some((tag) => tag.toLowerCase().includes(q)),
-      );
+    const arr = [...filterHosts(filtered, query)];
     if (sort === "name") arr.sort((a, b) => a.label.localeCompare(b.label));
     else if (sort === "connected")
       // most-recently-connected first; never-connected hosts sink to the bottom,
@@ -1439,6 +1485,55 @@ export function ViewHosts() {
     if (touch) setRailPushed(true);
     else if (!railOpen) toggleRail(true);
   };
+  // Back to the top match whenever the list itself changes meaning. Without this,
+  // arrowing to the fourth result and then typing one more letter would leave the
+  // highlight on whatever host happened to land in that slot.
+  useEffect(() => setCursor(0), [query, hostFilter, sort]);
+  // ⌘M swaps the whole shell, unmounting the box without a blur event — leaving
+  // `searchFocus` stuck true and a card ringed for keys that can no longer arrive.
+  useEffect(() => setSearchFocus(false), [touch]);
+  // Clamped at RENDER: the list shrinks under the highlight on every keystroke,
+  // and a highlight left past the end paints nothing while Enter quietly does
+  // nothing either — the exact "as if focus is lost" this screen was reported for.
+  const cursorIdx = shown.length === 0 ? -1 : Math.min(cursor, shown.length - 1);
+  // Paint the highlight only while the keys that move it will actually arrive:
+  // the box focused AND something typed. A ring left behind after the user clicks
+  // away advertises an Enter that goes nowhere — which is the "как будто теряется
+  // фокус с верхнего совпадения" this screen was reported for to begin with.
+  const searching = searchFocus && query.trim() !== "";
+  const moveCursor = (delta: number) => {
+    const next = nextRow(cursorIdx, delta, shown.length);
+    setCursor(next);
+    // Scrolling belongs to the arrow keys alone: as an effect it would also fire
+    // on mount and yank a list the user had scrolled by hand.
+    const id = shown[next]?.profileId;
+    if (id)
+      listRef.current
+        ?.querySelector(`[data-host-id="${CSS.escape(id)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+  };
+  const onSearchKey = (e: React.KeyboardEvent) => {
+    const hit = shown[cursorIdx];
+    // The decision itself is a pure function (support/hostsSearch.ts): this repo
+    // has no DOM test harness, so keeping it out of the component is the only way
+    // the behaviour that was reported broken is pinned by a test at all.
+    const action = searchKeyAction(
+      {
+        key: e.key,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        isComposing: e.nativeEvent.isComposing,
+      },
+      { hasQuery: query.trim() !== "", hasHit: !!hit },
+    );
+    if (!action) return;
+    e.preventDefault();
+    if (action.kind === "move") moveCursor(action.delta);
+    else if (action.kind === "clear") setQuery("");
+    else if (action.kind === "connect" && hit) ctx.connect(hit);
+    else if (action.kind === "open" && hit) openHost(hit.profileId);
+  };
+
   /** Is the rail on screen? Side-column mode uses the persisted flag; overlay mode
    *  uses the transient push, so the list is what you land on. */
   // Only a touch shell turns the rail into a pushed screen. On the desktop it
@@ -1499,6 +1594,107 @@ export function ViewHosts() {
     >
       <Icon name={icon} size={14} />
     </button>
+  );
+
+  // One search box for both shells — the desktop toolbar and the touch row — so
+  // the two cannot drift into filtering differently. Only one branch ever mounts,
+  // so the ref and the input id stay unambiguous.
+  const searchBox = (
+    <div
+      style={{
+        position: "relative",
+        flex: touch ? 1 : undefined,
+        width: touch ? undefined : tight ? 148 : 224,
+        // The stated width is a floor, not a suggestion: the toolbar wraps, and
+        // without this the box shrinks under its label before the row does.
+        flexShrink: touch ? 1 : 0,
+        minWidth: 0,
+        display: "flex",
+        alignItems: "center",
+        gap: touch ? 8 : 6,
+        height: touch ? SIZE.tapMin : 30,
+        padding: touch ? "0 6px 0 12px" : "0 4px 0 9px",
+        borderRadius: RADIUS.ctl,
+        background: p.bg2,
+        // Focus reads on the frame, matching the sort control's open state.
+        border: `1px solid ${searchFocus ? p.line2 : p.line}`,
+      }}
+    >
+      <Icon name="search" size={touch ? 17 : 14} color={p.txt3} />
+      <input
+        {...NO_AUTOCORRECT}
+        ref={searchRef}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={onSearchKey}
+        onFocus={() => setSearchFocus(true)}
+        onBlur={() => setSearchFocus(false)}
+        placeholder={t("hosts.searchPlaceholder")}
+        aria-label={t("hosts.searchPlaceholder")}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          height: "100%",
+          border: "none",
+          outline: "none",
+          background: "transparent",
+          color: p.txt,
+          fontFamily: UI,
+          // 16px or iOS zooms the whole page on focus. The desktop has no such
+          // problem and 16px there would tower over every other control.
+          fontSize: touch ? 16 : 13,
+        }}
+      />
+      {query && (
+        <button
+          onClick={() => {
+            setQuery("");
+            // Refocusing re-raises the soft keyboard, which is not what tapping ✕
+            // on a phone asks for; on the desktop it keeps typing where it was.
+            if (!touch) searchRef.current?.focus();
+          }}
+          aria-label={t("common.clear")}
+          style={{
+            width: touch ? SIZE.tapMin : 22,
+            height: touch ? SIZE.tapMin : 22,
+            flexShrink: 0,
+            border: "none",
+            background: "transparent",
+            color: p.txt3,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Icon name="x" size={touch ? 16 : 13} />
+        </button>
+      )}
+      {/* Off-screen rather than display:none — a hidden node is not announced.
+          Only speaks while a query is live, so it stays quiet on arrival. */}
+      <span
+        id={searchStatusId}
+        role="status"
+        aria-live="polite"
+        style={{
+          position: "absolute",
+          width: 1,
+          height: 1,
+          overflow: "hidden",
+          clip: "rect(0 0 0 0)",
+          clipPath: "inset(50%)",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {query.trim()
+          ? `${t("count.hosts", { count: shown.length })}${
+              shown[cursorIdx]
+                ? `. ${t("hosts.searchHighlighted", { label: shown[cursorIdx].label })}`
+                : ""
+            }`
+          : ""}
+      </span>
+    </div>
   );
 
   // The sort dropdown is the one header control a phone keeps. It renders in the
@@ -1640,11 +1836,21 @@ export function ViewHosts() {
                 whiteSpace: "nowrap",
               }}
             >
-              {t("count.hosts", { count: hosts.length })}
+              {/* Whatever narrowed the list — a query or a tag/group chip — count
+                  what is on screen: "6 hosts" over three visible cards reads as a
+                  rendering bug either way. */}
+              {t("count.hosts", {
+                count:
+                  query.trim() || hostFilter !== HOST_FILTER_ALL ? shown.length : hosts.length,
+              })}
               {sessions ? ` · ${t("count.sessions", { count: sessions })}` : ""}
             </span>
           </div>
           <div style={{ flex: 1 }} />
+          {/* The desktop's filter box. ⌘K stays the launcher; this narrows the
+              list in place, which is what people reach for on the screen that
+              shows the list. */}
+          {searchBox}
           {/* Header actions are quiet text, per the reference (.act / .new) — a
               filled primary here becomes a glaring near-white block in dark mode. */}
           <button
@@ -1736,65 +1942,11 @@ export function ViewHosts() {
         </div>
         )}
 
-        {/* Touch: a real filter box. The desktop has ⌘K in the title bar for this,
-            which needs a keyboard AND connects rather than filters. */}
+        {/* Touch: the filter box gets its own full-width row — the desktop toolbar
+            is gone here, and the sort control rides along with it. */}
         {touch && (
           <div style={{ padding: `0 ${gutter}px 10px`, display: "flex", alignItems: "center", gap: 10 }}>
-            <div
-              style={{
-                flex: 1,
-                minWidth: 0,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                height: SIZE.tapMin,
-                padding: "0 6px 0 12px",
-                borderRadius: RADIUS.ctl,
-                background: p.bg2,
-                border: `1px solid ${p.line}`,
-              }}
-            >
-              <Icon name="search" size={17} color={p.txt3} />
-              <input
-                {...NO_AUTOCORRECT}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={t("hosts.searchPlaceholder")}
-                aria-label={t("hosts.searchPlaceholder")}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  height: "100%",
-                  border: "none",
-                  outline: "none",
-                  background: "transparent",
-                  color: p.txt,
-                  fontFamily: UI,
-                  // 16px or iOS zooms the whole page on focus.
-                  fontSize: 16,
-                }}
-              />
-              {query && (
-                <button
-                  onClick={() => setQuery("")}
-                  aria-label={t("common.clear")}
-                  style={{
-                    width: SIZE.tapMin,
-                    height: SIZE.tapMin,
-                    flexShrink: 0,
-                    border: "none",
-                    background: "transparent",
-                    color: p.txt3,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Icon name="x" size={16} />
-                </button>
-              )}
-            </div>
+            {searchBox}
             {sortControl}
           </div>
         )}
@@ -2074,14 +2226,33 @@ export function ViewHosts() {
               }}
             >
               <Icon name="search" size={30} color={p.txt3} />
+              {/* A query that matches nothing is not the same dead end as a tag
+                  that holds nothing — saying "no hosts tagged prod" to someone who
+                  just typed "prd" sends them to reset a filter that was never the
+                  problem. Whichever narrowed the list is what gets offered back. */}
               <span style={{ fontSize: 14 }}>
-                {hostFilter === "__untagged"
-                  ? t("hosts.allHostsTagged")
-                  : t("hosts.noHostsForTag", { tag: hostFilter })}
+                {query.trim()
+                  ? t("hosts.noHostsForQuery", { query: query.trim() })
+                  : hostFilter === "__untagged"
+                    ? t("hosts.allHostsTagged")
+                    : t("hosts.noHostsForTag", { tag: hostFilter })}
               </span>
-              <Btn size="sm" variant="ghost" onClick={() => setHostFilter(HOST_FILTER_ALL)}>
-                {t("hosts.resetFilter")}
-              </Btn>
+              {query.trim() ? (
+                <Btn
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setQuery("");
+                    if (!touch) searchRef.current?.focus();
+                  }}
+                >
+                  {t("common.clear")}
+                </Btn>
+              ) : (
+                <Btn size="sm" variant="ghost" onClick={() => setHostFilter(HOST_FILTER_ALL)}>
+                  {t("hosts.resetFilter")}
+                </Btn>
+              )}
             </div>
           ) : layout === "cards" ? (
             <div
@@ -2098,12 +2269,13 @@ export function ViewHosts() {
                 gap: 12,
               }}
             >
-              {shown.map((h) => (
+              {shown.map((h, i) => (
                 <HostCard
                   key={h.profileId}
                   h={h}
                   selected={sel.includes(h.profileId)}
                   active={open === h.profileId}
+                  cursor={searching && i === cursorIdx}
                   session={activeIds.has(h.profileId)}
                   onToggle={() => toggle(h.profileId)}
                   onOpen={() => openHost(h.profileId)}
@@ -2124,6 +2296,7 @@ export function ViewHosts() {
                   h={h}
                   selected={sel.includes(h.profileId)}
                   active={open === h.profileId}
+                  cursor={searching && i === cursorIdx}
                   session={activeIds.has(h.profileId)}
                   first={i === 0}
                   onToggle={() => toggle(h.profileId)}
