@@ -80,10 +80,10 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
         <section class="hero" aria-labelledby="hero-head">
           <h1 id="hero-head">
             <span class="grad-text">unissh</span> – a modern and secure, fully open-source SSH
-            client with a built-in sync server
+            client with an optional self-hosted sync server
           </h1>
           <p class="hero__subhead">
-            Cross-platform. Secure by default. Sync everywhere.<br />
+            Cross-platform. Secure by default. Works without a server.<br />
             Designed for developers and teams that demand more.
           </p>
           <div class="hero__cta">
@@ -96,7 +96,7 @@ const canonical = `${import.meta.env.SITE ?? ''}${base}`;
           </div>
           <div class="hero__meta">
             <span><Icon name="lock" size={16} stroke={1.8} /> End-to-end encrypted</span>
-            <span><Icon name="refresh" size={16} stroke={1.8} /> Multi-device sync</span>
+            <span><Icon name="refresh" size={16} stroke={1.8} /> Optional multi-device sync</span>
             <span><Icon name="code" size={16} stroke={1.8} /> 100% open-source</span>
           </div>
         </section>
