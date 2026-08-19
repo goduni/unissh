@@ -901,25 +901,39 @@ export const useApp = create<AppStore>((set, get) => ({
     // each way. Intercepted here so every entry point — the title-bar button, the
     // palette, the reconnect banner, ⌘, — gets the same behaviour. A phone has no
     // room to show a session behind a panel and keeps Settings as a screen.
+    //
+    // The reverse holds too: every route change clears `settingsOpen` (here and
+    // at the other five navigation sites), or the panel would stay up over the
+    // screen you just navigated to — ⌘1, a palette entry, or a host connecting
+    // into a new terminal tab all move the route out from under it.
     if (r === "settings" && get().device !== "mobile") {
       set({ settingsOpen: true });
       return;
     }
-    const nav = () => set((s) => ({ route: r, routeSeq: s.routeSeq + 1 }));
+    const nav = () => set((s) => ({ route: r, routeSeq: s.routeSeq + 1, settingsOpen: false }));
     guardedNav(get, nav);
   },
   goFiltered: (filter) => {
-    const nav = () => set((s) => ({ hostFilter: filter, route: "hosts", routeSeq: s.routeSeq + 1 }));
+    const nav = () =>
+      set((s) => ({
+        hostFilter: filter,
+        route: "hosts",
+        routeSeq: s.routeSeq + 1,
+        settingsOpen: false,
+      }));
     guardedNav(get, nav);
   },
   setNavGuard: (g) => set({ navGuard: g }),
   setBackHandler: (h) => set({ backHandler: h }),
   runBack: () => get().backHandler?.() ?? false,
   reviewMismatch: (m) => {
-    set((s) => ({ pendingMismatch: m, route: "known", routeSeq: s.routeSeq + 1 }));
+    set((s) => ({ pendingMismatch: m, route: "known", routeSeq: s.routeSeq + 1, settingsOpen: false }));
   },
   setDevice: (d) => {
-    set({ device: d });
+    // The panel only exists in the desktop shell, so carrying `settingsOpen`
+    // across the preview toggle would leave a flag nothing renders — and pop
+    // Settings open again on the way back.
+    set({ device: d, settingsOpen: false });
     try {
       localStorage.setItem("unissh.device", d);
     } catch {
@@ -1393,6 +1407,7 @@ export const useApp = create<AppStore>((set, get) => ({
       activeTermId: t.id,
       route: "terminal",
       routeSeq: s.routeSeq + 1,
+      settingsOpen: false,
     })),
   closeTerminal: (id) =>
     set((s) => {
@@ -1419,7 +1434,12 @@ export const useApp = create<AppStore>((set, get) => ({
       return { terminals };
     }),
   requestNewTab: () =>
-    set((s) => ({ newTabNonce: s.newTabNonce + 1, route: "terminal", routeSeq: s.routeSeq + 1 })),
+    set((s) => ({
+      newTabNonce: s.newTabNonce + 1,
+      route: "terminal",
+      routeSeq: s.routeSeq + 1,
+      settingsOpen: false,
+    })),
   setDraggingTab: (id) => set({ draggingTabId: id }),
   mergeTabIntoPane: (sourceTabId, targetTabId, targetPaneId, dir) =>
     set((s) => {
@@ -1473,6 +1493,7 @@ export const useApp = create<AppStore>((set, get) => ({
         activeTermId: newTab.id,
         route: "terminal",
         routeSeq: s.routeSeq + 1,
+        settingsOpen: false,
       };
     }),
   renameTerminal: (id, title) =>
