@@ -19,7 +19,8 @@ _Your keys, your hosts, your machine. The client is complete on its own — no a
 <br/>
 
 **[⬇ Download the client](https://github.com/goduni/unissh/releases/latest)** — macOS · Windows · Linux · Android · iOS
-&nbsp;·&nbsp; [Quick Start](#quick-start) &nbsp;·&nbsp; [Do I need the server?](#faq--troubleshooting)
+
+[Quick Start](#quick-start) &nbsp;·&nbsp; [Do I need the server?](#faq--troubleshooting)
 
 <br/>
 
@@ -51,7 +52,7 @@ _Your keys, your hosts, your machine. The client is complete on its own — no a
 
 ## Quick Start
 
-**(A) is the whole install.** Download the client, open it, pick a **Local** vault — your hosts and keys are encrypted on that device and nothing else is required. No account to create, no backend to stand up, no network dependency for connecting to your servers.
+**(A) is the whole install.** Download the client and open it: the first run creates a **local** vault, and your hosts and keys are encrypted on that device. No account to create, no backend to stand up, and nothing of ours between you and the machines you connect to. (Do write down the Secret Key it shows you — it is what recovers the vault.)
 
 **(B)** and **(C)** exist only if you want the *same* vault on a second device or shared with a team. Everything the client does over SSH — sessions, SFTP, tunnels, fleet commands — behaves identically either way: SSH traffic goes straight from your device to your hosts and never through the sync server.
 
@@ -108,7 +109,9 @@ On first launch you pick a **Local** or **Cloud** vault. Local needs nothing els
 
 ### B. Self-host a sync server (optional)
 
-**Stop here if one device is all you need** — a Local vault is fully functional without any of this, and you can stand a server up later and carry your vault over with an [encrypted backup](#features).
+**Stop here if one device is all you need** — a local vault is fully functional without any of this, and standing a server up later takes nothing away: the client keeps working exactly as it does now, and a [portable encrypted backup](#features) carries the vault to another machine.
+
+Be aware of what that migration is and isn't, though: a restored backup lands as a **local** vault wherever it goes. Putting existing hosts behind sync today means creating a Cloud vault and moving them into it — there is no in-place local→cloud switch.
 
 Running one buys you exactly four things: the same vault unlocked on your laptop, phone and tablet; hosts and secrets shared with a team, with membership, roles and revocation; a lost device cut off from the vault without re-keying everything; and a server-side audit trail. What it does **not** buy the server is the ability to read any of it — it holds ciphertext and routing metadata, and the keys never leave your devices.
 
@@ -342,7 +345,6 @@ Supporting directories: **`deploy/`** (the Docker/Caddy/Prometheus deployment st
 **Client platforms:** the Tauri client targets **macOS, Windows, Linux** (desktop) and **iOS, Android** (mobile) from one codebase.
 
 ---
-
 
 ## Installing unsigned builds
 
@@ -618,7 +620,7 @@ Donations don't buy priority support or private builds. For anything else, write
 ## FAQ / Troubleshooting
 
 **Do I need the server? Can I run the client on its own?**
-No, and yes. Pick a **Local** vault on first launch and the client is complete: hosts, keys, terminals, SFTP, tunnels and fleet commands all work with the vault encrypted on that device, with no account and nothing listening on a network. The server is a **sync** backend and nothing else — you only want one to share the same vault across your devices or with a team. Starting local is not a dead end: a local vault exports as a [portable encrypted backup](#features) that imports into a server-backed instance later, re-encrypted to that instance's keys. SSH connections never route through the server either way.
+No, and yes. The first run creates a **local** vault and the client is complete from there: hosts, keys, terminals, SFTP, tunnels and fleet commands all work with the vault encrypted on that device, with no account and no service of ours listening for anything. The server is a **sync** backend and nothing else — you only want one to share the same vault across your devices or with a team. Starting local costs you nothing later: a [portable encrypted backup](#features) moves the vault to any instance, including a server-linked one (where it restores as a local vault — sync means creating a Cloud vault and moving the hosts into it). SSH connections never route through the server either way.
 
 **macOS: "UniSSH can't be opened because the developer cannot be verified."**
 Expected — the build is unsigned. Right-click → **Open**, or **System Settings → Privacy & Security → Open Anyway**, or `xattr -dr com.apple.quarantine /Applications/UniSSH.app`. See [Installing unsigned builds](#installing-unsigned-builds).
