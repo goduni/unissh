@@ -240,6 +240,9 @@ export function TitleBar() {
   const { t } = useTranslation();
   const { toggleTwin } = useTheme();
   const route = useApp((s) => s.route);
+  // Settings is an overlay on the desktop, so the button's lit state follows the
+  // overlay rather than the route it no longer changes.
+  const settingsOpen = useApp((s) => s.settingsOpen);
   const server = useApp((s) => s.serverStatus);
   const ctx = useCtx();
   // Native fullscreen hides the overlay traffic lights (they move into the
@@ -281,7 +284,7 @@ export function TitleBar() {
         <TitleIconBtn
           icon="sliders"
           onClick={() => ctx.go("settings")}
-          active={route === "settings"}
+          active={route === "settings" || settingsOpen}
           title={t("nav.settings")}
         />
         <TitleIconBtn icon="lock" onClick={ctx.onLock} title={t("shell.lock")} />

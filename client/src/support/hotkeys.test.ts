@@ -5,7 +5,7 @@
 // here, at the only two points where the decision is a pure function.
 
 import { describe, expect, it } from "vitest";
-import { hasAppModifier, isAppChord, terminalOwnsTabDigits } from "./hotkeys";
+import { hasAppModifier, isAppChord, opensSettings, terminalOwnsTabDigits } from "./hotkeys";
 import { paneFocusStep } from "@/shell/useTerminalShortcuts";
 
 /** A keydown event with only the fields these predicates read. */
@@ -87,5 +87,39 @@ describe("paneFocusStep", () => {
   it("ignores everything else", () => {
     expect(paneFocusStep("a")).toBe(null);
     expect(paneFocusStep("Tab")).toBe(null);
+  });
+});
+
+describe("opensSettings", () => {
+  it("is ⌘, on macOS and a BARE Ctrl+, elsewhere", () => {
+    expect(opensSettings(ev({ key: ",", code: "Comma", metaKey: true }), true)).toBe(true);
+    expect(opensSettings(ev({ key: ",", code: "Comma", ctrlKey: true }), false)).toBe(true);
+    // The app's usual Ctrl+Shift cannot be used here: Shift makes this key "<".
+    expect(opensSettings(ev({ key: "<", code: "Comma", ctrlKey: true, shiftKey: true }), false)).toBe(
+      false,
+    );
+    expect(opensSettings(ev({ key: ",", code: "Comma", ctrlKey: true }), true)).toBe(false);
+    expect(opensSettings(ev({ key: ",", code: "Comma", metaKey: true }), false)).toBe(false);
+  });
+
+  it("needs a modifier, so typing a comma is still typing a comma", () => {
+    expect(opensSettings(ev({ key: ",", code: "Comma" }), true)).toBe(false);
+    expect(opensSettings(ev({ key: ",", code: "Comma", altKey: true, metaKey: true }), true)).toBe(
+      false,
+    );
+  });
+
+  it("matches the physical key, so a non-Latin layout still opens Settings", () => {
+    // Cyrillic: that key reports "б", not ",".
+    expect(opensSettings(ev({ key: "б", code: "Comma", metaKey: true }), true)).toBe(true);
+  });
+
+  it("counts as an app chord, so the terminal hands the keys back", () => {
+    // Without this xterm would swallow the chord — the sibling-listener problem
+    // hasAppModifier alone does not cover, since this one carries no Shift.
+    // isAppChord reads the real platform, "unknown" (i.e. not mac) outside Tauri,
+    // so the bare-Ctrl form is the one to assert here.
+    expect(isAppChord(ev({ key: ",", code: "Comma", ctrlKey: true }))).toBe(true);
+    expect(isAppChord(ev({ key: ",", code: "Comma" }))).toBe(false);
   });
 });

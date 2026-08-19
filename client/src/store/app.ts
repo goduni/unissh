@@ -351,6 +351,9 @@ interface AppStore {
   importing: boolean;
   groupsModal: boolean;
   shortcuts: boolean;
+  /** Settings, opened over the current view instead of routed to. Desktop only:
+   *  a phone has no room for an overlay and keeps Settings as a screen. */
+  settingsOpen: boolean;
   confirm: ConfirmData | null;
   navGuard: (() => NavGuardSpec | null) | null;
   /** A view that has opened a full-screen layer of its OWN — one the shell's
@@ -403,6 +406,7 @@ interface AppStore {
   setImporting: (b: boolean) => void;
   setGroupsModal: (b: boolean) => void;
   setShortcuts: (b: boolean) => void;
+  setSettingsOpen: (b: boolean) => void;
   setConfirm: (c: ConfirmData | null) => void;
   setHostFilter: (f: string) => void;
 
@@ -767,6 +771,7 @@ export const useApp = create<AppStore>((set, get) => ({
   importing: false,
   groupsModal: false,
   shortcuts: false,
+  settingsOpen: false,
   confirm: null,
   navGuard: null,
   backHandler: null,
@@ -890,6 +895,16 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   go: (r) => {
+    // Settings opens OVER the current view on the desktop rather than replacing
+    // it: routing away from a live terminal blanks the session behind a
+    // full-screen page, drops focus out of xterm and costs a re-fit + PTY resize
+    // each way. Intercepted here so every entry point — the title-bar button, the
+    // palette, the reconnect banner, ⌘, — gets the same behaviour. A phone has no
+    // room to show a session behind a panel and keeps Settings as a screen.
+    if (r === "settings" && get().device !== "mobile") {
+      set({ settingsOpen: true });
+      return;
+    }
     const nav = () => set((s) => ({ route: r, routeSeq: s.routeSeq + 1 }));
     guardedNav(get, nav);
   },
@@ -1189,6 +1204,7 @@ export const useApp = create<AppStore>((set, get) => ({
   setImporting: (b) => set({ importing: b }),
   setGroupsModal: (b) => set({ groupsModal: b }),
   setShortcuts: (b) => set({ shortcuts: b }),
+  setSettingsOpen: (b) => set({ settingsOpen: b }),
   setConfirm: (c) => set({ confirm: c }),
   setHostFilter: (f) => set({ hostFilter: f }),
 

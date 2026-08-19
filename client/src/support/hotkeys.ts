@@ -54,8 +54,26 @@ export function hasAppModifier(ev: KeyboardEvent, mac = isMac()): boolean {
   return mac ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && ev.shiftKey && !ev.metaKey;
 }
 
+/** ⌘, on macOS, Ctrl+, elsewhere — every desktop's own "open preferences" chord,
+ *  and the one people press before looking for a menu.
+ *
+ *  A bare Ctrl here, not the app's usual Ctrl+Shift: with Shift held, `,` is `<`
+ *  on the common layouts, so Ctrl+Shift+, is a chord nobody types and no terminal
+ *  loses anything — unlike Ctrl+K/L/T, which is why the general rule exists.
+ *
+ *  Matched on `code` first so a Cyrillic or Dvorak layout, where `key` is not
+ *  "," on that physical key, still opens Settings. */
+export function opensSettings(ev: KeyboardEvent, mac = isMac()): boolean {
+  if (ev.altKey || ev.shiftKey) return false;
+  if (ev.code !== "Comma" && ev.key !== ",") return false;
+  return mac ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && !ev.metaKey;
+}
+
 /** Whether a key event is an app-level chord the terminal must let through. */
 export function isAppChord(ev: KeyboardEvent): boolean {
+  // Settings carries the platform's preferences modifier rather than the app's,
+  // so it is asked before the general rule would reject it.
+  if (opensSettings(ev)) return true;
   if (!hasAppModifier(ev)) return false;
   return APP_CHORD_KEYS.has(ev.key.toLowerCase());
 }
