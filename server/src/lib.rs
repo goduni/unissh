@@ -68,17 +68,18 @@ pub async fn build_state(
                  configuration ([setup].code / UNISSH__SETUP__CODE). Not logged: you already have it"
             );
         } else if instance_row.setup_code_hash.is_some() {
+            // Name the command instead of an environment variable. An operator who
+            // restarted the container and lost the boot scrollback has nothing to
+            // act on otherwise — that is how one report ended in dropped volumes.
             tracing::warn!(
-                "server unclaimed — a setup code was already issued on an earlier boot and is \
-                 still valid (its plaintext was printed then); set UNISSH__SETUP__CODE to rotate it"
+                "server unclaimed — a setup code was issued on an earlier boot and is still \
+                 valid, but only its sha256 is stored, so it cannot be printed again. Lost it? \
+                 Issue a new one with `unissh-server setup-code --rotate` (docker: `docker \
+                 compose exec server /usr/local/bin/unissh-server setup-code --rotate --config \
+                 /app/config.toml`) — no data is touched"
             );
         } else {
-            let mut rnd = [0u8; 6];
-            ids::fill_random(&mut rnd);
-            let code = ids::generate_setup_code(&rnd);
-            store
-                .set_setup_code_hash(&ids::sha256(code.as_bytes()))
-                .await?;
+            let code = rotate_setup_code(&store).await?;
             tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
             println!("SETUP CODE: {code}");
         }
@@ -105,6 +106,89 @@ pub async fn build_state(
 /// Build the router from a ready state.
 pub fn app(state: AppState) -> Router {
     http::build_router(state)
+}
+
+/// What the first-run setup code looks like from an operator's side, so the CLI
+/// can say something true without the caller re-deriving it from `InstanceRow`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupCodeState {
+    /// Claimed — no setup code is live any more (the claim CAS nulls the hash).
+    Claimed,
+    /// `[setup].code` is pinned in the configuration AND live: the stored hash is
+    /// that code's, so the value the operator holds is the one claim accepts.
+    Pinned,
+    /// Pinned in the configuration but NOT live — the stored hash is something
+    /// else (or nothing). The pinned value is applied at boot, so this is what an
+    /// edited `UNISSH__SETUP__CODE` looks like until the server restarts. Telling
+    /// the operator to "use the pinned value" here would hand them a code the
+    /// claim endpoint rejects.
+    PinnedStale,
+    /// A code was minted on an earlier boot. Only its sha256 survives here.
+    Issued,
+    /// Unclaimed, and no code has ever been issued (first boot has not run yet).
+    NotIssued,
+}
+
+/// Classify the setup code. `pinned_hash` is `sha256([setup].code)`, or `None`
+/// when no code is pinned — passed in rather than read here so a caller can answer
+/// for a config it was handed, and so the pinned code's *plaintext* never has to
+/// travel any further than the caller.
+pub async fn setup_code_state(
+    store: &Store,
+    pinned_hash: Option<&[u8]>,
+) -> AppResult<SetupCodeState> {
+    let row = store.instance().await?;
+    if row.claimed != 0 {
+        return Ok(SetupCodeState::Claimed);
+    }
+    Ok(match pinned_hash {
+        // Compared, not assumed: a pinned code only becomes live when a boot
+        // applies it, and the CLI reads the config file fresh every run.
+        Some(h) if row.setup_code_hash.as_deref() == Some(h) => SetupCodeState::Pinned,
+        Some(_) => SetupCodeState::PinnedStale,
+        None if row.setup_code_hash.is_some() => SetupCodeState::Issued,
+        None => SetupCodeState::NotIssued,
+    })
+}
+
+/// Write a setup-code hash and confirm it landed.
+///
+/// `set_setup_code_hash` carries `AND claimed = 0` and reports success whether or
+/// not a row matched, so without the read-back this would hand out a code the
+/// server never accepts. The read also separates the two ways that happens — the
+/// instance was claimed, or another writer (a concurrent rotate, a boot applying
+/// a pinned code, `reclaim`) got there first — because "instance is claimed" on
+/// an unclaimed instance sends the operator somewhere useless.
+async fn put_setup_code_hash(store: &Store, want: &[u8]) -> AppResult<()> {
+    store.set_setup_code_hash(want).await?;
+    let row = store.instance().await?;
+    if row.setup_code_hash.as_deref() != Some(want) {
+        return Err(if row.claimed != 0 {
+            AppError::conflict("instance was claimed — no setup code was issued")
+        } else {
+            AppError::conflict("another writer replaced the setup code — try again")
+        });
+    }
+    Ok(())
+}
+
+/// Mint a fresh setup code, store its hash and hand back the plaintext — the only
+/// moment it exists anywhere. Invalidates whatever code was live before, and takes
+/// effect immediately: the claim handler reads the hash per request, so a running
+/// server needs no restart. Refuses on a claimed instance.
+pub async fn rotate_setup_code(store: &Store) -> AppResult<String> {
+    let mut rnd = [0u8; 6];
+    ids::fill_random(&mut rnd);
+    let code = ids::generate_setup_code(&rnd);
+    put_setup_code_hash(store, &ids::sha256(code.as_bytes())).await?;
+    Ok(code)
+}
+
+/// Make an operator-pinned code live now instead of at the next boot. Nothing is
+/// printed or returned: the plaintext came from the operator, and echoing it would
+/// only copy a live credential somewhere new.
+pub async fn apply_pinned_setup_code(store: &Store, code: &str) -> AppResult<()> {
+    put_setup_code_hash(store, &ids::sha256(code.as_bytes())).await
 }
 
 /// Whole-DB-snapshot anti-rollback guard (§16). `generation` = instance-generation

@@ -47,6 +47,29 @@ owner. From there teammates join via a space-scoped **invite link** or **SSO**
 (if `[oidc]` is enabled) — no code needed. For IaC/automation, pin a
 deterministic code with `UNISSH__SETUP__CODE=…` instead of the random one.
 
+Restarted the container before copying that line? Only `sha256(code)` is stored,
+so it cannot be printed again — issue a new one instead of re-creating the stack:
+
+```bash
+docker compose exec server /usr/local/bin/unissh-server setup-code --rotate --config /app/config.toml
+```
+
+The old code stops working, the new one is live immediately (no restart), and the
+database is untouched. Run it without `--rotate` to just report where the code
+stands. The image is distroless — no shell — so the binary must be named in full.
+
+If the server container is not running (a port conflict, a certificate it cannot
+get — the usual reasons you are here), `exec` has nothing to attach to. Use the
+stopped-stack form, which mounts the same volume:
+
+```bash
+docker compose run --rm server setup-code --rotate --config /app/config.toml
+```
+
+Outside Docker, pass the config you serve with: the default database path is
+relative, so a different working directory silently creates an empty database and
+hands you a confident code for it.
+
 **Admin-panel sign-in.** After claiming, the panel logs in by **escrow**
 (handle + password + Secret Key — the keyset is recovered and unlocked
 in-browser, never on the server) or by **SSO**. There is no `.keyset` file to

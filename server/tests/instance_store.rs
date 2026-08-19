@@ -33,7 +33,7 @@ async fn ensure_is_idempotent_and_claim_is_single_winner() {
     let owner = ids::random_id16().to_vec();
     let mut tx = s.begin().await.unwrap();
     assert!(
-        s.claim_instance_cas(&mut tx, &owner, Some("Acme"))
+        s.claim_instance_cas(&mut tx, &owner, Some("Acme"), &hash)
             .await
             .unwrap()
     );
@@ -42,7 +42,9 @@ async fn ensure_is_idempotent_and_claim_is_single_winner() {
     let other = ids::random_id16().to_vec();
     let mut tx2 = s.begin().await.unwrap();
     assert!(
-        !s.claim_instance_cas(&mut tx2, &other, None).await.unwrap(),
+        !s.claim_instance_cas(&mut tx2, &other, None, &hash)
+            .await
+            .unwrap(),
         "second claim loses"
     );
     tx2.rollback().await.unwrap();
@@ -61,4 +63,38 @@ async fn seq_bump_never_lowers() {
     assert_eq!(s.bump_instance_seq_to(100).await.unwrap(), (0, 100));
     assert_eq!(s.bump_instance_seq_to(50).await.unwrap(), (100, 100));
     assert_eq!(s.bump_instance_seq_by(7).await.unwrap(), (100, 107));
+}
+
+/// The rotation guarantee: a code replaced between the handler's check and the CAS
+/// cannot still claim. Without the hash in the CAS's WHERE, this passes with the
+/// stale hash and the "previous code is now invalid" promise is a lie.
+#[tokio::test]
+async fn claim_cas_rejects_a_stale_setup_code_hash() {
+    let s = store_v2().await;
+    s.ensure_instance(1000).await.unwrap();
+    let old = ids::sha256(b"OLD1-OLD1-OLD1");
+    s.set_setup_code_hash(&old).await.unwrap();
+    // …a rotation lands…
+    let fresh = ids::sha256(b"NEW1-NEW1-NEW1");
+    s.set_setup_code_hash(&fresh).await.unwrap();
+
+    let owner = ids::random_id16().to_vec();
+    let mut tx = s.begin().await.unwrap();
+    assert!(
+        !s.claim_instance_cas(&mut tx, &owner, None, &old)
+            .await
+            .unwrap(),
+        "a claim validated against the rotated-away code must lose"
+    );
+    tx.rollback().await.unwrap();
+    assert_eq!(s.instance().await.unwrap().claimed, 0, "still unclaimed");
+
+    let mut tx2 = s.begin().await.unwrap();
+    assert!(
+        s.claim_instance_cas(&mut tx2, &owner, None, &fresh)
+            .await
+            .unwrap(),
+        "the live code still claims"
+    );
+    tx2.commit().await.unwrap();
 }

@@ -33,7 +33,14 @@ enum Command {
         #[arg(long, value_name = "DELTA")]
         by: Option<i64>,
     },
-    /// Unclaim the instance and print a fresh setup code (owner lost everything — spec §8).
+    /// Report where the first-run setup code stands. Read-only without --rotate.
+    SetupCode {
+        /// Issue a NEW code and print it. Invalidates the previous one; no restart needed.
+        #[arg(long)]
+        rotate: bool,
+    },
+    /// Unclaim the instance so a new owner can claim it (owner lost everything — spec §8).
+    /// Prints a fresh code, unless one is pinned in the config — that one is applied, not echoed.
     Reclaim,
 }
 
@@ -80,11 +87,101 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // The generated setup code is printed exactly once, to the boot log. One restart
+    // plus a lost scrollback used to leave an unclaimed instance reachable only by
+    // someone who already knew about UNISSH__SETUP__CODE or `reclaim` — one report
+    // ended with the operator dropping the volumes and starting over. `setup-code`
+    // says where the code stands; `--rotate` issues a new one, data untouched.
+    if let Some(Command::SetupCode { rotate }) = command {
+        use unissh_server::{
+            SetupCodeState, apply_pinned_setup_code, ids, rotate_setup_code, setup_code_state,
+        };
+        let store = unissh_server::Store::connect(&config.db).await?;
+        store.migrate().await?;
+        let now = time::system_clock().now_unix();
+        store.ensure_instance(now).await?;
+        // Which database this actually opened, on stderr so it never pollutes the
+        // `SETUP CODE:` line operators grep for. The default db url is RELATIVE, so
+        // a wrong working directory silently creates an empty database and this
+        // command would hand out a confident code for the wrong instance.
+        eprintln!("using {} database at {}", config.db.backend, config.db.url);
+        let pinned = config.setup.code.trim().to_string();
+        let pinned_hash = (!pinned.is_empty()).then(|| ids::sha256(pinned.as_bytes()));
+        // `[u8; 32]` is not `Deref`, so `as_deref()` does not apply here.
+        let state = setup_code_state(&store, pinned_hash.as_ref().map(|h| h.as_slice())).await?;
+        match (state, rotate) {
+            (SetupCodeState::Claimed, false) => println!(
+                "This instance is already claimed — no setup code is live (claiming clears \
+                 it). To hand the instance to a new owner, run `unissh-server reclaim`: it \
+                 unclaims and prints a code to claim with, leaving accounts, vaults and \
+                 objects intact."
+            ),
+            (SetupCodeState::Claimed, true) => {
+                return Err(anyhow::anyhow!(
+                    "refusing to rotate: the instance is already claimed, so a setup code \
+                     would not let anyone in. Use `unissh-server reclaim` to unclaim it and \
+                     mint a code for a new owner."
+                ));
+            }
+            (SetupCodeState::Pinned, false) => println!(
+                "The setup code pinned in your configuration ([setup].code / \
+                 UNISSH__SETUP__CODE) is the live one — use that value. It is deliberately \
+                 never printed here or to the log: it came from you, and echoing it would \
+                 only copy a live credential somewhere new."
+            ),
+            (SetupCodeState::Pinned, true) => {
+                return Err(anyhow::anyhow!(
+                    "refusing to rotate: [setup].code / UNISSH__SETUP__CODE pins the code and \
+                     every boot re-applies it, so a rotated code would be overwritten on the \
+                     next restart. Change the pinned value instead (or unset it to fall back \
+                     to a generated code)."
+                ));
+            }
+            // The pinned value is only applied by a boot, and this command reads the
+            // config fresh — so an edited code, or one pinned before the first boot,
+            // is NOT what the server accepts yet. Saying "use your pinned value" here
+            // would hand the operator a code the claim endpoint rejects.
+            (SetupCodeState::PinnedStale, false) => println!(
+                "A setup code is pinned in your configuration, but this instance is not \
+                 using it yet — the pinned value is applied at boot. Restart the server, or \
+                 run `unissh-server setup-code --rotate` to apply it right now."
+            ),
+            (SetupCodeState::PinnedStale, true) => {
+                apply_pinned_setup_code(&store, &pinned).await?;
+                println!(
+                    "The pinned setup code is now live (not printed — you already hold it). \
+                     Any code issued earlier no longer works."
+                );
+            }
+            (SetupCodeState::NotIssued, false) => println!(
+                "No setup code has ever been issued on this database. The server mints one \
+                 on its first boot and prints it to the log — start it, or run \
+                 `unissh-server setup-code --rotate` to mint one now."
+            ),
+            (SetupCodeState::NotIssued, true) => {
+                let code = rotate_setup_code(&store).await?;
+                println!("SETUP CODE: {code}");
+            }
+            (SetupCodeState::Issued, true) => {
+                let code = rotate_setup_code(&store).await?;
+                println!("SETUP CODE: {code}");
+                println!("(the previous code is now invalid; this one works immediately)");
+            }
+            (SetupCodeState::Issued, false) => println!(
+                "A setup code was issued on an earlier boot and is still valid, but only its \
+                 sha256 is stored — the plaintext existed solely in that boot's log, so it \
+                 cannot be shown again.\nRun `unissh-server setup-code --rotate` to issue a \
+                 new one. It invalidates the old code, takes effect immediately (no restart), \
+                 and touches no data."
+            ),
+        }
+        return Ok(());
+    }
+
     // Reclaim (§8): the owner lost every device/keyset. Unclaim the instance and mint
     // a fresh setup code so a new owner can claim it. Data (accounts/vaults/objects)
     // is left intact — only the claim/owner binding + a fresh code.
     if matches!(command, Some(Command::Reclaim)) {
-        use unissh_server::ids;
         let store = unissh_server::Store::connect(&config.db).await?;
         store.migrate().await?;
         let now = time::system_clock().now_unix();
@@ -104,17 +201,20 @@ async fn main() -> anyhow::Result<()> {
                 vec![],
             )
             .await?;
-        let code = if config.setup.code.is_empty() {
-            let mut rnd = [0u8; 6];
-            ids::fill_random(&mut rnd);
-            ids::generate_setup_code(&rnd)
+        // A pinned code is applied, not printed — the same rule the boot log and
+        // `setup-code` follow. It came from the operator; echoing it here would
+        // only copy a live credential into another scrollback.
+        if config.setup.code.trim().is_empty() {
+            let code = unissh_server::rotate_setup_code(&store).await?;
+            println!("SETUP CODE: {code}");
         } else {
-            config.setup.code.clone()
-        };
-        store
-            .set_setup_code_hash(&ids::sha256(code.as_bytes()))
-            .await?;
-        println!("SETUP CODE: {code}");
+            unissh_server::apply_pinned_setup_code(&store, config.setup.code.trim()).await?;
+            println!(
+                "Instance unclaimed. Claim it with the setup code pinned in your \
+                 configuration ([setup].code / UNISSH__SETUP__CODE) — not printed here, \
+                 you already hold it."
+            );
+        }
         return Ok(());
     }
 
