@@ -351,6 +351,9 @@ interface AppStore {
   importing: boolean;
   groupsModal: boolean;
   shortcuts: boolean;
+  /** Settings, opened over the current view instead of routed to. Desktop only:
+   *  a phone has no room for an overlay and keeps Settings as a screen. */
+  settingsOpen: boolean;
   confirm: ConfirmData | null;
   navGuard: (() => NavGuardSpec | null) | null;
   /** A view that has opened a full-screen layer of its OWN — one the shell's
@@ -403,6 +406,7 @@ interface AppStore {
   setImporting: (b: boolean) => void;
   setGroupsModal: (b: boolean) => void;
   setShortcuts: (b: boolean) => void;
+  setSettingsOpen: (b: boolean) => void;
   setConfirm: (c: ConfirmData | null) => void;
   setHostFilter: (f: string) => void;
 
@@ -767,6 +771,7 @@ export const useApp = create<AppStore>((set, get) => ({
   importing: false,
   groupsModal: false,
   shortcuts: false,
+  settingsOpen: false,
   confirm: null,
   navGuard: null,
   backHandler: null,
@@ -890,21 +895,60 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   go: (r) => {
-    const nav = () => set((s) => ({ route: r, routeSeq: s.routeSeq + 1 }));
+    // Settings opens OVER the current view on the desktop rather than replacing
+    // it: routing away from a live terminal blanks the session behind a
+    // full-screen page, drops focus out of xterm and costs a re-fit + PTY resize
+    // each way. Intercepted here so every entry point — the title-bar button, the
+    // palette, the reconnect banner, ⌘, — gets the same behaviour. A phone has no
+    // room to show a session behind a panel and keeps Settings as a screen.
+    //
+    // The reverse holds too: every route change clears `settingsOpen` (here and
+    // at the other five navigation sites), or the panel would stay up over the
+    // screen you just navigated to — ⌘1, a palette entry, or a host connecting
+    // into a new terminal tab all move the route out from under it.
+    //
+    // `navGuard` is deliberately skipped: the only view that registers one
+    // (ViewBroadcast) does so because LEAVING unmounts it and tears its broadcast
+    // down, and a panel over the top unmounts nothing. Firing that confirm here
+    // would be a false alarm — and confirming it clears the guard for good.
+    if (r === "settings" && get().device !== "mobile") {
+      set({ settingsOpen: true });
+      return;
+    }
+    const nav = () => set((s) => ({ route: r, routeSeq: s.routeSeq + 1, settingsOpen: false }));
     guardedNav(get, nav);
   },
   goFiltered: (filter) => {
-    const nav = () => set((s) => ({ hostFilter: filter, route: "hosts", routeSeq: s.routeSeq + 1 }));
+    const nav = () =>
+      set((s) => ({
+        hostFilter: filter,
+        route: "hosts",
+        routeSeq: s.routeSeq + 1,
+        settingsOpen: false,
+      }));
     guardedNav(get, nav);
   },
   setNavGuard: (g) => set({ navGuard: g }),
   setBackHandler: (h) => set({ backHandler: h }),
   runBack: () => get().backHandler?.() ?? false,
   reviewMismatch: (m) => {
-    set((s) => ({ pendingMismatch: m, route: "known", routeSeq: s.routeSeq + 1 }));
+    set((s) => ({ pendingMismatch: m, route: "known", routeSeq: s.routeSeq + 1, settingsOpen: false }));
   },
   setDevice: (d) => {
-    set({ device: d });
+    // The panel only exists in the desktop shell, so carrying `settingsOpen`
+    // across the preview toggle would leave a flag nothing renders — and pop
+    // Settings open again on the way back. Coming the other way, a phone sitting
+    // on the `settings` ROUTE would land on the desktop's now-vestigial
+    // full-screen Settings, where opening the panel would mount a second copy of
+    // the same view; carry the intent over as the panel instead.
+    const wasOnSettingsRoute = get().route === "settings";
+    const toDesktop = d !== "mobile";
+    set((s) => ({
+      device: d,
+      settingsOpen: wasOnSettingsRoute && toDesktop,
+      route: wasOnSettingsRoute && toDesktop ? "hosts" : s.route,
+      routeSeq: wasOnSettingsRoute && toDesktop ? s.routeSeq + 1 : s.routeSeq,
+    }));
     try {
       localStorage.setItem("unissh.device", d);
     } catch {
@@ -1030,6 +1074,9 @@ export const useApp = create<AppStore>((set, get) => ({
     set({
       unlocked: false,
       overlay: "unlock",
+      // Locking is not "come back to where you were": Settings should not be
+      // waiting on screen when the vault opens again.
+      settingsOpen: false,
       hosts: [],
       groups: [],
       items: [],
@@ -1189,6 +1236,7 @@ export const useApp = create<AppStore>((set, get) => ({
   setImporting: (b) => set({ importing: b }),
   setGroupsModal: (b) => set({ groupsModal: b }),
   setShortcuts: (b) => set({ shortcuts: b }),
+  setSettingsOpen: (b) => set({ settingsOpen: b }),
   setConfirm: (c) => set({ confirm: c }),
   setHostFilter: (f) => set({ hostFilter: f }),
 
@@ -1377,6 +1425,7 @@ export const useApp = create<AppStore>((set, get) => ({
       activeTermId: t.id,
       route: "terminal",
       routeSeq: s.routeSeq + 1,
+      settingsOpen: false,
     })),
   closeTerminal: (id) =>
     set((s) => {
@@ -1403,7 +1452,12 @@ export const useApp = create<AppStore>((set, get) => ({
       return { terminals };
     }),
   requestNewTab: () =>
-    set((s) => ({ newTabNonce: s.newTabNonce + 1, route: "terminal", routeSeq: s.routeSeq + 1 })),
+    set((s) => ({
+      newTabNonce: s.newTabNonce + 1,
+      route: "terminal",
+      routeSeq: s.routeSeq + 1,
+      settingsOpen: false,
+    })),
   setDraggingTab: (id) => set({ draggingTabId: id }),
   mergeTabIntoPane: (sourceTabId, targetTabId, targetPaneId, dir) =>
     set((s) => {
@@ -1457,6 +1511,7 @@ export const useApp = create<AppStore>((set, get) => ({
         activeTermId: newTab.id,
         route: "terminal",
         routeSeq: s.routeSeq + 1,
+        settingsOpen: false,
       };
     }),
   renameTerminal: (id, title) =>

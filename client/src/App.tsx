@@ -19,7 +19,7 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
 import { ResizeEdges } from "@/shell/WindowChrome";
 import { isDesktopOs, isMac } from "@/bridge/platform";
-import { terminalOwnsTabDigits } from "@/support/hotkeys";
+import { opensSettings, terminalOwnsTabDigits } from "@/support/hotkeys";
 import { useUpdate } from "@/store/update";
 import { BOOT_CHECK_DELAY_MS, PERIODIC_CHECK_MS } from "@/bridge/updater";
 
@@ -40,6 +40,7 @@ import { ViewSnippets } from "@/views/ViewSnippets";
 import { AuthPrompt } from "@/overlays/AuthPrompt";
 import { AgentApproval } from "@/overlays/AgentApproval";
 import { CommandPalette } from "@/overlays/CommandPalette";
+import { SettingsOverlay } from "@/overlays/SettingsOverlay";
 import { ImportPreview } from "@/overlays/ImportPreview";
 import { GroupsModal } from "@/overlays/GroupsModal";
 import { ConfirmDialog, ShortcutsHelp, ToastHost } from "@/overlays/Feedback";
@@ -467,6 +468,21 @@ export function App() {
   // global keyboard shortcuts (desktop)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // ⌘, / Ctrl+, — the platform's own preferences chord, so it is asked before
+      // the app-modifier gate below, which wants Ctrl+Shift off macOS.
+      if (opensSettings(e)) {
+        const s = useApp.getState();
+        // Nothing to configure behind the lock screen — and setting the flag there
+        // would pop Settings open by itself the moment the vault unlocks.
+        if (!s.unlocked) return;
+        e.preventDefault();
+        // A toggle: the same chord that opened it puts it away, which is what a
+        // panel over a running terminal has to do to stay out of the way. On a
+        // phone Settings is a screen, so the way back is the shell's own Back.
+        if (s.settingsOpen) s.setSettingsOpen(false);
+        else s.go("settings");
+        return;
+      }
       if (!(e.metaKey || e.ctrlKey)) return;
       const k = e.key.toLowerCase();
       if (k === "k" || e.code === "KeyK") {
@@ -657,6 +673,7 @@ export function App() {
       {showApp && <Modals />}
       {showApp && <AuthPrompt />}
       {showApp && <CommandPalette />}
+      {showApp && <SettingsOverlay />}
       {showApp && <ImportPreview />}
       {showApp && <GroupsModal />}
       {showApp && lockWarnSec !== null && (

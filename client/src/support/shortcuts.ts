@@ -45,6 +45,10 @@ export function shortcutGroups(mac: boolean): ShortcutGroup[] {
         // Carries its own Shift on macOS too: a bare ⌘S saves in the SFTP editor.
         { keys: mac ? "⌘⇧S" : "Ctrl+Shift+S", labelKey: "feedback.shortcut.localTerminal" },
         { keys: `${mod}L`, labelKey: "feedback.shortcut.lockInstance" },
+        // Bare Ctrl off macOS: with Shift held `,` is `<` on the usual layouts,
+        // and this is every desktop's own preferences chord anyway. Toggles —
+        // the panel opens over the current view, so the same keys put it away.
+        { keys: mac ? "⌘," : "Ctrl+,", labelKey: "feedback.shortcut.openSettings" },
         // Bare Ctrl off macOS, and NOT documented as "terminal tabs when already
         // there" the way ⌘T is. App.tsx matches sections by e.key with no e.code
         // fallback, and Shift turns a digit into "!@#$%^&*(" on the usual

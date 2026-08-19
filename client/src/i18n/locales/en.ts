@@ -443,6 +443,7 @@ export const en = {
       "newHost": "New host",
       "goToTerminal": "Go to terminal · new tab when already there",
       "localTerminal": "New local terminal",
+      "openSettings": "Settings (opens over the current view)",
       "lockInstance": "Lock instance",
       "switchSections": "Switch sections",
       "termZoom": "Zoom in / out / reset",
