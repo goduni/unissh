@@ -113,9 +113,11 @@ async fn claim(
     let space_name = req.space_name.as_deref().unwrap_or("Main");
 
     let mut tx = state.store.begin().await?;
+    // `got` is the hash we validated above; the CAS re-checks it so a code rotated
+    // in the window between that check and this UPDATE cannot still be claimed with.
     if !state
         .store
-        .claim_instance_cas(&mut tx, &account_id, None)
+        .claim_instance_cas(&mut tx, &account_id, None, &got)
         .await?
     {
         return Err(AppError::conflict("instance already claimed"));

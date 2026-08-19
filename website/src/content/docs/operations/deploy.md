@@ -57,6 +57,8 @@ docker compose exec server /usr/local/bin/unissh-server setup-code --rotate --co
 
 It invalidates the previous code, applies immediately without a restart, and leaves accounts, vaults and objects intact. Without `--rotate` the command only reports the code's status.
 
+If the container is not running — a port conflict or a failed certificate is usually why you are here — `exec` has nothing to attach to; `docker compose run --rm server setup-code --rotate --config /app/config.toml` does the same on a stopped stack.
+
 ## TLS strategy
 
 Caddy is the **only** TLS terminator and the only host-exposed service. The UniSSH server always runs **plain HTTP** behind it (`UNISSH__SERVER__TLS_CERT`/`TLS_KEY` empty → plain, `UNISSH__SERVER__TRUST_PROXY=true`). The server **never** does ACME — `acme=true` is a hard startup error — so all certificate management lives in Caddy, and switching TLS modes is a Caddy/env change with no server rebuild.

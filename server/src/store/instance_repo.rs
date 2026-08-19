@@ -67,18 +67,28 @@ impl Store {
 
     /// Single-winner claim; clears the setup code. Runs inside the caller's tx
     /// (atomic with owner account + first space creation).
+    ///
+    /// `setup_code_hash` is the hash the caller validated, and the CAS requires the
+    /// row to still hold it. Without that, a code rotated between the handler's
+    /// check and this UPDATE would still let the *old* code claim — which is the
+    /// one thing `setup-code --rotate` promises it cannot do.
     pub async fn claim_instance_cas(
         &self,
         tx: &mut Tx<'_>,
         owner_account_id: &[u8],
         name: Option<&str>,
+        setup_code_hash: &[u8],
     ) -> AppResult<bool> {
         let n = tx
             .exec(
                 "UPDATE instance SET claimed = 1, owner_account_id = ?, \
                  name = COALESCE(?, name), setup_code_hash = NULL \
-                 WHERE id = 1 AND claimed = 0",
-                vec![Val::b(owner_account_id), Val::OptT(name.map(String::from))],
+                 WHERE id = 1 AND claimed = 0 AND setup_code_hash = ?",
+                vec![
+                    Val::b(owner_account_id),
+                    Val::OptT(name.map(String::from)),
+                    Val::b(setup_code_hash),
+                ],
             )
             .await?;
         Ok(n == 1)

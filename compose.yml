@@ -100,11 +100,15 @@ services:
       # No bootstrap token: the first user CLAIMS the instance with a SETUP CODE
       # the server prints to its log on first boot
       # (docker compose logs server 2>&1 | grep -i "setup code"). Lost that line?
-      # Only its hash is stored, so issue a new code instead of re-creating the
-      # stack: docker compose exec server /usr/local/bin/unissh-server \
-      #   setup-code --rotate --config /app/config.toml
-      # Pin a deterministic code for IaC via UNISSH__SETUP__CODE (see .env.example).
+      # Only its hash is stored, so issue a new code instead of re-creating the stack:
+      #   docker compose exec server /usr/local/bin/unissh-server setup-code --rotate --config /app/config.toml
+      # Container down (a bad port, a bad cert)? `run --rm server setup-code --rotate
+      # --config /app/config.toml` does the same on a stopped stack.
+      # Pin a deterministic code for IaC via UNISSH__SETUP__CODE below.
       # UNISSH__OPS__TOKEN is an OPTIONAL break-glass for /v1/ops/* (default OFF).
+      # Compose interpolates .env into THIS file, it does not forward it into the
+      # container — without this line a pinned code in .env never reaches the server.
+      UNISSH__SETUP__CODE: "${UNISSH__SETUP__CODE:-}"
       UNISSH__OPS__TOKEN: "${UNISSH__OPS__TOKEN:-}"
     volumes:
       - unissh-data:/app/data        # SQLite db; owned by uid 65532 (distroless nonroot).

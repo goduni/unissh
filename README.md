@@ -141,7 +141,13 @@ Then open the client (or the admin panel), point it at your instance URL, and **
 docker compose exec server /usr/local/bin/unissh-server setup-code --rotate --config /app/config.toml
 ```
 
-(Without `--rotate` the same command just reports where the code stands. Dropping the volumes to get a new code is never necessary.)
+Without `--rotate` the same command only reports where the code stands. If the container will not stay up — which is how this usually happens, since a bad port or a bad certificate is what sent you looking — run it on the stopped stack instead:
+
+```bash
+docker compose run --rm server setup-code --rotate --config /app/config.toml
+```
+
+Dropping the volumes to get a new code is never necessary.
 
 Caddy publishes **:80 / :443** (and `:443/udp` for HTTP/3); the server (`:8443`) and metrics (`:9090`) stay internal to the compose network. SQLite is the default (data persisted in a named Docker volume); the server runs as a non-root user on a read-only rootfs.
 
@@ -640,7 +646,7 @@ Click **More info → Run anyway**. The binary is unsigned.
 Check, in order: the server is up (`curl -k https://YOUR_DOMAIN/healthz`); TLS is resolving (with the bundled Caddy, a real `UNISSH_DOMAIN` gets an automatic Let's Encrypt cert, while a `*.local`/IP needs `UNISSH_TLS_DIRECTIVE="tls internal"`); the instance URL in the client/admin-panel login is correct; firewall allows `:80`/`:443`. Running the server **without** the bundled Caddy? Then you terminate TLS yourself — in-process rustls needs `tls_cert`/`tls_key`, or front it with your own proxy and set `trust_proxy=true`.
 
 **I can't find the setup code / I can't claim the instance.**
-There is no bootstrap token. On first boot the server prints a one-time **SETUP CODE** to its log while the instance is unclaimed — read it with `docker compose logs server 2>&1 | grep -i "setup code"` (or your process manager's log), then enter it in the client/admin-panel to claim the instance and become the owner. Pinned a code via `UNISSH__SETUP__CODE`? Use that value. **Log gone after a restart?** Only the code's hash is stored, so it cannot be printed again — issue a new one with `docker compose exec server /usr/local/bin/unissh-server setup-code --rotate --config /app/config.toml` (bare binary: `unissh-server setup-code --rotate --config <the config you serve with>` — point it at the same config/database, or it will helpfully create an empty one somewhere else and hand you a code for it). It invalidates the old code, works immediately without a restart, and leaves your data alone; **you never need to drop the volumes for this**. "Already claimed" means someone (or a previous run) has already taken it — sign in with that account, or join via an invite link / SSO; if every owner device is lost, `unissh-server reclaim` unclaims the instance and prints a fresh code.
+There is no bootstrap token. On first boot the server prints a one-time **SETUP CODE** to its log while the instance is unclaimed — read it with `docker compose logs server 2>&1 | grep -i "setup code"` (or your process manager's log), then enter it in the client/admin-panel to claim the instance and become the owner. Pinned a code via `UNISSH__SETUP__CODE`? Use that value. **Log gone after a restart?** Only the code's hash is stored, so it cannot be printed again — issue a new one with `docker compose exec server /usr/local/bin/unissh-server setup-code --rotate --config /app/config.toml` (bare binary: `unissh-server setup-code --rotate --config <the config you serve with>` — point it at the same config/database, or it will helpfully create an empty one somewhere else and hand you a code for it). It invalidates the old code, works immediately without a restart, and leaves your data alone; **you never need to drop the volumes for this**. "Already claimed" means someone (or a previous run) has already taken it — sign in with that account, or join via an invite link / SSO; if every owner device is lost, `unissh-server reclaim` unclaims the instance and gives you a code to claim with (a fresh one, or your pinned one applied — pinned codes are never echoed).
 
 **The admin panel says "wasm not loaded" on unlock/claim.**
 The crypto bundle wasn't built. Run `npm run build:wasm` in `server-ui/` (needs `rustup` + `wasm-pack` + the `wasm32-unknown-unknown` target).

@@ -114,27 +114,62 @@ pub fn app(state: AppState) -> Router {
 pub enum SetupCodeState {
     /// Claimed — no setup code is live any more (the claim CAS nulls the hash).
     Claimed,
-    /// `[setup].code` is pinned in the configuration; the operator holds the value.
+    /// `[setup].code` is pinned in the configuration AND live: the stored hash is
+    /// that code's, so the value the operator holds is the one claim accepts.
     Pinned,
+    /// Pinned in the configuration but NOT live — the stored hash is something
+    /// else (or nothing). The pinned value is applied at boot, so this is what an
+    /// edited `UNISSH__SETUP__CODE` looks like until the server restarts. Telling
+    /// the operator to "use the pinned value" here would hand them a code the
+    /// claim endpoint rejects.
+    PinnedStale,
     /// A code was minted on an earlier boot. Only its sha256 survives here.
     Issued,
     /// Unclaimed, and no code has ever been issued (first boot has not run yet).
     NotIssued,
 }
 
-/// Classify the setup code. `pinned` is `![setup].code.is_empty()` — the config is
-/// deliberately not read here, so a caller can answer for a config it was handed.
-pub async fn setup_code_state(store: &Store, pinned: bool) -> AppResult<SetupCodeState> {
+/// Classify the setup code. `pinned_hash` is `sha256([setup].code)`, or `None`
+/// when no code is pinned — passed in rather than read here so a caller can answer
+/// for a config it was handed, and so the pinned code's *plaintext* never has to
+/// travel any further than the caller.
+pub async fn setup_code_state(
+    store: &Store,
+    pinned_hash: Option<&[u8]>,
+) -> AppResult<SetupCodeState> {
     let row = store.instance().await?;
-    Ok(if row.claimed != 0 {
-        SetupCodeState::Claimed
-    } else if pinned {
-        SetupCodeState::Pinned
-    } else if row.setup_code_hash.is_some() {
-        SetupCodeState::Issued
-    } else {
-        SetupCodeState::NotIssued
+    if row.claimed != 0 {
+        return Ok(SetupCodeState::Claimed);
+    }
+    Ok(match pinned_hash {
+        // Compared, not assumed: a pinned code only becomes live when a boot
+        // applies it, and the CLI reads the config file fresh every run.
+        Some(h) if row.setup_code_hash.as_deref() == Some(h) => SetupCodeState::Pinned,
+        Some(_) => SetupCodeState::PinnedStale,
+        None if row.setup_code_hash.is_some() => SetupCodeState::Issued,
+        None => SetupCodeState::NotIssued,
     })
+}
+
+/// Write a setup-code hash and confirm it landed.
+///
+/// `set_setup_code_hash` carries `AND claimed = 0` and reports success whether or
+/// not a row matched, so without the read-back this would hand out a code the
+/// server never accepts. The read also separates the two ways that happens — the
+/// instance was claimed, or another writer (a concurrent rotate, a boot applying
+/// a pinned code, `reclaim`) got there first — because "instance is claimed" on
+/// an unclaimed instance sends the operator somewhere useless.
+async fn put_setup_code_hash(store: &Store, want: &[u8]) -> AppResult<()> {
+    store.set_setup_code_hash(want).await?;
+    let row = store.instance().await?;
+    if row.setup_code_hash.as_deref() != Some(want) {
+        return Err(if row.claimed != 0 {
+            AppError::conflict("instance was claimed — no setup code was issued")
+        } else {
+            AppError::conflict("another writer replaced the setup code — try again")
+        });
+    }
+    Ok(())
 }
 
 /// Mint a fresh setup code, store its hash and hand back the plaintext — the only
@@ -145,17 +180,15 @@ pub async fn rotate_setup_code(store: &Store) -> AppResult<String> {
     let mut rnd = [0u8; 6];
     ids::fill_random(&mut rnd);
     let code = ids::generate_setup_code(&rnd);
-    let want = ids::sha256(code.as_bytes());
-    store.set_setup_code_hash(&want).await?;
-    // `set_setup_code_hash` carries `AND claimed = 0` and reports success whether or
-    // not a row matched, so read back rather than hand out a code the server would
-    // never accept — the instance may have been claimed a moment ago.
-    if store.instance().await?.setup_code_hash.as_deref() != Some(&want[..]) {
-        return Err(AppError::conflict(
-            "instance is claimed — no setup code was issued",
-        ));
-    }
+    put_setup_code_hash(store, &ids::sha256(code.as_bytes())).await?;
     Ok(code)
+}
+
+/// Make an operator-pinned code live now instead of at the next boot. Nothing is
+/// printed or returned: the plaintext came from the operator, and echoing it would
+/// only copy a live credential somewhere new.
+pub async fn apply_pinned_setup_code(store: &Store, code: &str) -> AppResult<()> {
+    put_setup_code_hash(store, &ids::sha256(code.as_bytes())).await
 }
 
 /// Whole-DB-snapshot anti-rollback guard (§16). `generation` = instance-generation
