@@ -56,6 +56,9 @@ metrics_bind = "127.0.0.1:9090"
 # boot (while the instance is unclaimed); the first user claims the instance with
 # it. Set a value to pin a deterministic code for IaC/tests — a pinned code is
 # NEVER printed to the log (you already hold it; logging it would only spread it).
+# Only sha256(code) is persisted, so a generated code cannot be printed twice: if
+# the boot log is gone, `unissh-server setup-code --rotate` issues a new one (data
+# untouched, no restart). `unissh-server setup-code` alone reports its status.
 # Env: UNISSH__SETUP__CODE=...
 code = ""
 

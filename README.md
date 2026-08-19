@@ -135,6 +135,14 @@ docker compose logs server 2>&1 | grep -i "setup code"
 
 Then open the client (or the admin panel), point it at your instance URL, and **claim** the instance with that code — the first user to claim becomes the **owner**. (For IaC/automation you can pin a deterministic code with `UNISSH__SETUP__CODE=…` instead of the random one.) After that, teammates join via a space-scoped **invite link** or **SSO** — no code needed.
 
+**Lost that line?** The code is printed once and only its hash is stored, so a restart with the scrollback gone leaves nothing to read — but nothing is broken either. Issue a fresh one, no data touched, effective immediately:
+
+```bash
+docker compose exec server /usr/local/bin/unissh-server setup-code --rotate --config /app/config.toml
+```
+
+(Without `--rotate` the same command just reports where the code stands. Dropping the volumes to get a new code is never necessary.)
+
 Caddy publishes **:80 / :443** (and `:443/udp` for HTTP/3); the server (`:8443`) and metrics (`:9090`) stay internal to the compose network. SQLite is the default (data persisted in a named Docker volume); the server runs as a non-root user on a read-only rootfs.
 
 Check it's alive (through Caddy):
@@ -632,7 +640,7 @@ Click **More info → Run anyway**. The binary is unsigned.
 Check, in order: the server is up (`curl -k https://YOUR_DOMAIN/healthz`); TLS is resolving (with the bundled Caddy, a real `UNISSH_DOMAIN` gets an automatic Let's Encrypt cert, while a `*.local`/IP needs `UNISSH_TLS_DIRECTIVE="tls internal"`); the instance URL in the client/admin-panel login is correct; firewall allows `:80`/`:443`. Running the server **without** the bundled Caddy? Then you terminate TLS yourself — in-process rustls needs `tls_cert`/`tls_key`, or front it with your own proxy and set `trust_proxy=true`.
 
 **I can't find the setup code / I can't claim the instance.**
-There is no bootstrap token. On first boot the server prints a one-time **SETUP CODE** to its log while the instance is unclaimed — read it with `docker compose logs server 2>&1 | grep -i "setup code"` (or your process manager's log), then enter it in the client/admin-panel to claim the instance and become the owner. Pinned a code via `UNISSH__SETUP__CODE`? Use that value. "Already claimed" means someone (or a previous run) has already taken it — sign in with that account, or join via an invite link / SSO.
+There is no bootstrap token. On first boot the server prints a one-time **SETUP CODE** to its log while the instance is unclaimed — read it with `docker compose logs server 2>&1 | grep -i "setup code"` (or your process manager's log), then enter it in the client/admin-panel to claim the instance and become the owner. Pinned a code via `UNISSH__SETUP__CODE`? Use that value. **Log gone after a restart?** Only the code's hash is stored, so it cannot be printed again — issue a new one with `docker compose exec server /usr/local/bin/unissh-server setup-code --rotate --config /app/config.toml` (bare binary: `unissh-server setup-code --rotate`). It invalidates the old code, works immediately without a restart, and leaves your data alone; **you never need to drop the volumes for this**. "Already claimed" means someone (or a previous run) has already taken it — sign in with that account, or join via an invite link / SSO; if every owner device is lost, `unissh-server reclaim` unclaims the instance and prints a fresh code.
 
 **The admin panel says "wasm not loaded" on unlock/claim.**
 The crypto bundle wasn't built. Run `npm run build:wasm` in `server-ui/` (needs `rustup` + `wasm-pack` + the `wasm32-unknown-unknown` target).

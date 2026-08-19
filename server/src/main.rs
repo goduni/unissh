@@ -33,6 +33,12 @@ enum Command {
         #[arg(long, value_name = "DELTA")]
         by: Option<i64>,
     },
+    /// Report the first-run setup code's status, or issue a fresh one with --rotate.
+    SetupCode {
+        /// Issue a NEW code and print it. Invalidates the previous one; no restart needed.
+        #[arg(long)]
+        rotate: bool,
+    },
     /// Unclaim the instance and print a fresh setup code (owner lost everything — spec §8).
     Reclaim,
 }
@@ -77,6 +83,65 @@ async fn main() -> anyhow::Result<()> {
             ));
         };
         println!("instance next_seq {old} -> {new}");
+        return Ok(());
+    }
+
+    // The generated setup code is printed exactly once, to the boot log. One restart
+    // plus a lost scrollback used to leave an unclaimed instance reachable only by
+    // someone who already knew about UNISSH__SETUP__CODE or `reclaim` — one report
+    // ended with the operator dropping the volumes and starting over. `setup-code`
+    // says where the code stands; `--rotate` issues a new one, data untouched.
+    if let Some(Command::SetupCode { rotate }) = command {
+        use unissh_server::{SetupCodeState, rotate_setup_code, setup_code_state};
+        let store = unissh_server::Store::connect(&config.db).await?;
+        store.migrate().await?;
+        let now = time::system_clock().now_unix();
+        store.ensure_instance(now).await?;
+        let state = setup_code_state(&store, !config.setup.code.is_empty()).await?;
+        match (state, rotate) {
+            (SetupCodeState::Claimed, false) => println!(
+                "This instance is already claimed — no setup code is live (claiming clears \
+                 it). To hand the instance to a new owner, run `unissh-server reclaim`: it \
+                 unclaims and prints a fresh code, leaving accounts, vaults and objects intact."
+            ),
+            (SetupCodeState::Claimed, true) => {
+                return Err(anyhow::anyhow!(
+                    "refusing to rotate: the instance is already claimed, so a setup code \
+                     would not let anyone in. Use `unissh-server reclaim` to unclaim it and \
+                     mint a code for a new owner."
+                ));
+            }
+            (SetupCodeState::Pinned, false) => println!(
+                "The setup code is pinned in your configuration ([setup].code / \
+                 UNISSH__SETUP__CODE) — use that value. It is deliberately never printed \
+                 here or to the log: it came from you, and echoing it would only copy a live \
+                 credential into your logs."
+            ),
+            (SetupCodeState::Pinned, true) => {
+                return Err(anyhow::anyhow!(
+                    "refusing to rotate: [setup].code / UNISSH__SETUP__CODE pins the code, and \
+                     every boot re-applies it — a rotated code would be overwritten on the next \
+                     restart. Change the pinned value instead (or unset it to fall back to a \
+                     generated code), then restart."
+                ));
+            }
+            (SetupCodeState::NotIssued, _) => {
+                let code = rotate_setup_code(&store).await?;
+                println!("SETUP CODE: {code}");
+            }
+            (SetupCodeState::Issued, true) => {
+                let code = rotate_setup_code(&store).await?;
+                println!("SETUP CODE: {code}");
+                println!("(the previous code is now invalid; this one works immediately)");
+            }
+            (SetupCodeState::Issued, false) => println!(
+                "A setup code was issued on an earlier boot and is still valid, but only its \
+                 sha256 is stored — the plaintext existed solely in that boot's log, so it \
+                 cannot be shown again.\nRun `unissh-server setup-code --rotate` to issue a \
+                 new one. It invalidates the old code, takes effect immediately (no restart), \
+                 and touches no data."
+            ),
+        }
         return Ok(());
     }
 

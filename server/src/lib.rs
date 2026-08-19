@@ -68,17 +68,18 @@ pub async fn build_state(
                  configuration ([setup].code / UNISSH__SETUP__CODE). Not logged: you already have it"
             );
         } else if instance_row.setup_code_hash.is_some() {
+            // Name the command instead of an environment variable. An operator who
+            // restarted the container and lost the boot scrollback has nothing to
+            // act on otherwise — that is how one report ended in dropped volumes.
             tracing::warn!(
-                "server unclaimed — a setup code was already issued on an earlier boot and is \
-                 still valid (its plaintext was printed then); set UNISSH__SETUP__CODE to rotate it"
+                "server unclaimed — a setup code was issued on an earlier boot and is still \
+                 valid, but only its sha256 is stored, so it cannot be printed again. Lost it? \
+                 Issue a new one with `unissh-server setup-code --rotate` (docker: `docker \
+                 compose exec server /usr/local/bin/unissh-server setup-code --rotate --config \
+                 /app/config.toml`) — no data is touched"
             );
         } else {
-            let mut rnd = [0u8; 6];
-            ids::fill_random(&mut rnd);
-            let code = ids::generate_setup_code(&rnd);
-            store
-                .set_setup_code_hash(&ids::sha256(code.as_bytes()))
-                .await?;
+            let code = rotate_setup_code(&store).await?;
             tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
             println!("SETUP CODE: {code}");
         }
@@ -105,6 +106,56 @@ pub async fn build_state(
 /// Build the router from a ready state.
 pub fn app(state: AppState) -> Router {
     http::build_router(state)
+}
+
+/// What the first-run setup code looks like from an operator's side, so the CLI
+/// can say something true without the caller re-deriving it from `InstanceRow`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupCodeState {
+    /// Claimed — no setup code is live any more (the claim CAS nulls the hash).
+    Claimed,
+    /// `[setup].code` is pinned in the configuration; the operator holds the value.
+    Pinned,
+    /// A code was minted on an earlier boot. Only its sha256 survives here.
+    Issued,
+    /// Unclaimed, and no code has ever been issued (first boot has not run yet).
+    NotIssued,
+}
+
+/// Classify the setup code. `pinned` is `![setup].code.is_empty()` — the config is
+/// deliberately not read here, so a caller can answer for a config it was handed.
+pub async fn setup_code_state(store: &Store, pinned: bool) -> AppResult<SetupCodeState> {
+    let row = store.instance().await?;
+    Ok(if row.claimed != 0 {
+        SetupCodeState::Claimed
+    } else if pinned {
+        SetupCodeState::Pinned
+    } else if row.setup_code_hash.is_some() {
+        SetupCodeState::Issued
+    } else {
+        SetupCodeState::NotIssued
+    })
+}
+
+/// Mint a fresh setup code, store its hash and hand back the plaintext — the only
+/// moment it exists anywhere. Invalidates whatever code was live before, and takes
+/// effect immediately: the claim handler reads the hash per request, so a running
+/// server needs no restart. Refuses on a claimed instance.
+pub async fn rotate_setup_code(store: &Store) -> AppResult<String> {
+    let mut rnd = [0u8; 6];
+    ids::fill_random(&mut rnd);
+    let code = ids::generate_setup_code(&rnd);
+    let want = ids::sha256(code.as_bytes());
+    store.set_setup_code_hash(&want).await?;
+    // `set_setup_code_hash` carries `AND claimed = 0` and reports success whether or
+    // not a row matched, so read back rather than hand out a code the server would
+    // never accept — the instance may have been claimed a moment ago.
+    if store.instance().await?.setup_code_hash.as_deref() != Some(&want[..]) {
+        return Err(AppError::conflict(
+            "instance is claimed — no setup code was issued",
+        ));
+    }
+    Ok(code)
 }
 
 /// Whole-DB-snapshot anti-rollback guard (§16). `generation` = instance-generation
