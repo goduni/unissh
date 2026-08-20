@@ -755,9 +755,17 @@ jobs:
           # AGP's dependencyResolutionManagement (settings.gradle.kts) takes
           # precedence and FORBIDS project-level repositories when it is present,
           # so it has to be tried first.
-          repo_block = f'''
+          # The URL expression is the ONE part that is not DSL-agnostic. In the Kotlin
+          # DSL `url` is typed `URI`, so assigning a String is a compile error
+          # ("inferred type is String but URI! was expected") — it needs uri(...),
+          # which is in scope because the block lands inside a Project script. Groovy
+          # is untyped and takes the string straight through setUrl(Object).
+          def repo_block(path):
+              url = (f'uri("file://{maven}")' if path.suffix == ".kts"
+                     else f'"file://{maven}"')
+              return f'''
                   maven {{
-                      url = "file://{maven}"
+                      url = {url}
                       metadataSources.artifact()
                   }}'''
 
@@ -789,7 +797,7 @@ jobs:
               if at < 0:
                   continue
               cut = at + len("repositories {")
-              path.write_text(s[:cut] + repo_block + s[cut:])
+              path.write_text(s[:cut] + repo_block(path) + s[cut:])
               print(f"maven repo added to {path}"
                     + (f" (inside {scope})" if scope else ""))
               break
