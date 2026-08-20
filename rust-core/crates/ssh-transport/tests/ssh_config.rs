@@ -1,6 +1,14 @@
 //! Unit tests of ssh-config import (no network).
 
-use unissh_ssh_transport::{HostSettings, SshConfig};
+use unissh_ssh_transport::{HostSettings, IncludedFile, SshConfig};
+
+/// One included file, for the loader closures below.
+fn file(path: &str, text: &str) -> Vec<IncludedFile> {
+    vec![IncludedFile {
+        path: path.to_string(),
+        text: text.to_string(),
+    }]
+}
 
 #[test]
 fn parses_and_resolves_first_match_wins() {
@@ -198,7 +206,10 @@ fn includes_are_followed_through_the_loader_and_cannot_loop() {
         seen += 1;
         assert_eq!(path, "conf.d/*");
         // Every included file includes the parent again.
-        vec!["Include conf.d/*\nHost b\n  User from_include\n".to_string()]
+        file(
+            "conf.d/a",
+            "Include conf.d/*\nHost b\n  User from_include\n",
+        )
     })
     .unwrap();
     assert_eq!(cfg.resolve("a").user.as_deref(), Some("from_root"));
@@ -221,7 +232,7 @@ Host *
 ";
     let cfg = SshConfig::parse_with_includes(root, |path| {
         assert_eq!(path, "conf.d/hosts");
-        vec!["Host prod\n  User deploy\n".to_string()]
+        file("conf.d/hosts", "Host prod\n  User deploy\n")
     })
     .unwrap();
     assert_eq!(
@@ -242,9 +253,10 @@ Host web
   Include conf.d/common
   User after
 ";
-    let cfg =
-        SshConfig::parse_with_includes(root, |_| vec!["Host other\n  User someone\n".to_string()])
-            .unwrap();
+    let cfg = SshConfig::parse_with_includes(root, |_| {
+        file("conf.d/common", "Host other\n  User someone\n")
+    })
+    .unwrap();
     let web = cfg.resolve("web");
     assert_eq!(web.hostname.as_deref(), Some("web.example.com"));
     assert_eq!(
@@ -258,7 +270,7 @@ Host web
 #[test]
 fn a_cyclic_include_terminates_and_is_reported() {
     let root = "Include loop\nHost a\n  User u\n";
-    let cfg = SshConfig::parse_with_includes(root, |_| vec!["Include loop\n".to_string()]).unwrap();
+    let cfg = SshConfig::parse_with_includes(root, |_| file("loop", "Include loop\n")).unwrap();
     assert_eq!(cfg.resolve("a").user.as_deref(), Some("u"));
     assert!(
         cfg.skipped()
@@ -266,4 +278,93 @@ fn a_cyclic_include_terminates_and_is_reported() {
             .any(|s| s.keyword.eq_ignore_ascii_case("include")),
         "hitting the depth limit must be reported, not silently truncated"
     );
+}
+
+#[test]
+fn a_hosts_origin_is_the_file_it_was_written_in() {
+    // The importer groups hosts by the file they came from, so an alias that is
+    // only reachable through an Include has to carry that file with it — and one
+    // written in the config the user picked has to carry nothing, so the top-level
+    // config never becomes a group of its own.
+    let root = "Include project1/config\nHost local\n  User me\n";
+    let cfg =
+        SshConfig::parse_with_includes(root, |_| file("project1/config", "Host p1a\nHost p1b\n"))
+            .unwrap();
+
+    let origins: Vec<(String, Option<String>)> = cfg
+        .host_aliases_with_origin()
+        .into_iter()
+        .map(|h| (h.alias, h.origin))
+        .collect();
+    assert_eq!(
+        origins,
+        vec![
+            ("p1a".to_string(), Some("project1/config".to_string())),
+            ("p1b".to_string(), Some("project1/config".to_string())),
+            ("local".to_string(), None),
+        ]
+    );
+}
+
+#[test]
+fn a_skipped_directive_carries_the_file_it_was_written_in() {
+    // "ProxyCommand did not come across" is only actionable with the file to fix.
+    let root = "Include conf.d/x\n";
+    let cfg = SshConfig::parse_with_includes(root, |_| {
+        file("conf.d/x", "Host a\n  ProxyCommand nc %h %p\n")
+    })
+    .unwrap();
+    let s = cfg.skipped();
+    assert_eq!(s.len(), 1, "{s:?}");
+    assert_eq!(s[0].keyword, "ProxyCommand");
+    assert_eq!(s[0].origin.as_deref(), Some("conf.d/x"));
+}
+
+#[test]
+fn an_include_that_expands_to_nothing_stays_pending() {
+    // OpenSSH ignores an include it cannot read. Ignoring it silently, though,
+    // costs the user the one clue for why a host is missing — so an include the
+    // loader could not open keeps its documented meaning: seen, not followed.
+    let root = "Include missing/config\nInclude conf.d/ok\n";
+    let cfg = SshConfig::parse_with_includes(root, |path| {
+        if path == "conf.d/ok" {
+            file("conf.d/ok", "Host a\n")
+        } else {
+            Vec::new()
+        }
+    })
+    .unwrap();
+    assert_eq!(cfg.pending_includes(), ["missing/config"]);
+    assert_eq!(cfg.host_aliases(), ["a"], "the rest of the config survives");
+}
+
+#[test]
+fn one_include_line_may_name_several_files() {
+    // `Include project1/config project2/config` is an ordinary layout, and each
+    // path is its own include: a missing one must not cost the line's others.
+    let root = "Include project1/config missing/config \"with space/config\"\n";
+    let mut asked: Vec<String> = Vec::new();
+    let cfg = SshConfig::parse_with_includes(root, |path| {
+        asked.push(path.to_string());
+        match path {
+            "project1/config" => file("project1/config", "Host p1\n"),
+            "with space/config" => file("with space/config", "Host spaced\n"),
+            _ => Vec::new(),
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        asked,
+        ["project1/config", "missing/config", "with space/config"]
+    );
+    assert_eq!(cfg.host_aliases(), ["p1", "spaced"]);
+    assert_eq!(cfg.pending_includes(), ["missing/config"]);
+}
+
+#[test]
+fn without_a_loader_every_path_on_the_line_is_reported() {
+    // Pasted config text follows nothing, so it has to name everything it did
+    // not follow — one entry per path, not one per line.
+    let cfg = SshConfig::parse("Include a/config b/config\n").unwrap();
+    assert_eq!(cfg.pending_includes(), ["a/config", "b/config"]);
 }

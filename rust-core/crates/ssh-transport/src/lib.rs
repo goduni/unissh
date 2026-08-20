@@ -54,7 +54,9 @@ pub use client::{
     ConnectOptions, ExecHandle, ExecSink, ForwardGuard, KeySource, KnownHosts, OutputSink,
     PromptField, SftpSession, ShellHandle, SshClient, SystemAgentKey,
 };
-pub use config::{HostSettings, SkipReason, SkippedDirective, SshConfig};
+pub use config::{
+    glob_match, HostOrigin, HostSettings, IncludedFile, SkipReason, SkippedDirective, SshConfig,
+};
 pub use error::TransportError;
 pub use forward::{AgentApproval, ForwardedAgent};
 pub use proxy::{ProxyKind, ProxyOptions};
