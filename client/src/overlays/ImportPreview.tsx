@@ -177,6 +177,11 @@ function ImportPreviewBody() {
   // The include tree, for grouping: a file pulled in by an included file belongs
   // to whatever group THAT file stands for.
   const includeTree = filesRead.map((f) => ({ path: f.path, includedBy: f.includedBy }));
+  // The path the CORE opened, not the string the picker handed back. Every other
+  // path here comes out of the same report, and comparing them against a
+  // different spelling of the same file (`~/.ssh/config` vs the expanded one)
+  // would fail to recognise the picked config and put it in a group of its own.
+  const configPath = filesRead[0]?.path ?? path;
   const pendingIncludes = report?.pendingIncludes ?? [];
   const [rows, setRows] = useState<ParsedHost[]>([]);
   const [sel, setSel] = useState<string[]>([]);
@@ -295,9 +300,9 @@ function ImportPreviewBody() {
   const includedFiles = Array.from(
     new Set(
       rows
-        .filter((h) => selectedSet.has(h.host) && h.originFile && h.originFile !== path)
-        .map((h) => groupFile(h.originFile as string, path, includeTree))
-        .filter((f) => f !== path),
+        .filter((h) => selectedSet.has(h.host) && h.originFile && h.originFile !== configPath)
+        .map((h) => groupFile(h.originFile as string, configPath, includeTree))
+        .filter((f) => f !== configPath),
     ),
   );
   const toggleFile = (f: string) =>
@@ -437,7 +442,7 @@ function ImportPreviewBody() {
         //    behind an open dialog whose obvious next move is to import them all
         //    again.
         const placement = planIncludeGroups({
-          configPath: path,
+          configPath,
           hosts: created.map((h) => ({ alias: h.alias, originFile: h.originFile })),
           files: includeTree,
           subgroups,
@@ -873,7 +878,7 @@ function ImportPreviewBody() {
                               flexShrink: 0,
                             }}
                           >
-                            {on ? includeGroupName(f, path) : t("import.subgroupOff")}
+                            {on ? includeGroupName(f, configPath) : t("import.subgroupOff")}
                             </span>
                           </label>
                         );
@@ -999,7 +1004,7 @@ function ImportPreviewBody() {
                     {/* Where it came from. Only for hosts reached through an
                         include: with everything from the picked file it would be
                         the same line repeated under every row. */}
-                    {h.originFile && h.originFile !== path && (
+                    {h.originFile && h.originFile !== configPath && (
                       <div
                         style={{
                           display: "flex",

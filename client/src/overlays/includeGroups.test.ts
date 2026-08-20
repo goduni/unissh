@@ -285,3 +285,40 @@ describe("groupFile", () => {
     expect(p.ungrouped).toEqual(["b"]);
   });
 });
+
+describe("the picked config is recognised by what the report read", () => {
+  // The report names files the way the core opened them. A caller that passes a
+  // different spelling of the same file — the string a picker returned, `~`
+  // unexpanded — must not end up with the config itself as a group.
+  const files = [
+    { path: "/home/u/.ssh/config", includedBy: null },
+    { path: "/home/u/.ssh/project1/config", includedBy: "/home/u/.ssh/config" },
+  ];
+
+  it("groups by the report's root even when configPath is spelled differently", () => {
+    const p = planIncludeGroups({
+      configPath: "~/.ssh/config",
+      files,
+      hosts: [
+        { alias: "local", originFile: "/home/u/.ssh/config" },
+        { alias: "a", originFile: "/home/u/.ssh/project1/config" },
+      ],
+      subgroups: true,
+      optedOut: [],
+      target: null,
+      groups: [],
+    });
+    expect(p.ungrouped).toEqual(["local"]);
+    expect(p.groups.map((g) => g.label)).toEqual(["project1"]);
+  });
+
+  it("stops the walk at the file the root included, not at the root's name", () => {
+    const deep = [
+      ...files,
+      { path: "/home/u/.ssh/project1/hosts.conf", includedBy: "/home/u/.ssh/project1/config" },
+    ];
+    expect(groupFile("/home/u/.ssh/project1/hosts.conf", "~/.ssh/config", deep)).toBe(
+      "/home/u/.ssh/project1/config",
+    );
+  });
+});

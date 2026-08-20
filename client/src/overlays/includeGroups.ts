@@ -94,15 +94,28 @@ export function includeGroupName(file: string, configPath: string): string {
  *  tree. One level of subgroup is the whole scope. */
 export function groupFile(file: string, configPath: string, files: ReadFile[]): string {
   const by = new Map(files.map((f) => [f.path, f.includedBy]));
+  const root = rootOf(configPath, files);
   let cur = file;
   // Bounded by the number of files, so a chain that loops (which the loader
   // already prevents) still cannot spin here.
   for (let i = 0; i <= files.length; i++) {
     const parent = by.get(cur);
-    if (parent == null || parent === configPath) return cur;
+    // Stop at the file the picked config included directly — the one whose own
+    // parent is the root, or is the root by name.
+    if (parent == null || parent === root || by.get(parent) == null) return cur;
     cur = parent;
   }
   return cur;
+}
+
+/** The config the report was rooted at: the one file nothing included.
+ *
+ *  Preferred over the caller's `configPath` because every other path in the plan
+ *  comes out of the same report, and two spellings of one file — the string a
+ *  file picker returned versus the path the core actually opened — would put the
+ *  picked config itself in a group. */
+function rootOf(configPath: string, files: ReadFile[]): string {
+  return files.find((f) => f.includedBy === null)?.path ?? configPath;
 }
 
 /** Group labels compare the way a person reads them, so a repeat import lands in
@@ -117,6 +130,7 @@ const norm = (label: string) => label.trim().toLowerCase();
  *  config twice converges instead of multiplying groups. */
 export function planIncludeGroups(input: IncludeGroupPlanInput): IncludeGroupPlan {
   const { configPath, hosts, subgroups, target, files } = input;
+  const root = rootOf(configPath, files);
   const optedOut = new Set(input.optedOut);
   const groups: IncludeGroup[] = [];
   const byLabel = new Map<string, IncludeGroup>();
@@ -124,11 +138,11 @@ export function planIncludeGroups(input: IncludeGroupPlanInput): IncludeGroupPla
 
   for (const h of hosts) {
     const file = h.originFile && groupFile(h.originFile, configPath, files);
-    if (!subgroups || !file || file === configPath || optedOut.has(file)) {
+    if (!subgroups || !file || file === configPath || file === root || optedOut.has(file)) {
       ungrouped.push(h.alias);
       continue;
     }
-    const label = includeGroupName(file, configPath);
+    const label = includeGroupName(file, root);
     let g = byLabel.get(norm(label));
     if (!g) {
       const existing = input.groups.find(
