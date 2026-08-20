@@ -353,6 +353,21 @@ pub async fn ssh_config_report(
         .into())
 }
 
+/// The same report for a config **file**, whose `Include` directives are
+/// followed. Read-only, and it reads more than the one file it was given — every
+/// file it touched comes back in `files_read` for the preview to show, which is
+/// the whole reason this is separate from the text-based call.
+#[tauri::command]
+pub async fn ssh_config_report_at_path(
+    path: String,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::SshConfigReport> {
+    let core = state.core.clone();
+    Ok(blocking(move || core.ssh_config_report_at_path(path))
+        .await?
+        .into())
+}
+
 /// Sets which algorithms new SSH connections may negotiate. Also an atomic
 /// store, so it stays off the blocking pool.
 #[tauri::command]
@@ -948,6 +963,24 @@ pub async fn import_ssh_config(
 ) -> ApiResult<Vec<String>> {
     let core = state.core.clone();
     blocking(move || core.import_ssh_config(vault_id, config_text)).await
+}
+
+/// Imports a config **file**, following its `Include` directives. `only` is the
+/// set of aliases the preview left ticked; `None` imports every host.
+///
+/// The path is the one the user chose in the OS file picker. Following includes
+/// widens the read beyond it, which is why `ssh_config_report_at_path` runs
+/// first and discloses every file before anything is written.
+#[tauri::command]
+pub async fn import_ssh_config_at_path(
+    vault_id: String,
+    path: String,
+    only: Option<Vec<String>>,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::ImportedSshHost>> {
+    let core = state.core.clone();
+    let v = blocking(move || core.import_ssh_config_at_path(vault_id, path, only)).await?;
+    Ok(v.into_iter().map(Into::into).collect())
 }
 
 #[tauri::command]

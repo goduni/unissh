@@ -1,8 +1,16 @@
 // ImportPreview.tsx — ssh-config import preview overlay.
 // Pixel-perfect port of import-preview.jsx, wired to the real store + core.
-// The user picks ~/.ssh/config (default homeDir()+/.ssh/config), we parse the
-// Host stanzas client-side for the preview list, and the core imports the whole
-// file via api.importSshConfig.
+// The user picks ~/.ssh/config (default homeDir()+/.ssh/config) and the core
+// reads it, follows its `Include` directives, and reports what an import would
+// produce; the same path is then handed to api.importSshConfigAtPath.
+//
+// The preview lists what the CORE resolved rather than a second opinion parsed
+// here: once a config's hosts can live in files the client never opened, a
+// client-side parser cannot see them, and two parsers would disagree about the
+// one thing this dialog exists to promise.
+//
+// Following includes means reading files the user did not name one by one, so
+// every file that was read is shown here, before anything is written.
 
 import { useEffect, useState } from "react";
 import { useTranslation, Trans } from "@/i18n";
@@ -16,6 +24,13 @@ import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
 import { defaultImportGroup } from "./importTarget";
+import { filterConfigToSelected } from "./configFilter";
+import {
+  groupFile,
+  includeGroupName,
+  planIncludeGroups,
+  planIncludeGroupWrites,
+} from "./includeGroups";
 import * as api from "@/bridge/api";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -27,81 +42,34 @@ interface ParsedHost {
   user: string;
   port: number;
   dup: boolean;
-  /** IdentityFile path from the config (block-local, or inherited from a
-   *  wildcard `Host *` block). Used to import the referenced key. */
+  /** IdentityFile as the core resolved it (the host's own, or one inherited
+   *  from a matching wildcard block). Used to import the referenced key. */
   identityFile?: string;
+  /** The file this host was written in — null for the config that was picked.
+   *  What the row is attributed to, and what its subgroup is derived from. */
+  originFile: string | null;
 }
 
-const isWildcard = (a: string) => a.includes("*") || a.includes("?") || a.startsWith("!");
 const stripQuotes = (v: string) => v.replace(/^["']|["']$/g, "").trim();
 
-/** Parse `Host` stanzas (alias, HostName, User, Port, IdentityFile) from an ssh
- *  config. IdentityFile set in a wildcard block (e.g. `Host *`) is applied as a
- *  fallback to hosts that don't set their own — matching OpenSSH inheritance for
- *  the common case (Match/Include directives are not expanded). */
-function parseSshConfig(text: string, existing: Set<string>): ParsedHost[] {
-  const out: ParsedHost[] = [];
-  let cur: ParsedHost | null = null;
-  let inWildcard = false;
-  let globalIdentity: string | undefined;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const m = line.match(/^(\S+)\s+(.+)$/);
-    if (!m) continue;
-    const key = m[1].toLowerCase();
-    const val = m[2].trim();
-    if (key === "host") {
-      // a Host line may list multiple aliases; take the first non-wildcard
-      const alias = val.split(/\s+/).find((a) => !isWildcard(a));
-      if (!alias) {
-        // wildcard-only block — not its own row, but remember its IdentityFile
-        // as a fallback for hosts that don't set one of their own.
-        cur = null;
-        inWildcard = true;
-        continue;
-      }
-      cur = { host: alias, hostname: "", user: "", port: 22, dup: existing.has(alias) };
-      inWildcard = false;
-      out.push(cur);
-    } else if (cur) {
-      if (key === "hostname") cur.hostname = val;
-      else if (key === "user") cur.user = val;
-      else if (key === "port") {
-        const n = parseInt(val, 10);
-        if (!Number.isNaN(n)) cur.port = n;
-      } else if (key === "identityfile" && !cur.identityFile) {
-        cur.identityFile = stripQuotes(val);
-      }
-    } else if (inWildcard && key === "identityfile" && !globalIdentity) {
-      globalIdentity = stripQuotes(val);
-    }
-  }
-  if (globalIdentity) {
-    for (const h of out) if (!h.identityFile) h.identityFile = globalIdentity;
-  }
-  return out;
-}
+/** What a file picker returned is a URI rather than a filesystem path — an
+ *  Android `content://`, say. A Windows drive letter (`C:\…`) is a path, not a
+ *  scheme, so it is excluded explicitly. */
+const isUri = (p: string) => /^[a-z][a-z0-9+.-]*:/i.test(p) && !/^[a-z]:[\\/]/i.test(p);
 
-/** Keep only the `Host` blocks whose first concrete alias is selected. Wildcard
- *  blocks (`Host *`, `Host *.example.com`) and the global preamble before the
- *  first `Host` are always kept so inherited settings (User/Port/IdentityFile)
- *  still resolve. A multi-alias `Host a b` line is kept whole if `a` is selected. */
-function filterConfigToSelected(text: string, selected: Set<string>): string {
-  const out: string[] = [];
-  let keep = true; // keep the global preamble before the first Host block
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    const m = line.match(/^([Hh]ost)\s+(.+)$/);
-    if (m && !line.startsWith("#")) {
-      const patterns = m[2].trim().split(/\s+/);
-      const allWild = patterns.every(isWildcard);
-      const firstAlias = patterns.find((a) => !isWildcard(a));
-      keep = allWild || (firstAlias != null && selected.has(firstAlias));
-    }
-    if (keep) out.push(raw);
-  }
-  return out.join("\n");
+/** Path components, on either separator. */
+const parts = (path: string) => path.split(/[/\\]/).filter(Boolean);
+
+/** A read file as it is worth showing: relative to the picked config's own
+ *  directory when it sits under it (`project1/config`), the whole path when it
+ *  does not — an include may point anywhere, and hiding that would defeat the
+ *  disclosure. */
+function shortPath(file: string, configPath: string): string {
+  const dir = parts(configPath).slice(0, -1);
+  const own = parts(file);
+  if (own.length <= dir.length) return file;
+  if (dir.every((c, i) => own[i] === c)) return own.slice(dir.length).join("/");
+  return file;
 }
 
 /** Resolve `~`, `~/`, `$HOME/` prefixes against the home dir; other paths pass
@@ -180,13 +148,32 @@ function ImportPreviewBody() {
   const setImporting = useApp((s) => s.setImporting);
 
   const [path, setPath] = useState<string>("~/.ssh/config");
-  const [fileText, setFileText] = useState<string>("");
-  // What the core says it cannot carry over. Fetched from the core rather than
-  // derived from the TS preview parser, so the warning reflects what the import
-  // will actually do rather than a second opinion about it.
-  const [skipped, setSkipped] = useState<api.SkippedDirective[]>([]);
+  // What the core resolved: the hosts, what it cannot carry over, every file it
+  // read, and the includes it could not follow. One answer from the thing that
+  // will do the importing, not a second opinion about the file.
+  const [report, setReport] = useState<api.SshConfigReport | null>(null);
+  const skipped = report?.skipped ?? [];
+  const filesRead = report?.filesRead ?? [];
+  // The include tree, for grouping: a file pulled in by an included file belongs
+  // to whatever group THAT file stands for.
+  const includeTree = filesRead.map((f) => ({ path: f.path, includedBy: f.includedBy }));
+  // The path the CORE opened, not the string the picker handed back. Every other
+  // path here comes out of the same report, and comparing them against a
+  // different spelling of the same file (`~/.ssh/config` vs the expanded one)
+  // would fail to recognise the picked config and put it in a group of its own.
+  const configPath = filesRead[0]?.path ?? path;
+  const pendingIncludes = report?.pendingIncludes ?? [];
   const [rows, setRows] = useState<ParsedHost[]>([]);
   const [sel, setSel] = useState<string[]>([]);
+  // Non-null only in the text fallback (see the picker effect): the file's
+  // contents, because that path imports by handing them back to the core.
+  const [fileText, setFileText] = useState<string | null>(null);
+  // A subgroup per included file, on by default: the directory layout usually
+  // IS the grouping, and the common case should need no configuration. Both the
+  // switch and the per-file opt-out below are settled here, in the preview,
+  // before anything is written.
+  const [subgroups, setSubgroups] = useState(true);
+  const [optedOut, setOptedOut] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   // Where the imported hosts land. Defaults to the group the sidebar has open —
@@ -229,19 +216,36 @@ function ImportPreviewBody() {
           setImporting(false);
           return;
         }
-        const text = await readTextFile(selected);
+        // The core reads the file and everything its `Include` lines point at.
+        // A failure here is fatal to the dialog, unlike the old best-effort
+        // report: there is nothing left to show a preview from.
+        //
+        // Except on Android, where the picker hands back a `content://` URI: the
+        // core opens paths with the filesystem and cannot read one, while Tauri's
+        // fs plugin can. Which one to use is decided by what the picker returned,
+        // NOT by catching the failure — a `catch` here would also swallow a real
+        // error (a bad `Port` in an included file fails the parse), quietly
+        // downgrade the import to the picked file alone, and lose every host
+        // behind an `Include` without ever saying so.
+        const text = isUri(selected) ? await readTextFile(selected) : null;
+        const rep =
+          text === null
+            ? await api.sshConfigReportAtPath(selected)
+            : await api.sshConfigReport(text);
         if (cancelled) return;
         const existing = new Set(useApp.getState().hosts.map((h) => h.label));
-        const parsed = parseSshConfig(text, existing);
+        const parsed: ParsedHost[] = rep.hosts.map((h) => ({
+          host: h.alias,
+          hostname: h.hostname,
+          user: h.user ?? "",
+          port: h.port,
+          dup: existing.has(h.alias),
+          identityFile: h.identityFile ? stripQuotes(h.identityFile) : undefined,
+          originFile: h.originFile,
+        }));
         setPath(selected);
         setFileText(text);
-        try {
-          const report = await api.sshConfigReport(text);
-          if (!cancelled) setSkipped(report.skipped);
-        } catch {
-          // A failed report must not block the import itself — worst case the
-          // user just doesn't get the warning.
-        }
+        setReport(rep);
         setRows(parsed);
         setSel(parsed.filter((h) => !h.dup).map((h) => h.host));
       } catch (e) {
@@ -260,28 +264,49 @@ function ImportPreviewBody() {
 
   // (There used to be a "reset transient state when the overlay closes" effect
   // here. It could never run: ImportPreview unmounts this body the moment
-  // `importing` goes false, so the branch that cleared rows/sel/fileText/path
+  // `importing` goes false, so the branch that cleared rows/sel/report/path
   // was dead, and the mount itself is the reset.)
 
   const toggle = (id: string) =>
     setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   const count = sel.length;
 
+  const selectedSet = new Set(sel);
+  // Every include the picked config made that a ticked host came from — the
+  // rows of the mapping, including the ones opted out (which is how they are
+  // opted back in). A host inside a nested include is listed under the include
+  // that reached it, because that is the group it lands in.
+  const includedFiles = Array.from(
+    new Set(
+      rows
+        .filter((h) => selectedSet.has(h.host) && h.originFile && h.originFile !== configPath)
+        .map((h) => groupFile(h.originFile as string, configPath, includeTree))
+        .filter((f) => f !== configPath),
+    ),
+  );
+  const toggleFile = (f: string) =>
+    setOptedOut((o) => (o.includes(f) ? o.filter((x) => x !== f) : [...o, f]));
+
   const doImport = async () => {
     const vaultId = useApp.getState().vaultId;
-    if (!vaultId || !fileText) {
+    if (!vaultId || rows.length === 0) {
       close();
       return;
     }
     setBusy(true);
     try {
       await guard(async () => {
-        const selectedSet = new Set(sel);
-        // 1) Create profiles for the SELECTED hosts only — the core imports every
-        //    Host block in whatever config text it's handed, so filter it first.
-        const filtered = filterConfigToSelected(fileText, selectedSet);
-        const created = await api.importSshConfig(vaultId, filtered);
-        const createdSet = new Set(created);
+        // 1) Create profiles for the SELECTED hosts only. The core re-reads the
+        //    file and its includes; the ticked aliases go with the call, because
+        //    filtering the config *text* cannot reach hosts in other files —
+        //    which is still how the text fallback has to do it.
+        const created =
+          fileText === null
+            ? await api.importSshConfigAtPath(vaultId, path, sel)
+            : (
+                await api.importSshConfig(vaultId, filterConfigToSelected(fileText, selectedSet))
+              ).map((alias) => ({ alias, originFile: null }));
+        const createdSet = new Set(created.map((h) => h.alias));
 
         // 2) Import each selected host's IdentityFile key into the vault and link
         //    it to the host. Best-effort: encrypted (passphrase) or missing keys
@@ -388,39 +413,65 @@ function ImportPreviewBody() {
           }
         }
 
-        // 3) Put the new hosts in the chosen group. Its own try/catch, and not
-        //    part of the guard() above: the profiles are already written by now,
-        //    so a failure here must not skip the reload and the close — that
-        //    would leave the hosts imported but invisible, behind an open dialog
-        //    whose obvious next move is to import them all again.
+        // 3) Place the new hosts: a subgroup per included file where the user
+        //    left that on, everything else in the chosen target group. Its own
+        //    try/catch, and not part of the guard() above: the profiles are
+        //    already written by now, so a failure here must not skip the reload
+        //    and the close — that would leave the hosts imported but invisible,
+        //    behind an open dialog whose obvious next move is to import them all
+        //    again.
+        const placement = planIncludeGroups({
+          configPath,
+          hosts: created.map((h) => ({ alias: h.alias, originFile: h.originFile })),
+          files: includeTree,
+          subgroups,
+          optedOut,
+          target,
+          groups: useApp.getState().groups,
+        });
         let groupLabel: string | null = null;
-        let moved = false;
-        if (target && created.length) {
-          try {
-            moved = await useApp.getState().moveHostsToGroup(target, created);
-            // Read AFTER the write, from the live store: a sync could have
-            // deleted the group mid-import, in which case nothing was written
-            // and naming it here would report a placement that never happened.
-            groupLabel = useApp.getState().groups.find((g) => g.groupId === target)?.label ?? null;
-          } catch (e) {
-            toast(apiErrorMessage(e), "err");
-          }
+        let madeGroups = 0;
+        try {
+          const stamp = Date.now();
+          const writes = planIncludeGroupWrites(
+            useApp.getState().groups,
+            placement,
+            target,
+            (_label, i) => `group-${stamp}-${i}`,
+          );
+          for (const g of writes) await api.saveGroup(vaultId, g);
+          // Only the ones this import actually created: a run that put its
+          // hosts into groups that were already there created nothing, and
+          // saying otherwise would send the user looking for them.
+          madeGroups = placement.groups.filter((g) => !g.existingId).length;
+          // Read AFTER the write, from the live store: a sync could have deleted
+          // the group mid-import, in which case nothing was written and naming
+          // it here would report a placement that never happened.
+          groupLabel =
+            target && placement.ungrouped.length
+              ? (useApp.getState().groups.find((g) => g.groupId === target)?.label ?? null)
+              : null;
+        } catch (e) {
+          toast(apiErrorMessage(e), "err");
         }
 
-        // moveHostsToGroup reloads when it writes; skip the second full decrypt
-        // pass over the vault in that case, but never skip it otherwise — the
-        // imported hosts are not in the store until something reloads.
-        if (!moved) await useApp.getState().reloadVault();
+        // The imported hosts are not in the store until something reloads.
+        await useApp.getState().reloadVault();
         setImporting(false);
         const hosts = t("count.hosts", { count: created.length });
         toast(
-          // Keys win over the group when both happened: the group is visible in
-          // the sidebar the moment this closes, the imported keys are not.
+          // Keys win over the placement when both happened: a group is visible
+          // in the sidebar the moment this closes, the imported keys are not.
           keysImported > 0
             ? t("import.importedWithKeys", { hosts, keys: t("count.keys", { count: keysImported }) })
-            : groupLabel
-              ? t("import.importedIntoGroup", { hosts, group: groupLabel })
-              : t("import.imported", { hosts }),
+            : madeGroups > 0
+              ? t("import.importedIntoGroups", {
+                  hosts,
+                  groups: t("count.groups", { count: madeGroups }),
+                })
+              : groupLabel
+                ? t("import.importedIntoGroup", { hosts, group: groupLabel })
+                : t("import.imported", { hosts }),
           "ok",
         );
         if (skips.length > 0) {
@@ -621,6 +672,89 @@ function ImportPreviewBody() {
             </div>
           ) : (
             <>
+              {/* Disclosure. An import of "one file" that reads five is only
+                  acceptable if it says which five, before it writes anything. */}
+              {filesRead.length > 1 && (
+                <div
+                  role="note"
+                  style={{
+                    margin: "0 0 12px",
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    border: `1px solid ${p.line2}`,
+                    background: p.bg2,
+                    fontSize: 12.5,
+                    color: p.txt2,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: 4 }}>
+                    {t("import.filesReadTitle", {
+                      files: t("count.files", { count: filesRead.length }),
+                    })}
+                  </div>
+                  <div style={{ marginBottom: 6 }}>{t("import.filesReadDesc")}</div>
+                  <div
+                    style={{
+                      fontFamily: MONO,
+                      fontSize: 11.5,
+                      color: p.txt3,
+                      // The whole list, always — but a config with fifty
+                      // includes must not push the hosts off the screen.
+                      maxHeight: 72,
+                      overflowY: "auto",
+                      overflowWrap: "anywhere",
+                    }}
+                  >
+                    {filesRead.map((f) => shortPath(f.path, path)).join("  ·  ")}
+                  </div>
+                </div>
+              )}
+              {pendingIncludes.length > 0 && (
+                <div
+                  role="note"
+                  style={{
+                    margin: "0 0 12px",
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    border: `1px solid ${rgba(p.amber, 0.35)}`,
+                    background: rgba(p.amber, 0.08),
+                    fontSize: 12.5,
+                    color: p.txt2,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: 4 }}>
+                    {t(
+                      fileText === null
+                        ? "import.includesSkippedTitle"
+                        : "import.includesNotFollowedTitle",
+                      { count: pendingIncludes.length },
+                    )}
+                  </div>
+                  {/* Two different facts wearing one shape: a file-based import
+                      could not OPEN these, a text-based one never tried. */}
+                  <div style={{ marginBottom: 6 }}>
+                    {t(
+                      fileText === null
+                        ? "import.includesSkippedDesc"
+                        : "import.includesNotFollowedDesc",
+                    )}
+                  </div>
+                  <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
+                    {pendingIncludes
+                      .map((inc) =>
+                        // Named with the file it was written in: two files can
+                        // each say `Include local`, and the path alone is then
+                        // the same string twice and no place to go and fix.
+                        inc.originFile
+                          ? `${shortPath(inc.originFile, configPath)}: ${inc.path}`
+                          : inc.path,
+                      )
+                      .join("  ·  ")}
+                  </div>
+                </div>
+              )}
               {skipped.length > 0 && (
                 <div
                   role="note"
@@ -642,9 +776,101 @@ function ImportPreviewBody() {
                   <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
                     {skipped
                       .slice(0, 12)
-                      .map((d) => `${d.line}: ${d.keyword}${d.insideMatch ? " (Match)" : ""}`)
+                      .map(
+                        (d) =>
+                          `${d.originFile ? `${shortPath(d.originFile, path)}:` : ""}${d.line}: ${d.keyword}${d.insideMatch ? " (Match)" : ""}`,
+                      )
                       .join("  ·  ")}
                     {skipped.length > 12 ? "  ·  …" : ""}
+                  </div>
+                </div>
+              )}
+              {/* The file → group mapping, correctable here rather than
+                  discovered afterwards. */}
+              {includedFiles.length > 0 && (
+                <div
+                  style={{
+                    margin: "0 0 12px",
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    border: `1px solid ${p.line2}`,
+                    background: p.bg2,
+                    fontSize: 12.5,
+                    color: p.txt2,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      cursor: "pointer",
+                      fontWeight: 700,
+                      color: p.txt,
+                      ...(isMobile ? { minHeight: 44 } : null),
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={subgroups}
+                      onChange={(e) => setSubgroups(e.target.checked)}
+                      style={{ accentColor: p.accent, width: 15, height: 15 }}
+                    />
+                    {t("import.subgroupsTitle")}
+                  </label>
+                  <div style={{ margin: "4px 0 8px" }}>{t("import.subgroupsDesc")}</div>
+                  <div style={{ maxHeight: 150, overflowY: "auto" }}>
+                    {subgroups &&
+                      includedFiles.map((f) => {
+                      const on = !optedOut.includes(f);
+                      return (
+                        <label
+                          key={f}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "3px 0",
+                            cursor: "pointer",
+                            minWidth: 0,
+                            ...(isMobile ? { minHeight: 40 } : null),
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => toggleFile(f)}
+                            style={{ accentColor: p.accent, width: 14, height: 14, flexShrink: 0 }}
+                          />
+                          <span
+                            style={{
+                              fontFamily: MONO,
+                              fontSize: 11.5,
+                              color: p.txt3,
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {shortPath(f, path)}
+                          </span>
+                          <Icon name="cr" size={12} color={p.txt3} />
+                          <span
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 700,
+                              color: on ? p.txt : p.txt3,
+                              textDecoration: on ? undefined : "line-through",
+                              flexShrink: 0,
+                            }}
+                          >
+                            {on ? includeGroupName(f, configPath) : t("import.subgroupOff")}
+                            </span>
+                          </label>
+                        );
+                      })}
                   </div>
                 </div>
               )}
@@ -763,6 +989,35 @@ function ImportPreviewBody() {
                     >
                       {h.user || "?"}@{h.hostname || h.host}:{h.port}
                     </div>
+                    {/* Where it came from. Only for hosts reached through an
+                        include: with everything from the picked file it would be
+                        the same line repeated under every row. */}
+                    {h.originFile && h.originFile !== configPath && (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          marginTop: 2,
+                          fontSize: 11,
+                          color: p.txt3,
+                          minWidth: 0,
+                        }}
+                      >
+                        <Icon name="file" size={11} color={p.txt3} />
+                        <span
+                          style={{
+                            fontFamily: MONO,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {shortPath(h.originFile, path)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

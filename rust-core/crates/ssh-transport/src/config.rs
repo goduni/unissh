@@ -55,6 +55,10 @@ pub struct SkippedDirective {
     pub keyword: String,
     /// Why it was not applied.
     pub reason: SkipReason,
+    /// The included file it was written in, or `None` for the config text
+    /// itself. "`ProxyCommand` did not come across" is only actionable with the
+    /// file to go and fix.
+    pub origin: Option<String>,
 }
 
 /// Why a directive did not make it into the imported settings.
@@ -69,6 +73,39 @@ pub enum SkipReason {
     InsideMatch,
 }
 
+/// A file an `Include` expanded to: the path it was read from, and what was in
+/// it. The path is what the importer shows the user and what it groups by, so it
+/// should read the way they wrote it (or the way they would recognise it), not
+/// as a canonicalised inode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncludedFile {
+    /// Where the text came from.
+    pub path: String,
+    /// The file's contents.
+    pub text: String,
+}
+
+/// An `Include` path that was seen but not followed, and the file it was written
+/// in. Two files can each say `Include local`; without the origin the report
+/// names the same string twice and neither is a place to go and fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingInclude {
+    /// The path exactly as written.
+    pub path: String,
+    /// The included file the `Include` line sits in, or `None` for the config
+    /// text itself.
+    pub origin: Option<String>,
+}
+
+/// A concrete host alias together with the file it was written in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostOrigin {
+    /// The alias, as in [`SshConfig::host_aliases`].
+    pub alias: String,
+    /// The included file it came from, or `None` for the config text itself.
+    pub origin: Option<String>,
+}
+
 /// OpenSSH stops following includes at this depth; matching it keeps a cyclic
 /// config terminating instead of recursing until the stack gives out.
 const MAX_INCLUDE_DEPTH: u32 = 16;
@@ -77,6 +114,7 @@ const MAX_INCLUDE_DEPTH: u32 = 16;
 struct HostBlock {
     patterns: Vec<String>,
     settings: HostSettings,
+    origin: Option<String>,
 }
 
 /// Parsed ssh-config.
@@ -84,7 +122,7 @@ struct HostBlock {
 pub struct SshConfig {
     blocks: Vec<HostBlock>,
     skipped: Vec<SkippedDirective>,
-    includes: Vec<String>,
+    includes: Vec<PendingInclude>,
 }
 
 impl SshConfig {
@@ -93,24 +131,31 @@ impl SshConfig {
     pub fn parse(text: &str) -> Result<Self, TransportError> {
         let mut cfg = SshConfig::default();
         // No loader: includes are recorded in `includes` and left alone.
-        cfg.parse_into::<fn(&str) -> Vec<String>>(text, &mut None, 0)?;
+        cfg.parse_into::<fn(&str, Option<&str>) -> Vec<IncludedFile>>(text, None, &mut None, 0)?;
         Ok(cfg)
     }
 
     /// Parses the config text, following `Include` directives through `load`.
     ///
     /// `load` receives the path exactly as written (globs and `~` included) and
-    /// returns the contents of every file it expands to, in order; resolving
-    /// those is the caller's business, since it needs a home directory and a
-    /// filesystem this crate has no opinion about. An include that cannot be
-    /// read is skipped, matching OpenSSH, which ignores a missing include rather
-    /// than failing the whole config.
+    /// the file the `Include` line sits in (`None` for the text being parsed),
+    /// and returns every file the path expands to, in order; resolving those is
+    /// the caller's business, since it needs a home directory and a filesystem
+    /// this crate has no opinion about. An include that cannot be read is
+    /// skipped, matching OpenSSH, which ignores a missing include rather than
+    /// failing the whole config — it is reported through
+    /// [`Self::pending_includes`], which then means exactly what it says: seen,
+    /// not followed.
+    ///
+    /// Each returned file carries its path, and every block parsed out of it
+    /// remembers it ([`Self::host_aliases_with_origin`], [`SkippedDirective`]) —
+    /// that is what lets an importer say where a host came from.
     pub fn parse_with_includes<F>(text: &str, mut load: F) -> Result<Self, TransportError>
     where
-        F: FnMut(&str) -> Vec<String>,
+        F: FnMut(&str, Option<&str>) -> Vec<IncludedFile>,
     {
         let mut cfg = SshConfig::default();
-        cfg.parse_into(text, &mut Some(&mut load), 0)?;
+        cfg.parse_into(text, None, &mut Some(&mut load), 0)?;
         Ok(cfg)
     }
 
@@ -124,11 +169,12 @@ impl SshConfig {
     fn parse_into<F>(
         &mut self,
         text: &str,
+        origin: Option<&str>,
         load: &mut Option<&mut F>,
         depth: u32,
     ) -> Result<(), TransportError>
     where
-        F: FnMut(&str) -> Vec<String>,
+        F: FnMut(&str, Option<&str>) -> Vec<IncludedFile>,
     {
         let mut current: Option<HostBlock> = None;
         // Directives inside a Match block belong to that block, not to the Host
@@ -155,6 +201,7 @@ impl SshConfig {
                 current = Some(HostBlock {
                     patterns,
                     settings: HostSettings::default(),
+                    origin: origin.map(str::to_string),
                 });
                 continue;
             }
@@ -168,51 +215,82 @@ impl SshConfig {
                     line: line_no,
                     keyword: keyword.to_string(),
                     reason: SkipReason::InsideMatch,
+                    origin: origin.map(str::to_string),
                 });
                 continue;
             }
 
             if key == "include" {
-                let path = rest.trim().to_string();
+                // One `Include` line may name several files — `Include
+                // project1/config project2/config` is an ordinary layout — and
+                // OpenSSH treats each as its own include. Splitting here rather
+                // than in the loader is what lets one missing path be reported
+                // while its neighbours on the same line are still followed.
+                let paths = split_include_paths(rest);
                 // Inside a Match block the include shares that block's fate.
                 if in_match {
                     self.skipped.push(SkippedDirective {
                         line: line_no,
                         keyword: keyword.to_string(),
                         reason: SkipReason::InsideMatch,
+                        origin: origin.map(str::to_string),
                     });
                     continue;
                 }
-                match load.as_mut() {
-                    None => self.includes.push(path),
-                    Some(_) if depth >= MAX_INCLUDE_DEPTH => {
-                        // A cycle (a includes b includes a) has to stop somewhere;
-                        // OpenSSH's own limit is 16. Reported, not silently cut.
-                        self.skipped.push(SkippedDirective {
-                            line: line_no,
-                            keyword: keyword.to_string(),
-                            reason: SkipReason::Unsupported,
-                        });
-                    }
-                    Some(loader) => {
-                        // Close the open Host block so included blocks land after
-                        // it and before whatever follows.
-                        let reopen = current.take().map(|b| {
-                            let patterns = b.patterns.clone();
-                            self.blocks.push(b);
-                            patterns
-                        });
-                        for included in loader(&path) {
-                            self.parse_into(&included, load, depth + 1)?;
+                if load.is_none() {
+                    // No loader: record every path and follow none of them.
+                    self.includes
+                        .extend(paths.into_iter().map(|path| PendingInclude {
+                            path,
+                            origin: origin.map(str::to_string),
+                        }));
+                } else if depth >= MAX_INCLUDE_DEPTH {
+                    // A cycle (a includes b includes a) has to stop somewhere;
+                    // OpenSSH's own limit is 16. Reported, not silently cut.
+                    self.skipped.push(SkippedDirective {
+                        line: line_no,
+                        keyword: keyword.to_string(),
+                        reason: SkipReason::Unsupported,
+                        origin: origin.map(str::to_string),
+                    });
+                } else {
+                    // Close the open Host block so included blocks land after
+                    // it and before whatever follows.
+                    let reopen = current.take().map(|b| {
+                        let patterns = b.patterns.clone();
+                        self.blocks.push(b);
+                        patterns
+                    });
+                    for spec in paths {
+                        // Re-borrow the loader per path: the recursion below
+                        // needs it too, so the borrow cannot outlive this call.
+                        let files = match load.as_mut() {
+                            Some(loader) => loader(&spec, origin),
+                            None => Vec::new(),
+                        };
+                        // Nothing behind it (missing, unreadable, a glob that
+                        // matched nothing). OpenSSH ignores that; ignoring it in
+                        // silence costs the user the one clue for why a host they
+                        // expected is not in the import.
+                        if files.is_empty() {
+                            self.includes.push(PendingInclude {
+                                path: spec,
+                                origin: origin.map(str::to_string),
+                            });
+                            continue;
                         }
-                        // Reopen the same Host block: in OpenSSH an Include in
-                        // the middle of a Host block does not end it, and the
-                        // directives after it still belong to that host.
-                        current = reopen.map(|patterns| HostBlock {
-                            patterns,
-                            settings: HostSettings::default(),
-                        });
+                        for inc in files {
+                            self.parse_into(&inc.text, Some(&inc.path), load, depth + 1)?;
+                        }
                     }
+                    // Reopen the same Host block: in OpenSSH an Include in the
+                    // middle of a Host block does not end it, and the directives
+                    // after it still belong to that host.
+                    current = reopen.map(|patterns| HostBlock {
+                        patterns,
+                        settings: HostSettings::default(),
+                        origin: origin.map(str::to_string),
+                    });
                 }
                 continue;
             }
@@ -222,6 +300,7 @@ impl SshConfig {
                     line: line_no,
                     keyword: keyword.to_string(),
                     reason: SkipReason::InsideMatch,
+                    origin: origin.map(str::to_string),
                 });
                 continue;
             }
@@ -236,6 +315,7 @@ impl SshConfig {
                         line: line_no,
                         keyword: keyword.to_string(),
                         reason: SkipReason::Unsupported,
+                        origin: origin.map(str::to_string),
                     });
                     continue;
                 }
@@ -265,6 +345,7 @@ impl SshConfig {
                     line: line_no,
                     keyword: keyword.to_string(),
                     reason: SkipReason::Unsupported,
+                    origin: origin.map(str::to_string),
                 }),
             }
         }
@@ -281,9 +362,11 @@ impl SshConfig {
         &self.skipped
     }
 
-    /// `Include` paths that were seen but not followed (only when parsed with
-    /// [`Self::parse`]).
-    pub fn pending_includes(&self) -> &[String] {
+    /// `Include` paths that were seen but **not** followed: every one of them
+    /// when parsed with [`Self::parse`], and with
+    /// [`Self::parse_with_includes`] the ones the loader could not open — a
+    /// missing file, one it may not read, or a glob that matched nothing.
+    pub fn pending_includes(&self) -> &[PendingInclude] {
         &self.includes
     }
 
@@ -295,6 +378,24 @@ impl SshConfig {
             for p in &block.patterns {
                 if !p.contains(['*', '?', '!']) && !out.contains(p) {
                     out.push(p.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// The same aliases as [`Self::host_aliases`], each with the file it was
+    /// written in — `None` for the config text itself. An importer maps included
+    /// files onto groups with this.
+    pub fn host_aliases_with_origin(&self) -> Vec<HostOrigin> {
+        let mut out: Vec<HostOrigin> = Vec::new();
+        for block in &self.blocks {
+            for p in &block.patterns {
+                if !p.contains(['*', '?', '!']) && !out.iter().any(|h| &h.alias == p) {
+                    out.push(HostOrigin {
+                        alias: p.clone(),
+                        origin: block.origin.clone(),
+                    });
                 }
             }
         }
@@ -331,6 +432,30 @@ fn block_matches(patterns: &[String], alias: &str) -> bool {
         }
     }
     positive_hit
+}
+
+/// The paths on one `Include` line. Whitespace-separated, with double quotes
+/// around a path that contains spaces — the same shape OpenSSH's own tokeniser
+/// accepts, minus the escapes nobody writes in a config.
+fn split_include_paths(rest: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for c in rest.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 fn split_keyword(line: &str) -> (&str, &str) {
@@ -384,7 +509,7 @@ fn merge(into: &mut HostSettings, from: &HostSettings) {
 /// Simple glob: `*` (any number of characters) and `?` (a single character). An
 /// iterative two-pointer approach with backtracking only over the last `*` — linear,
 /// without recursion and without catastrophic backtracking on patterns like `*a*a*…`.
-fn glob_match(pattern: &str, text: &str) -> bool {
+pub fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
 

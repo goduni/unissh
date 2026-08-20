@@ -123,7 +123,12 @@ import_vault(bytes, passphrase, new_vault_id)   // items are re-encrypted under 
 //   (error). The legacy format (without tags/password_item_id) is read without migration.
 save_connection(vault_id, profile) / list_connections(vault_id)
 get_connection(vault_id, profile_id) / delete_connection(vault_id, profile_id)
-import_ssh_config(vault_id, config_text) -> [created_profile_ids]
+import_ssh_config(vault_id, config_text) -> [created_profile_ids]        // pasted text; Include is reported, not followed
+import_ssh_config_at_path(vault_id, path, only?) -> [{alias, origin_file}] // a FILE: Include followed as ssh follows it,
+                                                                          // `only` = the aliases the preview left ticked
+ssh_config_report(config_text) / ssh_config_report_at_path(path)
+  -> {hosts[{alias, origin_file, hostname, port, user, identity_file}], skipped[{line, keyword, inside_match, origin_file}],
+      pending_includes[], files_read[]}   // shown BEFORE importing: files_read is every file an Include pulled in
 
 // errors: HostKeyMismatch{host, port, fingerprint} is singled out for a UI MITM warning
 ```

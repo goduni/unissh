@@ -1350,21 +1350,104 @@ pub struct SkippedDirective {
     /// differs: a Match block has to be rewritten as a Host block, while an
     /// unsupported directive simply has no equivalent here.
     pub inside_match: bool,
+    /// The included file it was written in, `None` for the picked config. A line
+    /// number stops being actionable once an import spans several files.
+    pub origin_file: Option<String>,
+}
+
+/// A host an import would create, resolved as `ssh` would resolve it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigHost {
+    pub alias: String,
+    /// The included file it came from — what the preview attributes it to and
+    /// what its subgroup is derived from. `None` for the picked config itself.
+    pub origin_file: Option<String>,
+    pub hostname: String,
+    pub port: u16,
+    pub user: Option<String>,
+    /// `IdentityFile` as written; the client resolves and reads it.
+    pub identity_file: Option<String>,
+}
+
+/// An `Include` a report saw but did not follow.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInclude {
+    pub path: String,
+    /// The file the `Include` line sits in; `None` for the picked config.
+    pub origin_file: Option<String>,
+}
+
+/// A file a report read, and what pulled it in.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigFile {
+    pub path: String,
+    /// The file whose `Include` pulled it in; `None` for the picked config.
+    pub included_by: Option<String>,
+}
+
+/// A host an import created.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedSshHost {
+    pub alias: String,
+    pub origin_file: Option<String>,
+}
+
+impl From<ffi::ImportedSshHost> for ImportedSshHost {
+    fn from(h: ffi::ImportedSshHost) -> Self {
+        ImportedSshHost {
+            alias: h.alias,
+            origin_file: h.origin_file,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConfigReport {
-    pub aliases: Vec<String>,
+    pub hosts: Vec<SshConfigHost>,
     pub skipped: Vec<SkippedDirective>,
-    pub pending_includes: Vec<String>,
+    /// `Include`s seen but not followed — all of them for a report on pasted
+    /// text, and the unreadable ones for a report on a file.
+    pub pending_includes: Vec<PendingInclude>,
+    /// Every file the report read, the picked one first. Empty for text.
+    pub files_read: Vec<SshConfigFile>,
 }
 
 impl From<ffi::SshConfigReport> for SshConfigReport {
     fn from(r: ffi::SshConfigReport) -> Self {
         SshConfigReport {
-            aliases: r.aliases,
-            pending_includes: r.pending_includes,
+            hosts: r
+                .hosts
+                .into_iter()
+                .map(|h| SshConfigHost {
+                    alias: h.alias,
+                    origin_file: h.origin_file,
+                    hostname: h.hostname,
+                    port: h.port,
+                    user: h.user,
+                    identity_file: h.identity_file,
+                })
+                .collect(),
+            pending_includes: r
+                .pending_includes
+                .into_iter()
+                .map(|p| PendingInclude {
+                    path: p.path,
+                    origin_file: p.origin_file,
+                })
+                .collect(),
+            files_read: r
+                .files_read
+                .into_iter()
+                .map(|f| SshConfigFile {
+                    path: f.path,
+                    included_by: f.included_by,
+                })
+                .collect(),
             skipped: r
                 .skipped
                 .into_iter()
@@ -1372,6 +1455,7 @@ impl From<ffi::SshConfigReport> for SshConfigReport {
                     line: s.line,
                     keyword: s.keyword,
                     inside_match: s.inside_match,
+                    origin_file: s.origin_file,
                 })
                 .collect(),
         }

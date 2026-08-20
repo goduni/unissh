@@ -58,6 +58,8 @@ use unissh_vault::{
     seal_account_payload, sign_account_state, verify_chain_to_epoch, Member, Vault,
 };
 
+mod ssh_include;
+
 uniffi::setup_scaffolding!();
 
 /// Item type for an SSH key (public metadata).
@@ -5073,19 +5075,21 @@ impl Core {
     /// `ProxyCommand` or `Match` block came with it.
     pub fn ssh_config_report(&self, config_text: String) -> Result<SshConfigReport, FfiError> {
         let cfg = SshConfig::parse(&config_text).map_err(FfiError::other)?;
-        Ok(SshConfigReport {
-            aliases: cfg.host_aliases(),
-            skipped: cfg
-                .skipped()
-                .iter()
-                .map(|s| SkippedDirectiveFfi {
-                    line: s.line,
-                    keyword: s.keyword.clone(),
-                    inside_match: matches!(s.reason, unissh_ssh_transport::SkipReason::InsideMatch),
-                })
-                .collect(),
-            pending_includes: cfg.pending_includes().to_vec(),
-        })
+        // Parsed from text, so there is no filesystem to follow an `Include`
+        // into: they come back in `pending_includes`, unfollowed and said so.
+        Ok(ssh_config_report_of(&cfg, Vec::new()))
+    }
+
+    /// The same report for a config **file**, with its `Include` directives
+    /// followed the way `ssh` would follow them.
+    ///
+    /// This reads files the user did not name one by one, so every one of them
+    /// comes back in [`SshConfigReport::files_read`] and belongs in the preview.
+    /// An import that quietly widened from "this file" to "this file and
+    /// whatever it points at" is not one the user agreed to.
+    pub fn ssh_config_report_at_path(&self, path: String) -> Result<SshConfigReport, FfiError> {
+        let (cfg, files_read) = parse_ssh_config_at(&path)?;
+        Ok(ssh_config_report_of(&cfg, files_read))
     }
 
     /// Imports `~/.ssh/config`: for each concrete `Host` alias it creates
@@ -5099,66 +5103,32 @@ impl Core {
         config_text: String,
     ) -> Result<Vec<String>, FfiError> {
         let cfg = SshConfig::parse(&config_text).map_err(FfiError::other)?;
-        self.with_state_mut(|state| {
-            let vault = Vault::open(
-                &state.storage,
-                &state.keyset,
-                &resolve_vid(&state.storage, &vault_id),
-            )
-            .map_err(FfiError::other)?;
-            let mut created = Vec::new();
-            for alias in cfg.host_aliases() {
-                // Don't overwrite an existing item of another type (e.g. a key with the same id):
-                // we skip such an alias, not counting it among the created ones.
-                if ensure_item_type(
-                    &state.storage,
-                    &vault_id,
-                    alias.as_bytes(),
-                    ITEM_TYPE_CONNECTION,
-                )
-                .is_err()
-                {
-                    continue;
-                }
-                // #9: overwriting an existing profile MUST preserve its
-                // immutable uid — personal bindings and hop_refs depend on it
-                // (B2.1/B2.2); a fresh uid would orphan them. We reuse the existing
-                // profile's uid, otherwise we mint a new one.
-                let existing_uid = vault
-                    .get_item(alias.as_bytes())
-                    .ok()
-                    .flatten()
-                    .and_then(|it| serde_json::from_slice::<StoredProfile>(&it.content).ok())
-                    .and_then(|sp| sp.uid)
-                    .filter(|u| !u.is_empty());
-                let s = cfg.resolve(&alias);
-                let stored = StoredProfile {
-                    uid: Some(existing_uid.unwrap_or_else(mint_profile_uid)),
-                    label: alias.clone(),
-                    host: s.hostname.unwrap_or_else(|| alias.clone()),
-                    port: s.port.unwrap_or(22),
-                    user: s.user.unwrap_or_default(),
-                    key_item_id: None,
-                    password_item_id: None,
-                    personal: false,
-                    username_template: None,
-                    jumps: parse_proxy_jump(s.proxy_jump.as_deref()),
-                    proxy: None,
-                    tags: Vec::new(),
-                    startup_snippet_ids: Vec::new(),
-                    record_sessions: false,
-                    agent_forward: false,
-                    system_agent_public_key: None,
-                    extra: std::collections::BTreeMap::new(),
-                };
-                let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
-                vault
-                    .put_item(alias.as_bytes(), ITEM_TYPE_CONNECTION, &json)
-                    .map_err(FfiError::other)?;
-                created.push(alias);
-            }
-            Ok(created)
-        })
+        Ok(self
+            .import_parsed_ssh_config(vault_id, &cfg, None)?
+            .into_iter()
+            .map(|h| h.alias)
+            .collect())
+    }
+
+    /// Imports a config **file**, following its `Include` directives — the whole
+    /// point of taking a path rather than text.
+    ///
+    /// `only` is the set of aliases to import, i.e. what the preview's
+    /// checkboxes left ticked; `None` imports every host the config resolves to.
+    /// It replaces the text-based path's trick of filtering the config text
+    /// before handing it over, which cannot work once the hosts live in files
+    /// other than the one being filtered.
+    ///
+    /// Each returned host carries the file it was written in, so the caller can
+    /// put it in the group that file stands for.
+    pub fn import_ssh_config_at_path(
+        &self,
+        vault_id: String,
+        path: String,
+        only: Option<Vec<String>>,
+    ) -> Result<Vec<ImportedSshHost>, FfiError> {
+        let (cfg, _) = parse_ssh_config_at(&path)?;
+        self.import_parsed_ssh_config(vault_id, &cfg, only)
     }
 
     /// Renders a vault's profiles into `~/.ssh/config` text (the inverse of
@@ -5517,6 +5487,82 @@ impl Core {
 }
 
 impl Core {
+    fn import_parsed_ssh_config(
+        &self,
+        vault_id: String,
+        cfg: &SshConfig,
+        only: Option<Vec<String>>,
+    ) -> Result<Vec<ImportedSshHost>, FfiError> {
+        let only: Option<std::collections::HashSet<String>> = only.map(|v| v.into_iter().collect());
+        self.with_state_mut(|state| {
+            let vault = Vault::open(
+                &state.storage,
+                &state.keyset,
+                &resolve_vid(&state.storage, &vault_id),
+            )
+            .map_err(FfiError::other)?;
+            let mut created = Vec::new();
+            for host in cfg.host_aliases_with_origin() {
+                let alias = &host.alias;
+                if only.as_ref().is_some_and(|o| !o.contains(alias)) {
+                    continue;
+                }
+                // Don't overwrite an existing item of another type (e.g. a key with the same id):
+                // we skip such an alias, not counting it among the created ones.
+                if ensure_item_type(
+                    &state.storage,
+                    &vault_id,
+                    alias.as_bytes(),
+                    ITEM_TYPE_CONNECTION,
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                // #9: overwriting an existing profile MUST preserve its
+                // immutable uid — personal bindings and hop_refs depend on it
+                // (B2.1/B2.2); a fresh uid would orphan them. We reuse the existing
+                // profile's uid, otherwise we mint a new one.
+                let existing_uid = vault
+                    .get_item(alias.as_bytes())
+                    .ok()
+                    .flatten()
+                    .and_then(|it| serde_json::from_slice::<StoredProfile>(&it.content).ok())
+                    .and_then(|sp| sp.uid)
+                    .filter(|u| !u.is_empty());
+                let s = cfg.resolve(alias);
+                let stored = StoredProfile {
+                    uid: Some(existing_uid.unwrap_or_else(mint_profile_uid)),
+                    label: alias.clone(),
+                    host: s.hostname.unwrap_or_else(|| alias.clone()),
+                    port: s.port.unwrap_or(22),
+                    user: s.user.unwrap_or_default(),
+                    key_item_id: None,
+                    password_item_id: None,
+                    personal: false,
+                    username_template: None,
+                    jumps: parse_proxy_jump(s.proxy_jump.as_deref()),
+                    proxy: None,
+                    tags: Vec::new(),
+                    startup_snippet_ids: Vec::new(),
+                    record_sessions: false,
+                    agent_forward: false,
+                    system_agent_public_key: None,
+                    extra: std::collections::BTreeMap::new(),
+                };
+                let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
+                vault
+                    .put_item(alias.as_bytes(), ITEM_TYPE_CONNECTION, &json)
+                    .map_err(FfiError::other)?;
+                created.push(ImportedSshHost {
+                    alias: host.alias,
+                    origin_file: host.origin,
+                });
+            }
+            Ok(created)
+        })
+    }
+
     /// Takes the state lock, recovering from mutex poisoning (the data
     /// under the lock is ordinary, not invariant-bearing) so that a single panic does not
     /// "jam" the entire Core forever on calls through the FFI.
@@ -7181,7 +7227,7 @@ pub struct Snippet {
 /// A directive an `~/.ssh/config` import will not carry over.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SkippedDirectiveFfi {
-    /// 1-based line in the config text.
+    /// 1-based line in the file it was written in.
     pub line: u32,
     /// The directive as written, e.g. `ProxyCommand`.
     pub keyword: String,
@@ -7191,17 +7237,148 @@ pub struct SkippedDirectiveFfi {
     /// block has to be rewritten as a `Host` block, an unsupported directive
     /// simply has no equivalent.
     pub inside_match: bool,
+    /// The included file it was written in, or `None` for the config itself.
+    /// A line number alone is not actionable once an import spans several files.
+    pub origin_file: Option<String>,
+}
+
+/// A host an `~/.ssh/config` import would create, resolved the way `ssh` would
+/// resolve it — so a preview built from this shows what the import will do
+/// rather than a second opinion about the file.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SshConfigHost {
+    /// The `Host` alias, which becomes the profile's id and label.
+    pub alias: String,
+    /// The included file it was written in, or `None` for the config itself.
+    /// This is what an importer maps onto groups.
+    pub origin_file: Option<String>,
+    /// `HostName`, or the alias when the config gives none.
+    pub hostname: String,
+    /// `Port`, or 22.
+    pub port: u16,
+    /// `User`, if the config sets one.
+    pub user: Option<String>,
+    /// `IdentityFile` as written (`~` not expanded), if the config sets one.
+    pub identity_file: Option<String>,
+}
+
+/// An `Include` a report saw but did not follow.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PendingIncludeFfi {
+    /// The path exactly as the config wrote it.
+    pub path: String,
+    /// The included file the `Include` line sits in, `None` for the config
+    /// itself. Two files can each say `Include local`; without this the report
+    /// names the same string twice and neither is a place to go and fix.
+    pub origin_file: Option<String>,
+}
+
+/// A file an `~/.ssh/config` report read, and what pulled it in.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SshConfigFile {
+    /// Where it was read from.
+    pub path: String,
+    /// The file whose `Include` line pulled it in; `None` for the config the
+    /// user picked. An importer walks this up to the file the picked config
+    /// included directly — one level of grouping, however deep the includes go.
+    pub included_by: Option<String>,
+}
+
+/// A host an `~/.ssh/config` import created.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ImportedSshHost {
+    /// The alias, which is the profile's id.
+    pub alias: String,
+    /// The included file it came from, or `None` for the config itself.
+    pub origin_file: Option<String>,
 }
 
 /// What importing an `~/.ssh/config` would produce.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SshConfigReport {
-    /// Concrete host aliases that would become profiles.
-    pub aliases: Vec<String>,
+    /// The hosts that would become profiles, in the order they appear.
+    pub hosts: Vec<SshConfigHost>,
     /// Directives that would be dropped.
     pub skipped: Vec<SkippedDirectiveFfi>,
-    /// `Include` paths seen but not followed.
-    pub pending_includes: Vec<String>,
+    /// `Include`s seen but **not** followed: all of them for a report on config
+    /// text, and for a report on a file the ones that could not be read.
+    pub pending_includes: Vec<PendingIncludeFfi>,
+    /// Every file the report read, the one the user picked first. Empty for a
+    /// report on text, which reads nothing. Following includes means touching
+    /// files the user did not name, and this is how the preview says which.
+    pub files_read: Vec<SshConfigFile>,
+}
+
+/// Reads a config file and follows its `Include` directives. Returns the parsed
+/// config and every file that was read, the picked one first.
+fn parse_ssh_config_at(path: &str) -> Result<(SshConfig, Vec<SshConfigFile>), FfiError> {
+    let root = expand_leading_home(path);
+    let text = std::fs::read_to_string(&root)
+        .map_err(|e| FfiError::other(format!("{}: {e}", root.display())))?;
+    let mut loader = ssh_include::IncludeLoader::new(&root);
+    let cfg = SshConfig::parse_with_includes(&text, |spec, including| loader.load(spec, including))
+        .map_err(FfiError::other)?;
+    let mut files_read = vec![SshConfigFile {
+        path: root.to_string_lossy().to_string(),
+        included_by: None,
+    }];
+    files_read.extend(loader.files_read().iter().map(|f| SshConfigFile {
+        path: f.path.clone(),
+        included_by: Some(f.included_by.clone()),
+    }));
+    Ok((cfg, files_read))
+}
+
+/// `~/…` for the config path itself. The file picker hands over an absolute
+/// path; a CLI user types the one they would type at a shell prompt.
+fn expand_leading_home(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => match unissh_local_pty::home_dir() {
+            Some(home) => home.join(rest),
+            None => PathBuf::from(path),
+        },
+        None => PathBuf::from(path),
+    }
+}
+
+/// The report for an already-parsed config.
+fn ssh_config_report_of(cfg: &SshConfig, files_read: Vec<SshConfigFile>) -> SshConfigReport {
+    SshConfigReport {
+        hosts: cfg
+            .host_aliases_with_origin()
+            .into_iter()
+            .map(|h| {
+                let s = cfg.resolve(&h.alias);
+                SshConfigHost {
+                    hostname: s.hostname.unwrap_or_else(|| h.alias.clone()),
+                    port: s.port.unwrap_or(22),
+                    user: s.user,
+                    identity_file: s.identity_file,
+                    alias: h.alias,
+                    origin_file: h.origin,
+                }
+            })
+            .collect(),
+        skipped: cfg
+            .skipped()
+            .iter()
+            .map(|s| SkippedDirectiveFfi {
+                line: s.line,
+                keyword: s.keyword.clone(),
+                inside_match: matches!(s.reason, unissh_ssh_transport::SkipReason::InsideMatch),
+                origin_file: s.origin.clone(),
+            })
+            .collect(),
+        pending_includes: cfg
+            .pending_includes()
+            .iter()
+            .map(|p| PendingIncludeFfi {
+                path: p.path.clone(),
+                origin_file: p.origin.clone(),
+            })
+            .collect(),
+        files_read,
+    }
 }
 
 /// Which algorithms a connection may negotiate.
