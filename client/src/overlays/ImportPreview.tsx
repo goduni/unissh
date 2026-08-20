@@ -742,7 +742,16 @@ function ImportPreviewBody() {
                     )}
                   </div>
                   <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
-                    {pendingIncludes.join("  ·  ")}
+                    {pendingIncludes
+                      .map((inc) =>
+                        // Named with the file it was written in: two files can
+                        // each say `Include local`, and the path alone is then
+                        // the same string twice and no place to go and fix.
+                        inc.originFile
+                          ? `${shortPath(inc.originFile, configPath)}: ${inc.path}`
+                          : inc.path,
+                      )
+                      .join("  ·  ")}
                   </div>
                 </div>
               )}

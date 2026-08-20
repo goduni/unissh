@@ -55,7 +55,8 @@ pub use client::{
     PromptField, SftpSession, ShellHandle, SshClient, SystemAgentKey,
 };
 pub use config::{
-    glob_match, HostOrigin, HostSettings, IncludedFile, SkipReason, SkippedDirective, SshConfig,
+    glob_match, HostOrigin, HostSettings, IncludedFile, PendingInclude, SkipReason,
+    SkippedDirective, SshConfig,
 };
 pub use error::TransportError;
 pub use forward::{AgentApproval, ForwardedAgent};

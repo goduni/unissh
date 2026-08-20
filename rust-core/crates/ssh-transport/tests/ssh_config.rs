@@ -3,6 +3,13 @@
 use unissh_ssh_transport::{HostSettings, IncludedFile, SshConfig};
 
 /// One included file, for the loader closures below.
+fn pending(cfg: &SshConfig) -> Vec<String> {
+    cfg.pending_includes()
+        .iter()
+        .map(|p| p.path.clone())
+        .collect()
+}
+
 fn file(path: &str, text: &str) -> Vec<IncludedFile> {
     vec![IncludedFile {
         path: path.to_string(),
@@ -335,7 +342,7 @@ fn an_include_that_expands_to_nothing_stays_pending() {
         }
     })
     .unwrap();
-    assert_eq!(cfg.pending_includes(), ["missing/config"]);
+    assert_eq!(pending(&cfg), ["missing/config"]);
     assert_eq!(cfg.host_aliases(), ["a"], "the rest of the config survives");
 }
 
@@ -359,7 +366,7 @@ fn one_include_line_may_name_several_files() {
         ["project1/config", "missing/config", "with space/config"]
     );
     assert_eq!(cfg.host_aliases(), ["p1", "spaced"]);
-    assert_eq!(cfg.pending_includes(), ["missing/config"]);
+    assert_eq!(pending(&cfg), ["missing/config"]);
 }
 
 #[test]
@@ -367,7 +374,7 @@ fn without_a_loader_every_path_on_the_line_is_reported() {
     // Pasted config text follows nothing, so it has to name everything it did
     // not follow — one entry per path, not one per line.
     let cfg = SshConfig::parse("Include a/config b/config\n").unwrap();
-    assert_eq!(cfg.pending_includes(), ["a/config", "b/config"]);
+    assert_eq!(pending(&cfg), ["a/config", "b/config"]);
 }
 
 #[test]
@@ -391,6 +398,30 @@ fn the_loader_is_told_which_file_the_include_line_sits_in() {
         [
             ("a/config".to_string(), None),
             ("b/config".to_string(), Some("a/config".to_string())),
+        ]
+    );
+}
+
+#[test]
+fn an_unfollowed_include_names_the_file_it_was_written_in() {
+    // Two files can each say `Include local`. Without the origin the report
+    // shows the same string twice and neither is a place to go and fix.
+    let root = "Include local\nInclude a/config\n";
+    let cfg = SshConfig::parse_with_includes(root, |path, _via| match path {
+        "a/config" => file("a/config", "Include local\n"),
+        _ => Vec::new(),
+    })
+    .unwrap();
+    let got: Vec<(String, Option<String>)> = cfg
+        .pending_includes()
+        .iter()
+        .map(|p| (p.path.clone(), p.origin.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("local".to_string(), None),
+            ("local".to_string(), Some("a/config".to_string())),
         ]
     );
 }

@@ -36,6 +36,15 @@ fn path(p: &Path) -> String {
     p.to_str().unwrap().to_string()
 }
 
+/// The `Include`s a report saw but did not follow, as `path` strings.
+fn pending(report: &unissh_ffi::SshConfigReport) -> Vec<String> {
+    report
+        .pending_includes
+        .iter()
+        .map(|p| p.path.clone())
+        .collect()
+}
+
 /// The paths a report says it read, in order.
 fn files(report: &unissh_ffi::SshConfigReport) -> Vec<String> {
     report.files_read.iter().map(|f| f.path.clone()).collect()
@@ -68,7 +77,7 @@ fn a_relative_include_is_resolved_against_the_configs_own_directory() {
         Some(path(&ssh.join("project1/config")).as_str()),
         "the host has to name the file it came from — the group is derived from it"
     );
-    assert!(report.pending_includes.is_empty());
+    assert!(pending(&report).is_empty());
     assert_eq!(
         files(&report),
         [path(&cfg), path(&ssh.join("project1/config"))],
@@ -146,7 +155,7 @@ fn a_missing_include_is_skipped_reported_and_costs_nothing_else() {
     let report = core.ssh_config_report_at_path(path(&cfg)).unwrap();
     assert_eq!(aliases(&report), ["there", "local"]);
     assert_eq!(
-        report.pending_includes,
+        pending(&report),
         ["gone/config"],
         "an include that went nowhere must be visible, or a missing host has no explanation"
     );
@@ -171,7 +180,7 @@ fn an_unreadable_include_is_skipped_and_reported_like_a_missing_one() {
         return;
     }
     assert_eq!(aliases(&report), ["local"]);
-    assert_eq!(report.pending_includes, ["secret/config"]);
+    assert_eq!(pending(&report), ["secret/config"]);
     assert_eq!(files(&report), [path(&cfg)]);
 }
 
@@ -354,7 +363,7 @@ fn a_config_without_includes_behaves_exactly_as_before() {
     assert_eq!(aliases(&report), ["solo"]);
     assert_eq!(report.hosts[0].origin_file, None);
     assert_eq!(files(&report), [path(&cfg)]);
-    assert!(report.pending_includes.is_empty());
+    assert!(pending(&report).is_empty());
 }
 
 #[test]
@@ -366,7 +375,48 @@ fn config_text_still_reports_includes_as_unfollowed() {
         .ssh_config_report("Include conf.d/*\nHost a\n".to_string())
         .unwrap();
     assert_eq!(aliases(&report), ["a"]);
-    assert_eq!(report.pending_includes, ["conf.d/*"]);
+    assert_eq!(pending(&report), ["conf.d/*"]);
     assert!(report.files_read.is_empty());
     assert_eq!(report.hosts[0].origin_file, None);
+}
+
+#[test]
+fn a_pattern_that_matched_nothing_is_not_reported_as_a_broken_include() {
+    // `Include conf.d/*` over an empty directory is an ordinary config, not a
+    // stale line; warning about it on every import would be noise.
+    let dir = tempfile::tempdir().unwrap();
+    let ssh = dir.path().join(".ssh");
+    fs::create_dir_all(ssh.join("conf.d")).unwrap();
+    let cfg = write(&ssh, "config", "Include conf.d/*\nHost local\n");
+
+    let core = vault(dir.path());
+    let report = core.ssh_config_report_at_path(path(&cfg)).unwrap();
+    assert_eq!(aliases(&report), ["local"]);
+    assert!(pending(&report).is_empty(), "{:?}", pending(&report));
+    assert_eq!(files(&report), [path(&cfg)]);
+}
+
+#[test]
+fn an_unfollowed_include_names_the_file_it_was_written_in() {
+    // Two files each saying `Include local` must not come back as one string
+    // twice, with no clue which file to go and fix.
+    let dir = tempfile::tempdir().unwrap();
+    let ssh = dir.path().join(".ssh");
+    write(&ssh, "a/config", "Include local\n");
+    let cfg = write(&ssh, "config", "Include local\nInclude a/config\n");
+
+    let core = vault(dir.path());
+    let report = core.ssh_config_report_at_path(path(&cfg)).unwrap();
+    let got: Vec<(String, Option<String>)> = report
+        .pending_includes
+        .iter()
+        .map(|p| (p.path.clone(), p.origin_file.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("local".to_string(), None),
+            ("local".to_string(), Some(path(&ssh.join("a/config")))),
+        ]
+    );
 }

@@ -326,11 +326,20 @@ export interface SshConfigHost {
 export interface SshConfigReport {
   hosts: SshConfigHost[];
   skipped: SkippedDirective[];
-  /** `Include` paths seen but not followed — all of them for a report on pasted
+  /** `Include`s seen but not followed — all of them for a report on pasted
    *  text, and the unreadable ones for a report on a file. */
-  pendingIncludes: string[];
+  pendingIncludes: PendingInclude[];
   /** Every file the report read, the picked one first; empty for text. */
   filesRead: SshConfigFile[];
+}
+
+/** An `Include` a report saw but did not follow. */
+export interface PendingInclude {
+  path: string;
+  /** The file the `Include` line sits in; null for the config that was picked.
+   *  Two files can each say `Include local` — without this the report names the
+   *  same string twice and neither is a place to go and fix. */
+  originFile: string | null;
 }
 
 /** A file a report read, and the file whose `Include` pulled it in. */

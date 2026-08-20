@@ -7262,6 +7262,17 @@ pub struct SshConfigHost {
     pub identity_file: Option<String>,
 }
 
+/// An `Include` a report saw but did not follow.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PendingIncludeFfi {
+    /// The path exactly as the config wrote it.
+    pub path: String,
+    /// The included file the `Include` line sits in, `None` for the config
+    /// itself. Two files can each say `Include local`; without this the report
+    /// names the same string twice and neither is a place to go and fix.
+    pub origin_file: Option<String>,
+}
+
 /// A file an `~/.ssh/config` report read, and what pulled it in.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SshConfigFile {
@@ -7289,9 +7300,9 @@ pub struct SshConfigReport {
     pub hosts: Vec<SshConfigHost>,
     /// Directives that would be dropped.
     pub skipped: Vec<SkippedDirectiveFfi>,
-    /// `Include` paths seen but **not** followed: all of them for a report on
-    /// config text, and for a report on a file the ones that could not be read.
-    pub pending_includes: Vec<String>,
+    /// `Include`s seen but **not** followed: all of them for a report on config
+    /// text, and for a report on a file the ones that could not be read.
+    pub pending_includes: Vec<PendingIncludeFfi>,
     /// Every file the report read, the one the user picked first. Empty for a
     /// report on text, which reads nothing. Following includes means touching
     /// files the user did not name, and this is how the preview says which.
@@ -7358,7 +7369,14 @@ fn ssh_config_report_of(cfg: &SshConfig, files_read: Vec<SshConfigFile>) -> SshC
                 origin_file: s.origin.clone(),
             })
             .collect(),
-        pending_includes: cfg.pending_includes().to_vec(),
+        pending_includes: cfg
+            .pending_includes()
+            .iter()
+            .map(|p| PendingIncludeFfi {
+                path: p.path.clone(),
+                origin_file: p.origin.clone(),
+            })
+            .collect(),
         files_read,
     }
 }

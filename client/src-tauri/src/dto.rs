@@ -1370,6 +1370,15 @@ pub struct SshConfigHost {
     pub identity_file: Option<String>,
 }
 
+/// An `Include` a report saw but did not follow.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInclude {
+    pub path: String,
+    /// The file the `Include` line sits in; `None` for the picked config.
+    pub origin_file: Option<String>,
+}
+
 /// A file a report read, and what pulled it in.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1401,9 +1410,9 @@ impl From<ffi::ImportedSshHost> for ImportedSshHost {
 pub struct SshConfigReport {
     pub hosts: Vec<SshConfigHost>,
     pub skipped: Vec<SkippedDirective>,
-    /// `Include` paths seen but not followed — all of them for a report on
-    /// pasted text, and the unreadable ones for a report on a file.
-    pub pending_includes: Vec<String>,
+    /// `Include`s seen but not followed — all of them for a report on pasted
+    /// text, and the unreadable ones for a report on a file.
+    pub pending_includes: Vec<PendingInclude>,
     /// Every file the report read, the picked one first. Empty for text.
     pub files_read: Vec<SshConfigFile>,
 }
@@ -1423,7 +1432,14 @@ impl From<ffi::SshConfigReport> for SshConfigReport {
                     identity_file: h.identity_file,
                 })
                 .collect(),
-            pending_includes: r.pending_includes,
+            pending_includes: r
+                .pending_includes
+                .into_iter()
+                .map(|p| PendingInclude {
+                    path: p.path,
+                    origin_file: p.origin_file,
+                })
+                .collect(),
             files_read: r
                 .files_read
                 .into_iter()

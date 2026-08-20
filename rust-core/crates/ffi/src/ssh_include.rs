@@ -94,8 +94,20 @@ impl IncludeLoader {
     /// an include seen but not followed.
     pub fn load(&mut self, spec: &str, including: Option<&str>) -> Vec<IncludedFile> {
         let included_by = including.unwrap_or(&self.root).to_string();
+        let expanded = self.expand(spec);
+        // A pattern that matched nothing is not a broken include: `Include
+        // conf.d/*` is how a config says "whatever is in there", and an empty
+        // directory is a legitimate answer to that. Reporting it would put a
+        // warning on an ordinary config at every import. A *named* file that is
+        // not there is a different claim, and stays reported.
+        if expanded.is_empty() && spec.contains(['*', '?']) {
+            return vec![IncludedFile {
+                path: spec.to_string(),
+                text: String::new(),
+            }];
+        }
         let mut out = Vec::new();
-        for path in self.expand(spec) {
+        for path in expanded {
             // A file reached twice contributes once. Re-parsing it would change
             // nothing (resolution is first-match-wins, so the second copy always
             // loses) but a config that includes itself would never terminate.
@@ -338,17 +350,36 @@ mod tests {
     }
 
     #[test]
+    fn a_pattern_that_matched_nothing_is_followed_not_reported() {
+        // `Include conf.d/*` over an empty (or absent) directory is an ordinary
+        // config saying "whatever is in there", not a stale line to warn about.
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("conf.d")).unwrap();
+        let cfg = write(dir.path(), "config", "");
+        let mut l = loader(&cfg, None);
+
+        let got = l.load("conf.d/*", None);
+        assert_eq!(got.len(), 1, "followed, so the parser does not report it");
+        assert_eq!(got[0].text, "", "and it contributes nothing");
+        assert!(
+            l.files_read().is_empty(),
+            "while disclosing no file it read"
+        );
+
+        assert!(
+            l.load("absent.d/*.conf", None).len() == 1,
+            "the same when the directory itself is not there"
+        );
+    }
+
+    #[test]
     fn nothing_readable_behind_a_path_yields_nothing() {
         // Which is how the parser learns to report it as seen-but-not-followed.
         let dir = tempfile::tempdir().unwrap();
         let cfg = write(dir.path(), "config", "");
         fs::create_dir_all(dir.path().join("adir")).unwrap();
         let mut l = loader(&cfg, None);
-        assert!(l.load("gone", None).is_empty());
-        assert!(
-            l.load("conf.d/*", None).is_empty(),
-            "a glob matching nothing"
-        );
+        assert!(l.load("gone", None).is_empty(), "a file that is not there");
         assert!(
             l.load("adir", None).is_empty(),
             "a directory is not a config"

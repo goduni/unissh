@@ -85,6 +85,18 @@ pub struct IncludedFile {
     pub text: String,
 }
 
+/// An `Include` path that was seen but not followed, and the file it was written
+/// in. Two files can each say `Include local`; without the origin the report
+/// names the same string twice and neither is a place to go and fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingInclude {
+    /// The path exactly as written.
+    pub path: String,
+    /// The included file the `Include` line sits in, or `None` for the config
+    /// text itself.
+    pub origin: Option<String>,
+}
+
 /// A concrete host alias together with the file it was written in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostOrigin {
@@ -110,7 +122,7 @@ struct HostBlock {
 pub struct SshConfig {
     blocks: Vec<HostBlock>,
     skipped: Vec<SkippedDirective>,
-    includes: Vec<String>,
+    includes: Vec<PendingInclude>,
 }
 
 impl SshConfig {
@@ -227,7 +239,11 @@ impl SshConfig {
                 }
                 if load.is_none() {
                     // No loader: record every path and follow none of them.
-                    self.includes.extend(paths);
+                    self.includes
+                        .extend(paths.into_iter().map(|path| PendingInclude {
+                            path,
+                            origin: origin.map(str::to_string),
+                        }));
                 } else if depth >= MAX_INCLUDE_DEPTH {
                     // A cycle (a includes b includes a) has to stop somewhere;
                     // OpenSSH's own limit is 16. Reported, not silently cut.
@@ -257,7 +273,10 @@ impl SshConfig {
                         // silence costs the user the one clue for why a host they
                         // expected is not in the import.
                         if files.is_empty() {
-                            self.includes.push(spec);
+                            self.includes.push(PendingInclude {
+                                path: spec,
+                                origin: origin.map(str::to_string),
+                            });
                             continue;
                         }
                         for inc in files {
@@ -347,7 +366,7 @@ impl SshConfig {
     /// when parsed with [`Self::parse`], and with
     /// [`Self::parse_with_includes`] the ones the loader could not open — a
     /// missing file, one it may not read, or a glob that matched nothing.
-    pub fn pending_includes(&self) -> &[String] {
+    pub fn pending_includes(&self) -> &[PendingInclude] {
         &self.includes
     }
 
