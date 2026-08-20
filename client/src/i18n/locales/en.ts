@@ -531,6 +531,7 @@ export const en = {
     "searchPlaceholder": "Filter by name, address or tag",
     "connect": "Connect",
     "menu": {
+      "copyAddress": "Copy address",
       "addToGroup": "Add to group\u2026",
       "manageGroups": "Manage groups\u2026"
     },
@@ -593,10 +594,12 @@ export const en = {
       "newTagPlaceholder": "New tag…",
       "nothingToRemove": "Selected hosts aren't in any group or tag.",
       "addedToGroup": "Added to {{name}}",
+      "movedToGroup": "Moved to {{name}}",
       "removedFromGroup": "Removed from {{name}}",
       "addedTag": "Tagged #{{name}}",
       "removedTag": "Removed #{{name}}"
     },
+    "addressCopied": "Address copied",
     "railHost": "Host",
     "railSessions": "Sessions",
     "selectHost": "Select a host",

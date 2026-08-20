@@ -271,6 +271,17 @@ interface AppStore {
    *  subscribes to this monotonic counter to react to every navigation. */
   routeSeq: number;
   device: Device;
+  /** Is the sidebar showing its GROUP list right now — i.e. wide enough for the
+   *  full sidebar and not collapsed by hand? Lives here only because ViewHosts
+   *  has to know: the group items are the drop targets for dragging a host into
+   *  a group, and with the sidebar folded to its icon rail there are none, so
+   *  the drag has to stop offering itself. App owns the two inputs (a width
+   *  breakpoint and a persisted toggle) and pushes the answer down.
+   *
+   *  Deliberately a BOOLEAN, not the sidebar's pixel width: App.tsx keeps the
+   *  width out of shared state because it changes on every frame of a resize.
+   *  This flips twice in the life of a drag. */
+  groupsNavVisible: boolean;
 
   // vault + data
   vaultId: string | null;
@@ -379,6 +390,7 @@ interface AppStore {
    *  navigates to the Known-hosts view. Shared by every review entry point. */
   reviewMismatch: (m: PendingMismatch) => void;
   setDevice: (d: Device) => void;
+  setGroupsNavVisible: (v: boolean) => void;
   setAutolockMin: (m: number | null) => void;
   setVault: (id: string) => Promise<void>;
   reloadVault: () => Promise<void>;
@@ -724,6 +736,7 @@ export const useApp = create<AppStore>((set, get) => ({
   route: "hosts", // always open on the all-hosts view (hostFilter defaults to HOST_FILTER_ALL)
   routeSeq: 0,
   device: lsDevice(),
+  groupsNavVisible: true,
   vaultId: null,
   vaults: [],
   hosts: [],
@@ -933,6 +946,11 @@ export const useApp = create<AppStore>((set, get) => ({
   runBack: () => get().backHandler?.() ?? false,
   reviewMismatch: (m) => {
     set((s) => ({ pendingMismatch: m, route: "known", routeSeq: s.routeSeq + 1, settingsOpen: false }));
+  },
+  setGroupsNavVisible: (v) => {
+    // Guarded: App pushes this on every render pass that could have changed it,
+    // and an unconditional set would notify every subscriber each time.
+    if (get().groupsNavVisible !== v) set({ groupsNavVisible: v });
   },
   setDevice: (d) => {
     // The panel only exists in the desktop shell, so carrying `settingsOpen`

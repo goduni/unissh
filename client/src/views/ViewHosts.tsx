@@ -14,12 +14,21 @@ import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, paneProfile, HOST_FILTER_ALL } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useCtx } from "@/store/ctx";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import * as api from "@/bridge/api";
 import { profileAuthKind, apiErrorMessage } from "@/bridge/types";
 import type { ConnectionProfile } from "@/bridge/types";
 import { useTranslation, tDyn } from "@/i18n";
 import { nextRow } from "@/support/listNav";
 import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
+import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
+
+/** The address as the list shows it — and, since dragging a card no longer lets
+ *  you select the text on it (a `draggable` element cannot be text-selected),
+ *  as "Copy address" puts it on the clipboard. One definition so the three can
+ *  never disagree; it also stops a host with no user rendering as `@10.0.0.1`. */
+const hostAddress = (h: ConnectionProfile): string =>
+  h.user ? `${h.user}@${h.host}` : h.host;
 
 type SortKey = "name" | "added" | "connected";
 type RailTab = "detail" | "sessions";
@@ -54,6 +63,8 @@ function HostCard({
   onConnect,
   onSftp,
   onMenu,
+  draggable,
+  onDragStart,
 }: {
   h: ConnectionProfile;
   selected: boolean;
@@ -69,6 +80,9 @@ function HostCard({
   onConnect: () => void;
   onSftp: () => void;
   onMenu: (e: React.MouseEvent) => void;
+  /** Off on touch and when the vault has no groups — see ViewHosts. */
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
 }) {
   const p = usePalette();
   const { t, i18n } = useTranslation();
@@ -93,6 +107,8 @@ function HostCard({
       // and the filters do to this list.
       data-host-id={h.profileId}
       active={active || selected}
+      draggable={draggable}
+      onDragStart={onDragStart}
       onClick={onOpen}
       onDoubleClick={onConnect}
       onContextMenu={onMenu}
@@ -193,7 +209,7 @@ function HostCard({
           marginTop: 6,
         }}
       >
-        {h.user ? `${h.user}@${h.host}` : h.host}
+        {hostAddress(h)}
       </div>
 
       {/* L3 — status · auth (one mono line; colour only on meaning).
@@ -350,6 +366,8 @@ function HostRow({
   onOpen,
   onConnect,
   onMenu,
+  draggable,
+  onDragStart,
 }: {
   h: ConnectionProfile;
   selected: boolean;
@@ -362,6 +380,9 @@ function HostRow({
   onOpen: () => void;
   onConnect: () => void;
   onMenu: (e: React.MouseEvent) => void;
+  /** Off on touch and when the vault has no groups — see ViewHosts. */
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
 }) {
   const p = usePalette();
   const { t } = useTranslation();
@@ -376,6 +397,8 @@ function HostRow({
       tabIndex={0}
       data-host-id={h.profileId}
       aria-current={cursor ? "true" : undefined}
+      draggable={draggable}
+      onDragStart={onDragStart}
       onKeyDown={pressActivate(onOpen)}
       onFocus={() => setFocusIn(true)}
       onBlur={(e) => {
@@ -449,7 +472,7 @@ function HostRow({
           whiteSpace: "nowrap",
         }}
       >
-        {h.user}@{h.host}
+        {hostAddress(h)}
       </span>
       <div style={{ display: "flex", gap: 5, width: 130, flexShrink: 0, overflow: "hidden", alignItems: "center" }}>
         {h.tags.slice(0, 2).map((tg) => (
@@ -1339,6 +1362,26 @@ export function ViewHosts() {
   useMenu(sortOpen, () => setSortOpen(false), sortRef);
   const [sel, setSel] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(hosts[0]?.profileId ?? null);
+  // Dragging a host onto a group files it there. The drop targets are the
+  // sidebar's group items (Shell) — on the desktop that IS the group UI; the
+  // chips in the strip below are the touch shell's stand-in for it, and touch
+  // has no drag to give them.
+  const beginHostDrag = (profileId: string, e: React.DragEvent) => {
+    hostDrag.set(draggedHostIds(profileId, sel));
+    try {
+      // The payload lives in hostDrag; this only arms the native gesture, which
+      // WebKit refuses to start with an empty data store. `move`, not `copy`: a
+      // host belongs to exactly one group, so the drop empties where it was.
+      e.dataTransfer.setData(HOST_DRAG_MIME, profileId);
+      e.dataTransfer.effectAllowed = "move";
+    } catch {
+      /* non-fatal */
+    }
+    // Covers every ending the drop handler doesn't: Escape, a drop on the
+    // toolbar, a drop on a tag chip. The browser fires dragend for all of them,
+    // and an empty payload is a no-op everywhere it is read.
+    window.addEventListener("dragend", () => hostDrag.clear(), { once: true });
+  };
   const [rail, setRail] = useState<RailTab>("detail");
   // The fixed-width detail rail would squish the list to a sliver when there isn't
   // room for both side by side, so render it as a full-width overlay instead. Trigger
@@ -1351,6 +1394,13 @@ export function ViewHosts() {
   // A 719px desktop window is narrow but NOT touch.
   const narrow = useNarrow();
   const touch = useIsMobile();
+  // A vertical drag on a phone is a scroll, so the phone shell never gets the
+  // attribute at all. The other two conditions are the same rule twice: an
+  // affordance that can only fail is worse than none. With no groups there is
+  // nowhere to drop; with the sidebar folded to its icon rail the groups exist
+  // but none of them is on screen, so the drop targets do not either.
+  const groupsNavVisible = useApp((s) => s.groupsNavVisible);
+  const canDragHosts = !touch && groups.length > 0 && groupsNavVisible;
   const rowRef = useRef<HTMLDivElement | null>(null);
   const [rowW, setRowW] = useState(0);
   useEffect(() => {
@@ -2285,6 +2335,8 @@ export function ViewHosts() {
                     e.preventDefault();
                     setMenu({ x: e.clientX, y: e.clientY, id: h.profileId, sub: false });
                   }}
+                  draggable={canDragHosts}
+                  onDragStart={(e) => beginHostDrag(h.profileId, e)}
                 />
               ))}
             </div>
@@ -2306,6 +2358,8 @@ export function ViewHosts() {
                     e.preventDefault();
                     setMenu({ x: e.clientX, y: e.clientY, id: h.profileId, sub: false });
                   }}
+                  draggable={canDragHosts}
+                  onDragStart={(e) => beginHostDrag(h.profileId, e)}
                 />
               ))}
             </div>
@@ -2576,6 +2630,19 @@ export function ViewHosts() {
           : [
               { icon: "terminal", label: t("hosts.connect"), onClick: () => ctx.connect(mh) },
               { icon: "folders", label: t("nav.sftp"), onClick: () => void ctx.connectSftp(mh) },
+              {
+                icon: "copy",
+                label: t("hosts.menu.copyAddress"),
+                // Dragging a card is what took the old way of getting this out
+                // of the screen — you cannot select text on a `draggable`
+                // element. This is better than what it replaces: it works in the
+                // row layout too, where the address is ellipsised, and it does
+                // not depend on hitting 12px of mono type with the pointer.
+                onClick: () =>
+                  void writeText(hostAddress(mh))
+                    .then(() => ctx.toast(t("hosts.addressCopied"), "ok"))
+                    .catch((e) => ctx.toast(apiErrorMessage(e), "err")),
+              },
               {
                 icon: "folder",
                 label: t("hosts.menu.addToGroup"),

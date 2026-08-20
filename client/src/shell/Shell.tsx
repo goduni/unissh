@@ -2,7 +2,7 @@
 // switcher, nav. Faithful port of app-shell.jsx + app-main.jsx title slots,
 // fed by real store data.
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO } from "@/theme/tokens";
@@ -11,12 +11,13 @@ import { FlatAvatar, SyncBadge } from "@/components/mono";
 import { useExternalEdits } from "@/sftp/external-edit";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
+import { hostDrag } from "@/support/hostDrag";
 import { isMac, isTauri } from "@/bridge/platform";
 import { useFullscreen, useMaximized } from "@/shell/WindowChrome";
 import { useNarrow } from "@/store/responsive";
 import type { Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import { type VaultInfo } from "@/bridge/types";
+import { apiErrorMessage, type VaultInfo } from "@/bridge/types";
 import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { useTranslation, tDyn } from "@/i18n";
 
@@ -314,6 +315,7 @@ function NavItem({
   sub,
   onClick,
   badge,
+  onDropHosts,
 }: {
   icon?: IconName;
   label: string;
@@ -322,6 +324,10 @@ function NavItem({
   sub?: boolean;
   onClick?: () => void;
   badge?: string;
+  /** Makes this item a drop target for hosts dragged off the Hosts screen.
+   *  Only the group items pass it: "All hosts" is not a group, and dropping a
+   *  host on it would mean un-grouping — a menu action, not this gesture. */
+  onDropHosts?: (profileIds: string[]) => void;
 }) {
   const p = usePalette();
   // Hover fill is React state, not an imperative e.currentTarget.style mutation:
@@ -329,12 +335,51 @@ function NavItem({
   // reconciler sees background unchanged ("transparent" both renders) and leaves a
   // stale old-theme fill until the next mouse event. Declaring it keeps it in sync.
   const [hover, setHover] = useState(false);
+  // Lit only while a host drag is actually over THIS item, so the affordance
+  // says "the drop lands here" and not merely "a drag is happening".
+  const [dropOver, setDropOver] = useState(false);
+  // `dragleave` is not fired for a drag that ENDS over the item — press Escape
+  // with the pointer here and the ring would stay lit on a drop that never
+  // happened. `dragend` bubbles to the window for every ending there is.
+  useEffect(() => {
+    if (!dropOver) return;
+    const off = () => setDropOver(false);
+    window.addEventListener("dragend", off);
+    return () => window.removeEventListener("dragend", off);
+  }, [dropOver]);
+  const dragProps = onDropHosts
+    ? {
+        onDragOver: (e: React.DragEvent) => {
+          // No payload = not our drag (a file from the desktop, a link): leave it
+          // unhandled so the item stays inert rather than pretending to accept it.
+          if (hostDrag.get().length === 0) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          setDropOver(true);
+        },
+        // Crossing into the item's own icon/label fires dragleave on the item
+        // (relatedTarget = the child), which without this guard blinks the ring
+        // off and on as the pointer travels across it.
+        onDragLeave: (e: React.DragEvent) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setDropOver(false);
+        },
+        onDrop: (e: React.DragEvent) => {
+          e.preventDefault();
+          setDropOver(false);
+          const ids = hostDrag.get();
+          hostDrag.clear();
+          if (ids.length > 0) onDropHosts(ids);
+        },
+      }
+    : null;
   return (
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      {...dragProps}
       style={{
         ...BTN_RESET,
         display: "flex",
@@ -349,9 +394,19 @@ function NavItem({
         cursor: "pointer",
         // Active = neutral fill + a 2.5px accent edge tick (the reference tick alone
         // read as almost invisible); hover = the same faint fill, no tick.
-        background: active || hover ? p.bg2 : "transparent",
+        background: active || hover || dropOver ? p.bg2 : "transparent",
         color: active ? p.txt : p.txt2,
-        boxShadow: active ? `inset 2.5px 0 0 ${p.accent}` : "none",
+        // Drop target = the same accent in a lighter weight: a hairline ring
+        // instead of the solid edge tick, so "the drop lands here" is legible at
+        // a glance yet never reads as "you are here" — the two are visible side
+        // by side while the drag is over a group that isn't the current filter.
+        boxShadow:
+          [
+            active ? `inset 2.5px 0 0 ${p.accent}` : null,
+            dropOver ? `inset 0 0 0 1px ${p.accent}` : null,
+          ]
+            .filter(Boolean)
+            .join(", ") || "none",
         fontSize: 13,
         fontWeight: active ? 600 : 500,
       }}
@@ -831,7 +886,32 @@ export function Sidebar({
   const terminals = useApp((s) => s.terminals);
   const tunnels = useApp((s) => s.tunnels);
   const hostFilter = useApp((s) => s.hostFilter);
+  const moveHostsToGroup = useApp((s) => s.moveHostsToGroup);
+  const setGroupsNavVisible = useApp((s) => s.setGroupsNavVisible);
   const ctx = useCtx();
+
+  // Report whether the group list is actually on screen. The Hosts screen gates
+  // its drag on this: folded to the icon rail there are no group items, so
+  // there is nothing to drop on, and a host you can pick up but never put down
+  // is the affordance-that-can-only-fail this feature is at pains to avoid.
+  // Reported from here rather than computed there so it stays true by
+  // construction if the rail ever grows or loses a section.
+  const groupsShown = wide && !collapsed;
+  useEffect(() => setGroupsNavVisible(groupsShown), [groupsShown, setGroupsNavVisible]);
+
+  // Drop of hosts dragged off the Hosts screen. The move itself is the store's,
+  // unchanged — drag adds no membership rules of its own, so it and the menu
+  // can never disagree about what filing a host means. A false return is
+  // "nothing would change" (dropped on the group they are already in, or on a
+  // group another window just deleted): no write, no reload, and no toast for a
+  // move that didn't happen.
+  const dropHostsOn = (groupId: string, label: string) => (profileIds: string[]) => {
+    void moveHostsToGroup(groupId, profileIds)
+      .then((moved) => {
+        if (moved) ctx.toast(t("hosts.bulk.movedToGroup", { name: label }), "ok");
+      })
+      .catch((e) => ctx.toast(apiErrorMessage(e), "err"));
+  };
 
   if (!wide || collapsed) return <SidebarRail onExpand={wide ? onToggleCollapse : undefined} />;
 
@@ -893,6 +973,7 @@ export function Sidebar({
               sub
               active={onHosts && hostFilter === g.groupId}
               onClick={() => ctx.goFiltered(g.groupId)}
+              onDropHosts={dropHostsOn(g.groupId, g.label)}
             />
           ))}
         </NavGroup>
