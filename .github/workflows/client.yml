@@ -712,6 +712,108 @@ jobs:
           PYEOF
         working-directory: client/src-tauri
 
+      # rustls-platform-verifier is not pure Rust: reaching Android's trust store
+      # means calling into the JVM, so the crate ships a Kotlin component next to
+      # it and the Gradle project has to be pointed at it. Without this the Rust
+      # side initialises against classes that are not in the APK and every HTTPS
+      # request dies — which is bug #34, where the failure surfaced as reqwest's
+      # "event loop thread panicked" with the real cause thrown away.
+      #
+      # The crate bundles a local Maven repository; `cargo metadata` is the only
+      # supported way to locate it on disk (the path contains the registry hash
+      # and the crate version). Resolving it HERE rather than in Gradle is what
+      # keeps the injected snippet to two literals — the upstream Kotlin recipe
+      # parses the JSON inside build.gradle.kts, which needs kotlinx-serialization
+      # on the buildscript classpath and a version catalog entry, neither of which
+      # Tauri's generated project has.
+      #
+      # gen/android is regenerated on every run (see the job header), so baking an
+      # absolute path in is safe: nothing outlives this job.
+      - name: Wire the rustls-platform-verifier Android component into gradle
+        run: |
+          python3 - <<'PYEOF'
+          import json, pathlib, subprocess, sys
+
+          meta = json.loads(subprocess.run(
+              ["cargo", "metadata", "--format-version", "1",
+               "--filter-platform", "aarch64-linux-android",
+               "--manifest-path", "Cargo.toml"],
+              capture_output=True, text=True, check=True).stdout)
+
+          pkg = next((p for p in meta["packages"]
+                      if p["name"] == "rustls-platform-verifier-android"), None)
+          if pkg is None:
+              sys.exit("rustls-platform-verifier-android is not in the dependency graph — "
+                       "did the reqwest `rustls` feature or the android-only dependency change?")
+
+          maven = pathlib.Path(pkg["manifest_path"]).parent / "maven"
+          if not maven.is_dir():
+              sys.exit(f"expected a bundled maven repo at {maven}, found none")
+          version = pkg["version"]
+
+          # Where repositories may be declared depends on the generated template:
+          # AGP's dependencyResolutionManagement (settings.gradle.kts) takes
+          # precedence and FORBIDS project-level repositories when it is present,
+          # so it has to be tried first.
+          repo_block = f'''
+                  maven {{
+                      url = uri("{maven}")
+                      metadataSources.artifact()
+                  }}'''
+
+          # `repositories {` alone is NOT a safe anchor: settings.gradle.kts opens with
+          # pluginManagement, whose repositories serve the BUILD's plugins and never the
+          # app's dependencies. Each candidate therefore names the block it must land
+          # inside, and the anchor is only accepted after it.
+          # The injected snippet is Kotlin DSL. Tauri's template is .kts throughout
+          # (the signing patch above relies on that too), so a Groovy settings file
+          # means the template changed under us — and silently falling through to the
+          # app module would then be worse than stopping, because settings.gradle's
+          # FAIL_ON_PROJECT_REPOS rejects project-level repositories and the build
+          # would die much later with an unrelated-looking error.
+          groovy = pathlib.Path("gen/android/settings.gradle")
+          if groovy.is_file() and not pathlib.Path("gen/android/settings.gradle.kts").is_file():
+              sys.exit(f"{groovy} is Groovy but this patch injects Kotlin DSL — "
+                       "the generated gradle template changed, re-check this patch")
+
+          candidates = [
+              (pathlib.Path("gen/android/settings.gradle.kts"), "dependencyResolutionManagement"),
+              (pathlib.Path("gen/android/build.gradle.kts"), "allprojects"),
+              (pathlib.Path("gen/android/app/build.gradle.kts"), None),
+          ]
+          for path, scope in candidates:
+              if not path.is_file():
+                  continue
+              s = path.read_text()
+              if "rustls-platform-verifier" in s:
+                  sys.exit(f"{path} already mentions rustls-platform-verifier — re-check this patch")
+              start = 0 if scope is None else s.find(scope)
+              if start < 0:
+                  continue
+              at = s.find("repositories {", start)
+              if at < 0:
+                  continue
+              cut = at + len("repositories {")
+              path.write_text(s[:cut] + repo_block + s[cut:])
+              print(f"maven repo added to {path}"
+                    + (f" (inside {scope})" if scope else ""))
+              break
+          else:
+              seen = [str(p) for p, _ in candidates if p.is_file()]
+              sys.exit("no dependency `repositories {` block found in any of: " + ", ".join(seen) +
+                       " — the generated gradle template changed, re-check this patch")
+
+          app = pathlib.Path("gen/android/app/build.gradle.kts")
+          s = app.read_text()
+          dep = f'\n    implementation("rustls:rustls-platform-verifier:{version}")'
+          out = s.replace("dependencies {", "dependencies {" + dep, 1)
+          if out == s:
+              sys.exit("anchor `dependencies {` not found in app/build.gradle.kts")
+          app.write_text(out)
+          print(f"rustls:rustls-platform-verifier:{version} added to app/build.gradle.kts")
+          PYEOF
+        working-directory: client/src-tauri
+
       # TWO invocations on purpose, and the order matters.
       #
       # `--target aarch64` used to be passed here, which built exactly one ABI:

@@ -31,7 +31,29 @@ static HTTP: Lazy<Client> = Lazy::new(|| {
 });
 
 /// The shared blocking client. MUST be called from a blocking context.
+///
+/// Preparing the platform verifier here, ahead of the `HTTP` deref that builds
+/// the client, is the fix for #34. On Android the certificate trust store is
+/// reached over JNI, and a verifier that was never handed the JVM panics — on
+/// reqwest's own internal thread, where the message is thrown away and replaced
+/// by reqwest's secondary "event loop thread panicked". Every cloud call on
+/// Android died there.
+///
+/// It sits in this function rather than in `HTTP`'s initialiser or in `setup()`
+/// for two reasons: the Android activity is not guaranteed to exist before the
+/// first cloud command, and running once per call means a transient failure is
+/// retried instead of being cached with the client for the life of the process.
+/// After the first success it is one atomic load. See `crate::platform_tls`.
+///
+/// The error is logged, not returned: this hands out a `&'static Client` to ~45
+/// call sites, several of which implement infallible core traits and have
+/// nowhere to put one. A failure still ends in a panic further down — but with a
+/// log line naming the real cause, which is exactly what #34 lacked. Making the
+/// whole path fallible is a separate change.
 pub fn http() -> &'static Client {
+    if let Err(e) = crate::platform_tls::init() {
+        log::error!("cloud: platform certificate verifier unavailable — {e}");
+    }
     &HTTP
 }
 

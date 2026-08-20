@@ -55,6 +55,20 @@ unissh-ffi = { path = "../../rust-core/crates/ffi" }
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 tauri-plugin-biometric = "2"
 
+# Android is the only platform where the certificate trust store is reached over
+# JNI rather than read off disk, so `rustls-platform-verifier` — which reqwest's
+# `rustls` feature pulls in and verifies every TLS connection with — has to be
+# handed the JVM and the app Context before it runs, or it panics (#34). See
+# src/platform_tls.rs.
+#
+# The version MUST stay semver-compatible with the one reqwest resolves: the
+# crate keeps the JNI handles in a private process-global OnceCell, and two
+# incompatible copies would each get their own — we would initialise one while
+# reqwest verified against the other, which fails exactly like no init at all.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.22", default-features = false }
+rustls-platform-verifier = "0.7"
+
 # In-place auto-update, desktop only. There is no mobile updater: Android/iOS
 # ship as sideload artifacts and are re-installed by hand. Update payloads are
 # verified against the minisign public key in tauri.conf.json before anything is
