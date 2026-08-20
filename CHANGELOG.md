@@ -34,6 +34,21 @@ starts with `0.`:
 
 ### Added
 
+- **Hosts can be dragged into a group.** Filing a host was menu-only — open the
+  overflow menu, find "Move to group", pick the target, and repeat for every
+  host you wanted moved — while every other rearrangeable list in UniSSH is
+  dragged. Pick up a host card or row and drop it on a group in the sidebar and
+  it moves there, leaving whatever group it was in; drag one host out of a
+  multi-selection and the whole selection goes with it, drag one that is *not*
+  selected and only that host moves. The group under the pointer is ringed so
+  the destination is visible before the release, Escape abandons the drag, and a
+  drop on anything that is not a group — the toolbar, a tag chip, empty space —
+  does nothing and says nothing. Dropping a host on the group it is already in
+  writes nothing at all, so the list does not flicker for a no-op.
+
+  The menu path is untouched, and it stays the only path on a phone, where a
+  vertical drag is a scroll.
+
 - **The host picker has a search box and a keyboard.** The `+` in the terminal
   and SFTP tab strips only offered a search past six saved hosts, so anyone with
   fewer never saw one; it now appears for any non-empty list. The list also

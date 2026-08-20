@@ -593,6 +593,7 @@ export const en = {
       "newTagPlaceholder": "New tag…",
       "nothingToRemove": "Selected hosts aren't in any group or tag.",
       "addedToGroup": "Added to {{name}}",
+      "movedToGroup": "Moved to {{name}}",
       "removedFromGroup": "Removed from {{name}}",
       "addedTag": "Tagged #{{name}}",
       "removedTag": "Removed #{{name}}"

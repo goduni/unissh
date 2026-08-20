@@ -20,6 +20,7 @@ import type { ConnectionProfile } from "@/bridge/types";
 import { useTranslation, tDyn } from "@/i18n";
 import { nextRow } from "@/support/listNav";
 import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
+import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
 
 type SortKey = "name" | "added" | "connected";
 type RailTab = "detail" | "sessions";
@@ -54,6 +55,8 @@ function HostCard({
   onConnect,
   onSftp,
   onMenu,
+  draggable,
+  onDragStart,
 }: {
   h: ConnectionProfile;
   selected: boolean;
@@ -69,6 +72,9 @@ function HostCard({
   onConnect: () => void;
   onSftp: () => void;
   onMenu: (e: React.MouseEvent) => void;
+  /** Off on touch and when the vault has no groups — see ViewHosts. */
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
 }) {
   const p = usePalette();
   const { t, i18n } = useTranslation();
@@ -93,6 +99,8 @@ function HostCard({
       // and the filters do to this list.
       data-host-id={h.profileId}
       active={active || selected}
+      draggable={draggable}
+      onDragStart={onDragStart}
       onClick={onOpen}
       onDoubleClick={onConnect}
       onContextMenu={onMenu}
@@ -350,6 +358,8 @@ function HostRow({
   onOpen,
   onConnect,
   onMenu,
+  draggable,
+  onDragStart,
 }: {
   h: ConnectionProfile;
   selected: boolean;
@@ -362,6 +372,9 @@ function HostRow({
   onOpen: () => void;
   onConnect: () => void;
   onMenu: (e: React.MouseEvent) => void;
+  /** Off on touch and when the vault has no groups — see ViewHosts. */
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
 }) {
   const p = usePalette();
   const { t } = useTranslation();
@@ -376,6 +389,8 @@ function HostRow({
       tabIndex={0}
       data-host-id={h.profileId}
       aria-current={cursor ? "true" : undefined}
+      draggable={draggable}
+      onDragStart={onDragStart}
       onKeyDown={pressActivate(onOpen)}
       onFocus={() => setFocusIn(true)}
       onBlur={(e) => {
@@ -1339,6 +1354,26 @@ export function ViewHosts() {
   useMenu(sortOpen, () => setSortOpen(false), sortRef);
   const [sel, setSel] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(hosts[0]?.profileId ?? null);
+  // Dragging a host onto a group files it there. The drop targets are the
+  // sidebar's group items (Shell) — on the desktop that IS the group UI; the
+  // chips in the strip below are the touch shell's stand-in for it, and touch
+  // has no drag to give them.
+  const beginHostDrag = (profileId: string, e: React.DragEvent) => {
+    hostDrag.set(draggedHostIds(profileId, sel));
+    try {
+      // The payload lives in hostDrag; this only arms the native gesture, which
+      // WebKit refuses to start with an empty data store. `move`, not `copy`: a
+      // host belongs to exactly one group, so the drop empties where it was.
+      e.dataTransfer.setData(HOST_DRAG_MIME, profileId);
+      e.dataTransfer.effectAllowed = "move";
+    } catch {
+      /* non-fatal */
+    }
+    // Covers every ending the drop handler doesn't: Escape, a drop on the
+    // toolbar, a drop on a tag chip. The browser fires dragend for all of them,
+    // and an empty payload is a no-op everywhere it is read.
+    window.addEventListener("dragend", () => hostDrag.clear(), { once: true });
+  };
   const [rail, setRail] = useState<RailTab>("detail");
   // The fixed-width detail rail would squish the list to a sliver when there isn't
   // room for both side by side, so render it as a full-width overlay instead. Trigger
@@ -1351,6 +1386,10 @@ export function ViewHosts() {
   // A 719px desktop window is narrow but NOT touch.
   const narrow = useNarrow();
   const touch = useIsMobile();
+  // A vertical drag on a phone is a scroll, so the phone shell never gets the
+  // attribute at all; with no groups there is nowhere to drop, and an affordance
+  // that can only fail is worse than none.
+  const canDragHosts = !touch && groups.length > 0;
   const rowRef = useRef<HTMLDivElement | null>(null);
   const [rowW, setRowW] = useState(0);
   useEffect(() => {
@@ -2285,6 +2324,8 @@ export function ViewHosts() {
                     e.preventDefault();
                     setMenu({ x: e.clientX, y: e.clientY, id: h.profileId, sub: false });
                   }}
+                  draggable={canDragHosts}
+                  onDragStart={(e) => beginHostDrag(h.profileId, e)}
                 />
               ))}
             </div>
@@ -2306,6 +2347,8 @@ export function ViewHosts() {
                     e.preventDefault();
                     setMenu({ x: e.clientX, y: e.clientY, id: h.profileId, sub: false });
                   }}
+                  draggable={canDragHosts}
+                  onDragStart={(e) => beginHostDrag(h.profileId, e)}
                 />
               ))}
             </div>

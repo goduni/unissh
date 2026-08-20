@@ -631,6 +631,7 @@ export const ru = {
       "newTagPlaceholder": "Новый тег…",
       "nothingToRemove": "Выбранные хосты не состоят ни в одной группе или теге.",
       "addedToGroup": "Добавлено в «{{name}}»",
+      "movedToGroup": "Перенесено в «{{name}}»",
       "removedFromGroup": "Убрано из «{{name}}»",
       "addedTag": "Добавлен тег #{{name}}",
       "removedTag": "Убран тег #{{name}}"
