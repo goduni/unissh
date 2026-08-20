@@ -826,16 +826,25 @@ jobs:
           # which R8 cannot see. Without this the classes are silently stripped: the
           # APK builds green, and the verifier then fails to initialise on the device
           # exactly as if this whole patch were absent.
-          if "proguard-rules.pro" not in s:
-              sys.exit("app/build.gradle.kts does not reference proguard-rules.pro — "
-                       "the keep rule below would be silently ignored; re-check this patch")
-          rules = pathlib.Path("gen/android/app/proguard-rules.pro")
-          rules.write_text(
-              (rules.read_text() if rules.is_file() else "")
-              + "\n# Reached only from Rust over JNI, so R8 sees no reference to it.\n"
-              + "-keep class org.rustls.platformverifier.** { *; }\n"
+          # Tauri's release buildType does not name its rules files; it globs them:
+          #     proguardFiles(*fileTree(".") { include("**/*.pro") }...)
+          # so a .pro dropped in beside build.gradle.kts is picked up with no edit to
+          # it. Assert the glob is still what feeds proguardFiles — if that ever
+          # changes, the rule below would be written and silently ignored, which is
+          # the one outcome worse than not writing it.
+          if 'include("**/*.pro")' not in s:
+              print(s)
+              sys.exit("app/build.gradle.kts no longer globs **/*.pro into proguardFiles "
+                       "— the keep rule would be silently ignored; the file above shows "
+                       "what it does instead")
+          pathlib.Path("gen/android/app/rustls-platform-verifier.pro").write_text(
+              "# The Kotlin half of rustls-platform-verifier is reached ONLY from Rust,\n"
+              "# through JNI FindClass. R8 cannot see that reference and strips the\n"
+              "# classes from the release build, which leaves the APK building green and\n"
+              "# cloud broken on the device exactly as in #34.\n"
+              "-keep class org.rustls.platformverifier.** { *; }\n"
           )
-          print("R8 keep rule written to app/proguard-rules.pro")
+          print("R8 keep rule written to app/rustls-platform-verifier.pro")
           PYEOF
         working-directory: client/src-tauri
 
