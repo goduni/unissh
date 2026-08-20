@@ -1395,9 +1395,12 @@ export function ViewHosts() {
   const narrow = useNarrow();
   const touch = useIsMobile();
   // A vertical drag on a phone is a scroll, so the phone shell never gets the
-  // attribute at all; with no groups there is nowhere to drop, and an affordance
-  // that can only fail is worse than none.
-  const canDragHosts = !touch && groups.length > 0;
+  // attribute at all. The other two conditions are the same rule twice: an
+  // affordance that can only fail is worse than none. With no groups there is
+  // nowhere to drop; with the sidebar folded to its icon rail the groups exist
+  // but none of them is on screen, so the drop targets do not either.
+  const groupsNavVisible = useApp((s) => s.groupsNavVisible);
+  const canDragHosts = !touch && groups.length > 0 && groupsNavVisible;
   const rowRef = useRef<HTMLDivElement | null>(null);
   const [rowW, setRowW] = useState(0);
   useEffect(() => {

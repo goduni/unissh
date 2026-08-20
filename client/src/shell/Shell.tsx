@@ -887,7 +887,17 @@ export function Sidebar({
   const tunnels = useApp((s) => s.tunnels);
   const hostFilter = useApp((s) => s.hostFilter);
   const moveHostsToGroup = useApp((s) => s.moveHostsToGroup);
+  const setGroupsNavVisible = useApp((s) => s.setGroupsNavVisible);
   const ctx = useCtx();
+
+  // Report whether the group list is actually on screen. The Hosts screen gates
+  // its drag on this: folded to the icon rail there are no group items, so
+  // there is nothing to drop on, and a host you can pick up but never put down
+  // is the affordance-that-can-only-fail this feature is at pains to avoid.
+  // Reported from here rather than computed there so it stays true by
+  // construction if the rail ever grows or loses a section.
+  const groupsShown = wide && !collapsed;
+  useEffect(() => setGroupsNavVisible(groupsShown), [groupsShown, setGroupsNavVisible]);
 
   // Drop of hosts dragged off the Hosts screen. The move itself is the store's,
   // unchanged — drag adds no membership rules of its own, so it and the menu
