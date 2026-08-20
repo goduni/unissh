@@ -43,6 +43,29 @@ starts with `0.`:
   longer grabs the caret on open — that pops the on-screen keyboard over the
   list before you have decided to type.
 
+- **`~/.ssh/config` imports follow `Include`.** A top-level config that is
+  little more than `Include project1/config project2/config` is an ordinary
+  layout, and `ssh` has followed it for years; UniSSH listed those paths as
+  "seen but not followed" and imported none of the hosts behind them. Picking a
+  config now reads it the way `ssh` would — `~` expanded, relative paths
+  resolved against the config's own directory, globs matched and sorted, an
+  include that is missing or unreadable skipped rather than fatal, and a file
+  reached twice read once so a config that includes itself terminates. Pasted
+  config text is unchanged: it has no filesystem behind it, and still says which
+  includes it could not follow.
+
+  Because the directory layout usually **is** the grouping, each included file
+  becomes a subgroup — `project1/config` → *project1* — created under the group
+  the import targets rather than at the root, and reusing a group of that name
+  if one is already there, so re-importing converges instead of multiplying
+  groups. It is on by default, with a per-file opt-out and a switch for the lot.
+
+  Following includes means reading files you did not name one by one, so the
+  preview now lists **every file the import read**, attributes each host to the
+  file it came from, shows the file → group mapping before anything is written,
+  and names the includes it could not open. Directives UniSSH does not implement
+  are still reported, now per file.
+
 - **`~/.ssh/config` imports into the group you have open.** Selecting a group
   and importing put every host at the vault root — the import had no notion of a
   target at all. The preview now shows where they will land, defaults to the

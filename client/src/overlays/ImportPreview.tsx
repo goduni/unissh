@@ -649,15 +649,19 @@ function ImportPreviewBody() {
                     })}
                   </div>
                   <div style={{ marginBottom: 6 }}>{t("import.filesReadDesc")}</div>
-                  <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
-                    {filesRead.map((f) => (
-                      <div
-                        key={f}
-                        style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                      >
-                        {shortPath(f, path)}
-                      </div>
-                    ))}
+                  <div
+                    style={{
+                      fontFamily: MONO,
+                      fontSize: 11.5,
+                      color: p.txt3,
+                      // The whole list, always — but a config with fifty
+                      // includes must not push the hosts off the screen.
+                      maxHeight: 72,
+                      overflowY: "auto",
+                      overflowWrap: "anywhere",
+                    }}
+                  >
+                    {filesRead.map((f) => shortPath(f, path)).join("  ·  ")}
                   </div>
                 </div>
               )}
@@ -681,6 +685,36 @@ function ImportPreviewBody() {
                   <div style={{ marginBottom: 6 }}>{t("import.includesSkippedDesc")}</div>
                   <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
                     {pendingIncludes.join("  ·  ")}
+                  </div>
+                </div>
+              )}
+              {skipped.length > 0 && (
+                <div
+                  role="note"
+                  style={{
+                    margin: "0 0 12px",
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    border: `1px solid ${rgba(p.amber, 0.35)}`,
+                    background: rgba(p.amber, 0.08),
+                    fontSize: 12.5,
+                    color: p.txt2,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: 4 }}>
+                    {t("import.skippedTitle", { count: skipped.length })}
+                  </div>
+                  <div style={{ marginBottom: 6 }}>{t("import.skippedDesc")}</div>
+                  <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
+                    {skipped
+                      .slice(0, 12)
+                      .map(
+                        (d) =>
+                          `${d.originFile ? `${shortPath(d.originFile, path)}:` : ""}${d.line}: ${d.keyword}${d.insideMatch ? " (Match)" : ""}`,
+                      )
+                      .join("  ·  ")}
+                    {skipped.length > 12 ? "  ·  …" : ""}
                   </div>
                 </div>
               )}
@@ -719,8 +753,9 @@ function ImportPreviewBody() {
                     {t("import.subgroupsTitle")}
                   </label>
                   <div style={{ margin: "4px 0 8px" }}>{t("import.subgroupsDesc")}</div>
-                  {subgroups &&
-                    includedFiles.map((f) => {
+                  <div style={{ maxHeight: 150, overflowY: "auto" }}>
+                    {subgroups &&
+                      includedFiles.map((f) => {
                       const on = !optedOut.includes(f);
                       return (
                         <label
@@ -765,39 +800,10 @@ function ImportPreviewBody() {
                             }}
                           >
                             {on ? includeGroupName(f, path) : t("import.subgroupOff")}
-                          </span>
-                        </label>
-                      );
-                    })}
-                </div>
-              )}
-              {skipped.length > 0 && (
-                <div
-                  role="note"
-                  style={{
-                    margin: "0 0 12px",
-                    padding: "10px 12px",
-                    borderRadius: 8,
-                    border: `1px solid ${rgba(p.amber, 0.35)}`,
-                    background: rgba(p.amber, 0.08),
-                    fontSize: 12.5,
-                    color: p.txt2,
-                    lineHeight: 1.5,
-                  }}
-                >
-                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: 4 }}>
-                    {t("import.skippedTitle", { count: skipped.length })}
-                  </div>
-                  <div style={{ marginBottom: 6 }}>{t("import.skippedDesc")}</div>
-                  <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
-                    {skipped
-                      .slice(0, 12)
-                      .map(
-                        (d) =>
-                          `${d.originFile ? `${shortPath(d.originFile, path)}:` : ""}${d.line}: ${d.keyword}${d.insideMatch ? " (Match)" : ""}`,
-                      )
-                      .join("  ·  ")}
-                    {skipped.length > 12 ? "  ·  …" : ""}
+                            </span>
+                          </label>
+                        );
+                      })}
                   </div>
                 </div>
               )}
