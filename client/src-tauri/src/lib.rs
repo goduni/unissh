@@ -273,6 +273,7 @@ pub fn run() {
             commands::personal_destination,
             commands::apply_username_template,
             commands::import_ssh_config,
+            commands::import_ssh_config_at_path,
             commands::export_ssh_config,
             commands::import_putty_sessions,
             // groups
@@ -338,6 +339,7 @@ pub fn run() {
             commands::submit_agent_approval,
             commands::set_algorithm_policy,
             commands::ssh_config_report,
+            commands::ssh_config_report_at_path,
             commands::system_agent_keys,
             commands::list_recordings,
             commands::get_recording,

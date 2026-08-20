@@ -306,20 +306,60 @@ export interface SkippedDirective {
    *  made. The remedy differs from a plain unsupported directive: a Match block
    *  has to be rewritten as a Host block. */
   insideMatch: boolean;
+  /** The included file it was written in, null for the config that was picked.
+   *  A line number alone stops being actionable once an import spans files. */
+  originFile: string | null;
+}
+
+/** A host an import would create, resolved the way `ssh` resolves it. */
+export interface SshConfigHost {
+  alias: string;
+  /** The included file it came from, null for the config that was picked. */
+  originFile: string | null;
+  hostname: string;
+  port: number;
+  user: string | null;
+  /** `IdentityFile` as written; the client resolves and reads it. */
+  identityFile: string | null;
 }
 
 export interface SshConfigReport {
-  aliases: string[];
+  hosts: SshConfigHost[];
   skipped: SkippedDirective[];
+  /** `Include` paths seen but not followed — all of them for a report on pasted
+   *  text, and the unreadable ones for a report on a file. */
   pendingIncludes: string[];
+  /** Every file the report read, the picked one first; empty for text. */
+  filesRead: string[];
 }
 
-/** What an import would drop. Parses only — writes nothing. */
+/** A host an import created. */
+export interface ImportedSshHost {
+  alias: string;
+  originFile: string | null;
+}
+
+/** What an import would drop. Parses only — writes nothing. Includes are
+ *  reported, not followed: text has no filesystem behind it. */
 export const sshConfigReport = (configText: string) =>
   invoke<SshConfigReport>("ssh_config_report", { configText });
 
+/** The same for a config **file**, whose `Include` directives are followed the
+ *  way `ssh` follows them. Reads more than the file it was given, and says so in
+ *  `filesRead` — which is why nothing may be imported without showing it. */
+export const sshConfigReportAtPath = (path: string) =>
+  invoke<SshConfigReport>("ssh_config_report_at_path", { path });
+
 export const importSshConfig = (vaultId: string, configText: string) =>
   afterMut(vaultId, invoke<string[]>("import_ssh_config", { vaultId, configText }));
+
+/** Imports a config file, following its includes. `only` is the set of aliases
+ *  to import — what the preview left ticked; omit it to import every host. */
+export const importSshConfigAtPath = (vaultId: string, path: string, only?: string[]) =>
+  afterMut(
+    vaultId,
+    invoke<ImportedSshHost[]>("import_ssh_config_at_path", { vaultId, path, only }),
+  );
 export const exportSshConfig = (vaultId: string) =>
   invoke<string>("export_ssh_config", { vaultId });
 export const importPuttySessions = (vaultId: string, regText: string) =>

@@ -1350,21 +1350,72 @@ pub struct SkippedDirective {
     /// differs: a Match block has to be rewritten as a Host block, while an
     /// unsupported directive simply has no equivalent here.
     pub inside_match: bool,
+    /// The included file it was written in, `None` for the picked config. A line
+    /// number stops being actionable once an import spans several files.
+    pub origin_file: Option<String>,
+}
+
+/// A host an import would create, resolved as `ssh` would resolve it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigHost {
+    pub alias: String,
+    /// The included file it came from — what the preview attributes it to and
+    /// what its subgroup is derived from. `None` for the picked config itself.
+    pub origin_file: Option<String>,
+    pub hostname: String,
+    pub port: u16,
+    pub user: Option<String>,
+    /// `IdentityFile` as written; the client resolves and reads it.
+    pub identity_file: Option<String>,
+}
+
+/// A host an import created.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedSshHost {
+    pub alias: String,
+    pub origin_file: Option<String>,
+}
+
+impl From<ffi::ImportedSshHost> for ImportedSshHost {
+    fn from(h: ffi::ImportedSshHost) -> Self {
+        ImportedSshHost {
+            alias: h.alias,
+            origin_file: h.origin_file,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConfigReport {
-    pub aliases: Vec<String>,
+    pub hosts: Vec<SshConfigHost>,
     pub skipped: Vec<SkippedDirective>,
+    /// `Include` paths seen but not followed — all of them for a report on
+    /// pasted text, and the unreadable ones for a report on a file.
     pub pending_includes: Vec<String>,
+    /// Every file the report read, the picked one first. Empty for text.
+    pub files_read: Vec<String>,
 }
 
 impl From<ffi::SshConfigReport> for SshConfigReport {
     fn from(r: ffi::SshConfigReport) -> Self {
         SshConfigReport {
-            aliases: r.aliases,
+            hosts: r
+                .hosts
+                .into_iter()
+                .map(|h| SshConfigHost {
+                    alias: h.alias,
+                    origin_file: h.origin_file,
+                    hostname: h.hostname,
+                    port: h.port,
+                    user: h.user,
+                    identity_file: h.identity_file,
+                })
+                .collect(),
             pending_includes: r.pending_includes,
+            files_read: r.files_read,
             skipped: r
                 .skipped
                 .into_iter()
@@ -1372,6 +1423,7 @@ impl From<ffi::SshConfigReport> for SshConfigReport {
                     line: s.line,
                     keyword: s.keyword,
                     inside_match: s.inside_match,
+                    origin_file: s.origin_file,
                 })
                 .collect(),
         }
