@@ -46,6 +46,32 @@ interface ParsedHost {
 
 const stripQuotes = (v: string) => v.replace(/^["']|["']$/g, "").trim();
 
+const isWildcard = (a: string) => a.includes("*") || a.includes("?") || a.startsWith("!");
+
+/** Keep only the `Host` blocks whose first concrete alias is selected. Wildcard
+ *  blocks (`Host *`, `Host *.example.com`) and the global preamble before the
+ *  first `Host` are always kept so inherited settings (User/Port/IdentityFile)
+ *  still resolve. A multi-alias `Host a b` line is kept whole if `a` is selected.
+ *
+ *  Only for the text fallback below: a path-based import is told which aliases
+ *  to take, because filtering text cannot reach a host in another file. */
+function filterConfigToSelected(text: string, selected: Set<string>): string {
+  const out: string[] = [];
+  let keep = true; // keep the global preamble before the first Host block
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const m = line.match(/^([Hh]ost)\s+(.+)$/);
+    if (m && !line.startsWith("#")) {
+      const patterns = m[2].trim().split(/\s+/);
+      const allWild = patterns.every(isWildcard);
+      const firstAlias = patterns.find((a) => !isWildcard(a));
+      keep = allWild || (firstAlias != null && selected.has(firstAlias));
+    }
+    if (keep) out.push(raw);
+  }
+  return out.join("\n");
+}
+
 /** Path components, on either separator. */
 const parts = (path: string) => path.split(/[/\\]/).filter(Boolean);
 
@@ -146,6 +172,9 @@ function ImportPreviewBody() {
   const pendingIncludes = report?.pendingIncludes ?? [];
   const [rows, setRows] = useState<ParsedHost[]>([]);
   const [sel, setSel] = useState<string[]>([]);
+  // Non-null only in the text fallback (see the picker effect): the file's
+  // contents, because that path imports by handing them back to the core.
+  const [fileText, setFileText] = useState<string | null>(null);
   // A subgroup per included file, on by default: the directory layout usually
   // IS the grouping, and the common case should need no configuration. Both the
   // switch and the per-file opt-out below are settled here, in the preview,
@@ -197,7 +226,20 @@ function ImportPreviewBody() {
         // The core reads the file and everything its `Include` lines point at.
         // A failure here is fatal to the dialog, unlike the old best-effort
         // report: there is nothing left to show a preview from.
-        const rep = await api.sshConfigReportAtPath(selected);
+        //
+        // Except on Android, where the picker hands back a `content://` URI: the
+        // core opens paths with the filesystem and cannot read one, while Tauri's
+        // fs plugin can. Falling back to the text-based report keeps that import
+        // working exactly as it did — without following includes, which it never
+        // did either.
+        let rep: api.SshConfigReport;
+        let text: string | null = null;
+        try {
+          rep = await api.sshConfigReportAtPath(selected);
+        } catch {
+          text = await readTextFile(selected);
+          rep = await api.sshConfigReport(text);
+        }
         if (cancelled) return;
         const existing = new Set(useApp.getState().hosts.map((h) => h.label));
         const parsed: ParsedHost[] = rep.hosts.map((h) => ({
@@ -210,6 +252,7 @@ function ImportPreviewBody() {
           originFile: h.originFile,
         }));
         setPath(selected);
+        setFileText(text);
         setReport(rep);
         setRows(parsed);
         setSel(parsed.filter((h) => !h.dup).map((h) => h.host));
@@ -260,9 +303,14 @@ function ImportPreviewBody() {
       await guard(async () => {
         // 1) Create profiles for the SELECTED hosts only. The core re-reads the
         //    file and its includes; the ticked aliases go with the call, because
-        //    filtering the config *text* — what this used to do — cannot reach
-        //    hosts that live in other files.
-        const created = await api.importSshConfigAtPath(vaultId, path, sel);
+        //    filtering the config *text* cannot reach hosts in other files —
+        //    which is still how the text fallback has to do it.
+        const created =
+          fileText === null
+            ? await api.importSshConfigAtPath(vaultId, path, sel)
+            : (
+                await api.importSshConfig(vaultId, filterConfigToSelected(fileText, selectedSet))
+              ).map((alias) => ({ alias, originFile: null }));
         const createdSet = new Set(created.map((h) => h.alias));
 
         // 2) Import each selected host's IdentityFile key into the vault and link
@@ -680,9 +728,22 @@ function ImportPreviewBody() {
                   }}
                 >
                   <div style={{ fontWeight: 700, color: p.txt, marginBottom: 4 }}>
-                    {t("import.includesSkippedTitle", { count: pendingIncludes.length })}
+                    {t(
+                      fileText === null
+                        ? "import.includesSkippedTitle"
+                        : "import.includesNotFollowedTitle",
+                      { count: pendingIncludes.length },
+                    )}
                   </div>
-                  <div style={{ marginBottom: 6 }}>{t("import.includesSkippedDesc")}</div>
+                  {/* Two different facts wearing one shape: a file-based import
+                      could not OPEN these, a text-based one never tried. */}
+                  <div style={{ marginBottom: 6 }}>
+                    {t(
+                      fileText === null
+                        ? "import.includesSkippedDesc"
+                        : "import.includesNotFollowedDesc",
+                    )}
+                  </div>
                   <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
                     {pendingIncludes.join("  ·  ")}
                   </div>

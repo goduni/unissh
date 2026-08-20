@@ -624,6 +624,8 @@ export const en = {
     "filesReadDesc": "Include leads outside the file you picked. Everything that was read:",
     "includesSkippedTitle": "{{count}} include(s) could not be opened",
     "includesSkippedDesc": "Missing, not readable, or a pattern that matched nothing. Everything else imports as usual:",
+    "includesNotFollowedTitle": "{{count}} include(s) not followed",
+    "includesNotFollowedDesc": "The config was read as text, with no access to files, so hosts living in these will not be imported:",
     "subgroupsTitle": "A subgroup per included file",
     "subgroupsDesc": "The layout is usually the grouping: project1/config → a \"project1\" group, created inside the group chosen below.",
     "subgroupOff": "no group",
