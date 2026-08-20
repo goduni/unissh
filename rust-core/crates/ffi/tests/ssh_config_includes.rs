@@ -36,6 +36,11 @@ fn path(p: &Path) -> String {
     p.to_str().unwrap().to_string()
 }
 
+/// The paths a report says it read, in order.
+fn files(report: &unissh_ffi::SshConfigReport) -> Vec<String> {
+    report.files_read.iter().map(|f| f.path.clone()).collect()
+}
+
 /// The aliases a report lists, in order.
 fn aliases(report: &unissh_ffi::SshConfigReport) -> Vec<String> {
     report.hosts.iter().map(|h| h.alias.clone()).collect()
@@ -65,9 +70,14 @@ fn a_relative_include_is_resolved_against_the_configs_own_directory() {
     );
     assert!(report.pending_includes.is_empty());
     assert_eq!(
-        report.files_read,
+        files(&report),
         [path(&cfg), path(&ssh.join("project1/config"))],
         "the preview must be able to show every file the import touched"
+    );
+    assert_eq!(report.files_read[0].included_by, None, "the picked config");
+    assert_eq!(
+        report.files_read[1].included_by.as_deref(),
+        Some(path(&cfg).as_str())
     );
 
     let created = core
@@ -140,7 +150,7 @@ fn a_missing_include_is_skipped_reported_and_costs_nothing_else() {
         ["gone/config"],
         "an include that went nowhere must be visible, or a missing host has no explanation"
     );
-    assert_eq!(report.files_read.len(), 2, "{:?}", report.files_read);
+    assert_eq!(files(&report).len(), 2, "{:?}", files(&report));
 }
 
 #[cfg(unix)]
@@ -162,7 +172,7 @@ fn an_unreadable_include_is_skipped_and_reported_like_a_missing_one() {
     }
     assert_eq!(aliases(&report), ["local"]);
     assert_eq!(report.pending_includes, ["secret/config"]);
-    assert_eq!(report.files_read, [path(&cfg)]);
+    assert_eq!(files(&report), [path(&cfg)]);
 }
 
 #[test]
@@ -181,6 +191,16 @@ fn an_included_file_may_include_another() {
         Some(path(&ssh.join("b/config")).as_str()),
         "a nested include's hosts belong to the file they were written in"
     );
+    let deep = report
+        .files_read
+        .iter()
+        .find(|f| f.path == path(&ssh.join("b/config")))
+        .unwrap();
+    assert_eq!(
+        deep.included_by.as_deref(),
+        Some(path(&ssh.join("a/config")).as_str()),
+        "and the chain says which include reached it, so grouping stays one level"
+    );
 }
 
 #[test]
@@ -194,7 +214,7 @@ fn a_cyclic_include_terminates() {
     let report = core.ssh_config_report_at_path(path(&cfg)).unwrap();
     assert_eq!(aliases(&report), ["a", "root"]);
     assert_eq!(
-        report.files_read,
+        files(&report),
         [path(&cfg), path(&ssh.join("a/config"))],
         "a file reached twice is read once"
     );
@@ -333,7 +353,7 @@ fn a_config_without_includes_behaves_exactly_as_before() {
     let report = core.ssh_config_report_at_path(path(&cfg)).unwrap();
     assert_eq!(aliases(&report), ["solo"]);
     assert_eq!(report.hosts[0].origin_file, None);
-    assert_eq!(report.files_read, [path(&cfg)]);
+    assert_eq!(files(&report), [path(&cfg)]);
     assert!(report.pending_includes.is_empty());
 }
 

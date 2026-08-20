@@ -119,26 +119,28 @@ impl SshConfig {
     pub fn parse(text: &str) -> Result<Self, TransportError> {
         let mut cfg = SshConfig::default();
         // No loader: includes are recorded in `includes` and left alone.
-        cfg.parse_into::<fn(&str) -> Vec<IncludedFile>>(text, None, &mut None, 0)?;
+        cfg.parse_into::<fn(&str, Option<&str>) -> Vec<IncludedFile>>(text, None, &mut None, 0)?;
         Ok(cfg)
     }
 
     /// Parses the config text, following `Include` directives through `load`.
     ///
     /// `load` receives the path exactly as written (globs and `~` included) and
-    /// returns every file it expands to, in order; resolving those is the
-    /// caller's business, since it needs a home directory and a filesystem this
-    /// crate has no opinion about. An include that cannot be read is skipped,
-    /// matching OpenSSH, which ignores a missing include rather than failing the
-    /// whole config — it is reported through [`Self::pending_includes`], which
-    /// then means exactly what it says: seen, not followed.
+    /// the file the `Include` line sits in (`None` for the text being parsed),
+    /// and returns every file the path expands to, in order; resolving those is
+    /// the caller's business, since it needs a home directory and a filesystem
+    /// this crate has no opinion about. An include that cannot be read is
+    /// skipped, matching OpenSSH, which ignores a missing include rather than
+    /// failing the whole config — it is reported through
+    /// [`Self::pending_includes`], which then means exactly what it says: seen,
+    /// not followed.
     ///
     /// Each returned file carries its path, and every block parsed out of it
     /// remembers it ([`Self::host_aliases_with_origin`], [`SkippedDirective`]) —
     /// that is what lets an importer say where a host came from.
     pub fn parse_with_includes<F>(text: &str, mut load: F) -> Result<Self, TransportError>
     where
-        F: FnMut(&str) -> Vec<IncludedFile>,
+        F: FnMut(&str, Option<&str>) -> Vec<IncludedFile>,
     {
         let mut cfg = SshConfig::default();
         cfg.parse_into(text, None, &mut Some(&mut load), 0)?;
@@ -160,7 +162,7 @@ impl SshConfig {
         depth: u32,
     ) -> Result<(), TransportError>
     where
-        F: FnMut(&str) -> Vec<IncludedFile>,
+        F: FnMut(&str, Option<&str>) -> Vec<IncludedFile>,
     {
         let mut current: Option<HostBlock> = None;
         // Directives inside a Match block belong to that block, not to the Host
@@ -247,7 +249,7 @@ impl SshConfig {
                         // Re-borrow the loader per path: the recursion below
                         // needs it too, so the borrow cannot outlive this call.
                         let files = match load.as_mut() {
-                            Some(loader) => loader(&spec),
+                            Some(loader) => loader(&spec, origin),
                             None => Vec::new(),
                         };
                         // Nothing behind it (missing, unreadable, a glob that

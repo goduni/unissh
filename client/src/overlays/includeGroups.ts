@@ -35,10 +35,21 @@ export interface IncludeGroupPlan {
   ungrouped: string[];
 }
 
+/** A file the import read, and the file whose `Include` pulled it in. */
+export interface ReadFile {
+  path: string;
+  /** null for the config the user picked. */
+  includedBy: string | null;
+}
+
 export interface IncludeGroupPlanInput {
   /** The config the user picked. Its own hosts never form a subgroup. */
   configPath: string;
   hosts: IncludedHost[];
+  /** Every file that was read, so a nested include can be traced back to the
+   *  include the picked config made. Empty means no include tree is known and
+   *  every host is grouped by its own file. */
+  files: ReadFile[];
   /** The global "create subgroups" switch. */
   subgroups: boolean;
   /** Included files the user opted out of, by path. */
@@ -74,6 +85,26 @@ export function includeGroupName(file: string, configPath: string): string {
   return stem || name;
 }
 
+/** The file a host is grouped by: the include the PICKED config made, however
+ *  many files down the host actually sits.
+ *
+ *  A nested include is not a group of its own. `project1/config` including
+ *  `project1/hosts.conf` is one project with its hosts split across two files,
+ *  not two projects — and a deep include tree must not turn into a deep group
+ *  tree. One level of subgroup is the whole scope. */
+export function groupFile(file: string, configPath: string, files: ReadFile[]): string {
+  const by = new Map(files.map((f) => [f.path, f.includedBy]));
+  let cur = file;
+  // Bounded by the number of files, so a chain that loops (which the loader
+  // already prevents) still cannot spin here.
+  for (let i = 0; i <= files.length; i++) {
+    const parent = by.get(cur);
+    if (parent == null || parent === configPath) return cur;
+    cur = parent;
+  }
+  return cur;
+}
+
 /** Group labels compare the way a person reads them, so a repeat import lands in
  *  `Project1` rather than beside it. */
 const norm = (label: string) => label.trim().toLowerCase();
@@ -85,14 +116,14 @@ const norm = (label: string) => label.trim().toLowerCase();
  *  matches a group already under that parent reuses it, so importing the same
  *  config twice converges instead of multiplying groups. */
 export function planIncludeGroups(input: IncludeGroupPlanInput): IncludeGroupPlan {
-  const { configPath, hosts, subgroups, target } = input;
+  const { configPath, hosts, subgroups, target, files } = input;
   const optedOut = new Set(input.optedOut);
   const groups: IncludeGroup[] = [];
   const byLabel = new Map<string, IncludeGroup>();
   const ungrouped: string[] = [];
 
   for (const h of hosts) {
-    const file = h.originFile;
+    const file = h.originFile && groupFile(h.originFile, configPath, files);
     if (!subgroups || !file || file === configPath || optedOut.has(file)) {
       ungrouped.push(h.alias);
       continue;

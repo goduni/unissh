@@ -17,6 +17,20 @@ use std::path::{Path, PathBuf};
 
 use unissh_ssh_transport::{glob_match, IncludedFile};
 
+/// A file the loader read, and the file whose `Include` line pulled it in.
+///
+/// The chain, not just the list: an importer that maps included files onto
+/// groups needs to know that `project1/hosts.conf`, reached through
+/// `project1/config`, belongs to whatever group `project1/config` stands for —
+/// one level of grouping, however deep the includes go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadFile {
+    /// Where it was read from.
+    pub path: String,
+    /// The file the `Include` line sits in.
+    pub included_by: String,
+}
+
 /// Reads the files an `Include` names.
 ///
 /// Resolution follows OpenSSH: `~` is the home directory, an absolute path is
@@ -29,8 +43,11 @@ pub struct IncludeLoader {
     /// Directory relative includes resolve against.
     base: PathBuf,
     home: Option<PathBuf>,
+    /// The config the user picked — what an `Include` at the top level is
+    /// attributed to.
+    root: String,
     /// Every file actually read, in the order it was read.
-    read: Vec<String>,
+    read: Vec<ReadFile>,
     /// Canonical paths already read, so a symlink loop cannot outlive the
     /// parser's depth cap.
     visited: HashSet<PathBuf>,
@@ -58,6 +75,7 @@ impl IncludeLoader {
         Self {
             base,
             home,
+            root: display(config_path),
             read: Vec::new(),
             visited,
         }
@@ -66,14 +84,16 @@ impl IncludeLoader {
     /// Every file this loader has read, in order, as the importer should show
     /// them. Does not include the config the user picked — the caller names that
     /// one itself, because it named it to us.
-    pub fn files_read(&self) -> &[String] {
+    pub fn files_read(&self) -> &[ReadFile] {
         &self.read
     }
 
-    /// The files one `Include` path expands to, in a stable order. An empty
+    /// The files one `Include` path expands to, in a stable order. `including`
+    /// is the file the `Include` line sits in, `None` at the top level. An empty
     /// result means nothing was readable behind it, which the parser records as
     /// an include seen but not followed.
-    pub fn load(&mut self, spec: &str) -> Vec<IncludedFile> {
+    pub fn load(&mut self, spec: &str, including: Option<&str>) -> Vec<IncludedFile> {
+        let included_by = including.unwrap_or(&self.root).to_string();
         let mut out = Vec::new();
         for path in self.expand(spec) {
             // A file reached twice contributes once. Re-parsing it would change
@@ -88,7 +108,10 @@ impl IncludeLoader {
                 match fs::read_to_string(&path) {
                     Ok(t) => {
                         self.visited.insert(key);
-                        self.read.push(display(&path));
+                        self.read.push(ReadFile {
+                            path: display(&path),
+                            included_by: included_by.clone(),
+                        });
                         t
                     }
                     // Missing, or ours to see but not to read. OpenSSH ignores
@@ -249,11 +272,12 @@ mod tests {
         let cfg = write(dir.path(), "elsewhere/config", "");
 
         let mut l = loader(&cfg, Some(home.clone()));
-        let got = l.load("~/.ssh/work/config");
+        let got = l.load("~/.ssh/work/config", None);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].text, "Host work\n");
         assert_eq!(got[0].path, home.join(".ssh/work/config").to_string_lossy());
         assert_eq!(l.files_read().len(), 1);
+        assert_eq!(l.files_read()[0].included_by, cfg.to_string_lossy());
     }
 
     #[test]
@@ -264,8 +288,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = write(dir.path(), "config", "");
         let mut l = loader(&cfg, Some(dir.path().to_path_buf()));
-        assert!(l.load("~").is_empty());
-        assert!(l.load("~other/config").is_empty());
+        assert!(l.load("~", None).is_empty());
+        assert!(l.load("~other/config", None).is_empty());
     }
 
     #[test]
@@ -274,7 +298,7 @@ mod tests {
         write(dir.path(), "conf.d/one", "Host one\n");
         let cfg = write(dir.path(), "config", "");
         let mut l = loader(&cfg, None);
-        let got = l.load("conf.d/one");
+        let got = l.load("conf.d/one", None);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].text, "Host one\n");
     }
@@ -290,7 +314,7 @@ mod tests {
         let cfg = write(dir.path(), "config", "");
 
         let mut l = loader(&cfg, None);
-        let got = l.load("conf.d/*");
+        let got = l.load("conf.d/*", None);
         let texts: Vec<&str> = got.iter().map(|f| f.text.as_str()).collect();
         assert_eq!(
             texts,
@@ -308,7 +332,7 @@ mod tests {
         let cfg = write(dir.path(), "config", "");
 
         let mut l = loader(&cfg, None);
-        let got = l.load("projects/*/config");
+        let got = l.load("projects/*/config", None);
         let texts: Vec<&str> = got.iter().map(|f| f.text.as_str()).collect();
         assert_eq!(texts, ["Host one\n", "Host two\n"]);
     }
@@ -320,10 +344,32 @@ mod tests {
         let cfg = write(dir.path(), "config", "");
         fs::create_dir_all(dir.path().join("adir")).unwrap();
         let mut l = loader(&cfg, None);
-        assert!(l.load("gone").is_empty());
-        assert!(l.load("conf.d/*").is_empty(), "a glob matching nothing");
-        assert!(l.load("adir").is_empty(), "a directory is not a config");
+        assert!(l.load("gone", None).is_empty());
+        assert!(
+            l.load("conf.d/*", None).is_empty(),
+            "a glob matching nothing"
+        );
+        assert!(
+            l.load("adir", None).is_empty(),
+            "a directory is not a config"
+        );
         assert!(l.files_read().is_empty());
+    }
+
+    #[test]
+    fn a_nested_include_records_the_file_that_pulled_it_in() {
+        // One level of grouping however deep the includes go: the importer walks
+        // this chain up to the file the picked config included directly.
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a/config", "");
+        write(dir.path(), "b/config", "");
+        let cfg = write(dir.path(), "config", "");
+        let mut l = loader(&cfg, None);
+        l.load("a/config", None);
+        l.load("b/config", Some(&display(&dir.path().join("a/config"))));
+        let read = l.files_read();
+        assert_eq!(read[0].included_by, cfg.to_string_lossy());
+        assert_eq!(read[1].included_by, display(&dir.path().join("a/config")));
     }
 
     #[test]
@@ -336,8 +382,8 @@ mod tests {
         let cfg = write(dir.path(), "config", "");
         let mut l = loader(&cfg, None);
 
-        assert_eq!(l.load("conf.d/one")[0].text, "Host one\n");
-        let again = l.load("conf.d/one");
+        assert_eq!(l.load("conf.d/one", None)[0].text, "Host one\n");
+        let again = l.load("conf.d/one", None);
         assert_eq!(
             again.len(),
             1,
@@ -356,7 +402,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = write(dir.path(), "config", "Include config\n");
         let mut l = loader(&cfg, None);
-        assert_eq!(l.load("config")[0].text, "");
+        assert_eq!(l.load("config", None)[0].text, "");
         assert!(l.files_read().is_empty());
     }
 }

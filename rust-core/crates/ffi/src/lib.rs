@@ -7262,6 +7262,17 @@ pub struct SshConfigHost {
     pub identity_file: Option<String>,
 }
 
+/// A file an `~/.ssh/config` report read, and what pulled it in.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SshConfigFile {
+    /// Where it was read from.
+    pub path: String,
+    /// The file whose `Include` line pulled it in; `None` for the config the
+    /// user picked. An importer walks this up to the file the picked config
+    /// included directly — one level of grouping, however deep the includes go.
+    pub included_by: Option<String>,
+}
+
 /// A host an `~/.ssh/config` import created.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ImportedSshHost {
@@ -7284,20 +7295,26 @@ pub struct SshConfigReport {
     /// Every file the report read, the one the user picked first. Empty for a
     /// report on text, which reads nothing. Following includes means touching
     /// files the user did not name, and this is how the preview says which.
-    pub files_read: Vec<String>,
+    pub files_read: Vec<SshConfigFile>,
 }
 
 /// Reads a config file and follows its `Include` directives. Returns the parsed
 /// config and every file that was read, the picked one first.
-fn parse_ssh_config_at(path: &str) -> Result<(SshConfig, Vec<String>), FfiError> {
+fn parse_ssh_config_at(path: &str) -> Result<(SshConfig, Vec<SshConfigFile>), FfiError> {
     let root = expand_leading_home(path);
     let text = std::fs::read_to_string(&root)
         .map_err(|e| FfiError::other(format!("{}: {e}", root.display())))?;
     let mut loader = ssh_include::IncludeLoader::new(&root);
-    let cfg =
-        SshConfig::parse_with_includes(&text, |spec| loader.load(spec)).map_err(FfiError::other)?;
-    let mut files_read = vec![root.to_string_lossy().to_string()];
-    files_read.extend(loader.files_read().iter().cloned());
+    let cfg = SshConfig::parse_with_includes(&text, |spec, including| loader.load(spec, including))
+        .map_err(FfiError::other)?;
+    let mut files_read = vec![SshConfigFile {
+        path: root.to_string_lossy().to_string(),
+        included_by: None,
+    }];
+    files_read.extend(loader.files_read().iter().map(|f| SshConfigFile {
+        path: f.path.clone(),
+        included_by: Some(f.included_by.clone()),
+    }));
     Ok((cfg, files_read))
 }
 
@@ -7314,7 +7331,7 @@ fn expand_leading_home(path: &str) -> PathBuf {
 }
 
 /// The report for an already-parsed config.
-fn ssh_config_report_of(cfg: &SshConfig, files_read: Vec<String>) -> SshConfigReport {
+fn ssh_config_report_of(cfg: &SshConfig, files_read: Vec<SshConfigFile>) -> SshConfigReport {
     SshConfigReport {
         hosts: cfg
             .host_aliases_with_origin()

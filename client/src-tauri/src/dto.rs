@@ -1370,6 +1370,15 @@ pub struct SshConfigHost {
     pub identity_file: Option<String>,
 }
 
+/// A file a report read, and what pulled it in.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigFile {
+    pub path: String,
+    /// The file whose `Include` pulled it in; `None` for the picked config.
+    pub included_by: Option<String>,
+}
+
 /// A host an import created.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1396,7 +1405,7 @@ pub struct SshConfigReport {
     /// pasted text, and the unreadable ones for a report on a file.
     pub pending_includes: Vec<String>,
     /// Every file the report read, the picked one first. Empty for text.
-    pub files_read: Vec<String>,
+    pub files_read: Vec<SshConfigFile>,
 }
 
 impl From<ffi::SshConfigReport> for SshConfigReport {
@@ -1415,7 +1424,14 @@ impl From<ffi::SshConfigReport> for SshConfigReport {
                 })
                 .collect(),
             pending_includes: r.pending_includes,
-            files_read: r.files_read,
+            files_read: r
+                .files_read
+                .into_iter()
+                .map(|f| SshConfigFile {
+                    path: f.path,
+                    included_by: f.included_by,
+                })
+                .collect(),
             skipped: r
                 .skipped
                 .into_iter()

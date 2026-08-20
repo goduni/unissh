@@ -330,7 +330,16 @@ export interface SshConfigReport {
    *  text, and the unreadable ones for a report on a file. */
   pendingIncludes: string[];
   /** Every file the report read, the picked one first; empty for text. */
-  filesRead: string[];
+  filesRead: SshConfigFile[];
+}
+
+/** A file a report read, and the file whose `Include` pulled it in. */
+export interface SshConfigFile {
+  path: string;
+  /** null for the config that was picked. An importer walks this up to the file
+   *  the picked config included directly — one level of grouping, however deep
+   *  the includes go. */
+  includedBy: string | null;
 }
 
 /** A host an import created. */

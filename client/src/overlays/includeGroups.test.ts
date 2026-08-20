@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { includeGroupName, planIncludeGroups, planIncludeGroupWrites } from "./includeGroups";
+import {
+  groupFile,
+  includeGroupName,
+  planIncludeGroups,
+  planIncludeGroupWrites,
+} from "./includeGroups";
 
 const CONFIG = "/home/u/.ssh/config";
 
@@ -10,6 +15,7 @@ const plan = (over: Partial<Parameters<typeof planIncludeGroups>[0]> = {}) =>
   planIncludeGroups({
     configPath: CONFIG,
     hosts: [],
+    files: [],
     subgroups: true,
     optedOut: [],
     target: null,
@@ -219,5 +225,63 @@ describe("planIncludeGroupWrites", () => {
   it("leaves the ungrouped hosts at the root when there is no target", () => {
     const p = plan({ hosts: [host("local", null)] });
     expect(planIncludeGroupWrites([], p, null, id)).toEqual([]);
+  });
+});
+
+describe("groupFile", () => {
+  const files = [
+    { path: CONFIG, includedBy: null },
+    { path: "/home/u/.ssh/project1/config", includedBy: CONFIG },
+    { path: "/home/u/.ssh/project1/hosts.conf", includedBy: "/home/u/.ssh/project1/config" },
+  ];
+
+  it("groups a nested include by the include the picked config made", () => {
+    // One project whose hosts are split across two files is one group, not two,
+    // and a deep include tree must not become a deep group tree.
+    expect(groupFile("/home/u/.ssh/project1/hosts.conf", CONFIG, files)).toBe(
+      "/home/u/.ssh/project1/config",
+    );
+  });
+
+  it("leaves a file the picked config included directly alone", () => {
+    expect(groupFile("/home/u/.ssh/project1/config", CONFIG, files)).toBe(
+      "/home/u/.ssh/project1/config",
+    );
+  });
+
+  it("falls back to the file itself when the chain is unknown", () => {
+    expect(groupFile("/home/u/.ssh/x/config", CONFIG, [])).toBe("/home/u/.ssh/x/config");
+  });
+
+  it("puts a nested include's hosts in the including file's group", () => {
+    const p = planIncludeGroups({
+      configPath: CONFIG,
+      files,
+      hosts: [
+        { alias: "a", originFile: "/home/u/.ssh/project1/config" },
+        { alias: "b", originFile: "/home/u/.ssh/project1/hosts.conf" },
+      ],
+      subgroups: true,
+      optedOut: [],
+      target: null,
+      groups: [],
+    });
+    expect(p.groups).toHaveLength(1);
+    expect(p.groups[0].label).toBe("project1");
+    expect(p.groups[0].aliases).toEqual(["a", "b"]);
+  });
+
+  it("opts a whole include out by the file the picked config named", () => {
+    const p = planIncludeGroups({
+      configPath: CONFIG,
+      files,
+      hosts: [{ alias: "b", originFile: "/home/u/.ssh/project1/hosts.conf" }],
+      subgroups: true,
+      optedOut: ["/home/u/.ssh/project1/config"],
+      target: null,
+      groups: [],
+    });
+    expect(p.groups).toEqual([]);
+    expect(p.ungrouped).toEqual(["b"]);
   });
 });

@@ -24,7 +24,12 @@ import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
 import { defaultImportGroup } from "./importTarget";
-import { includeGroupName, planIncludeGroups, planIncludeGroupWrites } from "./includeGroups";
+import {
+  groupFile,
+  includeGroupName,
+  planIncludeGroups,
+  planIncludeGroupWrites,
+} from "./includeGroups";
 import * as api from "@/bridge/api";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -169,6 +174,9 @@ function ImportPreviewBody() {
   const [report, setReport] = useState<api.SshConfigReport | null>(null);
   const skipped = report?.skipped ?? [];
   const filesRead = report?.filesRead ?? [];
+  // The include tree, for grouping: a file pulled in by an included file belongs
+  // to whatever group THAT file stands for.
+  const includeTree = filesRead.map((f) => ({ path: f.path, includedBy: f.includedBy }));
   const pendingIncludes = report?.pendingIncludes ?? [];
   const [rows, setRows] = useState<ParsedHost[]>([]);
   const [sel, setSel] = useState<string[]>([]);
@@ -280,13 +288,16 @@ function ImportPreviewBody() {
   const count = sel.length;
 
   const selectedSet = new Set(sel);
-  // Every included file a ticked host came from — the rows of the mapping,
-  // including the ones that were opted out (which is how they are opted back in).
+  // Every include the picked config made that a ticked host came from — the
+  // rows of the mapping, including the ones opted out (which is how they are
+  // opted back in). A host inside a nested include is listed under the include
+  // that reached it, because that is the group it lands in.
   const includedFiles = Array.from(
     new Set(
       rows
         .filter((h) => selectedSet.has(h.host) && h.originFile && h.originFile !== path)
-        .map((h) => h.originFile as string),
+        .map((h) => groupFile(h.originFile as string, path, includeTree))
+        .filter((f) => f !== path),
     ),
   );
   const toggleFile = (f: string) =>
@@ -428,6 +439,7 @@ function ImportPreviewBody() {
         const placement = planIncludeGroups({
           configPath: path,
           hosts: created.map((h) => ({ alias: h.alias, originFile: h.originFile })),
+          files: includeTree,
           subgroups,
           optedOut,
           target,
@@ -710,7 +722,7 @@ function ImportPreviewBody() {
                       overflowWrap: "anywhere",
                     }}
                   >
-                    {filesRead.map((f) => shortPath(f, path)).join("  ·  ")}
+                    {filesRead.map((f) => shortPath(f.path, path)).join("  ·  ")}
                   </div>
                 </div>
               )}
