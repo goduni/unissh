@@ -7426,11 +7426,13 @@ version = "0.3.1"
 dependencies = [
  "base64 0.23.0",
  "dashmap",
+ "jni 0.22.4",
  "keyring",
  "log",
  "objc2",
  "once_cell",
  "reqwest",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "serde_urlencoded",

@@ -119,6 +119,24 @@ egress path rather than a convenience, upgrade everyone who uses that vault
 before setting one; this build refuses to connect past a proxy it cannot
 understand, but it cannot make an older build do the same.
 
+### Fixed
+
+- **Every cloud/server operation on Android failed with `event loop thread
+  panicked`.** Adding a server, signing in from another device, syncing a vault —
+  all of it, on every Android build including v0.3.1, while the same server
+  worked from desktop. The message named nothing useful: it is reqwest's, raised
+  on reqwest's own internal thread after the *real* failure was thrown away.
+  Certificate verification goes through `rustls-platform-verifier`, which on
+  Android reaches the system trust store over JNI and has to be handed the JVM
+  and the app `Context` before it verifies anything — and never was. It panicked
+  where reqwest builds its client, and reqwest, unable to recover, panicked again
+  with the string users saw. The verifier is now initialised before the first
+  HTTPS request, and its Kotlin component is wired into the Android build.
+  Android keeps verifying against the **system** trust store, like every other
+  platform, so a self-hosted server behind a private CA still works by installing
+  that CA's root on the device — no bundled root list. Desktop behaviour is
+  unchanged. Vault format: unchanged. Server protocol: unchanged.
+
 ## [0.3.1] — 2026-08-10
 
 ### Added

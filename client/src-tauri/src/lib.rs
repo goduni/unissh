@@ -6,6 +6,7 @@ mod dto;
 mod error;
 mod keychain;
 mod observers;
+mod platform_tls;
 mod state;
 
 use tauri::Manager;

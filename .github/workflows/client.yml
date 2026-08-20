@@ -712,6 +712,142 @@ jobs:
           PYEOF
         working-directory: client/src-tauri
 
+      # rustls-platform-verifier is not pure Rust: reaching Android's trust store
+      # means calling into the JVM, so the crate ships a Kotlin component next to
+      # it and the Gradle project has to be pointed at it. Without this the Rust
+      # side initialises against classes that are not in the APK and every HTTPS
+      # request dies — which is bug #34, where the failure surfaced as reqwest's
+      # "event loop thread panicked" with the real cause thrown away.
+      #
+      # The crate bundles a local Maven repository; `cargo metadata` is the only
+      # supported way to locate it on disk (the path contains the registry hash
+      # and the crate version). Resolving it HERE rather than in Gradle is what
+      # keeps the injected snippet to two literals — the upstream Kotlin recipe
+      # parses the JSON inside build.gradle.kts, which needs kotlinx-serialization
+      # on the buildscript classpath and a version catalog entry, neither of which
+      # Tauri's generated project has.
+      #
+      # gen/android is regenerated on every run (see the job header), so baking an
+      # absolute path in is safe: nothing outlives this job.
+      - name: Wire the rustls-platform-verifier Android component into gradle
+        run: |
+          python3 - <<'PYEOF'
+          import json, pathlib, subprocess, sys
+
+          meta = json.loads(subprocess.run(
+              ["cargo", "metadata", "--format-version", "1",
+               "--filter-platform", "aarch64-linux-android",
+               "--manifest-path", "Cargo.toml"],
+              capture_output=True, text=True, check=True).stdout)
+
+          pkg = next((p for p in meta["packages"]
+                      if p["name"] == "rustls-platform-verifier-android"), None)
+          if pkg is None:
+              sys.exit("rustls-platform-verifier-android is not in the dependency graph — "
+                       "did the reqwest `rustls` feature or the android-only dependency change?")
+
+          maven = pathlib.Path(pkg["manifest_path"]).parent / "maven"
+          if not maven.is_dir():
+              sys.exit(f"expected a bundled maven repo at {maven}, found none")
+          version = pkg["version"]
+
+          # Where repositories may be declared depends on the generated template:
+          # AGP's dependencyResolutionManagement (settings.gradle.kts) takes
+          # precedence and FORBIDS project-level repositories when it is present,
+          # so it has to be tried first.
+          # The URL expression is the ONE part that is not DSL-agnostic. In the Kotlin
+          # DSL `url` is typed `URI`, so assigning a String is a compile error
+          # ("inferred type is String but URI! was expected") — it needs uri(...),
+          # which is in scope because the block lands inside a Project script. Groovy
+          # is untyped and takes the string straight through setUrl(Object).
+          def repo_block(path):
+              url = (f'uri("file://{maven}")' if path.suffix == ".kts"
+                     else f'"file://{maven}"')
+              return f'''
+                  maven {{
+                      url = {url}
+                      metadataSources.artifact()
+                  }}'''
+
+          # `repositories {` alone is NOT a safe anchor: settings.gradle.kts opens with
+          # pluginManagement, whose repositories serve the BUILD's plugins and never the
+          # app's dependencies. Each candidate therefore names the block it must land
+          # inside, and the anchor is only accepted after it.
+          # Tauri generates a MIXED DSL — settings.gradle is Groovy, app/build.gradle.kts
+          # is Kotlin — so both spellings of each file are candidates. The block above is
+          # accepted by either DSL; upstream's own Groovy and Kotlin recipes are identical
+          # apart from how they compute the path, and this one bakes it in as a literal.
+          candidates = [
+              (pathlib.Path("gen/android/settings.gradle.kts"), "dependencyResolutionManagement"),
+              (pathlib.Path("gen/android/settings.gradle"), "dependencyResolutionManagement"),
+              (pathlib.Path("gen/android/build.gradle.kts"), "allprojects"),
+              (pathlib.Path("gen/android/build.gradle"), "allprojects"),
+              (pathlib.Path("gen/android/app/build.gradle.kts"), None),
+          ]
+          for path, scope in candidates:
+              if not path.is_file():
+                  continue
+              s = path.read_text()
+              if "rustls-platform-verifier" in s:
+                  sys.exit(f"{path} already mentions rustls-platform-verifier — re-check this patch")
+              start = 0 if scope is None else s.find(scope)
+              if start < 0:
+                  continue
+              at = s.find("repositories {", start)
+              if at < 0:
+                  continue
+              cut = at + len("repositories {")
+              path.write_text(s[:cut] + repo_block(path) + s[cut:])
+              print(f"maven repo added to {path}"
+                    + (f" (inside {scope})" if scope else ""))
+              break
+          else:
+              # Dump what is actually there: these files are small, and one failed run
+              # that shows them is cheaper than another round trip guessing at the template.
+              for path, _ in candidates:
+                  if path.is_file():
+                      print(f"----- {path} -----")
+                      print(path.read_text())
+              sys.exit("no dependency `repositories {` block found — the generated gradle "
+                       "template changed; the files above show where it moved to")
+
+          app = pathlib.Path("gen/android/app/build.gradle.kts")
+          s = app.read_text()
+          dep = f'\n    implementation("rustls:rustls-platform-verifier:{version}")'
+          out = s.replace("dependencies {", "dependencies {" + dep, 1)
+          if out == s:
+              sys.exit("anchor `dependencies {` not found in app/build.gradle.kts")
+          app.write_text(out)
+          print(f"rustls:rustls-platform-verifier:{version} added to app/build.gradle.kts")
+
+          # R8 keep rule, and it is NOT optional. The release build minifies and
+          # obfuscates, the aar ships no consumer proguard rules of its own, and the
+          # only caller of these classes is Rust reaching them through JNI FindClass —
+          # which R8 cannot see. Without this the classes are silently stripped: the
+          # APK builds green, and the verifier then fails to initialise on the device
+          # exactly as if this whole patch were absent.
+          # Tauri's release buildType does not name its rules files; it globs them:
+          #     proguardFiles(*fileTree(".") { include("**/*.pro") }...)
+          # so a .pro dropped in beside build.gradle.kts is picked up with no edit to
+          # it. Assert the glob is still what feeds proguardFiles — if that ever
+          # changes, the rule below would be written and silently ignored, which is
+          # the one outcome worse than not writing it.
+          if 'include("**/*.pro")' not in s:
+              print(s)
+              sys.exit("app/build.gradle.kts no longer globs **/*.pro into proguardFiles "
+                       "— the keep rule would be silently ignored; the file above shows "
+                       "what it does instead")
+          pathlib.Path("gen/android/app/rustls-platform-verifier.pro").write_text(
+              "# The Kotlin half of rustls-platform-verifier is reached ONLY from Rust,\n"
+              "# through JNI FindClass. R8 cannot see that reference and strips the\n"
+              "# classes from the release build, which leaves the APK building green and\n"
+              "# cloud broken on the device exactly as in #34.\n"
+              "-keep class org.rustls.platformverifier.** { *; }\n"
+          )
+          print("R8 keep rule written to app/rustls-platform-verifier.pro")
+          PYEOF
+        working-directory: client/src-tauri
+
       # TWO invocations on purpose, and the order matters.
       #
       # `--target aarch64` used to be passed here, which built exactly one ABI:
@@ -816,6 +952,47 @@ jobs:
             echo "--- $APK"
             "$SIGNER" verify --print-certs "$APK"
           done
+
+      # A green gradle build is NOT evidence that the Kotlin component shipped: the
+      # classes are reached only from Rust over JNI, R8 cannot see that, and the aar
+      # carries no consumer keep rules. Assert against the artifact itself, in the
+      # same spirit as the icon check after `tauri android init`.
+      - name: Verify the platform verifier's classes actually shipped
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib, sys, zipfile
+
+          # The Kotlin half of rustls-platform-verifier is reached ONLY from Rust, through
+          # JNI FindClass. R8 cannot see that reference, the aar ships no consumer keep
+          # rules, and the release build minifies — so the classes are one missing proguard
+          # line away from being stripped out of a green build. On the device that failure
+          # is indistinguishable from never having wired the component in at all (#34), and
+          # nothing earlier in this job would notice. Hence: look in the artifact we are
+          # about to ship.
+          NEEDLE = b"org/rustls/platformverifier"
+
+          apks = sorted(pathlib.Path("out").glob("*.apk"))
+          if not apks:
+              sys.exit("no APKs in out/ — nothing to check, which is itself wrong")
+
+          bad = []
+          for apk in apks:
+              with zipfile.ZipFile(apk) as z:
+                  dexes = [n for n in z.namelist() if n.endswith(".dex")]
+                  if not dexes:
+                      bad.append(f"{apk.name}: no .dex entries at all")
+                      continue
+                  if not any(NEEDLE in z.read(n) for n in dexes):
+                      bad.append(f"{apk.name}: {NEEDLE.decode()} missing from {', '.join(dexes)}")
+                  else:
+                      print(f"{apk.name}: verifier classes present")
+
+          if bad:
+              print("\n".join(bad), file=sys.stderr)
+              sys.exit("the platform verifier's Kotlin classes are not in the APK — R8 stripped "
+                       "them, or the gradle wiring did not take. The Android build would ship "
+                       "with cloud broken exactly as in #34.")
+          PYEOF
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
