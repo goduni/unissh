@@ -569,6 +569,7 @@ export const ru = {
     "searchPlaceholder": "Поиск по имени, адресу или тегу",
     "connect": "Подключить",
     "menu": {
+      "copyAddress": "Скопировать адрес",
       "addToGroup": "В группу\u2026",
       "manageGroups": "Управление группами\u2026"
     },
@@ -636,6 +637,7 @@ export const ru = {
       "addedTag": "Добавлен тег #{{name}}",
       "removedTag": "Убран тег #{{name}}"
     },
+    "addressCopied": "Адрес скопирован",
     "railHost": "Хост",
     "railSessions": "Сессии",
     "selectHost": "Выберите хост",

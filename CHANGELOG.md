@@ -47,7 +47,11 @@ starts with `0.`:
   writes nothing at all, so the list does not flicker for a no-op.
 
   The menu path is untouched, and it stays the only path on a phone, where a
-  vertical drag is a scroll.
+  vertical drag is a scroll. It also gains **Copy address**: text on a
+  `draggable` element cannot be selected, so dragging a card took away the one
+  way there was of getting a host's address off this screen. The menu item is
+  better than what it replaces — it works in the list layout too, where the
+  address is ellipsised, and it does not depend on hitting 12px of mono type.
 
 - **The host picker has a search box and a keyboard.** The `+` in the terminal
   and SFTP tab strips only offered a search past six saved hosts, so anyone with

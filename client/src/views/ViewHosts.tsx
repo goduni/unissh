@@ -14,6 +14,7 @@ import { pressActivate, useMenu } from "@/components/a11y";
 import { useApp, paneProfile, HOST_FILTER_ALL } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useCtx } from "@/store/ctx";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import * as api from "@/bridge/api";
 import { profileAuthKind, apiErrorMessage } from "@/bridge/types";
 import type { ConnectionProfile } from "@/bridge/types";
@@ -21,6 +22,13 @@ import { useTranslation, tDyn } from "@/i18n";
 import { nextRow } from "@/support/listNav";
 import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
 import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
+
+/** The address as the list shows it — and, since dragging a card no longer lets
+ *  you select the text on it (a `draggable` element cannot be text-selected),
+ *  as "Copy address" puts it on the clipboard. One definition so the three can
+ *  never disagree; it also stops a host with no user rendering as `@10.0.0.1`. */
+const hostAddress = (h: ConnectionProfile): string =>
+  h.user ? `${h.user}@${h.host}` : h.host;
 
 type SortKey = "name" | "added" | "connected";
 type RailTab = "detail" | "sessions";
@@ -201,7 +209,7 @@ function HostCard({
           marginTop: 6,
         }}
       >
-        {h.user ? `${h.user}@${h.host}` : h.host}
+        {hostAddress(h)}
       </div>
 
       {/* L3 — status · auth (one mono line; colour only on meaning).
@@ -464,7 +472,7 @@ function HostRow({
           whiteSpace: "nowrap",
         }}
       >
-        {h.user}@{h.host}
+        {hostAddress(h)}
       </span>
       <div style={{ display: "flex", gap: 5, width: 130, flexShrink: 0, overflow: "hidden", alignItems: "center" }}>
         {h.tags.slice(0, 2).map((tg) => (
@@ -2619,6 +2627,19 @@ export function ViewHosts() {
           : [
               { icon: "terminal", label: t("hosts.connect"), onClick: () => ctx.connect(mh) },
               { icon: "folders", label: t("nav.sftp"), onClick: () => void ctx.connectSftp(mh) },
+              {
+                icon: "copy",
+                label: t("hosts.menu.copyAddress"),
+                // Dragging a card is what took the old way of getting this out
+                // of the screen — you cannot select text on a `draggable`
+                // element. This is better than what it replaces: it works in the
+                // row layout too, where the address is ellipsised, and it does
+                // not depend on hitting 12px of mono type with the pointer.
+                onClick: () =>
+                  void writeText(hostAddress(mh))
+                    .then(() => ctx.toast(t("hosts.addressCopied"), "ok"))
+                    .catch((e) => ctx.toast(apiErrorMessage(e), "err")),
+              },
               {
                 icon: "folder",
                 label: t("hosts.menu.addToGroup"),
