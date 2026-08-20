@@ -427,9 +427,7 @@ function ImportPreviewBody() {
         //    again.
         const placement = planIncludeGroups({
           configPath: path,
-          hosts: created
-            .filter((h) => createdSet.has(h.alias))
-            .map((h) => ({ alias: h.alias, originFile: h.originFile })),
+          hosts: created.map((h) => ({ alias: h.alias, originFile: h.originFile })),
           subgroups,
           optedOut,
           target,
@@ -446,7 +444,10 @@ function ImportPreviewBody() {
             (_label, i) => `group-${stamp}-${i}`,
           );
           for (const g of writes) await api.saveGroup(vaultId, g);
-          madeGroups = placement.groups.length;
+          // Only the ones this import actually created: a run that put its
+          // hosts into groups that were already there created nothing, and
+          // saying otherwise would send the user looking for them.
+          madeGroups = placement.groups.filter((g) => !g.existingId).length;
           // Read AFTER the write, from the live store: a sync could have deleted
           // the group mid-import, in which case nothing was written and naming
           // it here would report a placement that never happened.
