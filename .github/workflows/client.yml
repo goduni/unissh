@@ -757,7 +757,7 @@ jobs:
           # so it has to be tried first.
           repo_block = f'''
                   maven {{
-                      url = uri("{maven}")
+                      url = "file://{maven}"
                       metadataSources.artifact()
                   }}'''
 
@@ -765,20 +765,15 @@ jobs:
           # pluginManagement, whose repositories serve the BUILD's plugins and never the
           # app's dependencies. Each candidate therefore names the block it must land
           # inside, and the anchor is only accepted after it.
-          # The injected snippet is Kotlin DSL. Tauri's template is .kts throughout
-          # (the signing patch above relies on that too), so a Groovy settings file
-          # means the template changed under us — and silently falling through to the
-          # app module would then be worse than stopping, because settings.gradle's
-          # FAIL_ON_PROJECT_REPOS rejects project-level repositories and the build
-          # would die much later with an unrelated-looking error.
-          groovy = pathlib.Path("gen/android/settings.gradle")
-          if groovy.is_file() and not pathlib.Path("gen/android/settings.gradle.kts").is_file():
-              sys.exit(f"{groovy} is Groovy but this patch injects Kotlin DSL — "
-                       "the generated gradle template changed, re-check this patch")
-
+          # Tauri generates a MIXED DSL — settings.gradle is Groovy, app/build.gradle.kts
+          # is Kotlin — so both spellings of each file are candidates. The block above is
+          # accepted by either DSL; upstream's own Groovy and Kotlin recipes are identical
+          # apart from how they compute the path, and this one bakes it in as a literal.
           candidates = [
               (pathlib.Path("gen/android/settings.gradle.kts"), "dependencyResolutionManagement"),
+              (pathlib.Path("gen/android/settings.gradle"), "dependencyResolutionManagement"),
               (pathlib.Path("gen/android/build.gradle.kts"), "allprojects"),
+              (pathlib.Path("gen/android/build.gradle"), "allprojects"),
               (pathlib.Path("gen/android/app/build.gradle.kts"), None),
           ]
           for path, scope in candidates:
@@ -799,9 +794,14 @@ jobs:
                     + (f" (inside {scope})" if scope else ""))
               break
           else:
-              seen = [str(p) for p, _ in candidates if p.is_file()]
-              sys.exit("no dependency `repositories {` block found in any of: " + ", ".join(seen) +
-                       " — the generated gradle template changed, re-check this patch")
+              # Dump what is actually there: these files are small, and one failed run
+              # that shows them is cheaper than another round trip guessing at the template.
+              for path, _ in candidates:
+                  if path.is_file():
+                      print(f"----- {path} -----")
+                      print(path.read_text())
+              sys.exit("no dependency `repositories {` block found — the generated gradle "
+                       "template changed; the files above show where it moved to")
 
           app = pathlib.Path("gen/android/app/build.gradle.kts")
           s = app.read_text()
