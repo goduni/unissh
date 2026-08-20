@@ -24,6 +24,7 @@ import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
 import { defaultImportGroup } from "./importTarget";
+import { filterConfigToSelected } from "./configFilter";
 import {
   groupFile,
   includeGroupName,
@@ -51,31 +52,10 @@ interface ParsedHost {
 
 const stripQuotes = (v: string) => v.replace(/^["']|["']$/g, "").trim();
 
-const isWildcard = (a: string) => a.includes("*") || a.includes("?") || a.startsWith("!");
-
-/** Keep only the `Host` blocks whose first concrete alias is selected. Wildcard
- *  blocks (`Host *`, `Host *.example.com`) and the global preamble before the
- *  first `Host` are always kept so inherited settings (User/Port/IdentityFile)
- *  still resolve. A multi-alias `Host a b` line is kept whole if `a` is selected.
- *
- *  Only for the text fallback below: a path-based import is told which aliases
- *  to take, because filtering text cannot reach a host in another file. */
-function filterConfigToSelected(text: string, selected: Set<string>): string {
-  const out: string[] = [];
-  let keep = true; // keep the global preamble before the first Host block
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    const m = line.match(/^([Hh]ost)\s+(.+)$/);
-    if (m && !line.startsWith("#")) {
-      const patterns = m[2].trim().split(/\s+/);
-      const allWild = patterns.every(isWildcard);
-      const firstAlias = patterns.find((a) => !isWildcard(a));
-      keep = allWild || (firstAlias != null && selected.has(firstAlias));
-    }
-    if (keep) out.push(raw);
-  }
-  return out.join("\n");
-}
+/** What a file picker returned is a URI rather than a filesystem path — an
+ *  Android `content://`, say. A Windows drive letter (`C:\…`) is a path, not a
+ *  scheme, so it is excluded explicitly. */
+const isUri = (p: string) => /^[a-z][a-z0-9+.-]*:/i.test(p) && !/^[a-z]:[\\/]/i.test(p);
 
 /** Path components, on either separator. */
 const parts = (path: string) => path.split(/[/\\]/).filter(Boolean);
@@ -242,17 +222,16 @@ function ImportPreviewBody() {
         //
         // Except on Android, where the picker hands back a `content://` URI: the
         // core opens paths with the filesystem and cannot read one, while Tauri's
-        // fs plugin can. Falling back to the text-based report keeps that import
-        // working exactly as it did — without following includes, which it never
-        // did either.
-        let rep: api.SshConfigReport;
-        let text: string | null = null;
-        try {
-          rep = await api.sshConfigReportAtPath(selected);
-        } catch {
-          text = await readTextFile(selected);
-          rep = await api.sshConfigReport(text);
-        }
+        // fs plugin can. Which one to use is decided by what the picker returned,
+        // NOT by catching the failure — a `catch` here would also swallow a real
+        // error (a bad `Port` in an included file fails the parse), quietly
+        // downgrade the import to the picked file alone, and lose every host
+        // behind an `Include` without ever saying so.
+        const text = isUri(selected) ? await readTextFile(selected) : null;
+        const rep =
+          text === null
+            ? await api.sshConfigReportAtPath(selected)
+            : await api.sshConfigReport(text);
         if (cancelled) return;
         const existing = new Set(useApp.getState().hosts.map((h) => h.label));
         const parsed: ParsedHost[] = rep.hosts.map((h) => ({
