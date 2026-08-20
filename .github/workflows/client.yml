@@ -819,6 +819,23 @@ jobs:
               sys.exit("anchor `dependencies {` not found in app/build.gradle.kts")
           app.write_text(out)
           print(f"rustls:rustls-platform-verifier:{version} added to app/build.gradle.kts")
+
+          # R8 keep rule, and it is NOT optional. The release build minifies and
+          # obfuscates, the aar ships no consumer proguard rules of its own, and the
+          # only caller of these classes is Rust reaching them through JNI FindClass —
+          # which R8 cannot see. Without this the classes are silently stripped: the
+          # APK builds green, and the verifier then fails to initialise on the device
+          # exactly as if this whole patch were absent.
+          if "proguard-rules.pro" not in s:
+              sys.exit("app/build.gradle.kts does not reference proguard-rules.pro — "
+                       "the keep rule below would be silently ignored; re-check this patch")
+          rules = pathlib.Path("gen/android/app/proguard-rules.pro")
+          rules.write_text(
+              (rules.read_text() if rules.is_file() else "")
+              + "\n# Reached only from Rust over JNI, so R8 sees no reference to it.\n"
+              + "-keep class org.rustls.platformverifier.** { *; }\n"
+          )
+          print("R8 keep rule written to app/proguard-rules.pro")
           PYEOF
         working-directory: client/src-tauri
 
@@ -926,6 +943,47 @@ jobs:
             echo "--- $APK"
             "$SIGNER" verify --print-certs "$APK"
           done
+
+      # A green gradle build is NOT evidence that the Kotlin component shipped: the
+      # classes are reached only from Rust over JNI, R8 cannot see that, and the aar
+      # carries no consumer keep rules. Assert against the artifact itself, in the
+      # same spirit as the icon check after `tauri android init`.
+      - name: Verify the platform verifier's classes actually shipped
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib, sys, zipfile
+
+          # The Kotlin half of rustls-platform-verifier is reached ONLY from Rust, through
+          # JNI FindClass. R8 cannot see that reference, the aar ships no consumer keep
+          # rules, and the release build minifies — so the classes are one missing proguard
+          # line away from being stripped out of a green build. On the device that failure
+          # is indistinguishable from never having wired the component in at all (#34), and
+          # nothing earlier in this job would notice. Hence: look in the artifact we are
+          # about to ship.
+          NEEDLE = b"org/rustls/platformverifier"
+
+          apks = sorted(pathlib.Path("out").glob("*.apk"))
+          if not apks:
+              sys.exit("no APKs in out/ — nothing to check, which is itself wrong")
+
+          bad = []
+          for apk in apks:
+              with zipfile.ZipFile(apk) as z:
+                  dexes = [n for n in z.namelist() if n.endswith(".dex")]
+                  if not dexes:
+                      bad.append(f"{apk.name}: no .dex entries at all")
+                      continue
+                  if not any(NEEDLE in z.read(n) for n in dexes):
+                      bad.append(f"{apk.name}: {NEEDLE.decode()} missing from {', '.join(dexes)}")
+                  else:
+                      print(f"{apk.name}: verifier classes present")
+
+          if bad:
+              print("\n".join(bad), file=sys.stderr)
+              sys.exit("the platform verifier's Kotlin classes are not in the APK — R8 stripped "
+                       "them, or the gradle wiring did not take. The Android build would ship "
+                       "with cloud broken exactly as in #34.")
+          PYEOF
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
