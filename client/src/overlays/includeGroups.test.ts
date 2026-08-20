@@ -322,3 +322,37 @@ describe("the picked config is recognised by what the report read", () => {
     );
   });
 });
+
+describe("planIncludeGroupWrites leaves alone what it cannot place", () => {
+  const id = (label: string, i: number) => `new-${label}-${i}`;
+  const g = (groupId: string, memberIds: string[], label: string = groupId) => ({
+    groupId,
+    label,
+    memberIds,
+    parentId: null,
+  });
+
+  it("keeps a re-imported host in its group when no target is chosen", () => {
+    // "No group" is not a destination. Re-importing a config must not empty out
+    // the groups the user filed those hosts into by hand.
+    const existing = [g("g-mine", ["web"])];
+    const p = plan({ hosts: [host("web", null)] });
+    expect(planIncludeGroupWrites(existing, p, null, id)).toEqual([]);
+  });
+
+  it("keeps it in its group when the chosen target has vanished mid-import", () => {
+    // A sync can delete the target between the preview and the write. Removing
+    // the host from where it was and putting it nowhere is the worst outcome.
+    const existing = [g("g-mine", ["web"])];
+    const p = plan({ target: "g-gone", hosts: [host("web", null)] });
+    expect(planIncludeGroupWrites(existing, p, "g-gone", id)).toEqual([]);
+  });
+
+  it("still moves a host that a derived subgroup claims", () => {
+    const existing = [g("g-mine", ["a"])];
+    const p = plan({ hosts: [host("a", "/home/u/.ssh/project1/config")] });
+    const writes = planIncludeGroupWrites(existing, p, null, id);
+    expect(writes.find((w) => w.groupId === "g-mine")!.memberIds).toEqual([]);
+    expect(writes.find((w) => w.label === "project1")!.memberIds).toEqual(["a"]);
+  });
+});

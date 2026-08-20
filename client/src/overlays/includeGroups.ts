@@ -183,7 +183,15 @@ export function planIncludeGroupWrites(
   target: string | null,
   newGroupId: (label: string, index: number) => string,
 ): ServerGroup[] {
-  const placed = new Set([...plan.groups.flatMap((g) => g.aliases), ...plan.ungrouped]);
+  // Only hosts this import actually places anywhere. A host is moved, not
+  // copied, so it has to leave the group it was in — but "no target group" is
+  // not a destination, and taking a re-imported host out of the group the user
+  // put it in by hand would be a deletion nobody asked for.
+  const intoTarget = !!target && existing.some((g) => g.groupId === target);
+  const placed = new Set([
+    ...plan.groups.flatMap((g) => g.aliases),
+    ...(intoTarget ? plan.ungrouped : []),
+  ]);
   const writes = new Map<string, ServerGroup>();
   const current = (id: string) =>
     writes.get(id) ?? existing.find((g) => g.groupId === id) ?? null;
@@ -218,8 +226,8 @@ export function planIncludeGroupWrites(
   // Everything that did not become a subgroup goes where a plain import would
   // have put it. With no target group that is the vault root, which is not a
   // group and needs no write.
-  if (target && plan.ungrouped.length) {
-    const t = current(target);
+  if (intoTarget && plan.ungrouped.length) {
+    const t = current(target as string);
     if (t) into(t, plan.ungrouped);
   }
 
