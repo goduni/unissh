@@ -8,6 +8,10 @@ mod keychain;
 mod observers;
 mod platform_tls;
 mod state;
+// Desktop-only: the OS lock/suspend listeners have no counterpart on a phone,
+// and compiling the module there would only carry dead code (see its docs).
+#[cfg(desktop)]
+mod system_lock;
 
 use tauri::Manager;
 use unissh_ffi::Core;
@@ -203,6 +207,13 @@ pub fn run() {
                 }
             }
 
+            // Follow the OS out of the room: a screen lock or a suspend locks
+            // the vault the same way the lock button does. Best-effort by
+            // design — a desktop that emits neither signal simply behaves as it
+            // did before. Desktop-only; nothing is registered on mobile.
+            #[cfg(desktop)]
+            crate::system_lock::start(app.handle());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -211,6 +222,7 @@ pub fn run() {
             commands::reset_partial_instance,
             commands::reset_instance,
             commands::log_dir,
+            commands::system_lock_ack,
             commands::reveal_log_dir,
             commands::tiling_session,
             commands::create_account,

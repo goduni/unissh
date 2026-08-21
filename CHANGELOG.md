@@ -34,6 +34,52 @@ starts with `0.`:
 
 ### Added
 
+- **The vault locks when the screen does.** Auto-lock only ever watched UniSSH's
+  own window: lock your screen and walk away, and the vault stayed open until an
+  inactivity timer that had barely started happened to expire — or, with the
+  timeout on "Never", indefinitely. Closing the lid was worse, because a
+  suspended machine's idle timer does not tick at all. Locking the screen is the
+  clearest "I am leaving" anyone gives a computer, and it was the one signal
+  UniSSH ignored.
+
+  It now locks with the OS, on by default, through the same lock the lock button
+  and the idle timeout use — the same zeroize, the same teardown of terminals,
+  tunnels, transfers and SFTP panes, the same unlock screen, which now says
+  which of the two took your sessions away. A short grace period covers locking
+  the screen for thirty seconds and coming straight back: come back inside it
+  and the pending lock is cancelled with nothing lost. **Settings → Lock** has
+  the control — off, at once, or a grace of 30 s, 1 min or 5 min. Sleep is never
+  graced; the machine is going down and there is no changing one's mind.
+
+  The two settings are independent, which matters most if your auto-lock is on
+  **"Never"**: that switches off the *idle timer*, and it always did — it never
+  meant "never lock". So a "Never" instance now locks when the screen does,
+  which is the point. If that is not what you want, the new control has its own
+  off switch.
+
+  Sleep does, though, *wait*. Hearing "the machine is suspending" and merely
+  asking for a lock would let it go down with the keys still in memory, which is
+  the one thing this is for — so on Linux UniSSH holds a logind delay inhibitor
+  and on Windows it holds the power broadcast open, releasing only once the
+  vault is actually shut. Bounded in both cases — and bounded by what each OS
+  says it allows, not by one number picked to suit: a laptop that will not sleep
+  is worse than a vault that locked a moment late.
+
+  On macOS the same promise is weaker, and deliberately so. Apple's own guidance
+  draws the line — Cocoa's sleep notification is for hearing about a sleep, and
+  only I/O Kit can delay one — so there UniSSH asks for the lock and the machine
+  does not wait. Note also that macOS reports a screen lock when the screensaver
+  or display sleep starts, whichever your "require password" setting says; for a
+  tool holding SSH keys that is the right way round, and the grace period (and
+  the off switch) are there for the machine with an aggressive screensaver.
+
+  Detected from `com.apple.screenIsLocked` and the will-sleep notification on
+  macOS, `WTS_SESSION_LOCK` and the power broadcast on Windows, and logind's
+  session `Lock` plus `PrepareForSleep` on Linux, with the GNOME/KDE screensaver
+  as a fallback where logind stays quiet. A desktop that emits neither signal
+  behaves exactly as it did before rather than failing. Desktop only: nothing on
+  a phone emits these, and app backgrounding there is a different question.
+
 - **Hosts can be dragged into a group.** Filing a host was menu-only — open the
   overflow menu, find "Move to group", pick the target, and repeat for every
   host you wanted moved — while every other rearrangeable list in UniSSH is

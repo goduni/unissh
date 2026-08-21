@@ -29,6 +29,12 @@ import type { SftpSession, Transfer } from "@/store/sftp-types";
 import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
 import { suspendExternalEdits } from "@/sftp/external-edit";
 import { planGroupMove } from "@/store/groupMove";
+import type { LockGrace } from "@/support/systemLock";
+
+/** What closed the vault. `manual` is the lock action or the ⌘L shortcut;
+ *  `idle` is the inactivity timer; the other two come from the OS telling us
+ *  the user left the machine. Only used to explain the lock screen. */
+export type LockReason = "manual" | "idle" | "screen-lock" | "suspend";
 
 export type Route =
   | "hosts"
@@ -263,6 +269,14 @@ interface AppStore {
   /** Idle minutes before auto-lock; null = never. Store-backed so a Settings
    *  change re-arms the idle timer live (App.tsx effect depends on it). */
   autolockMin: number | null;
+  /** Seconds of grace between the OS session locking and the vault locking;
+   *  null = don't follow the OS at all. Independent of `autolockMin`: "never"
+   *  there means "no idle timer", not "never lock". Desktop-only — nothing
+   *  emits the signals on a phone. */
+  osLockGrace: LockGrace;
+  /** Why the vault is locked, for the lock screen to say so. Null on a cold
+   *  start (nothing happened — it was simply never unlocked). */
+  lockReason: LockReason | null;
 
   // navigation
   route: Route;
@@ -392,10 +406,11 @@ interface AppStore {
   setDevice: (d: Device) => void;
   setGroupsNavVisible: (v: boolean) => void;
   setAutolockMin: (m: number | null) => void;
+  setOsLockGrace: (g: LockGrace) => void;
   setVault: (id: string) => Promise<void>;
   reloadVault: () => Promise<void>;
   reloadVaults: () => Promise<void>;
-  lockInstance: () => Promise<void>;
+  lockInstance: (reason?: LockReason) => Promise<void>;
 
   // cloud server
   reloadServerStatus: () => Promise<void>;
@@ -532,6 +547,9 @@ const lsDevice = (): Device => {
   }
 };
 
+/** Seconds of grace on a screen lock, out of the box. */
+export const OS_LOCK_GRACE_DEFAULT = 30;
+
 /** Idle minutes before auto-lock, parsed from the Settings value. "never" → null
  *  (disabled). Defaults to 15, matching the Settings UI default. */
 const lsAutolockMin = (): number | null => {
@@ -542,6 +560,22 @@ const lsAutolockMin = (): number | null => {
     return Number.isFinite(n) && n > 0 ? n : 15;
   } catch {
     return 15;
+  }
+};
+
+/** Grace, in seconds, between the OS session locking and the vault locking.
+ *  `null` = don't follow the OS. On by default with a short grace: locking the
+ *  screen is the clearest "I am leaving" a user ever gives, and it is exactly
+ *  when the idle timer is least likely to have fired — but a thirty-second step
+ *  away should not cost every open session. Stored as seconds, or "off". */
+const lsOsLockGrace = (): LockGrace => {
+  try {
+    const v = localStorage.getItem("unissh.oslock") ?? String(OS_LOCK_GRACE_DEFAULT);
+    if (v === "off") return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= 0 ? n : OS_LOCK_GRACE_DEFAULT;
+  } catch {
+    return OS_LOCK_GRACE_DEFAULT;
   }
 };
 
@@ -733,6 +767,8 @@ export const useApp = create<AppStore>((set, get) => ({
   unlocked: false,
   requiresPassword: null,
   autolockMin: lsAutolockMin(),
+  osLockGrace: lsOsLockGrace(),
+  lockReason: null,
   route: "hosts", // always open on the all-hosts view (hostFilter defaults to HOST_FILTER_ALL)
   routeSeq: 0,
   device: lsDevice(),
@@ -974,6 +1010,14 @@ export const useApp = create<AppStore>((set, get) => ({
     }
   },
   setAutolockMin: (m) => set({ autolockMin: m }),
+  setOsLockGrace: (g) => {
+    set({ osLockGrace: g });
+    try {
+      localStorage.setItem("unissh.oslock", g === null ? "off" : String(g));
+    } catch {
+      /* ignore (private mode / quota) */
+    }
+  },
 
   reloadVaults: async () => {
     let vaults = await api.listVaults();
@@ -1074,7 +1118,7 @@ export const useApp = create<AppStore>((set, get) => ({
     }
   },
 
-  lockInstance: async () => {
+  lockInstance: async (reason = "manual") => {
     try {
       await api.lock();
     } catch (e) {
@@ -1092,6 +1136,7 @@ export const useApp = create<AppStore>((set, get) => ({
     set({
       unlocked: false,
       overlay: "unlock",
+      lockReason: reason,
       // Locking is not "come back to where you were": Settings should not be
       // waiting on screen when the vault opens again.
       settingsOpen: false,

@@ -83,6 +83,12 @@ export const resetInstance = () => invoke<void>("reset_instance");
 export const logDir = () => invoke<string>("log_dir");
 /** Open the log directory in the OS file manager. */
 export const revealLogDir = () => invoke<void>("reveal_log_dir");
+/** Tell the native listener we are done with a `system-lock` suspend signal.
+ *  It is holding the machine awake — a logind delay inhibitor on Linux, its own
+ *  window proc on Windows — so this must be called for EVERY suspend signal,
+ *  including ones the user's settings say to ignore. `token` is the one the
+ *  event carried; it says WHICH suspend is being answered. */
+export const systemLockAck = (token: number) => invoke<void>("system_lock_ack", { token });
 /** True when a tiling window manager runs the session — the DEFAULT for whether
  *  to draw our own title bar, overridable by the user. False everywhere but
  *  Linux/BSD. */

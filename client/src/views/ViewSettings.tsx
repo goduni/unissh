@@ -761,6 +761,8 @@ function SettingsAppearance() {
 
 // ── General ────────────────────────────────────────────────────
 type AutoLock = "5" | "15" | "60" | "never";
+/** Seconds of grace on an OS screen lock, or "off". Mirrors `osLockGrace`. */
+type OsLock = "off" | "0" | "30" | "60" | "300";
 type Startup = "locked" | "unlocked";
 
 function SettingsGeneral() {
@@ -781,6 +783,8 @@ function SettingsGeneral() {
   const sftpExternalEditDefault = useApp((s) => s.sftpExternalEditDefault);
   const setSftpExternalEditDefault = useApp((s) => s.setSftpExternalEditDefault);
   const setSftpParallelism = useApp((s) => s.setSftpParallelism);
+  const osLockGrace = useApp((s) => s.osLockGrace);
+  const setOsLockGrace = useApp((s) => s.setOsLockGrace);
   const isMobile = useIsMobile();
 
   // Master-password instances can't auto-unlock at startup (the password is
@@ -847,6 +851,24 @@ function SettingsGeneral() {
           ]}
         />
       </SettingRow>
+      {/* Desktop only: nothing on a phone emits a session-lock or suspend signal
+          for this to follow, and app backgrounding is a separate question this
+          setting does not answer. */}
+      {!isMobile && (
+        <SettingRow title={t("settings.osLockTitle")} desc={t("settings.osLockDesc")}>
+          <Segmented<OsLock>
+            value={osLockGrace === null ? "off" : (String(osLockGrace) as OsLock)}
+            onChange={(v) => setOsLockGrace(v === "off" ? null : parseInt(v, 10))}
+            options={[
+              { value: "off", label: t("settings.osLockOff") },
+              { value: "0", label: t("settings.osLockNow") },
+              { value: "30", label: t("settings.osLockSec", { n: 30 }) },
+              { value: "60", label: t("settings.osLockMin", { n: 1 }) },
+              { value: "300", label: t("settings.osLockMin", { n: 5 }) },
+            ]}
+          />
+        </SettingRow>
+      )}
       <SettingRow
         title={t("settings.startupTitle")}
         desc={startupDisabled ? t("settings.startupPwNote") : t("settings.startupDesc")}
