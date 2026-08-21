@@ -575,7 +575,7 @@ export function ViewFleet() {
           gap: rem(10),
           // Wrap so the done-summary group (counts + rerun-failed) drops below the title instead of overflowing.
           flexWrap: "wrap",
-          padding: `16px ${gutter}px 12px`,
+          padding: `${rem(16)} ${rem(gutter)} ${rem(12)}`,
         }}
       >
         <Icon name="layers" size={20} color={p.accentText} />
@@ -648,7 +648,7 @@ export function ViewFleet() {
           a phone has no hover, and "why didn't these hosts run?" is not a question
           to leave unanswered on a screen that just refused to run them. */}
       {touch && skipped > 0 && (
-        <div style={{ padding: `0 ${gutter}px 10px`, fontSize: TEXT.small, color: p.txt3 }}>
+        <div style={{ padding: `0 ${rem(gutter)} ${rem(10)}`, fontSize: TEXT.small, color: p.txt3 }}>
           {t("fleet.skippedTitle")}
         </div>
       )}
@@ -662,7 +662,7 @@ export function ViewFleet() {
             alignItems: "center",
             gap: rem(10),
             flexWrap: "wrap",
-            padding: `0 ${gutter}px 12px`,
+            padding: `0 ${rem(gutter)} ${rem(12)}`,
           }}
         >
           <span style={{ fontSize: TEXT.base, color: p.txt2, whiteSpace: "nowrap" }}>
@@ -733,7 +733,7 @@ export function ViewFleet() {
       )}
 
       {/* command bar */}
-      <div style={{ padding: `0 ${gutter}px 14px` }}>
+      <div style={{ padding: `0 ${rem(gutter)} ${rem(14)}` }}>
         <div
           style={{
             display: "flex",
@@ -779,7 +779,7 @@ export function ViewFleet() {
               // over — 30px on a 390px screen, about two characters, for the field
               // that types a command onto every host you own. Given a basis it can
               // push the checkbox and Run onto their own line instead of starving.
-              flex: "1 1 200px",
+              flex: `1 1 ${rem(200)}`,
               minWidth: rem(160),
               background: "transparent",
               border: "none",
@@ -829,7 +829,7 @@ export function ViewFleet() {
       </div>
 
       {/* per-host grid */}
-      <div style={{ flex: 1, overflow: "auto", padding: `0 ${gutter}px 18px` }}>
+      <div style={{ flex: 1, overflow: "auto", padding: `0 ${rem(gutter)} ${rem(18)}` }}>
         {filtered.length === 0 ? (
           <div
             style={{
@@ -905,7 +905,7 @@ export function ViewFleet() {
             className="uh-stagger"
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+              gridTemplateColumns: `repeat(auto-fill, minmax(${rem(300)}, 1fr))`,
               gap: rem(14),
             }}
           >

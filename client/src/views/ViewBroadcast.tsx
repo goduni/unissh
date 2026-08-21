@@ -568,8 +568,8 @@ export function ViewBroadcast() {
             style={{
               display: "grid",
               gridTemplateColumns: isMobile
-                ? "repeat(auto-fill, minmax(150px, 1fr))"
-                : "repeat(auto-fill, minmax(240px, 1fr))",
+                ? `repeat(auto-fill, minmax(${rem(150)}, 1fr))`
+                : `repeat(auto-fill, minmax(${rem(240)}, 1fr))`,
               gap: rem(12),
             }}
           >

@@ -26,8 +26,10 @@ function parseHostKey(key: string): { algo: string; fp: string } {
   return { algo: "", fp: key };
 }
 
-// minmax(0,1fr) lets the host/fingerprint tracks shrink below content so cells can ellipsize.
-const GRID = "minmax(0,1fr) 130px minmax(0,1fr) 110px 90px";
+// minmax(0,1fr) lets the host/fingerprint tracks shrink below content so cells can
+// ellipsize. The fixed tracks hold type (an algo name, a date), so they are design
+// pixels — at 150 % a 130 CSS-px track no longer fits "ssh-ed25519".
+const GRID = `minmax(0,1fr) ${rem(130)} minmax(0,1fr) ${rem(110)} ${rem(90)}`;
 
 export function ViewKnown() {
   const p = usePalette();

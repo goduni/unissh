@@ -1880,7 +1880,7 @@ export function ViewHosts() {
             flexWrap: "wrap",
             gap: rem(12),
             rowGap: rem(10),
-            padding: `24px ${gutter}px 14px`,
+            padding: `${rem(24)} ${rem(gutter)} ${rem(14)}`,
           }}
         >
           {/* Title + count share one baseline (reference .head); the outer row stays
@@ -2006,7 +2006,7 @@ export function ViewHosts() {
         {/* Touch: the filter box gets its own full-width row — the desktop toolbar
             is gone here, and the sort control rides along with it. */}
         {touch && (
-          <div style={{ padding: `0 ${gutter}px 10px`, display: "flex", alignItems: "center", gap: rem(10) }}>
+          <div style={{ padding: `0 ${rem(gutter)} ${rem(10)}`, display: "flex", alignItems: "center", gap: rem(10) }}>
             {searchBox}
             {sortControl}
           </div>
@@ -2017,7 +2017,7 @@ export function ViewHosts() {
             position: "relative",
             display: "flex",
             gap: rem(14),
-            padding: `0 ${gutter}px 10px`,
+            padding: `0 ${rem(gutter)} ${rem(10)}`,
             alignItems: "center",
             // Touch adds group chips to the tag chips, which would wrap this strip
             // into three rows of a screen that has none to spare — scroll instead,
@@ -2196,7 +2196,7 @@ export function ViewHosts() {
             // as far as the finger. (html/body's overscroll-behavior does not
             // cascade into an inner scroller.)
             overscrollBehaviorY: "contain",
-            padding: `6px ${gutter}px 76px`,
+            padding: `${rem(6)} ${rem(gutter)} ${rem(76)}`,
             transform: pull ? `translateY(${pull}px)` : undefined,
             transition: pulling ? "none" : "transform .2s",
           }}
@@ -2326,7 +2326,9 @@ export function ViewHosts() {
                 // security-relevant datum — down to nothing. The card also carries
                 // permanent Connect/SFTP buttons there, which a 248px track cannot
                 // hold alongside anything readable.
-                gridTemplateColumns: touch ? "1fr" : "repeat(auto-fill, minmax(248px, 1fr))",
+                gridTemplateColumns: touch
+                  ? "1fr"
+                  : `repeat(auto-fill, minmax(${rem(248)}, 1fr))`,
                 gap: rem(12),
               }}
             >

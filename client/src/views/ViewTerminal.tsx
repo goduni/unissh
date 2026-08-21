@@ -87,7 +87,7 @@ function PasswordGate({ onSubmit }: { onSubmit: (pw: string) => void }) {
           border: `1px solid ${p.line2}`,
           borderRadius: 16,
           padding: rem(20),
-          width: "min(320px, calc(100vw - 32px))",
+          width: `min(${rem(320)}, calc(100vw - 32px))`,
           boxShadow: p.shadow,
         }}
       >
@@ -175,7 +175,7 @@ function HostKeyMismatchCard({
     >
       <div
         style={{
-          width: "min(460px, 100%)",
+          width: `min(${rem(460)}, 100%)`,
           borderRadius: 16,
           overflow: "hidden",
           background: p.bg1,

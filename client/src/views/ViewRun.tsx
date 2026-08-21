@@ -12,7 +12,7 @@ import { useApp } from "@/store/app";
 import { usePalette } from "@/theme/ThemeProvider";
 import { useTranslation } from "@/i18n";
 import { useNarrow } from "@/store/responsive";
-import { SPACE } from "@/theme/tokens";
+import { rem, SPACE } from "@/theme/tokens";
 import { UnderlineTabs } from "@/components/mono";
 import { ViewBroadcast } from "@/views/ViewBroadcast";
 import { ViewFleet } from "@/views/ViewFleet";
@@ -40,7 +40,7 @@ export function ViewRun() {
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-      <div style={{ padding: `12px ${gutter}px 0`, borderBottom: `1px solid ${p.line}`, flexShrink: 0 }}>
+      <div style={{ padding: `${rem(12)} ${rem(gutter)} 0`, borderBottom: `1px solid ${p.line}`, flexShrink: 0 }}>
         <UnderlineTabs<RunMode>
           ariaLabel={t("nav.run")}
           value={mode}

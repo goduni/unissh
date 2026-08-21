@@ -702,7 +702,7 @@ function SettingsAppearance() {
           style={{
             display: "grid",
             gridTemplateColumns: isMobile
-              ? "repeat(auto-fill, minmax(150px, 1fr))"
+              ? `repeat(auto-fill, minmax(${rem(150)}, 1fr))`
               : "repeat(4, 1fr)",
             gap: rem(10),
           }}

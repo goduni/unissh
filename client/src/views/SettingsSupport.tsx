@@ -80,7 +80,7 @@ function WalletRow({ label, address }: { label: string; address: string }) {
     >
       <span
         style={{
-          flex: "0 0 62px",
+          flex: `0 0 ${rem(62)}`,
           fontFamily: MONO,
           fontSize: TEXT.small,
           fontWeight: 700,
