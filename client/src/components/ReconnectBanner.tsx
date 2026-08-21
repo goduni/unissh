@@ -4,7 +4,7 @@
 
 import { type CSSProperties } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { rgba } from "@/theme/tokens";
+import { rgba, TEXT } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
 import { useTranslation } from "@/i18n";
 import { useApp, type TerminalPaneState } from "@/store/app";
@@ -61,7 +61,7 @@ export function ReconnectBanner({
         style={{
           flex: 1,
           minWidth: 0,
-          fontSize: 13,
+          fontSize: TEXT.base,
           color: p.txt2,
           overflow: "hidden",
           textOverflow: "ellipsis",

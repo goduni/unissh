@@ -69,6 +69,20 @@ export const ROOT_FONT_PX = 16;
  *  so this never produces a repeating fraction to round. */
 export const rem = (px: number): string => `${px / ROOT_FONT_PX}rem`;
 
+/** Device pixels → design pixels, against the LIVE root font size.
+ *
+ *  For the handful of places that convert a POINTER measurement back into the
+ *  space the layout is authored in — a draggable panel divider. Without it a
+ *  sidebar dragged to "220" at 150 % stores a number that means something else
+ *  the next time the scale changes, and the panel silently resizes itself.
+ *
+ *  NOT a way for a component to size itself. Reach for a token; the whole point
+ *  of expressing the scale once is that nothing else has to ask what it is. */
+export function designPx(devicePx: number): number {
+  const root = parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return Number.isFinite(root) && root > 0 ? (devicePx * ROOT_FONT_PX) / root : devicePx;
+}
+
 /** The offered steps, in percent. Five, not a slider: a slider invites a value
  *  nobody can name and makes "what is this set to?" unanswerable across two
  *  machines. Down to 90 for a small laptop, up to 150 for reduced vision. */

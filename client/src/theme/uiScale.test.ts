@@ -238,6 +238,14 @@ const MIGRATED_AREAS: string[] = [
   "../components/LogoMark.tsx",
   "../components/mono.tsx",
   "../components/primitives.tsx",
+  // Shell and title bar.
+  "../App.tsx",
+  "../components/ContextMenu.tsx",
+  "../components/Modal.tsx",
+  "../components/ReconnectBanner.tsx",
+  "../components/UpdateBanner.tsx",
+  "../shell/Shell.tsx",
+  "../shell/WindowChrome.tsx",
 ];
 
 describe("migrated areas keep their type sizes scalable", () => {

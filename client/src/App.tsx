@@ -12,6 +12,7 @@ import {
 import { sourceFor } from "@/bridge/sources";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePalette } from "@/theme/ThemeProvider";
+import { designPx, rem, TEXT } from "@/theme/tokens";
 import * as api from "@/bridge/api";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -113,7 +114,7 @@ function LockWarnBanner({ sec, onStay }: { sec: number; onStay: () => void }) {
       }}
     >
       <Icon name="lock" size={15} color={p.amber} />
-      <span style={{ fontSize: 13, color: p.txt }}>{t("autolock.warn", { sec })}</span>
+      <span style={{ fontSize: TEXT.base, color: p.txt }}>{t("autolock.warn", { sec })}</span>
       <button
         onClick={onStay}
         style={{
@@ -122,7 +123,7 @@ function LockWarnBanner({ sec, onStay }: { sec: number; onStay: () => void }) {
           border: "none",
           borderRadius: 8,
           padding: "6px 12px",
-          fontSize: 12,
+          fontSize: TEXT.small,
           fontWeight: 600,
           cursor: "pointer",
           whiteSpace: "nowrap",
@@ -187,8 +188,13 @@ export function App() {
       }
       return n;
     });
+  // Stored in DESIGN pixels, not device pixels: the drag reports where the
+  // pointer is on screen, and at 150 % that is 1.5x the number the layout is
+  // written in. Converting here keeps a width the user chose meaning the same
+  // proportion of the interface at every scale, instead of shrinking back to a
+  // truncating sliver the moment they scale up.
   const resizeSidebar = (clientX: number) => {
-    const w = Math.min(360, Math.max(180, Math.round(clientX)));
+    const w = Math.min(360, Math.max(180, Math.round(designPx(clientX))));
     setSbW(w);
     try {
       localStorage.setItem("unissh.sidebarW", String(w));
@@ -631,10 +637,10 @@ export function App() {
               top: 0,
               left: 0,
               right: 0,
-              height: 36,
+              height: rem(36),
               display: "flex",
               alignItems: "center",
-              padding: "0 10px",
+              padding: `0 ${rem(10)}`,
               background: p.bg1,
               borderBottom: `1px solid ${p.line}`,
               zIndex: 10,

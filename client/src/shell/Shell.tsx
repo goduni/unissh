@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconName, Logo, ResizeHandle, VaultBadge } from "@/components/primitives";
 import { FlatAvatar, SyncBadge } from "@/components/mono";
 import { useExternalEdits } from "@/sftp/external-edit";
@@ -54,8 +54,8 @@ function TitleIconBtn({
       aria-label={title}
       onClick={onClick}
       style={{
-        width: 30,
-        height: 30,
+        width: rem(30),
+        height: rem(30),
         borderRadius: 8,
         // Neutral mono chrome (matches the IconBtn primitive): active = bg2 fill +
         // hairline + txt; resting = transparent + txt2. Accent is reserved for the
@@ -99,8 +99,8 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          width: 34,
-          height: 30,
+          width: rem(34),
+          height: rem(30),
           borderRadius: 8,
           background: p.bg2,
           border: `1px solid ${p.line}`,
@@ -121,16 +121,16 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
         ...BTN_RESET,
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        width: 380,
+        gap: rem(8),
+        width: rem(380),
         maxWidth: "40vw",
-        height: 30,
-        padding: "0 12px",
+        height: rem(30),
+        padding: `0 ${rem(12)}`,
         borderRadius: 8,
         background: p.bg2,
         border: `1px solid ${p.line}`,
         color: p.txt3,
-        fontSize: 13,
+        fontSize: TEXT.base,
         cursor: "pointer",
       }}
     >
@@ -143,8 +143,8 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
       <span
         style={{
           fontFamily: MONO,
-          fontSize: 11,
-          padding: "1px 6px",
+          fontSize: TEXT.micro,
+          padding: `${rem(1)} ${rem(6)}`,
           borderRadius: 6,
           background: p.bg3,
           border: `1px solid ${p.line}`,
@@ -184,8 +184,8 @@ export function WindowControls() {
       aria-label={title}
       onClick={onClick}
       style={{
-        width: 30,
-        height: 30,
+        width: rem(30),
+        height: rem(30),
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
@@ -220,7 +220,7 @@ export function WindowControls() {
     </svg>
   );
   return (
-    <div style={{ display: "flex", gap: 2 }}>
+    <div style={{ display: "flex", gap: rem(2) }}>
       <Btn title={t("common.close")} danger onClick={() => void win.close()}>
         {line("M2 2l7 7M9 2l-7 7")}
       </Btn>
@@ -257,11 +257,11 @@ export function TitleBar() {
           spacer clears the DEFAULT traffic-light span: the buttons are never
           repositioned (tao's inset surgery broke hit-testing on Tahoe). */}
       {isMac() ? (
-        macFullscreen ? null : <div style={{ width: 60, pointerEvents: "none" }} aria-hidden />
+        macFullscreen ? null : <div style={{ width: rem(60), pointerEvents: "none" }} aria-hidden />
       ) : (
         <WindowControls />
       )}
-      <div style={{ marginLeft: 4, display: "flex", pointerEvents: "none" }}>
+      <div style={{ marginLeft: rem(4), display: "flex", pointerEvents: "none" }}>
         <Logo size={18} />
       </div>
       <div
@@ -280,7 +280,7 @@ export function TitleBar() {
       {/* data-tauri-drag-region: the 8px gaps between the icon buttons belong to
           this container's own box, so they drag the window; the buttons still
           win, since a clickable element in the event path blocks dragging. */}
-      <div data-tauri-drag-region style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div data-tauri-drag-region style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
         <TitleIconBtn icon="moon" onClick={toggleTwin} title={t("shell.appTheme")} />
         <TitleIconBtn
           icon="sliders"
@@ -384,8 +384,8 @@ function NavItem({
         ...BTN_RESET,
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        height: 32,
+        gap: rem(8),
+        height: rem(32),
         // Reference nav: full-bleed row, no rounded pill / side margin. The accent
         // tick sits flush at the sidebar's left edge; accent is reserved for it.
         width: "100%",
@@ -407,7 +407,7 @@ function NavItem({
           ]
             .filter(Boolean)
             .join(", ") || "none",
-        fontSize: 13,
+        fontSize: TEXT.base,
         fontWeight: active ? 600 : 500,
       }}
     >
@@ -415,9 +415,9 @@ function NavItem({
       <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {label}
       </span>
-      {badge && <span style={{ width: 6, height: 6, borderRadius: "50%", background: badge }} />}
+      {badge && <span style={{ width: rem(6), height: rem(6), borderRadius: "50%", background: badge }} />}
       {count != null && (
-        <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3, fontWeight: 600 }}>
+        <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3, fontWeight: 600 }}>
           {count}
         </span>
       )}
@@ -437,13 +437,13 @@ function NavGroup({
   const p = usePalette();
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", padding: "12px 12px 5px 18px" }}>
+      <div style={{ display: "flex", alignItems: "center", padding: `${rem(12)} ${rem(12)} ${rem(5)} ${rem(18)}` }}>
         <span
           style={{
             flex: 1,
-            fontSize: 11,
+            fontSize: TEXT.micro,
             fontWeight: 700,
-            letterSpacing: 0.6,
+            letterSpacing: rem(0.6),
             color: p.txt3,
             textTransform: "uppercase",
           }}
@@ -473,8 +473,8 @@ function CollapseToggle({ onClick }: { onClick: () => void }) {
       style={{
         ...BTN_RESET,
         flexShrink: 0,
-        width: 32,
-        height: 32,
+        width: rem(32),
+        height: rem(32),
         borderRadius: 8,
         border: "1px solid transparent",
         background: hover ? p.bg1 : "transparent",
@@ -528,13 +528,13 @@ function VaultSwitcher() {
         style={{
           ...BTN_RESET,
           width: "100%",
-          padding: 10,
+          padding: rem(10),
           borderRadius: 10,
           background: p.bg1,
           border: `1px solid ${open ? p.accentLine : p.line}`,
           display: "flex",
           alignItems: "center",
-          gap: 9,
+          gap: rem(9),
           cursor: "pointer",
           // clip the location/sync badges to the card so a long "Синхронизировано"
           // + space name can never spill past the rounded frame
@@ -544,10 +544,10 @@ function VaultSwitcher() {
         <FlatAvatar name={v.name} size={26} />
         {/* spans (not divs) — the trigger is a <button>, which only allows phrasing content */}
         <span style={{ flex: 1, minWidth: 0, display: "block" }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: rem(5), minWidth: 0 }}>
             <span
               style={{
-                fontSize: 13,
+                fontSize: TEXT.base,
                 fontWeight: 700,
                 whiteSpace: "nowrap",
                 overflow: "hidden",
@@ -560,12 +560,12 @@ function VaultSwitcher() {
           </span>
           <span
             style={{
-              fontSize: 11,
+              fontSize: TEXT.micro,
               color: p.txt3,
-              marginTop: 2,
+              marginTop: rem(2),
               display: "flex",
               alignItems: "center",
-              gap: 6,
+              gap: rem(6),
               // Complete the shrink chain so the location/sync badges truncate here
               // instead of spilling over the chevron + collapse toggle at the
               // default (220px) sidebar width.
@@ -606,12 +606,12 @@ function VaultSwitcher() {
             bottom: "100%",
             left: 0,
             right: 0,
-            marginBottom: 6,
+            marginBottom: rem(6),
             zIndex: 30,
             background: p.bg0,
             border: `1px solid ${p.line2}`,
             borderRadius: 12,
-            padding: 6,
+            padding: rem(6),
             boxShadow: p.shadow,
           }}
         >
@@ -630,8 +630,8 @@ function VaultSwitcher() {
                 width: "100%",
                 display: "flex",
                 alignItems: "center",
-                gap: 9,
-                padding: 8,
+                gap: rem(9),
+                padding: rem(8),
                 borderRadius: 8,
                 cursor: "pointer",
                 background: x.vaultId === vaultId ? p.bg4 : "transparent",
@@ -647,7 +647,7 @@ function VaultSwitcher() {
               <span
                 style={{
                   flex: 1,
-                  fontSize: 13,
+                  fontSize: TEXT.base,
                   fontWeight: 600,
                   whiteSpace: "nowrap",
                   overflow: "hidden",
@@ -661,7 +661,7 @@ function VaultSwitcher() {
               {x.vaultId === vaultId && <Icon name="check" size={14} color={p.accentText} />}
             </button>
           ))}
-          <div style={{ height: 1, background: p.line, margin: "6px 4px" }} />
+          <div style={{ height: 1, background: p.line, margin: `${rem(6)} ${rem(4)}` }} />
           <button
             role="menuitem"
             tabIndex={-1}
@@ -674,8 +674,8 @@ function VaultSwitcher() {
               width: "100%",
               display: "flex",
               alignItems: "center",
-              gap: 9,
-              padding: 8,
+              gap: rem(9),
+              padding: rem(8),
               borderRadius: 8,
               cursor: "pointer",
               color: p.txt2,
@@ -683,8 +683,8 @@ function VaultSwitcher() {
           >
             <span
               style={{
-                width: 22,
-                height: 22,
+                width: rem(22),
+                height: rem(22),
                 borderRadius: 6,
                 border: `1px dashed ${p.line2}`,
                 display: "flex",
@@ -694,7 +694,7 @@ function VaultSwitcher() {
             >
               <Icon name="plus" size={12} />
             </span>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{t("shell.newVault")}</span>
+            <span style={{ fontSize: TEXT.base, fontWeight: 600 }}>{t("shell.newVault")}</span>
           </button>
         </div>
       )}
@@ -734,8 +734,8 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
       aria-label={RAIL_LABEL_KEY[r] ? tDyn(RAIL_LABEL_KEY[r]!) : r}
       aria-current={route === r ? "page" : undefined}
       style={{
-        width: 40,
-        height: 40,
+        width: rem(40),
+        height: rem(40),
         borderRadius: 12,
         cursor: "pointer",
         position: "relative",
@@ -753,10 +753,10 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
         <span
           style={{
             position: "absolute",
-            top: 7,
-            right: 7,
-            width: 6,
-            height: 6,
+            top: rem(7),
+            right: rem(7),
+            width: rem(6),
+            height: rem(6),
             borderRadius: "50%",
             background: badge,
           }}
@@ -767,15 +767,15 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
   return (
     <div
       style={{
-        width: 60,
+        width: rem(60),
         flexShrink: 0,
         background: p.bg0,
         borderRight: `1px solid ${p.line}`,
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: 6,
-        padding: "12px 0",
+        gap: rem(6),
+        padding: `${rem(12)} 0`,
       }}
     >
       <button
@@ -786,15 +786,15 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
         title={t("shell.vaultTooltip", { name: v?.name ?? "" })}
         aria-label={t("shell.vaultTooltip", { name: v?.name ?? "" })}
         style={{
-          width: 40,
-          height: 40,
+          width: rem(40),
+          height: rem(40),
           borderRadius: 12,
           cursor: "pointer",
           background: p.bg3,
           border: `1px solid ${p.line}`,
           color: p.txt2,
           fontWeight: 700,
-          fontSize: 16,
+          fontSize: TEXT.lead,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -802,7 +802,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
       >
         {v?.name[0] ?? "?"}
       </button>
-      <div style={{ width: 24, height: 1, background: p.line, margin: "4px 0" }} />
+      <div style={{ width: rem(24), height: 1, background: p.line, margin: `${rem(4)} 0` }} />
       {item("server", "hosts")}
       {item("terminal", "terminal", p.green)}
       {/* An edit that stopped pushing is only actionable in the SFTP view, so
@@ -821,8 +821,8 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
           aria-label={t("common.maximize")}
           onClick={onExpand}
           style={{
-            width: 38,
-            height: 38,
+            width: rem(38),
+            height: rem(38),
             borderRadius: 12,
             border: `1px solid ${p.line}`,
             background: p.bg1,
@@ -841,8 +841,8 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
         aria-label={t("shell.lockShort")}
         onClick={ctx.onLock}
         style={{
-          width: 38,
-          height: 38,
+          width: rem(38),
+          height: rem(38),
           borderRadius: 12,
           border: `1px solid ${p.line}`,
           background: p.bg1,
@@ -921,14 +921,16 @@ export function Sidebar({
   return (
     <div
       style={{
-        width,
+        // Design pixels (see App.tsx's resizeSidebar): the sidebar holds labels,
+        // so it has to grow with them or "Known hosts" truncates at 150 %.
+        width: rem(width),
         flexShrink: 0,
         position: "relative",
         background: p.bg0,
         borderRight: `1px solid ${p.line}`,
         display: "flex",
         flexDirection: "column",
-        padding: "12px 0",
+        padding: `${rem(12)} 0`,
       }}
     >
       <ResizeHandle side="right" onDrag={onResize} />
@@ -941,8 +943,8 @@ export function Sidebar({
               title={t("shell.manageGroups")}
               aria-label={t("shell.manageGroups")}
               style={{
-                width: 22,
-                height: 22,
+                width: rem(22),
+                height: rem(22),
                 borderRadius: 6,
                 border: `1px solid ${p.line}`,
                 background: p.bg1,
@@ -1043,12 +1045,12 @@ export function Sidebar({
       </div>
       <div
         style={{
-          marginTop: 8,
+          marginTop: rem(8),
           borderTop: `1px solid ${p.line}`,
-          padding: "10px 12px 0",
+          padding: `${rem(10)} ${rem(12)} 0`,
           display: "flex",
           alignItems: "center",
-          gap: 6,
+          gap: rem(6),
         }}
       >
         <VaultSwitcher />

@@ -14,6 +14,7 @@ import { useTranslation } from "@/i18n";
 import { Btn, Icon, Spinner } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useUpdate } from "@/store/update";
+import { rem, TEXT } from "@/theme/tokens";
 
 export function UpdateBanner() {
   const p = usePalette();
@@ -64,7 +65,7 @@ export function UpdateBanner() {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 6 }}>
         <Icon name="download" size={15} color={p.txt2} />
-        <span style={{ fontSize: 13, fontWeight: 700, color: p.txt, flex: 1 }}>
+        <span style={{ fontSize: TEXT.base, fontWeight: 700, color: p.txt, flex: 1 }}>
           {t("update.available", { version: info.version })}
         </span>
         <button
@@ -84,7 +85,7 @@ export function UpdateBanner() {
         </button>
       </div>
 
-      <div style={{ fontSize: 12.5, color: p.txt3, lineHeight: 1.45, marginBottom: 12 }}>
+      <div style={{ fontSize: rem(12.5), color: p.txt3, lineHeight: 1.45, marginBottom: 12 }}>
         {t("update.currentIs", { version: info.currentVersion })}
       </div>
 

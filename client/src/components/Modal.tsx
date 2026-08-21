@@ -9,7 +9,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { useIsMobile } from "@/store/responsive";
 import { Icon, type IconName } from "@/components/primitives";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
-import { rgba } from "@/theme/tokens";
+import { rgba, TEXT } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
 
 export function Modal({
@@ -105,8 +105,8 @@ export function Modal({
             <Icon name={icon} size={18} color={iconColor || p.accentText} />
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.3 }}>{title}</div>
-            {subtitle != null && <div style={{ fontSize: 12, color: p.txt3 }}>{subtitle}</div>}
+            <div style={{ fontSize: TEXT.lead, fontWeight: 800, letterSpacing: -0.3 }}>{title}</div>
+            {subtitle != null && <div style={{ fontSize: TEXT.small, color: p.txt3 }}>{subtitle}</div>}
           </div>
           <button
             onClick={onClose}
