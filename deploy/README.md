@@ -141,27 +141,33 @@ take a **port number** (not an interface prefix — for loopback-only use
 ports. Only the host side moves: inside the container Caddy still listens on
 80/443, so the Caddyfile and every override in this folder are untouched. (One
 visible consequence of that: Caddy advertises HTTP/3 as `alt-svc: h3=":443"`,
-the port it listens on inside, so browsers reaching a moved HTTPS port quietly
-stay on HTTP/2. Nothing breaks; the UDP mapping is published either way.)
+the port it listens on inside. `Alt-Svc` is an optional hint — a client that
+cannot reach h3 there just keeps the connection it already has
+([RFC 7838](https://www.rfc-editor.org/rfc/rfc7838.html)) — so a browser on a
+moved HTTPS port stays on HTTP/2. The UDP mapping is published either way.)
 
 Set `UNISSH__SERVER__PUBLIC_URL=https://<domain>:8443` to match, or invite links
 come out pointing at the port you no longer serve. Caddy's HTTP→HTTPS redirect
 targets the site address with no port, so browse the HTTPS port directly.
 
-> **Moving the HTTP port breaks automatic ACME.** The HTTP-01 challenge is
-> answered on the **real** public port 80 and no redirect to another port is
-> followed, so the certificate silently never issues. What to do depends on
-> *what* owns port 80:
+> **Moving the HTTP port breaks automatic ACME.** The challenge GET "MUST be
+> sent to TCP port 80"
+> ([RFC 8555 §8.3](https://www.rfc-editor.org/rfc/rfc8555.html#section-8.3)),
+> and Let's Encrypt follows redirects "only to ports 80 or 443"
+> ([Challenge Types](https://letsencrypt.org/docs/challenge-types/)) — so the
+> obvious fix, a 301 from the busy port to the one you picked, does **not**
+> work either. What does depends on *what* owns port 80:
 > - **Nothing on this host** — the host is not the edge, or the conflict is
 >   elsewhere. Forward public `:80` to your chosen port upstream (router, NAT
 >   rule, cloud load balancer). The challenge arrives on the moved port and
 >   succeeds.
 > - **Another HTTP server on this host** (nginx, Apache, another Caddy — the
->   usual reason you are here). Point *only* `/.well-known/acme-challenge/*` at
->   your chosen HTTP port from that server. Do **not** NAT-redirect all of `:80`
->   to it: that hijacks the traffic of the service that owns the port. And weigh
->   `compose.behind-proxy.yml` first — a proxy already terminating TLS for other
->   sites can do it for this one, and then no port has to move at all.
+>   usual reason you are here). Have it **proxy** `/.well-known/acme-challenge/*`
+>   to your chosen HTTP port — a proxy_pass, not a redirect, per the port rule
+>   above. Do not NAT-redirect all of `:80` either: that hijacks the traffic of
+>   the service that owns the port. And weigh `compose.behind-proxy.yml` first —
+>   a proxy already terminating TLS for other sites can do it for this one, and
+>   then no port has to move at all.
 > - **Neither is workable** — use a TLS mode that needs no challenge:
 >   `UNISSH_TLS_DIRECTIVE="tls internal"` for a LAN host, or certificate files
 >   obtained some other way (DNS-01, a commercial cert) via
