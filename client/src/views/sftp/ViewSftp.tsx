@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
+import { rem, TEXT } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
@@ -529,9 +530,9 @@ export function ViewSftp() {
       className="uh-view"
       style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: p.bg0, overflow: "hidden" }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: isMobile ? "14px 14px 10px" : "16px 22px 12px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), padding: isMobile ? `${rem(14)} ${rem(14)} ${rem(10)}` : `${rem(16)} ${rem(22)} ${rem(12)}` }}>
         <Icon name="folders" size={20} color={p.accentText} />
-        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>SFTP</h1>
+        <h1 style={{ margin: 0, fontSize: TEXT.h2, fontWeight: 800, letterSpacing: rem(-0.5) }}>SFTP</h1>
       </div>
 
       <div
@@ -541,8 +542,8 @@ export function ViewSftp() {
           display: "flex",
           flexDirection: oneCol ? "column" : "row",
           alignItems: "stretch",
-          gap: 12,
-          padding: isMobile ? "0 14px 12px" : "0 22px 12px",
+          gap: rem(12),
+          padding: isMobile ? `0 ${rem(14)} ${rem(12)}` : `0 ${rem(22)} ${rem(12)}`,
           minHeight: 0,
           ...(oneCol ? { overflow: "auto" } : {}),
         }}

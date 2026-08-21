@@ -9,7 +9,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { useIsMobile } from "@/store/responsive";
 import { Icon, type IconName } from "@/components/primitives";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
-import { rgba } from "@/theme/tokens";
+import { rem, rgba, TEXT } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
 
 export function Modal({
@@ -71,7 +71,10 @@ export function Modal({
         tabIndex={-1}
         style={{
           position: "relative",
-          width: isMobile ? "100%" : `min(${w}px, calc(100% - 24px))`,
+          // `w` is design pixels: a dialog sized to hold N characters of a label has
+          // to grow with the label. The viewport clamp stays in CSS pixels — that
+          // one is about the window, not the type.
+          width: isMobile ? "100%" : `min(${rem(w)}, calc(100% - 24px))`,
           maxHeight: isMobile ? "calc(100dvh - 80px)" : "90%",
           overflow: "auto",
           background: p.bg1,
@@ -85,15 +88,15 @@ export function Modal({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 11,
-            padding: "18px 22px",
+            gap: rem(11),
+            padding: `${rem(18)} ${rem(22)}`,
             borderBottom: `1px solid ${p.line}`,
           }}
         >
           <span
             style={{
-              width: 36,
-              height: 36,
+              width: rem(36),
+              height: rem(36),
               borderRadius: 10,
               background: rgba(iconColor || p.accent, 0.13),
               border: `1px solid ${rgba(iconColor || p.accent, 0.4)}`,
@@ -105,16 +108,16 @@ export function Modal({
             <Icon name={icon} size={18} color={iconColor || p.accentText} />
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.3 }}>{title}</div>
-            {subtitle != null && <div style={{ fontSize: 12, color: p.txt3 }}>{subtitle}</div>}
+            <div style={{ fontSize: TEXT.lead, fontWeight: 800, letterSpacing: rem(-0.3) }}>{title}</div>
+            {subtitle != null && <div style={{ fontSize: TEXT.small, color: p.txt3 }}>{subtitle}</div>}
           </div>
           <button
             onClick={onClose}
             title={t("common.close")}
             aria-label={t("common.close")}
             style={{
-              width: 30,
-              height: 30,
+              width: rem(30),
+              height: rem(30),
               borderRadius: 8,
               border: `1px solid ${p.line}`,
               background: p.bg2,
@@ -128,7 +131,7 @@ export function Modal({
             <Icon name="x" size={15} />
           </button>
         </div>
-        <div style={{ padding: isMobile ? 16 : 22, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ padding: isMobile ? rem(16) : rem(22), display: "flex", flexDirection: "column", gap: rem(16) }}>
           {children}
         </div>
         {footer != null && (
@@ -136,8 +139,8 @@ export function Modal({
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
-              padding: isMobile ? "14px 16px" : "14px 22px",
+              gap: rem(10),
+              padding: isMobile ? `${rem(14)} ${rem(16)}` : `${rem(14)} ${rem(22)}`,
               borderTop: `1px solid ${p.line}`,
               background: p.bg0,
               // Always wrap: a narrow (or RU-labelled) footer drops trailing buttons
@@ -221,9 +224,9 @@ export function BottomSheet({
           onTouchStart={onStart}
           onTouchMove={onMove}
           onTouchEnd={onEnd}
-          style={{ touchAction: "none", margin: "-10px -16px 0", padding: "14px 16px 8px", cursor: "grab" }}
+          style={{ touchAction: "none", margin: `${rem(-10)} ${rem(-16)} 0`, padding: `${rem(14)} ${rem(16)} ${rem(8)}`, cursor: "grab" }}
         >
-          <div style={{ width: 38, height: 4, borderRadius: 2, background: p.line2, margin: "0 auto 12px" }} />
+          <div style={{ width: rem(38), height: rem(4), borderRadius: 2, background: p.line2, margin: "0 auto 12px" }} />
         </div>
         {children}
       </div>

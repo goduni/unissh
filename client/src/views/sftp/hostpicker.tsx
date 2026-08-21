@@ -14,7 +14,7 @@ import {
   type CSSProperties,
 } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Icon, NO_AUTOCORRECT } from "@/components/primitives";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
@@ -90,9 +90,9 @@ export function HostList({
   const rowStyle = (on: boolean): CSSProperties => ({
     display: "flex",
     alignItems: "center",
-    gap: 9,
+    gap: rem(9),
     width: "100%",
-    padding: "7px 9px",
+    padding: `${rem(7)} ${rem(9)}`,
     borderRadius: 8,
     border: "1px solid transparent",
     background: on ? p.bg2 : "transparent",
@@ -120,10 +120,10 @@ export function HostList({
       >
         <Icon name={local ? "laptop" : "server"} size={15} color={p.txt3} />
         <span style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
+          <span style={{ display: "block", fontSize: TEXT.base, fontWeight: 600 }}>
             {local ? t("terminal.localShell") : row.host.label}
           </span>
-          <span style={{ display: "block", fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+          <span style={{ display: "block", fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
             {local
               ? t("terminal.localShellHint")
               : `${row.host.user}@${row.host.host}:${row.host.port}`}
@@ -162,13 +162,13 @@ export function HostList({
           style={{
             width: "100%",
             boxSizing: "border-box",
-            marginBottom: 5,
-            padding: "6px 9px",
+            marginBottom: rem(5),
+            padding: `${rem(6)} ${rem(9)}`,
             borderRadius: 8,
             border: `1px solid ${p.line2}`,
             background: p.bg2,
             color: p.txt,
-            fontSize: 13,
+            fontSize: TEXT.base,
             outline: "none",
           }}
         />
@@ -180,13 +180,13 @@ export function HostList({
             {/* Separated, not just listed first: this one does not go over the
                 network, and the list below is entirely about things that do. */}
             {row.kind === "local" && rows.length > 1 && (
-              <div style={{ height: 1, background: p.line2, margin: "5px 4px" }} />
+              <div style={{ height: 1, background: p.line2, margin: `${rem(5)} ${rem(4)}` }} />
             )}
           </Fragment>
         ))}
       </div>
       {rows.length === 0 && hosts.length > 0 && (
-        <div style={{ padding: "8px 10px", fontSize: 13, color: p.txt3 }}>
+        <div style={{ padding: `${rem(8)} ${rem(10)}`, fontSize: TEXT.base, color: p.txt3 }}>
           {t("sftp.noHostMatches", { q: q.trim() })}
         </div>
       )}
@@ -199,16 +199,16 @@ export function HostList({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 9,
+            gap: rem(9),
             width: "100%",
-            padding: "8px 9px",
+            padding: `${rem(8)} ${rem(9)}`,
             borderRadius: 8,
             border: "1px solid transparent",
             background: "transparent",
             color: p.accentText,
             cursor: "pointer",
             textAlign: "left",
-            fontSize: 13,
+            fontSize: TEXT.base,
           }}
           // Clears the row highlight as well as painting itself: two rows lit at
           // once says nothing about which one Enter would take.
@@ -286,14 +286,14 @@ export function HostMenu({
         ...(align === "left" ? { left: 0 } : { right: 0 }),
         transform: shiftX ? `translateX(${shiftX}px)` : undefined,
         zIndex: 40,
-        minWidth: 240,
-        maxHeight: 340,
+        minWidth: rem(240),
+        maxHeight: rem(340),
         overflow: "auto",
         background: p.bg1,
         border: `1px solid ${p.line2}`,
         borderRadius: 12,
         boxShadow: p.shadow,
-        padding: 5,
+        padding: rem(5),
       }}
     >
       <HostList

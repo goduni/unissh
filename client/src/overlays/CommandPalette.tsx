@@ -3,7 +3,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, UI } from "@/theme/tokens";
+import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, NO_AUTOCORRECT, type IconName } from "@/components/primitives";
 import { useApp, type Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -249,7 +249,7 @@ export function CommandPalette() {
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 600,
+          width: rem(600),
           maxWidth: "90%",
           maxHeight: "70vh",
           display: "flex",
@@ -265,8 +265,8 @@ export function CommandPalette() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 11,
-            padding: "14px 16px",
+            gap: rem(11),
+            padding: `${rem(14)} ${rem(16)}`,
             borderBottom: `1px solid ${p.line}`,
           }}
         >
@@ -284,15 +284,15 @@ export function CommandPalette() {
               border: "none",
               outline: "none",
               color: p.txt,
-              fontSize: 16,
+              fontSize: TEXT.lead,
               fontFamily: UI,
             }}
           />
           <span
             style={{
               fontFamily: MONO,
-              fontSize: 11,
-              padding: "2px 7px",
+              fontSize: TEXT.micro,
+              padding: `${rem(2)} ${rem(7)}`,
               borderRadius: 6,
               background: p.bg3,
               border: `1px solid ${p.line}`,
@@ -302,20 +302,20 @@ export function CommandPalette() {
             esc
           </span>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: rem(8) }}>
           {flat.length === 0 ? (
-            <div style={{ padding: "34px 0", textAlign: "center", color: p.txt3, fontSize: 14 }}>
+            <div style={{ padding: `${rem(34)} 0`, textAlign: "center", color: p.txt3, fontSize: TEXT.body }}>
               {t("command.empty", { q })}
             </div>
           ) : (
             groups.map((g) => (
-              <div key={g.title} style={{ marginBottom: 6 }}>
+              <div key={g.title} style={{ marginBottom: rem(6) }}>
                 <div
                   style={{
-                    padding: "6px 10px 4px",
-                    fontSize: 11,
+                    padding: `${rem(6)} ${rem(10)} ${rem(4)}`,
+                    fontSize: TEXT.micro,
                     fontWeight: 700,
-                    letterSpacing: 0.6,
+                    letterSpacing: rem(0.6),
                     color: p.txt3,
                     textTransform: "uppercase",
                   }}
@@ -334,8 +334,8 @@ export function CommandPalette() {
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        gap: 11,
-                        padding: "9px 10px",
+                        gap: rem(11),
+                        padding: `${rem(9)} ${rem(10)}`,
                         cursor: "pointer",
                         borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
                         boxShadow: active ? `inset 2px 0 0 ${p.accent}` : undefined,
@@ -343,8 +343,8 @@ export function CommandPalette() {
                     >
                       <span
                         style={{
-                          width: 30,
-                          height: 30,
+                          width: rem(30),
+                          height: rem(30),
                           borderRadius: 8,
                           background: p.bg2,
                           border: `1px solid ${p.line}`,
@@ -359,7 +359,7 @@ export function CommandPalette() {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div
                           style={{
-                            fontSize: 14,
+                            fontSize: TEXT.body,
                             fontWeight: 600,
                             color: p.txt,
                             whiteSpace: "nowrap",
@@ -372,7 +372,7 @@ export function CommandPalette() {
                         <div
                           style={{
                             fontFamily: it.kind === "host" ? MONO : UI,
-                            fontSize: 12,
+                            fontSize: TEXT.small,
                             color: p.txt3,
                             whiteSpace: "nowrap",
                             overflow: "hidden",
@@ -383,7 +383,7 @@ export function CommandPalette() {
                         </div>
                       </div>
                       {it.kind === "host" && (
-                        <span style={{ fontSize: 11, color: p.txt3 }}>↵ {t("command.terminalHint")}</span>
+                        <span style={{ fontSize: TEXT.micro, color: p.txt3 }}>↵ {t("command.terminalHint")}</span>
                       )}
                     </div>
                   );
@@ -396,10 +396,10 @@ export function CommandPalette() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 14,
-            padding: "9px 14px",
+            gap: rem(14),
+            padding: `${rem(9)} ${rem(14)}`,
             borderTop: `1px solid ${p.line}`,
-            fontSize: 12,
+            fontSize: TEXT.small,
             color: p.txt3,
           }}
         >

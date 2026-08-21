@@ -34,6 +34,48 @@ starts with `0.`:
 
 ### Added
 
+- **The interface has a scale.** On a HiDPI monitor the text around the terminal
+  was too small and nothing in Settings changed it. The nearest setting was
+  **Interface density**, and it is the wrong axis — density moves *spacing*, so
+  reaching for it made a cramped interface more cramped and the type no bigger.
+  The terminal was fine, because the terminal has always had its own zoom; it was
+  the host list, the sidebar, Settings, the SFTP panes and every label around it
+  that did not answer to anything.
+
+  **Settings → Appearance → Interface scale** now offers 90 / 100 / 110 / 125 /
+  150 %, with a line of body text beside it so you can pick by looking rather
+  than by applying and reverting, and a reset back to 100 %. It applies at once,
+  persists per device the way density and the terminal preferences already do,
+  and is never synced — a laptop setting has no business following you onto a
+  desktop where it is wrong.
+
+  Scale and density stay independent, which is the whole point of adding a second
+  axis rather than overloading the first: large type at compact spacing is a
+  perfectly good way to fit a lot of readable rows on a laptop.
+
+  **The terminal keeps its own zoom, and the two never compound.** Webview zoom
+  would have been a one-line implementation and was rejected for exactly that
+  reason — it scales the terminal too, and anyone who had used both controls
+  would land on a size neither of them asked for. What ships instead is a root
+  font size with every interface size expressed relative to it, so the terminal
+  *chrome* — tab strip, pane headers, search box, status line — grows with the
+  rest of the interface while the grid answers only to ⌘/Ctrl +, −, 0.
+
+  At 90 % touch targets stay at their 44px minimum and hairlines stay one pixel:
+  scaling down makes the type smaller, not the things you have to hit or the
+  lines that separate them.
+
+  On a **first launch** the starting point comes from the display instead of
+  always being 100 % — but from the gap between the scale your desktop asked for
+  and the one the webview actually applied, not from the raw scale factor. On a
+  Retina Mac those agree and the answer is 100 %, which is correct, because macOS
+  has already made the interface the right physical size. Once you have picked a
+  value yourself, the display never gets a vote again — plugging in a monitor
+  cannot undo your choice.
+
+  Not offered on phones, which already scale through the OS, and nothing about
+  phone sizing changed.
+
 - **The vault locks when the screen does.** Auto-lock only ever watched UniSSH's
   own window: lock your screen and walk away, and the vault stayed open until an
   inactivity timer that had barely started happened to expire — or, with the

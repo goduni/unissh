@@ -16,7 +16,7 @@ import { useApp } from "@/store/app";
 import { toast } from "@/store/toast";
 import { CONTACT_EMAIL, LINKS, WALLETS } from "@/support/wallets";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { SectionLabel } from "./ViewSettings";
 
 /** One "costs nothing" row: a labelled action that opens a URL, with copy alongside
@@ -29,14 +29,14 @@ function HelpRow({ title, desc, url }: { title: string; desc: string; url: strin
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        padding: "10px 0",
+        gap: rem(12),
+        padding: `${rem(10)} 0`,
         borderBottom: `1px solid ${p.line}`,
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, color: p.txt }}>{title}</div>
-        <div style={{ fontSize: 12, color: p.txt3 }}>{desc}</div>
+        <div style={{ fontSize: TEXT.base, color: p.txt }}>{title}</div>
+        <div style={{ fontSize: TEXT.small, color: p.txt3 }}>{desc}</div>
       </div>
       <Btn
         variant="ghost"
@@ -73,16 +73,16 @@ function WalletRow({ label, address }: { label: string; address: string }) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        padding: "10px 0",
+        gap: rem(12),
+        padding: `${rem(10)} 0`,
         borderBottom: `1px solid ${p.line}`,
       }}
     >
       <span
         style={{
-          flex: "0 0 62px",
+          flex: `0 0 ${rem(62)}`,
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           fontWeight: 700,
           color: p.txt2,
         }}
@@ -96,7 +96,7 @@ function WalletRow({ label, address }: { label: string; address: string }) {
           flex: 1,
           minWidth: 0,
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           color: p.txt,
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -136,11 +136,11 @@ export function SettingsSupport() {
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(14), marginBottom: rem(16) }}>
         <span
           style={{
-            width: 44,
-            height: 44,
+            width: rem(44),
+            height: rem(44),
             borderRadius: 14,
             background: p.bg2,
             border: `1px solid ${p.line}`,
@@ -152,7 +152,7 @@ export function SettingsSupport() {
         >
           <Icon name="heart" size={20} color={p.txt2} stroke={1.8} />
         </span>
-        <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: p.txt2, maxWidth: "58ch" }}>
+        <p style={{ margin: 0, fontSize: TEXT.base, lineHeight: 1.6, color: p.txt2, maxWidth: "58ch" }}>
           {t("support.lede")}
         </p>
       </div>
@@ -173,8 +173,8 @@ export function SettingsSupport() {
       ))}
       <p
         style={{
-          margin: "14px 0 0",
-          fontSize: 12,
+          margin: `${rem(14)} 0 0`,
+          fontSize: TEXT.small,
           lineHeight: 1.55,
           color: p.txt3,
           maxWidth: "62ch",
@@ -188,14 +188,14 @@ export function SettingsSupport() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 12,
-          padding: "10px 0",
+          gap: rem(12),
+          padding: `${rem(10)} 0`,
           borderBottom: `1px solid ${p.line}`,
         }}
       >
         <span
           className="uh-selectable"
-          style={{ flex: 1, minWidth: 0, fontFamily: MONO, fontSize: 13, color: p.txt }}
+          style={{ flex: 1, minWidth: 0, fontFamily: MONO, fontSize: TEXT.base, color: p.txt }}
         >
           {CONTACT_EMAIL}
         </span>
@@ -215,8 +215,8 @@ export function SettingsSupport() {
       </div>
       <p
         style={{
-          margin: "10px 0 0",
-          fontSize: 12,
+          margin: `${rem(10)} 0 0`,
+          fontSize: TEXT.small,
           lineHeight: 1.55,
           color: p.txt3,
           maxWidth: "58ch",

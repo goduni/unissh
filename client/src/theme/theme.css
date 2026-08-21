@@ -221,6 +221,18 @@ button {
   width: 100%;
   height: 100%;
 }
+/* The terminal boundary, stated once.
+   The interface scale is a root font size, and `.xterm` does not set its own —
+   it INHERITS. xterm puts the real type on `.xterm-rows` (which is why the grid
+   already stays put), but its stylesheet also positions the helper textarea with
+   an `em` length, and any future `em` inside it would quietly start following a
+   setting that is not supposed to reach in here.
+   16px is the document default this element inherited before the scale existed,
+   so this is a no-op at 100 % and an insulator at every other step. The terminal
+   keeps its own zoom (Cmd +/-/0); the two never compound. */
+.xterm {
+  font-size: 16px;
+}
 /* xterm.css hard-codes `.xterm .xterm-viewport` to `background-color: #000`, so the
    strip below the last row (the sub-row remainder + scroll gutter) paints pure
    black — a black bar between the terminal output and the status bar.

@@ -15,7 +15,7 @@ import { Icon, Btn, VaultBadge, type IconName } from "@/components/primitives";
 import { FlatAvatar, SyncBadge } from "@/components/mono";
 import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { BottomSheet } from "@/components/Modal";
-import { MONO, RADIUS, SIZE, UI } from "@/theme/tokens";
+import { MONO, RADIUS, rem, SIZE, UI } from "@/theme/tokens";
 import { useApp } from "@/store/app";
 import { isDesktopOs } from "@/bridge/platform";
 import { useKeyboardInset, useLandscape } from "@/store/responsive";
@@ -948,7 +948,14 @@ export function MobileApp() {
         // stay identical to the one that renders that strip, customChrome
         // included: with a real window frame there is no strip, and reserving
         // 36px for it would leave a dead band across the top of the shell.
-        ...(isDesktopOs() && customChrome ? { top: 36, height: "calc(100% - 36px)" } : null),
+        //
+        // In `rem`, and this ONE number, because it is the desktop strip's height,
+        // not mobile sizing: the strip follows the interface scale, so a preview at
+        // 125 % would otherwise start the shell underneath it. Everything else in
+        // this file stays in device pixels — a phone scales through the OS.
+        ...(isDesktopOs() && customChrome
+          ? { top: rem(36), height: `calc(100% - ${rem(36)})` }
+          : null),
       }}
     >
       {/* On every tab, not just Hosts: the vault you're in and the way to LOCK are

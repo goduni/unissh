@@ -9,7 +9,7 @@ import * as api from "@/bridge/api";
 import { apiErrorMessage } from "@/bridge/types";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rgba } from "@/theme/tokens";
+import { MONO, rem, rgba, TEXT } from "@/theme/tokens";
 import { Btn, Field, Icon, Input, NO_AUTOCORRECT, Spinner, Tag } from "@/components/primitives";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/store/toast";
@@ -79,7 +79,7 @@ function Editor({
       w={560}
       zIndex={300}
       footer={
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
           <Btn variant="ghost" onClick={onClose} disabled={busy}>
             {t("common.cancel")}
           </Btn>
@@ -89,7 +89,7 @@ function Editor({
         </div>
       }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
         <Field label={t("snippets.label")}>
           <Input value={label} onChange={setLabel} placeholder={t("snippets.labelHint")} />
         </Field>
@@ -103,9 +103,9 @@ function Editor({
               width: "100%",
               resize: "vertical",
               fontFamily: MONO,
-              fontSize: 13,
+              fontSize: TEXT.base,
               lineHeight: 1.5,
-              padding: "10px 12px",
+              padding: `${rem(10)} ${rem(12)}`,
               borderRadius: 9,
               border: `1px solid ${p.line}`,
               background: p.bg2,
@@ -115,7 +115,7 @@ function Editor({
           />
         </Field>
         <Field label={t("snippets.tags")} group>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: rem(6), flexWrap: "wrap" }}>
             {tags.map((tg) => (
               <button
                 key={tg}
@@ -201,16 +201,16 @@ export function ViewSnippets() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          padding: isMobile ? "16px 16px 12px" : "16px 22px 12px",
+          gap: rem(10),
+          padding: isMobile ? `${rem(16)} ${rem(16)} ${rem(12)}` : `${rem(16)} ${rem(22)} ${rem(12)}`,
           flexWrap: isMobile ? "wrap" : "nowrap",
         }}
       >
         <Icon name="terminal" size={20} color={p.accentText} />
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
+        <h1 style={{ margin: 0, fontSize: TEXT.h1, fontWeight: 800, letterSpacing: rem(-0.7) }}>
           {t("nav.snippets")}
         </h1>
-        <span style={{ fontFamily: MONO, fontSize: 12, color: p.txt3 }}>{items?.length ?? 0}</span>
+        <span style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.txt3 }}>{items?.length ?? 0}</span>
         <div style={{ flex: 1 }} />
         <Btn icon="plus" size="sm" onClick={() => setEditing({ edit: null })}>
           {t("snippets.new")}
@@ -222,15 +222,15 @@ export function ViewSnippets() {
         style={{
           flex: 1,
           overflow: "auto",
-          padding: isMobile ? "4px 16px 18px" : "4px 22px 18px",
+          padding: isMobile ? `${rem(4)} ${rem(16)} ${rem(18)}` : `${rem(4)} ${rem(22)} ${rem(18)}`,
         }}
       >
         {items === null ? (
-          <div style={{ padding: "40px 0", textAlign: "center" }}>
+          <div style={{ padding: `${rem(40)} 0`, textAlign: "center" }}>
             <Spinner />
           </div>
         ) : items.length === 0 ? (
-          <div style={{ padding: "40px 0", textAlign: "center", fontSize: 13, color: p.txt3 }}>
+          <div style={{ padding: `${rem(40)} 0`, textAlign: "center", fontSize: TEXT.base, color: p.txt3 }}>
             {t("snippets.empty")}
           </div>
         ) : (
@@ -238,8 +238,8 @@ export function ViewSnippets() {
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: 8,
-              minWidth: isMobile ? 0 : 640,
+              gap: rem(8),
+              minWidth: isMobile ? 0 : rem(640),
             }}
           >
             {items.map((s) => (
@@ -248,8 +248,8 @@ export function ViewSnippets() {
                 style={{
                   display: "flex",
                   alignItems: "flex-start",
-                  gap: 12,
-                  padding: "12px 14px",
+                  gap: rem(12),
+                  padding: `${rem(12)} ${rem(14)}`,
                   borderRadius: 12,
                   border: `1px solid ${p.line}`,
                   background: p.bg2,
@@ -257,12 +257,12 @@ export function ViewSnippets() {
                 }}
               >
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>{s.label}</div>
+                  <div style={{ fontSize: TEXT.body, fontWeight: 700 }}>{s.label}</div>
                   <pre
                     style={{
-                      margin: "4px 0 0",
+                      margin: `${rem(4)} 0 0`,
                       fontFamily: MONO,
-                      fontSize: 11.5,
+                      fontSize: rem(11.5),
                       color: p.txt2,
                       whiteSpace: "pre-wrap",
                       wordBreak: "break-word",
@@ -271,15 +271,15 @@ export function ViewSnippets() {
                     {s.command}
                   </pre>
                   {s.tags.length > 0 && (
-                    <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", gap: rem(4), marginTop: rem(6), flexWrap: "wrap" }}>
                       {s.tags.map((tg) => (
                         <span
                           key={tg}
                           style={{
                             fontFamily: MONO,
-                            fontSize: 10.5,
+                            fontSize: rem(10.5),
                             color: p.txt3,
-                            padding: "1px 6px",
+                            padding: `${rem(1)} ${rem(6)}`,
                             borderRadius: 999,
                             background: rgba(p.txt3, 0.12),
                           }}

@@ -13,7 +13,7 @@ import * as api from "@/bridge/api";
 import { apiErrorMessage } from "@/bridge/types";
 import { useTranslation } from "@/i18n";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO, termOptions } from "@/theme/tokens";
+import { MONO, rem, termOptions, TEXT } from "@/theme/tokens";
 import { Btn, Icon, Spinner } from "@/components/primitives";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/store/toast";
@@ -138,7 +138,7 @@ function Player({ cast, onClose, title }: { cast: string; onClose: () => void; t
     >
       <div
         ref={hostRef}
-        style={{ height: 420, borderRadius: 8, overflow: "hidden" }}
+        style={{ height: rem(420), borderRadius: 8, overflow: "hidden" }}
         aria-label={t("recordings.playerLabel")}
       />
     </Modal>
@@ -229,16 +229,16 @@ export function ViewRecordings() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          padding: isMobile ? "16px 16px 12px" : "16px 22px 12px",
+          gap: rem(10),
+          padding: isMobile ? `${rem(16)} ${rem(16)} ${rem(12)}` : `${rem(16)} ${rem(22)} ${rem(12)}`,
           flexWrap: isMobile ? "wrap" : "nowrap",
         }}
       >
         <Icon name="record" size={20} color={p.accentText} />
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
+        <h1 style={{ margin: 0, fontSize: TEXT.h1, fontWeight: 800, letterSpacing: rem(-0.7) }}>
           {t("nav.recordings")}
         </h1>
-        <span style={{ fontFamily: MONO, fontSize: 12, color: p.txt3 }}>
+        <span style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.txt3 }}>
           asciicast · {items?.length ?? 0}
         </span>
       </div>
@@ -248,27 +248,27 @@ export function ViewRecordings() {
         style={{
           flex: 1,
           overflow: "auto",
-          padding: isMobile ? "4px 16px 18px" : "4px 22px 18px",
+          padding: isMobile ? `${rem(4)} ${rem(16)} ${rem(18)}` : `${rem(4)} ${rem(22)} ${rem(18)}`,
         }}
       >
         {items === null ? (
-          <div style={{ padding: "40px 0", textAlign: "center" }}>
+          <div style={{ padding: `${rem(40)} 0`, textAlign: "center" }}>
             <Spinner />
           </div>
         ) : items.length === 0 ? (
-          <div style={{ padding: "40px 0", textAlign: "center", fontSize: 13, color: p.txt3 }}>
+          <div style={{ padding: `${rem(40)} 0`, textAlign: "center", fontSize: TEXT.base, color: p.txt3 }}>
             {t("recordings.empty")}
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: isMobile ? 0 : 680 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: rem(8), minWidth: isMobile ? 0 : rem(680) }}>
             {items.map((m) => (
               <div
                 key={m.recordingId}
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 12,
-                  padding: "12px 14px",
+                  gap: rem(12),
+                  padding: `${rem(12)} ${rem(14)}`,
                   borderRadius: 12,
                   border: `1px solid ${p.line}`,
                   background: p.bg2,
@@ -276,13 +276,13 @@ export function ViewRecordings() {
                 }}
               >
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>{m.label}</div>
-                  <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
+                  <div style={{ fontSize: TEXT.body, fontWeight: 700 }}>{m.label}</div>
+                  <div style={{ fontFamily: MONO, fontSize: rem(11.5), color: p.txt3 }}>
                     {m.user}@{m.host} · {new Date(m.startedUnix * 1000).toLocaleString()} ·{" "}
                     {fmtDuration(m.durationSecs)} · {fmtSize(m.sizeBytes)}
                   </div>
                   {m.truncated && (
-                    <div style={{ fontSize: 11.5, color: p.amber, marginTop: 2 }}>
+                    <div style={{ fontSize: rem(11.5), color: p.amber, marginTop: rem(2) }}>
                       {t("recordings.truncated")}
                     </div>
                   )}

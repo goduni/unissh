@@ -13,6 +13,7 @@ import { useApp } from "@/store/app";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { Icon } from "@/components/primitives";
 import { usePalette } from "@/theme/ThemeProvider";
+import { rem } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
 import { ViewSettings } from "@/views/ViewSettings";
 
@@ -49,7 +50,7 @@ function SettingsPanel() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 32,
+        padding: rem(32),
         boxSizing: "border-box",
       }}
     >
@@ -66,8 +67,12 @@ function SettingsPanel() {
         className="uh-view"
         style={{
           position: "relative",
-          width: "min(1080px, 100%)",
-          height: "min(760px, 100%)",
+          // Design pixels: the panel holds Settings' own two columns, and at 150 %
+          // a 1080 CSS-px box makes the label column crush the control beside it.
+          // The `100%` half of each clamp keeps it on screen at any window size —
+          // grow, then fall back to the viewport, never overflow it.
+          width: `min(${rem(1080)}, 100%)`,
+          height: `min(${rem(760)}, 100%)`,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -86,11 +91,11 @@ function SettingsPanel() {
           aria-label={t("common.close")}
           style={{
             position: "absolute",
-            top: 10,
-            right: 10,
+            top: rem(10),
+            right: rem(10),
             zIndex: 1,
-            width: 30,
-            height: 30,
+            width: rem(30),
+            height: rem(30),
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

@@ -5,7 +5,7 @@
 
 import { useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, UI } from "@/theme/tokens";
+import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
@@ -136,9 +136,9 @@ export function FileRow({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 9,
-        height: isMobile ? 44 : 30,
-        padding: "0 10px",
+        gap: rem(9),
+        height: isMobile ? rem(44) : rem(30),
+        padding: `0 ${rem(10)}`,
         borderRadius: 8,
         cursor: isFile ? "grab" : "pointer",
         userSelect: "none",
@@ -158,7 +158,7 @@ export function FileRow({
             : selected
               ? `inset 2px 0 0 ${p.accent}`
               : "none",
-        fontSize: 13,
+        fontSize: TEXT.base,
       }}
     >
       <Icon name={icon} size={14} color={color} stroke={1.8} />
@@ -178,7 +178,7 @@ export function FileRow({
       {!isUp && showPerms && (
         <span
           title={entry.uid || entry.gid ? `uid ${entry.uid ?? 0} · gid ${entry.gid ?? 0}` : undefined}
-          style={{ fontFamily: MONO, fontSize: 11, color: p.txt2, width: 78, textAlign: "left" }}
+          style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt2, width: rem(78), textAlign: "left" }}
         >
           {modeString(entry.mode)}
         </span>
@@ -187,9 +187,9 @@ export function FileRow({
       {!isUp && showModified && (
         <span
           style={{
-            fontSize: 11,
+            fontSize: TEXT.micro,
             color: p.txt2,
-            width: 96,
+            width: rem(96),
             textAlign: "right",
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -200,7 +200,7 @@ export function FileRow({
         </span>
       )}
       {!isUp && (
-        <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt2, width: 70, textAlign: "right" }}>
+        <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt2, width: rem(70), textAlign: "right" }}>
           {isDir ? "—" : fmtSize(entry.size)}
         </span>
       )}
@@ -240,10 +240,10 @@ export function FileRow({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            width: 44,
-            height: 44,
+            width: rem(44),
+            height: rem(44),
             flexShrink: 0,
-            marginRight: -6,
+            marginRight: rem(-6),
           }}
         >
           <Icon name="more" size={18} color={p.txt3} />

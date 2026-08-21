@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rgba } from "@/theme/tokens";
+import { MONO, rem, rgba, TEXT } from "@/theme/tokens";
 import { Btn, Icon, IconName } from "@/components/primitives";
 import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { useApp, type ConfirmData } from "@/store/app";
@@ -99,8 +99,8 @@ export function ToastHost() {
   }, []);
 
   const actBtn = {
-    width: 22,
-    height: 22,
+    width: rem(22),
+    height: rem(22),
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -121,13 +121,13 @@ export function ToastHost() {
         zIndex: 400,
         display: "flex",
         flexDirection: "column",
-        gap: 8,
+        gap: rem(8),
         pointerEvents: "none",
         // Desktop: bottom-right, off the shell prompt (persistent err toasts no
         // longer sit on the terminal line). Mobile: near-full-width bottom-center.
         ...(isMobile
-          ? { bottom: 24, left: 12, right: 12, alignItems: "stretch" }
-          : { bottom: 24, right: 24, maxWidth: 420, alignItems: "flex-end" }),
+          ? { bottom: rem(24), left: rem(12), right: rem(12), alignItems: "stretch" }
+          : { bottom: rem(24), right: rem(24), maxWidth: rem(420), alignItems: "flex-end" }),
       }}
     >
       {items.map((x) => {
@@ -140,14 +140,14 @@ export function ToastHost() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
-              padding: isErr ? "10px 10px 10px 16px" : "10px 16px",
+              gap: rem(10),
+              padding: isErr ? `${rem(10)} ${rem(10)} ${rem(10)} ${rem(16)}` : `${rem(10)} ${rem(16)}`,
               borderRadius: 12,
               background: p.bg3,
               border: `1px solid ${isErr ? rgba(p.red, 0.5) : p.line2}`,
               boxShadow: p.shadow,
               color: p.txt,
-              fontSize: 13,
+              fontSize: TEXT.base,
               fontWeight: 600,
               maxWidth: "min(520px, calc(100vw - 32px))",
               animation: "uhToast .26s cubic-bezier(.2,.8,.3,1)",
@@ -165,12 +165,12 @@ export function ToastHost() {
               <span
                 style={{
                   fontFamily: MONO,
-                  fontSize: 12,
+                  fontSize: TEXT.small,
                   color: c,
                   background: rgba(c, 0.14),
                   border: `1px solid ${rgba(c, 0.35)}`,
                   borderRadius: 20,
-                  padding: "1px 7px",
+                  padding: `${rem(1)} ${rem(7)}`,
                   flexShrink: 0,
                 }}
               >
@@ -233,7 +233,7 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   useDialogFocus(data.danger ? cancelRef : confirmRef);
-  const mobileBtnStyle = isMobile ? { minHeight: 44 } : undefined;
+  const mobileBtnStyle = isMobile ? { minHeight: rem(44) } : undefined;
   return (
     <div
       onClick={close}
@@ -245,7 +245,7 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
         alignItems: "center",
         justifyContent: "center",
         background: "rgba(0,0,0,0.45)",
-        ...(isMobile ? { padding: 16 } : null),
+        ...(isMobile ? { padding: rem(16) } : null),
       }}
     >
       <div
@@ -255,21 +255,21 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
         aria-modal="true"
         aria-label={data.title}
         style={{
-          width: 400,
+          width: rem(400),
           maxWidth: "90vw",
           background: p.bg1,
           border: `1px solid ${p.line2}`,
           borderRadius: 16,
-          padding: 22,
+          padding: rem(22),
           boxShadow: p.shadow,
           ...(isMobile ? { width: "100%" } : null),
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(10), marginBottom: rem(10) }}>
           <span
             style={{
-              width: 34,
-              height: 34,
+              width: rem(34),
+              height: rem(34),
               borderRadius: 10,
               flexShrink: 0,
               background: data.danger ? `${p.red}22` : p.accentSoft,
@@ -282,17 +282,17 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
           >
             <Icon name={(data.icon as IconName) || (data.danger ? "alert" : "shield")} size={18} />
           </span>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>{data.title}</div>
+          <div style={{ fontSize: TEXT.lead, fontWeight: 700 }}>{data.title}</div>
         </div>
         {data.body && (
-          <p style={{ margin: "0 0 18px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+          <p style={{ margin: `0 0 ${rem(18)}`, fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
             {data.body}
           </p>
         )}
         <div
           style={{
             display: "flex",
-            gap: 10,
+            gap: rem(10),
             justifyContent: "flex-end",
             // wrap so a long RU confirmLabel (e.g. "Сбросить и начать заново") doesn't spill a narrow card
             flexWrap: "wrap",
@@ -355,7 +355,7 @@ export function ShortcutsHelp() {
           background: p.bg1,
           border: `1px solid ${p.line2}`,
           borderRadius: 16,
-          padding: 22,
+          padding: rem(22),
           boxShadow: p.shadow,
           // The sheet is now taller than a laptop viewport at its smallest —
           // scroll the list rather than clip rows off the bottom edge.
@@ -364,17 +364,17 @@ export function ShortcutsHelp() {
           flexDirection: "column",
         }}
       >
-        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, flexShrink: 0 }}>
+        <div style={{ fontSize: TEXT.lead, fontWeight: 700, marginBottom: rem(16), flexShrink: 0 }}>
           {t("feedback.shortcutsTitle")}
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 18, overflowY: "auto", minHeight: 0 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: rem(18), overflowY: "auto", minHeight: 0 }}>
           {shortcutGroups(isMac()).map((group) => (
-            <div key={group.titleKey} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div key={group.titleKey} style={{ display: "flex", flexDirection: "column", gap: rem(10) }}>
               <div
                 style={{
-                  fontSize: 11,
+                  fontSize: TEXT.micro,
                   fontWeight: 600,
-                  letterSpacing: 0.6,
+                  letterSpacing: rem(0.6),
                   textTransform: "uppercase",
                   color: p.txt3,
                 }}
@@ -384,15 +384,15 @@ export function ShortcutsHelp() {
               {group.rows.map((row) => (
                 <div
                   key={row.labelKey}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: rem(12) }}
                 >
                   {/* minWidth:0 lets a long RU shortcut description wrap instead of shoving the keycap */}
-                  <span style={{ fontSize: 13, color: p.txt2, minWidth: 0 }}>{tDyn(row.labelKey)}</span>
+                  <span style={{ fontSize: TEXT.base, color: p.txt2, minWidth: 0 }}>{tDyn(row.labelKey)}</span>
                   <span
                     style={{
                       fontFamily: MONO,
-                      fontSize: 12,
-                      padding: "3px 9px",
+                      fontSize: TEXT.small,
+                      padding: `${rem(3)} ${rem(9)}`,
                       borderRadius: 6,
                       background: p.bg3,
                       border: `1px solid ${p.line2}`,

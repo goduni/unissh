@@ -12,7 +12,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO, rgba, termOptions } from "@/theme/tokens";
+import { MONO, rem, rgba, termOptions, TEXT } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, StatusDot, type IconName } from "@/components/primitives";
 import { ReconnectBanner } from "@/components/ReconnectBanner";
 import { useTranslation, Trans } from "@/i18n";
@@ -86,12 +86,12 @@ function PasswordGate({ onSubmit }: { onSubmit: (pw: string) => void }) {
           background: p.bg1,
           border: `1px solid ${p.line2}`,
           borderRadius: 16,
-          padding: 20,
-          width: "min(320px, calc(100vw - 32px))",
+          padding: rem(20),
+          width: `min(${rem(320)}, calc(100vw - 32px))`,
           boxShadow: p.shadow,
         }}
       >
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>{t("terminal.passwordHeading")}</div>
+        <div style={{ fontWeight: 700, marginBottom: rem(10) }}>{t("terminal.passwordHeading")}</div>
         <input
           autoFocus
           {...NO_AUTOCORRECT}
@@ -101,21 +101,21 @@ function PasswordGate({ onSubmit }: { onSubmit: (pw: string) => void }) {
           placeholder="••••••••"
           style={{
             width: "100%",
-            padding: "10px 12px",
+            padding: `${rem(10)} ${rem(12)}`,
             borderRadius: 8,
             border: `1px solid ${p.line2}`,
             background: p.bg0,
             color: p.txt,
             fontFamily: MONO,
-            fontSize: 14,
+            fontSize: TEXT.body,
           }}
         />
         <button
           type="submit"
           style={{
-            marginTop: 12,
+            marginTop: rem(12),
             width: "100%",
-            padding: "10px",
+            padding: rem(10),
             borderRadius: 10,
             border: "none",
             background: p.accent,
@@ -170,12 +170,12 @@ function HostKeyMismatchCard({
         alignItems: "center",
         justifyContent: "center",
         background: "rgba(0,0,0,0.5)",
-        padding: 16,
+        padding: rem(16),
       }}
     >
       <div
         style={{
-          width: "min(460px, 100%)",
+          width: `min(${rem(460)}, 100%)`,
           borderRadius: 16,
           overflow: "hidden",
           background: p.bg1,
@@ -187,16 +187,16 @@ function HostKeyMismatchCard({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 11,
-            padding: "13px 16px",
+            gap: rem(11),
+            padding: `${rem(13)} ${rem(16)}`,
             background: rgba(p.red, 0.07),
             borderBottom: `1px solid ${rgba(p.red, 0.3)}`,
           }}
         >
           <span
             style={{
-              width: 34,
-              height: 34,
+              width: rem(34),
+              height: rem(34),
               borderRadius: 10,
               background: rgba(p.red, 0.18),
               border: `1px solid ${rgba(p.red, 0.5)}`,
@@ -209,14 +209,14 @@ function HostKeyMismatchCard({
             <Icon name="alert" size={18} color={p.red} />
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: p.red }}>
+            <div style={{ fontSize: TEXT.body, fontWeight: 800, color: p.red }}>
               {t("known.mismatchTitle")}
             </div>
-            <div style={{ fontFamily: MONO, fontSize: 12, color: p.txt2 }}>{label}</div>
+            <div style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.txt2 }}>{label}</div>
           </div>
         </div>
-        <div style={{ padding: "13px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+        <div style={{ padding: `${rem(13)} ${rem(16)}`, display: "flex", flexDirection: "column", gap: rem(12) }}>
+          <div style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
             <Trans
               i18nKey="known.mismatchBody"
               values={{ host: mismatch.host }}
@@ -224,23 +224,23 @@ function HostKeyMismatchCard({
             />
           </div>
           <div>
-            <div style={{ fontSize: 11, color: p.txt3, marginBottom: 3 }}>
+            <div style={{ fontSize: TEXT.micro, color: p.txt3, marginBottom: rem(3) }}>
               {t("known.stored")}
             </div>
-            <div style={{ fontFamily: MONO, fontSize: 12, color: p.txt2, wordBreak: "break-all" }}>
+            <div style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.txt2, wordBreak: "break-all" }}>
               {storedFp || "—"}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: p.txt3, marginBottom: 3 }}>
+            <div style={{ fontSize: TEXT.micro, color: p.txt3, marginBottom: rem(3) }}>
               {t("known.presentedNow")}
             </div>
-            <div style={{ fontFamily: MONO, fontSize: 12, color: p.red, wordBreak: "break-all" }}>
+            <div style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.red, wordBreak: "break-all" }}>
               {mismatch.fingerprint || "—"}
             </div>
           </div>
           {/* Wrap the footer + let the danger label wrap so the full security review action stays readable in a narrow split pane. */}
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end", flexWrap: "wrap" }}>
             <Btn variant="ghost" size="sm" onClick={onReject}>
               {t("known.reject")}
             </Btn>
@@ -987,8 +987,8 @@ async function runStartupSnippets(
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    width: 24,
-    height: 24,
+    width: rem(24),
+    height: rem(24),
     background: "transparent",
     border: "none",
     borderRadius: 6,
@@ -1048,7 +1048,7 @@ async function runStartupSnippets(
         background: termTheme.bg,
         // Inner breathing room so the shell text isn't flush against the chrome
         // edges. Same colour as the terminal, so it reads as padding, not a frame.
-        padding: 8,
+        padding: rem(8),
         // Focus ring: only when this pane shares its tab with others, so a single
         // terminal isn't boxed for no reason.
         boxShadow: focused && multi ? `inset 0 0 0 2px ${p.accent}` : "none",
@@ -1100,11 +1100,11 @@ async function runStartupSnippets(
           aria-label={t("terminal.menu.closePane")}
           style={{
             position: "absolute",
-            top: 6,
-            right: 6,
+            top: rem(6),
+            right: rem(6),
             zIndex: 7,
-            width: 20,
-            height: 20,
+            width: rem(20),
+            height: rem(20),
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -1122,13 +1122,13 @@ async function runStartupSnippets(
         <div
           style={{
             position: "absolute",
-            top: 10,
-            right: 12,
+            top: rem(10),
+            right: rem(12),
             zIndex: 6,
             display: "flex",
             alignItems: "center",
-            gap: 4,
-            padding: "4px 5px 4px 8px",
+            gap: rem(4),
+            padding: `${rem(4)} ${rem(5)} ${rem(4)} ${rem(8)}`,
             borderRadius: 8,
             background: p.bg1,
             border: `1px solid ${p.line2}`,
@@ -1152,22 +1152,22 @@ async function runStartupSnippets(
             placeholder={t("terminal.search.placeholder")}
             {...NO_AUTOCORRECT}
             style={{
-              width: 150,
+              width: rem(150),
               background: p.bg2,
               border: `1px solid ${p.line2}`,
               borderRadius: 6,
               color: p.txt,
               fontFamily: MONO,
-              fontSize: 12,
-              padding: "4px 7px",
+              fontSize: TEXT.small,
+              padding: `${rem(4)} ${rem(7)}`,
               outline: "none",
             }}
           />
           <span
             style={{
-              minWidth: 40,
+              minWidth: rem(40),
               textAlign: "center",
-              fontSize: 11,
+              fontSize: TEXT.micro,
               color: p.txt3,
               fontVariantNumeric: "tabular-nums",
             }}
@@ -1382,6 +1382,9 @@ function Divider({ tabId, split, lineColor }: { tabId: string; split: SplitRect;
         left: `${split.boundary}%`,
         top: `${split.region.top}%`,
         height: `${split.region.height}%`,
+        // Device pixels: the wide part is a mouse target and the seam inside it is
+        // a rule. Neither is made of type, and a 9px grab strip at 150 % would eat
+        // terminal columns to no one's benefit.
         width: 6,
         transform: "translateX(-3px)",
         cursor: "col-resize",
@@ -1438,7 +1441,7 @@ function PaneIdentity({ pane }: { pane: TerminalPaneState }) {
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 6,
+        gap: rem(6),
         color: p.txt2,
         minWidth: 0,
         overflow: "hidden",
@@ -1454,12 +1457,12 @@ function PaneIdentity({ pane }: { pane: TerminalPaneState }) {
         <span
           style={{
             flexShrink: 0,
-            padding: "1px 6px",
+            padding: `${rem(1)} ${rem(6)}`,
             borderRadius: 6,
             border: `1px solid ${p.line2}`,
             color: p.txt3,
-            fontSize: 10,
-            letterSpacing: 0.4,
+            fontSize: rem(10),
+            letterSpacing: rem(0.4),
             textTransform: "uppercase",
           }}
         >
@@ -1574,8 +1577,8 @@ export function ViewTerminal() {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    width: 22,
-    height: 22,
+    width: rem(22),
+    height: rem(22),
     background: "transparent",
     border: "none",
     borderRadius: 6,
@@ -1621,17 +1624,17 @@ export function ViewTerminal() {
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 10,
+              gap: rem(10),
               color: p.txt3,
               // App chrome, not terminal colours — there is no PTY yet.
               background: p.bg0,
             }}
           >
             <Icon name="terminal" size={34} color={p.txt3} />
-            <div style={{ fontSize: 14 }}>{t("terminal.noSessions")}</div>
+            <div style={{ fontSize: TEXT.body }}>{t("terminal.noSessions")}</div>
             <div
               onClick={() => ctx.go("hosts")}
-              style={{ fontSize: 13, color: p.accentText, cursor: "pointer" }}
+              style={{ fontSize: TEXT.base, color: p.accentText, cursor: "pointer" }}
             >
               {t("terminal.openHost")}
             </div>
@@ -1698,7 +1701,7 @@ export function ViewTerminal() {
       {!isMobile && (
         <div
           style={{
-            height: 30,
+            height: rem(30),
             flexShrink: 0,
             // App chrome stays neutral mono (bg0); a single hairline separates it
             // from the PTY body, which keeps its own terminal theme. Only the
@@ -1707,10 +1710,10 @@ export function ViewTerminal() {
             borderTop: `1px solid ${p.line}`,
             display: "flex",
             alignItems: "center",
-            gap: 10,
-            padding: "0 14px",
+            gap: rem(10),
+            padding: `0 ${rem(14)}`,
             fontFamily: MONO,
-            fontSize: 12,
+            fontSize: TEXT.small,
             color: p.txt3,
           }}
         >
@@ -1756,7 +1759,7 @@ export function ViewTerminal() {
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 5,
+              gap: rem(5),
               cursor: "pointer",
               whiteSpace: "nowrap",
               flexShrink: 0,

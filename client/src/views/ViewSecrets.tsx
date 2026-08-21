@@ -8,7 +8,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, UI } from "@/theme/tokens";
+import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, Spinner, Tag, VaultBadge } from "@/components/primitives";
 import { Modal } from "@/components/Modal";
 import { UnderlineTabs, fmtRelativeUnix, FlatAvatar, MetaChip, RowOverflowMenu, Card, HairlineRow } from "@/components/mono";
@@ -85,7 +85,7 @@ function TabBar({
         tabs={tabs.map((tb) => ({
           value: tb.id,
           label: (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: rem(7) }}>
               <Icon name={tb.icon} size={15} stroke={1.8} />
               {tb.label}
             </span>
@@ -151,9 +151,9 @@ function RevealField({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        height: 34,
-        padding: "0 6px 0 12px",
+        gap: rem(8),
+        height: rem(34),
+        padding: `0 ${rem(6)} 0 ${rem(12)}`,
         borderRadius: 8,
         background: p.bg0,
         border: `1px solid ${p.line}`,
@@ -163,7 +163,7 @@ function RevealField({
         style={{
           flex: 1,
           fontFamily: mono ? MONO : UI,
-          fontSize: 13,
+          fontSize: TEXT.base,
           color: shown ? p.txt : p.txt3,
           letterSpacing: shown ? 0 : 2,
           whiteSpace: "nowrap",
@@ -178,8 +178,8 @@ function RevealField({
         aria-label={shown ? t("common.hide") : t("common.show")}
         aria-pressed={shown}
         style={{
-          width: 28,
-          height: 26,
+          width: rem(28),
+          height: rem(26),
           borderRadius: 8,
           border: "none",
           background: "transparent",
@@ -197,8 +197,8 @@ function RevealField({
         title={t("common.copy")}
         aria-label={t("common.copy")}
         style={{
-          width: 28,
-          height: 26,
+          width: rem(28),
+          height: rem(26),
           borderRadius: 8,
           border: "none",
           background: copied ? p.accentSoft : "transparent",
@@ -328,8 +328,8 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
   };
 
   const actBtn = {
-    width: isMobile ? 40 : 28,
-    height: isMobile ? 40 : 28,
+    width: isMobile ? rem(40) : rem(28),
+    height: isMobile ? rem(40) : rem(28),
     borderRadius: 8,
     display: "flex",
     alignItems: "center",
@@ -341,14 +341,14 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
       style={{
         alignItems: isMobile ? "stretch" : "center",
         flexDirection: isMobile ? "column" : "row",
-        gap: isMobile ? 10 : 14,
+        gap: isMobile ? rem(10) : rem(14),
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 12 : 14, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: isMobile ? rem(12) : rem(14), minWidth: 0 }}>
         <span
           style={{
-            width: 40,
-            height: 40,
+            width: rem(40),
+            height: rem(40),
             borderRadius: 12,
             background: p.bg3,
             border: `1px solid ${p.line}`,
@@ -360,11 +360,11 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
         >
           <Icon name="key" size={18} color={p.txt2} />
         </span>
-        <div style={{ width: isMobile ? "auto" : 150, flexShrink: 0, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <div style={{ width: isMobile ? "auto" : rem(150), flexShrink: 0, minWidth: 0 }}>
+          <div style={{ fontSize: TEXT.body, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {item.itemId}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+          <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
             {t("secrets.updatedAgo", { ago: fmtRelativeUnix(item.updatedAt, i18n.language) })}
             {item.hasCertificate ? " · cert" : ""}
           </div>
@@ -375,7 +375,7 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
           flex: 1,
           width: isMobile ? "100%" : undefined,
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           color: p.txt2,
           whiteSpace: "nowrap",
           overflow: "hidden",
@@ -391,7 +391,7 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
         style={{
           display: "flex",
           alignItems: "center",
-          gap: isMobile ? 10 : 14,
+          gap: isMobile ? rem(10) : rem(14),
           flexWrap: isMobile ? "wrap" : "nowrap",
           justifyContent: isMobile ? "flex-end" : "flex-start",
         }}
@@ -451,7 +451,7 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const { t } = useTranslation();
   const ctx = useCtx();
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
       <div>
         {keys.map((k, i) => (
           <KeyRow key={k.itemId} item={k} isMobile={isMobile} first={i === 0} />
@@ -463,14 +463,14 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          gap: 8,
-          padding: 13,
+          gap: rem(8),
+          padding: rem(13),
           borderRadius: 12,
           border: `1px dashed ${p.line2}`,
           background: "transparent",
           color: p.txt2,
           cursor: "pointer",
-          fontSize: 13,
+          fontSize: TEXT.base,
           fontWeight: 600,
         }}
       >
@@ -530,14 +530,14 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          gap: 8,
-          padding: 15,
+          gap: rem(8),
+          padding: rem(15),
           borderRadius: 12,
           border: `1px dashed ${p.line2}`,
           background: "transparent",
           color: p.txt2,
           cursor: "pointer",
-          fontSize: 13,
+          fontSize: TEXT.base,
           fontWeight: 600,
         }}
       >
@@ -547,12 +547,12 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
     );
   }
   return (
-    <div style={{ padding: 15, borderRadius: 12, background: p.bg1, border: `1px solid ${p.line}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+    <div style={{ padding: rem(15), borderRadius: 12, background: p.bg1, border: `1px solid ${p.line}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), marginBottom: rem(12) }}>
         <span
           style={{
-            width: 34,
-            height: 34,
+            width: rem(34),
+            height: rem(34),
             borderRadius: 8,
             background: p.bg3,
             border: `1px solid ${p.line}`,
@@ -573,14 +573,14 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
           style={{
             flex: 1,
             minWidth: 0,
-            height: 34,
-            padding: "0 10px",
+            height: rem(34),
+            padding: `0 ${rem(10)}`,
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg0,
             color: p.txt,
             fontFamily: MONO,
-            fontSize: 13,
+            fontSize: TEXT.base,
           }}
         />
       </div>
@@ -591,18 +591,18 @@ function NewPasswordCard({ openSignal }: { openSignal: number }) {
         placeholder={t("secrets.valuePlaceholder")}
         style={{
           width: "100%",
-          height: 34,
-          padding: "0 12px",
+          height: rem(34),
+          padding: `0 ${rem(12)}`,
           borderRadius: 8,
           border: `1px solid ${p.line}`,
           background: p.bg0,
           color: p.txt,
           fontFamily: MONO,
-          fontSize: 13,
-          marginBottom: 10,
+          fontSize: TEXT.base,
+          marginBottom: rem(10),
         }}
       />
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
         <Btn variant="ghost" size="sm" onClick={() => setOpen(false)}>
           {t("common.cancel")}
         </Btn>
@@ -676,20 +676,20 @@ function VersionHistory({
       }
     >
       {versions === null ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, color: p.txt3, fontSize: 13 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(8), color: p.txt3, fontSize: TEXT.base }}>
           <Spinner /> {t("serverVaults.loading")}
         </div>
       ) : versions.length === 0 ? (
-        <div style={{ fontSize: 13, color: p.txt3 }}>{t("secrets.historyEmpty")}</div>
+        <div style={{ fontSize: TEXT.base, color: p.txt3 }}>{t("secrets.historyEmpty")}</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 12, color: p.txt3, lineHeight: 1.5 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: rem(10) }}>
+          <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5 }}>
             {t("secrets.historyExplain")}
           </div>
           {versions.map((v) => (
-            <div key={v} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontFamily: MONO, fontSize: 12, color: p.txt2 }}>v{v}</span>
+            <div key={v} style={{ display: "flex", flexDirection: "column", gap: rem(5) }}>
+              <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
+                <span style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.txt2 }}>v{v}</span>
                 {v === current && <Tag>{t("secrets.historyCurrent")}</Tag>}
               </div>
               <RevealField
@@ -762,11 +762,11 @@ function PasswordCard({ item }: { item: ItemInfo }) {
 
   return (
     <Card>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), marginBottom: rem(12) }}>
         <span
           style={{
-            width: 34,
-            height: 34,
+            width: rem(34),
+            height: rem(34),
             borderRadius: 8,
             background: p.bg3,
             border: `1px solid ${p.line}`,
@@ -779,10 +779,10 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           <Icon name="lock" size={16} color={p.txt2} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <div style={{ fontSize: TEXT.body, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {item.itemId}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+          <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
             {t("secrets.updatedAgo", { ago: fmtRelativeUnix(item.updatedAt, i18n.language) })}
           </div>
         </div>
@@ -791,8 +791,8 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           title={t("secrets.historyTitle")}
           aria-label={t("secrets.historyTitle")}
           style={{
-            width: 28,
-            height: 28,
+            width: rem(28),
+            height: rem(28),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
@@ -811,8 +811,8 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           title={editing ? t("common.save") : t("common.edit")}
           aria-label={editing ? t("common.save") : t("common.edit")}
           style={{
-            width: 28,
-            height: 28,
+            width: rem(28),
+            height: rem(28),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
@@ -831,8 +831,8 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           title={t("common.delete")}
           aria-label={t("common.delete")}
           style={{
-            width: 28,
-            height: 28,
+            width: rem(28),
+            height: rem(28),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
@@ -856,14 +856,14 @@ function PasswordCard({ item }: { item: ItemInfo }) {
           placeholder={t("secrets.valuePlaceholder")}
           style={{
             width: "100%",
-            height: 34,
-            padding: "0 12px",
+            height: rem(34),
+            padding: `0 ${rem(12)}`,
             borderRadius: 8,
             border: `1px solid ${p.line2}`,
             background: p.bg0,
             color: p.txt,
             fontFamily: MONO,
-            fontSize: 13,
+            fontSize: TEXT.base,
           }}
         />
       ) : (
@@ -893,7 +893,7 @@ function PasswordsTab({
       style={{
         display: "grid",
         gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
-        gap: 12,
+        gap: rem(12),
       }}
     >
       {passwords.map((pw) => (
@@ -991,17 +991,17 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
 
   return (
     <HairlineRow first={first} style={{ flexDirection: "column", alignItems: "stretch", gap: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(9), marginBottom: rem(10) }}>
         <Icon name="note" size={16} color={p.txt2} />
-        <span style={{ fontSize: 14, fontWeight: 700 }}>{item.itemId}</span>
+        <span style={{ fontSize: TEXT.body, fontWeight: 700 }}>{item.itemId}</span>
         <div style={{ flex: 1 }} />
         <button
           onClick={() => setHistory(true)}
           title={t("secrets.historyTitle")}
           aria-label={t("secrets.historyTitle")}
           style={{
-            width: 28,
-            height: 28,
+            width: rem(28),
+            height: rem(28),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
@@ -1020,8 +1020,8 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
           title={editing ? t("common.save") : t("common.edit")}
           aria-label={editing ? t("common.save") : t("common.edit")}
           style={{
-            width: 28,
-            height: 28,
+            width: rem(28),
+            height: rem(28),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
@@ -1039,8 +1039,8 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
           title={t("common.copy")}
           aria-label={t("common.copy")}
           style={{
-            width: 28,
-            height: 28,
+            width: rem(28),
+            height: rem(28),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: copied ? p.accentSoft : p.bg2,
@@ -1058,8 +1058,8 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
           title={t("common.delete")}
           aria-label={t("common.delete")}
           style={{
-            width: 28,
-            height: 28,
+            width: rem(28),
+            height: rem(28),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
@@ -1084,13 +1084,13 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
             width: "100%",
             resize: "vertical",
             fontFamily: MONO,
-            fontSize: 13,
+            fontSize: TEXT.base,
             color: p.txt,
             lineHeight: 1.7,
             background: p.bg0,
             border: `1px solid ${p.line2}`,
             borderRadius: 8,
-            padding: 10,
+            padding: rem(10),
           }}
         />
       ) : body === null ? (
@@ -1099,14 +1099,14 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 7,
-            padding: "6px 0",
+            gap: rem(7),
+            padding: `${rem(6)} 0`,
             background: "transparent",
             border: "none",
             color: p.txt3,
             cursor: "pointer",
             fontFamily: UI,
-            fontSize: 13,
+            fontSize: TEXT.base,
           }}
         >
           <Icon name="eye" size={14} />
@@ -1114,7 +1114,7 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
         </button>
       ) : (
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: rem(8), marginBottom: rem(6) }}>
             <button
               type="button"
               onClick={() => setBody(null)}
@@ -1123,13 +1123,13 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 6,
+                gap: rem(6),
                 border: "none",
                 background: "transparent",
                 padding: 0,
                 color: p.txt3,
                 fontFamily: UI,
-                fontSize: 13,
+                fontSize: TEXT.base,
                 cursor: "pointer",
               }}
             >
@@ -1162,7 +1162,7 @@ function NoteCard({ item, first }: { item: ItemInfo; first?: boolean }) {
             style={{
               margin: 0,
               fontFamily: MONO,
-              fontSize: 13,
+              fontSize: TEXT.base,
               color: p.txt2,
               lineHeight: 1.7,
               whiteSpace: "pre-wrap",
@@ -1225,14 +1225,14 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          gap: 8,
-          padding: 16,
+          gap: rem(8),
+          padding: rem(16),
           borderRadius: 12,
           border: `1px dashed ${p.line2}`,
           background: "transparent",
           color: p.txt2,
           cursor: "pointer",
-          fontSize: 13,
+          fontSize: TEXT.base,
           fontWeight: 600,
         }}
       >
@@ -1242,8 +1242,8 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
     );
   }
   return (
-    <div style={{ padding: 16, borderRadius: 12, background: p.bg1, border: `1px solid ${p.line}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 10 }}>
+    <div style={{ padding: rem(16), borderRadius: 12, background: p.bg1, border: `1px solid ${p.line}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(9), marginBottom: rem(10) }}>
         <Icon name="note" size={16} color={p.txt2} />
         <input
           ref={nameRef}
@@ -1254,14 +1254,14 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
           style={{
             flex: 1,
             minWidth: 0,
-            height: 32,
-            padding: "0 10px",
+            height: rem(32),
+            padding: `0 ${rem(10)}`,
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg0,
             color: p.txt,
             fontFamily: MONO,
-            fontSize: 13,
+            fontSize: TEXT.base,
           }}
         />
       </div>
@@ -1275,17 +1275,17 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
           width: "100%",
           resize: "vertical",
           fontFamily: MONO,
-          fontSize: 13,
+          fontSize: TEXT.base,
           color: p.txt,
           lineHeight: 1.7,
           background: p.bg0,
           border: `1px solid ${p.line2}`,
           borderRadius: 8,
-          padding: 10,
-          marginBottom: 10,
+          padding: rem(10),
+          marginBottom: rem(10),
         }}
       />
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
         <Btn variant="ghost" size="sm" onClick={() => setOpen(false)}>
           {t("common.cancel")}
         </Btn>
@@ -1299,7 +1299,7 @@ function NewNoteCard({ openSignal }: { openSignal: number }) {
 
 function NotesTab({ notes, openSignal }: { notes: ItemInfo[]; openSignal: number }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
       <div>
         {notes.map((n, i) => (
           <NoteCard key={n.itemId} item={n} first={i === 0} />
@@ -1316,14 +1316,14 @@ function NotesTab({ notes, openSignal }: { notes: ItemInfo[]; openSignal: number
 // a binding (B3). The credential picker below only lists this vault's keys/pws.
 const selectStyle = (p: ReturnType<typeof usePalette>) => ({
   width: "100%",
-  height: 34,
-  padding: "0 10px",
+  height: rem(34),
+  padding: `0 ${rem(10)}`,
   borderRadius: 8,
   border: `1px solid ${p.line}`,
   background: p.bg0,
   color: p.txt,
   fontFamily: MONO,
-  fontSize: 13,
+  fontSize: TEXT.base,
 });
 
 // Encode a chosen credential as "none" | "key:<id>" | "pw:<id>".
@@ -1432,14 +1432,14 @@ function NewIdentityCard({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          gap: 8,
-          padding: 15,
+          gap: rem(8),
+          padding: rem(15),
           borderRadius: 12,
           border: `1px dashed ${p.line2}`,
           background: "transparent",
           color: p.txt2,
           cursor: "pointer",
-          fontSize: 13,
+          fontSize: TEXT.base,
           fontWeight: 600,
         }}
       >
@@ -1449,12 +1449,12 @@ function NewIdentityCard({
     );
   }
   return (
-    <div style={{ padding: 15, borderRadius: 12, background: p.bg1, border: `1px solid ${p.line}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+    <div style={{ padding: rem(15), borderRadius: 12, background: p.bg1, border: `1px solid ${p.line}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), marginBottom: rem(12) }}>
         <span
           style={{
-            width: 34,
-            height: 34,
+            width: rem(34),
+            height: rem(34),
             borderRadius: 8,
             background: p.bg3,
             border: `1px solid ${p.line}`,
@@ -1475,14 +1475,14 @@ function NewIdentityCard({
           style={{
             flex: 1,
             minWidth: 0,
-            height: 34,
-            padding: "0 10px",
+            height: rem(34),
+            padding: `0 ${rem(10)}`,
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg0,
             color: p.txt,
             fontFamily: MONO,
-            fontSize: 13,
+            fontSize: TEXT.base,
           }}
         />
       </div>
@@ -1493,21 +1493,21 @@ function NewIdentityCard({
         placeholder={t("secrets.identityUserPlaceholder")}
         style={{
           width: "100%",
-          height: 34,
-          padding: "0 12px",
+          height: rem(34),
+          padding: `0 ${rem(12)}`,
           borderRadius: 8,
           border: `1px solid ${p.line}`,
           background: p.bg0,
           color: p.txt,
           fontFamily: MONO,
-          fontSize: 13,
-          marginBottom: 10,
+          fontSize: TEXT.base,
+          marginBottom: rem(10),
         }}
       />
-      <div style={{ marginBottom: 10 }}>
+      <div style={{ marginBottom: rem(10) }}>
         <CredSelect keys={keys} passwords={passwords} value={cred} onChange={setCred} />
       </div>
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
         <Btn variant="ghost" size="sm" onClick={() => setOpen(false)}>
           {t("common.cancel")}
         </Btn>
@@ -1609,11 +1609,11 @@ function IdentityCard({
 
   return (
     <Card>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: editing ? 12 : 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), marginBottom: editing ? rem(12) : 0 }}>
         <span
           style={{
-            width: 34,
-            height: 34,
+            width: rem(34),
+            height: rem(34),
             borderRadius: 8,
             background: p.bg3,
             border: `1px solid ${p.line}`,
@@ -1628,7 +1628,7 @@ function IdentityCard({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
-              fontSize: 14,
+              fontSize: TEXT.body,
               fontWeight: 700,
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -1637,7 +1637,7 @@ function IdentityCard({
           >
             {item.itemId}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+          <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
             {ident ? `${ident.user || "—"} · ${credLabel}` : `v${item.version}`}
           </div>
         </div>
@@ -1646,8 +1646,8 @@ function IdentityCard({
           title={editing ? t("common.save") : t("common.edit")}
           aria-label={editing ? t("common.save") : t("common.edit")}
           style={{
-            width: 28,
-            height: 28,
+            width: rem(28),
+            height: rem(28),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
@@ -1666,8 +1666,8 @@ function IdentityCard({
           title={t("common.delete")}
           aria-label={t("common.delete")}
           style={{
-            width: 28,
-            height: 28,
+            width: rem(28),
+            height: rem(28),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg2,
@@ -1683,7 +1683,7 @@ function IdentityCard({
         </button>
       </div>
       {editing && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: rem(10) }}>
           <input
             autoFocus
             {...NO_AUTOCORRECT}
@@ -1692,14 +1692,14 @@ function IdentityCard({
             placeholder={t("secrets.identityUserPlaceholder")}
             style={{
               width: "100%",
-              height: 34,
-              padding: "0 12px",
+              height: rem(34),
+              padding: `0 ${rem(12)}`,
               borderRadius: 8,
               border: `1px solid ${p.line2}`,
               background: p.bg0,
               color: p.txt,
               fontFamily: MONO,
-              fontSize: 13,
+              fontSize: TEXT.base,
             }}
           />
           <CredSelect keys={keys} passwords={passwords} value={cred} onChange={setCred} />
@@ -1747,28 +1747,28 @@ function IdentityVaultSwitcher({
   const row = (base: string): CSSProperties => ({
     display: "flex",
     alignItems: "center",
-    gap: 10,
-    padding: 8,
+    gap: rem(10),
+    padding: rem(8),
     borderRadius: 8,
     cursor: "pointer",
     background: base,
   });
 
   return (
-    <div style={{ position: "relative", maxWidth: 440 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: p.txt3, marginBottom: 6 }}>
+    <div style={{ position: "relative", maxWidth: rem(440) }}>
+      <div style={{ fontSize: TEXT.micro, fontWeight: 600, color: p.txt3, marginBottom: rem(6) }}>
         {t("secrets.identityVaultCaption")}
       </div>
       <div
         onClick={() => setOpen(!open)}
         style={{
-          padding: "9px 11px",
+          padding: `${rem(9)} ${rem(11)}`,
           borderRadius: 12,
           background: p.bg1,
           border: `1px solid ${open ? p.accentLine : p.line}`,
           display: "flex",
           alignItems: "center",
-          gap: 10,
+          gap: rem(10),
           cursor: "pointer",
         }}
       >
@@ -1776,7 +1776,7 @@ function IdentityVaultSwitcher({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
-              fontSize: 13,
+              fontSize: TEXT.base,
               fontWeight: 700,
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -1785,7 +1785,7 @@ function IdentityVaultSwitcher({
           >
             {cur.name}
           </div>
-          <div style={{ marginTop: 3 }}>
+          <div style={{ marginTop: rem(3) }}>
             <VaultBadge target={cur.syncTarget} label={badgeLabel(cur)} size={11} />
           </div>
         </div>
@@ -1805,14 +1805,14 @@ function IdentityVaultSwitcher({
               top: "100%",
               left: 0,
               right: 0,
-              marginTop: 6,
+              marginTop: rem(6),
               zIndex: 41,
               background: p.bg3,
               border: `1px solid ${p.line2}`,
               borderRadius: 12,
-              padding: 6,
+              padding: rem(6),
               boxShadow: p.shadow,
-              maxHeight: 320,
+              maxHeight: rem(320),
               overflowY: "auto",
             }}
           >
@@ -1835,7 +1835,7 @@ function IdentityVaultSwitcher({
                 <span
                   style={{
                     flex: 1,
-                    fontSize: 13,
+                    fontSize: TEXT.base,
                     fontWeight: 600,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
@@ -1848,7 +1848,7 @@ function IdentityVaultSwitcher({
                 {x.vaultId === cur.vaultId && <Icon name="check" size={14} color={p.accentText} />}
               </div>
             ))}
-            <div style={{ height: 1, background: p.line, margin: "6px 4px" }} />
+            <div style={{ height: 1, background: p.line, margin: `${rem(6)} ${rem(4)}` }} />
             <div
               onClick={() => {
                 onCreate();
@@ -1860,8 +1860,8 @@ function IdentityVaultSwitcher({
             >
               <span
                 style={{
-                  width: 24,
-                  height: 24,
+                  width: rem(24),
+                  height: rem(24),
                   borderRadius: 6,
                   border: `1px dashed ${p.accentLine}`,
                   display: "flex",
@@ -1871,7 +1871,7 @@ function IdentityVaultSwitcher({
               >
                 <Icon name="plus" size={13} color={p.accentText} />
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{t("secrets.newIdentityVault")}</span>
+              <span style={{ fontSize: TEXT.base, fontWeight: 600 }}>{t("secrets.newIdentityVault")}</span>
             </div>
           </div>
         </>
@@ -1954,18 +1954,18 @@ function IdentitiesTab({
           border: `1px dashed ${p.line}`,
           borderRadius: 12,
           background: "transparent",
-          padding: "20px 18px",
+          padding: `${rem(20)} ${rem(18)}`,
           display: "flex",
           flexDirection: "column",
-          gap: 10,
+          gap: rem(10),
           alignItems: "flex-start",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
           <Icon name="fingerprint" size={16} color={p.txt2} />
-          <span style={{ fontSize: 13, fontWeight: 700 }}>{t("secrets.noIdentityVaultTitle")}</span>
+          <span style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("secrets.noIdentityVaultTitle")}</span>
         </div>
-        <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.55, maxWidth: 470 }}>
+        <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.55, maxWidth: rem(470) }}>
           {t("secrets.noIdentityVaultHint")}
         </div>
         <Btn icon="plus" onClick={newVault}>
@@ -1977,7 +1977,7 @@ function IdentitiesTab({
   if (!vault) return null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
       {/* The vault IS the context here — everything below lives in it. Pick a cloud vault
           in a Space you OWN to keep company identities in the company's perimeter, or a
           local one for on-device. A shared team vault can never hold identities. */}
@@ -1989,7 +1989,7 @@ function IdentitiesTab({
         onCreate={newVault}
       />
       {identities.length === 0 && (
-        <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5, padding: "0 2px" }}>
+        <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5, padding: `0 ${rem(2)}` }}>
           {t("secrets.vaultEmptyHint")}
         </div>
       )}
@@ -1997,7 +1997,7 @@ function IdentitiesTab({
         style={{
           display: "grid",
           gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
-          gap: 12,
+          gap: rem(12),
         }}
       >
         {identities.map((id) => (
@@ -2096,14 +2096,14 @@ export function ViewSecrets() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: isMobile ? 10 : 14,
+          gap: isMobile ? rem(10) : rem(14),
           // Always wrap: long RU tab strip + primary button overlap on desktop otherwise.
           flexWrap: "wrap",
-          rowGap: 8,
-          padding: isMobile ? "14px 14px 10px" : "16px 22px 12px",
+          rowGap: rem(8),
+          padding: isMobile ? `${rem(14)} ${rem(14)} ${rem(10)}` : `${rem(16)} ${rem(22)} ${rem(12)}`,
         }}
       >
-        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, letterSpacing: -0.7 }}>{t("secrets.title")}</h1>
+        <h1 style={{ margin: 0, fontSize: TEXT.h2, fontWeight: 800, letterSpacing: rem(-0.7) }}>{t("secrets.title")}</h1>
         <TabBar tab={tab} setTab={setTab} counts={counts} isMobile={isMobile} />
         <div style={{ flex: 1 }} />
         <Btn icon="plus" size="sm" onClick={onPrimary}>
@@ -2113,7 +2113,7 @@ export function ViewSecrets() {
 
       <div
         className="uh-stagger"
-        style={{ flex: 1, overflow: "auto", padding: isMobile ? "6px 14px 18px" : "6px 22px 18px" }}
+        style={{ flex: 1, overflow: "auto", padding: isMobile ? `${rem(6)} ${rem(14)} ${rem(18)}` : `${rem(6)} ${rem(22)} ${rem(18)}` }}
       >
         {tab === "keys" && <KeysTab keys={keys} isMobile={isMobile} />}
         {tab === "passwords" && <PasswordsTab passwords={passwords} openSignal={addSignal} isMobile={isMobile} />}

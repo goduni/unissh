@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Icon } from "@/components/primitives";
 import { fmtSize } from "@/i18n/format";
 import { useTranslation } from "@/i18n";
@@ -91,15 +91,15 @@ export function VolumePicker({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 4,
-          maxWidth: 130,
-          padding: "3px 7px",
+          gap: rem(4),
+          maxWidth: rem(130),
+          padding: `${rem(3)} ${rem(7)}`,
           borderRadius: 7,
           border: `1px solid ${p.line}`,
           background: p.bg2,
           color: p.txt2,
           fontFamily: MONO,
-          fontSize: 11.5,
+          fontSize: rem(11.5),
           cursor: "pointer",
         }}
       >
@@ -117,14 +117,14 @@ export function VolumePicker({
             top: "calc(100% + 5px)",
             left: 0,
             zIndex: 40,
-            minWidth: 230,
-            maxHeight: 300,
+            minWidth: rem(230),
+            maxHeight: rem(300),
             overflow: "auto",
             background: p.bg1,
             border: `1px solid ${p.line2}`,
             borderRadius: 12,
             boxShadow: p.shadow,
-            padding: 5,
+            padding: rem(5),
           }}
         >
           {volumes.map((v) => {
@@ -140,9 +140,9 @@ export function VolumePicker({
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 9,
+                  gap: rem(9),
                   width: "100%",
-                  padding: "7px 9px",
+                  padding: `${rem(7)} ${rem(9)}`,
                   borderRadius: 8,
                   border: "1px solid transparent",
                   background: on ? p.bg2 : "transparent",
@@ -158,7 +158,7 @@ export function VolumePicker({
                   <span
                     style={{
                       display: "block",
-                      fontSize: 13,
+                      fontSize: TEXT.base,
                       fontWeight: on ? 700 : 600,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
@@ -174,7 +174,7 @@ export function VolumePicker({
                       style={{
                         display: "block",
                         fontFamily: MONO,
-                        fontSize: 11,
+                        fontSize: TEXT.micro,
                         color: p.txt3,
                         overflow: "hidden",
                         textOverflow: "ellipsis",
@@ -188,7 +188,7 @@ export function VolumePicker({
                 {/* Capacity tells two same-named volumes apart, and it is what
                     you want to know before sending a folder to one of them. */}
                 {v.totalBytes > 0 && (
-                  <span style={{ flexShrink: 0, fontFamily: MONO, fontSize: 10.5, color: p.txt3 }}>
+                  <span style={{ flexShrink: 0, fontFamily: MONO, fontSize: rem(10.5), color: p.txt3 }}>
                     {t("sftp.driveFree", { free: fmtSize(v.freeBytes), total: fmtSize(v.totalBytes) })}
                   </span>
                 )}
