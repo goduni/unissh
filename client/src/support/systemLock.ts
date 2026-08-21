@@ -149,3 +149,49 @@ export function createSystemLockWatcher(opts: SystemLockOptions): SystemLockWatc
     dispose: reset,
   };
 }
+
+/** The shape the native listener emits. Typed loosely on purpose — it crosses
+ *  an IPC boundary, and [`handleSystemLockEvent`] is where it gets checked. */
+export interface SystemLockEventPayload {
+  signal?: unknown;
+  /** Present only when the OS is being held open for us, i.e. on a suspend from
+   *  a platform that can hold one (not macOS). */
+  token?: unknown;
+}
+
+/**
+ * Route one `system-lock` event: decide with the watcher, then release the
+ * machine if it is being held for us.
+ *
+ * Lives here rather than inline in the subscription because of one case that is
+ * easy to get wrong and impossible to notice: **a suspend must be answered even
+ * when the feature is switched off.** The native side takes its logind delay
+ * inhibitor at startup, before it can know what the user chose — it has to, the
+ * setting lives in the front end — so silence from here is not read as "nothing
+ * to do", it is read as "still working", and the machine waits out the whole
+ * timeout on its way to sleep. A user who turned this feature OFF would pay for
+ * it with a stalled suspend every time, which is the one way this feature could
+ * make a machine worse rather than merely no better.
+ */
+export async function handleSystemLockEvent(
+  payload: SystemLockEventPayload | null | undefined,
+  deps: {
+    watcher: SystemLockWatcher;
+    /** Tell the native side it may let the machine sleep. */
+    releaseSuspend: (token: number) => Promise<void>;
+  },
+): Promise<void> {
+  const kind = payload?.signal;
+  if (kind !== "screen-lock" && kind !== "screen-unlock" && kind !== "suspend") return;
+  deps.watcher.signal(kind);
+  if (kind !== "suspend") return;
+  // No token means nothing is waiting on an answer (macOS hands none out).
+  const token = payload?.token;
+  if (typeof token !== "number") return;
+  await deps.watcher.settled();
+  try {
+    await deps.releaseSuspend(token);
+  } catch {
+    /* not a Tauri context, or the suspend already went ahead without us */
+  }
+}

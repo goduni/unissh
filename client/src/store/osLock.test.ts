@@ -88,6 +88,30 @@ describe("locking because the OS did", () => {
     expect(useApp.getState().lockReason).toBe("suspend");
   });
 
+  // The two settings are independent, and this is the one users ask about:
+  // "auto-lock: never" turns off the IDLE TIMER, not locking. Someone who never
+  // wants an inactivity lock still wants their keys gone when they lock the
+  // screen and walk off — that is the whole premise of the feature.
+  it("still locks when auto-lock is set to never", async () => {
+    useApp.setState({ autolockMin: null, osLockGrace: 0 });
+    const w = watch(useApp.getState().osLockGrace);
+    w.signal("screen-lock");
+    await vi.waitFor(() => expect(useApp.getState().unlocked).toBe(false));
+    expect(useApp.getState().lockReason).toBe("screen-lock");
+  });
+
+  // ...and the converse: switching the OS lock off leaves the idle timer alone.
+  // Nothing in this path reads `autolockMin`, which is what makes both true.
+  it("does nothing when the OS lock is off, whatever auto-lock says", () => {
+    useApp.setState({ autolockMin: 15, osLockGrace: null });
+    const w = watch(useApp.getState().osLockGrace);
+    w.signal("screen-lock");
+    w.signal("suspend");
+    vi.advanceTimersByTime(600_000);
+    expect(lock).not.toHaveBeenCalled();
+    expect(useApp.getState().unlocked).toBe(true);
+  });
+
   it("leaves an already-locked instance alone", () => {
     useApp.setState({ unlocked: false });
     const w = watch(0);

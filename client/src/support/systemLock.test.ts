@@ -3,7 +3,7 @@
 // grace, so it did not.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSystemLockWatcher } from "./systemLock";
+import { createSystemLockWatcher, handleSystemLockEvent } from "./systemLock";
 
 const make = (grace: number | null, unlocked = true) => {
   const lock = vi.fn();
@@ -186,5 +186,104 @@ describe("createSystemLockWatcher", () => {
     w.dispose();
     vi.advanceTimersByTime(600_000);
     expect(lock).not.toHaveBeenCalled();
+  });
+});
+
+// Routing the raw event. The case that earns this its own describe is the LAST
+// one: a suspend must be answered even when the feature is off, because the
+// native side takes its inhibitor before it can know what the user chose. Get
+// that wrong and turning the feature off costs the user a stalled suspend every
+// time — the one way this feature can make a machine worse, not just no better.
+describe("handleSystemLockEvent", () => {
+  const setup = (grace: number | null, unlocked = true) => {
+    const lock = vi.fn();
+    const releaseSuspend = vi.fn(() => Promise.resolve());
+    const watcher = createSystemLockWatcher({ lock, grace, unlocked });
+    return { lock, releaseSuspend, watcher };
+  };
+
+  it("releases the machine even though the feature is switched off", async () => {
+    const { lock, releaseSuspend, watcher } = setup(null);
+    await handleSystemLockEvent({ signal: "suspend", token: 7 }, { watcher, releaseSuspend });
+    expect(lock).not.toHaveBeenCalled(); // nothing to lock — that is the setting
+    expect(releaseSuspend).toHaveBeenCalledExactlyOnceWith(7); // but say so anyway
+  });
+
+  it("releases the machine when the vault was already locked", async () => {
+    const { releaseSuspend, watcher } = setup(0, false);
+    await handleSystemLockEvent({ signal: "suspend", token: 8 }, { watcher, releaseSuspend });
+    expect(releaseSuspend).toHaveBeenCalledExactlyOnceWith(8);
+  });
+
+  it("releases only once the vault is actually shut", async () => {
+    const order: string[] = [];
+    let finishLock = () => {};
+    const watcher = createSystemLockWatcher({
+      lock: () =>
+        new Promise<void>((r) => {
+          finishLock = () => {
+            order.push("locked");
+            r();
+          };
+        }),
+      grace: 0,
+      unlocked: true,
+    });
+    const releaseSuspend = vi.fn(() => {
+      order.push("released");
+      return Promise.resolve();
+    });
+
+    const routed = handleSystemLockEvent(
+      { signal: "suspend", token: 9 },
+      { watcher, releaseSuspend },
+    );
+    await Promise.resolve();
+    expect(releaseSuspend).not.toHaveBeenCalled();
+
+    finishLock();
+    await routed;
+    expect(order).toEqual(["locked", "released"]);
+  });
+
+  it("still releases the machine when the lock itself failed", async () => {
+    const watcher = createSystemLockWatcher({
+      lock: () => Promise.reject(new Error("core is gone")),
+      grace: 0,
+      unlocked: true,
+    });
+    const releaseSuspend = vi.fn(() => Promise.resolve());
+    await handleSystemLockEvent({ signal: "suspend", token: 10 }, { watcher, releaseSuspend });
+    expect(releaseSuspend).toHaveBeenCalledExactlyOnceWith(10);
+  });
+
+  it("survives a release that throws — a suspend nobody can answer is not our error", async () => {
+    const { watcher } = setup(0);
+    const releaseSuspend = vi.fn(() => Promise.reject(new Error("no such command")));
+    await expect(
+      handleSystemLockEvent({ signal: "suspend", token: 11 }, { watcher, releaseSuspend }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("releases nothing on a screen lock — no machine is waiting on one", async () => {
+    const { releaseSuspend, watcher } = setup(0);
+    await handleSystemLockEvent({ signal: "screen-lock" }, { watcher, releaseSuspend });
+    expect(releaseSuspend).not.toHaveBeenCalled();
+  });
+
+  it("releases nothing when the platform handed out no token (macOS)", async () => {
+    const { lock, releaseSuspend, watcher } = setup(0);
+    await handleSystemLockEvent({ signal: "suspend" }, { watcher, releaseSuspend });
+    expect(lock).toHaveBeenCalledExactlyOnceWith("suspend"); // it still locks
+    expect(releaseSuspend).not.toHaveBeenCalled(); // there is just nothing to release
+  });
+
+  it("ignores a payload it does not understand", async () => {
+    const { lock, releaseSuspend, watcher } = setup(0);
+    for (const bad of [null, undefined, {}, { signal: "screen-melted" }, { signal: 3 }]) {
+      await handleSystemLockEvent(bad as never, { watcher, releaseSuspend });
+    }
+    expect(lock).not.toHaveBeenCalled();
+    expect(releaseSuspend).not.toHaveBeenCalled();
   });
 });

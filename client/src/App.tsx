@@ -22,8 +22,8 @@ import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
 import { ResizeEdges } from "@/shell/WindowChrome";
 import { isDesktopOs, isMac } from "@/bridge/platform";
 import { opensSettings, terminalOwnsTabDigits } from "@/support/hotkeys";
-import { createSystemLockWatcher } from "@/support/systemLock";
-import type { SystemLockSignal, SystemLockWatcher } from "@/support/systemLock";
+import { createSystemLockWatcher, handleSystemLockEvent } from "@/support/systemLock";
+import type { SystemLockEventPayload, SystemLockWatcher } from "@/support/systemLock";
 import { useUpdate } from "@/store/update";
 import { BOOT_CHECK_DELAY_MS, PERIODIC_CHECK_MS } from "@/bridge/updater";
 
@@ -328,23 +328,12 @@ export function App() {
     let alive = true;
     void (async () => {
       try {
-        type Payload = { signal: SystemLockSignal; token?: number };
-        const un = await listen<Payload>("system-lock", async (e) => {
-          const kind = e.payload?.signal;
-          if (kind !== "screen-lock" && kind !== "screen-unlock" && kind !== "suspend") return;
-          watcher.signal(kind);
-          if (kind !== "suspend") return;
-          const token = e.payload.token;
-          if (token === undefined) return; // nothing is being held open for us
-          // The machine is being held awake for us — on Linux by a logind delay
-          // inhibitor, on Windows by a blocked window proc. Answer once the
-          // vault is shut, and answer even when nothing was locked (the feature
-          // may be off), or the suspend waits out the timeout for nothing.
-          await watcher.settled();
-          void api.systemLockAck(token).catch(() => {
-            /* nothing to ack: not Tauri, or the suspend already went ahead */
-          });
-        });
+        const un = await listen<SystemLockEventPayload>("system-lock", (e) =>
+          handleSystemLockEvent(e.payload, {
+            watcher,
+            releaseSuspend: api.systemLockAck,
+          }),
+        );
         if (alive) dispose = un;
         else un();
       } catch {

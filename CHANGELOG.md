@@ -51,6 +51,12 @@ starts with `0.`:
   the control — off, at once, or a grace of 30 s, 1 min or 5 min. Sleep is never
   graced; the machine is going down and there is no changing one's mind.
 
+  The two settings are independent, which matters most if your auto-lock is on
+  **"Never"**: that switches off the *idle timer*, and it always did — it never
+  meant "never lock". So a "Never" instance now locks when the screen does,
+  which is the point. If that is not what you want, the new control has its own
+  off switch.
+
   Sleep does, though, *wait*. Hearing "the machine is suspending" and merely
   asking for a lock would let it go down with the keys still in memory, which is
   the one thing this is for — so on Linux UniSSH holds a logind delay inhibitor
