@@ -10,11 +10,13 @@ import { useTranslation, tDyn } from "@/i18n";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import {
   MONO,
-  UI,
+  rem,
   rgba,
   selAlpha,
   TERM_EDITOR_FIELDS,
+  TEXT,
   toHexInput,
+  UI,
   validateTermThemeImport,
 } from "@/theme/tokens";
 import type { TermEditorField, TermTheme, TermThemePalette } from "@/theme/tokens";
@@ -76,7 +78,7 @@ function MSeg<T extends string>({
 }) {
   const p = usePalette();
   return (
-    <div style={{ display: "flex", gap: 8 }}>
+    <div style={{ display: "flex", gap: rem(8) }}>
       {options.map((o) => (
         <button
           key={o.id}
@@ -87,8 +89,8 @@ function MSeg<T extends string>({
             display: "flex",
             flexDirection: "column",
             alignItems: "flex-start",
-            gap: 2,
-            padding: "9px 12px",
+            gap: rem(2),
+            padding: `${rem(9)} ${rem(12)}`,
             borderRadius: 8,
             cursor: "pointer",
             textAlign: "left",
@@ -99,11 +101,11 @@ function MSeg<T extends string>({
             border: `1px solid ${value === o.id ? p.line2 : p.line}`,
           }}
         >
-          <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: rem(6), fontSize: TEXT.base, fontWeight: 700 }}>
             <Icon name={o.icon} size={14} color={value === o.id ? p.txt : p.txt3} />
             {o.label}
           </span>
-          {o.desc && <span style={{ fontSize: 11, color: p.txt3, fontWeight: 500 }}>{o.desc}</span>}
+          {o.desc && <span style={{ fontSize: TEXT.micro, color: p.txt3, fontWeight: 500 }}>{o.desc}</span>}
         </button>
       ))}
     </div>
@@ -140,8 +142,8 @@ function MPick<T extends string>({
     <>
       <span
         style={{
-          width: 30,
-          height: 30,
+          width: rem(30),
+          height: rem(30),
           borderRadius: 8,
           flexShrink: 0,
           display: "flex",
@@ -154,17 +156,17 @@ function MPick<T extends string>({
         <Icon name={o.icon} size={15} color={active ? p.txt : p.txt3} />
       </span>
       <span style={{ flex: 1, minWidth: 0, display: "block" }}>
-        <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: p.txt }}>
+        <span style={{ display: "block", fontSize: TEXT.base, fontWeight: 700, color: p.txt }}>
           {o.label}
         </span>
         {o.desc && (
           <span
             style={{
               display: "block",
-              fontSize: 11.5,
+              fontSize: rem(11.5),
               color: p.txt3,
               fontWeight: 500,
-              marginTop: 1,
+              marginTop: rem(1),
               // One line: the list is a chooser, not the documentation. The
               // selected kind renders its own full explanation below.
               whiteSpace: "nowrap",
@@ -198,8 +200,8 @@ function MPick<T extends string>({
           width: "100%",
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          padding: "8px 12px",
+          gap: rem(10),
+          padding: `${rem(8)} ${rem(12)}`,
           borderRadius: 8,
           background: p.bg2,
           border: `1px solid ${open ? p.line2 : p.line}`,
@@ -220,12 +222,12 @@ function MPick<T extends string>({
             top: "100%",
             left: 0,
             right: 0,
-            marginTop: 6,
+            marginTop: rem(6),
             zIndex: 30,
             background: p.bg0,
             border: `1px solid ${p.line2}`,
             borderRadius: 12,
-            padding: 6,
+            padding: rem(6),
             boxShadow: p.shadow,
           }}
         >
@@ -253,8 +255,8 @@ function MPick<T extends string>({
                 width: "100%",
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
-                padding: 8,
+                gap: rem(10),
+                padding: rem(8),
                 borderRadius: 8,
                 background: o.id === value ? p.bg3 : "transparent",
               }}
@@ -289,8 +291,8 @@ function HelpBtn({ label, onClick }: { label: string; onClick: () => void }) {
       aria-label={label}
       style={{
         ...BTN_RESET,
-        width: 22,
-        height: 22,
+        width: rem(22),
+        height: rem(22),
         borderRadius: "50%",
         flexShrink: 0,
         display: "flex",
@@ -321,12 +323,12 @@ function SwitchRow({
   helpLabel: string;
 }) {
   return (
-    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+    <div style={{ display: "flex", gap: rem(12), alignItems: "center" }}>
       {/* The label is a sibling, not a <label for> — so name the switch itself,
           or a screen reader announces an unlabelled control. */}
       <Toggle checked={checked} onChange={onChange} aria-label={title} />
-      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{title}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(6), minWidth: 0 }}>
+        <span style={{ fontSize: TEXT.base, fontWeight: 600 }}>{title}</span>
         <HelpBtn label={helpLabel} onClick={onHelp} />
       </div>
     </div>
@@ -352,8 +354,8 @@ function NHSelect({
       style={{
         display: "flex",
         alignItems: "center",
-        height: 40,
-        padding: "0 12px",
+        height: rem(40),
+        padding: `0 ${rem(12)}`,
         borderRadius: 8,
         background: p.bg2,
         border: `1px solid ${p.line2}`,
@@ -369,7 +371,7 @@ function NHSelect({
           border: "none",
           outline: "none",
           fontFamily: MONO,
-          fontSize: 13,
+          fontSize: TEXT.base,
           color: options.length ? p.txt : p.txt3,
           appearance: "none",
           cursor: "pointer",
@@ -1058,15 +1060,15 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 11,
-            padding: "18px 22px",
+            gap: rem(11),
+            padding: `${rem(18)} ${rem(22)}`,
             borderBottom: `1px solid ${p.line}`,
           }}
         >
           <span
             style={{
-              width: 36,
-              height: 36,
+              width: rem(36),
+              height: rem(36),
               borderRadius: 10,
               background: p.bg2,
               border: `1px solid ${p.line}`,
@@ -1078,12 +1080,12 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
             <Icon name="server" size={18} color={p.txt2} />
           </span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.3 }}>
+            <div style={{ fontSize: TEXT.lead, fontWeight: 800, letterSpacing: rem(-0.3) }}>
               {edit ? t("modals.host.editTitle") : t("modals.host.newTitle")}
             </div>
-            <div style={{ fontSize: 12, color: p.txt3, display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ fontSize: TEXT.small, color: p.txt3, display: "flex", alignItems: "center", gap: rem(5) }}>
               {t("modals.host.intoVault")}
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: p.accent }} />
+              <span style={{ width: rem(6), height: rem(6), borderRadius: "50%", background: p.accent }} />
               <b style={{ color: p.txt2 }}>{vaultInfo?.name ?? "—"}</b>
             </div>
           </div>
@@ -1092,8 +1094,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
             title={t("common.close")}
             aria-label={t("common.close")}
             style={{
-              width: 30,
-              height: 30,
+              width: rem(30),
+              height: rem(30),
               borderRadius: 8,
               border: `1px solid ${p.line}`,
               background: p.bg2,
@@ -1111,17 +1113,17 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
         {/* body */}
         <div
           style={{
-            padding: isMobile ? 16 : 22,
+            padding: isMobile ? rem(16) : rem(22),
             display: "flex",
             flexDirection: "column",
-            gap: 16,
+            gap: rem(16),
           }}
         >
           <Field label={t("modals.host.label")}>
             <Input value={label} placeholder="web-04" accent onChange={setLabel} />
           </Field>
 
-          <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: rem(12) }}>
             <Field label={t("modals.host.hostAddress")} w="100%">
               <Input value={host} placeholder="web-04.prod.example.net" mono onChange={setHost} />
             </Field>
@@ -1147,9 +1149,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               options={authOptions}
               ariaLabel={t("modals.host.auth")}
             />
-            <div style={{ marginTop: 10 }}>
+            <div style={{ marginTop: rem(10) }}>
               {auth === "key" && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: rem(8) }}>
                   {keyItems.length > 0 && !showNewKey && (
                     <NHSelect
                       value={keyId}
@@ -1174,8 +1176,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       style={{
                         display: "flex",
                         flexDirection: "column",
-                        gap: 8,
-                        paddingTop: 10,
+                        gap: rem(8),
+                        paddingTop: rem(10),
                         borderTop: `1px solid ${p.line}`,
                       }}
                     >
@@ -1194,7 +1196,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                           { id: "rsa", label: "RSA", icon: "lock", desc: t("modals.key.algoImportOnly") },
                         ]}
                       />
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: rem(8), flexWrap: "wrap" }}>
                         <Btn variant="ghost" size="sm" icon="upload" onClick={loadKeyFromFile}>
                           {t("modals.key.loadFromFile")}
                         </Btn>
@@ -1203,10 +1205,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                             style={{
                               display: "inline-flex",
                               alignItems: "center",
-                              gap: 6,
+                              gap: rem(6),
                               minWidth: 0,
                               fontFamily: MONO,
-                              fontSize: 12,
+                              fontSize: TEXT.small,
                               color: p.txt2,
                               overflow: "hidden",
                               textOverflow: "ellipsis",
@@ -1229,21 +1231,21 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                           }}
                           style={{
                             width: "100%",
-                            minHeight: 90,
+                            minHeight: rem(90),
                             resize: "vertical",
-                            padding: 10,
+                            padding: rem(10),
                             borderRadius: 8,
                             background: p.bg0,
                             border: `1px solid ${p.line2}`,
                             outline: "none",
                             fontFamily: MONO,
-                            fontSize: 12,
+                            fontSize: TEXT.small,
                             color: p.txt,
                             boxSizing: "border-box",
                           }}
                         />
                       )}
-                      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                      <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
                         <Btn variant="ghost" size="sm" onClick={() => setShowNewKey(false)}>
                           {t("common.cancel")}
                         </Btn>
@@ -1261,7 +1263,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                 </div>
               )}
               {auth === "password" && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: rem(8) }}>
                   <Input
                     value={newPw}
                     placeholder={t("modals.host.newPasswordPlaceholder")}
@@ -1273,7 +1275,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   />
                   {pwItems.length > 0 && (
                     <>
-                      <div style={{ fontSize: 12, color: p.txt3 }}>{t("modals.host.orSelectSaved")}</div>
+                      <div style={{ fontSize: TEXT.small, color: p.txt3 }}>{t("modals.host.orSelectSaved")}</div>
                       <NHSelect
                         value={pwId}
                         onChange={(v) => {
@@ -1288,29 +1290,29 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       />
                     </>
                   )}
-                  <div style={{ fontSize: 12, color: p.txt3 }}>
+                  <div style={{ fontSize: TEXT.small, color: p.txt3 }}>
                     {t("modals.host.passwordStoredHint")}
                   </div>
                 </div>
               )}
               {auth === "ask" && (
-                <div style={{ fontSize: 13, color: p.txt3, padding: "2px 2px" }}>
+                <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(2)} ${rem(2)}` }}>
                   {t("modals.host.askHint")}
                 </div>
               )}
               {auth === "systemAgent" && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ fontSize: 12.5, color: p.txt2, lineHeight: 1.5 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: rem(8) }}>
+                  <div style={{ fontSize: rem(12.5), color: p.txt2, lineHeight: 1.5 }}>
                     {t("modals.host.agentExplain")}
                   </div>
                   {agentKeys === null ? (
                     <Spinner />
                   ) : agentKeys.length === 0 ? (
-                    <div style={{ fontSize: 12.5, color: p.amber, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: rem(12.5), color: p.amber, lineHeight: 1.5 }}>
                       {agentError ?? t("modals.host.agentEmpty")}
                     </div>
                   ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: rem(6) }}>
                       {agentKeys.map((k) => {
                         const on = k.publicKey === agentPublicKey;
                         return (
@@ -1322,9 +1324,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                               ...BTN_RESET,
                               display: "flex",
                               alignItems: "center",
-                              gap: 8,
+                              gap: rem(8),
                               textAlign: "left",
-                              padding: "8px 10px",
+                              padding: `${rem(8)} ${rem(10)}`,
                               borderRadius: 8,
                               border: `1px solid ${on ? p.accentText : p.line}`,
                               background: on ? rgba(p.accentText, 0.08) : "transparent",
@@ -1337,14 +1339,14 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                               color={on ? p.accentText : p.txt3}
                             />
                             <span style={{ minWidth: 0, flex: 1 }}>
-                              <span style={{ display: "block", fontSize: 13 }}>
+                              <span style={{ display: "block", fontSize: TEXT.base }}>
                                 {k.comment || t("modals.host.agentNoComment")}
                               </span>
                               <span
                                 style={{
                                   display: "block",
                                   fontFamily: MONO,
-                                  fontSize: 11,
+                                  fontSize: TEXT.micro,
                                   color: p.txt3,
                                   overflow: "hidden",
                                   textOverflow: "ellipsis",
@@ -1373,20 +1375,20 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     : idUser;
                   const hasIds = !!bindVault && pIdentities.length > 0;
                   return (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: rem(10) }}>
                       {sharedVaultDefault && (
                         <div
-                          style={{ fontSize: 12, color: p.accentText, fontWeight: 600, padding: "2px 2px" }}
+                          style={{ fontSize: TEXT.small, color: p.accentText, fontWeight: 600, padding: `${rem(2)} ${rem(2)}` }}
                         >
                           {t("modals.host.sharedVaultPersonalHint")}
                         </div>
                       )}
-                      <div style={{ fontSize: 13, color: p.txt3, padding: "2px 2px" }}>
+                      <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(2)} ${rem(2)}` }}>
                         {t("modals.host.personalHint")}
                       </div>
 
                       {pLoaded && !bindVault && (
-                        <div style={{ fontSize: 12, color: p.amber, padding: "2px 2px", lineHeight: 1.5 }}>
+                        <div style={{ fontSize: TEXT.small, color: p.amber, padding: `${rem(2)} ${rem(2)}`, lineHeight: 1.5 }}>
                           {t("modals.host.personalNoVault")}
                         </div>
                       )}
@@ -1410,7 +1412,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                         </Field>
                       )}
                       {pLoaded && bindVault && pIdentities.length === 0 && (
-                        <div style={{ fontSize: 12, color: p.amber, padding: "2px 2px", lineHeight: 1.5 }}>
+                        <div style={{ fontSize: TEXT.small, color: p.amber, padding: `${rem(2)} ${rem(2)}`, lineHeight: 1.5 }}>
                           {t("modals.host.personalNoIdentities")}
                         </div>
                       )}
@@ -1440,7 +1442,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                             onChange={setUsernameTemplate}
                           />
                           <div
-                            style={{ fontSize: 12, color: p.txt3, padding: "5px 2px 0", lineHeight: 1.5 }}
+                            style={{ fontSize: TEXT.small, color: p.txt3, padding: `${rem(5)} ${rem(2)} 0`, lineHeight: 1.5 }}
                           >
                             {resolved && (
                               <span style={{ color: p.txt2 }}>
@@ -1458,8 +1460,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           </Field>
 
           {/* ProxyJump */}
-          <div style={{ borderTop: `1px solid ${p.line}`, paddingTop: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ borderTop: `1px solid ${p.line}`, paddingTop: rem(16) }}>
+            <div style={{ display: "flex", alignItems: "center", gap: rem(10) }}>
               <Toggle
                 checked={useJump}
                 onChange={setUseJump}
@@ -1467,14 +1469,14 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               />
               <Icon name="branch" size={15} color={useJump ? p.txt2 : p.txt3} />
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{t("modals.host.proxyJump")}</div>
-                <div style={{ fontSize: 11, color: p.txt3 }}>{t("modals.host.proxyJumpDesc")}</div>
+                <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>{t("modals.host.proxyJump")}</div>
+                <div style={{ fontSize: TEXT.micro, color: p.txt3 }}>{t("modals.host.proxyJumpDesc")}</div>
               </div>
             </div>
             {useJump && (
-              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ marginTop: rem(10), display: "flex", flexDirection: "column", gap: rem(10) }}>
                 {refHosts.length > 0 && (
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ display: "flex", gap: rem(8) }}>
                     {(["inline", "ref"] as const).map((m) => (
                       <button
                         key={m}
@@ -1482,10 +1484,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                         onClick={() => setJMode(m)}
                         style={{
                           flex: 1,
-                          padding: "7px 10px",
+                          padding: `${rem(7)} ${rem(10)}`,
                           borderRadius: 8,
                           cursor: "pointer",
-                          fontSize: 13,
+                          fontSize: TEXT.base,
                           fontWeight: jMode === m ? 700 : 600,
                           // De-decor: active jump-mode = neutral raised tile + ink text.
                           background: jMode === m ? p.bg4 : p.bg2,
@@ -1511,13 +1513,13 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       }))}
                       empty={t("modals.host.jumpRefEmpty")}
                     />
-                    <div style={{ fontSize: 12, color: p.txt3, padding: "4px 2px 0" }}>
+                    <div style={{ fontSize: TEXT.small, color: p.txt3, padding: `${rem(4)} ${rem(2)} 0` }}>
                       {t("modals.host.jumpRefHint")}
                     </div>
                   </Field>
                 ) : (
                   <>
-                    <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
+                    <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: rem(12) }}>
                       <Field label={t("modals.host.bastionHost")} w="100%">
                         <Input value={jHost} placeholder="bastion.corp.net" mono onChange={setJHost} />
                       </Field>
@@ -1525,7 +1527,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                         <Input value={jPort} mono selectOnFocus onChange={setJPort} />
                       </Field>
                     </div>
-                    <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
+                    <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: rem(12) }}>
                       <Field label={t("modals.host.user")} w="100%">
                         <Input value={jUser} placeholder="ops" mono onChange={setJUser} />
                       </Field>
@@ -1545,8 +1547,8 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           </div>
 
           {/* outbound proxy (issue #27) */}
-          <div style={{ borderTop: `1px solid ${p.line}`, paddingTop: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ borderTop: `1px solid ${p.line}`, paddingTop: rem(16) }}>
+            <div style={{ display: "flex", alignItems: "center", gap: rem(10) }}>
               <Toggle
                 checked={useProxy}
                 onChange={setUseProxy}
@@ -1554,13 +1556,13 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               />
               <Icon name="globe" size={15} color={useProxy ? p.txt2 : p.txt3} />
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{t("modals.host.proxy")}</div>
-                <div style={{ fontSize: 11, color: p.txt3 }}>{t("modals.host.proxyDesc")}</div>
+                <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>{t("modals.host.proxy")}</div>
+                <div style={{ fontSize: TEXT.micro, color: p.txt3 }}>{t("modals.host.proxyDesc")}</div>
               </div>
             </div>
             {useProxy && (
-              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ marginTop: rem(10), display: "flex", flexDirection: "column", gap: rem(10) }}>
+                <div style={{ display: "flex", gap: rem(8) }}>
                   {(["http", "socks4", "socks5"] as const).map((k) => (
                     <button
                       key={k}
@@ -1568,10 +1570,10 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       onClick={() => setPxKind(k)}
                       style={{
                         flex: 1,
-                        padding: "7px 10px",
+                        padding: `${rem(7)} ${rem(10)}`,
                         borderRadius: 8,
                         cursor: "pointer",
-                        fontSize: 13,
+                        fontSize: TEXT.base,
                         fontWeight: pxKind === k ? 700 : 600,
                         // De-decor: active proxy-kind = neutral raised tile + ink text.
                         background: pxKind === k ? p.bg4 : p.bg2,
@@ -1583,7 +1585,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     </button>
                   ))}
                 </div>
-                <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: rem(12) }}>
                   <Field label={t("modals.host.proxyHost")} w="100%">
                     <Input value={pxHost} placeholder="proxy.corp.net" mono onChange={setPxHost} />
                   </Field>
@@ -1591,7 +1593,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     <Input value={pxPort} mono selectOnFocus onChange={setPxPort} />
                   </Field>
                 </div>
-                <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: rem(12) }}>
                   <Field label={t("modals.host.proxyUsername")} w="100%">
                     <Input value={pxUser} placeholder="" mono onChange={setPxUser} />
                   </Field>
@@ -1615,9 +1617,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           </div>
 
           {/* group */}
-          <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ display: "flex", gap: rem(12) }}>
             <Field label={t("modals.host.group")} w="100%" group>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: rem(6), flexWrap: "wrap" }}>
                 {groups.map((g) => {
                   const on = groupId === g.groupId;
                   return (
@@ -1629,12 +1631,12 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
-                        gap: 6,
-                        padding: "7px 12px",
+                        gap: rem(6),
+                        padding: `${rem(7)} ${rem(12)}`,
                         borderRadius: 8,
                         cursor: "pointer",
                         fontFamily: UI,
-                        fontSize: 13,
+                        fontSize: TEXT.base,
                         fontWeight: on ? 700 : 600,
                         // De-decor: selected group = neutral raised tile + ink text.
                         background: on ? p.bg4 : p.bg2,
@@ -1658,12 +1660,12 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
-                      gap: 6,
-                      padding: "7px 12px",
+                      gap: rem(6),
+                      padding: `${rem(7)} ${rem(12)}`,
                       borderRadius: 8,
                       cursor: "pointer",
                       fontFamily: UI,
-                      fontSize: 13,
+                      fontSize: TEXT.base,
                       fontWeight: 700,
                       // De-decor: selected pending group = neutral raised tile + ink text.
                       background: p.bg4,
@@ -1696,11 +1698,11 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     }}
                     onBlur={confirmNewGroup}
                     style={{
-                      width: 150,
-                      height: 34,
-                      padding: "0 10px",
+                      width: rem(150),
+                      height: rem(34),
+                      padding: `0 ${rem(10)}`,
                       borderRadius: 8,
-                      fontSize: 13,
+                      fontSize: TEXT.base,
                       fontWeight: 600,
                       background: p.bg2,
                       color: p.txt,
@@ -1715,12 +1717,12 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
-                      gap: 5,
-                      padding: "7px 12px",
+                      gap: rem(5),
+                      padding: `${rem(7)} ${rem(12)}`,
                       borderRadius: 8,
                       cursor: "pointer",
                       fontFamily: UI,
-                      fontSize: 13,
+                      fontSize: TEXT.base,
                       fontWeight: 600,
                       background: "transparent",
                       color: p.txt3,
@@ -1739,12 +1741,12 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
-                    gap: 5,
-                    padding: "7px 12px",
+                    gap: rem(5),
+                    padding: `${rem(7)} ${rem(12)}`,
                     borderRadius: 8,
                     cursor: "pointer",
                     fontFamily: UI,
-                    fontSize: 13,
+                    fontSize: TEXT.base,
                     fontWeight: groupId === "" ? 700 : 600,
                     // De-decor: selected "No group" = neutral raised tile + ink text.
                     background: groupId === "" ? p.bg4 : "transparent",
@@ -1791,9 +1793,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
 
           {/* startup snippets */}
           {snippetLib.length > 0 && (
-            <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ display: "flex", gap: rem(12) }}>
               <Field label={t("modals.host.startupSnippets")} hint={t("modals.host.startupHint")} w="100%" group>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: rem(4) }}>
                   {snippetLib.map((sn) => {
                     const on = startupSnippetIds.includes(sn.snippetId);
                     return (
@@ -1813,9 +1815,9 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                           ...BTN_RESET,
                           display: "flex",
                           alignItems: "center",
-                          gap: 8,
+                          gap: rem(8),
                           textAlign: "left",
-                          padding: "6px 8px",
+                          padding: `${rem(6)} ${rem(8)}`,
                           borderRadius: 8,
                           border: `1px solid ${on ? p.accentText : p.line}`,
                           background: on ? rgba(p.accentText, 0.08) : "transparent",
@@ -1828,12 +1830,12 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                           color={on ? p.accentText : p.txt3}
                         />
                         <span style={{ minWidth: 0, flex: 1 }}>
-                          <span style={{ display: "block", fontSize: 12.5 }}>{sn.label}</span>
+                          <span style={{ display: "block", fontSize: rem(12.5) }}>{sn.label}</span>
                           <span
                             style={{
                               display: "block",
                               fontFamily: MONO,
-                              fontSize: 11,
+                              fontSize: TEXT.micro,
                               color: p.txt3,
                               overflow: "hidden",
                               textOverflow: "ellipsis",
@@ -1844,7 +1846,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                           </span>
                         </span>
                         {on && (
-                          <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+                          <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
                             {startupSnippetIds.indexOf(sn.snippetId) + 1}
                           </span>
                         )}
@@ -1857,16 +1859,16 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           )}
 
           {/* tags */}
-          <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ display: "flex", gap: rem(12) }}>
             <Field label={t("modals.host.tags")} w="100%" group>
               <div
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 6,
+                  gap: rem(6),
                   flexWrap: "wrap",
-                  minHeight: 40,
-                  padding: "0 10px",
+                  minHeight: rem(40),
+                  padding: `0 ${rem(10)}`,
                   borderRadius: 8,
                   background: p.bg2,
                   border: `1px solid ${p.line2}`,
@@ -1898,13 +1900,13 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
                   onBlur={addTag}
                   style={{
                     flex: 1,
-                    minWidth: 70,
-                    height: 38,
+                    minWidth: rem(70),
+                    height: rem(38),
                     background: "none",
                     border: "none",
                     outline: "none",
                     fontFamily: UI,
-                    fontSize: 13,
+                    fontSize: TEXT.base,
                     color: p.txt,
                   }}
                 />
@@ -1918,14 +1920,14 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 10,
-            padding: isMobile ? "14px 16px" : "14px 22px",
+            gap: rem(10),
+            padding: isMobile ? `${rem(14)} ${rem(16)}` : `${rem(14)} ${rem(22)}`,
             borderTop: `1px solid ${p.line}`,
             background: p.bg0,
             flexWrap: "wrap",
           }}
         >
-          <span style={{ fontSize: 12, color: p.txt3, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: TEXT.small, color: p.txt3, display: "flex", alignItems: "center", gap: rem(6) }}>
             <Icon name="shieldcheck" size={13} color={p.green} />
             {t("modals.host.tofuNote")}
           </span>
@@ -1938,7 +1940,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
               style={{
                 color: p.red,
                 borderColor: rgba(p.red, 0.4),
-                ...(isMobile ? { minHeight: 44, flex: "1 1 100%" } : null),
+                ...(isMobile ? { minHeight: rem(44), flex: "1 1 100%" } : null),
               }}
               onClick={remove}
             >
@@ -1948,11 +1950,11 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
           <Btn
             variant="ghost"
             onClick={onClose}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {t("common.cancel")}
           </Btn>
-          <Btn icon="check" onClick={save} style={isMobile ? { minHeight: 44, flex: 1 } : undefined}>
+          <Btn icon="check" onClick={save} style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}>
             {edit ? t("common.save") : t("modals.host.saveHost")}
           </Btn>
         </div>
@@ -1971,7 +1973,7 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
             </div>
           }
         >
-          <div style={{ fontSize: 13, lineHeight: 1.55, color: p.txt2 }}>{help.body}</div>
+          <div style={{ fontSize: TEXT.base, lineHeight: 1.55, color: p.txt2 }}>{help.body}</div>
         </Modal>
       )}
     </div>
@@ -2078,7 +2080,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       footer={
         <React.Fragment>
-          <span style={{ fontSize: 12, color: p.txt3, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: TEXT.small, color: p.txt3, display: "flex", alignItems: "center", gap: rem(6) }}>
             <Icon name="shieldcheck" size={13} color={p.green} />
             {t("modals.key.encryptNote")}
           </span>
@@ -2086,7 +2088,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
           <Btn
             variant="ghost"
             onClick={onClose}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {t("common.cancel")}
           </Btn>
@@ -2094,7 +2096,7 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
             icon={willImport ? "download" : "zap"}
             onClick={run}
             disabled={busy}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {willImport ? t("modals.key.import") : t("modals.key.generate")}
           </Btn>
@@ -2122,14 +2124,14 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          gap: 8,
-          padding: "11px 12px",
+          gap: rem(8),
+          padding: `${rem(11)} ${rem(12)}`,
           borderRadius: 10,
           border: `1px solid ${p.line}`,
           background: "transparent",
           color: p.txt2,
           cursor: "pointer",
-          fontSize: 13,
+          fontSize: TEXT.base,
           fontWeight: 600,
         }}
       >
@@ -2141,12 +2143,12 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            padding: "8px 12px",
+            gap: rem(8),
+            padding: `${rem(8)} ${rem(12)}`,
             borderRadius: 8,
             background: p.bg2,
             border: `1px solid ${p.line}`,
-            fontSize: 13,
+            fontSize: TEXT.base,
           }}
         >
           <Icon name="key" size={13} color={p.txt2} />
@@ -2185,15 +2187,15 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
               }}
               style={{
                 width: "100%",
-                minHeight: 132,
+                minHeight: rem(132),
                 resize: "vertical",
-                padding: 12,
+                padding: rem(12),
                 borderRadius: 8,
                 background: p.bg2,
                 border: `1px solid ${p.line2}`,
                 outline: "none",
                 fontFamily: MONO,
-                fontSize: 12,
+                fontSize: TEXT.small,
                 lineHeight: 1.5,
                 color: p.txt,
                 boxSizing: "border-box",
@@ -2214,13 +2216,13 @@ function NewKeyModal({ onClose }: { onClose: () => void }) {
       ) : (
         <div
           style={{
-            paddingTop: 12,
+            paddingTop: rem(12),
             borderTop: `1px solid ${p.line}`,
-            fontSize: 13,
+            fontSize: TEXT.base,
             color: p.txt3,
             display: "flex",
             alignItems: "center",
-            gap: 8,
+            gap: rem(8),
           }}
         >
           <Icon name="zap" size={15} color={p.txt3} />
@@ -2358,7 +2360,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       footer={
         <React.Fragment>
-          <span style={{ fontSize: 12, color: p.txt3, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: TEXT.small, color: p.txt3, display: "flex", alignItems: "center", gap: rem(6) }}>
             <Icon name="alert" size={13} color={p.amber} />
             {t("modals.tunnel.autoCloseNote")}
           </span>
@@ -2366,11 +2368,11 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
           <Btn
             variant="ghost"
             onClick={onClose}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {t("common.cancel")}
           </Btn>
-          <Btn icon="check" onClick={open} style={isMobile ? { minHeight: 44, flex: 1 } : undefined}>
+          <Btn icon="check" onClick={open} style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}>
             {t("modals.tunnel.openTunnel")}
           </Btn>
         </React.Fragment>
@@ -2399,7 +2401,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
             empty={t("modals.tunnel.noHosts")}
           />
         ) : (
-          <div style={{ fontSize: 13, color: p.txt3, padding: "2px 2px" }}>
+          <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(2)} ${rem(2)}` }}>
             {t("modals.tunnel.noSavedHosts")}
           </div>
         )}
@@ -2409,7 +2411,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
           display: "flex",
           flexDirection: narrow ? "column" : "row",
           alignItems: narrow ? "stretch" : "flex-end",
-          gap: 12,
+          gap: rem(12),
         }}
       >
         <Field label={tDyn(m.srcLKey)} w="100%">
@@ -2417,7 +2419,7 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
         </Field>
         <span
           style={{
-            height: narrow ? "auto" : 40,
+            height: narrow ? "auto" : rem(40),
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -2433,13 +2435,13 @@ function NewTunnelModal({ onClose }: { onClose: () => void }) {
               style={{
                 display: "flex",
                 alignItems: "center",
-                height: 40,
-                padding: "0 12px",
+                height: rem(40),
+                padding: `0 ${rem(12)}`,
                 borderRadius: 8,
                 background: p.bg2,
                 border: `1px solid ${p.line2}`,
                 fontFamily: MONO,
-                fontSize: 13,
+                fontSize: TEXT.base,
                 color: p.txt3,
               }}
             >
@@ -2531,7 +2533,7 @@ function NewVaultModal({
             variant="ghost"
             onClick={onClose}
             disabled={busy}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {t("common.cancel")}
           </Btn>
@@ -2539,7 +2541,7 @@ function NewVaultModal({
             icon="check"
             onClick={save}
             disabled={busy}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {edit ? t("common.save") : t("common.create")}
           </Btn>
@@ -2718,7 +2720,7 @@ function IdentityVaultModal({
             variant="ghost"
             onClick={onClose}
             disabled={busy}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {t("common.cancel")}
           </Btn>
@@ -2726,7 +2728,7 @@ function IdentityVaultModal({
             icon="check"
             onClick={save}
             disabled={busy}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {t("common.create")}
           </Btn>
@@ -2775,7 +2777,7 @@ function IdentityVaultModal({
         </Field>
       )}
       {target === "cloud" && newSpace && (
-        <div style={{ fontSize: 12, color: p.txt3, lineHeight: 1.5, padding: "0 2px" }}>
+        <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5, padding: `0 ${rem(2)}` }}>
           {account
             ? t("identityVault.newSpaceHint", { server: serverShortLabel(account) })
             : t("identityVault.needAccount")}
@@ -2807,13 +2809,13 @@ function ColorSwatch({
 }) {
   const p = usePalette();
   return (
-    <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", minWidth: 0 }}>
-      <span style={{ position: "relative", width: 30, height: 30, flexShrink: 0 }}>
+    <label style={{ display: "flex", alignItems: "center", gap: rem(9), cursor: "pointer", minWidth: 0 }}>
+      <span style={{ position: "relative", width: rem(30), height: rem(30), flexShrink: 0 }}>
         <span
           style={{
             display: "block",
-            width: 30,
-            height: 30,
+            width: rem(30),
+            height: rem(30),
             borderRadius: 8,
             background: value,
             border: `1px solid ${p.line2}`,
@@ -2826,7 +2828,7 @@ function ColorSwatch({
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }}
         />
       </span>
-      <span style={{ fontSize: 13, color: p.txt2, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <span style={{ fontSize: TEXT.base, color: p.txt2, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {label}
       </span>
     </label>
@@ -2838,7 +2840,7 @@ function ThemePreview({ pal }: { pal: TermThemePalette }) {
   const p = usePalette();
   return (
     <div style={{ borderRadius: 12, overflow: "hidden", border: `1px solid ${p.line}` }}>
-      <div style={{ padding: "12px 14px", background: pal.bg, fontFamily: MONO, fontSize: 12, lineHeight: 1.6 }}>
+      <div style={{ padding: `${rem(12)} ${rem(14)}`, background: pal.bg, fontFamily: MONO, fontSize: TEXT.small, lineHeight: 1.6 }}>
         <div>
           <span style={{ color: pal.green }}>$</span> <span style={{ color: pal.fg }}>ssh</span>{" "}
           <span style={{ color: pal.blue }}>web-01</span> <span style={{ color: pal.dimc }}># prod</span>
@@ -2959,7 +2961,7 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
             variant="ghost"
             icon="upload"
             onClick={importJson}
-            style={isMobile ? { minHeight: 44, flex: "1 1 calc(50% - 5px)" } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: "1 1 calc(50% - 5px)" } : undefined}
           >
             {t("termtheme.import")}
           </Btn>
@@ -2967,7 +2969,7 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
             variant="ghost"
             icon="download"
             onClick={exportJson}
-            style={isMobile ? { minHeight: 44, flex: "1 1 calc(50% - 5px)" } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: "1 1 calc(50% - 5px)" } : undefined}
           >
             {t("termtheme.export")}
           </Btn>
@@ -2975,14 +2977,14 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
           <Btn
             variant="ghost"
             onClick={onClose}
-            style={isMobile ? { minHeight: 44, flex: "1 1 calc(50% - 5px)" } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: "1 1 calc(50% - 5px)" } : undefined}
           >
             {t("common.cancel")}
           </Btn>
           <Btn
             icon="check"
             onClick={save}
-            style={isMobile ? { minHeight: 44, flex: "1 1 calc(50% - 5px)" } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: "1 1 calc(50% - 5px)" } : undefined}
           >
             {t("termtheme.save")}
           </Btn>
@@ -3001,7 +3003,7 @@ function TermThemeModal({ edit, onClose }: { edit?: TermTheme; onClose: () => vo
         style={{
           display: "grid",
           gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
-          gap: "12px 18px",
+          gap: `${rem(12)} ${rem(18)}`,
         }}
       >
         {TERM_EDITOR_FIELDS.map((f) => (
@@ -3142,14 +3144,14 @@ function CopyKeyToServerModal({
       w={520}
       footer={
         <React.Fragment>
-          <span style={{ fontSize: 12, color: p.txt3 }}>
+          <span style={{ fontSize: TEXT.small, color: p.txt3 }}>
             {t("modals.copyKey.selectedCount", { count: chosen.length })}
           </span>
           <div style={{ flex: isMobile ? "1 1 100%" : 1 }} />
           <Btn
             variant="ghost"
             onClick={onClose}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {t("common.cancel")}
           </Btn>
@@ -3157,34 +3159,34 @@ function CopyKeyToServerModal({
             icon="upload"
             onClick={install}
             disabled={busy || chosen.length === 0}
-            style={isMobile ? { minHeight: 44, flex: 1 } : undefined}
+            style={isMobile ? { minHeight: rem(44), flex: 1 } : undefined}
           >
             {t("modals.copyKey.install")}
           </Btn>
         </React.Fragment>
       }
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 2 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), marginBottom: rem(2) }}>
+        <div style={{ fontSize: TEXT.small, fontWeight: 600, color: p.txt2, flex: 1 }}>
           {t("modals.copyKey.hostsLabel")}
         </div>
         <button
           type="button"
           onClick={selectAll}
-          style={{ ...BTN_RESET, fontFamily: UI, fontSize: 12, color: p.accentText, cursor: "pointer" }}
+          style={{ ...BTN_RESET, fontFamily: UI, fontSize: TEXT.small, color: p.accentText, cursor: "pointer" }}
         >
           {t("modals.copyKey.selectAll")}
         </button>
         <button
           type="button"
           onClick={clearAll}
-          style={{ ...BTN_RESET, fontFamily: UI, fontSize: 12, color: p.txt3, cursor: "pointer" }}
+          style={{ ...BTN_RESET, fontFamily: UI, fontSize: TEXT.small, color: p.txt3, cursor: "pointer" }}
         >
           {t("modals.copyKey.clear")}
         </button>
       </div>
       {hosts.length === 0 ? (
-        <div style={{ fontSize: 13, color: p.txt3, padding: "10px 2px" }}>
+        <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(10)} ${rem(2)}` }}>
           {t("modals.copyKey.noHosts")}
         </div>
       ) : (
@@ -3192,9 +3194,9 @@ function CopyKeyToServerModal({
           style={{
             display: "flex",
             flexDirection: "column",
-            maxHeight: 260,
+            maxHeight: rem(260),
             overflowY: "auto",
-            paddingRight: 2,
+            paddingRight: rem(2),
           }}
         >
           {hosts.map((h, i) => {
@@ -3206,8 +3208,8 @@ function CopyKeyToServerModal({
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
-                  padding: "9px 11px",
+                  gap: rem(10),
+                  padding: `${rem(9)} ${rem(11)}`,
                   cursor: "pointer",
                   background: on ? p.bg2 : "transparent",
                   borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
@@ -3215,8 +3217,8 @@ function CopyKeyToServerModal({
               >
                 <span
                   style={{
-                    width: 17,
-                    height: 17,
+                    width: rem(17),
+                    height: rem(17),
                     borderRadius: 6,
                     flexShrink: 0,
                     display: "flex",
@@ -3232,7 +3234,7 @@ function CopyKeyToServerModal({
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div
                     style={{
-                      fontSize: 13,
+                      fontSize: TEXT.base,
                       fontWeight: 600,
                       whiteSpace: "nowrap",
                       overflow: "hidden",
@@ -3241,7 +3243,7 @@ function CopyKeyToServerModal({
                   >
                     {h.label}
                   </div>
-                  <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+                  <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
                     {h.user}@{h.host}
                     {h.port !== 22 ? `:${h.port}` : ""}
                   </div>
@@ -3269,9 +3271,9 @@ function CopyKeyToServerModal({
               // flex-start so a wrapped long RU label keeps the toggle beside its
               // first line (the Toggle primitive is already flexShrink:0).
               alignItems: "flex-start",
-              gap: 10,
+              gap: rem(10),
               cursor: "pointer",
-              fontSize: 13,
+              fontSize: TEXT.base,
               color: p.txt2,
             }}
           >
@@ -3287,16 +3289,16 @@ function CopyKeyToServerModal({
             borderRadius: 10,
             border: `1px solid ${rgba(p.red, 0.4)}`,
             background: rgba(p.red, 0.08),
-            padding: 10,
+            padding: rem(10),
             display: "flex",
             flexDirection: "column",
-            gap: 4,
-            maxHeight: 120,
+            gap: rem(4),
+            maxHeight: rem(120),
             overflowY: "auto",
           }}
         >
           {errors.map((e, i) => (
-            <div key={i} style={{ fontFamily: MONO, fontSize: 12, color: p.txt2 }}>
+            <div key={i} style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.txt2 }}>
               {e}
             </div>
           ))}
@@ -3484,12 +3486,12 @@ function BindHostModal({
       }
     >
       {!loaded ? (
-        <div style={{ display: "flex", justifyContent: "center", padding: 24 }}>
+        <div style={{ display: "flex", justifyContent: "center", padding: rem(24) }}>
           <Spinner />
         </div>
       ) : !bindVault ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "flex-start" }}>
-          <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: rem(12), alignItems: "flex-start" }}>
+          <div style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
             {t("bind.noPersonalVault")}
           </div>
           <Btn
@@ -3504,9 +3506,9 @@ function BindHostModal({
           </Btn>
         </div>
       ) : loadError ? (
-        <div style={{ fontSize: 13, color: p.red, lineHeight: 1.5 }}>{t("bind.loadError")}</div>
+        <div style={{ fontSize: TEXT.base, color: p.red, lineHeight: 1.5 }}>{t("bind.loadError")}</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
           {/* Which private vault the identity lives in (work vs. personal server). */}
           {privateVaults.length > 1 && (
             <Field label={t("secrets.identityVault")}>
@@ -3525,12 +3527,12 @@ function BindHostModal({
             </Field>
           )}
           {identities.length === 0 ? (
-            <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+            <div style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
               {t("bind.noIdentities", { vault: pvName })}
             </div>
           ) : (
             <>
-              <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
+              <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5 }}>
                 {t("bind.intro", { vault: pvName })}
               </div>
               <Field label={t("bind.identity")}>
@@ -3545,7 +3547,7 @@ function BindHostModal({
                 />
               </Field>
               {binding && (
-                <div style={{ fontSize: 12, color: p.txt3 }}>
+                <div style={{ fontSize: TEXT.small, color: p.txt3 }}>
                   {t("bind.currentPin", { pin: binding.destinationPin })}
                 </div>
               )}
@@ -3585,21 +3587,21 @@ function QrModal({
       onClose={onClose}
       w={320}
     >
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: rem(14) }}>
         {/* White plate: the canvas is black-on-white, and a dark theme behind a bare
             canvas leaves no quiet zone for a camera to lock onto. */}
-        <div style={{ padding: 12, borderRadius: 12, background: "#ffffff" }}>
+        <div style={{ padding: rem(12), borderRadius: 12, background: "#ffffff" }}>
           <canvas ref={ref} aria-label={`${label} ${address}`} />
         </div>
         <span
           className="uh-selectable"
           style={{
             fontFamily: MONO,
-            fontSize: 11,
+            fontSize: TEXT.micro,
             color: p.txt2,
             textAlign: "center",
             wordBreak: "break-all",
-            maxWidth: 260,
+            maxWidth: rem(260),
           }}
         >
           {address}

@@ -6,7 +6,7 @@ import { writeSecretToClipboard } from "@/bridge/clipboard";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, UI, rgba } from "@/theme/tokens";
+import { MONO, rem, rgba, TEXT, UI } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { isDesktopOs, isMac } from "@/bridge/platform";
@@ -51,7 +51,7 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
           : // Keep the centered card out of the top 44px chrome band: at the
             // minimum window size the card would otherwise slide under the drag
             // strip and the floating window controls.
-            { padding: "44px 0 16px" }),
+            { padding: `${rem(44)} 0 ${rem(16)}` }),
       }}
     >
       <div
@@ -75,10 +75,10 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
         <>
           <div
             data-tauri-drag-region
-            style={{ position: "absolute", top: 0, left: 0, right: 0, height: 44 }}
+            style={{ position: "absolute", top: 0, left: 0, right: 0, height: rem(44) }}
           />
           {!isMac() && (
-            <div style={{ position: "absolute", top: 7, left: 16, zIndex: 1 }}>
+            <div style={{ position: "absolute", top: rem(7), left: rem(16), zIndex: 1 }}>
               <WindowControls />
             </div>
           )}
@@ -93,14 +93,17 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
           // scrolls (top reachable above the keyboard) when it doesn't.
           margin: isMobile ? "auto" : undefined,
           flexShrink: isMobile ? 0 : undefined,
-          width: isMobile ? "100%" : w,
+          // Design pixels: the card is sized to hold its own copy, so it grows
+          // with it. The vw/% caps stay viewport-relative — they are the "stay on
+          // screen and scroll" half, and `overflow: auto` below is the other.
+          width: isMobile ? "100%" : rem(w),
           maxWidth: isMobile ? "100%" : "92vw",
           maxHeight: isMobile ? "none" : "92%",
           overflow: "auto",
           background: p.bg1,
           border: `1px solid ${p.line2}`,
           borderRadius: 16,
-          padding: isMobile ? 20 : 30,
+          padding: isMobile ? rem(20) : rem(30),
           boxShadow: p.shadow,
         }}
       >
@@ -125,20 +128,20 @@ function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
         alignItems: "center",
         // wrap on desktop too: 3 long RU step labels exhaust the ~400px card and hyphen-break
         flexWrap: "wrap",
-        gap: isMobile ? "8px 6px" : 10,
-        marginBottom: 26,
+        gap: isMobile ? `${rem(8)} ${rem(6)}` : rem(10),
+        marginBottom: rem(26),
       }}
     >
       {steps.map((s, i) => (
         <React.Fragment key={s}>
-          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? rem(6) : rem(8) }}>
             <span
               style={{
-                width: 24,
-                height: 24,
+                width: rem(24),
+                height: rem(24),
                 flexShrink: 0,
                 borderRadius: "50%",
-                fontSize: 12,
+                fontSize: TEXT.small,
                 fontWeight: 700,
                 fontFamily: MONO,
                 display: "flex",
@@ -153,7 +156,7 @@ function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
             </span>
             <span
               style={{
-                fontSize: isMobile ? 12 : 13,
+                fontSize: isMobile ? TEXT.small : TEXT.base,
                 fontWeight: i === step ? 700 : 500,
                 color: i === step ? p.txt : p.txt2,
               }}
@@ -162,7 +165,7 @@ function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
             </span>
           </div>
           {i < steps.length - 1 && (
-            <span style={{ width: isMobile ? 12 : 22, height: 1, flexShrink: 0, background: p.line2 }} />
+            <span style={{ width: isMobile ? rem(12) : rem(22), height: 1, flexShrink: 0, background: p.line2 }} />
           )}
         </React.Fragment>
       ))}
@@ -172,7 +175,9 @@ function Stepper({ step, isMobile }: { step: number; isMobile?: boolean }) {
 
 // Shared box metrics for the entry-overlay fields (taller + rounder than the modal
 // default). Only the height varies with the viewport, passed per call site.
-const ENTRY_BOX = { radius: 11, pad: "0 14px", gap: 10, fontSize: 14 } as const;
+// <Input> props, not a style object: `gap` and `height` are DESIGN pixels that the
+// primitive converts, `pad` is raw CSS and converts here.
+const ENTRY_BOX = { radius: 11, pad: `0 ${rem(14)}`, gap: 10, fontSize: TEXT.body } as const;
 
 /** Coarse 0–4 master-password strength: length plus character-class variety.
  *  Drives the meter only — the hard gate is non-empty + matching confirmation. */
@@ -224,27 +229,27 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
 
   return (
     <Modal>
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: rem(20) }}>
         <Logo size={24} />
       </div>
       <Stepper step={0} isMobile={isMobile} />
-      <h1 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>
+      <h1 style={{ margin: `0 0 ${rem(6)}`, fontSize: TEXT.h2, fontWeight: 800, letterSpacing: rem(-0.5) }}>
         {t("onboarding.newInstanceTitle")}
       </h1>
-      <p style={{ margin: "0 0 20px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+      <p style={{ margin: `0 0 ${rem(20)}`, fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
         {t("onboarding.newInstanceDesc")}
       </p>
-      <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: rem(15) }}>
         <div>
           <div
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              marginBottom: 7,
+              marginBottom: rem(7),
             }}
           >
-            <span style={{ fontSize: 12, fontWeight: 600, color: p.txt2 }}>
+            <span style={{ fontSize: TEXT.small, fontWeight: 600, color: p.txt2 }}>
               {t("onboarding.masterPassword")}{" "}
               <span style={{ color: p.txt3, fontWeight: 500 }}>· {t("onboarding.optional")}</span>
             </span>
@@ -255,7 +260,7 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
             />
           </div>
           {usePwd ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: rem(8) }}>
               <Field>
                 <Input
                   icon="lock"
@@ -271,14 +276,14 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
                 />
               </Field>
               {password.length > 0 && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ flex: 1, display: "flex", gap: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
+                  <div style={{ flex: 1, display: "flex", gap: rem(4) }}>
                     {[0, 1, 2, 3].map((i) => (
                       <div
                         key={i}
                         style={{
                           flex: 1,
-                          height: 4,
+                          height: rem(4),
                           borderRadius: 2,
                           background:
                             i < strength
@@ -293,7 +298,7 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
                       />
                     ))}
                   </div>
-                  <span style={{ fontSize: 11, color: p.txt3, minWidth: 44, textAlign: "right" }}>
+                  <span style={{ fontSize: TEXT.micro, color: p.txt3, minWidth: rem(44), textAlign: "right" }}>
                     {t(
                       `onboarding.pwStrength.${strength <= 1 ? "weak" : strength === 2 ? "fair" : strength === 3 ? "good" : "strong"}`,
                     )}
@@ -314,13 +319,13 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
                 />
               </Field>
               {mismatch && (
-                <div style={{ fontSize: 12, color: p.red, padding: "0 2px" }}>
+                <div style={{ fontSize: TEXT.small, color: p.red, padding: `0 ${rem(2)}` }}>
                   {t("onboarding.passwordMismatch")}
                 </div>
               )}
             </div>
           ) : (
-            <div style={{ fontSize: 13, color: p.txt2, padding: "6px 2px" }}>
+            <div style={{ fontSize: TEXT.base, color: p.txt2, padding: `${rem(6)} ${rem(2)}` }}>
               {t("onboarding.noPasswordHint")}
             </div>
           )}
@@ -330,15 +335,15 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
         style={{
           display: "flex",
           alignItems: "flex-start",
-          gap: 9,
-          margin: "20px 0",
-          padding: "14px 0",
+          gap: rem(9),
+          margin: `${rem(20)} 0`,
+          padding: `${rem(14)} 0`,
           borderTop: `1px solid ${p.line}`,
           borderBottom: `1px solid ${p.line}`,
         }}
       >
-        <Icon name="shieldcheck" size={17} color={p.txt3} style={{ marginTop: 1 }} />
-        <span style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+        <Icon name="shieldcheck" size={17} color={p.txt3} style={{ marginTop: rem(1) }} />
+        <span style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
           <Trans
             i18nKey="onboarding.secretKeyNotice"
             components={{
@@ -354,7 +359,7 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
         full
         onClick={create}
         disabled={!canCreate}
-        style={isMobile ? { minHeight: 48 } : undefined}
+        style={isMobile ? { minHeight: rem(48) } : undefined}
       >
         {busy ? <Spinner size={16} color={p.accentInk} /> : t("onboarding.generateSecretKey")}
       </Btn>
@@ -364,13 +369,13 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
         style={{
           display: "block",
           width: "100%",
-          marginTop: 14,
+          marginTop: rem(14),
           padding: 0,
           background: "none",
           border: "none",
           cursor: busy ? "default" : "pointer",
           fontFamily: UI,
-          fontSize: 13,
+          fontSize: TEXT.base,
           color: p.txt3,
           textAlign: "center",
         }}
@@ -444,11 +449,11 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
   return (
     <Modal w={540}>
       {!isReveal && <Stepper step={2} isMobile={isMobile} />}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), marginBottom: rem(6) }}>
         <span
           style={{
-            width: 38,
-            height: 38,
+            width: rem(38),
+            height: rem(38),
             flexShrink: 0,
             borderRadius: 12,
             background: rgba(p.amber, 0.12),
@@ -461,46 +466,46 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
           <Icon name="key" size={20} color={p.amber} />
         </span>
         <h1
-          style={{ margin: 0, fontSize: 24, fontWeight: 800, letterSpacing: -0.5, whiteSpace: "nowrap" }}
+          style={{ margin: 0, fontSize: TEXT.h2, fontWeight: 800, letterSpacing: rem(-0.5), whiteSpace: "nowrap" }}
         >
           {t("onboarding.yourSecretKey")}
         </h1>
       </div>
       {loading ? (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 0" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: `${rem(40)} 0` }}>
           <Spinner size={22} />
         </div>
       ) : key ? (
         <>
-          <p style={{ margin: "0 0 18px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+          <p style={{ margin: `0 0 ${rem(18)}`, fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
             {isReveal ? t("onboarding.revealNotice") : t("onboarding.singleShowNotice")}
           </p>
           <div
             style={{
               position: "relative",
-              padding: "16px 18px 18px",
+              padding: `${rem(16)} ${rem(18)} ${rem(18)}`,
               borderRadius: 16,
               background: p.bg0,
               border: `1px solid ${p.line2}`,
-              marginBottom: 14,
+              marginBottom: rem(14),
             }}
           >
             <div
               style={{
                 fontFamily: MONO,
-                fontSize: 11,
+                fontSize: TEXT.micro,
                 color: p.txt2,
-                letterSpacing: 1,
-                marginBottom: 12,
+                letterSpacing: rem(1),
+                marginBottom: rem(12),
               }}
             >
               {t("onboarding.secretKeyLabel")}
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "11px 9px", alignItems: "center" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: `${rem(11)} ${rem(9)}`, alignItems: "center" }}>
               {segs.map((s, i) => (
                 <React.Fragment key={i}>
                   <span
-                    style={{ fontFamily: MONO, fontSize: 18, fontWeight: 700, color: p.txt, letterSpacing: 2 }}
+                    style={{ fontFamily: MONO, fontSize: rem(18), fontWeight: 700, color: p.txt, letterSpacing: rem(2) }}
                   >
                     {s}
                   </span>
@@ -514,14 +519,14 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
               display: "flex",
               // wrap on desktop too: long RU labels (Скачать .txt / Скопировать) overlap below ~587px
               flexWrap: "wrap",
-              gap: 10,
-              marginBottom: 16,
+              gap: rem(10),
+              marginBottom: rem(16),
             }}
           >
             <Btn
               variant="ghost"
               icon="copy"
-              style={{ flex: isMobile ? "1 1 100%" : 1, minHeight: isMobile ? 44 : undefined }}
+              style={{ flex: isMobile ? "1 1 100%" : 1, minHeight: isMobile ? rem(44) : undefined }}
               onClick={copy}
             >
               {t("common.copy")}
@@ -529,7 +534,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
             <Btn
               variant="ghost"
               icon="download"
-              style={{ flex: isMobile ? "1 1 100%" : 1, minHeight: isMobile ? 44 : undefined }}
+              style={{ flex: isMobile ? "1 1 100%" : 1, minHeight: isMobile ? rem(44) : undefined }}
               onClick={download}
             >
               {t("onboarding.downloadTxt")}
@@ -537,7 +542,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
             <Btn
               variant="ghost"
               icon="hash"
-              style={{ flex: isMobile ? "1 1 100%" : 1, minHeight: isMobile ? 44 : undefined }}
+              style={{ flex: isMobile ? "1 1 100%" : 1, minHeight: isMobile ? rem(44) : undefined }}
               onClick={() => window.print()}
             >
               {t("onboarding.print")}
@@ -547,16 +552,16 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
             style={{
               display: "flex",
               alignItems: "flex-start",
-              gap: 9,
-              marginBottom: 16,
-              padding: 12,
+              gap: rem(9),
+              marginBottom: rem(16),
+              padding: rem(12),
               borderRadius: 12,
               background: rgba(p.amber, 0.1),
               border: `1px solid ${rgba(p.amber, 0.4)}`,
             }}
           >
-            <Icon name="shield" size={17} color={p.amber} style={{ marginTop: 1 }} />
-            <span style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+            <Icon name="shield" size={17} color={p.amber} style={{ marginTop: rem(1) }} />
+            <span style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
               <Trans
                 i18nKey="onboarding.lossWarning"
                 components={{ b: <b style={{ color: p.txt }} /> }}
@@ -568,7 +573,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
               size="lg"
               full
               onClick={onDone}
-              style={isMobile ? { minHeight: 48 } : undefined}
+              style={isMobile ? { minHeight: rem(48) } : undefined}
             >
               {t("common.done")}
             </Btn>
@@ -579,8 +584,8 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
                 onChange={setSaved}
                 size={22}
                 label={t("onboarding.kitSaved")}
-                style={{ display: "flex", gap: 11, marginBottom: 16 }}
-                labelStyle={{ fontSize: 13, color: p.txt, fontWeight: 600 }}
+                style={{ display: "flex", gap: rem(11), marginBottom: rem(16) }}
+                labelStyle={{ fontSize: TEXT.base, color: p.txt, fontWeight: 600 }}
               />
           {/* really disabled (not opacity-faked): unfocusable and announced as
               disabled until the "I saved it" checkbox is ticked */}
@@ -592,7 +597,7 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
             disabled={!saved}
             style={{
               ...(saved ? {} : { opacity: 0.5, cursor: "not-allowed" }),
-              ...(isMobile ? { minHeight: 48 } : null),
+              ...(isMobile ? { minHeight: rem(48) } : null),
             }}
             onClick={() => saved && onDone()}
           >
@@ -603,13 +608,13 @@ function EmergencyKit({ secretKey, onDone }: { secretKey: string | null; onDone:
         </>
       ) : (
         <>
-          <p style={{ margin: "0 0 18px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+          <p style={{ margin: `0 0 ${rem(18)}`, fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
             <Trans
               i18nKey="onboarding.alreadyShownNotice"
               components={{ b: <b style={{ color: p.txt }} /> }}
             />
           </p>
-          <Btn size="lg" full onClick={onDone} style={isMobile ? { minHeight: 48 } : undefined}>
+          <Btn size="lg" full onClick={onDone} style={isMobile ? { minHeight: rem(48) } : undefined}>
             {t("onboarding.gotIt")}
           </Btn>
         </>
@@ -695,8 +700,8 @@ function Unlock() {
       <div style={{ textAlign: "center" }}>
         <div
           style={{
-            width: 60,
-            height: 60,
+            width: rem(60),
+            height: rem(60),
             margin: "0 auto 18px",
             borderRadius: 16,
             background: p.bg3,
@@ -708,10 +713,10 @@ function Unlock() {
         >
           <Icon name="lock" size={26} color={p.txt2} stroke={2} />
         </div>
-        <h1 style={{ margin: "0 0 4px", fontSize: 19, fontWeight: 800, letterSpacing: -0.4 }}>
+        <h1 style={{ margin: `0 0 ${rem(4)}`, fontSize: TEXT.h3, fontWeight: 800, letterSpacing: rem(-0.4) }}>
           {t("onboarding.locked")}
         </h1>
-        <p style={{ margin: "0 0 22px", fontSize: 13, color: p.txt2 }}>
+        <p style={{ margin: `0 0 ${rem(22)}`, fontSize: TEXT.base, color: p.txt2 }}>
           {/* Say why, when there is a why worth saying. A vault that closed
               because the user locked the screen or shut the lid is otherwise
               indistinguishable from one that timed out, and the sessions are
@@ -729,7 +734,7 @@ function Unlock() {
           e.preventDefault();
           void unlock();
         }}
-        style={{ display: "flex", flexDirection: "column", gap: 13 }}
+        style={{ display: "flex", flexDirection: "column", gap: rem(13) }}
       >
         {requiresPassword !== false && (
           <Field label={t("onboarding.masterPassword")} labelGap={7}>
@@ -763,20 +768,20 @@ function Unlock() {
         </Field>
         {fromKeychain && (
           <div
-            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: p.green }}
+            style={{ display: "flex", alignItems: "center", gap: rem(6), fontSize: TEXT.small, color: p.green }}
           >
             <Icon name="shieldcheck" size={12} color={p.green} />
             {t("onboarding.loadedFromKeychain")}
           </div>
         )}
-        <div style={{ margin: "5px 0" }}>
+        <div style={{ margin: `${rem(5)} 0` }}>
           <Btn
             size="lg"
             icon={busy ? undefined : "unlock"}
             full
             onClick={unlock}
             disabled={busy}
-            style={isMobile ? { minHeight: 48 } : undefined}
+            style={isMobile ? { minHeight: rem(48) } : undefined}
           >
             {busy ? <Spinner size={16} color={p.accentInk} /> : t("onboarding.unlock")}
           </Btn>
@@ -787,13 +792,13 @@ function Unlock() {
         style={{
           display: "block",
           width: "100%",
-          margin: "2px 0 10px",
+          margin: `${rem(2)} 0 ${rem(10)}`,
           padding: 0,
           background: "none",
           border: "none",
           cursor: "pointer",
           fontFamily: UI,
-          fontSize: 13,
+          fontSize: TEXT.base,
           fontWeight: 600,
           color: p.accentText,
           textAlign: "center",
@@ -806,13 +811,13 @@ function Unlock() {
         style={{
           display: "block",
           width: "100%",
-          margin: "2px 0 14px",
+          margin: `${rem(2)} 0 ${rem(14)}`,
           padding: 0,
           background: "none",
           border: "none",
           cursor: "pointer",
           fontFamily: UI,
-          fontSize: 12,
+          fontSize: TEXT.small,
           color: p.txt3,
           textAlign: "center",
         }}
@@ -825,8 +830,8 @@ function Unlock() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          gap: 6,
-          fontSize: 12,
+          gap: rem(6),
+          fontSize: TEXT.small,
           color: p.txt3,
         }}
       >
@@ -881,11 +886,11 @@ function Repair() {
 
   return (
     <Modal w={460}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), marginBottom: rem(6) }}>
         <span
           style={{
-            width: 38,
-            height: 38,
+            width: rem(38),
+            height: rem(38),
             flexShrink: 0,
             borderRadius: 12,
             background: rgba(p.amber, 0.12),
@@ -897,11 +902,11 @@ function Repair() {
         >
           <Icon name="shield" size={20} color={p.amber} />
         </span>
-        <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800, letterSpacing: -0.4 }}>
+        <h1 style={{ margin: 0, fontSize: TEXT.h3, fontWeight: 800, letterSpacing: rem(-0.4) }}>
           {t("entry.repair.title")}
         </h1>
       </div>
-      <p style={{ margin: "0 0 20px", fontSize: 13, color: p.txt2, lineHeight: 1.55 }}>
+      <p style={{ margin: `0 0 ${rem(20)}`, fontSize: TEXT.base, color: p.txt2, lineHeight: 1.55 }}>
         {t("entry.repair.body")}
       </p>
       <Btn
@@ -911,7 +916,7 @@ function Repair() {
         full
         onClick={reset}
         disabled={busy || confirmShown}
-        style={{ color: p.red, borderColor: rgba(p.red, 0.5), ...(isMobile ? { minHeight: 48 } : null) }}
+        style={{ color: p.red, borderColor: rgba(p.red, 0.5), ...(isMobile ? { minHeight: rem(48) } : null) }}
       >
         {busy ? <Spinner size={16} color={p.red} /> : t("entry.repair.reset")}
       </Btn>
@@ -941,8 +946,8 @@ function Retry() {
       <div style={{ textAlign: "center" }}>
         <div
           style={{
-            width: 60,
-            height: 60,
+            width: rem(60),
+            height: rem(60),
             margin: "0 auto 18px",
             borderRadius: 16,
             background: p.bg3,
@@ -954,10 +959,10 @@ function Retry() {
         >
           <Icon name="refresh" size={26} color={p.txt2} stroke={2} />
         </div>
-        <h1 style={{ margin: "0 0 4px", fontSize: 19, fontWeight: 800, letterSpacing: -0.4 }}>
+        <h1 style={{ margin: `0 0 ${rem(4)}`, fontSize: TEXT.h3, fontWeight: 800, letterSpacing: rem(-0.4) }}>
           {t("entry.retry.title")}
         </h1>
-        <p style={{ margin: "0 0 22px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+        <p style={{ margin: `0 0 ${rem(22)}`, fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
           {t("entry.retry.body")}
         </p>
       </div>
@@ -967,7 +972,7 @@ function Retry() {
         full
         onClick={retry}
         disabled={busy}
-        style={isMobile ? { minHeight: 48 } : undefined}
+        style={isMobile ? { minHeight: rem(48) } : undefined}
       >
         {busy ? <Spinner size={16} color={p.accentInk} /> : t("entry.retry.retry")}
       </Btn>
@@ -1042,13 +1047,13 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
 
   return (
     <Modal w={460}>
-      <div style={{ marginBottom: 18 }}>
+      <div style={{ marginBottom: rem(18) }}>
         <Logo size={24} />
       </div>
-      <h1 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>
+      <h1 style={{ margin: `0 0 ${rem(6)}`, fontSize: TEXT.h2, fontWeight: 800, letterSpacing: rem(-0.5) }}>
         {t("entry.join.title")}
       </h1>
-      <p style={{ margin: "0 0 18px", fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+      <p style={{ margin: `0 0 ${rem(18)}`, fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
         {t("entry.join.desc")}
       </p>
       <textarea
@@ -1060,30 +1065,30 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
         disabled={busy}
         style={{
           width: "100%",
-          minHeight: 128,
+          minHeight: rem(128),
           resize: "vertical",
-          padding: 12,
+          padding: rem(12),
           borderRadius: 12,
           background: p.bg2,
           border: `1px solid ${p.line2}`,
           outline: "none",
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           lineHeight: 1.5,
           color: p.txt,
           boxSizing: "border-box",
         }}
       />
-      <div style={{ marginTop: 15 }}>
+      <div style={{ marginTop: rem(15) }}>
         <div
           style={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            marginBottom: 7,
+            marginBottom: rem(7),
           }}
         >
-          <span style={{ fontSize: 12, fontWeight: 600, color: p.txt2 }}>
+          <span style={{ fontSize: TEXT.small, fontWeight: 600, color: p.txt2 }}>
             {t("onboarding.masterPassword")}{" "}
             <span style={{ color: p.txt3, fontWeight: 500 }}>· {t("onboarding.optional")}</span>
           </span>
@@ -1107,7 +1112,7 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
             />
           </Field>
         ) : (
-          <div style={{ fontSize: 13, color: p.txt2, padding: "6px 2px" }}>
+          <div style={{ fontSize: TEXT.base, color: p.txt2, padding: `${rem(6)} ${rem(2)}` }}>
             {t("onboarding.noPasswordHint")}
           </div>
         )}
@@ -1116,15 +1121,15 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
         style={{
           display: "flex",
           alignItems: "flex-start",
-          gap: 9,
-          margin: "18px 0",
-          padding: "14px 0",
+          gap: rem(9),
+          margin: `${rem(18)} 0`,
+          padding: `${rem(14)} 0`,
           borderTop: `1px solid ${p.line}`,
           borderBottom: `1px solid ${p.line}`,
         }}
       >
-        <Icon name="link" size={17} color={p.txt3} style={{ marginTop: 1 }} />
-        <span style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+        <Icon name="link" size={17} color={p.txt3} style={{ marginTop: rem(1) }} />
+        <span style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
           {busy ? t("entry.join.waiting") : t("entry.join.hint")}
         </span>
       </div>
@@ -1134,7 +1139,7 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
         full
         onClick={join}
         disabled={busy}
-        style={isMobile ? { minHeight: 48 } : undefined}
+        style={isMobile ? { minHeight: rem(48) } : undefined}
       >
         {busy ? <Spinner size={16} color={p.accentInk} /> : t("entry.join.connect")}
       </Btn>
@@ -1144,13 +1149,13 @@ function JoinDevice({ onBack }: { onBack: () => void }) {
         style={{
           display: "block",
           width: "100%",
-          marginTop: 14,
+          marginTop: rem(14),
           padding: 0,
           background: "none",
           border: "none",
           cursor: busy ? "default" : "pointer",
           fontFamily: UI,
-          fontSize: 13,
+          fontSize: TEXT.base,
           color: p.txt3,
           textAlign: "center",
         }}

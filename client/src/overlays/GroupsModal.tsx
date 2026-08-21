@@ -6,7 +6,7 @@
 
 import { useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { UI } from "@/theme/tokens";
+import { rem, TEXT, UI } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
@@ -145,7 +145,7 @@ function GroupsModalBody() {
         justifyContent: "center",
         background: p.name === "dark" ? "rgba(6,7,11,0.6)" : "rgba(40,44,60,0.35)",
         backdropFilter: "blur(3px)",
-        ...(isMobile ? { padding: 12, paddingTop: "calc(env(safe-area-inset-top) + 16px)" } : null),
+        ...(isMobile ? { padding: rem(12), paddingTop: "calc(env(safe-area-inset-top) + 16px)" } : null),
       }}
     >
       <div
@@ -156,7 +156,7 @@ function GroupsModalBody() {
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 560,
+          width: rem(560),
           maxWidth: "92%",
           maxHeight: "88%",
           display: "flex",
@@ -176,15 +176,15 @@ function GroupsModalBody() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 11,
-            padding: "18px 22px",
+            gap: rem(11),
+            padding: `${rem(18)} ${rem(22)}`,
             borderBottom: `1px solid ${p.line}`,
           }}
         >
           <span
             style={{
-              width: 36,
-              height: 36,
+              width: rem(36),
+              height: rem(36),
               borderRadius: 10,
               background: p.bg3,
               border: `1px solid ${p.line}`,
@@ -196,10 +196,10 @@ function GroupsModalBody() {
             <Icon name="folders" size={18} color={p.txt2} />
           </span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.3, color: p.txt }}>
+            <div style={{ fontSize: TEXT.lead, fontWeight: 800, letterSpacing: rem(-0.3), color: p.txt }}>
               {t("groups.title")}
             </div>
-            <div style={{ fontSize: 12, color: p.txt3 }}>
+            <div style={{ fontSize: TEXT.small, color: p.txt3 }}>
               {t("groups.subtitle", {
                 groups: t("count.groups", { count: groups.length }),
               })}
@@ -210,8 +210,8 @@ function GroupsModalBody() {
             title={t("common.close")}
             aria-label={t("common.close")}
             style={{
-              width: isMobile ? 44 : 30,
-              height: isMobile ? 44 : 30,
+              width: isMobile ? rem(44) : rem(30),
+              height: isMobile ? rem(44) : rem(30),
               borderRadius: 8,
               border: `1px solid ${p.line}`,
               background: p.bg2,
@@ -227,7 +227,7 @@ function GroupsModalBody() {
           </button>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "10px 22px 16px" }} className="uh-stagger">
+        <div style={{ flex: 1, overflowY: "auto", padding: `${rem(10)} ${rem(22)} ${rem(16)}` }} className="uh-stagger">
           {groups.map((g, i) => (
             <div
               key={g.groupId}
@@ -235,8 +235,8 @@ function GroupsModalBody() {
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 12,
-                padding: "12px 0",
+                gap: rem(12),
+                padding: `${rem(12)} 0`,
                 borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
                 background: selHost ? p.bg2 : "transparent",
                 animationDelay: i * 40 + "ms",
@@ -245,8 +245,8 @@ function GroupsModalBody() {
             >
               <span
                 style={{
-                  width: 36,
-                  height: 36,
+                  width: rem(36),
+                  height: rem(36),
                   borderRadius: 10,
                   background: p.bg3,
                   border: `1px solid ${p.line}`,
@@ -272,18 +272,18 @@ function GroupsModalBody() {
                       background: p.bg0,
                       border: `1px solid ${p.accentLine}`,
                       borderRadius: 8,
-                      padding: isMobile ? "9px 11px" : "5px 9px",
+                      padding: isMobile ? `${rem(9)} ${rem(11)}` : `${rem(5)} ${rem(9)}`,
                       color: p.txt,
-                      fontSize: 14,
+                      fontSize: TEXT.body,
                       fontWeight: 700,
                       fontFamily: UI,
                       outline: "none",
                     }}
                   />
                 ) : (
-                  <div style={{ fontSize: 14, fontWeight: 700, color: p.txt }}>{g.label}</div>
+                  <div style={{ fontSize: TEXT.body, fontWeight: 700, color: p.txt }}>{g.label}</div>
                 )}
-                <div style={{ fontSize: 12, color: p.txt3, marginTop: 2 }}>
+                <div style={{ fontSize: TEXT.small, color: p.txt3, marginTop: rem(2) }}>
                   {t("count.hosts", { count: memberCount(g) })}
                 </div>
               </div>
@@ -295,8 +295,8 @@ function GroupsModalBody() {
                 title={t("groups.rename")}
                 aria-label={t("groups.rename")}
                 style={{
-                  width: isMobile ? 44 : 30,
-                  height: isMobile ? 44 : 30,
+                  width: isMobile ? rem(44) : rem(30),
+                  height: isMobile ? rem(44) : rem(30),
                   borderRadius: 8,
                   border: `1px solid ${p.line}`,
                   background: p.bg1,
@@ -318,8 +318,8 @@ function GroupsModalBody() {
                 title={t("common.delete")}
                 aria-label={t("common.delete")}
                 style={{
-                  width: isMobile ? 44 : 30,
-                  height: isMobile ? 44 : 30,
+                  width: isMobile ? rem(44) : rem(30),
+                  height: isMobile ? rem(44) : rem(30),
                   borderRadius: 8,
                   border: `1px solid ${p.line}`,
                   background: p.bg1,
@@ -341,18 +341,18 @@ function GroupsModalBody() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: 9,
+              gap: rem(9),
               width: "100%",
-              marginTop: 12,
-              padding: 13,
+              marginTop: rem(12),
+              padding: rem(13),
               borderRadius: 12,
               border: `1px dashed ${p.line2}`,
               background: "transparent",
               color: p.txt2,
               cursor: "pointer",
-              fontSize: 13,
+              fontSize: TEXT.base,
               fontWeight: 600,
-              ...(isMobile ? { minHeight: 44 } : null),
+              ...(isMobile ? { minHeight: rem(44) } : null),
             }}
           >
             <Icon name="plus" size={16} />
@@ -363,17 +363,17 @@ function GroupsModalBody() {
             <>
               <div
                 style={{
-                  fontSize: 11,
+                  fontSize: TEXT.micro,
                   fontWeight: 700,
-                  letterSpacing: 0.6,
+                  letterSpacing: rem(0.6),
                   color: p.txt3,
                   textTransform: "uppercase",
-                  margin: "16px 0 8px",
+                  margin: `${rem(16)} 0 ${rem(8)}`,
                 }}
               >
                 {t("groups.ungroupedHeading")}
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: rem(7) }}>
                 {ungrouped.map((h) => {
                   const on = selHost === h.profileId;
                   return (
@@ -383,12 +383,12 @@ function GroupsModalBody() {
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
-                        gap: 6,
-                        padding: isMobile ? "10px 14px" : "6px 11px",
+                        gap: rem(6),
+                        padding: isMobile ? `${rem(10)} ${rem(14)}` : `${rem(6)} ${rem(11)}`,
                         borderRadius: 20,
                         background: on ? p.bg3 : p.bg2,
                         border: `1px solid ${on ? p.line2 : p.line}`,
-                        fontSize: 13,
+                        fontSize: TEXT.base,
                         fontWeight: on ? 600 : 400,
                         color: p.txt,
                         cursor: "grab",
@@ -403,12 +403,12 @@ function GroupsModalBody() {
               </div>
               <div
                 style={{
-                  fontSize: 12,
+                  fontSize: TEXT.small,
                   color: p.txt3,
-                  marginTop: 8,
+                  marginTop: rem(8),
                   display: "flex",
                   alignItems: "center",
-                  gap: 6,
+                  gap: rem(6),
                 }}
               >
                 <Icon name="alert" size={13} color={p.txt3} />
@@ -427,17 +427,17 @@ function GroupsModalBody() {
             flexDirection: narrow ? "column" : undefined,
             // wrap so the long footer note reflows above "Готово" instead of crowding it
             flexWrap: "wrap",
-            gap: 10,
-            padding: "14px 22px",
+            gap: rem(10),
+            padding: `${rem(14)} ${rem(22)}`,
             borderTop: `1px solid ${p.line}`,
             background: p.bg0,
           }}
         >
-          <span style={{ fontSize: 12, color: p.txt3, minWidth: 0 }}>
+          <span style={{ fontSize: TEXT.small, color: p.txt3, minWidth: 0 }}>
             {t("groups.footerNote")}
           </span>
           {!narrow && <div style={{ flex: 1 }} />}
-          <Btn icon="check" full={narrow} style={isMobile ? { minHeight: 44 } : undefined} onClick={close}>
+          <Btn icon="check" full={narrow} style={isMobile ? { minHeight: rem(44) } : undefined} onClick={close}>
             {t("common.done")}
           </Btn>
         </div>

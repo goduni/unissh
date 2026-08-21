@@ -216,13 +216,16 @@ describe("floors that must not follow the scale", () => {
 });
 
 // ── Migration guard ────────────────────────────────────────────
-// A scan, not a render: the areas already migrated must not quietly grow a new
-// hard-coded pixel type size. The list is explicit and grows as stages land —
-// that keeps the guard's scope legible and keeps it from failing on code nobody
-// has migrated yet.
+// A scan, not a render: the migrated surface must not quietly grow a new
+// hard-coded pixel type size.
 //
-// Deliberately NOT the whole tree: the mobile shell is out of scope by design
-// (phones scale through the OS), so a numeric size there is correct, not debt.
+// Written as an EXCLUSION list rather than an inclusion one, now that every
+// desktop area has landed. While the stages were in flight an explicit list of
+// migrated files was the honest shape — it kept the guard from failing on code
+// nobody had touched yet — but a list of what is DONE stops covering the app the
+// moment someone adds a view and forgets to add it here. A list of what is
+// deliberately out cannot rot that way: a new file is guarded by default, and
+// opting one out means writing down why.
 //
 // `?raw` through Vite rather than node:fs, for the reason spelled out in
 // src/vite-env.d.ts: @types/node would make `process` and `Buffer` typecheck
@@ -233,59 +236,27 @@ const SOURCES = import.meta.glob("../**/*.tsx", {
   eager: true,
 }) as Record<string, string>;
 
-const MIGRATED_AREAS: string[] = [
-  // Shared primitives — these carry most of the app's type on their own.
-  "../components/LogoMark.tsx",
-  "../components/mono.tsx",
-  "../components/primitives.tsx",
-  // Shell and title bar.
-  "../App.tsx",
-  "../components/ContextMenu.tsx",
-  "../components/Modal.tsx",
-  "../components/ReconnectBanner.tsx",
-  "../components/UpdateBanner.tsx",
-  "../shell/Shell.tsx",
-  "../shell/WindowChrome.tsx",
-  // Hosts view and host picker.
-  "../views/ViewHosts.tsx",
-  "../views/sftp/hostpicker.tsx",
-  // Settings.
-  "../overlays/SettingsOverlay.tsx",
-  "../views/ServerVaultsSection.tsx",
-  "../views/SettingsSupport.tsx",
-  "../views/ViewSettings.tsx",
-  // SFTP.
-  "../views/sftp/Breadcrumb.tsx",
-  "../views/sftp/ExternalEdits.tsx",
-  "../views/sftp/FileList.tsx",
-  "../views/sftp/FileRow.tsx",
-  "../views/sftp/PaneSlot.tsx",
-  "../views/sftp/TabStrip.tsx",
-  "../views/sftp/TextEditor.tsx",
-  "../views/sftp/TransferQueue.tsx",
-  "../views/sftp/ViewSftp.tsx",
-  "../views/sftp/dialogs.tsx",
-  "../views/sftp/volumes.tsx",
-  // Terminal CHROME. The grid itself is xterm's, sized by its own zoom — the
-  // boundary is pinned in theme.css, not here.
-  "../views/TermTabStrip.tsx",
-  "../views/TerminalPreview.tsx",
-  "../views/ViewTerminal.tsx",
-];
+/** The phone shell. Out of scope by design — the setting is not offered there and
+ *  phones already scale through the OS — so a pixel size in here is a decision,
+ *  not debt. */
+const NOT_MIGRATED = ["../mobile/MobileApp.tsx"];
+
+const GUARDED = Object.keys(SOURCES)
+  .filter((f) => !NOT_MIGRATED.includes(f))
+  .sort();
 
 describe("migrated areas keep their type sizes scalable", () => {
-  it("names files that exist", () => {
-    // A typo in the list would silently scan nothing and pass forever.
-    for (const rel of MIGRATED_AREAS) expect(Object.keys(SOURCES)).toContain(rel);
+  it("has something to guard, and knows what it is skipping", () => {
+    expect(GUARDED.length).toBeGreaterThan(40);
+    for (const f of NOT_MIGRATED) expect(Object.keys(SOURCES)).toContain(f);
   });
 
-  it.each(MIGRATED_AREAS)("%s has no numeric fontSize", (rel) => {
-    const src = SOURCES[rel];
+  it.each(GUARDED)("%s has no numeric fontSize", (rel) => {
     // The style-object form only. `fontSize={13}` on a primitive, and a
     // `fontSize = 13.5` default parameter, are DESIGN pixels that the primitive
     // itself converts — those are the convention, not the debt.
-    const hits = [...src.matchAll(/fontSize:\s*-?\d/g)].map(
-      (m) => `line ${src.slice(0, m.index).split("\n").length}`,
+    const hits = [...SOURCES[rel].matchAll(/fontSize:\s*-?\d/g)].map(
+      (m) => `line ${SOURCES[rel].slice(0, m.index).split("\n").length}`,
     );
     expect(hits, `${rel}: use TEXT.* or rem(px) instead of a pixel number`).toEqual([]);
   });

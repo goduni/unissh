@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, SPACE, rgba } from "@/theme/tokens";
+import { MONO, rem, rgba, SPACE, TEXT } from "@/theme/tokens";
 import { Icon, Btn, Checkbox, NO_AUTOCORRECT, Spinner } from "@/components/primitives";
 import { pressActivate } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
@@ -125,8 +125,8 @@ const HostTile = React.memo(function HostTile({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 9,
-          padding: "10px 13px",
+          gap: rem(9),
+          padding: `${rem(10)} ${rem(13)}`,
           borderBottom: `1px solid ${p.line}`,
         }}
       >
@@ -139,8 +139,8 @@ const HostTile = React.memo(function HostTile({
         ) : (
           <span
             style={{
-              width: 8,
-              height: 8,
+              width: rem(8),
+              height: rem(8),
               borderRadius: "50%",
               background: bar,
               animation: st === "running" ? "uhPulse 1s ease-in-out infinite" : "none",
@@ -151,7 +151,7 @@ const HostTile = React.memo(function HostTile({
         <span
           style={{
             fontWeight: 700,
-            fontSize: 14,
+            fontSize: TEXT.body,
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -164,7 +164,7 @@ const HostTile = React.memo(function HostTile({
         <span
           style={{
             fontFamily: MONO,
-            fontSize: 11,
+            fontSize: TEXT.micro,
             color: p.txt3,
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -176,15 +176,15 @@ const HostTile = React.memo(function HostTile({
         </span>
         <div style={{ flex: 1 }} />
         {st === "queued" && (
-          <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>{t("fleet.queued")}</span>
+          <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>{t("fleet.queued")}</span>
         )}
         {st === "cancelled" && (
-          <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+          <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
             {t("fleet.cancelled")}
           </span>
         )}
         {st === "running" && (
-          <span style={{ fontFamily: MONO, fontSize: 11, color: p.accentText }}>
+          <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.accentText }}>
             {t("fleet.running")}
           </span>
         )}
@@ -193,9 +193,9 @@ const HostTile = React.memo(function HostTile({
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 5,
+              gap: rem(5),
               fontFamily: MONO,
-              fontSize: 11,
+              fontSize: TEXT.micro,
               color: timedOut ? p.amber : result.exitStatus === 0 ? p.green : p.red,
             }}
           >
@@ -207,11 +207,11 @@ const HostTile = React.memo(function HostTile({
       </div>
       <div
         style={{
-          padding: "11px 13px",
+          padding: `${rem(11)} ${rem(13)}`,
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           lineHeight: 1.7,
-          minHeight: 64,
+          minHeight: rem(64),
           background: p.bg0,
         }}
       >
@@ -232,7 +232,7 @@ const HostTile = React.memo(function HostTile({
               </div>
             ))}
             {mismatch && (
-              <div style={{ marginTop: 8 }}>
+              <div style={{ marginTop: rem(8) }}>
                 <Btn
                   variant="danger"
                   size="sm"
@@ -572,7 +572,7 @@ export function ViewFleet() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
+          gap: rem(10),
           // Wrap so the done-summary group (counts + rerun-failed) drops below the title instead of overflowing.
           flexWrap: "wrap",
           padding: `16px ${gutter}px 12px`,
@@ -585,9 +585,9 @@ export function ViewFleet() {
             // Under the Run tab AND ViewRun's own mode tabs, a 28px h1 is a third
             // header — and in RU ("Массовое выполнение") 238 of 358px of one.
             display: narrow ? "none" : undefined,
-            fontSize: narrow ? 24 : 28,
+            fontSize: narrow ? TEXT.h2 : TEXT.h1,
             fontWeight: 800,
-            letterSpacing: -0.7,
+            letterSpacing: rem(-0.7),
             whiteSpace: "nowrap",
             flexShrink: 0,
           }}
@@ -599,7 +599,7 @@ export function ViewFleet() {
         <span
           style={{
             fontFamily: MONO,
-            fontSize: 12,
+            fontSize: TEXT.small,
             color: p.txt3,
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -614,9 +614,9 @@ export function ViewFleet() {
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 5,
+              gap: rem(5),
               fontFamily: MONO,
-              fontSize: 11,
+              fontSize: TEXT.micro,
               color: p.amber,
               whiteSpace: "nowrap",
             }}
@@ -630,8 +630,8 @@ export function ViewFleet() {
         )}
         <div style={{ flex: 1 }} />
         {phase === "done" && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontFamily: MONO, fontSize: 13 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: rem(10) }}>
+            <span style={{ fontFamily: MONO, fontSize: TEXT.base }}>
               <span style={{ color: p.green }}>{t("fleet.okCount", { count: okCount })}</span> ·{" "}
               <span style={{ color: p.red }}>{t("fleet.failCount", { count: failCount })}</span>
             </span>
@@ -648,7 +648,7 @@ export function ViewFleet() {
           a phone has no hover, and "why didn't these hosts run?" is not a question
           to leave unanswered on a screen that just refused to run them. */}
       {touch && skipped > 0 && (
-        <div style={{ padding: `0 ${gutter}px 10px`, fontSize: 12, color: p.txt3 }}>
+        <div style={{ padding: `0 ${gutter}px 10px`, fontSize: TEXT.small, color: p.txt3 }}>
           {t("fleet.skippedTitle")}
         </div>
       )}
@@ -660,12 +660,12 @@ export function ViewFleet() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 10,
+            gap: rem(10),
             flexWrap: "wrap",
             padding: `0 ${gutter}px 12px`,
           }}
         >
-          <span style={{ fontSize: 13, color: p.txt2, whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: TEXT.base, color: p.txt2, whiteSpace: "nowrap" }}>
             {t("fleet.selectedOfTotal", {
               n: selectedRunnable.length,
               m: runnable.length,
@@ -684,11 +684,11 @@ export function ViewFleet() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
+              gap: rem(8),
               flex: 1,
-              minWidth: 180,
-              height: 34,
-              padding: "0 12px",
+              minWidth: rem(180),
+              height: rem(34),
+              padding: `0 ${rem(12)}`,
               borderRadius: 8,
               background: p.bg1,
               border: `1px solid ${p.line2}`,
@@ -701,7 +701,7 @@ export function ViewFleet() {
               onChange={(e) => setQuery(e.target.value)}
               placeholder={t("fleet.searchPlaceholder")}
               style={{
-                fontSize: 13,
+                fontSize: TEXT.base,
                 color: p.txt,
                 flex: 1,
                 background: "transparent",
@@ -738,18 +738,18 @@ export function ViewFleet() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 12,
+            gap: rem(12),
             // Wrap so the count-labelled Execute isn't clipped below ~500px; minHeight lets a wrapped row grow.
             flexWrap: "wrap",
-            minHeight: 50,
-            padding: "0 16px",
+            minHeight: rem(50),
+            padding: `0 ${rem(16)}`,
             borderRadius: 12,
             background: p.bg1,
             border: `1px solid ${p.line2}`,
             boxShadow: "none",
           }}
         >
-          <span style={{ fontFamily: MONO, fontSize: 18, color: p.accentText, fontWeight: 700 }}>
+          <span style={{ fontFamily: MONO, fontSize: rem(18), color: p.accentText, fontWeight: 700 }}>
             ❯
           </span>
           <input
@@ -771,7 +771,7 @@ export function ViewFleet() {
             placeholder={t("fleet.commandPlaceholder")}
             style={{
               fontFamily: MONO,
-              fontSize: 16,
+              fontSize: TEXT.lead,
               color: p.txt,
               // A real basis, not `flex: 1`. With a 0 basis this input's hypothetical
               // size is 0, so it contributes NOTHING to line-breaking: the row never
@@ -780,7 +780,7 @@ export function ViewFleet() {
               // that types a command onto every host you own. Given a basis it can
               // push the checkbox and Run onto their own line instead of starving.
               flex: "1 1 200px",
-              minWidth: 160,
+              minWidth: rem(160),
               background: "transparent",
               border: "none",
               outline: "none",
@@ -794,8 +794,8 @@ export function ViewFleet() {
             size={touch ? 22 : 16}
             label={t("fleet.stopOnError")}
             title={t("fleet.stopOnErrorTitle")}
-            style={{ gap: 6, whiteSpace: "nowrap" }}
-            labelStyle={{ fontSize: 12, color: p.txt3 }}
+            style={{ gap: rem(6), whiteSpace: "nowrap" }}
+            labelStyle={{ fontSize: TEXT.small, color: p.txt3 }}
           />
           {phase === "running" ? (
             <Btn
@@ -822,7 +822,7 @@ export function ViewFleet() {
           )}
         </div>
         {phase === "idle" && selectedRunnable.length === 0 && runnable.length > 0 && (
-          <div style={{ fontSize: 12, color: p.txt3, padding: "7px 4px 0" }}>
+          <div style={{ fontSize: TEXT.small, color: p.txt3, padding: `${rem(7)} ${rem(4)} 0` }}>
             {t("fleet.selectHostsHint")}
           </div>
         )}
@@ -838,14 +838,14 @@ export function ViewFleet() {
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 14,
+              gap: rem(14),
               color: p.txt3,
             }}
           >
             <span
               style={{
-                width: 56,
-                height: 56,
+                width: rem(56),
+                height: rem(56),
                 borderRadius: 16,
                 background: p.bg2,
                 border: `1px solid ${p.line}`,
@@ -857,10 +857,10 @@ export function ViewFleet() {
               <Icon name="layers" size={26} color={p.txt3} />
             </span>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>
+              <div style={{ fontSize: TEXT.lead, fontWeight: 700, color: p.txt }}>
                 {t("fleet.emptyTitle")}
               </div>
-              <div style={{ fontSize: 13, color: p.txt3, marginTop: 3 }}>
+              <div style={{ fontSize: TEXT.base, color: p.txt3, marginTop: rem(3) }}>
                 {t("fleet.emptyDesc")}
               </div>
             </div>
@@ -876,12 +876,12 @@ export function ViewFleet() {
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 12,
+              gap: rem(12),
               color: p.txt3,
             }}
           >
             <Icon name="lock" size={30} color={p.amber} />
-            <span style={{ fontSize: 14, textAlign: "center", maxWidth: 360 }}>
+            <span style={{ fontSize: TEXT.body, textAlign: "center", maxWidth: rem(360) }}>
               {t("fleet.allRequirePassword")}
             </span>
           </div>
@@ -893,12 +893,12 @@ export function ViewFleet() {
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 10,
+              gap: rem(10),
               color: p.txt3,
             }}
           >
             <Icon name="search" size={26} color={p.txt3} />
-            <span style={{ fontSize: 14, textAlign: "center" }}>{t("fleet.noMatches")}</span>
+            <span style={{ fontSize: TEXT.body, textAlign: "center" }}>{t("fleet.noMatches")}</span>
           </div>
         ) : (
           <div
@@ -906,7 +906,7 @@ export function ViewFleet() {
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-              gap: 14,
+              gap: rem(14),
             }}
           >
             {(phase === "idle" ? visible : (runHosts ?? selectedRunnable)).map((h, i) => (

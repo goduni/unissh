@@ -5,7 +5,7 @@
 // drops it from the list (re-enabling means re-opening via the modal).
 
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Btn, Icon, Toggle, StatusDot } from "@/components/primitives";
 import { HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
@@ -54,15 +54,15 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
       first={first}
       style={{
         flexWrap: narrow ? "wrap" : "nowrap",
-        gap: narrow ? "10px 12px" : 16,
-        padding: "14px 16px",
+        gap: narrow ? `${rem(10)} ${rem(12)}` : rem(16),
+        padding: `${rem(14)} ${rem(16)}`,
         opacity: tun.on ? 1 : 0.7,
       }}
     >
       <span
         style={{
-          width: 36,
-          height: 36,
+          width: rem(36),
+          height: rem(36),
           borderRadius: 10,
           background: p.bg2,
           display: "flex",
@@ -70,7 +70,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
           justifyContent: "center",
           fontFamily: MONO,
           fontWeight: 700,
-          fontSize: 16,
+          fontSize: TEXT.lead,
           color: p.txt2,
           flexShrink: 0,
           ...(narrow ? { order: 0 } : null),
@@ -78,11 +78,11 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
       >
         {m.letter}
       </span>
-      <div style={{ ...(narrow ? { flex: 1, minWidth: 0, order: 1 } : { width: 150, flexShrink: 0 }) }}>
+      <div style={{ ...(narrow ? { flex: 1, minWidth: 0, order: 1 } : { width: rem(150), flexShrink: 0 }) }}>
         {/* Ellipsize a long label so it can't spill into the route column. */}
         <div
           style={{
-            fontSize: 14,
+            fontSize: TEXT.body,
             fontWeight: 700,
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -92,7 +92,7 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
         >
           {tun.label}
         </div>
-        <div style={{ fontSize: 12, color: p.txt3 }}>{tDyn(m.nameKey)}</div>
+        <div style={{ fontSize: TEXT.small, color: p.txt3 }}>{tDyn(m.nameKey)}</div>
       </div>
       <div
         style={{
@@ -100,9 +100,9 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
           display: "flex",
           alignItems: "center",
           flexWrap: narrow ? "wrap" : "nowrap",
-          gap: 10,
+          gap: rem(10),
           fontFamily: MONO,
-          fontSize: 13,
+          fontSize: TEXT.base,
           minWidth: 0,
           ...(narrow ? { order: 4, flexBasis: "100%" } : null),
         }}
@@ -122,10 +122,10 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
           <span
             style={{
               color: p.txt3,
-              fontSize: 12,
+              fontSize: TEXT.small,
               display: "flex",
               alignItems: "center",
-              gap: 4,
+              gap: rem(4),
               whiteSpace: "nowrap",
             }}
           >
@@ -138,11 +138,11 @@ function TunnelRow({ t: tun, first }: { t: ActiveTunnel; first?: boolean }) {
         style={{
           display: "inline-flex",
           justifyContent: "flex-end",
-          fontSize: 12,
+          fontSize: TEXT.small,
           whiteSpace: "nowrap",
           // minWidth (not a hard width) so a longer-language status word grows the
           // column instead of spilling out of it.
-          ...(narrow ? { width: "auto", order: 2, flexShrink: 0 } : { minWidth: 80, flexShrink: 0 }),
+          ...(narrow ? { width: "auto", order: 2, flexShrink: 0 } : { minWidth: rem(80), flexShrink: 0 }),
         }}
       >
         <StatusDot
@@ -195,17 +195,17 @@ export function ViewTunnels() {
           alignItems: "center",
           // Always wrap so the "Новый туннель" action isn't clipped in a narrow window.
           flexWrap: "wrap",
-          rowGap: 8,
-          gap: 10,
-          padding: isMobile ? "16px 16px 12px" : "16px 22px 12px",
+          rowGap: rem(8),
+          gap: rem(10),
+          padding: isMobile ? `${rem(16)} ${rem(16)} ${rem(12)}` : `${rem(16)} ${rem(22)} ${rem(12)}`,
         }}
       >
         <Icon name="branch" size={20} color={p.accentText} />
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>{t("nav.tunnels")}</h1>
+        <h1 style={{ margin: 0, fontSize: TEXT.h1, fontWeight: 800, letterSpacing: rem(-0.7) }}>{t("nav.tunnels")}</h1>
         <span
           style={{
             fontFamily: MONO,
-            fontSize: 12,
+            fontSize: TEXT.small,
             color: p.txt2,
           }}
         >
@@ -225,28 +225,28 @@ export function ViewTunnels() {
         style={{
           flex: 1,
           overflow: "auto",
-          padding: isMobile ? "4px 16px 18px" : "4px 22px 18px",
+          padding: isMobile ? `${rem(4)} ${rem(16)} ${rem(18)}` : `${rem(4)} ${rem(22)} ${rem(18)}`,
           display: "flex",
           flexDirection: "column",
-          gap: 11,
+          gap: rem(11),
         }}
       >
         {tunnels.length === 0 ? (
           <div
             style={{
               flex: 1,
-              minHeight: 240,
+              minHeight: rem(240),
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 12,
+              gap: rem(12),
             }}
           >
             <span
               style={{
-                width: 56,
-                height: 56,
+                width: rem(56),
+                height: rem(56),
                 borderRadius: 16,
                 background: p.bg2,
                 border: `1px solid ${p.line}`,
@@ -258,8 +258,8 @@ export function ViewTunnels() {
               <Icon name="branch" size={26} color={p.txt3} />
             </span>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>{t("tunnels.emptyTitle")}</div>
-              <div style={{ fontSize: 13, color: p.txt3, marginTop: 3 }}>
+              <div style={{ fontSize: TEXT.lead, fontWeight: 700, color: p.txt }}>{t("tunnels.emptyTitle")}</div>
+              <div style={{ fontSize: TEXT.base, color: p.txt3, marginTop: rem(3) }}>
                 {t("tunnels.emptyHint")}
               </div>
             </div>
@@ -278,13 +278,13 @@ export function ViewTunnels() {
         <div
           style={{
             display: "flex",
-            gap: 8,
-            marginTop: 4,
-            padding: 14,
+            gap: rem(8),
+            marginTop: rem(4),
+            padding: rem(14),
             borderRadius: 12,
             border: `1px solid ${p.line}`,
             color: p.txt3,
-            fontSize: 13,
+            fontSize: TEXT.base,
           }}
         >
           <Icon name="alert" size={15} color={p.txt3} style={{ flexShrink: 0 }} />

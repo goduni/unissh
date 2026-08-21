@@ -14,7 +14,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Modal } from "@/components/Modal";
 import { Btn } from "@/components/primitives";
 
@@ -91,7 +91,7 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
       w={420}
       zIndex={500}
       footer={
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
           <Btn variant="ghost" onClick={() => finish(false)} disabled={busy}>
             {t("agentApproval.deny")}
           </Btn>
@@ -101,14 +101,14 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
         </div>
       }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: rem(10), fontSize: TEXT.base }}>
         <div>{t("agentApproval.body", { host: req.host })}</div>
         {req.target ? (
           <div
             style={{
               fontFamily: MONO,
-              fontSize: 12,
-              padding: "8px 10px",
+              fontSize: TEXT.small,
+              padding: `${rem(8)} ${rem(10)}`,
               borderRadius: 8,
               background: p.bg2,
               border: `1px solid ${p.line}`,
@@ -119,7 +119,7 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
         ) : (
           // Not an SSH login — a git signature, say. Saying so is better than
           // showing nothing, because "we could not tell" is itself information.
-          <div style={{ fontSize: 12, color: p.txt3 }}>{t("agentApproval.unknownUse")}</div>
+          <div style={{ fontSize: TEXT.small, color: p.txt3 }}>{t("agentApproval.unknownUse")}</div>
         )}
       </div>
     </Modal>

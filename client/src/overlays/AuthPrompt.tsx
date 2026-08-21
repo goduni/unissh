@@ -16,6 +16,7 @@ import { useTranslation } from "@/i18n";
 import { Modal } from "@/components/Modal";
 import { Btn, Field, Input, NO_AUTOCORRECT } from "@/components/primitives";
 import { useDialogFocus } from "@/components/a11y";
+import { rem, TEXT } from "@/theme/tokens";
 
 interface PromptField {
   prompt: string;
@@ -120,7 +121,7 @@ function PromptDialog({ req, onDone }: { req: PromptRequest; onDone: () => void 
       w={420}
       zIndex={400}
       footer={
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
           <Btn variant="ghost" onClick={() => finish(null)} disabled={busy}>
             {t("common.cancel")}
           </Btn>
@@ -130,11 +131,11 @@ function PromptDialog({ req, onDone }: { req: PromptRequest; onDone: () => void 
         </div>
       }
     >
-      <div ref={ref} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div ref={ref} style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
         {/* Server text, shown verbatim: it is how a server says which factor it
             wants, and paraphrasing would hide that. */}
         {(req.name || req.instruction) && (
-          <div style={{ fontSize: 13, opacity: 0.8, whiteSpace: "pre-wrap" }}>
+          <div style={{ fontSize: TEXT.base, opacity: 0.8, whiteSpace: "pre-wrap" }}>
             {[req.name, req.instruction].filter(Boolean).join("\n")}
           </div>
         )}

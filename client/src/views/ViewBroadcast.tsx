@@ -16,7 +16,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Btn, Icon, NO_AUTOCORRECT, StatusDot } from "@/components/primitives";
 import { useApp, type PendingMismatch } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
@@ -93,8 +93,8 @@ const HostTile = memo(function HostTile({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 8,
-          padding: "8px 12px",
+          gap: rem(8),
+          padding: `${rem(8)} ${rem(12)}`,
           borderBottom: `1px solid ${p.line}`,
         }}
       >
@@ -102,7 +102,7 @@ const HostTile = memo(function HostTile({
         <span
           style={{
             fontFamily: MONO,
-            fontSize: 13,
+            fontSize: TEXT.base,
             fontWeight: 600,
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -113,18 +113,18 @@ const HostTile = memo(function HostTile({
           {host.profile.label}
         </span>
         <div style={{ flex: 1 }} />
-        <span style={{ fontFamily: MONO, fontSize: 11, color: off ? p.txt3 : p.green }}>
+        <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: off ? p.txt3 : p.green }}>
           {off ? t("broadcast.offline") : t("broadcast.mirrored")}
         </span>
       </div>
       <div
         style={{
           flex: 1,
-          padding: "11px 13px",
+          padding: `${rem(11)} ${rem(13)}`,
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           lineHeight: 1.7,
-          minHeight: 118,
+          minHeight: rem(118),
           whiteSpace: "pre-wrap",
           wordBreak: "break-all",
         }}
@@ -133,7 +133,7 @@ const HostTile = memo(function HostTile({
           <div style={{ color: p.red }}>
             ssh: {host.status.error || t("broadcast.connectionRefused")}
             {mismatch && (
-              <div style={{ marginTop: 8 }}>
+              <div style={{ marginTop: rem(8) }}>
                 <Btn
                   variant="danger"
                   size="sm"
@@ -458,8 +458,8 @@ export function ViewBroadcast() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          padding: isMobile ? "16px 14px 12px" : "16px 22px 12px",
+          gap: rem(10),
+          padding: isMobile ? `${rem(16)} ${rem(14)} ${rem(12)}` : `${rem(16)} ${rem(22)} ${rem(12)}`,
           // Always wrap so Connect drops to a second row instead of clipping below ~640px.
           flexWrap: "wrap",
         }}
@@ -468,9 +468,9 @@ export function ViewBroadcast() {
         <h1
           style={{
             margin: 0,
-            fontSize: 28,
+            fontSize: TEXT.h1,
             fontWeight: 800,
-            letterSpacing: -0.7,
+            letterSpacing: rem(-0.7),
             whiteSpace: "nowrap",
             flexShrink: 0,
           }}
@@ -480,7 +480,7 @@ export function ViewBroadcast() {
         <span
           style={{
             fontFamily: MONO,
-            fontSize: 12,
+            fontSize: TEXT.small,
             color: p.txt2,
             whiteSpace: "nowrap",
             // Shrink+ellipsize the status so the selection chip and Connect stay reachable.
@@ -499,14 +499,14 @@ export function ViewBroadcast() {
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 7,
+              gap: rem(7),
               fontFamily: MONO,
-              fontSize: 12,
+              fontSize: TEXT.small,
               color: p.txt,
               background: "transparent",
               border: `1px solid ${p.line}`,
               borderRadius: 20,
-              padding: "2px 6px 2px 9px",
+              padding: `${rem(2)} ${rem(6)} ${rem(2)} ${rem(9)}`,
               whiteSpace: "nowrap",
             }}
           >
@@ -516,8 +516,8 @@ export function ViewBroadcast() {
               aria-label={t("broadcast.scopeClear")}
               onClick={() => setFleetSelection([])}
               style={{
-                width: 16,
-                height: 16,
+                width: rem(16),
+                height: rem(16),
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -544,7 +544,7 @@ export function ViewBroadcast() {
           // is actually surfaced.
           <span
             style={{
-              fontSize: 12,
+              fontSize: TEXT.small,
               color: p.txt3,
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -562,7 +562,7 @@ export function ViewBroadcast() {
         )}
       </div>
 
-      <div style={{ flex: 1, overflow: "auto", padding: isMobile ? "0 14px 14px" : "0 22px 14px" }}>
+      <div style={{ flex: 1, overflow: "auto", padding: isMobile ? `0 ${rem(14)} ${rem(14)}` : `0 ${rem(22)} ${rem(14)}` }}>
         {bcId && opened.length > 0 ? (
           <div
             style={{
@@ -570,7 +570,7 @@ export function ViewBroadcast() {
               gridTemplateColumns: isMobile
                 ? "repeat(auto-fill, minmax(150px, 1fr))"
                 : "repeat(auto-fill, minmax(240px, 1fr))",
-              gap: 12,
+              gap: rem(12),
             }}
           >
             {opened.map((h) => (
@@ -585,18 +585,18 @@ export function ViewBroadcast() {
         ) : (
           <div
             style={{
-              minHeight: 280,
+              minHeight: rem(280),
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 12,
+              gap: rem(12),
             }}
           >
             <span
               style={{
-                width: 56,
-                height: 56,
+                width: rem(56),
+                height: rem(56),
                 borderRadius: 16,
                 background: p.bg2,
                 border: `1px solid ${p.line}`,
@@ -608,8 +608,8 @@ export function ViewBroadcast() {
               <Icon name="radio" size={26} color={p.txt3} />
             </span>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>{t("broadcast.notStarted")}</div>
-              <div style={{ fontSize: 13, color: p.txt3, marginTop: 3 }}>
+              <div style={{ fontSize: TEXT.lead, fontWeight: 700, color: p.txt }}>{t("broadcast.notStarted")}</div>
+              <div style={{ fontSize: TEXT.base, color: p.txt3, marginTop: rem(3) }}>
                 {t("broadcast.notStartedHint")}
               </div>
             </div>
@@ -621,15 +621,15 @@ export function ViewBroadcast() {
       </div>
 
       {/* synchronized input */}
-      <div style={{ padding: isMobile ? "12px 14px 18px" : "12px 22px 18px", borderTop: `1px solid ${p.line}`, background: p.bg1 }}>
+      <div style={{ padding: isMobile ? `${rem(12)} ${rem(14)} ${rem(18)}` : `${rem(12)} ${rem(22)} ${rem(18)}`, borderTop: `1px solid ${p.line}`, background: p.bg1 }}>
         <div
           style={{
             display: "flex",
             flexDirection: narrow ? "column" : "row",
             alignItems: narrow ? "stretch" : "center",
-            gap: 12,
-            height: narrow ? undefined : 50,
-            padding: isMobile ? "12px 14px" : "0 16px",
+            gap: rem(12),
+            height: narrow ? undefined : rem(50),
+            padding: isMobile ? `${rem(12)} ${rem(14)}` : `0 ${rem(16)}`,
             borderRadius: 12,
             background: p.bg0,
             border: `1px solid ${p.line2}`,
@@ -640,7 +640,7 @@ export function ViewBroadcast() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 12,
+              gap: rem(12),
               alignSelf: narrow ? "stretch" : undefined,
               flex: narrow ? undefined : 1,
             }}
@@ -666,7 +666,7 @@ export function ViewBroadcast() {
                 border: "none",
                 outline: "none",
                 fontFamily: MONO,
-                fontSize: 16,
+                fontSize: TEXT.lead,
                 color: p.txt,
                 caretColor: "transparent",
               }}
@@ -677,7 +677,7 @@ export function ViewBroadcast() {
                   position: "absolute",
                   pointerEvents: "none",
                   fontFamily: MONO,
-                  fontSize: 16,
+                  fontSize: TEXT.lead,
                   color: p.accentText,
                   opacity: caret ? 1 : 0,
                   left: `calc(${typed.length}ch)`,
@@ -689,7 +689,7 @@ export function ViewBroadcast() {
           </div>
           </div>
           {!narrow && (
-            <span style={{ fontFamily: MONO, fontSize: 12, color: p.txt3 }}>
+            <span style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.txt3 }}>
               Enter → {t("broadcast.toAllHosts")}
             </span>
           )}
@@ -699,7 +699,7 @@ export function ViewBroadcast() {
             full={narrow}
             onClick={() => void send()}
             disabled={!bcId || liveCount === 0}
-            style={isMobile ? { minHeight: 44 } : undefined}
+            style={isMobile ? { minHeight: rem(44) } : undefined}
           >
             {t("broadcast.send")}
           </Btn>
@@ -708,9 +708,9 @@ export function ViewBroadcast() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            marginTop: 9,
-            fontSize: 12,
+            gap: rem(8),
+            marginTop: rem(9),
+            fontSize: TEXT.small,
             color: p.txt3,
           }}
         >

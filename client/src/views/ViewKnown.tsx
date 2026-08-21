@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rgba } from "@/theme/tokens";
+import { MONO, rem, rgba, TEXT } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
 import { useApp, type PendingMismatch } from "@/store/app";
 import { toast } from "@/store/toast";
@@ -134,19 +134,19 @@ export function ViewKnown() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          padding: isMobile ? "16px 16px 12px" : "16px 22px 12px",
+          gap: rem(10),
+          padding: isMobile ? `${rem(16)} ${rem(16)} ${rem(12)}` : `${rem(16)} ${rem(22)} ${rem(12)}`,
           flexWrap: isMobile ? "wrap" : "nowrap",
         }}
       >
         <Icon name="shieldcheck" size={20} color={p.accentText} />
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, letterSpacing: -0.7 }}>
+        <h1 style={{ margin: 0, fontSize: TEXT.h1, fontWeight: 800, letterSpacing: rem(-0.7) }}>
           {t("nav.known")}
         </h1>
         <span
           style={{
             fontFamily: MONO,
-            fontSize: 12,
+            fontSize: TEXT.small,
             color: p.txt3,
           }}
         >
@@ -162,15 +162,15 @@ export function ViewKnown() {
         style={{
           flex: 1,
           overflow: "auto",
-          padding: isMobile ? "4px 16px 18px" : "4px 22px 18px",
+          padding: isMobile ? `${rem(4)} ${rem(16)} ${rem(18)}` : `${rem(4)} ${rem(22)} ${rem(18)}`,
         }}
       >
-        <div style={{ minWidth: isMobile ? 0 : 680 }}>
+        <div style={{ minWidth: isMobile ? 0 : rem(680) }}>
           {/* mismatch banner — only when a live connect surfaced a key change */}
           {pendingMismatch && (
             <div
               style={{
-                marginBottom: 16,
+                marginBottom: rem(16),
                 borderRadius: 16,
                 overflow: "hidden",
                 border: `1px solid ${rgba(p.red, 0.5)}`,
@@ -181,15 +181,15 @@ export function ViewKnown() {
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 11,
-                  padding: "13px 16px",
+                  gap: rem(11),
+                  padding: `${rem(13)} ${rem(16)}`,
                   borderBottom: `1px solid ${rgba(p.red, 0.3)}`,
                 }}
               >
                 <span
                   style={{
-                    width: 34,
-                    height: 34,
+                    width: rem(34),
+                    height: rem(34),
                     borderRadius: 10,
                     background: rgba(p.red, 0.18),
                     border: `1px solid ${rgba(p.red, 0.5)}`,
@@ -202,10 +202,10 @@ export function ViewKnown() {
                   <Icon name="alert" size={18} color={p.red} />
                 </span>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: p.red }}>
+                  <div style={{ fontSize: TEXT.body, fontWeight: 800, color: p.red }}>
                     ⚠ {t("known.mismatchTitle")}
                   </div>
-                  <div style={{ fontSize: 13, color: p.txt2 }}>
+                  <div style={{ fontSize: TEXT.base, color: p.txt2 }}>
                     <Trans
                       i18nKey="known.mismatchBody"
                       values={{ host: pendingMismatch.host }}
@@ -216,21 +216,21 @@ export function ViewKnown() {
               </div>
               <div
                 style={{
-                  padding: "13px 16px",
+                  padding: `${rem(13)} ${rem(16)}`,
                   display: "flex",
                   flexDirection: isMobile ? "column" : "row",
                   alignItems: isMobile ? "stretch" : "center",
-                  gap: isMobile ? 12 : 20,
+                  gap: isMobile ? rem(12) : rem(20),
                 }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 11, color: p.txt3, marginBottom: 3 }}>
+                  <div style={{ fontSize: TEXT.micro, color: p.txt3, marginBottom: rem(3) }}>
                     {t("known.stored")}
                   </div>
                   <div
                     style={{
                       fontFamily: MONO,
-                      fontSize: 12,
+                      fontSize: TEXT.small,
                       color: p.txt2,
                       // Break fingerprint on desktop too: full SHA256 overflows its ~200px column.
                       wordBreak: "break-all",
@@ -248,13 +248,13 @@ export function ViewKnown() {
                   style={isMobile ? { transform: "rotate(90deg)" } : undefined}
                 />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 11, color: p.txt3, marginBottom: 3 }}>
+                  <div style={{ fontSize: TEXT.micro, color: p.txt3, marginBottom: rem(3) }}>
                     {t("known.presentedNow")}
                   </div>
                   <div
                     style={{
                       fontFamily: MONO,
-                      fontSize: 12,
+                      fontSize: TEXT.small,
                       color: p.red,
                       // Break fingerprint on desktop too: full SHA256 overflows its ~200px column.
                       wordBreak: "break-all",
@@ -266,7 +266,7 @@ export function ViewKnown() {
                 <div
                   style={{
                     display: "flex",
-                    gap: 8,
+                    gap: rem(8),
                     ...(isMobile ? { width: "100%" } : null),
                   }}
                 >
@@ -274,7 +274,7 @@ export function ViewKnown() {
                     variant="ghost"
                     size="sm"
                     onClick={reject}
-                    style={isMobile ? { flex: 1, minHeight: 40 } : undefined}
+                    style={isMobile ? { flex: 1, minHeight: rem(40) } : undefined}
                   >
                     {t("known.reject")}
                   </Btn>
@@ -282,7 +282,7 @@ export function ViewKnown() {
                     variant="danger"
                     size="sm"
                     icon="refresh"
-                    style={isMobile ? { flex: 1, minHeight: 40 } : undefined}
+                    style={isMobile ? { flex: 1, minHeight: rem(40) } : undefined}
                     onClick={accept}
                   >
                     {t("known.acceptNew")}
@@ -299,18 +299,18 @@ export function ViewKnown() {
                 borderRadius: 12,
                 border: `1px solid ${p.line}`,
                 background: p.bg1,
-                padding: "48px 22px",
+                padding: `${rem(48)} ${rem(22)}`,
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
-                gap: 10,
+                gap: rem(10),
                 textAlign: "center",
               }}
             >
               <span
                 style={{
-                  width: 52,
-                  height: 52,
+                  width: rem(52),
+                  height: rem(52),
                   borderRadius: 16,
                   background: p.bg2,
                   border: `1px solid ${p.line}`,
@@ -321,8 +321,8 @@ export function ViewKnown() {
               >
                 <Icon name="fingerprint" size={24} color={p.txt3} />
               </span>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>{t("known.emptyTitle")}</div>
-              <div style={{ fontSize: 13, color: p.txt2, maxWidth: 360 }}>
+              <div style={{ fontSize: TEXT.lead, fontWeight: 700 }}>{t("known.emptyTitle")}</div>
+              <div style={{ fontSize: TEXT.base, color: p.txt2, maxWidth: rem(360) }}>
                 {t("known.emptyBody")}
               </div>
             </div>
@@ -340,10 +340,10 @@ export function ViewKnown() {
                   style={{
                     display: "grid",
                     gridTemplateColumns: GRID,
-                    padding: "9px 16px",
+                    padding: `${rem(9)} ${rem(16)}`,
                     fontFamily: MONO,
-                    fontSize: 11,
-                    letterSpacing: 0.8,
+                    fontSize: TEXT.micro,
+                    letterSpacing: rem(0.8),
                     color: p.txt3,
                     textTransform: "uppercase",
                     borderBottom: `1px solid ${p.line}`,
@@ -368,8 +368,8 @@ export function ViewKnown() {
                       style={{
                         display: "flex",
                         flexDirection: "column",
-                        gap: 6,
-                        padding: "12px 14px",
+                        gap: rem(6),
+                        padding: `${rem(12)} ${rem(14)}`,
                         borderBottom: lastRow ? "none" : `1px solid ${p.line}`,
                         background: "transparent",
                       }}
@@ -378,8 +378,8 @@ export function ViewKnown() {
                         style={{
                           display: "flex",
                           alignItems: "center",
-                          gap: 8,
-                          fontSize: 14,
+                          gap: rem(8),
+                          fontSize: TEXT.body,
                           fontWeight: 600,
                           minWidth: 0,
                         }}
@@ -398,7 +398,7 @@ export function ViewKnown() {
                       <div
                         style={{
                           fontFamily: MONO,
-                          fontSize: 12,
+                          fontSize: TEXT.small,
                           color: p.txt2,
                           overflow: "hidden",
                           textOverflow: "ellipsis",
@@ -408,15 +408,15 @@ export function ViewKnown() {
                       >
                         {k.fingerprint}
                       </div>
-                      <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+                      <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
                         {algo} · {fmtDate(k.addedAt)}
                       </div>
                       <button
                         title={t("known.forget")}
                         onClick={() => forget(k)}
                         style={{
-                          marginTop: 2,
-                          minHeight: 40,
+                          marginTop: rem(2),
+                          minHeight: rem(40),
                           width: "100%",
                           borderRadius: 8,
                           border: `1px solid ${p.line}`,
@@ -426,8 +426,8 @@ export function ViewKnown() {
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
-                          gap: 8,
-                          fontSize: 13,
+                          gap: rem(8),
+                          fontSize: TEXT.base,
                           fontWeight: 600,
                         }}
                       >
@@ -444,7 +444,7 @@ export function ViewKnown() {
                       display: "grid",
                       gridTemplateColumns: GRID,
                       alignItems: "center",
-                      padding: "11px 16px",
+                      padding: `${rem(11)} ${rem(16)}`,
                       borderBottom: lastRow ? "none" : `1px solid ${p.line}`,
                       background: "transparent",
                     }}
@@ -453,8 +453,8 @@ export function ViewKnown() {
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        gap: 8,
-                        fontSize: 13,
+                        gap: rem(8),
+                        fontSize: TEXT.base,
                         fontWeight: 600,
                         // Ellipsize long host:port instead of forcing horizontal scroll.
                         overflow: "hidden",
@@ -469,7 +469,7 @@ export function ViewKnown() {
                     <span
                       style={{
                         fontFamily: MONO,
-                        fontSize: 12,
+                        fontSize: TEXT.small,
                         color: p.txt3,
                         // Ellipsize long algo names in the fixed 130px track.
                         overflow: "hidden",
@@ -483,7 +483,7 @@ export function ViewKnown() {
                     <span
                       style={{
                         fontFamily: MONO,
-                        fontSize: 12,
+                        fontSize: TEXT.small,
                         color: p.txt2,
                         whiteSpace: "nowrap",
                         overflow: "hidden",
@@ -493,15 +493,15 @@ export function ViewKnown() {
                     >
                       {k.fingerprint}
                     </span>
-                    <span style={{ fontSize: 12, color: p.txt3 }}>{fmtDate(k.addedAt)}</span>
-                    <span style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                    <span style={{ fontSize: TEXT.small, color: p.txt3 }}>{fmtDate(k.addedAt)}</span>
+                    <span style={{ display: "flex", justifyContent: "flex-end", gap: rem(6) }}>
                       <button
                         title={t("known.forget")}
                         aria-label={t("known.forget")}
                         onClick={() => forget(k)}
                         style={{
-                          width: 26,
-                          height: 26,
+                          width: rem(26),
+                          height: rem(26),
                           borderRadius: 8,
                           border: `1px solid ${p.line}`,
                           background: p.bg2,

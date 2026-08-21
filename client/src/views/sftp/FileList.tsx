@@ -151,7 +151,10 @@ export function FileList({
         fontSize: TEXT.micro,
         fontWeight: 600,
         color: sort.key === k ? p.txt2 : p.txt3,
-        width: w,
+        // Design pixels — these have to stay equal to the matching column widths
+        // in FileRow, which are `rem`. In CSS pixels the header would drift left
+        // of its own column at every scale but 100 %.
+        width: w ? rem(w) : undefined,
         textAlign: align ?? "left",
         flex: w ? undefined : 1,
       }}
