@@ -443,6 +443,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const factor = await getCurrentWindow().scaleFactor();
         if (cancelled) return;
+        // Asked AGAIN, after the awaits. The guard above ran before a dynamic
+        // import and an IPC round trip, and "detection never overrides an
+        // explicit choice" has to hold across that gap too — otherwise a user
+        // quick enough to pick a scale while the window was still answering
+        // would watch their choice get overwritten by the display.
+        if (lsUiScale() !== null) return;
         setUiScaleState(detectUiScale(factor, window.devicePixelRatio));
       } catch {
         /* no window to ask (browser preview), or the platform declined — 100 % */
