@@ -176,6 +176,21 @@ targets the site address with no port, so browse the HTTPS port directly.
 > Moving **only** `UNISSH_HTTPS_PORT` is safe for ACME — HTTP-01 still runs on
 > 80. (TLS-ALPN-01, which would need 443, simply stops being an option.)
 
+The nginx form of the second case, on the server that holds `:80`:
+
+```nginx
+location /.well-known/acme-challenge/ {
+    proxy_pass http://127.0.0.1:8080;   # your UNISSH_HTTP_PORT
+    proxy_set_header Host $host;
+}
+```
+
+The `Host` line is load-bearing. Drop it and the request reaches Caddy as
+`Host: 127.0.0.1:8080`, which matches no site it serves, so it answers the
+challenge with a redirect elsewhere and validation fails — with a connection
+error that says nothing about the header. Both outcomes were reproduced against
+a local ACME server before this was written.
+
 If the reason 443 is busy is that **you already run a proxy there**, these
 variables are the wrong tool: use `compose.behind-proxy.yml` and let that proxy
 terminate TLS in front of the stack — see *Other front doors* just below.
