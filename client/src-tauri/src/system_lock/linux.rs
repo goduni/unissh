@@ -12,6 +12,15 @@
 //! the grace module's "a lock is already owed" state — that is what makes the
 //! doubling harmless, and it is why this file does not try to pick a winner.
 //!
+//! Sleep needs one more thing than a subscription. `PrepareForSleep(true)` is
+//! not a warning, it is a starting gun: logind emits it only *after* every
+//! delay inhibitor has been released, and then suspends. Merely hearing it and
+//! posting an event at a webview that is about to lose its CPU would let the
+//! machine go down with the keys still in memory — the exact thing this feature
+//! exists to prevent. So we hold a `delay` inhibitor of our own, and let go of
+//! it only once the front end confirms the vault is shut (or the bounded wait
+//! runs out). The inhibitor is retaken on resume, ready for the next one.
+//!
 //! Two threads, one per bus, each blocking on its own message stream. Any
 //! failure — no D-Bus at all, no logind, no session bus — logs once and ends
 //! that thread; the app then behaves exactly as it did before this feature.
@@ -19,10 +28,10 @@
 use tauri::AppHandle;
 use zbus::blocking::{fdo::DBusProxy, Connection, MessageIterator};
 use zbus::message::Type;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::zvariant::{OwnedFd, OwnedObjectPath};
 use zbus::MatchRule;
 
-use super::{emit, SystemLockSignal};
+use super::{emit, emit_suspend_and_wait, SystemLockSignal};
 
 const LOGIND: &str = "org.freedesktop.login1";
 const LOGIND_MANAGER: &str = "org.freedesktop.login1.Manager";
@@ -77,6 +86,17 @@ fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
             .build(),
     )?;
 
+    // Held from now until the machine actually goes down, then retaken on the
+    // way back up. A failure here is not fatal: we still hear the signal and
+    // still ask for a lock, we just cannot promise it finishes first.
+    let mut inhibitor = match take_sleep_inhibitor(&bus) {
+        Ok(fd) => Some(fd),
+        Err(e) => {
+            log::info!("system-lock-logind: sleep will not wait for the lock ({e})");
+            None
+        }
+    };
+
     // Scope the lock signals to THIS session. Without the path filter we would
     // also hear another logged-in user's screen lock, which is none of our
     // business and would zeroize a vault whose owner never left.
@@ -97,6 +117,9 @@ fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
         Err(e) => log::info!("system-lock-logind: no session object ({e})"),
     }
 
+    // The iterator takes the connection; keep a handle for retaking the
+    // inhibitor on resume (`Connection` is a cheap clone of a shared socket).
+    let retake = bus.clone();
     for msg in MessageIterator::from(bus) {
         let msg = msg?;
         let header = msg.header();
@@ -105,11 +128,16 @@ fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
         };
         match member.as_str() {
             "PrepareForSleep" => {
-                // `true` = going down, `false` = coming back. Only the first is
-                // a reason to lock; a resume finds the vault already locked and
-                // has nothing to say.
+                // `true` = going down, `false` = coming back.
                 if msg.body().deserialize::<bool>().unwrap_or(false) {
-                    emit(app, SystemLockSignal::Suspend);
+                    emit_suspend_and_wait(app);
+                    // Only now: dropping the descriptor is what tells logind we
+                    // are finished and the machine may sleep.
+                    drop(inhibitor.take());
+                } else {
+                    // Back from sleep, and the vault is already locked — nothing
+                    // to announce. Just re-arm for the next time.
+                    inhibitor = take_sleep_inhibitor(&retake).ok();
                 }
             }
             "Lock" => emit(app, SystemLockSignal::ScreenLock),
@@ -118,6 +146,30 @@ fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Take a `delay` inhibitor on sleep. Holding the returned descriptor is what
+/// keeps logind waiting; dropping it says "go ahead".
+///
+/// `delay`, not `block`: we are asking for a moment to finish something, not
+/// claiming the right to refuse. logind caps that moment at `InhibitDelayMaxSec`
+/// (5s by default) and suspends regardless once it passes, which is the correct
+/// outcome — a hung webview must not be able to stop a laptop from sleeping.
+fn take_sleep_inhibitor(bus: &Connection) -> zbus::Result<OwnedFd> {
+    bus.call_method(
+        Some(LOGIND),
+        "/org/freedesktop/login1",
+        Some(LOGIND_MANAGER),
+        "Inhibit",
+        &(
+            "sleep",
+            "UniSSH",
+            "Locking the vault before the machine sleeps",
+            "delay",
+        ),
+    )?
+    .body()
+    .deserialize()
 }
 
 /// Our logind session object path, resolved from this process's PID.

@@ -15,6 +15,11 @@
 //! documentation promises every app; where both arrive, the second is swallowed
 //! by the grace module's "a lock is already owed" state.
 //!
+//! The suspend half holds the message open until the vault is actually shut
+//! (see the window proc): the broadcast is the only warning there is, and
+//! returning from it immediately means the machine may sleep with the keys
+//! still in memory.
+//!
 //! Win+L, the lock screen after a screensaver and a fast-user-switch away all
 //! surface as `WTS_SESSION_LOCK` for this session, which is exactly the set we
 //! want: each one means the desk is empty.
@@ -36,7 +41,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 
-use super::{emit, SystemLockSignal};
+use super::{emit, emit_suspend_and_wait, SystemLockSignal};
 
 /// The window proc is a bare `extern "system" fn` with nowhere to put a captured
 /// handle, and there is exactly one app to notify, so it reads it from here.
@@ -123,8 +128,14 @@ unsafe extern "system" fn wnd_proc(
             },
             // Only the "we are going down" event matters. A resume finds the
             // vault already locked and has nothing to add.
+            //
+            // This blocks until the front end confirms the vault is shut, which
+            // is safe precisely because this window proc runs on the listener's
+            // OWN thread: the UI thread stays free to service the webview that
+            // has to do the locking. Doing the same on Tauri's window would
+            // deadlock — it would be waiting on the thread it is blocking.
             WM_POWERBROADCAST if wparam as u32 == PBT_APMSUSPEND => {
-                emit(app, SystemLockSignal::Suspend);
+                emit_suspend_and_wait(app);
             }
             _ => {}
         }

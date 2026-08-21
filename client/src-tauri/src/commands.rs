@@ -200,6 +200,25 @@ pub fn tiling_session() -> bool {
     .any(|wm| desktop.split(':').any(|part| part.trim() == *wm))
 }
 
+/// The front end reporting that it has finished handling a `system-lock` suspend
+/// signal — locked, or decided not to.
+///
+/// This is what lets the machine actually go to sleep: the Linux listener is
+/// holding a logind delay inhibitor and the Windows one is sitting in its window
+/// proc, and both release on this. It must therefore be called for EVERY suspend
+/// signal, including one the user's settings say to ignore, or a suspend waits
+/// out the full timeout for nothing.
+///
+/// `token` is the one the `system-lock` event carried. Answers naming a suspend
+/// that is already over are dropped rather than released onto the current one.
+#[tauri::command]
+pub fn system_lock_ack(token: u64) {
+    #[cfg(desktop)]
+    crate::system_lock::ack(token);
+    #[cfg(not(desktop))]
+    let _ = token;
+}
+
 /// Absolute path to the per-OS application log directory (where the rotating log
 /// file lives). Shown in Settings so the user can find their logs.
 #[tauri::command]

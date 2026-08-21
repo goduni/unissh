@@ -12,20 +12,31 @@
 //! The distributed observers are registered with an explicit suspension
 //! behaviour of `DeliverImmediately`, and that is the whole reason this file
 //! defines an Objective-C class instead of taking the tidier block-based
-//! observer API — only the selector-based call accepts the behaviour. It
-//! matters here more than anywhere else it could: an AppKit application's
-//! distributed centre is suspended while the app is not active, and under the
-//! default `Coalesce` a suspended centre *holds* the notification until the app
-//! comes forward again. Our app is by definition not the front app when the
-//! screen locks, so the default would deliver "the screen locked" at the exact
-//! moment the user is already back — the one moment it is worthless.
+//! observer API — only the selector-based call accepts the behaviour. A
+//! distributed centre can be suspended, and the default `Coalesce` behaviour
+//! *holds* notifications while it is, delivering them when it resumes. Every
+//! notification this file cares about arrives while the app is in the
+//! background by definition, so that is the one delivery mode that would be
+//! useless: "the screen locked" is worth nothing if it arrives when the user is
+//! already back. Asking for immediate delivery costs nothing and removes the
+//! question of when, exactly, AppKit decides to suspend the centre.
 //!
 //! Notification centres do not retain selector-based observers, so the observer
 //! is deliberately leaked: it must outlive every notification, which is to say
 //! the process.
+//!
+//! **Sleep here is best-effort, unlike the other two desktops.** Linux holds a
+//! logind delay inhibitor and Windows blocks its own message loop, so both wait
+//! for the front end to confirm the vault is shut. Neither trick is available
+//! on macOS: the will-sleep notification is delivered on the main thread, and
+//! blocking there would starve the very webview that has to do the locking. In
+//! practice the machine takes long enough to go down that the lock lands, but
+//! it is not a guarantee, and `IORegisterForSystemPower` (whose callback can be
+//! taken on a thread of our own, with `IOAllowPowerChange` deferred) is the
+//! documented way to make it one if a device test shows it is needed.
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, NSObject};
+use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass};
 use objc2_app_kit::{NSWorkspace, NSWorkspaceWillSleepNotification};
 use objc2_foundation::{
@@ -64,6 +75,10 @@ define_class!(
             emit(&self.ivars().app, SystemLockSignal::Suspend);
         }
     }
+
+    // For `respondsToSelector:` in `start` — the guard that keeps a missing
+    // method from becoming an exception raised inside a notification.
+    unsafe impl NSObjectProtocol for LockObserver {}
 );
 
 impl LockObserver {
@@ -76,13 +91,29 @@ impl LockObserver {
 pub fn start(app: &AppHandle) {
     let observer = LockObserver::new(app.clone());
 
-    // SAFETY: the selectors below are the ones this class implements, and the
-    // observer outlives every notification (it is leaked at the end).
+    // Registering a selector the observer does not answer to is not a quiet
+    // mistake: it is an unrecognised-selector exception raised inside the
+    // notification, i.e. a crash at the exact moment the user locks the screen.
+    // The class is defined right above, so this should never fire — but "should
+    // never" is worth one branch when the alternative is that failure mode, and
+    // the same probe already guards the Tahoe metrics call in lib.rs.
+    let selectors = [
+        sel!(unisshScreenIsLocked:),
+        sel!(unisshScreenIsUnlocked:),
+        sel!(unisshWillSleep:),
+    ];
+    if !selectors.iter().all(|s| observer.respondsToSelector(*s)) {
+        log::warn!("system-lock: observer is missing its selectors; not watching");
+        return;
+    }
+
+    // SAFETY: the selectors are the ones this class implements (just checked),
+    // and the observer outlives every notification (it is leaked at the end).
     unsafe {
         let distributed = NSDistributedNotificationCenter::defaultCenter();
         for (name, selector) in [
-            ("com.apple.screenIsLocked", sel!(unisshScreenIsLocked:)),
-            ("com.apple.screenIsUnlocked", sel!(unisshScreenIsUnlocked:)),
+            ("com.apple.screenIsLocked", selectors[0]),
+            ("com.apple.screenIsUnlocked", selectors[1]),
         ] {
             distributed.addObserver_selector_name_object_suspensionBehavior(
                 &observer,
@@ -99,7 +130,7 @@ pub fn start(app: &AppHandle) {
             .notificationCenter()
             .addObserver_selector_name_object(
                 &observer,
-                sel!(unisshWillSleep:),
+                selectors[2],
                 Some(NSWorkspaceWillSleepNotification),
                 None,
             );

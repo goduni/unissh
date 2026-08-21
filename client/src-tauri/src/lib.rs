@@ -222,6 +222,7 @@ pub fn run() {
             commands::reset_partial_instance,
             commands::reset_instance,
             commands::log_dir,
+            commands::system_lock_ack,
             commands::reveal_log_dir,
             commands::tiling_session,
             commands::create_account,

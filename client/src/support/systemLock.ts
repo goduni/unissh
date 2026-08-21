@@ -42,6 +42,13 @@ export interface SystemLockWatcher {
   /** Follow the vault. Nothing fires while it is locked, and unlocking clears
    *  the latch so the next screen lock is heard again. */
   setUnlocked: (unlocked: boolean) => void;
+  /** Resolves once the lock asked for by the most recent [`signal`] has
+   *  finished — immediately when that signal asked for none.
+   *
+   *  This exists for suspend, where the machine is being held awake for us and
+   *  someone has to say when to let go. Never rejects: a lock that failed still
+   *  zeroed what it could, and a suspend must not be held open over it. */
+  settled: () => Promise<void>;
   /** Drop any pending lock (unmount). */
   dispose: () => void;
 }
@@ -49,8 +56,10 @@ export interface SystemLockWatcher {
 export interface SystemLockOptions {
   /** The single lock path. Called at most once per lock/unlock cycle, with the
    *  signal that earned it — which is not always the one that armed the timer,
-   *  since a suspend can overtake a screen lock still inside its grace. */
-  lock: (cause: LockCause) => void;
+   *  since a suspend can overtake a screen lock still inside its grace.
+   *
+   *  Anything it returns is awaited by [`SystemLockWatcher.settled`]. */
+  lock: (cause: LockCause) => void | Promise<void>;
   grace: LockGrace;
   unlocked: boolean;
 }
@@ -64,6 +73,12 @@ export function createSystemLockWatcher(opts: SystemLockOptions): SystemLockWatc
   // dropped. They are not interchangeable, though — a suspend overtakes an
   // "armed" grace (see below) and is a no-op against a "done" one.
   let state: "idle" | "armed" | "done" = "idle";
+  // When the armed grace runs out, as wall-clock rather than as a timer id. The
+  // timer is only a prompt to look; this is the answer. See `signal`.
+  let deadline = 0;
+  // The lock asked for by the signal being handled right now, if any. Cleared
+  // at the top of every `signal` so `settled` answers about that signal alone.
+  let pending: Promise<void> | undefined;
 
   const disarm = () => {
     if (timer !== undefined) {
@@ -80,14 +95,25 @@ export function createSystemLockWatcher(opts: SystemLockOptions): SystemLockWatc
   const fire = (cause: LockCause) => {
     timer = undefined;
     state = "done";
-    opts.lock(cause);
+    // Swallowed here rather than at the call site: `settled` is a suspend
+    // waiting to be released, and a rejected lock is still a finished one.
+    pending = Promise.resolve(opts.lock(cause)).then(
+      () => {},
+      () => {},
+    );
   };
 
   return {
     signal: (kind) => {
+      pending = undefined;
       if (kind === "screen-unlock") {
-        // The user is back. Whether a lock was pending, already fired, or never
-        // armed, the next screen lock starts from a clean slate.
+        // The user is back — but "back" is not the same as "in time". A hidden
+        // window's timers are throttled by the webview, so an armed grace can
+        // still be sitting there un-fired well past the moment it was owed;
+        // cancelling on the strength of the callback not having run yet would
+        // hand back a lock the user had already earned. The deadline decides,
+        // and only then does the next screen lock start from a clean slate.
+        if (state === "armed" && Date.now() >= deadline) fire("screen-lock");
         reset();
         return;
       }
@@ -108,6 +134,7 @@ export function createSystemLockWatcher(opts: SystemLockOptions): SystemLockWatc
         return;
       }
       state = "armed";
+      deadline = Date.now() + grace * 1000;
       timer = setTimeout(() => fire("screen-lock"), grace * 1000);
     },
     setGrace: (next) => {
@@ -118,6 +145,7 @@ export function createSystemLockWatcher(opts: SystemLockOptions): SystemLockWatc
       unlocked = next;
       reset();
     },
+    settled: () => pending ?? Promise.resolve(),
     dispose: reset,
   };
 }

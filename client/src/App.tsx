@@ -12,6 +12,7 @@ import {
 import { sourceFor } from "@/bridge/sources";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePalette } from "@/theme/ThemeProvider";
+import * as api from "@/bridge/api";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useTranslation } from "@/i18n";
@@ -318,7 +319,7 @@ export function App() {
     const watcher = createSystemLockWatcher({
       // The watcher names the cause, and it is not always the signal that armed
       // the timer: a suspend overtakes a screen lock still inside its grace.
-      lock: (cause) => void useApp.getState().lockInstance(cause),
+      lock: (cause) => useApp.getState().lockInstance(cause),
       grace: useApp.getState().osLockGrace,
       unlocked: useApp.getState().unlocked,
     });
@@ -327,10 +328,22 @@ export function App() {
     let alive = true;
     void (async () => {
       try {
-        const un = await listen<{ signal: SystemLockSignal }>("system-lock", (e) => {
+        type Payload = { signal: SystemLockSignal; token?: number };
+        const un = await listen<Payload>("system-lock", async (e) => {
           const kind = e.payload?.signal;
           if (kind !== "screen-lock" && kind !== "screen-unlock" && kind !== "suspend") return;
           watcher.signal(kind);
+          if (kind !== "suspend") return;
+          const token = e.payload.token;
+          if (token === undefined) return; // nothing is being held open for us
+          // The machine is being held awake for us — on Linux by a logind delay
+          // inhibitor, on Windows by a blocked window proc. Answer once the
+          // vault is shut, and answer even when nothing was locked (the feature
+          // may be off), or the suspend waits out the timeout for nothing.
+          await watcher.settled();
+          void api.systemLockAck(token).catch(() => {
+            /* nothing to ack: not Tauri, or the suspend already went ahead */
+          });
         });
         if (alive) dispose = un;
         else un();

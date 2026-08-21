@@ -24,6 +24,18 @@ describe("createSystemLockWatcher", () => {
     expect(lock).toHaveBeenCalledExactlyOnceWith("screen-lock");
   });
 
+  it("locks anyway when the user comes back AFTER the grace had expired", () => {
+    // A hidden window's timers get throttled by the webview, so the callback
+    // can run long after the grace it was armed for. The deadline, not the
+    // callback, is what decides: coming back at 45s does not excuse a lock
+    // that was owed at 30s.
+    const { lock, w } = make(30);
+    w.signal("screen-lock");
+    vi.setSystemTime(Date.now() + 45_000); // clock moved; the timer did not fire
+    w.signal("screen-unlock");
+    expect(lock).toHaveBeenCalledExactlyOnceWith("screen-lock");
+  });
+
   it("does not lock when the user comes back inside the grace", () => {
     const { lock, w } = make(30);
     w.signal("screen-lock");
@@ -122,6 +134,50 @@ describe("createSystemLockWatcher", () => {
     w.signal("screen-unlock");
     w.signal("screen-lock");
     expect(lock).toHaveBeenCalledTimes(2);
+  });
+
+  // `settled` is what releases a machine that is being held awake for us: a
+  // logind delay inhibitor on Linux, a blocked window proc on Windows. Every
+  // suspend must reach an answer, including the ones that lock nothing —
+  // otherwise a user who turned the feature off pays a stalled suspend for it.
+  describe("releasing a held suspend", () => {
+    it("waits for the lock it asked for", async () => {
+      let finish = () => {};
+      const lock = vi.fn(() => new Promise<void>((r) => (finish = r)));
+      const w = createSystemLockWatcher({ lock, grace: 0, unlocked: true });
+
+      w.signal("suspend");
+      let released = false;
+      void w.settled().then(() => (released = true));
+
+      await Promise.resolve();
+      expect(released).toBe(false); // still locking — the machine must wait
+
+      finish();
+      await w.settled();
+      expect(released).toBe(true);
+    });
+
+    it("answers at once when the setting is off and nothing was locked", async () => {
+      const { lock, w } = make(null);
+      w.signal("suspend");
+      await w.settled();
+      expect(lock).not.toHaveBeenCalled();
+    });
+
+    it("answers at once when the vault was already locked", async () => {
+      const { lock, w } = make(0, false);
+      w.signal("suspend");
+      await w.settled();
+      expect(lock).not.toHaveBeenCalled();
+    });
+
+    it("answers even when the lock itself failed", async () => {
+      const lock = vi.fn(() => Promise.reject(new Error("core is gone")));
+      const w = createSystemLockWatcher({ lock, grace: 0, unlocked: true });
+      w.signal("suspend");
+      await expect(w.settled()).resolves.toBeUndefined();
+    });
   });
 
   it("drops a pending lock on dispose", () => {

@@ -51,6 +51,13 @@ starts with `0.`:
   the control — off, at once, or a grace of 30 s, 1 min or 5 min. Sleep is never
   graced; the machine is going down and there is no changing one's mind.
 
+  Sleep does, though, *wait*. Hearing "the machine is suspending" and merely
+  asking for a lock would let it go down with the keys still in memory, which is
+  the one thing this is for — so on Linux UniSSH holds a logind delay inhibitor
+  and on Windows it holds the power broadcast open, releasing only once the
+  vault is actually shut. Bounded, in both cases, at three seconds: a laptop
+  that will not sleep is worse than a vault that locked a moment late.
+
   Detected from `com.apple.screenIsLocked` and the will-sleep notification on
   macOS, `WTS_SESSION_LOCK` and the power broadcast on Windows, and logind's
   session `Lock` plus `PrepareForSleep` on Linux, with the GNOME/KDE screensaver
