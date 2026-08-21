@@ -3,7 +3,7 @@
 
 import React, { CSSProperties, useEffect, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, RADIUS, SIZE, UI, AUTH_LABEL_KEY, Palette } from "@/theme/tokens";
+import { MONO, RADIUS, rem, SIZE, TEXT, UI, AUTH_LABEL_KEY, Palette } from "@/theme/tokens";
 import { useIsMobile } from "@/store/responsive";
 import { LogoMark } from "@/components/LogoMark";
 import { tDyn } from "@/i18n";
@@ -110,6 +110,11 @@ export const ICONS = {
 
 export type IconName = keyof typeof ICONS;
 
+/** `size` is DESIGN pixels — what the glyph measured at 100 % — and is rendered
+ *  as a `rem`, so every one of the several hundred `<Icon size={14}/>` call sites
+ *  grows with the interface scale without being touched. The stroke is in the
+ *  24x24 viewBox's own units, so it stays proportional for free. Pass a CSS
+ *  length string for the rare glyph that must not scale. */
 export function Icon({
   name,
   size = 16,
@@ -118,15 +123,14 @@ export function Icon({
   style,
 }: {
   name: IconName;
-  size?: number;
+  size?: number | string;
   stroke?: number;
   color?: string;
   style?: CSSProperties;
 }) {
+  const side = typeof size === "number" ? rem(size) : size;
   return (
     <svg
-      width={size}
-      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke={color}
@@ -135,7 +139,7 @@ export function Icon({
       strokeLinejoin="round"
       aria-hidden="true"
       focusable="false"
-      style={{ flexShrink: 0, ...style }}
+      style={{ width: side, height: side, flexShrink: 0, ...style }}
       dangerouslySetInnerHTML={{ __html: ICONS[name] || "" }}
     />
   );
@@ -162,6 +166,7 @@ export function StatusDot({
   glow = false,
 }: {
   status: Status;
+  /** Design pixels. */
   size?: number;
   label?: React.ReactNode;
   srLabel?: string;
@@ -174,8 +179,8 @@ export function StatusDot({
     <span
       aria-hidden
       style={{
-        width: size,
-        height: size,
+        width: rem(size),
+        height: rem(size),
         borderRadius: "50%",
         background: ring ? "transparent" : c,
         border: ring ? `2px solid ${c}` : "none",
@@ -219,7 +224,7 @@ export function Tag({ children, mono }: { children: React.ReactNode; mono?: bool
   return (
     <span
       style={{
-        fontSize: 11,
+        fontSize: TEXT.micro,
         fontWeight: 500,
         color: p.txt3,
         fontFamily: mono ? MONO : UI,
@@ -262,8 +267,8 @@ export function VaultBadge({
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
-        fontSize: 11,
+        gap: rem(4),
+        fontSize: TEXT.micro,
         fontWeight: 600,
         color: c,
         background: "transparent",
@@ -406,7 +411,13 @@ export function Btn({
   // sites someone was already thinking about touch at, and missed the rest
   // (Run/Stop on the fleet runner, the host detail's actions). Fix it here.
   const touch = useIsMobile();
-  const pad = size === "sm" ? "5px 10px" : size === "lg" ? "11px 18px" : "8px 14px";
+  // Design pixels throughout: `pad` and `fs` are what the button measured at
+  // 100 %, and both are emitted as `rem` so the control's height follows its
+  // label instead of trapping a 19.5px word in a 34px box. The touch floor below
+  // stays in device pixels — it is a floor, not a size.
+  const padY = size === "sm" ? 5 : size === "lg" ? 11 : 8;
+  const padX = size === "sm" ? 10 : size === "lg" ? 18 : 14;
+  const pad = `${rem(padY)} ${rem(padX)}`;
   const fs = size === "sm" ? 12.5 : size === "lg" ? 15 : 13.5;
   const variants: Record<BtnVariant, CSSProperties> = {
     primary: {
@@ -446,9 +457,9 @@ export function Btn({
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        gap: 7,
+        gap: rem(7),
         fontFamily: UI,
-        fontSize: fs,
+        fontSize: rem(fs),
         fontWeight: variant === "primary" ? 700 : 600,
         letterSpacing: 0.1,
         padding: pad,
@@ -500,9 +511,9 @@ export function Logo({ size = 22, color }: { size?: number; color?: string }) {
   const p = usePalette();
   const c = color || p.accent;
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 9 }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: rem(9) }}>
       <LogoMark size={size} />
-      <span style={{ fontWeight: 700, fontSize: size * 0.74, letterSpacing: -0.3 }}>
+      <span style={{ fontWeight: 700, fontSize: rem(size * 0.74), letterSpacing: -0.3 }}>
         Uni<span style={{ color: c }}>SSH</span>
       </span>
     </span>
@@ -530,7 +541,10 @@ export function IconBtn({
   // hit box on touch; the drawn box (background/border) keeps its size, so dense
   // rows don't visually inflate — they just become tappable.
   const touch = useIsMobile();
-  const hit = touch ? Math.max(size, SIZE.tapMin) : size;
+  // The drawn box scales with the interface; the TARGET is floored in device
+  // pixels. CSS max() is what lets the two units meet — at 150 % the box has
+  // already outgrown the floor and wins, at 90 % the floor does.
+  const hit = touch ? `max(${rem(size)}, ${SIZE.tapMin}px)` : rem(size);
   const [hover, setHover] = useState(false);
   return (
     <button
@@ -559,8 +573,8 @@ export function IconBtn({
     >
       <span
         style={{
-          width: size,
-          height: size,
+          width: rem(size),
+          height: rem(size),
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
@@ -595,7 +609,7 @@ export function Segmented<T extends string>({
   disabled?: boolean;
 }) {
   const p = usePalette();
-  const pad = size === "sm" ? "5px 9px" : "6px 12px";
+  const pad = size === "sm" ? `${rem(5)} ${rem(9)}` : `${rem(6)} ${rem(12)}`;
   const fs = size === "sm" ? 12 : 13;
   return (
     <div
@@ -622,9 +636,9 @@ export function Segmented<T extends string>({
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 6,
+              gap: rem(6),
               padding: pad,
-              fontSize: fs,
+              fontSize: rem(fs),
               fontWeight: 600,
               fontFamily: UI,
               borderRadius: 8,
@@ -660,7 +674,7 @@ export function Checkbox({
   checked: boolean;
   onChange: (v: boolean) => void;
   label?: React.ReactNode;
-  /** Box side in px (the glyph and radius scale with it). */
+  /** Box side in DESIGN px (the glyph and radius scale with it). */
   size?: number;
   title?: string;
   "aria-label"?: string;
@@ -688,7 +702,7 @@ export function Checkbox({
         ...BTN_RESET,
         display: "inline-flex",
         alignItems: "center",
-        gap: 8,
+        gap: rem(8),
         flexShrink: 0,
         minHeight: touch ? SIZE.tapMin : undefined,
         minWidth: touch && !label ? SIZE.tapMin : undefined,
@@ -697,8 +711,8 @@ export function Checkbox({
     >
       <span
         style={{
-          width: size,
-          height: size,
+          width: rem(size),
+          height: rem(size),
           borderRadius: Math.round(size * 0.3),
           border: `1px solid ${checked ? p.accent : p.line2}`,
           background: checked ? p.accent : p.bg2,
@@ -714,7 +728,7 @@ export function Checkbox({
         )}
       </span>
       {label != null && (
-        <span style={{ fontSize: 13, color: p.txt2, ...labelStyle }}>{label}</span>
+        <span style={{ fontSize: TEXT.base, color: p.txt2, ...labelStyle }}>{label}</span>
       )}
     </button>
   );
@@ -757,13 +771,16 @@ export function Toggle({
         justifyContent: "center",
         flexShrink: 0,
         cursor: disabled ? "default" : "pointer",
+        // Device pixels: this padding exists to reach the 44px touch floor, and a
+        // floor that shrinks with the type is not one. At 150 % the track has
+        // already cleared it on its own and the padding is just breathing room.
         padding: touch ? 9 : 0, // 26 + 2×9 = 44 → 44×44 hit-area, track unchanged
       }}
     >
       <span
         style={{
-          width: 44,
-          height: 26,
+          width: rem(44),
+          height: rem(26),
           borderRadius: 12,
           background: checked ? p.accent : p.bg4,
           position: "relative",
@@ -774,10 +791,10 @@ export function Toggle({
         <span
           style={{
             position: "absolute",
-            top: 3,
-            left: checked ? 21 : 3,
-            width: 20,
-            height: 20,
+            top: rem(3),
+            left: checked ? rem(21) : rem(3),
+            width: rem(20),
+            height: rem(20),
             borderRadius: "50%",
             background: "#fff",
             transition: "left .18s cubic-bezier(.2,.8,.3,1)",
@@ -828,7 +845,7 @@ export function Field({
       {...(group ? { role: "group", "aria-label": label } : null)}
     >
       {label != null && (
-        <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: labelGap }}>
+        <div style={{ fontSize: TEXT.small, fontWeight: 600, color: p.txt2, marginBottom: rem(labelGap) }}>
           {label}
           {hint && <span style={{ color: p.txt3, fontWeight: 500 }}> · {hint}</span>}
         </div>
@@ -854,7 +871,7 @@ export function Input({
   icon,
   height = 40,
   radius = 9,
-  pad = "0 12px",
+  pad = `0 ${rem(12)}`,
   gap,
   fontSize = 13.5,
   autoFocus,
@@ -868,11 +885,13 @@ export function Input({
   mono?: boolean;
   accent?: boolean;
   icon?: IconName;
+  /** Design pixels — the box grows with the type it holds. */
   height?: number;
   radius?: number;
   pad?: string;
   gap?: number;
-  fontSize?: number;
+  /** Design pixels, or an explicit CSS length. */
+  fontSize?: number | string;
   autoFocus?: boolean;
   /** Select the whole value when the field takes focus. For a box that arrives
    *  PREFILLED with a default — a port, a name suggestion. Typing into one of
@@ -903,8 +922,8 @@ export function Input({
       style={{
         display: "flex",
         alignItems: "center",
-        ...(gap != null ? { gap } : null),
-        height,
+        ...(gap != null ? { gap: rem(gap) } : null),
+        height: rem(height),
         padding: pad,
         borderRadius: radius,
         background: p.bg2,
@@ -950,7 +969,7 @@ export function Input({
           border: "none",
           outline: "none",
           fontFamily: mono ? MONO : UI,
-          fontSize,
+          fontSize: typeof fontSize === "number" ? rem(fontSize) : fontSize,
           color: p.txt,
         }}
       />
@@ -963,8 +982,8 @@ export function Spinner({ size = 16, color }: { size?: number; color?: string })
   return (
     <span
       style={{
-        width: size,
-        height: size,
+        width: rem(size),
+        height: rem(size),
         borderRadius: "50%",
         border: `2px solid ${color || p.accent}`,
         borderTopColor: "transparent",

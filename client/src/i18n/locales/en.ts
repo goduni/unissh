@@ -1068,7 +1068,7 @@ export const en = {
     "accentDesc": "Primary interactive color of the interface",
     "uiScaleTitle": "Interface scale",
     "uiScaleDesc": "Size of the interface text and everything sized with it. The terminal keeps its own zoom.",
-    "uiScalePreview": "The quick brown fox jumps over the lazy dog",
+    "uiScalePreview": "Sample interface text",
     "uiScaleReset": "Reset to 100%",
     "densityTitle": "Interface density",
     "densityDesc": "Comfortable spacing or a compact layout",
