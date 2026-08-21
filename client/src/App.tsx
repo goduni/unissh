@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { platform } from "@tauri-apps/plugin-os";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import {
   purgeExternalEditScratch,
   resumeExternalEdits,
@@ -20,6 +21,8 @@ import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
 import { ResizeEdges } from "@/shell/WindowChrome";
 import { isDesktopOs, isMac } from "@/bridge/platform";
 import { opensSettings, terminalOwnsTabDigits } from "@/support/hotkeys";
+import { createSystemLockWatcher } from "@/support/systemLock";
+import type { SystemLockSignal, SystemLockWatcher } from "@/support/systemLock";
 import { useUpdate } from "@/store/update";
 import { BOOT_CHECK_DELAY_MS, PERIODIC_CHECK_MS } from "@/bridge/updater";
 
@@ -139,12 +142,16 @@ export function App() {
   const overlay = useApp((s) => s.overlay);
   const unlocked = useApp((s) => s.unlocked);
   const autolockMin = useApp((s) => s.autolockMin);
+  const osLockGrace = useApp((s) => s.osLockGrace);
   const booted = useApp((s) => s.booted);
   const boot = useApp((s) => s.boot);
   const ctx = useCtx();
   // Seconds left before an idle auto-lock, or null when no warning is showing.
   const [lockWarnSec, setLockWarnSec] = useState<number | null>(null);
   const rearmLockRef = useRef<() => void>(() => {});
+  // Owns the OS-lock grace decision; created once so the Tauri subscription
+  // below is set up once too (see the effect).
+  const sysLockRef = useRef<SystemLockWatcher | null>(null);
   // The BOOLEAN, not the width. Only one question is ever asked of the window
   // width (Shell.tsx Sidebar: is there room for the full sidebar, or the rail?),
   // and holding the raw pixel value in root state answered it at a ruinous price:
@@ -273,7 +280,7 @@ export function App() {
     const arm = () => {
       clearAll();
       setLockWarnSec(null);
-      lockTimer = setTimeout(() => void useApp.getState().lockInstance(), ms);
+      lockTimer = setTimeout(() => void useApp.getState().lockInstance("idle"), ms);
       warnTimer = setTimeout(() => {
         let left = Math.round(warnLead / 1000);
         setLockWarnSec(left);
@@ -293,6 +300,59 @@ export function App() {
       events.forEach((e) => window.removeEventListener(e, arm));
     };
   }, [unlocked, autolockMin]);
+
+  // Lock when the OS does. The idle timer only ever watched this window, so
+  // locking the screen — the single clearest "I am leaving" a user gives — did
+  // nothing, and closing the lid suspended the machine with the vault open and
+  // an idle timer that does not tick while asleep. The native listeners emit one
+  // `system-lock` event; every decision about it lives in the grace module, and
+  // the lock itself is the same `lockInstance()` the manual and idle paths call,
+  // so there is exactly one place zeroize can be got wrong.
+  //
+  // Subscribed ONCE, on mount: the setting and the vault state are pushed into
+  // the watcher by the effects below rather than re-subscribing, so there is no
+  // window during which a screen lock lands between an unsubscribe and the next
+  // `listen()` resolving. Absent signals (a phone, a plain browser preview, a
+  // desktop whose session emits neither) are a no-op, not an error.
+  useEffect(() => {
+    const watcher = createSystemLockWatcher({
+      // The watcher names the cause, and it is not always the signal that armed
+      // the timer: a suspend overtakes a screen lock still inside its grace.
+      lock: (cause) => void useApp.getState().lockInstance(cause),
+      grace: useApp.getState().osLockGrace,
+      unlocked: useApp.getState().unlocked,
+    });
+    sysLockRef.current = watcher;
+    let dispose: (() => void) | undefined;
+    let alive = true;
+    void (async () => {
+      try {
+        const un = await listen<{ signal: SystemLockSignal }>("system-lock", (e) => {
+          const kind = e.payload?.signal;
+          if (kind !== "screen-lock" && kind !== "screen-unlock" && kind !== "suspend") return;
+          watcher.signal(kind);
+        });
+        if (alive) dispose = un;
+        else un();
+      } catch {
+        /* no Tauri context, or no listener registered on this platform */
+      }
+    })();
+    return () => {
+      alive = false;
+      dispose?.();
+      watcher.dispose();
+      sysLockRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    sysLockRef.current?.setGrace(osLockGrace);
+  }, [osLockGrace]);
+
+  useEffect(() => {
+    sysLockRef.current?.setUnlocked(unlocked);
+  }, [unlocked]);
 
   // Confirm-on-quit: intercept the window close when the setting is on and any
   // session (terminal / tunnel / broadcast / sftp) is still live, so closing the

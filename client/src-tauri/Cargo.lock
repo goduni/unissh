@@ -7430,6 +7430,8 @@ dependencies = [
  "keyring",
  "log",
  "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "once_cell",
  "reqwest",
  "rustls-platform-verifier",
@@ -7454,6 +7456,8 @@ dependencies = [
  "thiserror 2.0.19",
  "unissh-ffi",
  "uuid",
+ "windows-sys 0.61.2",
+ "zbus 5.17.0",
 ]
 
 [[package]]

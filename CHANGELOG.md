@@ -34,6 +34,30 @@ starts with `0.`:
 
 ### Added
 
+- **The vault locks when the screen does.** Auto-lock only ever watched UniSSH's
+  own window: lock your screen and walk away, and the vault stayed open until an
+  inactivity timer that had barely started happened to expire — or, with the
+  timeout on "Never", indefinitely. Closing the lid was worse, because a
+  suspended machine's idle timer does not tick at all. Locking the screen is the
+  clearest "I am leaving" anyone gives a computer, and it was the one signal
+  UniSSH ignored.
+
+  It now locks with the OS, on by default, through the same lock the lock button
+  and the idle timeout use — the same zeroize, the same teardown of terminals,
+  tunnels, transfers and SFTP panes, the same unlock screen, which now says
+  which of the two took your sessions away. A short grace period covers locking
+  the screen for thirty seconds and coming straight back: come back inside it
+  and the pending lock is cancelled with nothing lost. **Settings → Lock** has
+  the control — off, at once, or a grace of 30 s, 1 min or 5 min. Sleep is never
+  graced; the machine is going down and there is no changing one's mind.
+
+  Detected from `com.apple.screenIsLocked` and the will-sleep notification on
+  macOS, `WTS_SESSION_LOCK` and the power broadcast on Windows, and logind's
+  session `Lock` plus `PrepareForSleep` on Linux, with the GNOME/KDE screensaver
+  as a fallback where logind stays quiet. A desktop that emits neither signal
+  behaves exactly as it did before rather than failing. Desktop only: nothing on
+  a phone emits these, and app backgrounding there is a different question.
+
 - **Hosts can be dragged into a group.** Filing a host was menu-only — open the
   overflow menu, find "Move to group", pick the target, and repeat for every
   host you wanted moved — while every other rearrangeable list in UniSSH is

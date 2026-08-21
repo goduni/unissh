@@ -630,6 +630,7 @@ function Unlock() {
   // there's nothing to type. `requiresPassword` is derived from the on-disk keyset
   // header at boot, so it's known before unlocking. null/true → keep the field.
   const requiresPassword = useApp((s) => s.requiresPassword);
+  const lockReason = useApp((s) => s.lockReason);
 
   // prefill the Secret Key from the OS keychain if it was saved on this device
   // (cached read — at most one keychain access per process)
@@ -653,7 +654,7 @@ function Unlock() {
       // store the key only if it wasn't already in the keychain — avoids a
       // write (and its prompt) on every unlock.
       if (!fromKeychain) rememberSecretKey(cleanKey);
-      useApp.setState({ unlocked: true, overlay: null });
+      useApp.setState({ unlocked: true, overlay: null, lockReason: null });
       await useApp.getState().reloadVaults();
       await useApp.getState().reloadServerStatus();
       // Bind legacy unbound cloud vaults now — the normal locked cold-start path
@@ -711,7 +712,16 @@ function Unlock() {
           {t("onboarding.locked")}
         </h1>
         <p style={{ margin: "0 0 22px", fontSize: 13, color: p.txt2 }}>
-          {t("onboarding.secretsZeroed")}
+          {/* Say why, when there is a why worth saying. A vault that closed
+              because the user locked the screen or shut the lid is otherwise
+              indistinguishable from one that timed out, and the sessions are
+              gone either way — "what happened to my terminals" deserves an
+              answer on the screen that took them. */}
+          {lockReason === "screen-lock"
+            ? t("onboarding.lockedByScreen")
+            : lockReason === "suspend"
+              ? t("onboarding.lockedBySleep")
+              : t("onboarding.secretsZeroed")}
         </p>
       </div>
       <form
