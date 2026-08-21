@@ -9,12 +9,16 @@ import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import {
   ACCENT_KEYS,
   ACCENTS,
+  DEFAULT_UI_SCALE,
   MONO,
+  sanitizeUiScale,
+  TEXT,
   TERM_FONTS,
   TERM_SCROLLBACK_LIMIT,
   TERM_SCROLLBACK_MIN,
   TERM_SCROLLBACK_STEP,
   UI,
+  UI_SCALES,
   rgba,
   termScrollbackBytes,
   toHexInput,
@@ -249,6 +253,8 @@ function SettingsAppearance() {
     setAccent,
     density,
     setDensity,
+    uiScale,
+    setUiScale,
     hostsLayout,
     setHostsLayout,
     termThemeId,
@@ -372,6 +378,42 @@ function SettingsAppearance() {
                 })}
               </div>
             )}
+          </div>
+        </SettingRow>
+      )}
+      {/* Desktop only: a phone already scales through the OS, and the mobile shell
+          is not migrated to `rem`, so offering the control there would move the
+          shared primitives and leave everything around them where it was. */}
+      {!isPhone && (
+        <SettingRow title={t("settings.uiScaleTitle")} desc={t("settings.uiScaleDesc")}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+            <Segmented<string>
+              value={String(uiScale)}
+              onChange={(v) => setUiScale(sanitizeUiScale(v))}
+              options={UI_SCALES.map((v) => ({ value: String(v), label: `${v}%` }))}
+            />
+            {/* The pane the user is reading IS already at the new scale, but the
+                thing they came to judge is body text, and Settings is chrome. Show
+                a line of it, at the size a host row will use. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, maxWidth: "100%" }}>
+              <span
+                style={{
+                  fontSize: TEXT.body,
+                  color: p.txt2,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {t("settings.uiScalePreview")}
+              </span>
+              {uiScale !== DEFAULT_UI_SCALE && (
+                <Btn variant="ghost" size="sm" onClick={() => setUiScale(DEFAULT_UI_SCALE)}>
+                  {t("settings.uiScaleReset")}
+                </Btn>
+              )}
+            </div>
           </div>
         </SettingRow>
       )}

@@ -42,15 +42,103 @@ export const RADIUS = {
   modal: 20,
 } as const;
 
-/** Type scale. Twenty sizes lived here across ~480 sites, nine of them inside the
- *  10–14.5 band: 12 / 12.5 / 13 / 13.5 all carried the same secondary-label role,
- *  271 times, inside a pixel and a half. Half a pixel is not a decision anyone can
- *  read — but four of them mean two identical labels never quite agree, and that
- *  reads as an app assembled from parts. Integers only, one role each.
+// ── Interface scale ────────────────────────────────────────────
+// The whole interface's type — and the geometry that has to travel with it —
+// is expressed as a fraction of ONE number: the root font size. `uiScale` sets
+// that number and nothing else reads it, which is the point: no component has
+// to know the current scale to size itself correctly.
+//
+// Webview zoom (`setZoom()`) would have been one line, and it was rejected: it
+// also scales the terminal, which already owns its own zoom on Cmd +/-/0. Two
+// controls over the same pixels compound, and the user who had used both would
+// get a size neither of them asked for.
+
+/** The root font size at 100 %, in CSS px — the browser default, so a user who
+ *  never touches the setting sees exactly what they saw before this existed. */
+export const ROOT_FONT_PX = 16;
+
+/** Design pixels → a `rem` length against ROOT_FONT_PX.
+ *
+ *  The convention this module (and every migrated call site) follows: a bare
+ *  NUMBER is a design pixel — what the value measured at 100 % — and `rem()` is
+ *  what turns it into a length that scales. Primitives that take a size prop
+ *  (`Icon`, `StatusDot`, `Checkbox`, `Input`) convert internally, so their call
+ *  sites keep passing plain numbers and scale anyway.
+ *
+ *  Every step of the scale divides into 16 exactly (…, 10.5, 11, 11.5, 13, 19),
+ *  so this never produces a repeating fraction to round. */
+export const rem = (px: number): string => `${px / ROOT_FONT_PX}rem`;
+
+/** The offered steps, in percent. Five, not a slider: a slider invites a value
+ *  nobody can name and makes "what is this set to?" unanswerable across two
+ *  machines. Down to 90 for a small laptop, up to 150 for reduced vision. */
+export const UI_SCALES = [90, 100, 110, 125, 150] as const;
+export type UiScale = (typeof UI_SCALES)[number];
+export const DEFAULT_UI_SCALE: UiScale = 100;
+
+/** The root font size, in CSS px, for a scale step. */
+export const rootFontPx = (scale: UiScale): number => (ROOT_FONT_PX * scale) / 100;
+
+/** A persisted (therefore possibly stale or hand-edited) scale → an offered step.
+ *  Anything that is not exactly one of the five falls back to 100 %, and never
+ *  throws: this value ends up as `document.documentElement.style.fontSize`, and a
+ *  garbage root font size is an unreadable app with no way back to Settings.
+ *
+ *  Deliberately NOT a snap-to-nearest: a stored 200 is not "the user wanted the
+ *  biggest step", it is a value from a schema this build does not know. */
+export function sanitizeUiScale(raw: unknown): UiScale {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  return (UI_SCALES as readonly number[]).includes(n) ? (n as UiScale) : DEFAULT_UI_SCALE;
+}
+
+/** The offered step closest to a percentage. Ties go to the LARGER step — this
+ *  only ever runs on a display that reported more scaling than the webview
+ *  applied, where erring small reproduces the complaint. */
+export function nearestUiScale(pct: number): UiScale {
+  if (!Number.isFinite(pct)) return DEFAULT_UI_SCALE;
+  let best: UiScale = UI_SCALES[0];
+  for (const s of UI_SCALES) {
+    if (Math.abs(s - pct) <= Math.abs(best - pct)) best = s;
+  }
+  return best;
+}
+
+/** First-launch default, from the display — so a HiDPI user gets a readable
+ *  interface before they find the setting.
+ *
+ *  The input is NOT the desktop's raw scale factor, and that distinction is the
+ *  whole of this function. On a Retina Mac the desktop reports 2.0 and the
+ *  webview already renders every CSS pixel at 2 device pixels: the interface is
+ *  the right physical size, and starting such a user at 150 % would be absurd.
+ *  What is actually worth correcting is the gap — the scaling the desktop asked
+ *  for that the webview did NOT apply, which is where the "everything is tiny"
+ *  reports come from (notably WebKitGTK under a fractional-scaled session).
+ *
+ *  Never smaller than 100 %: detection may make the interface readable, it may
+ *  not shrink an interface nobody complained about. And it is a STARTING point,
+ *  not a policy — the moment the user picks a step, this never runs again. */
+export function detectUiScale(desktopScaleFactor: number, webviewPixelRatio: number): UiScale {
+  if (!Number.isFinite(desktopScaleFactor) || desktopScaleFactor <= 0) return DEFAULT_UI_SCALE;
+  if (!Number.isFinite(webviewPixelRatio) || webviewPixelRatio <= 0) return DEFAULT_UI_SCALE;
+  const unapplied = desktopScaleFactor / webviewPixelRatio;
+  if (unapplied <= 1) return DEFAULT_UI_SCALE;
+  return nearestUiScale(unapplied * 100);
+}
+
+/** Type scale, in design pixels. Twenty sizes lived here across ~480 sites, nine
+ *  of them inside the 10–14.5 band: 12 / 12.5 / 13 / 13.5 all carried the same
+ *  secondary-label role, 271 times, inside a pixel and a half. Half a pixel is not
+ *  a decision anyone can read — but four of them mean two identical labels never
+ *  quite agree, and that reads as an app assembled from parts. Integers only, one
+ *  role each.
  *
  *  Steps land at ~1.08–1.2, which is the product register's range: this UI has far
- *  more type elements than a marketing page, so exaggerated contrast is noise. */
-export const TEXT = {
+ *  more type elements than a marketing page, so exaggerated contrast is noise.
+ *
+ *  Use TEXT (the `rem` twin below) in a style. This map is the px source of truth,
+ *  and stays exported for the few call sites that have to do arithmetic on a size
+ *  before handing it to a primitive that converts. */
+export const TEXT_PX = {
   /** Badges, status words, the densest mono meta. */
   micro: 11,
   /** Secondary labels, table cells, chips. */
@@ -71,6 +159,14 @@ export const TEXT = {
   h1: 28,
 } as const;
 
+/** The type scale as `rem` — what a `fontSize` should be set to. Derived from
+ *  TEXT_PX so the two can never drift; the round-trip to today's pixels at 100 %
+ *  is pinned by a golden list in tokens.test.ts, which is what makes this whole
+ *  migration provably invisible to a user who never touches the setting. */
+export const TEXT = Object.fromEntries(
+  Object.entries(TEXT_PX).map(([k, px]) => [k, rem(px)]),
+) as { readonly [K in keyof typeof TEXT_PX]: string };
+
 /** Layout insets. */
 export const SPACE = {
   /** A view's horizontal content gutter. */
@@ -81,15 +177,31 @@ export const SPACE = {
 
 export const SIZE = {
   /** Minimum touch target. WCAG 2.5.5 asks 44x44 CSS px; Apple HIG and Material
-   *  agree. Anything interactive on a touch surface must clear this. */
+   *  agree. Anything interactive on a touch surface must clear this.
+   *
+   *  DEVICE pixels, and it must stay that way. This is a FLOOR, not a size: as a
+   *  `rem` it would follow the interface scale down and stop being 44 CSS px at
+   *  90 %, which is the one scale where a thumb still has to land on it. */
   tapMin: 44,
 } as const;
+
+/** Hairline width, in DEVICE pixels. Borders, dividers and rings do not follow
+ *  the interface scale: a 1px line is a line at every scale, while 1.5px of one
+ *  is a grey smear on a display that cannot draw it. Structure stays crisp; the
+ *  type it separates is what grows. */
+export const HAIRLINE = 1;
 
 export type Mode = "dark" | "light" | "auto";
 export type EffMode = "dark" | "light";
 export type AccentKey = "blue" | "green" | "violet" | "amber" | "rose";
 /** Global SPACING axis (row height / padding / hairline-vs-shadow). Independent of
- *  the Hosts card/list layout and of the mobile touch-shell platform flag. */
+ *  the Hosts card/list layout and of the mobile touch-shell platform flag.
+ *
+ *  And explicitly NOT a type-size axis — that is `UiScale`, and the two are
+ *  orthogonal on purpose: compact spacing with large type is a legitimate way to
+ *  fit a lot of readable rows on a laptop. Conflating them is what left a HiDPI
+ *  user reaching for "compact" to make text bigger and getting a tighter, equally
+ *  small interface instead. */
 export type Density = "comfortable" | "compact";
 /** Hosts list rendering: a card grid vs a flat row list. A per-view layout choice,
  *  NOT the spacing density. */
