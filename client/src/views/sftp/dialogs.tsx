@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { Btn, Checkbox, NO_AUTOCORRECT } from "@/components/primitives";
 import { Modal } from "@/components/Modal";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import type { ConflictResolution } from "@/sftp/transfer-runner";
@@ -56,12 +56,12 @@ function TextInput({
       style={{
         width: "100%",
         boxSizing: "border-box",
-        padding: "9px 11px",
+        padding: `${rem(9)} ${rem(11)}`,
         borderRadius: 8,
         border: `1px solid ${focus ? p.accentLine : p.line2}`,
         background: p.bg2,
         color: p.txt,
-        fontSize: 13,
+        fontSize: TEXT.base,
         fontFamily: MONO,
         outline: "none",
       }}
@@ -76,7 +76,7 @@ function NameError({ error }: { error: NameErrorKind }) {
   const { t } = useTranslation();
   if (error !== "dup" && error !== "invalid") return null;
   return (
-    <div style={{ fontSize: 12, color: p.red }}>
+    <div style={{ fontSize: TEXT.small, color: p.red }}>
       {error === "dup" ? t("sftp.dlg.nameTaken") : t("sftp.dlg.invalidName")}
     </div>
   );
@@ -213,12 +213,12 @@ export function ConfirmDeleteDialog({
         </>
       }
     >
-      <div style={{ fontSize: 13, color: p.txt }}>
+      <div style={{ fontSize: TEXT.base, color: p.txt }}>
         {names.length === 1
           ? t("sftp.dlg.deleteOne", { name: names[0] })
           : t("sftp.dlg.deleteMany", { count: names.length })}
       </div>
-      {hasDir && <div style={{ fontSize: 12, color: p.amber }}>{t("sftp.dlg.deleteRecursive")}</div>}
+      {hasDir && <div style={{ fontSize: TEXT.small, color: p.amber }}>{t("sftp.dlg.deleteRecursive")}</div>}
     </Modal>
   );
 }
@@ -272,7 +272,7 @@ export function ConflictDialog({
         </>
       }
     >
-      <div style={{ fontSize: 13, color: p.txt }}>
+      <div style={{ fontSize: TEXT.base, color: p.txt }}>
         {t("sftp.dlg.conflictBody", { there: fmtSize(targetSize), incoming: fmtSize(sourceSize) })}
       </div>
       {batchable && (
@@ -320,7 +320,7 @@ export function ChmodDialog({
       onClose={onClose}
       footer={
         <>
-          <span style={{ fontFamily: MONO, fontSize: 13, color: p.txt2 }}>{octal}</span>
+          <span style={{ fontFamily: MONO, fontSize: TEXT.base, color: p.txt2 }}>{octal}</span>
           <div style={{ flex: 1 }} />
           <Btn variant="ghost" size="sm" onClick={onClose}>
             {t("common.cancel")}
@@ -337,10 +337,10 @@ export function ChmodDialog({
         </>
       }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: rem(6) }}>
         {classes.map((cls) => (
-          <div key={cls.shift} style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ width: 64, fontSize: 13, color: p.txt2 }}>{cls.label}</span>
+          <div key={cls.shift} style={{ display: "flex", alignItems: "center", gap: rem(12) }}>
+            <span style={{ width: rem(64), fontSize: TEXT.base, color: p.txt2 }}>{cls.label}</span>
             {perms.map((perm) => {
               const bit = perm.bit << cls.shift;
               const on = (bits & bit) !== 0;
@@ -350,7 +350,7 @@ export function ChmodDialog({
                   checked={on}
                   onChange={() => setBits((b) => b ^ bit)}
                   label={perm.label}
-                  style={{ display: "flex", gap: 5 }}
+                  style={{ display: "flex", gap: rem(5) }}
                   labelStyle={{ fontFamily: MONO }}
                 />
               );

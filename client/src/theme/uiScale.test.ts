@@ -254,6 +254,18 @@ const MIGRATED_AREAS: string[] = [
   "../views/ServerVaultsSection.tsx",
   "../views/SettingsSupport.tsx",
   "../views/ViewSettings.tsx",
+  // SFTP.
+  "../views/sftp/Breadcrumb.tsx",
+  "../views/sftp/ExternalEdits.tsx",
+  "../views/sftp/FileList.tsx",
+  "../views/sftp/FileRow.tsx",
+  "../views/sftp/PaneSlot.tsx",
+  "../views/sftp/TabStrip.tsx",
+  "../views/sftp/TextEditor.tsx",
+  "../views/sftp/TransferQueue.tsx",
+  "../views/sftp/ViewSftp.tsx",
+  "../views/sftp/dialogs.tsx",
+  "../views/sftp/volumes.tsx",
 ];
 
 describe("migrated areas keep their type sizes scalable", () => {

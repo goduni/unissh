@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { UI } from "@/theme/tokens";
+import { rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, IconBtn, NO_AUTOCORRECT, type IconName } from "@/components/primitives";
 import { MetaChip } from "@/components/mono";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
@@ -121,7 +121,7 @@ export function PaneSlot({
     <div
       style={{
         flex: "1 1 0",
-        minWidth: isMobile ? 0 : 240,
+        minWidth: isMobile ? 0 : rem(240),
         ...(isMobile ? { minHeight: 0 } : {}),
         display: "flex",
         flexDirection: "column",
@@ -153,19 +153,19 @@ export function PaneSlot({
             flex: 1,
             display: "flex",
             flexDirection: "column",
-            padding: "18px 14px",
+            padding: `${rem(18)} ${rem(14)}`,
             minHeight: isMobile ? "52vh" : 0,
             overflow: "auto",
           }}
         >
           {/* margin:auto centres a short list without justifyContent, which would
               clip the top of a long one once it starts scrolling. */}
-          <div style={{ margin: "auto 0", width: "100%", maxWidth: 320, alignSelf: "center" }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, textAlign: "center" }}>
+          <div style={{ margin: "auto 0", width: "100%", maxWidth: rem(320), alignSelf: "center" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: rem(8), textAlign: "center" }}>
               <span
                 style={{
-                  width: 40,
-                  height: 40,
+                  width: rem(40),
+                  height: rem(40),
                   borderRadius: 14,
                   background: p.bg2,
                   border: `1px solid ${p.line}`,
@@ -176,12 +176,12 @@ export function PaneSlot({
               >
                 <Icon name="server" size={19} color={p.txt3} />
               </span>
-              <div style={{ fontSize: 14, fontWeight: 700, color: p.txt }}>{t("sftp.selectHost")}</div>
-              <div style={{ fontSize: 13, color: p.txt3, maxWidth: 260 }}>
+              <div style={{ fontSize: TEXT.body, fontWeight: 700, color: p.txt }}>{t("sftp.selectHost")}</div>
+              <div style={{ fontSize: TEXT.base, color: p.txt3, maxWidth: rem(260) }}>
                 {hosts.length ? t("sftp.pickHostHint") : t("sftp.addFirstHint")}
               </div>
             </div>
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: rem(12) }}>
               <HostList hosts={hosts} onPick={onPickHost} />
             </div>
           </div>
@@ -198,8 +198,8 @@ export function PaneSlot({
           // row rather than fall off the edge. The filter box has flex-basis 0,
           // so nothing wraps while the row still fits.
           flexWrap: "wrap",
-          gap: 8,
-          padding: "7px 10px",
+          gap: rem(8),
+          padding: `${rem(7)} ${rem(10)}`,
           borderBottom: `1px solid ${p.line}`,
         }}
       >
@@ -214,12 +214,12 @@ export function PaneSlot({
             style={{
               flex: 1,
               minWidth: 0, // let the input shrink below its intrinsic width in a narrow pane
-              marginLeft: 6,
+              marginLeft: rem(6),
               border: "none",
               background: "transparent",
               color: p.txt,
               fontFamily: UI,
-              fontSize: isMobile ? 16 : 12.5, // ≥16px avoids iOS zoom-on-focus
+              fontSize: isMobile ? TEXT.lead : rem(12.5), // ≥16px avoids iOS zoom-on-focus
               outline: "none",
             }}
           />
@@ -237,10 +237,10 @@ export function PaneSlot({
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 5,
+              gap: rem(5),
               background: "transparent",
               border: "none",
-              padding: "2px 4px",
+              padding: `${rem(2)} ${rem(4)}`,
               cursor: "pointer",
               flexShrink: 0,
             }}

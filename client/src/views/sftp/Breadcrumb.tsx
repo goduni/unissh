@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Icon, NO_AUTOCORRECT } from "@/components/primitives";
 import { useTranslation } from "@/i18n";
 import type { Crumb } from "@/sftp/paths";
@@ -47,7 +47,7 @@ export function Breadcrumb({
 
   if (editing) {
     return (
-      <div style={{ padding: "6px 12px", borderBottom: `1px solid ${p.line}` }}>
+      <div style={{ padding: `${rem(6)} ${rem(12)}`, borderBottom: `1px solid ${p.line}` }}>
         <input
           ref={inputRef}
           value={text}
@@ -67,13 +67,13 @@ export function Breadcrumb({
           style={{
             width: "100%",
             boxSizing: "border-box",
-            padding: "5px 9px",
+            padding: `${rem(5)} ${rem(9)}`,
             borderRadius: 8,
             border: `1px solid ${p.accentLine}`,
             background: p.bg2,
             color: p.txt,
             fontFamily: MONO,
-            fontSize: 12,
+            fontSize: TEXT.small,
             outline: "none",
           }}
         />
@@ -83,7 +83,7 @@ export function Breadcrumb({
 
   return (
     <div style={{ display: "flex", alignItems: "center", borderBottom: `1px solid ${p.line}` }}>
-      {leading && <div style={{ display: "flex", alignItems: "center", paddingLeft: 8 }}>{leading}</div>}
+      {leading && <div style={{ display: "flex", alignItems: "center", paddingLeft: rem(8) }}>{leading}</div>}
       <div
         ref={rowRef}
         onClick={startEdit}
@@ -93,10 +93,10 @@ export function Breadcrumb({
           minWidth: 0,
           display: "flex",
           alignItems: "center",
-          gap: 3,
-          padding: "7px 12px",
+          gap: rem(3),
+          padding: `${rem(7)} ${rem(12)}`,
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           color: p.txt2,
           whiteSpace: "nowrap",
           overflowX: "auto",
@@ -107,7 +107,7 @@ export function Breadcrumb({
       {crumbs.map((c, i) => {
         const last = i === crumbs.length - 1;
         return (
-          <span key={c.path} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+          <span key={c.path} style={{ display: "inline-flex", alignItems: "center", gap: rem(3) }}>
             {i > 0 && <span style={{ color: p.line2 }}>›</span>}
             <button
               onClick={(e) => {
@@ -121,11 +121,11 @@ export function Breadcrumb({
               style={{
                 background: "transparent",
                 border: "none",
-                padding: "1px 3px",
+                padding: `${rem(1)} ${rem(3)}`,
                 borderRadius: 6,
                 cursor: last ? "default" : "pointer",
                 fontFamily: MONO,
-                fontSize: 12,
+                fontSize: TEXT.small,
                 color: last ? p.txt : p.txt2,
                 fontWeight: last ? 700 : 400,
                 whiteSpace: "nowrap",
@@ -152,7 +152,7 @@ export function Breadcrumb({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          width: 30,
+          width: rem(30),
           alignSelf: "stretch",
           background: "transparent",
           border: "none",

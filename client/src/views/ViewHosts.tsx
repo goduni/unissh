@@ -1434,7 +1434,9 @@ export function ViewHosts() {
   useEffect(() => {
     const el = mainRef.current;
     if (!el) return;
-    const apply = () => setTight(el.clientWidth < 820);
+    // Design pixels — the toolbar's labels grow with the scale, so the width at
+    // which they stop fitting grows with them.
+    const apply = () => setTight(designPx(el.clientWidth) < 820);
     const ro = new ResizeObserver(apply);
     ro.observe(el);
     apply();
