@@ -150,12 +150,21 @@ targets the site address with no port, so browse the HTTPS port directly.
 
 > **Moving the HTTP port breaks automatic ACME.** The HTTP-01 challenge is
 > answered on the **real** public port 80 and no redirect to another port is
-> followed, so the certificate silently never issues. Two ways out:
-> - forward the host's real `:80` to the port you picked, outside Compose —
->   e.g. `iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080`
->   (or the equivalent NAT rule upstream); or
-> - use a TLS mode that needs no challenge: `UNISSH_TLS_DIRECTIVE="tls internal"`
->   for a LAN host, or certificate files you already hold via
+> followed, so the certificate silently never issues. What to do depends on
+> *what* owns port 80:
+> - **Nothing on this host** — the host is not the edge, or the conflict is
+>   elsewhere. Forward public `:80` to your chosen port upstream (router, NAT
+>   rule, cloud load balancer). The challenge arrives on the moved port and
+>   succeeds.
+> - **Another HTTP server on this host** (nginx, Apache, another Caddy — the
+>   usual reason you are here). Point *only* `/.well-known/acme-challenge/*` at
+>   your chosen HTTP port from that server. Do **not** NAT-redirect all of `:80`
+>   to it: that hijacks the traffic of the service that owns the port. And weigh
+>   `compose.behind-proxy.yml` first — a proxy already terminating TLS for other
+>   sites can do it for this one, and then no port has to move at all.
+> - **Neither is workable** — use a TLS mode that needs no challenge:
+>   `UNISSH_TLS_DIRECTIVE="tls internal"` for a LAN host, or certificate files
+>   obtained some other way (DNS-01, a commercial cert) via
 >   `compose.tls-files.yml`.
 >
 > Moving **only** `UNISSH_HTTPS_PORT` is safe for ACME — HTTP-01 still runs on
