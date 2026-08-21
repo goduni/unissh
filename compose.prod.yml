@@ -23,7 +23,8 @@
 #   docker buildx imagetools inspect ghcr.io/goduni/unissh-server:latest
 #
 # Topology (identical to compose.yml):
-#   caddy   -> the ONLY host-exposed service (80/443 + 443/udp). Terminates TLS
+#   caddy   -> the ONLY host-exposed service (80/443 + 443/udp by default; move
+#              them with UNISSH_HTTP_PORT / UNISSH_HTTPS_PORT). Terminates TLS
 #              (ACME or internal CA), serves the SPA same-origin and
 #              reverse-proxies the API (/v1, /healthz, /readyz) to the server
 #              over the compose network.
@@ -53,9 +54,15 @@ services:
     depends_on:
       - server
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"   # HTTP/3 (QUIC)
+      # Host side only. The CONTAINER side never moves: Caddy still listens on
+      # 80/443 inside, so the Caddyfile, the compose network and every override
+      # in deploy/ are unaffected. Unset => 80/443, exactly as before.
+      # Moving the HTTP port breaks ACME's HTTP-01 challenge unless the real
+      # public :80 is forwarded to it — see "Port 80 or 443 already in use" in
+      # deploy/README.md.
+      - "${UNISSH_HTTP_PORT:-80}:80"
+      - "${UNISSH_HTTPS_PORT:-443}:443"
+      - "${UNISSH_HTTPS_PORT:-443}:443/udp"   # HTTP/3 (QUIC) — follows HTTPS
     environment:
       # Site address. Real domain => automatic ACME. A *.local host or an IP,
       # combined with UNISSH_TLS_MODE=internal, => Caddy internal CA (self-signed).

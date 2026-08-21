@@ -25,6 +25,7 @@ docker compose up -d --build
 ```
 
 - Only **Caddy** publishes host ports: **80** and **443** (443/udp for HTTP/3).
+  One of them already taken? See [Port 80 or 443 already in use](#port-80-or-443-already-in-use).
 - The server is **never** host-published; Caddy reaches it as `http://server:8443`.
 - Migrations auto-apply on boot (SQLite). The SPA is served same-origin, so the
   admin panel and its API share one origin (CORS stays off).
@@ -113,6 +114,56 @@ TLS is controlled by a single env knob, `UNISSH_TLS_DIRECTIVE`:
   `skip_install_trust` in the Caddyfile.
 
 The `caddy-data` volume persists issued certs / the internal CA root — keep it.
+
+## Port 80 or 443 already in use
+
+The published ports are variables, so a host that already serves something on
+80 or 443 is a two-line `.env` change rather than a fork of a tracked compose
+file:
+
+```bash
+# .env
+UNISSH_HTTP_PORT=8080
+UNISSH_HTTPS_PORT=8443
+```
+
+```bash
+docker compose config | grep -B1 -A2 published   # resolved mapping, nothing started
+docker compose up -d
+curl -kI https://<UNISSH_DOMAIN>:8443/readyz
+```
+
+Both default to today's values, so a stack that sets neither publishes exactly
+what it always did. They work the same in `compose.yml` and `compose.prod.yml`,
+take a **port number** (not an interface prefix — for loopback-only use
+`compose.behind-proxy.yml` below), and `UNISSH_HTTPS_PORT` carries the HTTP/3
+(QUIC) UDP mapping with it, so HTTPS and HTTP/3 can never land on different
+ports. Only the host side moves: inside the container Caddy still listens on
+80/443, so the Caddyfile and every override in this folder are untouched. (One
+visible consequence of that: Caddy advertises HTTP/3 as `alt-svc: h3=":443"`,
+the port it listens on inside, so browsers reaching a moved HTTPS port quietly
+stay on HTTP/2. Nothing breaks; the UDP mapping is published either way.)
+
+Set `UNISSH__SERVER__PUBLIC_URL=https://<domain>:8443` to match, or invite links
+come out pointing at the port you no longer serve. Caddy's HTTP→HTTPS redirect
+targets the site address with no port, so browse the HTTPS port directly.
+
+> **Moving the HTTP port breaks automatic ACME.** The HTTP-01 challenge is
+> answered on the **real** public port 80 and no redirect to another port is
+> followed, so the certificate silently never issues. Two ways out:
+> - forward the host's real `:80` to the port you picked, outside Compose —
+>   e.g. `iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080`
+>   (or the equivalent NAT rule upstream); or
+> - use a TLS mode that needs no challenge: `UNISSH_TLS_DIRECTIVE="tls internal"`
+>   for a LAN host, or certificate files you already hold via
+>   `compose.tls-files.yml`.
+>
+> Moving **only** `UNISSH_HTTPS_PORT` is safe for ACME — HTTP-01 still runs on
+> 80. (TLS-ALPN-01, which would need 443, simply stops being an option.)
+
+If the reason 443 is busy is that **you already run a proxy there**, these
+variables are the wrong tool: use `compose.behind-proxy.yml` and let that proxy
+terminate TLS in front of the stack — see *Other front doors* just below.
 
 ## Other front doors
 
