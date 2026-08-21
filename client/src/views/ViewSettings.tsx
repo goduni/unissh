@@ -11,17 +11,18 @@ import {
   ACCENTS,
   DEFAULT_UI_SCALE,
   MONO,
+  rem,
+  rgba,
   sanitizeUiScale,
-  TEXT,
   TERM_FONTS,
   TERM_SCROLLBACK_LIMIT,
   TERM_SCROLLBACK_MIN,
   TERM_SCROLLBACK_STEP,
+  termScrollbackBytes,
+  TEXT,
+  toHexInput,
   UI,
   UI_SCALES,
-  rgba,
-  termScrollbackBytes,
-  toHexInput,
 } from "@/theme/tokens";
 import type {
   AppThemeFamily,
@@ -117,15 +118,15 @@ function SettingRow({
         display: "flex",
         alignItems: "center",
         flexWrap: "wrap",
-        gap: 16,
-        rowGap: 12,
-        padding: "16px 0",
+        gap: rem(16),
+        rowGap: rem(12),
+        padding: `${rem(16)} 0`,
         borderBottom: `1px solid ${p.line}`,
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>{title}</div>
-        {desc && <div style={{ fontSize: 13, color: p.txt3, marginTop: 2 }}>{desc}</div>}
+        <div style={{ fontSize: TEXT.body, fontWeight: 700 }}>{title}</div>
+        {desc && <div style={{ fontSize: TEXT.base, color: p.txt3, marginTop: rem(2) }}>{desc}</div>}
       </div>
       {children}
     </div>
@@ -139,12 +140,12 @@ export function SectionLabel({ children, first }: { children: React.ReactNode; f
   return (
     <div
       style={{
-        fontSize: 11,
+        fontSize: TEXT.micro,
         fontWeight: 700,
-        letterSpacing: 0.6,
+        letterSpacing: rem(0.6),
         color: p.txt3,
         textTransform: "uppercase",
-        marginTop: first ? 4 : 26,
+        marginTop: first ? rem(4) : rem(26),
       }}
     >
       {children}
@@ -156,9 +157,9 @@ function inputStyle(p: Palette, mono?: boolean): React.CSSProperties {
   return {
     width: "100%",
     boxSizing: "border-box",
-    padding: "9px 12px",
+    padding: `${rem(9)} ${rem(12)}`,
     fontFamily: mono ? MONO : UI,
-    fontSize: 13,
+    fontSize: TEXT.base,
     color: p.txt,
     background: p.bg0,
     border: `1px solid ${p.line2}`,
@@ -186,8 +187,8 @@ function ThemeCardAction({
       aria-label={label}
       onClick={onClick}
       style={{
-        width: 22,
-        height: 22,
+        width: rem(22),
+        height: rem(22),
         borderRadius: 6,
         display: "flex",
         alignItems: "center",
@@ -341,7 +342,7 @@ function SettingsAppearance() {
       </SettingRow>
       {family === "nebula" && (
         <SettingRow title={t("settings.accentTitle")} desc={t("settings.accentDesc")}>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: rem(8) }}>
             <Btn
               variant="ghost"
               size="sm"
@@ -351,7 +352,7 @@ function SettingsAppearance() {
               {t("settings.customize")}
             </Btn>
             {customizeOpen && (
-              <div style={{ display: "flex", gap: 9 }}>
+              <div style={{ display: "flex", gap: rem(9) }}>
                 {ACCENT_KEYS.map((key) => {
                   const c = ACCENTS[key].accent;
                   const on = accent === key;
@@ -360,8 +361,8 @@ function SettingsAppearance() {
                       key={key}
                       onClick={() => setAccent(key)}
                       style={{
-                        width: 30,
-                        height: 30,
+                        width: rem(30),
+                        height: rem(30),
                         borderRadius: "50%",
                         background: c,
                         cursor: "pointer",
@@ -386,7 +387,7 @@ function SettingsAppearance() {
           shared primitives and leave everything around them where it was. */}
       {!isPhone && (
         <SettingRow title={t("settings.uiScaleTitle")} desc={t("settings.uiScaleDesc")}>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: rem(8) }}>
             <Segmented<string>
               value={String(uiScale)}
               onChange={(v) => setUiScale(sanitizeUiScale(v))}
@@ -395,7 +396,7 @@ function SettingsAppearance() {
             {/* The pane the user is reading IS already at the new scale, but the
                 thing they came to judge is body text, and Settings is chrome. Show
                 a line of it, at the size a host row will use. */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10, maxWidth: "100%" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: rem(10), maxWidth: "100%" }}>
               <span
                 style={{
                   fontSize: TEXT.body,
@@ -461,7 +462,7 @@ function SettingsAppearance() {
         </SettingRow>
       )}
       <SettingRow title={t("settings.termFontTitle")} desc={t("settings.termFontDesc")}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
           <Btn
             variant="ghost"
             size="sm"
@@ -471,10 +472,10 @@ function SettingsAppearance() {
           />
           <span
             style={{
-              minWidth: 52,
+              minWidth: rem(52),
               textAlign: "center",
               fontFamily: MONO,
-              fontSize: 13,
+              fontSize: TEXT.base,
               fontWeight: 700,
             }}
           >
@@ -496,14 +497,14 @@ function SettingsAppearance() {
       </SettingRow>
 
       <SettingRow title={t("settings.termFontFamilyTitle")} desc={t("settings.termFontFamilyDesc")}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: rem(8), alignItems: "flex-end" }}>
           <select
             value={termPrefs.fontId}
             onChange={(e) => setTermPrefs({ fontId: e.target.value as TermFontId })}
             style={{
               fontFamily: UI,
-              fontSize: 13,
-              padding: "6px 10px",
+              fontSize: TEXT.base,
+              padding: `${rem(6)} ${rem(10)}`,
               borderRadius: 8,
               border: `1px solid ${p.line2}`,
               background: p.bg2,
@@ -526,13 +527,13 @@ function SettingsAppearance() {
               placeholder={t("settings.termFontCustomPlaceholder")}
               style={{
                 fontFamily: MONO,
-                fontSize: 13,
-                padding: "6px 10px",
+                fontSize: TEXT.base,
+                padding: `${rem(6)} ${rem(10)}`,
                 borderRadius: 8,
                 border: `1px solid ${p.line2}`,
                 background: p.bg2,
                 color: p.txt,
-                width: 220,
+                width: rem(220),
               }}
             />
           )}
@@ -540,7 +541,7 @@ function SettingsAppearance() {
       </SettingRow>
 
       <SettingRow title={t("settings.termLineHeightTitle")} desc={t("settings.termLineHeightDesc")}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(10) }}>
           <input
             type="range"
             min={1}
@@ -548,9 +549,9 @@ function SettingsAppearance() {
             step={0.05}
             value={termPrefs.lineHeight}
             onChange={(e) => setTermPrefs({ lineHeight: parseFloat(e.target.value) })}
-            style={{ width: 150 }}
+            style={{ width: rem(150) }}
           />
-          <span style={{ fontFamily: MONO, fontSize: 12, minWidth: 34, textAlign: "right" }}>
+          <span style={{ fontFamily: MONO, fontSize: TEXT.small, minWidth: rem(34), textAlign: "right" }}>
             {termPrefs.lineHeight.toFixed(2)}
           </span>
         </div>
@@ -560,7 +561,7 @@ function SettingsAppearance() {
         title={t("settings.termLetterSpacingTitle")}
         desc={t("settings.termLetterSpacingDesc")}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(10) }}>
           <input
             type="range"
             min={-1}
@@ -568,16 +569,16 @@ function SettingsAppearance() {
             step={0.25}
             value={termPrefs.letterSpacing}
             onChange={(e) => setTermPrefs({ letterSpacing: parseFloat(e.target.value) })}
-            style={{ width: 150 }}
+            style={{ width: rem(150) }}
           />
-          <span style={{ fontFamily: MONO, fontSize: 12, minWidth: 34, textAlign: "right" }}>
+          <span style={{ fontFamily: MONO, fontSize: TEXT.small, minWidth: rem(34), textAlign: "right" }}>
             {termPrefs.letterSpacing.toFixed(2)}
           </span>
         </div>
       </SettingRow>
 
       <SettingRow title={t("settings.termCursorTitle")}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(12), flexWrap: "wrap" }}>
           <Segmented<TermCursorStyle>
             value={termPrefs.cursor}
             onChange={(v) => setTermPrefs({ cursor: v })}
@@ -587,7 +588,7 @@ function SettingsAppearance() {
               { value: "underline", label: t("settings.termCursorUnderline") },
             ]}
           />
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: rem(8), fontSize: TEXT.base }}>
             <Toggle
               checked={termPrefs.cursorBlink}
               onChange={(v) => setTermPrefs({ cursorBlink: v })}
@@ -599,13 +600,13 @@ function SettingsAppearance() {
       </SettingRow>
 
       <SettingRow title={t("settings.termFgTitle")} desc={t("settings.termFgDesc")}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(10) }}>
           <input
             type="color"
             value={toHexInput(termPrefs.fg ?? termTheme.fg)}
             onChange={(e) => setTermPrefs({ fg: e.target.value })}
             aria-label={t("settings.termFgTitle")}
-            style={{ width: 36, height: 28, padding: 0, border: "none", background: "none" }}
+            style={{ width: rem(36), height: rem(28), padding: 0, border: "none", background: "none" }}
           />
           {termPrefs.fg && (
             <Btn variant="ghost" size="sm" onClick={() => setTermPrefs({ fg: null })}>
@@ -630,7 +631,7 @@ function SettingsAppearance() {
           who wants 200 000 rows should be able to say so instead of dragging to a stop we
           invented. The estimate below carries what the missing ceiling used to. */}
       <SettingRow title={t("settings.termScrollbackTitle")} desc={t("settings.termScrollbackDesc")}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(10), flexWrap: "wrap" }}>
           <input
             type="number"
             min={TERM_SCROLLBACK_MIN}
@@ -649,16 +650,16 @@ function SettingsAppearance() {
             aria-label={t("settings.termScrollbackTitle")}
             style={{
               fontFamily: MONO,
-              fontSize: 13,
-              padding: "6px 10px",
+              fontSize: TEXT.base,
+              padding: `${rem(6)} ${rem(10)}`,
               borderRadius: 8,
               border: `1px solid ${p.line2}`,
               background: p.bg2,
               color: p.txt,
-              width: 110,
+              width: rem(110),
             }}
           />
-          <span style={{ fontSize: 12, color: p.txt3 }}>
+          <span style={{ fontSize: TEXT.small, color: p.txt3 }}>
             {t("settings.termScrollbackEstimate", {
               size: fmtSize(termScrollbackBytes(termPrefs.scrollback)),
             })}
@@ -666,32 +667,32 @@ function SettingsAppearance() {
         </div>
       </SettingRow>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", padding: "12px 0" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: `${rem(12)} 0` }}>
         <Btn variant="ghost" size="sm" icon="refresh" onClick={resetTermPrefs}>
           {t("settings.termResetPrefs")}
         </Btn>
       </div>
 
       <SectionLabel>{t("settings.termPreviewLabel")}</SectionLabel>
-      <div style={{ padding: "4px 0 0" }}>
+      <div style={{ padding: `${rem(4)} 0 0` }}>
         <TerminalPreview />
       </div>
-      <div style={{ padding: "16px 0" }}>
+      <div style={{ padding: `${rem(16)} 0` }}>
         <div
           style={{
             display: "flex",
             alignItems: "flex-start",
             justifyContent: "space-between",
-            gap: 12,
-            marginBottom: 14,
+            gap: rem(12),
+            marginBottom: rem(14),
             flexWrap: "wrap", // let the reset Btn drop below the title on a narrow window
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 3 }}>
+            <div style={{ fontSize: TEXT.body, fontWeight: 700, marginBottom: rem(3) }}>
               {t("settings.termThemeTitle")}
             </div>
-            <div style={{ fontSize: 13, color: p.txt3 }}>{t("settings.termThemeDesc")}</div>
+            <div style={{ fontSize: TEXT.base, color: p.txt3 }}>{t("settings.termThemeDesc")}</div>
           </div>
           <Btn variant="ghost" size="sm" icon="refresh" onClick={resetTermTheme}>
             {t("settings.termResetDefault")}
@@ -703,7 +704,7 @@ function SettingsAppearance() {
             gridTemplateColumns: isMobile
               ? "repeat(auto-fill, minmax(150px, 1fr))"
               : "repeat(4, 1fr)",
-            gap: 10,
+            gap: rem(10),
           }}
         >
           {visibleThemes.map((th) => {
@@ -725,7 +726,7 @@ function SettingsAppearance() {
                     boxShadow: active ? `0 0 0 3px ${p.accentSoft}` : "none",
                   }}
                 >
-                  <div style={{ padding: "10px 12px", fontFamily: MONO, fontSize: 11, lineHeight: 1.5 }}>
+                  <div style={{ padding: `${rem(10)} ${rem(12)}`, fontFamily: MONO, fontSize: TEXT.micro, lineHeight: 1.5 }}>
                     <div>
                       <span style={{ color: th.green }}>$</span>{" "}
                       <span style={{ color: th.fg }}>ssh</span>{" "}
@@ -741,19 +742,19 @@ function SettingsAppearance() {
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      gap: 6,
-                      padding: "7px 12px",
+                      gap: rem(6),
+                      padding: `${rem(7)} ${rem(12)}`,
                       background: "rgba(0,0,0,0.25)",
                     }}
                   >
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#fff", flex: 1 }}>
+                    <span style={{ fontSize: TEXT.small, fontWeight: 700, color: "#fff", flex: 1 }}>
                       {th.name}
                     </span>
                     {active && <Icon name="check" size={13} color="#fff" />}
                   </div>
                 </button>
                 {isCustom && (
-                  <div style={{ position: "absolute", top: 6, right: 6, display: "flex", gap: 4 }}>
+                  <div style={{ position: "absolute", top: rem(6), right: rem(6), display: "flex", gap: rem(4) }}>
                     <ThemeCardAction
                       icon="pencil"
                       label={t("termtheme.editTitle")}
@@ -776,21 +777,21 @@ function SettingsAppearance() {
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 6,
+              gap: rem(6),
               borderRadius: 12,
               cursor: "pointer",
               border: `1px solid ${p.line}`,
               background: "transparent",
               color: p.txt3,
-              minHeight: 86,
+              minHeight: rem(86),
             }}
           >
             <Icon name="plus" size={18} />
-            <span style={{ fontSize: 12, fontWeight: 600 }}>{t("settings.customTheme")}</span>
+            <span style={{ fontSize: TEXT.small, fontWeight: 600 }}>{t("settings.customTheme")}</span>
           </button>
         </div>
         {!showAllThemes && orderedThemes.length > 8 && (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: rem(12) }}>
             <Btn variant="ghost" size="sm" onClick={() => setShowAllThemes(true)}>
               {t("settings.termShowAllThemes", { n: orderedThemes.length })}
             </Btn>
@@ -986,7 +987,7 @@ function SettingsGeneral() {
       <SectionLabel>{t("settings.sectionDiagnostics")}</SectionLabel>
       <SettingRow title={t("settings.logsTitle")} desc={t("settings.logsDesc")}>
         {/* wrap so the two long RU labels can stack instead of overflowing */}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: rem(8), flexWrap: "wrap" }}>
           <Btn variant="ghost" icon="folder" onClick={openLogs}>
             {t("settings.openLogFolder")}
           </Btn>
@@ -1095,7 +1096,7 @@ function SettingsLocalTerminal() {
             machine ? t("settings.localShellAuto", { program: machine.program }) : undefined
           }
           {...NO_AUTOCORRECT}
-          style={{ ...inputStyle(p, true), maxWidth: 340 }}
+          style={{ ...inputStyle(p, true), maxWidth: rem(340) }}
         />
       </SettingRow>
       <SettingRow
@@ -1115,7 +1116,7 @@ function SettingsLocalTerminal() {
           {...NO_AUTOCORRECT}
           style={{
             ...inputStyle(p, true),
-            maxWidth: 340,
+            maxWidth: rem(340),
             borderColor: argsOk ? p.line2 : p.red,
           }}
         />
@@ -1126,7 +1127,7 @@ function SettingsLocalTerminal() {
           onChange={(e) => onCwd(e.target.value)}
           placeholder={t("settings.localCwdAuto")}
           {...NO_AUTOCORRECT}
-          style={{ ...inputStyle(p, true), maxWidth: 340 }}
+          style={{ ...inputStyle(p, true), maxWidth: rem(340) }}
         />
       </SettingRow>
       <SettingRow
@@ -1135,7 +1136,7 @@ function SettingsLocalTerminal() {
       >
         <Toggle checked={record} onChange={onRecord} />
       </SettingRow>
-      <div style={{ fontSize: 12, color: p.txt3, marginTop: 12 }}>
+      <div style={{ fontSize: TEXT.small, color: p.txt3, marginTop: rem(12) }}>
         {t("settings.localLockNote")}
       </div>
     </>
@@ -1178,17 +1179,17 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
         void submit();
       }}
       style={{
-        marginTop: 12,
-        padding: 16,
+        marginTop: rem(12),
+        padding: rem(16),
         borderRadius: 12,
         border: `1px solid ${p.line2}`,
         background: p.bg1,
         display: "flex",
         flexDirection: "column",
-        gap: 11,
+        gap: rem(11),
       }}
     >
-      <div style={{ fontSize: 13, fontWeight: 700 }}>{t("settings.changeMasterPw")}</div>
+      <div style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("settings.changeMasterPw")}</div>
       <input
         {...NO_AUTOCORRECT}
         type="password"
@@ -1213,7 +1214,7 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
         placeholder={t("settings.secretKeyPlaceholder")}
         style={inputStyle(p, true)}
       />
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
         <Btn variant="ghost" size="sm" onClick={onClose} disabled={busy}>
           {t("common.cancel")}
         </Btn>
@@ -1301,16 +1302,16 @@ function SettingsSecurity() {
 
       <div
         style={{
-          marginTop: 26,
-          paddingTop: 20,
+          marginTop: rem(26),
+          paddingTop: rem(20),
           borderTop: `1px solid ${p.line}`,
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 700, color: p.red, marginBottom: 4 }}>
+        <div style={{ fontSize: TEXT.base, fontWeight: 700, color: p.red, marginBottom: rem(4) }}>
           {t("settings.dangerZone")}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ flex: 1, fontSize: 13, color: p.txt2 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(12) }}>
+          <div style={{ flex: 1, fontSize: TEXT.base, color: p.txt2 }}>
             {t("settings.dangerZoneDesc")}
           </div>
           <Btn
@@ -1362,7 +1363,7 @@ function ConsistencyResult({
         </div>
       }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 13 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: rem(12), fontSize: TEXT.base }}>
         <div style={{ color: p.txt2 }}>
           {report.ok
             ? t("settings.dbConsistencyOk")
@@ -1371,9 +1372,9 @@ function ConsistencyResult({
         {!report.integrityOk && (
           <div
             style={{
-              fontSize: 12,
+              fontSize: TEXT.small,
               color: p.red,
-              padding: "8px 10px",
+              padding: `${rem(8)} ${rem(10)}`,
               borderRadius: 8,
               background: rgba(p.red, 0.1),
               border: `1px solid ${rgba(p.red, 0.4)}`,
@@ -1387,8 +1388,8 @@ function ConsistencyResult({
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: 6,
-              maxHeight: 280,
+              gap: rem(6),
+              maxHeight: rem(280),
               overflowY: "auto",
             }}
           >
@@ -1398,25 +1399,25 @@ function ConsistencyResult({
                 style={{
                   display: "flex",
                   flexDirection: "column",
-                  gap: 3,
-                  padding: "8px 10px",
+                  gap: rem(3),
+                  padding: `${rem(8)} ${rem(10)}`,
                   borderRadius: 8,
                   background: p.bg2,
                   border: `1px solid ${p.line}`,
                 }}
               >
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                  <span style={{ fontSize: 12, color: p.red, fontWeight: 600 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: rem(8) }}>
+                  <span style={{ fontSize: TEXT.small, color: p.red, fontWeight: 600 }}>
                     {t(`settings.dbIssue.${it.kind}`)}
                   </span>
                   {/* Hex ids are long and the tail carries no information a human
                       uses — enough to tell two rows apart is the whole job. */}
-                  <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+                  <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
                     {it.vaultIdHex.slice(0, 8)}/{it.itemIdHex.slice(0, 12)}
                   </span>
                 </div>
                 {it.detail && (
-                  <span style={{ fontSize: 12, color: p.txt2, overflowWrap: "anywhere" }}>
+                  <span style={{ fontSize: TEXT.small, color: p.txt2, overflowWrap: "anywhere" }}>
                     {it.detail}
                   </span>
                 )}
@@ -1439,17 +1440,17 @@ function AboutRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
         display: "flex",
         flexDirection: isMobile ? "column" : "row",
         alignItems: isMobile ? "stretch" : "baseline",
-        gap: isMobile ? 2 : 10,
-        padding: "11px 0",
+        gap: isMobile ? rem(2) : rem(10),
+        padding: `${rem(11)} 0`,
         borderBottom: `1px solid ${p.line}`,
       }}
     >
-      <span style={{ width: isMobile ? "auto" : 150, fontSize: 13, color: p.txt3 }}>{k}</span>
+      <span style={{ width: isMobile ? "auto" : rem(150), fontSize: TEXT.base, color: p.txt3 }}>{k}</span>
       <span
         style={{
           flex: 1,
           minWidth: 0,
-          fontSize: 13,
+          fontSize: TEXT.base,
           color: p.txt,
           fontFamily: mono ? MONO : UI,
           wordBreak: isMobile ? "break-all" : undefined,
@@ -1482,12 +1483,12 @@ function LinkRow({ label, url }: { label: string; url: string }) {
         display: "flex",
         flexDirection: isMobile ? "column" : "row",
         alignItems: isMobile ? "stretch" : "center",
-        gap: isMobile ? 2 : 10,
-        padding: "7px 0",
+        gap: isMobile ? rem(2) : rem(10),
+        padding: `${rem(7)} 0`,
         borderBottom: `1px solid ${p.line}`,
       }}
     >
-      <span style={{ width: isMobile ? "auto" : 150, fontSize: 13, color: p.txt3, flexShrink: 0 }}>
+      <span style={{ width: isMobile ? "auto" : rem(150), fontSize: TEXT.base, color: p.txt3, flexShrink: 0 }}>
         {label}
       </span>
       <span
@@ -1495,7 +1496,7 @@ function LinkRow({ label, url }: { label: string; url: string }) {
         style={{
           flex: 1,
           minWidth: 0,
-          fontSize: 13,
+          fontSize: TEXT.base,
           fontFamily: MONO,
           color: p.txt,
           overflow: "hidden",
@@ -1584,11 +1585,11 @@ function SettingsAbout() {
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(14), marginBottom: rem(18) }}>
         <span
           style={{
-            width: 56,
-            height: 56,
+            width: rem(56),
+            height: rem(56),
             borderRadius: 16,
             background: p.accent,
             display: "flex",
@@ -1599,8 +1600,8 @@ function SettingsAbout() {
           <Icon name="terminal" size={26} color={p.accentInk} stroke={2} />
         </span>
         <div>
-          <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.4 }}>UniSSH</div>
-          <div style={{ fontSize: 13, color: p.txt3 }}>{t("settings.tagline")}</div>
+          <div style={{ fontSize: TEXT.h3, fontWeight: 800, letterSpacing: rem(-0.4) }}>UniSSH</div>
+          <div style={{ fontSize: TEXT.base, color: p.txt3 }}>{t("settings.tagline")}</div>
         </div>
       </div>
       <AboutRow k={t("settings.aboutVersion")} v={appVersion} mono />
@@ -1901,9 +1902,9 @@ function SettingsVaults() {
           // Always wrap: on desktop the trailing destructive move/unbind/delete
           // Btns were clipped by groupBox overflow:hidden. rowGap spaces wrapped rows.
           flexWrap: "wrap",
-          gap: 10,
-          rowGap: 10,
-          padding: "12px 14px",
+          gap: rem(10),
+          rowGap: rem(10),
+          padding: `${rem(12)} ${rem(14)}`,
           borderTop: `1px solid ${p.line}`,
           background: isCurrent ? p.bg2 : "transparent",
           opacity: dragging === v.vaultId ? 0.45 : 1,
@@ -1917,11 +1918,11 @@ function SettingsVaults() {
             minWidth: isMobile ? "100%" : 0,
             display: "flex",
             alignItems: "center",
-            gap: 8,
+            gap: rem(8),
             flexWrap: "wrap",
           }}
         >
-          <span style={{ fontSize: 13, fontWeight: 650 }}>{v.name}</span>
+          <span style={{ fontSize: TEXT.base, fontWeight: 650 }}>{v.name}</span>
           {isCurrent && <Tag>{t("vault.current")}</Tag>}
           {kind === "local" && <VaultBadge target="local" label={t("vault.local")} />}
           {isMember && (
@@ -1930,8 +1931,8 @@ function SettingsVaults() {
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 5,
-                fontSize: 11,
+                gap: rem(5),
+                fontSize: TEXT.micro,
                 color: p.txt3,
               }}
             >
@@ -1940,7 +1941,7 @@ function SettingsVaults() {
             </span>
           )}
           {kind === "unbound" && (
-            <span style={{ fontSize: 11, color: p.amber, fontWeight: 600, whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: TEXT.micro, color: p.amber, fontWeight: 600, whiteSpace: "nowrap" }}>
               {t("vault.wontSync")}
             </span>
           )}
@@ -2063,8 +2064,8 @@ function SettingsVaults() {
   const groupIcon = (name: IconName, color: string, borderColor: string) => (
     <span
       style={{
-        width: 28,
-        height: 28,
+        width: rem(28),
+        height: rem(28),
         borderRadius: 8,
         flex: "none",
         display: "grid",
@@ -2081,29 +2082,29 @@ function SettingsVaults() {
     const vs = vaultsOn(s);
     const isActive = s.serverId === activeServerId;
     return (
-      <div key={s.serverId ?? s.baseUrl ?? ""} style={{ marginBottom: 22 }}>
+      <div key={s.serverId ?? s.baseUrl ?? ""} style={{ marginBottom: rem(22) }}>
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 10,
-            padding: "0 2px 9px",
+            gap: rem(10),
+            padding: `0 ${rem(2)} ${rem(9)}`,
             flexWrap: "wrap", // let the "Sync now" Btn drop below the server name when narrow
           }}
         >
           {groupIcon("cloud", p.txt, p.line)}
           <div
-            style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap" }}
+            style={{ display: "flex", alignItems: "center", gap: rem(8), minWidth: 0, flexWrap: "wrap" }}
           >
-            <span style={{ fontSize: 14, fontWeight: 700 }}>{serverShortLabel(s)}</span>
+            <span style={{ fontSize: TEXT.body, fontWeight: 700 }}>{serverShortLabel(s)}</span>
             {s.handle && (
               <span
                 style={{
-                  fontSize: 12,
+                  fontSize: TEXT.small,
                   color: p.txt3,
                   display: "inline-flex",
                   alignItems: "center",
-                  gap: 4,
+                  gap: rem(4),
                 }}
                 title={t("vault.srvAccount")}
               >
@@ -2113,14 +2114,14 @@ function SettingsVaults() {
             )}
             <span
               style={{
-                width: 7,
-                height: 7,
+                width: rem(7),
+                height: rem(7),
                 borderRadius: "50%",
                 background: s.hasSession ? p.green : p.txt3,
                 opacity: s.hasSession ? 1 : 0.5,
               }}
             />
-            <span style={{ fontSize: 12, color: p.txt3 }}>
+            <span style={{ fontSize: TEXT.small, color: p.txt3 }}>
               {s.hasSession ? t("vault.srvConnected") : t("vault.srvSignedOut")}
             </span>
             {isActive && <Tag>{t("vault.srvActive")}</Tag>}
@@ -2134,7 +2135,7 @@ function SettingsVaults() {
         </div>
         {groupBox(
           vs.length === 0 ? (
-            <div style={{ padding: "14px 15px", fontSize: 13, color: p.txt3 }}>
+            <div style={{ padding: `${rem(14)} ${rem(15)}`, fontSize: TEXT.base, color: p.txt3 }}>
               {dragging ? t("vault.dropHere") : t("vault.emptyServer")}
             </div>
           ) : (
@@ -2147,24 +2148,24 @@ function SettingsVaults() {
   };
 
   const localGroup = () => (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 9px" }}>
+    <div style={{ marginBottom: rem(22) }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), padding: `0 ${rem(2)} ${rem(9)}` }}>
         {groupIcon("home", p.txt3, p.line)}
-        <span style={{ fontSize: 14, fontWeight: 700 }}>{t("vault.grpLocal")}</span>
-        <span style={{ fontSize: 12, color: p.txt3 }}>· {t("vault.grpLocalHint")}</span>
+        <span style={{ fontSize: TEXT.body, fontWeight: 700 }}>{t("vault.grpLocal")}</span>
+        <span style={{ fontSize: TEXT.small, color: p.txt3 }}>· {t("vault.grpLocalHint")}</span>
       </div>
       {groupBox(localVaults.map((v) => vaultRow(v, "local")))}
     </div>
   );
 
   const unboundGroup = () => (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 9px" }}>
+    <div style={{ marginBottom: rem(22) }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), padding: `0 ${rem(2)} ${rem(9)}` }}>
         {groupIcon("alert", p.amber, rgba(p.amber, 0.4))}
-        <span style={{ fontSize: 14, fontWeight: 700, color: p.amber }}>
+        <span style={{ fontSize: TEXT.body, fontWeight: 700, color: p.amber }}>
           {t("vault.grpUnbound")}
         </span>
-        <span style={{ fontSize: 12, color: p.amber, opacity: 0.85 }}>
+        <span style={{ fontSize: TEXT.small, color: p.amber, opacity: 0.85 }}>
           · {t("vault.grpUnboundHint")}
         </span>
       </div>
@@ -2175,7 +2176,7 @@ function SettingsVaults() {
   return (
     <>
       <SectionLabel first>{t("vault.manage")}</SectionLabel>
-      <div style={{ fontSize: 13, color: p.txt3, margin: "6px 0 18px", maxWidth: 560 }}>
+      <div style={{ fontSize: TEXT.base, color: p.txt3, margin: `${rem(6)} 0 ${rem(18)}`, maxWidth: rem(560) }}>
         {t("vault.topoDesc")}
       </div>
 
@@ -2183,7 +2184,7 @@ function SettingsVaults() {
       {localVaults.length > 0 && localGroup()}
       {unboundVaults.length > 0 && unboundGroup()}
 
-      <div style={{ marginTop: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ marginTop: rem(20), display: "flex", gap: rem(8), flexWrap: "wrap" }}>
         <Btn icon="plus" onClick={() => openModal({ kind: "vault" })}>
           {t("vault.create")}
         </Btn>
@@ -2229,7 +2230,7 @@ function SettingsVaults() {
                 </>
               }
             >
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: rem(8) }}>
                 {opts.map((s) => {
                   const active = bindSel === s.serverId;
                   return (
@@ -2239,8 +2240,8 @@ function SettingsVaults() {
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        gap: 10,
-                        padding: "12px 14px",
+                        gap: rem(10),
+                        padding: `${rem(12)} ${rem(14)}`,
                         borderRadius: 10,
                         cursor: "pointer",
                         textAlign: "left",
@@ -2250,7 +2251,7 @@ function SettingsVaults() {
                       }}
                     >
                       <Icon name="cloud" size={16} color={active ? p.accentText : p.txt3} />
-                      <span style={{ flex: 1, fontSize: 13 }}>{serverShortLabel(s)}</span>
+                      <span style={{ flex: 1, fontSize: TEXT.base }}>{serverShortLabel(s)}</span>
                       {active && <Icon name="check" size={15} color={p.accentText} />}
                     </button>
                   );
@@ -2339,7 +2340,7 @@ function BackupExport({ vault, onClose }: { vault: VaultInfo; onClose: () => voi
       onClose={onClose}
       w={440}
       footer={
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", width: "100%" }}>
+        <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end", width: "100%" }}>
           <Btn variant="ghost" onClick={onClose} disabled={busy}>
             {t("common.cancel")}
           </Btn>
@@ -2349,8 +2350,8 @@ function BackupExport({ vault, onClose }: { vault: VaultInfo; onClose: () => voi
         </div>
       }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
+        <div style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
           {t("vault.backupExplain")}
         </div>
         <Field label={t("vault.backupPassphrase")} hint={t("vault.backupPassphraseHint")}>
@@ -2360,7 +2361,7 @@ function BackupExport({ vault, onClose }: { vault: VaultInfo; onClose: () => voi
           <Input value={again} type="password" onChange={setAgain} {...NO_AUTOCORRECT} />
         </Field>
         {mismatch && (
-          <div style={{ fontSize: 12, color: p.red }}>{t("vault.backupMismatch")}</div>
+          <div style={{ fontSize: TEXT.small, color: p.red }}>{t("vault.backupMismatch")}</div>
         )}
       </div>
     </Modal>
@@ -2424,7 +2425,7 @@ function BackupImport({ onClose, onDone }: { onClose: () => void; onDone: () => 
       onClose={onClose}
       w={440}
       footer={
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", width: "100%" }}>
+        <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end", width: "100%" }}>
           <Btn variant="ghost" onClick={onClose} disabled={busy}>
             {t("common.cancel")}
           </Btn>
@@ -2434,18 +2435,18 @@ function BackupImport({ onClose, onDone }: { onClose: () => void; onDone: () => 
         </div>
       }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
+        <div style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5 }}>
           {t("vault.restoreExplain")}
         </div>
         <Field label={t("vault.backupFile")}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: rem(8), alignItems: "center" }}>
             <Btn variant="ghost" size="sm" icon="folder" onClick={pick}>
               {t("vault.chooseFile")}
             </Btn>
             <span
               style={{
-                fontSize: 12,
+                fontSize: TEXT.small,
                 fontFamily: MONO,
                 color: path ? p.txt2 : p.txt3,
                 minWidth: 0,
@@ -2504,7 +2505,7 @@ function IntegrityResult({
         </div>
       }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 13 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: rem(12), fontSize: TEXT.base }}>
         <div style={{ color: p.txt2 }}>
           {t(report.ok ? "vault.integrityOk" : "vault.integrityFailed", {
             count: report.ok
@@ -2519,8 +2520,8 @@ function IntegrityResult({
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: 6,
-              maxHeight: 260,
+              gap: rem(6),
+              maxHeight: rem(260),
               overflowY: "auto",
             }}
           >
@@ -2530,8 +2531,8 @@ function IntegrityResult({
                 style={{
                   display: "flex",
                   alignItems: "baseline",
-                  gap: 8,
-                  padding: "8px 10px",
+                  gap: rem(8),
+                  padding: `${rem(8)} ${rem(10)}`,
                   borderRadius: 8,
                   background: p.bg2,
                   border: `1px solid ${p.line}`,
@@ -2540,7 +2541,7 @@ function IntegrityResult({
                 <span
                   style={{
                     fontFamily: MONO,
-                    fontSize: 12,
+                    fontSize: TEXT.small,
                     color: p.txt,
                     flex: 1,
                     minWidth: 0,
@@ -2549,11 +2550,11 @@ function IntegrityResult({
                 >
                   {it.itemId}
                 </span>
-                <span style={{ fontSize: 11, color: p.txt3, flexShrink: 0 }}>
+                <span style={{ fontSize: TEXT.micro, color: p.txt3, flexShrink: 0 }}>
                   v{it.version}
                   {it.tombstone ? ` · ${t("vault.integrityDeleted")}` : ""}
                 </span>
-                <span style={{ fontSize: 11, color: p.red, flexShrink: 0 }}>
+                <span style={{ fontSize: TEXT.micro, color: p.red, flexShrink: 0 }}>
                   {t(`vault.integrityFailure.${it.failure}`)}
                 </span>
               </div>
@@ -2576,19 +2577,19 @@ function CloudInfoRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) 
         display: "flex",
         flexDirection: isMobile ? "column" : "row",
         alignItems: isMobile ? "stretch" : "baseline",
-        gap: isMobile ? 2 : 10,
-        padding: "11px 0",
+        gap: isMobile ? rem(2) : rem(10),
+        padding: `${rem(11)} 0`,
         borderBottom: `1px solid ${p.line}`,
       }}
     >
-      <span style={{ width: isMobile ? "auto" : 150, flexShrink: 0, fontSize: 13, color: p.txt3 }}>
+      <span style={{ width: isMobile ? "auto" : rem(150), flexShrink: 0, fontSize: TEXT.base, color: p.txt3 }}>
         {k}
       </span>
       <span
         style={{
           flex: 1,
           minWidth: 0,
-          fontSize: 13,
+          fontSize: TEXT.base,
           color: p.txt,
           fontFamily: mono ? MONO : UI,
           wordBreak: "break-all",
@@ -2619,7 +2620,7 @@ function ConnectField({
   const p = usePalette();
   return (
     <label style={{ display: "block" }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: TEXT.small, fontWeight: 600, color: p.txt2, marginBottom: rem(6) }}>{label}</div>
       <input
         {...NO_AUTOCORRECT}
         type={type ?? "text"}
@@ -2905,7 +2906,7 @@ function CloudConnectForm({
     return (
       <>
         <SectionLabel first>{t("serverCloud.sectionConnect")}</SectionLabel>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "16px 0" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: rem(12), padding: `${rem(16)} 0` }}>
           <ConnectField
             label={t("serverCloud.baseUrl")}
             value={baseUrl}
@@ -2913,7 +2914,7 @@ function CloudConnectForm({
             placeholder={t("serverCloud.baseUrlPlaceholder")}
             mono
           />
-          <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
+          <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5 }}>
             {t("serverCloud.baseUrlHint")}
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -2930,14 +2931,14 @@ function CloudConnectForm({
   return (
     <>
       <SectionLabel first>{t("serverCloud.sectionConnect")}</SectionLabel>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "16px 0" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: rem(12), padding: `${rem(16)} 0` }}>
         {/* Probed instance summary: name, claimed state, advertised sign-in methods. */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 12,
-            padding: "12px 14px",
+            gap: rem(12),
+            padding: `${rem(12)} ${rem(14)}`,
             borderRadius: 12,
             border: `1px solid ${p.line2}`,
             background: p.bg1,
@@ -2945,12 +2946,12 @@ function CloudConnectForm({
         >
           <Icon name="server" size={18} style={{ color: p.accentText, flexShrink: 0 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: p.txt }}>
+            <div style={{ fontSize: TEXT.base, fontWeight: 700, color: p.txt }}>
               {info.name || baseUrl.trim()}
             </div>
             <div
               style={{
-                fontSize: 12,
+                fontSize: TEXT.small,
                 color: p.txt3,
                 fontFamily: MONO,
                 overflow: "hidden",
@@ -2964,14 +2965,14 @@ function CloudConnectForm({
           </div>
           <span
             style={{
-              fontSize: 11,
+              fontSize: TEXT.micro,
               fontWeight: 700,
-              letterSpacing: 0.4,
+              letterSpacing: rem(0.4),
               textTransform: "uppercase",
               color: info.claimed ? p.txt3 : p.green,
               border: `1px solid ${info.claimed ? p.line2 : rgba(p.green, 0.5)}`,
               borderRadius: 6,
-              padding: "1px 6px",
+              padding: `${rem(1)} ${rem(6)}`,
               flexShrink: 0,
             }}
           >
@@ -2985,7 +2986,7 @@ function CloudConnectForm({
         {!info.claimed ? (
           // Unclaimed → set up as owner with the printed setup code.
           <>
-            <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
+            <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5 }}>
               {t("serverCloud.setupCodeHint")}
             </div>
             <ConnectField
@@ -3052,7 +3053,7 @@ function CloudConnectForm({
 
             {branch === "invite" ? (
               <>
-                <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
+                <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5 }}>
                   {t("serverCloud.inviteLinkHint")}
                 </div>
                 <ConnectField
@@ -3065,7 +3066,7 @@ function CloudConnectForm({
                   placeholder={t("serverCloud.inviteLinkPlaceholder")}
                   mono
                 />
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: rem(10) }}>
                   <Btn variant="ghost" size="sm" icon="eye" onClick={doPreview} disabled={busy}>
                     {t("serverCloud.preview")}
                   </Btn>
@@ -3075,20 +3076,20 @@ function CloudConnectForm({
                     style={{
                       display: "flex",
                       flexDirection: "column",
-                      gap: 6,
-                      padding: "10px 12px",
+                      gap: rem(6),
+                      padding: `${rem(10)} ${rem(12)}`,
                       borderRadius: 10,
                       border: `1px solid ${p.line2}`,
                       background: p.bg2,
                     }}
                   >
                     {preview.instanceName && (
-                      <div style={{ fontSize: 13, fontWeight: 700, color: p.txt }}>
+                      <div style={{ fontSize: TEXT.base, fontWeight: 700, color: p.txt }}>
                         {preview.instanceName}
                       </div>
                     )}
                     {preview.spaces.length === 0 ? (
-                      <div style={{ fontSize: 12, color: p.txt3 }}>
+                      <div style={{ fontSize: TEXT.small, color: p.txt3 }}>
                         {t("serverCloud.previewNoSpaces")}
                       </div>
                     ) : (
@@ -3098,14 +3099,14 @@ function CloudConnectForm({
                           style={{
                             display: "flex",
                             alignItems: "center",
-                            gap: 8,
-                            fontSize: 13,
+                            gap: rem(8),
+                            fontSize: TEXT.base,
                             color: p.txt2,
                           }}
                         >
                           <Icon name="cloud" size={13} style={{ color: p.txt3 }} />
                           <span style={{ flex: 1, minWidth: 0 }}>{sp.name || sp.spaceId}</span>
-                          <span style={{ fontSize: 11, color: p.txt3 }}>{sp.role}</span>
+                          <span style={{ fontSize: TEXT.micro, color: p.txt3 }}>{sp.role}</span>
                         </div>
                       ))
                     )}
@@ -3132,7 +3133,7 @@ function CloudConnectForm({
               </>
             ) : branch === "identity" ? (
               <>
-                <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
+                <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5 }}>
                   {t("serverCloud.identityHint")}
                 </div>
                 <ConnectField
@@ -3169,14 +3170,14 @@ function CloudConnectForm({
               </>
             ) : branch === "kit" ? (
               <>
-                <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
+                <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5 }}>
                   {t("serverCloud.kitHint")}
                 </div>
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
+                  <div style={{ fontSize: TEXT.small, fontWeight: 600, color: p.txt2, marginBottom: rem(6) }}>
                     {t("serverCloud.kitFile")}
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: rem(10) }}>
                     <Btn
                       variant="ghost"
                       size="sm"
@@ -3190,7 +3191,7 @@ function CloudConnectForm({
                       style={{
                         flex: 1,
                         minWidth: 0,
-                        fontSize: 13,
+                        fontSize: TEXT.base,
                         fontFamily: MONO,
                         color: kitFileName ? p.txt2 : p.txt3,
                         overflow: "hidden",
@@ -3228,7 +3229,7 @@ function CloudConnectForm({
                 {/* Reconnect the local keyset — only for an already-linked instance. */}
                 {alreadyLinked && (
                   <>
-                    <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5 }}>
                       {t("serverCloud.signInHint")}
                     </div>
                     <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -3246,12 +3247,12 @@ function CloudConnectForm({
                         style={{
                           display: "flex",
                           alignItems: "center",
-                          gap: 10,
+                          gap: rem(10),
                           color: p.txt3,
-                          fontSize: 12,
+                          fontSize: TEXT.small,
                           textTransform: "uppercase",
-                          letterSpacing: 0.4,
-                          margin: "2px 0",
+                          letterSpacing: rem(0.4),
+                          margin: `${rem(2)} 0`,
                         }}
                       >
                         <span style={{ flex: 1, height: 1, background: p.line2 }} />
@@ -3259,7 +3260,7 @@ function CloudConnectForm({
                         <span style={{ flex: 1, height: 1, background: p.line2 }} />
                       </div>
                     )}
-                    <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5 }}>
                       {t("serverCloud.ssoHint")}
                     </div>
                     <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -3328,7 +3329,7 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
 
   if (!loaded || devices.length === 0) return null;
   return (
-    <div style={{ marginTop: 4 }}>
+    <div style={{ marginTop: rem(4) }}>
       {devices.map((d) => {
         const isCurrent = !!currentDeviceId && d.deviceId === currentDeviceId;
         const revoked = d.status !== "active";
@@ -3338,18 +3339,18 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
-              padding: "11px 0",
+              gap: rem(10),
+              padding: `${rem(11)} 0`,
               borderBottom: `1px solid ${p.line}`,
               opacity: revoked ? 0.55 : 1,
             }}
           >
             <Icon name="server" size={16} color={isCurrent ? p.accentText : p.txt3} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: rem(7) }}>
                 <span
                   style={{
-                    fontSize: 13,
+                    fontSize: TEXT.base,
                     fontFamily: MONO,
                     color: p.txt,
                     overflow: "hidden",
@@ -3362,7 +3363,7 @@ function CloudDevicesList({ currentDeviceId }: { currentDeviceId: string | null 
                 </span>
                 {isCurrent && <Tag>{t("serverCloud.thisDevice")}</Tag>}
               </div>
-              <div style={{ fontSize: 11, color: p.txt3 }}>
+              <div style={{ fontSize: TEXT.micro, color: p.txt3 }}>
                 {t("serverCloud.deviceRegistered", { date: fmtDate(d.registeredAt) })}
                 {" · "}
                 {t("serverCloud.deviceSessions", { n: d.activeSessions })}
@@ -3451,47 +3452,47 @@ function PairingCard({ onClose }: { onClose: () => void }) {
   return (
     <div
       style={{
-        marginTop: 12,
-        padding: 16,
+        marginTop: rem(12),
+        padding: rem(16),
         borderRadius: 12,
         border: `1px solid ${p.line2}`,
         background: p.bg1,
         display: "flex",
         flexDirection: "column",
-        gap: 11,
+        gap: rem(11),
       }}
     >
-      <div style={{ fontSize: 13, fontWeight: 700 }}>{t("serverCloud.pairingTitle")}</div>
-      <div style={{ fontSize: 13, color: p.txt3 }}>{t("serverCloud.pairingHint")}</div>
+      <div style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("serverCloud.pairingTitle")}</div>
+      <div style={{ fontSize: TEXT.base, color: p.txt3 }}>{t("serverCloud.pairingHint")}</div>
       <textarea
         readOnly
         value={payloadText}
         spellCheck={false}
         style={{
           width: "100%",
-          minHeight: 132,
+          minHeight: rem(132),
           resize: "vertical",
-          padding: 12,
+          padding: rem(12),
           borderRadius: 8,
           background: p.bg0,
           border: `1px solid ${p.line2}`,
           outline: "none",
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           lineHeight: 1.5,
           color: p.txt,
           boxSizing: "border-box",
         }}
       />
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10) }}>
         {waiting && (
-          <span style={{ display: "flex", alignItems: "center", gap: 8, color: p.txt2, fontSize: 13 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: rem(8), color: p.txt2, fontSize: TEXT.base }}>
             <Spinner size={14} />
             {t("serverCloud.pairingWaiting")}
           </span>
         )}
         {done && (
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: p.green, fontSize: 13 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: rem(6), color: p.green, fontSize: TEXT.base }}>
             <Icon name="check" size={14} color={p.green} />
             {t("serverCloud.pairingDone")}
           </span>
@@ -3533,17 +3534,17 @@ function CloudProfileForm({ status, onClose }: { status: ServerStatus; onClose: 
   return (
     <div
       style={{
-        marginTop: 12,
-        padding: 16,
+        marginTop: rem(12),
+        padding: rem(16),
         borderRadius: 12,
         border: `1px solid ${p.line2}`,
         background: p.bg1,
         display: "flex",
         flexDirection: "column",
-        gap: 11,
+        gap: rem(11),
       }}
     >
-      <div style={{ fontSize: 13, fontWeight: 700 }}>{t("serverCloud.editProfile")}</div>
+      <div style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("serverCloud.editProfile")}</div>
       <input
         {...NO_AUTOCORRECT}
         value={displayName}
@@ -3558,7 +3559,7 @@ function CloudProfileForm({ status, onClose }: { status: ServerStatus; onClose: 
         placeholder={t("serverCloud.handlePlaceholder")}
         style={inputStyle(p, true)}
       />
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
         <Btn variant="ghost" size="sm" onClick={onClose} disabled={busy}>
           {t("common.cancel")}
         </Btn>
@@ -3628,18 +3629,18 @@ function ArmEscrowForm({
         void submit();
       }}
       style={{
-        marginTop: 12,
-        padding: 16,
+        marginTop: rem(12),
+        padding: rem(16),
         borderRadius: 12,
         border: `1px solid ${p.line2}`,
         background: p.bg1,
         display: "flex",
         flexDirection: "column",
-        gap: 11,
+        gap: rem(11),
       }}
     >
-      <div style={{ fontSize: 13, fontWeight: 700 }}>{t("serverCloud.armEscrowFormTitle")}</div>
-      <div style={{ fontSize: 13, color: p.txt3, lineHeight: 1.5 }}>
+      <div style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("serverCloud.armEscrowFormTitle")}</div>
+      <div style={{ fontSize: TEXT.base, color: p.txt3, lineHeight: 1.5 }}>
         {t("serverCloud.armEscrowHint")}
       </div>
       {usesPassword && (
@@ -3659,7 +3660,7 @@ function ArmEscrowForm({
         type="password"
         mono
       />
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
         <Btn variant="ghost" size="sm" onClick={onClose} disabled={busy}>
           {t("common.cancel")}
         </Btn>
@@ -3710,33 +3711,33 @@ function CloudAuditLog() {
         </Btn>
       </SettingRow>
       {forbidden ? (
-        <div style={{ fontSize: 13, color: p.txt3, padding: "10px 0" }}>
+        <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(10)} 0` }}>
           {t("serverCloud.auditForbidden")}
         </div>
       ) : loaded && entries.length === 0 ? (
-        <div style={{ fontSize: 13, color: p.txt3, padding: "10px 0" }}>
+        <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(10)} 0` }}>
           {t("serverCloud.auditEmpty")}
         </div>
       ) : (
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: rem(8) }}>
           {!isMobile && (
             <div
               style={{
                 display: "flex",
-                gap: 10,
-                padding: "7px 0",
-                fontSize: 11,
+                gap: rem(10),
+                padding: `${rem(7)} 0`,
+                fontSize: TEXT.micro,
                 fontWeight: 700,
-                letterSpacing: 0.4,
+                letterSpacing: rem(0.4),
                 color: p.txt3,
                 textTransform: "uppercase",
                 borderBottom: `1px solid ${p.line}`,
               }}
             >
-              <span style={{ width: 56 }}>{t("serverCloud.auditSeq")}</span>
-              <span style={{ width: 110 }}>{t("serverCloud.auditSource")}</span>
+              <span style={{ width: rem(56) }}>{t("serverCloud.auditSeq")}</span>
+              <span style={{ width: rem(110) }}>{t("serverCloud.auditSource")}</span>
               <span style={{ flex: 1 }}>{t("serverCloud.auditRecordedAt")}</span>
-              <span style={{ width: 130 }}>{t("serverCloud.auditAuthor")}</span>
+              <span style={{ width: rem(130) }}>{t("serverCloud.auditAuthor")}</span>
             </div>
           )}
           {entries.map((a) =>
@@ -3746,13 +3747,13 @@ function CloudAuditLog() {
                 style={{
                   display: "flex",
                   flexDirection: "column",
-                  gap: 3,
-                  padding: "10px 0",
-                  fontSize: 13,
+                  gap: rem(3),
+                  padding: `${rem(10)} 0`,
+                  fontSize: TEXT.base,
                   borderBottom: `1px solid ${p.line}`,
                 }}
               >
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: rem(8) }}>
                   <span style={{ fontFamily: MONO, color: p.txt3 }}>{a.seq}</span>
                   <span style={{ fontWeight: 700, color: p.txt2 }}>{a.source}</span>
                 </div>
@@ -3775,18 +3776,18 @@ function CloudAuditLog() {
                 key={a.seq}
                 style={{
                   display: "flex",
-                  gap: 10,
-                  padding: "8px 0",
-                  fontSize: 13,
+                  gap: rem(10),
+                  padding: `${rem(8)} 0`,
+                  fontSize: TEXT.base,
                   borderBottom: `1px solid ${p.line}`,
                 }}
               >
-                <span style={{ width: 56, fontFamily: MONO, color: p.txt3 }}>{a.seq}</span>
-                <span style={{ width: 110, color: p.txt2 }}>{a.source}</span>
+                <span style={{ width: rem(56), fontFamily: MONO, color: p.txt3 }}>{a.seq}</span>
+                <span style={{ width: rem(110), color: p.txt2 }}>{a.source}</span>
                 <span style={{ flex: 1, color: p.txt2 }}>{fmtDate(a.recordedAt)}</span>
                 <span
                   style={{
-                    width: 130,
+                    width: rem(130),
                     fontFamily: MONO,
                     color: p.txt3,
                     overflow: "hidden",
@@ -3944,11 +3945,11 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
   return (
     <>
       <SectionLabel>{t("serverCloud.members")}</SectionLabel>
-      <div style={{ fontSize: 13, color: p.txt3, margin: "6px 0 8px" }}>
+      <div style={{ fontSize: TEXT.base, color: p.txt3, margin: `${rem(6)} 0 ${rem(8)}` }}>
         {t("serverCloud.membersDesc")}
       </div>
       {members.length === 0 ? (
-        <div style={{ fontSize: 13, color: p.txt3, padding: "8px 0" }}>
+        <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(8)} 0` }}>
           {t("serverCloud.membersEmpty")}
         </div>
       ) : (
@@ -3958,8 +3959,8 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
-              padding: "12px 0",
+              gap: rem(10),
+              padding: `${rem(12)} 0`,
               borderBottom: `1px solid ${p.line}`,
             }}
           >
@@ -3967,7 +3968,7 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div
                 style={{
-                  fontSize: 13,
+                  fontSize: TEXT.base,
                   fontFamily: MONO,
                   color: p.txt,
                   overflow: "hidden",
@@ -3978,7 +3979,7 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
               >
                 {m.ed25519PubHex.slice(0, 20)}…
               </div>
-              <div style={{ fontSize: 11, color: p.txt3, fontFamily: MONO }}>{m.fingerprint}</div>
+              <div style={{ fontSize: TEXT.micro, color: p.txt3, fontFamily: MONO }}>{m.fingerprint}</div>
             </div>
             <Tag>{roleLabel(m.role)}</Tag>
             <Btn
@@ -3996,17 +3997,17 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
       {adding ? (
         <div
           style={{
-            marginTop: 12,
-            padding: 16,
+            marginTop: rem(12),
+            padding: rem(16),
             borderRadius: 12,
             border: `1px solid ${p.line2}`,
             background: p.bg1,
             display: "flex",
             flexDirection: "column",
-            gap: 11,
+            gap: rem(11),
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 700 }}>{t("serverCloud.addMember")}</div>
+          <div style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("serverCloud.addMember")}</div>
           {accounts.length > 0 && (
             <select
               onChange={(e) => pickAccount(e.target.value)}
@@ -4036,7 +4037,7 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
             style={inputStyle(p, true)}
           />
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: p.txt2, marginBottom: 6 }}>
+            <div style={{ fontSize: TEXT.small, fontWeight: 600, color: p.txt2, marginBottom: rem(6) }}>
               {t("serverCloud.memberRole")}
             </div>
             <Segmented<MemberRole>
@@ -4049,7 +4050,7 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
               ]}
             />
           </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
             <Btn variant="ghost" size="sm" onClick={() => setAdding(false)} disabled={busy}>
               {t("common.cancel")}
             </Btn>
@@ -4059,7 +4060,7 @@ function CloudMembersPanel({ vault }: { vault: VaultInfo }) {
           </div>
         </div>
       ) : (
-        <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+        <div style={{ display: "flex", gap: rem(10), marginTop: rem(14) }}>
           <Btn icon="plus" size="sm" onClick={() => setAdding(true)}>
             {t("serverCloud.addMember")}
           </Btn>
@@ -4119,7 +4120,7 @@ function CloudServersList({
   return (
     <>
       <SectionLabel first>{t("serverCloud.sectionServers")}</SectionLabel>
-      <div style={{ display: "flex", flexDirection: "column", padding: "12px 0" }}>
+      <div style={{ display: "flex", flexDirection: "column", padding: `${rem(12)} 0` }}>
         {servers.map((s) => {
           const isActive = s.serverId === activeServerId;
           return (
@@ -4132,8 +4133,8 @@ function CloudServersList({
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 12,
-                padding: "12px 0",
+                gap: rem(12),
+                padding: `${rem(12)} 0`,
                 cursor: isActive ? "default" : "pointer",
                 borderBottom: `1px solid ${p.line}`,
                 background: isActive ? p.bg2 : "transparent",
@@ -4150,8 +4151,8 @@ function CloudServersList({
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 8,
-                    fontSize: 13,
+                    gap: rem(8),
+                    fontSize: TEXT.base,
                     fontWeight: 600,
                     color: p.txt,
                     minWidth: 0, // let the ellipsis label span actually truncate
@@ -4168,19 +4169,19 @@ function CloudServersList({
                     {serverLabel(s)}
                   </span>
                   {isActive && (
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: rem(5) }}>
                       <span
                         aria-hidden
                         style={{
-                          width: 6,
-                          height: 6,
+                          width: rem(6),
+                          height: rem(6),
                           borderRadius: "50%",
                           background: p.accent,
                           flexShrink: 0,
                         }}
                       />
                       <span
-                        style={{ fontSize: 11, fontWeight: 600, fontFamily: MONO, color: p.txt2 }}
+                        style={{ fontSize: TEXT.micro, fontWeight: 600, fontFamily: MONO, color: p.txt2 }}
                       >
                         {t("serverCloud.activeBadge")}
                       </span>
@@ -4199,7 +4200,7 @@ function CloudServersList({
                 </div>
                 <div
                   style={{
-                    fontSize: 12,
+                    fontSize: TEXT.small,
                     color: p.txt3,
                     fontFamily: MONO,
                     overflow: "hidden",
@@ -4226,7 +4227,7 @@ function CloudServersList({
             </div>
           );
         })}
-        <div style={{ display: "flex", justifyContent: "flex-start", marginTop: 4 }}>
+        <div style={{ display: "flex", justifyContent: "flex-start", marginTop: rem(4) }}>
           <Btn variant="ghost" size="sm" icon="plus" onClick={onAdd}>
             {t("serverCloud.addAnotherServer")}
           </Btn>
@@ -4305,7 +4306,7 @@ function SettingsCloud() {
 
   if (!unlocked) {
     return (
-      <div style={{ fontSize: 13, color: p.txt3, padding: "12px 0" }}>
+      <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(12)} 0` }}>
         {t("serverCloud.needUnlock")}
       </div>
     );
@@ -4434,9 +4435,9 @@ function SettingsCloud() {
       {addingServer && (
         <div
           style={{
-            marginTop: 4,
-            marginBottom: 8,
-            padding: "0 14px 8px",
+            marginTop: rem(4),
+            marginBottom: rem(8),
+            padding: `0 ${rem(14)} ${rem(8)}`,
             borderRadius: 12,
             border: `1px solid ${p.line2}`,
             background: p.bg1,
@@ -4449,9 +4450,9 @@ function SettingsCloud() {
       {armPrompt && (
         <div
           style={{
-            marginTop: 8,
-            marginBottom: 4,
-            padding: "13px 15px 15px",
+            marginTop: rem(8),
+            marginBottom: rem(4),
+            padding: `${rem(13)} ${rem(15)} ${rem(15)}`,
             borderRadius: 12,
             border: `1px solid ${rgba(p.accent, 0.5)}`,
             background: p.accentSoft,
@@ -4461,15 +4462,15 @@ function SettingsCloud() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
-              fontSize: 13,
+              gap: rem(8),
+              fontSize: TEXT.base,
               fontWeight: 700,
             }}
           >
             <Icon name="shieldcheck" size={16} color={p.accentText} />
             {t("serverCloud.armEscrowPromptTitle")}
           </div>
-          <div style={{ fontSize: 13, color: p.txt2, lineHeight: 1.5, marginTop: 4 }}>
+          <div style={{ fontSize: TEXT.base, color: p.txt2, lineHeight: 1.5, marginTop: rem(4) }}>
             {t("serverCloud.armEscrowPromptBody")}
           </div>
           <ArmEscrowForm
@@ -4486,8 +4487,8 @@ function SettingsCloud() {
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 6,
-            fontSize: 13,
+            gap: rem(6),
+            fontSize: TEXT.base,
             fontWeight: 600,
             color: s.hasSession ? p.green : p.amber,
           }}
@@ -4511,7 +4512,7 @@ function SettingsCloud() {
       <CloudInfoRow k={t("serverCloud.handleRow")} v={s.handle ?? "—"} />
       <CloudInfoRow k={t("serverCloud.lastSync")} v={lastSyncStr} />
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 16 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: rem(10), marginTop: rem(16) }}>
         <Btn
           icon={syncStatus.syncing ? undefined : "refresh"}
           onClick={doSync}
@@ -4553,7 +4554,7 @@ function SettingsCloud() {
       <ServerVaultsSection serverId={s.serverId} hasSession={s.hasSession} />
 
       {syncStatus.lastReport && (
-        <div style={{ fontSize: 12, color: p.txt3, marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: TEXT.small, color: p.txt3, marginTop: rem(10), display: "flex", gap: rem(12), flexWrap: "wrap" }}>
           <span>{t("serverCloud.syncReportApplied", { count: syncStatus.lastReport.applied })}</span>
           <span>{t("serverCloud.syncReportPushed", { count: syncStatus.lastReport.pushed })}</span>
           <span>{t("serverCloud.syncReportConflicts", { count: syncStatus.lastReport.conflicts })}</span>
@@ -4601,7 +4602,7 @@ function SettingsCloud() {
       ) : (
         <>
           <SectionLabel>{t("serverCloud.sectionVault")}</SectionLabel>
-          <div style={{ fontSize: 13, color: p.txt3, padding: "8px 0" }}>
+          <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(8)} 0` }}>
             {t("serverCloud.noCloudVault")}
           </div>
         </>
@@ -4612,7 +4613,7 @@ function SettingsCloud() {
           the profile/members panels collided and rendered a phantom empty panel. */}
       <CloudAuditLog key={`audit-${activeServerId ?? ""}`} />
 
-      <div style={{ display: "flex", gap: 10, marginTop: 26 }}>
+      <div style={{ display: "flex", gap: rem(10), marginTop: rem(26) }}>
         <Btn variant="ghost" size="sm" icon="unlock" onClick={doSignOut} disabled={!s.hasSession}>
           {t("serverCloud.signOut")}
         </Btn>
@@ -4658,21 +4659,21 @@ export function ViewSettings() {
     >
       <div
         style={{
-          width: isMobile ? "100%" : 200,
+          width: isMobile ? "100%" : rem(200),
           flexShrink: 0,
           borderRight: isMobile ? "none" : `1px solid ${p.line}`,
           borderBottom: isMobile ? `1px solid ${p.line}` : "none",
-          padding: isMobile ? "12px" : "20px 12px",
+          padding: isMobile ? `${rem(12)}` : `${rem(20)} ${rem(12)}`,
           display: "flex",
           flexDirection: isMobile ? "row" : "column",
-          gap: isMobile ? 6 : 3,
+          gap: isMobile ? rem(6) : rem(3),
           overflowX: isMobile ? "auto" : undefined,
           boxSizing: "border-box",
         }}
       >
         {!isMobile && (
           <h1
-            style={{ margin: "0 0 14px 10px", fontSize: 19, fontWeight: 800, letterSpacing: -0.5 }}
+            style={{ margin: `0 0 ${rem(14)} ${rem(10)}`, fontSize: TEXT.h3, fontWeight: 800, letterSpacing: rem(-0.5) }}
           >
             {t("settings.heading")}
           </h1>
@@ -4686,8 +4687,8 @@ export function ViewSettings() {
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
-                padding: isMobile ? "10px 14px" : "9px 11px",
+                gap: rem(10),
+                padding: isMobile ? `${rem(10)} ${rem(14)}` : `${rem(9)} ${rem(11)}`,
                 borderRadius: 8,
                 cursor: "pointer",
                 textAlign: "left",
@@ -4700,7 +4701,7 @@ export function ViewSettings() {
                     : `inset 2px 0 0 ${p.accent}`
                   : "none",
                 fontFamily: UI,
-                fontSize: 13,
+                fontSize: TEXT.base,
                 fontWeight: on ? 700 : 500,
                 whiteSpace: isMobile ? "nowrap" : undefined,
                 flexShrink: isMobile ? 0 : undefined,
@@ -4715,16 +4716,16 @@ export function ViewSettings() {
       <div ref={scrollRef} style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
         <div
           style={{
-            maxWidth: 720,
-            padding: isMobile ? "18px 16px 30px" : "22px 26px 30px",
+            maxWidth: rem(720),
+            padding: isMobile ? `${rem(18)} ${rem(16)} ${rem(30)}` : `${rem(22)} ${rem(26)} ${rem(30)}`,
             width: "100%",
             boxSizing: "border-box",
           }}
         >
-          <h2 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>
+          <h2 style={{ margin: `0 0 ${rem(6)}`, fontSize: TEXT.h2, fontWeight: 800, letterSpacing: rem(-0.5) }}>
             {title}
           </h2>
-          <div style={{ height: 8 }} />
+          <div style={{ height: rem(8) }} />
           {tab === "appearance" && <SettingsAppearance />}
           {tab === "general" && <SettingsGeneral />}
           {tab === "vaults" && <SettingsVaults />}

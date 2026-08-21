@@ -249,6 +249,11 @@ const MIGRATED_AREAS: string[] = [
   // Hosts view and host picker.
   "../views/ViewHosts.tsx",
   "../views/sftp/hostpicker.tsx",
+  // Settings.
+  "../overlays/SettingsOverlay.tsx",
+  "../views/ServerVaultsSection.tsx",
+  "../views/SettingsSupport.tsx",
+  "../views/ViewSettings.tsx",
 ];
 
 describe("migrated areas keep their type sizes scalable", () => {

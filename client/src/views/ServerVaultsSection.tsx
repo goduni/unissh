@@ -9,6 +9,7 @@ import { useTranslation } from "@/i18n";
 import { Btn, Icon, Spinner, Tag } from "@/components/primitives";
 import { toast } from "@/store/toast";
 import { usePalette } from "@/theme/ThemeProvider";
+import { rem, TEXT } from "@/theme/tokens";
 
 /** A vault's status decides the single action offered on its row. */
 type Kind = "inSync" | "pull" | "push";
@@ -86,31 +87,31 @@ export function ServerVaultsSection({
   if (!hasSession) return null;
 
   return (
-    <div style={{ marginTop: 18 }}>
+    <div style={{ marginTop: rem(18) }}>
       <div
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          marginBottom: 8,
+          marginBottom: rem(8),
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 600, color: p.txt }}>{t("serverVaults.title")}</div>
+        <div style={{ fontSize: TEXT.base, fontWeight: 600, color: p.txt }}>{t("serverVaults.title")}</div>
         <Btn variant="ghost" icon="refresh" onClick={load} disabled={loading}>
           {t("common.refresh")}
         </Btn>
       </div>
 
       {loading && rows === null ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, color: p.txt3, fontSize: 13 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: rem(8), color: p.txt3, fontSize: TEXT.base }}>
           <Spinner /> {t("serverVaults.loading")}
         </div>
       ) : rows && rows.length === 0 ? (
-        <div style={{ fontSize: 13, color: p.txt3, padding: "6px 0" }}>
+        <div style={{ fontSize: TEXT.base, color: p.txt3, padding: `${rem(6)} 0` }}>
           {t("serverVaults.empty")}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: rem(6) }}>
           {(rows ?? []).map((v) => {
             const kind = classify(v);
             const rowBusy = busy === v.vaultId;
@@ -120,8 +121,8 @@ export function ServerVaultsSection({
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
-                  padding: "8px 10px",
+                  gap: rem(10),
+                  padding: `${rem(8)} ${rem(10)}`,
                   border: `1px solid ${p.line}`,
                   borderRadius: 8,
                 }}
@@ -129,7 +130,7 @@ export function ServerVaultsSection({
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      fontSize: 13,
+                      fontSize: TEXT.base,
                       color: p.txt,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
@@ -138,7 +139,7 @@ export function ServerVaultsSection({
                   >
                     {v.isLocal && v.localName ? v.localName : shortId(v.vaultId)}
                   </div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 3 }}>
+                  <div style={{ display: "flex", gap: rem(6), marginTop: rem(3) }}>
                     {v.tombstone && <Tag>{t("serverVaults.tagDeleted")}</Tag>}
                     {!v.isLocal && <Tag>{t("serverVaults.tagOnServer")}</Tag>}
                     {v.isLocal && !v.bound && <Tag>{t("serverVaults.tagLocalOnly")}</Tag>}
@@ -148,7 +149,7 @@ export function ServerVaultsSection({
                 {rowBusy ? (
                   <Spinner />
                 ) : kind === "inSync" ? (
-                  <span style={{ fontSize: 12, color: p.txt3, display: "inline-flex", gap: 4, alignItems: "center" }}>
+                  <span style={{ fontSize: TEXT.small, color: p.txt3, display: "inline-flex", gap: rem(4), alignItems: "center" }}>
                     <Icon name="check" /> {t("serverVaults.inSync")}
                   </span>
                 ) : kind === "pull" ? (
