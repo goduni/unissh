@@ -51,19 +51,19 @@ export function UpdateBanner() {
       aria-live="polite"
       style={{
         position: "fixed",
-        right: 16,
-        bottom: 16,
+        right: rem(16),
+        bottom: rem(16),
         zIndex: 8900, // below the auto-lock warning (9000) — that one is time-critical
-        width: 320,
+        width: rem(320),
         maxWidth: "calc(100% - 32px)",
-        padding: 14,
+        padding: rem(14),
         borderRadius: 12,
         background: p.bg1,
         border: `1px solid ${p.line2}`,
         boxShadow: "0 8px 28px rgba(0,0,0,0.35)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(9), marginBottom: rem(6) }}>
         <Icon name="download" size={15} color={p.txt2} />
         <span style={{ fontSize: TEXT.base, fontWeight: 700, color: p.txt, flex: 1 }}>
           {t("update.available", { version: info.version })}
@@ -75,7 +75,7 @@ export function UpdateBanner() {
           style={{
             background: "none",
             border: "none",
-            padding: 2,
+            padding: rem(2),
             cursor: "pointer",
             display: "flex",
             color: p.txt3,
@@ -85,11 +85,11 @@ export function UpdateBanner() {
         </button>
       </div>
 
-      <div style={{ fontSize: rem(12.5), color: p.txt3, lineHeight: 1.45, marginBottom: 12 }}>
+      <div style={{ fontSize: rem(12.5), color: p.txt3, lineHeight: 1.45, marginBottom: rem(12) }}>
         {t("update.currentIs", { version: info.currentVersion })}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
         <Btn size="sm" onClick={start} disabled={installing}>
           {installing ? <Spinner size={13} /> : null}
           {installing ? t("update.installing") : t("update.install")}

@@ -4,7 +4,7 @@
 
 import { type CSSProperties } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { rgba, TEXT } from "@/theme/tokens";
+import { rem, rgba, TEXT } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
 import { useTranslation } from "@/i18n";
 import { useApp, type TerminalPaneState } from "@/store/app";
@@ -31,9 +31,9 @@ export function ReconnectBanner({
 
   const floatStyle: CSSProperties = {
     position: "absolute",
-    left: 8,
-    right: 8,
-    bottom: 8,
+    left: rem(8),
+    right: rem(8),
+    bottom: rem(8),
     borderRadius: 10,
     background: p.bg3,
     border: `1px solid ${isError ? p.red : p.line2}`,
@@ -51,8 +51,8 @@ export function ReconnectBanner({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: float ? "9px 12px" : "10px 14px",
+        gap: rem(10),
+        padding: float ? `${rem(9)} ${rem(12)}` : `${rem(10)} ${rem(14)}`,
         ...(float ? floatStyle : stripStyle),
       }}
     >

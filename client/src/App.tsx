@@ -11,8 +11,8 @@ import {
 } from "@/sftp/external-edit";
 import { sourceFor } from "@/bridge/sources";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { usePalette } from "@/theme/ThemeProvider";
-import { designPx, rem, TEXT } from "@/theme/tokens";
+import { usePalette, useTheme } from "@/theme/ThemeProvider";
+import { designPx, rem, ROOT_FONT_PX, rootFontPx, TEXT } from "@/theme/tokens";
 import * as api from "@/bridge/api";
 import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -137,6 +137,7 @@ function LockWarnBanner({ sec, onStay }: { sec: number; onStay: () => void }) {
 
 export function App() {
   const p = usePalette();
+  const { uiScale } = useTheme();
   const { t } = useTranslation();
   const route = useApp((s) => s.route);
   const device = useApp((s) => s.device);
@@ -162,7 +163,13 @@ export function App() {
   // life of a drag, and React drops the rest. This was felt as resize lag, and
   // felt worst under tiling compositors, where windows are resized constantly
   // rather than only when someone grabs an edge.
-  const [wide, setWide] = useState(typeof window !== "undefined" ? window.innerWidth >= 880 : true);
+  // 880 DESIGN pixels, not CSS: the sidebar and the view beside it both grow
+  // with the interface scale, so the width at which they stop fitting grows too.
+  const [wide, setWide] = useState(
+    typeof window !== "undefined"
+      ? window.innerWidth >= (880 * rootFontPx(uiScale)) / ROOT_FONT_PX
+      : true,
+  );
   const [sbCollapsed, setSbCollapsed] = useState(() => {
     try {
       return localStorage.getItem("unissh.sidebarCollapsed") === "1";
@@ -241,12 +248,14 @@ export function App() {
     }
   }, [boot]);
 
+  // Re-asked when the interface scale changes, not only on resize: the window
+  // did not move, but the number of design pixels it holds did.
   useEffect(() => {
-    const on = () => setWide(window.innerWidth >= 880);
+    const on = () => setWide(window.innerWidth >= (880 * rootFontPx(uiScale)) / ROOT_FONT_PX);
     on();
     window.addEventListener("resize", on);
     return () => window.removeEventListener("resize", on);
-  }, []);
+  }, [uiScale]);
 
   // Desktop auto-update. One check a few seconds after boot — late enough that it
   // never competes with unlock and session restore — then a slow tick for windows
@@ -694,7 +703,7 @@ export function App() {
         <div
           data-tauri-drag-region
           style={{
-            height: isMac() ? 38 : 44,
+            height: isMac() ? rem(38) : rem(44),
             flexShrink: 0,
             display: "flex",
             alignItems: "center",

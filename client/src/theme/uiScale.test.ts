@@ -246,6 +246,9 @@ const MIGRATED_AREAS: string[] = [
   "../components/UpdateBanner.tsx",
   "../shell/Shell.tsx",
   "../shell/WindowChrome.tsx",
+  // Hosts view and host picker.
+  "../views/ViewHosts.tsx",
+  "../views/sftp/hostpicker.tsx",
 ];
 
 describe("migrated areas keep their type sizes scalable", () => {

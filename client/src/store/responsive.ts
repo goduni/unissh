@@ -5,6 +5,8 @@
 
 import { useEffect, useState } from "react";
 import { useApp } from "./app";
+import { useTheme } from "@/theme/ThemeProvider";
+import { ROOT_FONT_PX, rootFontPx } from "@/theme/tokens";
 
 /** True when the app is rendering the mobile/phone shell. */
 export function useIsMobile(): boolean {
@@ -16,19 +18,25 @@ export function useIsMobile(): boolean {
  *  resizable desktop window it never fires; label+control rows that should stack
  *  (Settings, two-up modal bodies) must gate on this instead so narrowing the
  *  window actually triggers the column fallback. Default 720px ≈ the width below
- *  which a two-column label/control row starts to crowd. */
+ *  which a two-column label/control row starts to crowd.
+ *
+ *  `bp` is in DESIGN pixels, so the question stays "is there room for two columns
+ *  of THIS type?" rather than "how many CSS pixels wide is the window?". At 150 %
+ *  a 1440px window holds 960 design pixels of interface, and the rows that crowd
+ *  below 720 crowd there too; a breakpoint blind to the scale would keep
+ *  insisting the window was roomy while the content spilled out of it. At 100 %
+ *  the two are the same number and nothing moves. */
 export function useNarrow(bp = 720): boolean {
   const mobile = useApp((s) => s.device === "mobile");
-  const [narrow, setNarrow] = useState(
-    typeof window !== "undefined" ? window.innerWidth < bp : false,
-  );
+  const { uiScale } = useTheme();
+  const [width, setWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 0);
   useEffect(() => {
-    const on = () => setNarrow(window.innerWidth < bp);
+    const on = () => setWidth(window.innerWidth);
     on();
     window.addEventListener("resize", on);
     return () => window.removeEventListener("resize", on);
-  }, [bp]);
-  return mobile || narrow;
+  }, []);
+  return mobile || width < (bp * rootFontPx(uiScale)) / ROOT_FONT_PX;
 }
 
 /** True when the viewport is in landscape (wider than tall). On a phone this is

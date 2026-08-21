@@ -389,7 +389,7 @@ function NavItem({
         // Reference nav: full-bleed row, no rounded pill / side margin. The accent
         // tick sits flush at the sidebar's left edge; accent is reserved for it.
         width: "100%",
-        padding: sub ? "0 18px 0 30px" : "0 18px",
+        padding: sub ? `0 ${rem(18)} 0 ${rem(30)}` : `0 ${rem(18)}`,
         borderRadius: 0,
         cursor: "pointer",
         // Active = neutral fill + a 2.5px accent edge tick (the reference tick alone

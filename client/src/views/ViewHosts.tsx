@@ -6,7 +6,7 @@
 
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO, RADIUS, SIZE, SPACE, UI, AUTH_LABEL_KEY } from "@/theme/tokens";
+import { AUTH_LABEL_KEY, designPx, MONO, RADIUS, rem, SIZE, SPACE, TEXT, UI } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot, Spinner, NO_AUTOCORRECT } from "@/components/primitives";
 import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
@@ -161,8 +161,8 @@ function HostCard({
           // BUTTON out at 12/12 would put the visible box at 24/24 with a hit area
           // over the name and address. Pull the button back by half the slack so
           // the box lands where it did.
-          top: touch ? 12 - (SIZE.tapMin - 20) / 2 : 12,
-          right: touch ? 12 - (SIZE.tapMin - 20) / 2 : 12,
+          top: touch ? 12 - (SIZE.tapMin - 20) / 2 : rem(12),
+          right: touch ? 12 - (SIZE.tapMin - 20) / 2 : rem(12),
           justifyContent: "center",
           display: touch || show || selected ? "inline-flex" : "none",
           zIndex: 2,
@@ -170,11 +170,11 @@ function HostCard({
       />
 
       {/* L1 — 7px status dot + name (reference: dot keys off a live session) */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(8), minWidth: 0 }}>
         <span
           style={{
-            width: 7,
-            height: 7,
+            width: rem(7),
+            height: rem(7),
             borderRadius: "50%",
             flexShrink: 0,
             background: session ? p.green : p.line2,
@@ -182,9 +182,9 @@ function HostCard({
         />
         <span
           style={{
-            fontSize: 16,
+            fontSize: TEXT.lead,
             fontWeight: 700,
-            letterSpacing: "-0.2px",
+            letterSpacing: `${rem(-0.2)}`,
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -201,12 +201,12 @@ function HostCard({
       <div
         style={{
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           color: p.txt2,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
-          marginTop: 6,
+          marginTop: rem(6),
         }}
       >
         {hostAddress(h)}
@@ -216,15 +216,15 @@ function HostCard({
           Desktop: fades on hover so the hover Connect never sits over the text.
           Touch: hover never fires, so the actions ride this row instead and the
           meta shares the width with them rather than fading for nothing. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: touch ? 12 : 16, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), marginTop: touch ? rem(12) : rem(16), minWidth: 0 }}>
         <div
           style={{
             flex: 1,
             display: "flex",
             alignItems: "center",
-            gap: 7,
+            gap: rem(7),
             fontFamily: MONO,
-            fontSize: 12,
+            fontSize: TEXT.small,
             color: p.txt3,
             opacity: !touch && show ? 0 : 1,
             transition: "opacity .12s ease",
@@ -278,7 +278,7 @@ function HostCard({
             phone had to open the detail screen to reach it — the desktop's own
             double-click and hover-Connect are both unreachable by a finger. */}
         {touch && (
-          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: rem(6), flexShrink: 0 }}>
             <Btn
               size="md"
               variant="ghost"
@@ -315,15 +315,15 @@ function HostCard({
         <div
           style={{
             position: "absolute",
-            right: 12,
+            right: rem(12),
             // Center the ~27px buttons on the L3 meta row for BOTH densities:
             // the row sits on the bottom padding (18 comfortable / 13 compact),
             // so one fixed offset tuned for comfortable rode 5px high in
             // compact and the Connect button broke out of its row.
-            bottom: compact ? 7 : 11,
+            bottom: compact ? rem(7) : rem(11),
             zIndex: 3,
             display: "flex",
-            gap: 6,
+            gap: rem(6),
           }}
         >
           <Btn
@@ -412,10 +412,10 @@ function HostRow({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        padding: "0 4px",
+        gap: rem(12),
+        padding: `0 ${rem(4)}`,
         // Density is the spacing axis: compact packs the rows tighter.
-        height: compact ? 38 : 46,
+        height: compact ? rem(38) : rem(46),
         cursor: "pointer",
         // Hairline row: no per-row box/radius/side-stripe. Selection = an inset
         // accentLine frame, NOT a fill — the bg2 tint recoloured the row itself
@@ -449,9 +449,9 @@ function HostRow({
       />
       <span
         style={{
-          width: 150,
+          width: rem(150),
           fontWeight: 600,
-          fontSize: 13,
+          fontSize: TEXT.base,
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -463,7 +463,7 @@ function HostRow({
       <span
         style={{
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           color: p.txt3,
           flex: 1,
           minWidth: 0,
@@ -474,7 +474,13 @@ function HostRow({
       >
         {hostAddress(h)}
       </span>
-      <div style={{ display: "flex", gap: 5, width: 130, flexShrink: 0, overflow: "hidden", alignItems: "center" }}>
+      {/* Tags and the session column YIELD; the auth badge and Connect do not.
+          The row's fixed columns add up to more than a narrow list pane can hold
+          (true before the interface scale existed — try a 1000px window), and
+          everything being unshrinkable meant the overflow came off the END of the
+          row: the connect button, clipped. Large type reaches that width sooner,
+          so the two low-priority columns now give first and the actions survive. */}
+      <div style={{ display: "flex", gap: rem(5), width: rem(130), minWidth: 0, overflow: "hidden", alignItems: "center" }}>
         {h.tags.slice(0, 2).map((tg) => (
           <Tag key={tg}>{tg}</Tag>
         ))}
@@ -483,11 +489,12 @@ function HostRow({
       <span
         style={{
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           color: p.txt3,
-          width: 74,
+          width: rem(74),
+          minWidth: 0,
+          overflow: "hidden",
           textAlign: "right",
-          flexShrink: 0,
         }}
       >
         {session ? <span style={{ color: p.green }}>{t("hosts.session")}</span> : "—"}
@@ -496,7 +503,7 @@ function HostRow({
         <AuthBadge auth={profileAuthKind(h.auth)} jump={h.jumps.length > 0} />
       </span>
       {/* 112 (not 84): fits the RU "Подключить" icon+label so it never spills over AuthBadge */}
-      <div style={{ width: 112, flexShrink: 0, display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ width: rem(112), flexShrink: 0, display: "flex", justifyContent: "flex-end" }}>
         {show ? (
           <Btn
             size="sm"
@@ -532,18 +539,18 @@ function DetailRow({
       style={{
         display: "flex",
         alignItems: "baseline",
-        gap: 10,
-        padding: "7px 0",
+        gap: rem(10),
+        padding: `${rem(7)} 0`,
         borderBottom: `1px solid ${p.line}`,
       }}
     >
       <span
         style={{
-          minWidth: 72,
+          minWidth: rem(72),
           // cap + ellipsis so a long RU label ("Последнее подключение") can't shove
           // the value off the row; the fixed flexShrink:0 stays.
-          maxWidth: 140,
-          fontSize: 12,
+          maxWidth: rem(140),
+          fontSize: TEXT.small,
           color: p.txt3,
           flexShrink: 0,
           whiteSpace: "nowrap",
@@ -557,7 +564,7 @@ function DetailRow({
         style={{
           flex: 1,
           minWidth: 0,
-          fontSize: 13,
+          fontSize: TEXT.base,
           color: p.txt,
           fontFamily: mono ? MONO : UI,
           whiteSpace: "nowrap",
@@ -611,11 +618,11 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       {/* Wraps: on touch the three IconBtns below claim a 44px hit box each, which
           pushes this row past a phone's width. Better the actions drop to a second
           line than the delete button sit off-screen. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 3, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(9), marginBottom: rem(3), flexWrap: "wrap" }}>
         <span
           style={{
-            width: 10,
-            height: 10,
+            width: rem(10),
+            height: rem(10),
             borderRadius: "50%",
             flexShrink: 0,
             background: session ? p.green : p.line2,
@@ -624,11 +631,11 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         <h3
           style={{
             margin: 0,
-            fontSize: 19,
+            fontSize: TEXT.h3,
             fontWeight: 700,
             whiteSpace: "nowrap",
             flexShrink: 0,
-            maxWidth: 170,
+            maxWidth: rem(170),
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
@@ -640,8 +647,8 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 3,
-              fontSize: 11,
+              gap: rem(3),
+              fontSize: TEXT.micro,
               color: p.txt3,
               flexShrink: 0,
             }}
@@ -655,8 +662,8 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 3,
-              fontSize: 11,
+              gap: rem(3),
+              fontSize: TEXT.micro,
               color: p.txt3,
               flexShrink: 0,
             }}
@@ -665,7 +672,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
             {t("hosts.proxyBadge")}
           </span>
         )}
-        <div style={{ flex: 1, minWidth: 8 }} />
+        <div style={{ flex: 1, minWidth: rem(8) }} />
         {h.auth.type === "personal" && vault && (
           <IconBtn
             icon="fingerprint"
@@ -691,15 +698,15 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       <div
         style={{
           fontFamily: MONO,
-          fontSize: 12,
+          fontSize: TEXT.small,
           color: session ? p.green : p.txt3,
-          marginBottom: 14,
+          marginBottom: rem(14),
         }}
       >
         {session ? t("hosts.sessionActive") : t("hosts.noActiveSession")}
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: rem(8), marginBottom: rem(16) }}>
         <Btn
           variant="outline"
           icon="terminal"
@@ -712,7 +719,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
           variant="ghost"
           icon="bolt"
           title={t("nav.fleetExec")}
-          style={{ padding: "8px 11px" }}
+          style={{ padding: `${rem(8)} ${rem(11)}` }}
           onClick={() => ctx.go("fleet")}
         />
         {/* Quick SFTP: connect + jump straight to the SFTP view for this host. */}
@@ -720,7 +727,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
           variant="ghost"
           icon="folders"
           title={t("hosts.openSftp")}
-          style={{ padding: "8px 11px" }}
+          style={{ padding: `${rem(8)} ${rem(11)}` }}
           onClick={() => void ctx.connectSftp(h)}
         />
       </div>
@@ -734,7 +741,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       <DetailRow label={t("hosts.detail.auth")}>
         {/* badge + its OWN ellipsizing text child (minWidth:0+triad) so long RU auth
             labels ("Спросить при подключении") truncate with dots, not mid-word. */}
-        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: rem(6), minWidth: 0 }}>
           <AuthBadge auth={authKind} />
           <span
             style={{
@@ -767,17 +774,17 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         <>
           <div
             style={{
-              fontSize: 11,
+              fontSize: TEXT.micro,
               fontWeight: 700,
-              letterSpacing: 0.6,
+              letterSpacing: rem(0.6),
               color: p.txt3,
               textTransform: "uppercase",
-              margin: "14px 0 7px",
+              margin: `${rem(14)} 0 ${rem(7)}`,
             }}
           >
             {t("hosts.detail.groups")}
           </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", gap: rem(6), flexWrap: "wrap", alignItems: "center" }}>
             {memberOf.map((g) => (
               <Tag key={g.groupId}>{g.label}</Tag>
             ))}
@@ -786,19 +793,19 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
       )}
       <div
         style={{
-          fontSize: 11,
+          fontSize: TEXT.micro,
           fontWeight: 700,
-          letterSpacing: 0.6,
+          letterSpacing: rem(0.6),
           color: p.txt3,
           textTransform: "uppercase",
-          margin: "14px 0 7px",
+          margin: `${rem(14)} 0 ${rem(7)}`,
         }}
       >
         {t("hosts.tags")}
       </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: rem(6), flexWrap: "wrap", alignItems: "center" }}>
         {h.tags.length === 0 && (
-          <span style={{ fontSize: 12, color: p.txt3 }}>{t("hosts.noTags")}</span>
+          <span style={{ fontSize: TEXT.small, color: p.txt3 }}>{t("hosts.noTags")}</span>
         )}
         {h.tags.map((tg) => (
           <Tag key={tg} mono>
@@ -814,7 +821,7 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
         onKeyDown={pressActivate(() => ctx.go("known"))}
         onClick={() => ctx.go("known")}
         style={{
-          padding: "12px 0 2px",
+          padding: `${rem(12)} 0 ${rem(2)}`,
           borderTop: `1px solid ${p.line}`,
           background: "transparent",
           cursor: "pointer",
@@ -824,16 +831,16 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 6,
-            fontSize: 11,
+            gap: rem(6),
+            fontSize: TEXT.micro,
             color: p.txt3,
-            marginBottom: 5,
+            marginBottom: rem(5),
           }}
         >
           <Icon name="shieldcheck" size={13} color={known ? p.green : p.txt3} />
           {known ? t("hosts.hostKeyPinned") : t("hosts.hostKeyUnpinned")}
         </div>
-        <div style={{ fontFamily: MONO, fontSize: 11, color: p.txt2, wordBreak: "break-all" }}>
+        <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt2, wordBreak: "break-all" }}>
           {known ? known.key : t("hosts.unpinned")}
         </div>
       </div>
@@ -867,9 +874,9 @@ function SessionsRail() {
     .filter((t) => t.status === "online" || t.status === "connecting");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: rem(12) }}>
       {live.length === 0 && (
-        <div style={{ fontSize: 12, color: p.txt3, padding: "4px 2px" }}>
+        <div style={{ fontSize: TEXT.small, color: p.txt3, padding: `${rem(4)} ${rem(2)}` }}>
           {tr("hosts.noActiveSessions")}
         </div>
       )}
@@ -898,7 +905,7 @@ function SessionsRail() {
               ctx.go("terminal");
             }}
             style={{
-              padding: 12,
+              padding: rem(12),
               borderRadius: 12,
               background: p.bg0,
               border: `1px solid ${p.line}`,
@@ -907,12 +914,12 @@ function SessionsRail() {
               cursor: "pointer",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
               {/* shape carries the state too: solid = online, hollow = connecting */}
               <span
                 style={{
-                  width: 8,
-                  height: 8,
+                  width: rem(8),
+                  height: rem(8),
                   borderRadius: "50%",
                   background: online ? color : "transparent",
                   border: online ? "none" : `1.5px solid ${color}`,
@@ -923,8 +930,8 @@ function SessionsRail() {
                   scan to find "the one I was working in", and picking the wrong
                   one is picking the wrong machine. */}
               {t.local && <Icon name="laptop" size={13} color={p.txt3} />}
-              <span style={{ fontSize: 13, fontWeight: 700 }}>{t.title}</span>
-              <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+              <span style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t.title}</span>
+              <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
                 {t.local
                   ? tr("terminal.localShell")
                   : t.profile
@@ -934,20 +941,20 @@ function SessionsRail() {
                     : "pty"}
               </span>
               <div style={{ flex: 1 }} />
-              <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+              <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
                 {t.status === "online" ? tr("hosts.online") : "…"}
               </span>
             </div>
             {t.preview && t.preview.length > 0 && (
               <div
                 style={{
-                  marginTop: 9,
+                  marginTop: rem(9),
                   borderRadius: 8,
                   background: p.bg0,
                   border: `1px solid ${p.line}`,
-                  padding: "8px 10px",
+                  padding: `${rem(8)} ${rem(10)}`,
                   fontFamily: MONO,
-                  fontSize: 11,
+                  fontSize: TEXT.micro,
                   lineHeight: 1.6,
                 }}
               >
@@ -970,12 +977,12 @@ function SessionsRail() {
         );
       })}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(8), marginTop: rem(2) }}>
         <span
           style={{
-            fontSize: 11,
+            fontSize: TEXT.micro,
             fontWeight: 700,
-            letterSpacing: 0.6,
+            letterSpacing: rem(0.6),
             color: p.txt3,
             textTransform: "uppercase",
           }}
@@ -985,13 +992,13 @@ function SessionsRail() {
         <div style={{ flex: 1, height: 1, background: p.line }} />
         <button
           onClick={() => ctx.go("tunnels")}
-          style={{ ...BTN_RESET, fontSize: 11, color: p.accentText, cursor: "pointer" }}
+          style={{ ...BTN_RESET, fontSize: TEXT.micro, color: p.accentText, cursor: "pointer" }}
         >
           {tr("common.all")} →
         </button>
       </div>
       {tunnels.length === 0 && (
-        <div style={{ fontSize: 12, color: p.txt3 }}>{tr("hosts.noOpenTunnels")}</div>
+        <div style={{ fontSize: TEXT.small, color: p.txt3 }}>{tr("hosts.noOpenTunnels")}</div>
       )}
       {tunnels.map((t, i) => (
         <div
@@ -1005,8 +1012,8 @@ function SessionsRail() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 9,
-            padding: "9px 2px",
+            gap: rem(9),
+            padding: `${rem(9)} ${rem(2)}`,
             borderTop: i === 0 ? "none" : `1px solid ${p.line}`,
             background: "transparent",
             cursor: "pointer",
@@ -1014,14 +1021,14 @@ function SessionsRail() {
         >
           <Icon name="branch" size={15} color={p.txt3} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 600 }}>{t.label}</div>
-            <div style={{ fontSize: 11, color: p.txt3 }}>{t.route}</div>
+            <div style={{ fontFamily: MONO, fontSize: TEXT.small, fontWeight: 600 }}>{t.label}</div>
+            <div style={{ fontSize: TEXT.micro, color: p.txt3 }}>{t.route}</div>
           </div>
           {/* solid = forwarding, hollow = off — state isn't colour-only */}
           <span
             style={{
-              width: 7,
-              height: 7,
+              width: rem(7),
+              height: rem(7),
               borderRadius: "50%",
               background: t.on ? p.green : "transparent",
               border: t.on ? "none" : `1.5px solid ${p.txt3}`,
@@ -1107,11 +1114,11 @@ function BulkActionsMenu({
     width: "100%",
     display: "flex",
     alignItems: "center",
-    gap: 9,
-    padding: "8px 10px",
+    gap: rem(9),
+    padding: `${rem(8)} ${rem(10)}`,
     borderRadius: 8,
     cursor: "pointer",
-    fontSize: 13,
+    fontSize: TEXT.base,
     fontWeight: 500,
     color: p.txt2,
   };
@@ -1122,12 +1129,12 @@ function BulkActionsMenu({
   const sectionLabel = (label: string) => (
     <div
       style={{
-        fontSize: 11,
+        fontSize: TEXT.micro,
         fontWeight: 700,
-        letterSpacing: 0.6,
+        letterSpacing: rem(0.6),
         textTransform: "uppercase",
         color: p.txt3,
-        padding: "6px 10px 4px",
+        padding: `${rem(6)} ${rem(10)} ${rem(4)}`,
       }}
     >
       {label}
@@ -1135,10 +1142,10 @@ function BulkActionsMenu({
   );
   const inputStyle: React.CSSProperties = {
     width: "100%",
-    height: 32,
-    padding: "0 10px",
+    height: rem(32),
+    padding: `0 ${rem(10)}`,
     borderRadius: 8,
-    fontSize: 13,
+    fontSize: TEXT.base,
     background: p.bg2,
     color: p.txt,
     border: `1px solid ${p.line2}`,
@@ -1169,20 +1176,20 @@ function BulkActionsMenu({
             position: "absolute",
             bottom: "100%",
             left: 0,
-            marginBottom: 8,
-            width: 248,
+            marginBottom: rem(8),
+            width: rem(248),
             zIndex: 30,
             background: p.bg3,
             border: `1px solid ${p.line2}`,
             borderRadius: 12,
-            padding: 6,
+            padding: rem(6),
             boxShadow: p.shadow,
-            maxHeight: 340,
+            maxHeight: rem(340),
             overflow: "auto",
           }}
         >
           {empty && (
-            <div style={{ padding: "10px 10px", fontSize: 13, color: p.txt3 }}>
+            <div style={{ padding: `${rem(10)} ${rem(10)}`, fontSize: TEXT.base, color: p.txt3 }}>
               {t("hosts.bulk.nothingToRemove")}
             </div>
           )}
@@ -1211,7 +1218,7 @@ function BulkActionsMenu({
             </button>
           ))}
           {mode === "add" && (
-            <div style={{ padding: "4px 6px 8px" }}>
+            <div style={{ padding: `${rem(4)} ${rem(6)} ${rem(8)}` }}>
               <input
                 value={newGroup}
                 placeholder={t("hosts.bulk.newGroupPlaceholder")}
@@ -1247,7 +1254,7 @@ function BulkActionsMenu({
             </button>
           ))}
           {mode === "add" && (
-            <div style={{ padding: "4px 6px 6px" }}>
+            <div style={{ padding: `${rem(4)} ${rem(6)} ${rem(6)}` }}>
               <input
                 value={newTag}
                 placeholder={t("hosts.bulk.newTagPlaceholder")}
@@ -1462,8 +1469,10 @@ export function ViewHosts() {
       /* ignore */
     }
   };
+  // Design pixels, like the sidebar's: the pointer measurement is converted once
+  // here so a rail dragged wide at 150 % does not come back as a sliver at 100 %.
   const resizeRail = (clientX: number) => {
-    const w = Math.min(460, Math.max(220, Math.round(window.innerWidth - clientX)));
+    const w = Math.min(460, Math.max(220, Math.round(designPx(window.innerWidth - clientX))));
     setRailW(w);
     try {
       localStorage.setItem("unissh.hostRailW", String(w));
@@ -1630,8 +1639,8 @@ export function ViewHosts() {
       aria-label={t(val === "cards" ? "hosts.viewCards" : "hosts.viewList")}
       aria-pressed={hostsLayout === val}
       style={{
-        width: 30,
-        height: 26,
+        width: rem(30),
+        height: rem(26),
         borderRadius: 6,
         border: "none",
         background: hostsLayout === val ? p.bg4 : "transparent",
@@ -1654,16 +1663,16 @@ export function ViewHosts() {
       style={{
         position: "relative",
         flex: touch ? 1 : undefined,
-        width: touch ? undefined : tight ? 148 : 224,
+        width: touch ? undefined : tight ? rem(148) : rem(224),
         // The stated width is a floor, not a suggestion: the toolbar wraps, and
         // without this the box shrinks under its label before the row does.
         flexShrink: touch ? 1 : 0,
         minWidth: 0,
         display: "flex",
         alignItems: "center",
-        gap: touch ? 8 : 6,
-        height: touch ? SIZE.tapMin : 30,
-        padding: touch ? "0 6px 0 12px" : "0 4px 0 9px",
+        gap: touch ? rem(8) : rem(6),
+        height: touch ? SIZE.tapMin : rem(30),
+        padding: touch ? `0 ${rem(6)} 0 ${rem(12)}` : `0 ${rem(4)} 0 ${rem(9)}`,
         borderRadius: RADIUS.ctl,
         background: p.bg2,
         // Focus reads on the frame, matching the sort control's open state.
@@ -1692,7 +1701,7 @@ export function ViewHosts() {
           fontFamily: UI,
           // 16px or iOS zooms the whole page on focus. The desktop has no such
           // problem and 16px there would tower over every other control.
-          fontSize: touch ? 16 : 13,
+          fontSize: touch ? TEXT.lead : TEXT.base,
         }}
       />
       {query && (
@@ -1705,8 +1714,8 @@ export function ViewHosts() {
           }}
           aria-label={t("common.clear")}
           style={{
-            width: touch ? SIZE.tapMin : 22,
-            height: touch ? SIZE.tapMin : 22,
+            width: touch ? SIZE.tapMin : rem(22),
+            height: touch ? SIZE.tapMin : rem(22),
             flexShrink: 0,
             border: "none",
             background: "transparent",
@@ -1761,9 +1770,9 @@ export function ViewHosts() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 6,
-            height: touch ? SIZE.tapMin : 30,
-            padding: touch ? "0 12px" : "0 10px",
+            gap: rem(6),
+            height: touch ? SIZE.tapMin : rem(30),
+            padding: touch ? `0 ${rem(12)}` : `0 ${rem(10)}`,
             borderRadius: RADIUS.chip,
             // No grey fill — just the frame. Open state reads via a stronger
             // hairline + darker label instead of a bg tint.
@@ -1771,7 +1780,7 @@ export function ViewHosts() {
             background: "transparent",
             color: sortOpen ? p.txt : p.txt2,
             cursor: "pointer",
-            fontSize: 13,
+            fontSize: TEXT.base,
             fontWeight: 600,
           }}
         >
@@ -1790,14 +1799,14 @@ export function ViewHosts() {
               position: "absolute",
               top: "100%",
               right: 0,
-              marginTop: 6,
+              marginTop: rem(6),
               zIndex: 30,
               background: p.bg3,
               border: `1px solid ${p.line2}`,
               borderRadius: 12,
-              padding: 5,
+              padding: rem(5),
               boxShadow: p.shadow,
-              width: 220,
+              width: rem(220),
             }}
           >
             {(Object.keys(SORT_KEYS) as SortKey[]).map((k) => (
@@ -1815,11 +1824,11 @@ export function ViewHosts() {
                   width: "100%",
                   display: "flex",
                   alignItems: "center",
-                  gap: 9,
-                  padding: "8px 10px",
+                  gap: rem(9),
+                  padding: `${rem(8)} ${rem(10)}`,
                   borderRadius: 8,
                   cursor: "pointer",
-                  fontSize: 13,
+                  fontSize: TEXT.base,
                   fontWeight: sort === k ? 700 : 500,
                   color: sort === k ? p.txt : p.txt2,
                   background: "transparent",
@@ -1867,21 +1876,21 @@ export function ViewHosts() {
             display: "flex",
             alignItems: "center",
             flexWrap: "wrap",
-            gap: 12,
-            rowGap: 10,
+            gap: rem(12),
+            rowGap: rem(10),
             padding: `24px ${gutter}px 14px`,
           }}
         >
           {/* Title + count share one baseline (reference .head); the outer row stays
               center-aligned so the toolbar buttons don't ride the text baseline. */}
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
-            <h1 style={{ margin: 0, fontSize: narrow ? 24 : 28, fontWeight: 800, letterSpacing: -0.7 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: rem(12), minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontSize: narrow ? TEXT.h2 : TEXT.h1, fontWeight: 800, letterSpacing: rem(-0.7) }}>
               {t("hosts.title")}
             </h1>
             <span
               style={{
                 fontFamily: MONO,
-                fontSize: 12,
+                fontSize: TEXT.small,
                 color: p.txt3,
                 whiteSpace: "nowrap",
               }}
@@ -1912,12 +1921,12 @@ export function ViewHosts() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: 5,
+              gap: rem(5),
               // `tight` collapses this to an icon on any phone, so 30px would
               // leave a 14px target.
-              height: touch ? SIZE.tapMin : 30,
+              height: touch ? SIZE.tapMin : rem(30),
               minWidth: touch ? SIZE.tapMin : undefined,
-              fontSize: 13,
+              fontSize: TEXT.base,
               fontWeight: 600,
               color: p.txt3,
               cursor: "pointer",
@@ -1932,12 +1941,12 @@ export function ViewHosts() {
             style={{
               display: "flex",
               alignItems: "center",
-              height: 30,
+              height: rem(30),
               background: "transparent",
               border: `1px solid ${p.line}`,
               borderRadius: RADIUS.chip,
-              padding: 1,
-              gap: 2,
+              padding: rem(1),
+              gap: rem(2),
             }}
           >
             {segBtn("grid", "cards")}
@@ -1954,9 +1963,9 @@ export function ViewHosts() {
                 ...BTN_RESET,
                 display: "flex",
                 alignItems: "center",
-                gap: 5,
-                height: 30,
-                fontSize: 13,
+                gap: rem(5),
+                height: rem(30),
+                fontSize: TEXT.base,
                 fontWeight: 700,
                 color: p.accentText,
                 cursor: "pointer",
@@ -1974,8 +1983,8 @@ export function ViewHosts() {
               aria-label={t("common.show")}
               onClick={() => toggleRail(true)}
               style={{
-                width: 30,
-                height: 30,
+                width: rem(30),
+                height: rem(30),
                 borderRadius: 8,
                 border: `1px solid ${p.line}`,
                 background: "transparent",
@@ -1995,7 +2004,7 @@ export function ViewHosts() {
         {/* Touch: the filter box gets its own full-width row — the desktop toolbar
             is gone here, and the sort control rides along with it. */}
         {touch && (
-          <div style={{ padding: `0 ${gutter}px 10px`, display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ padding: `0 ${gutter}px 10px`, display: "flex", alignItems: "center", gap: rem(10) }}>
             {searchBox}
             {sortControl}
           </div>
@@ -2005,7 +2014,7 @@ export function ViewHosts() {
           style={{
             position: "relative",
             display: "flex",
-            gap: 14,
+            gap: rem(14),
             padding: `0 ${gutter}px 10px`,
             alignItems: "center",
             // Touch adds group chips to the tag chips, which would wrap this strip
@@ -2027,8 +2036,8 @@ export function ViewHosts() {
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 5,
-                fontSize: 13,
+                gap: rem(5),
+                fontSize: TEXT.base,
                 fontWeight: 700,
                 color: p.txt,
                 // The strip scrolls rather than wraps on touch; without this the
@@ -2046,7 +2055,7 @@ export function ViewHosts() {
                   ...BTN_RESET,
                   display: "inline-flex",
                   alignItems: "center",
-                  padding: 2,
+                  padding: rem(2),
                   cursor: "pointer",
                   color: p.txt3,
                 }}
@@ -2071,13 +2080,13 @@ export function ViewHosts() {
                     flexShrink: 0,
                     display: "inline-flex",
                     alignItems: "center",
-                    gap: 6,
+                    gap: rem(6),
                     minHeight: SIZE.tapMin,
                     fontFamily: UI,
-                    fontSize: 13,
+                    fontSize: TEXT.base,
                     fontWeight: 600,
                     cursor: "pointer",
-                    padding: "2px 1px 5px",
+                    padding: `${rem(2)} ${rem(1)} ${rem(5)}`,
                     border: "none",
                     borderRadius: 0,
                     borderBottom: `2px solid ${on ? p.accent : "transparent"}`,
@@ -2093,7 +2102,7 @@ export function ViewHosts() {
           {touch && groups.length > 0 && (
             <span
               aria-hidden
-              style={{ flexShrink: 0, alignSelf: "stretch", width: 1, margin: "5px 0", background: p.line }}
+              style={{ flexShrink: 0, alignSelf: "stretch", width: 1, margin: `${rem(5)} 0`, background: p.line }}
             />
           )}
           {[HOST_FILTER_ALL, ...tagSet].map((tag) => {
@@ -2106,10 +2115,10 @@ export function ViewHosts() {
                 aria-pressed={on}
                 style={{
                   fontFamily: isAll ? UI : MONO,
-                  fontSize: 13,
+                  fontSize: TEXT.base,
                   fontWeight: 600,
                   cursor: "pointer",
-                  padding: "2px 1px 5px",
+                  padding: `${rem(2)} ${rem(1)} ${rem(5)}`,
                   minHeight: touch ? SIZE.tapMin : undefined,
                   flexShrink: 0,
                   border: "none",
@@ -2129,10 +2138,10 @@ export function ViewHosts() {
               aria-pressed={hostFilter === "__untagged"}
               style={{
                 fontFamily: UI,
-                fontSize: 13,
+                fontSize: TEXT.base,
                 fontWeight: 600,
                 cursor: "pointer",
-                padding: "2px 1px 5px",
+                padding: `${rem(2)} ${rem(1)} ${rem(5)}`,
                 minHeight: touch ? SIZE.tapMin : undefined,
                 flexShrink: 0,
                 border: "none",
@@ -2149,8 +2158,8 @@ export function ViewHosts() {
             <button
               onClick={() => setSel(shown.map((x) => x.profileId))}
               style={{
-                marginLeft: 2,
-                fontSize: 13,
+                marginLeft: rem(2),
+                fontSize: TEXT.base,
                 fontWeight: 600,
                 cursor: "pointer",
                 // Same as the chips beside it: this strip scrolls rather than wraps
@@ -2195,7 +2204,7 @@ export function ViewHosts() {
             <div
               style={{
                 position: "absolute",
-                top: -34,
+                top: rem(-34),
                 left: 0,
                 right: 0,
                 display: "flex",
@@ -2228,14 +2237,14 @@ export function ViewHosts() {
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: 14,
+                gap: rem(14),
                 color: p.txt3,
               }}
             >
               <span
                 style={{
-                  width: 56,
-                  height: 56,
+                  width: rem(56),
+                  height: rem(56),
                   borderRadius: 16,
                   background: p.bg2,
                   border: `1px solid ${p.line}`,
@@ -2247,14 +2256,14 @@ export function ViewHosts() {
                 <Icon name="server" size={26} color={p.txt3} />
               </span>
               <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: p.txt }}>
+                <div style={{ fontSize: TEXT.lead, fontWeight: 700, color: p.txt }}>
                   {t("hosts.emptyVaultTitle")}
                 </div>
-                <div style={{ fontSize: 13, color: p.txt3, marginTop: 3 }}>
+                <div style={{ fontSize: TEXT.base, color: p.txt3, marginTop: rem(3) }}>
                   {t("hosts.emptyVaultHint")}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ display: "flex", gap: rem(10) }}>
                 <Btn variant="ghost" size="sm" icon="download" onClick={() => ctx.openImport()}>
                   {t("hosts.importSshConfig")}
                 </Btn>
@@ -2271,7 +2280,7 @@ export function ViewHosts() {
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: 12,
+                gap: rem(12),
                 color: p.txt3,
               }}
             >
@@ -2280,7 +2289,7 @@ export function ViewHosts() {
                   that holds nothing — saying "no hosts tagged prod" to someone who
                   just typed "prd" sends them to reset a filter that was never the
                   problem. Whichever narrowed the list is what gets offered back. */}
-              <span style={{ fontSize: 14 }}>
+              <span style={{ fontSize: TEXT.body }}>
                 {query.trim()
                   ? t("hosts.noHostsForQuery", { query: query.trim() })
                   : hostFilter === "__untagged"
@@ -2316,7 +2325,7 @@ export function ViewHosts() {
                 // permanent Connect/SFTP buttons there, which a 248px track cannot
                 // hold alongside anything readable.
                 gridTemplateColumns: touch ? "1fr" : "repeat(auto-fill, minmax(248px, 1fr))",
-                gap: 12,
+                gap: rem(12),
               }}
             >
               {shown.map((h, i) => (
@@ -2372,10 +2381,10 @@ export function ViewHosts() {
               position: "absolute",
               left: gutter,
               right: gutter,
-              bottom: 16,
+              bottom: rem(16),
               // minHeight (not height) + wrap: in RU the destructive Delete + clear-✕
               // can't fit one row inside overflow:hidden main — let them wrap, don't clip.
-              minHeight: 52,
+              minHeight: rem(52),
               borderRadius: 12,
               background: p.bg0,
               border: `1px solid ${p.line2}`,
@@ -2383,22 +2392,22 @@ export function ViewHosts() {
               display: "flex",
               alignItems: "center",
               flexWrap: "wrap",
-              gap: 12,
-              rowGap: 8,
-              padding: "0 14px",
+              gap: rem(12),
+              rowGap: rem(8),
+              padding: `0 ${rem(14)}`,
               zIndex: 5,
             }}
           >
             <span
               style={{
-                width: 26,
-                height: 26,
+                width: rem(26),
+                height: rem(26),
                 borderRadius: 8,
                 background: p.accent,
                 color: p.accentInk,
                 fontFamily: MONO,
                 fontWeight: 700,
-                fontSize: 13,
+                fontSize: TEXT.base,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -2406,10 +2415,10 @@ export function ViewHosts() {
             >
               {sel.length}
             </span>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>
+            <span style={{ fontSize: TEXT.base, fontWeight: 600 }}>
               {t("count.hostsSelected", { count: sel.length })}
             </span>
-            <span style={{ fontSize: 12, color: p.txt3 }}>{t("hosts.runInParallel")}</span>
+            <span style={{ fontSize: TEXT.small, color: p.txt3 }}>{t("hosts.runInParallel")}</span>
             <div style={{ flex: 1 }} />
             <BulkActionsMenu mode="add" ids={sel} onApplied={() => setSel([])} tight={tight} />
             <BulkActionsMenu mode="remove" ids={sel} onApplied={() => setSel([])} tight={tight} />
@@ -2467,8 +2476,8 @@ export function ViewHosts() {
               title={t("hosts.clearSelection")}
               aria-label={t("hosts.clearSelection")}
               style={{
-                width: 28,
-                height: 28,
+                width: rem(28),
+                height: rem(28),
                 borderRadius: 8,
                 border: `1px solid ${p.line2}`,
                 background: "transparent",
@@ -2501,10 +2510,10 @@ export function ViewHosts() {
             aria-label={t("hosts.newHost")}
             style={{
               position: "absolute",
-              right: 18,
-              bottom: 20,
-              width: 56,
-              height: 56,
+              right: rem(18),
+              bottom: rem(20),
+              width: rem(56),
+              height: rem(56),
               borderRadius: RADIUS.menu,
               background: p.bg2,
               border: `1px solid ${p.line2}`,
@@ -2531,10 +2540,10 @@ export function ViewHosts() {
             background: p.bg0,
             display: "flex",
             flexDirection: "column",
-            padding: 14,
+            padding: rem(14),
             ...(railOverlay
               ? { position: "absolute", inset: 0, width: "100%", zIndex: 6 }
-              : { width: railW, position: "relative", borderLeft: `1px solid ${p.line}` }),
+              : { width: rem(railW), position: "relative", borderLeft: `1px solid ${p.line}` }),
           }}
         >
           {!railOverlay && <ResizeHandle side="left" onDrag={resizeRail} />}
@@ -2543,9 +2552,9 @@ export function ViewHosts() {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              gap: 8,
+              gap: rem(8),
               borderBottom: `1px solid ${p.line}`,
-              marginBottom: 14,
+              marginBottom: rem(14),
             }}
           >
             <UnderlineTabs<RailTab>
@@ -2564,8 +2573,8 @@ export function ViewHosts() {
               style={{
                 // In overlay mode this is the only way back to the list, so it has
                 // to clear the touch minimum rather than the desktop's 30px.
-                width: touch ? SIZE.tapMin : 30,
-                height: touch ? SIZE.tapMin : 30,
+                width: touch ? SIZE.tapMin : rem(30),
+                height: touch ? SIZE.tapMin : rem(30),
                 flexShrink: 0,
                 borderRadius: RADIUS.chip,
                 border: "none",
@@ -2585,7 +2594,7 @@ export function ViewHosts() {
               detail ? (
                 <HostDetail h={detail} session={activeIds.has(detail.profileId)} />
               ) : (
-                <div style={{ fontSize: 13, color: p.txt3 }}>{t("hosts.selectHost")}</div>
+                <div style={{ fontSize: TEXT.base, color: p.txt3 }}>{t("hosts.selectHost")}</div>
               )
             ) : (
               <SessionsRail />
