@@ -68,20 +68,38 @@ fn emit_with_token(app: &AppHandle, signal: SystemLockSignal, token: Option<u64>
 
 /// How long a suspend may be held open while the front end shuts the vault.
 ///
-/// Deliberately under logind's `InhibitDelayMaxSec`, which defaults to 5s: a
-/// delay inhibitor held past that is overridden and the machine sleeps anyway,
-/// with a warning in the journal. Locking is a handful of milliseconds when the
-/// webview is responsive, so this is an upper bound on a pathological case, not
-/// a budget anything is expected to spend.
+/// Each OS states its own allowance and neither is ours to exceed, so this is
+/// per-platform rather than one number that happens to suit one of them:
+///
+/// * **Linux** — logind's `InhibitDelayMaxSec` defaults to 5s. A delay
+///   inhibitor held past it is overridden and the machine sleeps anyway, with a
+///   warning in the journal.
+/// * **Windows** — the `PBT_APMSUSPEND` documentation is explicit: "The system
+///   allows approximately two seconds for an application to handle this
+///   notification. If an application is still performing operations after its
+///   time allotment has expired, the system may interrupt the application."
+///   Staying inside it means we hand back of our own accord instead of being
+///   cut off mid-hand-off.
+///
+/// Locking is a handful of milliseconds when the webview is responsive, so
+/// either way this is the bound on a pathological case, not a budget anything
+/// is expected to spend. macOS has no entry here because it cannot hold a
+/// suspend open at all — see `macos.rs`.
+#[cfg(target_os = "linux")]
 const SUSPEND_GRACE: Duration = Duration::from_secs(3);
+#[cfg(target_os = "windows")]
+const SUSPEND_GRACE: Duration = Duration::from_millis(1_500);
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// The hand-off currently open, if any: which suspend it belongs to, and how to
 /// release it.
 static SUSPEND_ACK: Mutex<Option<(u64, SyncSender<()>)>> = Mutex::new(None);
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// Names each suspend hand-off. Only ever incremented.
 static NEXT_SUSPEND: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// Announce a suspend and wait, bounded, for the front end to say the vault is
 /// shut — then let the caller release whatever is holding the machine awake.
 ///
@@ -98,6 +116,7 @@ fn emit_suspend_and_wait(app: &AppHandle) {
     wait_suspend_ack(rx, SUSPEND_GRACE);
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// Open the hand-off. Must happen BEFORE the emit: an ack that arrives first
 /// would otherwise find nothing to notify and the wait would run its full
 /// course with the work already done.
@@ -108,6 +127,7 @@ fn arm_suspend_ack() -> (u64, Receiver<()>) {
     (token, rx)
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// Wait for the ack, then close the hand-off — so an ack that arrives after the
 /// deadline is dropped rather than left to satisfy the *next* suspend.
 fn wait_suspend_ack(rx: Receiver<()>, timeout: Duration) {
@@ -117,6 +137,7 @@ fn wait_suspend_ack(rx: Receiver<()>, timeout: Duration) {
     SUSPEND_ACK.lock().expect("suspend ack").take();
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// The front end reporting that it has finished with a suspend signal.
 ///
 /// The token is what makes this safe, and it is not ceremony. An ack is a
@@ -134,6 +155,12 @@ pub fn ack(token: u64) {
         }
     }
 }
+
+/// macOS cannot hold a suspend open (see `macos.rs`), so it never hands out a
+/// token and the front end never acks. Should one arrive anyway, there is
+/// nothing waiting on it.
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn ack(_token: u64) {}
 
 #[cfg(target_os = "macos")]
 #[path = "system_lock/macos.rs"]
@@ -158,6 +185,7 @@ pub fn start(app: &AppHandle) {
     imp::start(app);
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[cfg(test)]
 mod tests {
     use super::*;

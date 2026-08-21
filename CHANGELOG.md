@@ -55,8 +55,17 @@ starts with `0.`:
   asking for a lock would let it go down with the keys still in memory, which is
   the one thing this is for — so on Linux UniSSH holds a logind delay inhibitor
   and on Windows it holds the power broadcast open, releasing only once the
-  vault is actually shut. Bounded, in both cases, at three seconds: a laptop
-  that will not sleep is worse than a vault that locked a moment late.
+  vault is actually shut. Bounded in both cases — and bounded by what each OS
+  says it allows, not by one number picked to suit: a laptop that will not sleep
+  is worse than a vault that locked a moment late.
+
+  On macOS the same promise is weaker, and deliberately so. Apple's own guidance
+  draws the line — Cocoa's sleep notification is for hearing about a sleep, and
+  only I/O Kit can delay one — so there UniSSH asks for the lock and the machine
+  does not wait. Note also that macOS reports a screen lock when the screensaver
+  or display sleep starts, whichever your "require password" setting says; for a
+  tool holding SSH keys that is the right way round, and the grace period (and
+  the off switch) are there for the machine with an aggressive screensaver.
 
   Detected from `com.apple.screenIsLocked` and the will-sleep notification on
   macOS, `WTS_SESSION_LOCK` and the power broadcast on Windows, and logind's

@@ -18,7 +18,10 @@
 //! The suspend half holds the message open until the vault is actually shut
 //! (see the window proc): the broadcast is the only warning there is, and
 //! returning from it immediately means the machine may sleep with the keys
-//! still in memory.
+//! still in memory. Windows says how long that is allowed to take — "the system
+//! allows approximately two seconds ... after its time allotment has expired,
+//! the system may interrupt the application" — and `SUSPEND_GRACE` is set under
+//! it, so we hand back rather than get cut off.
 //!
 //! Win+L, the lock screen after a screensaver and a fast-user-switch away all
 //! surface as `WTS_SESSION_LOCK` for this session, which is exactly the set we

@@ -9,6 +9,21 @@
 //! own, and posts it *before* the machine goes down, which is the only reason
 //! locking on sleep is possible at all.
 //!
+//! Two things about the lock notification are worth knowing before reading the
+//! rest, because neither is in Apple's documentation — the names are observable
+//! but unpublished:
+//!
+//! * It is **not delivered to sandboxed applications.** UniSSH is not one (its
+//!   macOS bundle declares no entitlements and no sandbox), so this works; a
+//!   future decision to sandbox would silently switch the feature off, and this
+//!   comment is the warning.
+//! * It fires when the **screensaver or display sleep** begins, not only on a
+//!   true lock, and does so regardless of how "require password after sleep or
+//!   screensaver begins" is set (rdar://26264008). For a tool holding SSH keys
+//!   that is the right way round — the desk is empty either way — and the grace
+//!   period covers stepping back. It is also exactly the case the setting's off
+//!   switch exists for, on a machine with an aggressive screensaver policy.
+//!
 //! The distributed observers are registered with an explicit suspension
 //! behaviour of `DeliverImmediately`, and that is the whole reason this file
 //! defines an Objective-C class instead of taking the tidier block-based
@@ -25,15 +40,22 @@
 //! is deliberately leaked: it must outlive every notification, which is to say
 //! the process.
 //!
-//! **Sleep here is best-effort, unlike the other two desktops.** Linux holds a
-//! logind delay inhibitor and Windows blocks its own message loop, so both wait
-//! for the front end to confirm the vault is shut. Neither trick is available
-//! on macOS: the will-sleep notification is delivered on the main thread, and
-//! blocking there would starve the very webview that has to do the locking. In
-//! practice the machine takes long enough to go down that the lock lands, but
-//! it is not a guarantee, and `IORegisterForSystemPower` (whose callback can be
-//! taken on a thread of our own, with `IOAllowPowerChange` deferred) is the
-//! documented way to make it one if a device test shows it is needed.
+//! **Sleep here is best-effort, unlike the other two desktops**, and that is a
+//! property of the API rather than of this file. Apple's QA1340 draws the line
+//! itself: Cocoa's sleep notifications are for *receiving*, and only I/O Kit
+//! can delay a sleep. Linux holds a logind delay inhibitor and Windows blocks
+//! its own message loop, so both wait for the front end to confirm the vault is
+//! shut; the Cocoa route has no equivalent, and blocking the will-sleep
+//! observer would not help either — it arrives on the main thread, which is the
+//! one the webview needs in order to do the locking.
+//!
+//! In practice the machine takes long enough to go down that the lock lands,
+//! but that is an observation, not a guarantee. `IORegisterForSystemPower` is
+//! the documented way to make it one: its callback can be taken on a run loop
+//! of our own and the sleep waits (up to 30s) until `IOAllowPowerChange`. That
+//! is the follow-up if a device test shows the gap is real — deliberately not
+//! written blind, since it is raw FFI that cannot be exercised anywhere in this
+//! project's CI.
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
