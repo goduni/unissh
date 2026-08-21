@@ -266,6 +266,11 @@ const MIGRATED_AREAS: string[] = [
   "../views/sftp/ViewSftp.tsx",
   "../views/sftp/dialogs.tsx",
   "../views/sftp/volumes.tsx",
+  // Terminal CHROME. The grid itself is xterm's, sized by its own zoom — the
+  // boundary is pinned in theme.css, not here.
+  "../views/TermTabStrip.tsx",
+  "../views/TerminalPreview.tsx",
+  "../views/ViewTerminal.tsx",
 ];
 
 describe("migrated areas keep their type sizes scalable", () => {

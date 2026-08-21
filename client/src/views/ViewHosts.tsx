@@ -184,7 +184,7 @@ function HostCard({
           style={{
             fontSize: TEXT.lead,
             fontWeight: 700,
-            letterSpacing: `${rem(-0.2)}`,
+            letterSpacing: rem(-0.2),
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
