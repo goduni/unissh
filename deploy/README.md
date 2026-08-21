@@ -25,6 +25,7 @@ docker compose up -d --build
 ```
 
 - Only **Caddy** publishes host ports: **80** and **443** (443/udp for HTTP/3).
+  One of them already taken? See [Port 80 or 443 already in use](#port-80-or-443-already-in-use).
 - The server is **never** host-published; Caddy reaches it as `http://server:8443`.
 - Migrations auto-apply on boot (SQLite). The SPA is served same-origin, so the
   admin panel and its API share one origin (CORS stays off).
@@ -113,6 +114,86 @@ TLS is controlled by a single env knob, `UNISSH_TLS_DIRECTIVE`:
   `skip_install_trust` in the Caddyfile.
 
 The `caddy-data` volume persists issued certs / the internal CA root — keep it.
+
+## Port 80 or 443 already in use
+
+The published ports are variables, so a host that already serves something on
+80 or 443 is a two-line `.env` change rather than a fork of a tracked compose
+file:
+
+```bash
+# .env
+UNISSH_HTTP_PORT=8080
+UNISSH_HTTPS_PORT=8443
+```
+
+```bash
+docker compose config | grep -B1 -A2 published   # resolved mapping, nothing started
+docker compose up -d
+curl -kI https://<UNISSH_DOMAIN>:8443/readyz
+```
+
+Both default to today's values, so a stack that sets neither publishes exactly
+what it always did. They work the same in `compose.yml` and `compose.prod.yml`,
+take a **port number** (not an interface prefix — for loopback-only use
+`compose.behind-proxy.yml` below), and `UNISSH_HTTPS_PORT` carries the HTTP/3
+(QUIC) UDP mapping with it, so HTTPS and HTTP/3 can never land on different
+ports. Only the host side moves: inside the container Caddy still listens on
+80/443, so the Caddyfile and every override in this folder are untouched. (One
+visible consequence of that: Caddy advertises HTTP/3 as `alt-svc: h3=":443"`,
+the port it listens on inside. `Alt-Svc` is an optional hint — a client that
+cannot reach h3 there just keeps the connection it already has
+([RFC 7838](https://www.rfc-editor.org/rfc/rfc7838.html)) — so a browser on a
+moved HTTPS port stays on HTTP/2. The UDP mapping is published either way.)
+
+Set `UNISSH__SERVER__PUBLIC_URL=https://<domain>:8443` to match, or invite links
+come out pointing at the port you no longer serve. Caddy's HTTP→HTTPS redirect
+targets the site address with no port, so browse the HTTPS port directly.
+
+> **Moving the HTTP port breaks automatic ACME.** The challenge GET "MUST be
+> sent to TCP port 80"
+> ([RFC 8555 §8.3](https://www.rfc-editor.org/rfc/rfc8555.html#section-8.3)),
+> and Let's Encrypt follows redirects "only to ports 80 or 443"
+> ([Challenge Types](https://letsencrypt.org/docs/challenge-types/)) — so the
+> obvious fix, a 301 from the busy port to the one you picked, does **not**
+> work either. What does depends on *what* owns port 80:
+> - **Nothing on this host** — the host is not the edge, or the conflict is
+>   elsewhere. Forward public `:80` to your chosen port upstream (router, NAT
+>   rule, cloud load balancer). The challenge arrives on the moved port and
+>   succeeds.
+> - **Another HTTP server on this host** (nginx, Apache, another Caddy — the
+>   usual reason you are here). Have it **proxy** `/.well-known/acme-challenge/*`
+>   to your chosen HTTP port — a proxy_pass, not a redirect, per the port rule
+>   above. Do not NAT-redirect all of `:80` either: that hijacks the traffic of
+>   the service that owns the port. And weigh `compose.behind-proxy.yml` first —
+>   a proxy already terminating TLS for other sites can do it for this one, and
+>   then no port has to move at all.
+> - **Neither is workable** — use a TLS mode that needs no challenge:
+>   `UNISSH_TLS_DIRECTIVE="tls internal"` for a LAN host, or certificate files
+>   obtained some other way (DNS-01, a commercial cert) via
+>   `compose.tls-files.yml`.
+>
+> Moving **only** `UNISSH_HTTPS_PORT` is safe for ACME — HTTP-01 still runs on
+> 80. (TLS-ALPN-01, which would need 443, simply stops being an option.)
+
+The nginx form of the second case, on the server that holds `:80`:
+
+```nginx
+location /.well-known/acme-challenge/ {
+    proxy_pass http://127.0.0.1:8080;   # your UNISSH_HTTP_PORT
+    proxy_set_header Host $host;
+}
+```
+
+The `Host` line is load-bearing. Drop it and the request reaches Caddy as
+`Host: 127.0.0.1:8080`, which matches no site it serves, so it answers the
+challenge with a redirect elsewhere and validation fails — with a connection
+error that says nothing about the header. Both outcomes were reproduced against
+a local ACME server before this was written.
+
+If the reason 443 is busy is that **you already run a proxy there**, these
+variables are the wrong tool: use `compose.behind-proxy.yml` and let that proxy
+terminate TLS in front of the stack — see *Other front doors* just below.
 
 ## Other front doors
 
