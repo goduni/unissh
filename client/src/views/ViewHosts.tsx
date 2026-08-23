@@ -1280,7 +1280,7 @@ function BulkActionsMenu({
 export function ViewHosts() {
   const p = usePalette();
   const { t } = useTranslation();
-  const { hostsLayout, setHostsLayout } = useTheme();
+  const { hostsLayout, setHostsLayout, uiScale } = useTheme();
   const ctx = useCtx();
   const hosts = useApp((s) => s.hosts);
   const groups = useApp((s) => s.groups);
@@ -1436,12 +1436,15 @@ export function ViewHosts() {
     if (!el) return;
     // Design pixels — the toolbar's labels grow with the scale, so the width at
     // which they stop fitting grows with them.
-    const apply = () => setTight(designPx(el.clientWidth) < 820);
+    const apply = () => setTight(designPx(el.clientWidth, uiScale) < 820);
     const ro = new ResizeObserver(apply);
     ro.observe(el);
     apply();
     return () => ro.disconnect();
-  }, []);
+    // uiScale is a real dependency: the toolbar can stop fitting because the
+    // TYPE grew, with the element the same number of CSS pixels wide, and then
+    // no observer fires. Re-ask on both.
+  }, [uiScale]);
   const [railOpen, setRailOpen] = useState(() => {
     try {
       return localStorage.getItem("unissh.hostRailOpen") !== "0";
@@ -1474,7 +1477,7 @@ export function ViewHosts() {
   // Design pixels, like the sidebar's: the pointer measurement is converted once
   // here so a rail dragged wide at 150 % does not come back as a sliver at 100 %.
   const resizeRail = (clientX: number) => {
-    const w = Math.min(460, Math.max(220, Math.round(designPx(window.innerWidth - clientX))));
+    const w = Math.min(460, Math.max(220, Math.round(designPx(window.innerWidth - clientX, uiScale))));
     setRailW(w);
     try {
       localStorage.setItem("unissh.hostRailW", String(w));

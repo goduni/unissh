@@ -69,18 +69,25 @@ export const ROOT_FONT_PX = 16;
  *  so this never produces a repeating fraction to round. */
 export const rem = (px: number): string => `${px / ROOT_FONT_PX}rem`;
 
-/** Device pixels → design pixels, against the LIVE root font size.
+/** Device pixels → design pixels, at a given scale.
  *
- *  For the handful of places that convert a POINTER measurement back into the
- *  space the layout is authored in — a draggable panel divider. Without it a
- *  sidebar dragged to "220" at 150 % stores a number that means something else
- *  the next time the scale changes, and the panel silently resizes itself.
+ *  For the handful of places that convert a MEASUREMENT back into the space the
+ *  layout is authored in: a draggable panel divider, and the two panes that ask
+ *  "have I still got room for this column?". Without it a sidebar dragged to
+ *  "220" at 150 % stores a number that means something else the next time the
+ *  scale changes, and the panel silently resizes itself.
+ *
+ *  The scale is a PARAMETER, not something to go and read. Deriving it from
+ *  `getComputedStyle(document.documentElement)` worked and was worse in three
+ *  ways: it put a DOM read (and a style flush) in whatever called it, including
+ *  one component's render path; it made the dependency invisible, so a caller
+ *  could hold a stale answer across a scale change with nothing to notice; and
+ *  it made this function untestable without a DOM.
  *
  *  NOT a way for a component to size itself. Reach for a token; the whole point
  *  of expressing the scale once is that nothing else has to ask what it is. */
-export function designPx(devicePx: number): number {
-  const root = parseFloat(getComputedStyle(document.documentElement).fontSize);
-  return Number.isFinite(root) && root > 0 ? (devicePx * ROOT_FONT_PX) / root : devicePx;
+export function designPx(devicePx: number, scale: UiScale): number {
+  return (devicePx * ROOT_FONT_PX) / rootFontPx(scale);
 }
 
 /** The offered steps, in percent. Five, not a slider: a slider invites a value

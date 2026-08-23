@@ -3,7 +3,7 @@
 // and the empty/loading/error states; delegates the actual actions to the pane.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { usePalette } from "@/theme/ThemeProvider";
+import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { designPx, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
 import { useIsMobile } from "@/store/responsive";
@@ -63,6 +63,7 @@ export function FileList({
   // drop the fixed metadata columns before they crowd the name / overflow the row —
   // modified (widest, RU dates) first, then perms. Keeps header + rows in sync since
   // both derive from showModified/showPerms.
+  const { uiScale } = useTheme();
   const rootRef = useRef<HTMLDivElement>(null);
   const [paneW, setPaneW] = useState(0);
   useEffect(() => {
@@ -80,7 +81,11 @@ export function FileList({
   // In DESIGN pixels: the columns being dropped are made of type, so the width at
   // which they crowd grows with it. Measured in CSS pixels the pane looks roomy at
   // 150 % while its own contents no longer fit.
-  const paneDesign = paneW > 0 ? designPx(paneW) : 0;
+  //
+  // Derived from the scale rather than measured again, so this re-decides when
+  // the type grows without the pane's CSS width changing — a full-width pane in
+  // an unmoved window is exactly that case, and no ResizeObserver would fire.
+  const paneDesign = paneW > 0 ? designPx(paneW, uiScale) : 0;
   const showModified = hasMtime && !isMobile && !(paneDesign > 0 && paneDesign < 400);
   const showPerms = hasPerms && !isMobile && !(paneDesign > 0 && paneDesign < 320);
 

@@ -201,7 +201,7 @@ export function App() {
   // proportion of the interface at every scale, instead of shrinking back to a
   // truncating sliver the moment they scale up.
   const resizeSidebar = (clientX: number) => {
-    const w = Math.min(360, Math.max(180, Math.round(designPx(clientX))));
+    const w = Math.min(360, Math.max(180, Math.round(designPx(clientX, uiScale))));
     setSbW(w);
     try {
       localStorage.setItem("unissh.sidebarW", String(w));

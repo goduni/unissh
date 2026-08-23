@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_UI_SCALE,
+  designPx,
   detectUiScale,
   HAIRLINE,
   nearestUiScale,
@@ -139,6 +140,34 @@ describe("interface scale — first-launch detection", () => {
     expect(nearestUiScale(105)).toBe(110);
     expect(nearestUiScale(117.5)).toBe(125);
     expect(nearestUiScale(137.5)).toBe(150);
+  });
+});
+
+describe("measurements converted back into design space", () => {
+  // A pointer lands where it lands, in CSS pixels; a pane measures itself in CSS
+  // pixels. Both have to be read back in the space the layout is written in, or
+  // a width dragged at 150 % means something else at 100 % and a column decides
+  // it has room it does not have.
+  it("is the identity at 100 %", () => {
+    for (const px of [0, 1, 220, 264, 819, 1440]) expect(designPx(px, 100)).toBe(px);
+  });
+
+  it("reads a measurement back at every scale", () => {
+    expect(designPx(330, 150)).toBe(220); // a sidebar dragged to 330 CSS px at 150 %
+    expect(designPx(220, 150)).toBeCloseTo(146.67, 2);
+    expect(designPx(198, 90)).toBe(220);
+    expect(designPx(275, 125)).toBe(220);
+  });
+
+  it("round-trips against rem", () => {
+    // The two halves of the same conversion: rem() writes a design pixel out,
+    // designPx() reads a CSS pixel back in. They must agree at every step.
+    for (const scale of UI_SCALES) {
+      for (const px of [8, 44, 220, 264, 460]) {
+        const cssPx = cssPxAt(rem(px), scale);
+        expect(designPx(cssPx, scale), `${px} at ${scale}%`).toBeCloseTo(px, 10);
+      }
+    }
   });
 });
 
