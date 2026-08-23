@@ -393,28 +393,14 @@ function SettingsAppearance() {
               onChange={(v) => setUiScale(sanitizeUiScale(v))}
               options={UI_SCALES.map((v) => ({ value: String(v), label: `${v}%` }))}
             />
-            {/* The pane the user is reading IS already at the new scale, but the
-                thing they came to judge is body text, and Settings is chrome. Show
-                a line of it, at the size a host row will use. */}
-            <div style={{ display: "flex", alignItems: "center", gap: rem(10), maxWidth: "100%" }}>
-              <span
-                style={{
-                  fontSize: TEXT.body,
-                  color: p.txt2,
-                  minWidth: 0,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {t("settings.uiScalePreview")}
-              </span>
-              {uiScale !== DEFAULT_UI_SCALE && (
-                <Btn variant="ghost" size="sm" onClick={() => setUiScale(DEFAULT_UI_SCALE)}>
-                  {t("settings.uiScaleReset")}
-                </Btn>
-              )}
-            </div>
+            {/* No sample line: the pane the user is reading is already AT the new
+                scale, so the preview said the same thing twice and only competed
+                with the control for the row's width. */}
+            {uiScale !== DEFAULT_UI_SCALE && (
+              <Btn variant="ghost" size="sm" onClick={() => setUiScale(DEFAULT_UI_SCALE)}>
+                {t("settings.uiScaleReset")}
+              </Btn>
+            )}
           </div>
         </SettingRow>
       )}

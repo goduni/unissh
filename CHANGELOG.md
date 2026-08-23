@@ -43,8 +43,9 @@ starts with `0.`:
   that did not answer to anything.
 
   **Settings → Appearance → Interface scale** now offers 90 / 100 / 110 / 125 /
-  150 %, with a line of body text beside it so you can pick by looking rather
-  than by applying and reverting, and a reset back to 100 %. It applies at once,
+  150 %, and a reset back to 100 %. There is no sample line beside it, because
+  the pane you are reading is already at the chosen scale — you pick by looking
+  at the app, not at a swatch of it. It applies at once,
   persists per device the way density and the terminal preferences already do,
   and is never synced — a laptop setting has no business following you onto a
   desktop where it is wrong.
