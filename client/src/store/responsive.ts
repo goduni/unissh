@@ -29,14 +29,23 @@ export function useIsMobile(): boolean {
 export function useNarrow(bp = 720): boolean {
   const mobile = useApp((s) => s.device === "mobile");
   const { uiScale } = useTheme();
-  const [width, setWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 0);
+  // The ANSWER in state, never the width — the same rule App.tsx spells out for
+  // its own sidebar question, and for the same reason: the width changes on every
+  // pixel of an interactive resize, so holding it here would re-render all
+  // sixteen callers on every frame of a drag, where a boolean changes twice.
+  // The scale belongs in the effect's deps rather than the comparison, so the
+  // answer is re-asked when the interface grows without the window moving.
+  const bpCss = (bp * rootFontPx(uiScale)) / ROOT_FONT_PX;
+  const [narrow, setNarrow] = useState(
+    typeof window !== "undefined" ? window.innerWidth < bpCss : false,
+  );
   useEffect(() => {
-    const on = () => setWidth(window.innerWidth);
+    const on = () => setNarrow(window.innerWidth < (bp * rootFontPx(uiScale)) / ROOT_FONT_PX);
     on();
     window.addEventListener("resize", on);
     return () => window.removeEventListener("resize", on);
-  }, []);
-  return mobile || width < (bp * rootFontPx(uiScale)) / ROOT_FONT_PX;
+  }, [bp, uiScale]);
+  return mobile || narrow;
 }
 
 /** True when the viewport is in landscape (wider than tall). On a phone this is
