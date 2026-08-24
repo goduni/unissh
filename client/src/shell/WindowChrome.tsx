@@ -8,6 +8,17 @@ import React, { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri, osPlatform } from "@/bridge/platform";
 import { useApp } from "@/store/app";
+import { windowControlsLayout, type ControlsLayout } from "@/shell/windowControls";
+
+/** The window-controls layout, live: it moves the moment either setting changes,
+ *  with no restart. The decision itself is `windowControlsLayout` — everything
+ *  that has to agree about the buttons' corner asks through here, so the
+ *  controls, the bar's placement and the macOS spacer cannot disagree. */
+export function useWindowControls(): ControlsLayout {
+  const customChrome = useApp((s) => s.customChrome);
+  const stored = useApp((s) => s.windowControlsSide);
+  return windowControlsLayout({ platform: osPlatform(), stored, customChrome });
+}
 
 type ResizeDirection = Parameters<ReturnType<typeof getCurrentWindow>["startResizeDragging"]>[0];
 

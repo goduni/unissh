@@ -9,8 +9,9 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, rgba, TEXT, UI } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
-import { isDesktopOs, isMac } from "@/bridge/platform";
+import { isDesktopOs } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
+import { useWindowControls } from "@/shell/WindowChrome";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
@@ -26,6 +27,7 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
   const isMobile = useIsMobile();
   const narrow = useNarrow();
   const customChrome = useApp((s) => s.customChrome);
+  const controls = useWindowControls();
   return (
     <div
       style={{
@@ -77,11 +79,23 @@ function Modal({ children, w = 460 }: { children: React.ReactNode; w?: number })
             data-tauri-drag-region
             style={{ position: "absolute", top: 0, left: 0, right: 0, height: rem(44) }}
           />
-          {!isMac() && (
-            <div style={{ position: "absolute", top: rem(7), left: rem(16), zIndex: 1 }}>
-              <WindowControls />
-            </div>
-          )}
+          {/* Pinned to whichever corner the setting names — the same corner the
+              real title bar underneath this overlay uses, so the buttons do not
+              jump across the window when the vault unlocks. macOS renders
+              nothing here (its traffic lights are already on top of everything)
+              and so does the system-frame case. */}
+          <div
+            style={{
+              position: "absolute",
+              top: rem(7),
+              ...(controls.kind === "custom" && controls.side === "right"
+                ? { right: rem(16) }
+                : { left: rem(16) }),
+              zIndex: 1,
+            }}
+          >
+            <WindowControls />
+          </div>
         </>
       )}
       <div

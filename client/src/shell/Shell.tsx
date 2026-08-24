@@ -12,8 +12,9 @@ import { useExternalEdits } from "@/sftp/external-edit";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { hostDrag } from "@/support/hostDrag";
-import { isMac, isTauri } from "@/bridge/platform";
-import { useFullscreen, useMaximized } from "@/shell/WindowChrome";
+import { isMac } from "@/bridge/platform";
+import { useFullscreen, useMaximized, useWindowControls } from "@/shell/WindowChrome";
+import type { ControlButton } from "@/shell/windowControls";
 import { useNarrow } from "@/store/responsive";
 import type { Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
@@ -156,17 +157,21 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
   );
 }
 
-/** Custom close/min/maximize controls for Windows/Linux, sitting left of the
- *  logo. macOS never renders these: it keeps its native traffic lights,
- *  overlaid on the same spot (titleBarStyle: Overlay). */
+/** Custom close/min/maximize controls for Windows/Linux. Which corner they sit
+ *  in and what order they come in is `windowControlsLayout`'s answer, not this
+ *  component's — it only draws what it is told. macOS never renders these: it
+ *  keeps its native traffic lights, overlaid on the same spot (titleBarStyle:
+ *  Overlay), and so does any platform where the system draws the frame. */
 export function WindowControls() {
   const p = usePalette();
   const { t } = useTranslation();
   const maximized = useMaximized();
-  // After the hooks, before any window API: in a plain browser preview
-  // getCurrentWindow() throws, and with no ErrorBoundary that takes the whole
-  // tree down — render no chrome there instead.
-  if (!isTauri()) return null;
+  const layout = useWindowControls();
+  // After the hooks, before any window API: `custom` is the only case with
+  // buttons of ours, and it is also what rules out a plain browser preview,
+  // where getCurrentWindow() throws and — with no ErrorBoundary — would take
+  // the whole tree down.
+  if (layout.kind !== "custom") return null;
   const win = getCurrentWindow();
   const Btn = ({
     onClick,
@@ -219,22 +224,32 @@ export function WindowControls() {
       <path d={d} />
     </svg>
   );
-  return (
-    <div style={{ display: "flex", gap: rem(2) }}>
-      <Btn title={t("common.close")} danger onClick={() => void win.close()}>
+  // Same three buttons, same icons, same hover treatment and the same danger
+  // styling on close as before; the layout only permutes them. Rendering from
+  // the order (rather than reordering with CSS) keeps the DOM order, and with it
+  // the tab order and the accessible names, honest about what the eye sees.
+  const btn: Record<ControlButton, React.ReactNode> = {
+    close: (
+      <Btn key="close" title={t("common.close")} danger onClick={() => void win.close()}>
         {line("M2 2l7 7M9 2l-7 7")}
       </Btn>
-      <Btn title={t("common.minimize")} onClick={() => void win.minimize()}>
+    ),
+    minimize: (
+      <Btn key="minimize" title={t("common.minimize")} onClick={() => void win.minimize()}>
         {line("M1.5 5.5h8")}
       </Btn>
+    ),
+    maximize: (
       <Btn
+        key="maximize"
         title={maximized ? t("common.restore") : t("common.maximize")}
         onClick={() => void win.toggleMaximize()}
       >
         {line(maximized ? "M3.8 3.5V1.8h5.4v5.4H7.5M2 3.5h5.5v5.5H2z" : "M2 2h7v7h-7z")}
       </Btn>
-    </div>
-  );
+    ),
+  };
+  return <div style={{ display: "flex", gap: rem(2) }}>{layout.order.map((b) => btn[b])}</div>;
 }
 
 export function TitleBar() {
@@ -249,6 +264,11 @@ export function TitleBar() {
   // Native fullscreen hides the overlay traffic lights (they move into the
   // auto-revealed menu bar), so the reserved space collapses with them.
   const macFullscreen = useFullscreen(isMac());
+  const layout = useWindowControls();
+  // One question, asked once. The spacer, the controls and the logo all move off
+  // this single answer, so the bar cannot end up reserving a gap on the left and
+  // drawing the buttons on the right.
+  const onLeft = layout.kind === "custom" && layout.side === "left";
   return (
     <>
       {/* pointerEvents none lets a mousedown on the spacer/logo fall through to
@@ -256,11 +276,10 @@ export function TitleBar() {
           attribute only triggers on the exact element under the cursor. The
           spacer clears the DEFAULT traffic-light span: the buttons are never
           repositioned (tao's inset surgery broke hit-testing on Tahoe). */}
-      {isMac() ? (
-        macFullscreen ? null : <div style={{ width: rem(60), pointerEvents: "none" }} aria-hidden />
-      ) : (
-        <WindowControls />
+      {layout.kind === "native" && !macFullscreen && (
+        <div style={{ width: rem(60), pointerEvents: "none" }} aria-hidden />
       )}
+      {onLeft && <WindowControls />}
       <div style={{ marginLeft: rem(4), display: "flex", pointerEvents: "none" }}>
         <Logo size={18} />
       </div>
@@ -303,6 +322,10 @@ export function TitleBar() {
           </span>
         )}
       </div>
+      {/* Last in the bar, past the toolbar, when the controls live on the right:
+          the search box's flex:1 already ate the space the buttons vacated on
+          the left, so nothing is left behind but a wider drag region. */}
+      {layout.kind === "custom" && layout.side === "right" && <WindowControls />}
     </>
   );
 }
