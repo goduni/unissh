@@ -860,21 +860,26 @@ export const useApp = create<AppStore>((set, get) => ({
 
   boot: async () => {
     void refineLangFromSystem(); // refine language from OS locale on first run
-    // Window chrome — only where the frame can be swapped at all (see the initial
-    // value). Elsewhere this whole block is skipped rather than relying on the
-    // apply being a no-op: two layers agreeing by accident is how the macOS
-    // window ended up square and buttonless in the first place.
+    // Window chrome. Every branch below names its platform outright rather than
+    // leaning on the apply's own guard to no-op: two layers agreeing by accident
+    // is how the macOS window ended up square and buttonless in the first place.
     //
     // The window-manager question is Linux's alone, and only when the user has
     // never chosen — an explicit setting is never second-guessed by detection,
     // on this boot or any later one. Deliberately NOT persisted: leaving the key
     // unset keeps the answer live, so moving the same vault between a tiling
     // session and a plain desktop keeps doing the right thing instead of
-    // freezing whatever ran first. Windows has no such question; it just needs
-    // the stored answer put back into effect, since the window is always born
-    // undecorated from tauri.conf.
-    if (canSwapDecorations()) {
-      if (osPlatform() === "linux" && lsCustomChrome() === null) {
+    // freezing whatever ran first.
+    //
+    // Windows has no such question, and gets NO call until the user has actually
+    // answered one. The window is born undecorated from tauri.conf, so on an
+    // untouched install `setDecorations(false)` would be asking for the state
+    // the window is already in — a no-op in theory, and this is precisely the
+    // call whose Windows behaviour nothing here has ever executed. An untouched
+    // Windows install therefore boots down exactly the path it does today, and
+    // the new call reaches only the people who went and asked for it.
+    if (osPlatform() === "linux") {
+      if (lsCustomChrome() === null) {
         void api
           .tilingSession()
           .then((tiling) => {
@@ -885,6 +890,8 @@ export const useApp = create<AppStore>((set, get) => ({
       } else {
         void applyWindowDecorations(get().customChrome);
       }
+    } else if (osPlatform() === "windows" && lsCustomChrome() !== null) {
+      void applyWindowDecorations(get().customChrome);
     }
     // Push the persisted keepalive interval to the core before any connection.
     void api
