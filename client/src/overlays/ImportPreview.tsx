@@ -15,7 +15,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation, Trans } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rgba } from "@/theme/tokens";
+import { MONO, rem, rgba, TEXT } from "@/theme/tokens";
 import { Btn, Icon } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
@@ -515,7 +515,7 @@ function ImportPreviewBody() {
         justifyContent: "center",
         background: p.name === "dark" ? "rgba(6,7,11,0.6)" : "rgba(40,44,60,0.35)",
         backdropFilter: "blur(3px)",
-        ...(isMobile ? { padding: 12, paddingTop: "calc(env(safe-area-inset-top) + 16px)" } : null),
+        ...(isMobile ? { padding: rem(12), paddingTop: "calc(env(safe-area-inset-top) + 16px)" } : null),
       }}
     >
       <div
@@ -526,7 +526,7 @@ function ImportPreviewBody() {
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 620,
+          width: rem(620),
           maxWidth: "92%",
           maxHeight: "88%",
           display: "flex",
@@ -544,15 +544,15 @@ function ImportPreviewBody() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 11,
-            padding: "18px 22px",
+            gap: rem(11),
+            padding: `${rem(18)} ${rem(22)}`,
             borderBottom: `1px solid ${p.line}`,
           }}
         >
           <span
             style={{
-              width: 36,
-              height: 36,
+              width: rem(36),
+              height: rem(36),
               borderRadius: 10,
               background: p.bg2,
               border: `1px solid ${p.line}`,
@@ -564,10 +564,10 @@ function ImportPreviewBody() {
             <Icon name="download" size={18} color={p.txt2} />
           </span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.3 }}>
+            <div style={{ fontSize: TEXT.lead, fontWeight: 800, letterSpacing: rem(-0.3) }}>
               {t("import.title")}
             </div>
-            <div style={{ fontSize: 12, color: p.txt3 }}>
+            <div style={{ fontSize: TEXT.small, color: p.txt3 }}>
               {t("import.found", { hosts: t("count.hosts", { count: rows.length }) })}
             </div>
           </div>
@@ -576,8 +576,8 @@ function ImportPreviewBody() {
             title={t("common.close")}
             aria-label={t("common.close")}
             style={{
-              width: isMobile ? 44 : 30,
-              height: isMobile ? 44 : 30,
+              width: isMobile ? rem(44) : rem(30),
+              height: isMobile ? rem(44) : rem(30),
               borderRadius: 8,
               border: `1px solid ${p.line}`,
               background: p.bg2,
@@ -597,8 +597,8 @@ function ImportPreviewBody() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 10,
-            padding: "10px 22px",
+            gap: rem(10),
+            padding: `${rem(10)} ${rem(22)}`,
             borderBottom: `1px solid ${p.line}`,
           }}
         >
@@ -606,7 +606,7 @@ function ImportPreviewBody() {
           <span
             style={{
               fontFamily: MONO,
-              fontSize: 12,
+              fontSize: TEXT.small,
               color: p.txt3,
               minWidth: 0,
               overflow: "hidden",
@@ -620,13 +620,13 @@ function ImportPreviewBody() {
           <button
             onClick={() => setSel(rows.map((h) => h.host))}
             style={{
-              fontSize: 12,
+              fontSize: TEXT.small,
               fontWeight: 600,
               color: p.accentText,
               background: "none",
               border: "none",
               cursor: "pointer",
-              ...(isMobile ? { minHeight: 44, padding: "0 8px", flexShrink: 0 } : null),
+              ...(isMobile ? { minHeight: rem(44), padding: `0 ${rem(8)}`, flexShrink: 0 } : null),
             }}
           >
             {t("import.selectAll")}
@@ -634,26 +634,26 @@ function ImportPreviewBody() {
           <button
             onClick={() => setSel([])}
             style={{
-              fontSize: 12,
+              fontSize: TEXT.small,
               fontWeight: 600,
               color: p.txt3,
               background: "none",
               border: "none",
               cursor: "pointer",
-              ...(isMobile ? { minHeight: 44, padding: "0 8px", flexShrink: 0 } : null),
+              ...(isMobile ? { minHeight: rem(44), padding: `0 ${rem(8)}`, flexShrink: 0 } : null),
             }}
           >
             {t("import.clear")}
           </button>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: 10 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: rem(10) }}>
           {loading ? (
             <div
               style={{
-                padding: "40px 0",
+                padding: `${rem(40)} 0`,
                 textAlign: "center",
-                fontSize: 13,
+                fontSize: TEXT.base,
                 color: p.txt3,
               }}
             >
@@ -662,9 +662,9 @@ function ImportPreviewBody() {
           ) : rows.length === 0 ? (
             <div
               style={{
-                padding: "40px 0",
+                padding: `${rem(40)} 0`,
                 textAlign: "center",
-                fontSize: 13,
+                fontSize: TEXT.base,
                 color: p.txt3,
               }}
             >
@@ -678,30 +678,30 @@ function ImportPreviewBody() {
                 <div
                   role="note"
                   style={{
-                    margin: "0 0 12px",
-                    padding: "10px 12px",
+                    margin: `0 0 ${rem(12)}`,
+                    padding: `${rem(10)} ${rem(12)}`,
                     borderRadius: 8,
                     border: `1px solid ${p.line2}`,
                     background: p.bg2,
-                    fontSize: 12.5,
+                    fontSize: rem(12.5),
                     color: p.txt2,
                     lineHeight: 1.5,
                   }}
                 >
-                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: 4 }}>
+                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: rem(4) }}>
                     {t("import.filesReadTitle", {
                       files: t("count.files", { count: filesRead.length }),
                     })}
                   </div>
-                  <div style={{ marginBottom: 6 }}>{t("import.filesReadDesc")}</div>
+                  <div style={{ marginBottom: rem(6) }}>{t("import.filesReadDesc")}</div>
                   <div
                     style={{
                       fontFamily: MONO,
-                      fontSize: 11.5,
+                      fontSize: rem(11.5),
                       color: p.txt3,
                       // The whole list, always — but a config with fifty
                       // includes must not push the hosts off the screen.
-                      maxHeight: 72,
+                      maxHeight: rem(72),
                       overflowY: "auto",
                       overflowWrap: "anywhere",
                     }}
@@ -714,17 +714,17 @@ function ImportPreviewBody() {
                 <div
                   role="note"
                   style={{
-                    margin: "0 0 12px",
-                    padding: "10px 12px",
+                    margin: `0 0 ${rem(12)}`,
+                    padding: `${rem(10)} ${rem(12)}`,
                     borderRadius: 8,
                     border: `1px solid ${rgba(p.amber, 0.35)}`,
                     background: rgba(p.amber, 0.08),
-                    fontSize: 12.5,
+                    fontSize: rem(12.5),
                     color: p.txt2,
                     lineHeight: 1.5,
                   }}
                 >
-                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: 4 }}>
+                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: rem(4) }}>
                     {t(
                       fileText === null
                         ? "import.includesSkippedTitle"
@@ -734,14 +734,14 @@ function ImportPreviewBody() {
                   </div>
                   {/* Two different facts wearing one shape: a file-based import
                       could not OPEN these, a text-based one never tried. */}
-                  <div style={{ marginBottom: 6 }}>
+                  <div style={{ marginBottom: rem(6) }}>
                     {t(
                       fileText === null
                         ? "import.includesSkippedDesc"
                         : "import.includesNotFollowedDesc",
                     )}
                   </div>
-                  <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
+                  <div style={{ fontFamily: MONO, fontSize: rem(11.5), color: p.txt3 }}>
                     {pendingIncludes
                       .map((inc) =>
                         // Named with the file it was written in: two files can
@@ -759,21 +759,21 @@ function ImportPreviewBody() {
                 <div
                   role="note"
                   style={{
-                    margin: "0 0 12px",
-                    padding: "10px 12px",
+                    margin: `0 0 ${rem(12)}`,
+                    padding: `${rem(10)} ${rem(12)}`,
                     borderRadius: 8,
                     border: `1px solid ${rgba(p.amber, 0.35)}`,
                     background: rgba(p.amber, 0.08),
-                    fontSize: 12.5,
+                    fontSize: rem(12.5),
                     color: p.txt2,
                     lineHeight: 1.5,
                   }}
                 >
-                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: 4 }}>
+                  <div style={{ fontWeight: 700, color: p.txt, marginBottom: rem(4) }}>
                     {t("import.skippedTitle", { count: skipped.length })}
                   </div>
-                  <div style={{ marginBottom: 6 }}>{t("import.skippedDesc")}</div>
-                  <div style={{ fontFamily: MONO, fontSize: 11.5, color: p.txt3 }}>
+                  <div style={{ marginBottom: rem(6) }}>{t("import.skippedDesc")}</div>
+                  <div style={{ fontFamily: MONO, fontSize: rem(11.5), color: p.txt3 }}>
                     {skipped
                       .slice(0, 12)
                       .map(
@@ -790,12 +790,12 @@ function ImportPreviewBody() {
               {includedFiles.length > 0 && (
                 <div
                   style={{
-                    margin: "0 0 12px",
-                    padding: "10px 12px",
+                    margin: `0 0 ${rem(12)}`,
+                    padding: `${rem(10)} ${rem(12)}`,
                     borderRadius: 8,
                     border: `1px solid ${p.line2}`,
                     background: p.bg2,
-                    fontSize: 12.5,
+                    fontSize: rem(12.5),
                     color: p.txt2,
                     lineHeight: 1.5,
                   }}
@@ -804,23 +804,23 @@ function ImportPreviewBody() {
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      gap: 8,
+                      gap: rem(8),
                       cursor: "pointer",
                       fontWeight: 700,
                       color: p.txt,
-                      ...(isMobile ? { minHeight: 44 } : null),
+                      ...(isMobile ? { minHeight: rem(44) } : null),
                     }}
                   >
                     <input
                       type="checkbox"
                       checked={subgroups}
                       onChange={(e) => setSubgroups(e.target.checked)}
-                      style={{ accentColor: p.accent, width: 15, height: 15 }}
+                      style={{ accentColor: p.accent, width: rem(15), height: rem(15) }}
                     />
                     {t("import.subgroupsTitle")}
                   </label>
-                  <div style={{ margin: "4px 0 8px" }}>{t("import.subgroupsDesc")}</div>
-                  <div style={{ maxHeight: 150, overflowY: "auto" }}>
+                  <div style={{ margin: `${rem(4)} 0 ${rem(8)}` }}>{t("import.subgroupsDesc")}</div>
+                  <div style={{ maxHeight: rem(150), overflowY: "auto" }}>
                     {subgroups &&
                       includedFiles.map((f) => {
                       const on = !optedOut.includes(f);
@@ -830,23 +830,23 @@ function ImportPreviewBody() {
                           style={{
                             display: "flex",
                             alignItems: "center",
-                            gap: 8,
-                            padding: "3px 0",
+                            gap: rem(8),
+                            padding: `${rem(3)} 0`,
                             cursor: "pointer",
                             minWidth: 0,
-                            ...(isMobile ? { minHeight: 40 } : null),
+                            ...(isMobile ? { minHeight: rem(40) } : null),
                           }}
                         >
                           <input
                             type="checkbox"
                             checked={on}
                             onChange={() => toggleFile(f)}
-                            style={{ accentColor: p.accent, width: 14, height: 14, flexShrink: 0 }}
+                            style={{ accentColor: p.accent, width: rem(14), height: rem(14), flexShrink: 0 }}
                           />
                           <span
                             style={{
                               fontFamily: MONO,
-                              fontSize: 11.5,
+                              fontSize: rem(11.5),
                               color: p.txt3,
                               minWidth: 0,
                               overflow: "hidden",
@@ -859,7 +859,7 @@ function ImportPreviewBody() {
                           <Icon name="cr" size={12} color={p.txt3} />
                           <span
                             style={{
-                              fontSize: 12,
+                              fontSize: TEXT.small,
                               fontWeight: 700,
                               color: on ? p.txt : p.txt3,
                               textDecoration: on ? undefined : "line-through",
@@ -883,19 +883,19 @@ function ImportPreviewBody() {
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 12,
-                    padding: "11px 12px",
+                    gap: rem(12),
+                    padding: `${rem(11)} ${rem(12)}`,
                     cursor: "pointer",
                     background: on ? p.bg2 : "transparent",
                     borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
                     opacity: h.dup && !on ? 0.6 : 1,
-                    ...(isMobile ? { minHeight: 44 } : null),
+                    ...(isMobile ? { minHeight: rem(44) } : null),
                   }}
                 >
                   <span
                     style={{
-                      width: isMobile ? 26 : 20,
-                      height: isMobile ? 26 : 20,
+                      width: isMobile ? rem(26) : rem(20),
+                      height: isMobile ? rem(26) : rem(20),
                       borderRadius: 6,
                       flexShrink: 0,
                       border: `1px solid ${on ? p.accent : p.line2}`,
@@ -916,8 +916,8 @@ function ImportPreviewBody() {
                   </span>
                   <span
                     style={{
-                      width: 34,
-                      height: 34,
+                      width: rem(34),
+                      height: rem(34),
                       borderRadius: 8,
                       background: p.bg3,
                       border: `1px solid ${p.line}`,
@@ -934,13 +934,13 @@ function ImportPreviewBody() {
                       style={{
                         display: "flex",
                         alignItems: "center",
-                        gap: 8,
+                        gap: rem(8),
                         ...(isMobile ? { minWidth: 0 } : null),
                       }}
                     >
                       <span
                         style={{
-                          fontSize: 14,
+                          fontSize: TEXT.body,
                           fontWeight: 700,
                           // ellipsize unconditionally: long host aliases/FQDNs spill on desktop too
                           minWidth: 0,
@@ -956,8 +956,8 @@ function ImportPreviewBody() {
                           style={{
                             display: "inline-flex",
                             alignItems: "center",
-                            gap: 5,
-                            fontSize: 11,
+                            gap: rem(5),
+                            fontSize: TEXT.micro,
                             fontWeight: 600,
                             color: p.amber,
                             ...(isMobile ? { flexShrink: 0 } : null),
@@ -965,8 +965,8 @@ function ImportPreviewBody() {
                         >
                           <span
                             style={{
-                              width: 5,
-                              height: 5,
+                              width: rem(5),
+                              height: rem(5),
                               borderRadius: "50%",
                               background: p.amber,
                               flexShrink: 0,
@@ -979,7 +979,7 @@ function ImportPreviewBody() {
                     <div
                       style={{
                         fontFamily: MONO,
-                        fontSize: 12,
+                        fontSize: TEXT.small,
                         color: p.txt3,
                         // ellipsize unconditionally: user@host:port spills on desktop for long FQDNs
                         overflow: "hidden",
@@ -997,9 +997,9 @@ function ImportPreviewBody() {
                         style={{
                           display: "flex",
                           alignItems: "center",
-                          gap: 5,
-                          marginTop: 2,
-                          fontSize: 11,
+                          gap: rem(5),
+                          marginTop: rem(2),
+                          fontSize: TEXT.micro,
                           color: p.txt3,
                           minWidth: 0,
                         }}
@@ -1031,13 +1031,13 @@ function ImportPreviewBody() {
             display: "flex",
             alignItems: narrow ? "stretch" : "center",
             flexDirection: narrow ? "column" : undefined,
-            gap: 10,
-            padding: "14px 22px",
+            gap: rem(10),
+            padding: `${rem(14)} ${rem(22)}`,
             borderTop: `1px solid ${p.line}`,
             background: p.bg0,
           }}
         >
-          <span style={{ fontSize: 13, color: p.txt3 }}>
+          <span style={{ fontSize: TEXT.base, color: p.txt3 }}>
             <Trans
               i18nKey="import.selectedOf"
               components={{ b: <b style={{ color: p.txt }} /> }}
@@ -1053,10 +1053,10 @@ function ImportPreviewBody() {
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 8,
-                fontSize: 13,
+                gap: rem(8),
+                fontSize: TEXT.base,
                 color: p.txt3,
-                ...(narrow ? null : { marginLeft: 6 }),
+                ...(narrow ? null : { marginLeft: rem(6) }),
               }}
             >
               {t("import.intoGroup")}
@@ -1071,14 +1071,14 @@ function ImportPreviewBody() {
                   // Themes the native option popup — without it the list renders
                   // light while the control above it is dark.
                   colorScheme: p.name === "dark" ? "dark" : "light",
-                  height: isMobile ? 44 : 30,
-                  maxWidth: 220,
-                  padding: "0 8px",
+                  height: isMobile ? rem(44) : rem(30),
+                  maxWidth: rem(220),
+                  padding: `0 ${rem(8)}`,
                   borderRadius: 8,
                   border: `1px solid ${p.line}`,
                   background: p.bg0,
                   color: p.txt,
-                  fontSize: 13,
+                  fontSize: TEXT.base,
                   ...(narrow ? { flex: 1, minWidth: 0 } : null),
                 }}
               >
@@ -1095,7 +1095,7 @@ function ImportPreviewBody() {
           <Btn
             variant="ghost"
             full={narrow}
-            style={isMobile ? { minHeight: 44 } : undefined}
+            style={isMobile ? { minHeight: rem(44) } : undefined}
             onClick={close}
           >
             {t("common.cancel")}
@@ -1107,7 +1107,7 @@ function ImportPreviewBody() {
             disabled={!count || busy}
             style={{
               ...(count && !busy ? {} : { opacity: 0.5 }),
-              ...(isMobile ? { minHeight: 44 } : null),
+              ...(isMobile ? { minHeight: rem(44) } : null),
             }}
           >
             {t("import.importN", { count })}

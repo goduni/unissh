@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, UI } from "@/theme/tokens";
+import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
@@ -68,22 +68,22 @@ function QueueRow({ t }: { t: Transfer }) {
   return (
     <div
       style={{
-        padding: "9px 12px",
+        padding: `${rem(9)} ${rem(12)}`,
         borderRadius: 10,
         background: p.bg2,
         border: `1px solid ${p.line}`,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(7), marginBottom: rem(7) }}>
         <Icon name={dirIcon(t)} size={13} color={t.state === "done" ? p.green : t.state === "error" ? p.red : p.accentText} />
-        <span style={{ fontFamily: MONO, fontSize: 12, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <span style={{ fontFamily: MONO, fontSize: TEXT.small, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {t.label}
           {t.kind === "dir" && t.filesTotal > 0 ? ` (${t.filesDone}/${t.filesTotal})` : ""}
         </span>
         <span
           style={{
             fontFamily: MONO,
-            fontSize: 11,
+            fontSize: TEXT.micro,
             color: t.state === "done" ? p.green : p.txt3,
             // ellipsis so a long RU active status ("42% · 1,2 МБ/с · осталось 0:12") can't wrap
             minWidth: 0,
@@ -108,10 +108,10 @@ function QueueRow({ t }: { t: Transfer }) {
               border: "none",
               borderRadius: 8,
               padding: 0,
-              width: isMobile ? 38 : 22,
-              height: isMobile ? 38 : 22,
+              width: isMobile ? rem(38) : rem(22),
+              height: isMobile ? rem(38) : rem(22),
               flexShrink: 0,
-              marginLeft: c.danger ? 2 : 0,
+              marginLeft: c.danger ? rem(2) : 0,
               cursor: "pointer",
               color: c.danger ? p.red : p.txt2,
             }}
@@ -125,11 +125,11 @@ function QueueRow({ t }: { t: Transfer }) {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 5,
+          gap: rem(5),
           fontFamily: UI,
-          fontSize: 11,
+          fontSize: TEXT.micro,
           color: p.txt3,
-          marginBottom: 7,
+          marginBottom: rem(7),
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -139,7 +139,7 @@ function QueueRow({ t }: { t: Transfer }) {
         <span aria-hidden style={{ flexShrink: 0, color: p.txt3 }}>→</span>
         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{legLabel(t.to)}</span>
       </div>
-      <div style={{ height: 5, borderRadius: 6, background: p.bg4, overflow: "hidden" }}>
+      <div style={{ height: rem(5), borderRadius: 6, background: p.bg4, overflow: "hidden" }}>
         {/* scaleX, not width: transform animates off the layout path */}
         <div
           style={{
@@ -159,10 +159,10 @@ function QueueRow({ t }: { t: Transfer }) {
           title={t.error}
           style={{
             fontFamily: MONO,
-            fontSize: 11,
+            fontSize: TEXT.micro,
             lineHeight: 1.35,
             color: p.red,
-            marginTop: 6,
+            marginTop: rem(6),
             wordBreak: "break-word",
           }}
         >
@@ -197,10 +197,10 @@ function QueueBody({ transfers }: { transfers: Transfer[] }) {
   return (
     <div>
       {/* flexWrap so the pauseAll/cancelAll/clear labels wrap instead of overflowing a narrow panel */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, rowGap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(8), rowGap: rem(6), flexWrap: "wrap", marginBottom: rem(10) }}>
         <Icon name="arrows" size={15} color={p.txt2} />
-        <span style={{ fontSize: 13, fontWeight: 700 }}>{t("sftp.queue.title")}</span>
-        <span style={{ fontFamily: MONO, fontSize: 11, color: p.txt3 }}>
+        <span style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("sftp.queue.title")}</span>
+        <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
           {t("sftp.queue.overall", {
             count: transfers.length,
             done: fmtSize(agg.done),
@@ -223,7 +223,7 @@ function QueueBody({ transfers }: { transfers: Transfer[] }) {
         </button>
       </div>
       {agg.active > 0 && agg.total > 0 && (
-        <div style={{ height: 4, borderRadius: 2, background: p.bg4, overflow: "hidden", marginBottom: 10 }}>
+        <div style={{ height: rem(4), borderRadius: 2, background: p.bg4, overflow: "hidden", marginBottom: rem(10) }}>
           {/* scaleX, not width: transform animates off the layout path */}
           <div
             style={{
@@ -237,9 +237,9 @@ function QueueBody({ transfers }: { transfers: Transfer[] }) {
           />
         </div>
       )}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: rem(10), flexWrap: "wrap" }}>
         {transfers.map((t) => (
-          <div key={t.id} style={{ flex: "1 1 240px", maxWidth: 380 }}>
+          <div key={t.id} style={{ flex: "1 1 240px", maxWidth: rem(380) }}>
             <QueueRow t={t} />
           </div>
         ))}
@@ -253,9 +253,9 @@ function qbtn(p: ReturnType<typeof usePalette>): React.CSSProperties {
     background: p.bg2,
     border: `1px solid ${p.line}`,
     borderRadius: 8,
-    padding: "4px 9px",
+    padding: `${rem(4)} ${rem(9)}`,
     cursor: "pointer",
-    fontSize: 12,
+    fontSize: TEXT.small,
     color: p.txt2,
     fontFamily: UI,
   };
@@ -295,7 +295,7 @@ export function TransferQueue() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 9,
+            gap: rem(9),
             width: "100%",
             borderTop: `1px solid ${p.line}`,
             background: p.bg1,
@@ -304,8 +304,8 @@ export function TransferQueue() {
           }}
         >
           <Icon name="arrows" size={15} color={p.accentText} />
-          <span style={{ fontSize: 13, fontWeight: 700, color: p.txt }}>{t("sftp.queue.title")}</span>
-          <div style={{ flex: 1, height: 5, borderRadius: 6, background: p.bg4, overflow: "hidden" }}>
+          <span style={{ fontSize: TEXT.base, fontWeight: 700, color: p.txt }}>{t("sftp.queue.title")}</span>
+          <div style={{ flex: 1, height: rem(5), borderRadius: 6, background: p.bg4, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${Math.round(agg.ratio * 100)}%`, background: p.accent }} />
           </div>
           <Icon name="cd" size={13} color={p.txt3} />
@@ -320,7 +320,7 @@ export function TransferQueue() {
   }
 
   return (
-    <div style={{ borderTop: `1px solid ${p.line}`, background: p.bg1, padding: "12px 22px 16px" }}>
+    <div style={{ borderTop: `1px solid ${p.line}`, background: p.bg1, padding: `${rem(12)} ${rem(22)} ${rem(16)}` }}>
       <QueueBody transfers={transfers} />
     </div>
   );

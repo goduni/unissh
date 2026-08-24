@@ -9,7 +9,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as Xterm } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { termOptions } from "@/theme/tokens";
+import { rem, termOptions } from "@/theme/tokens";
 import "@xterm/xterm/css/xterm.css";
 
 const CSI = "\x1b["; // ANSI Control Sequence Introducer
@@ -105,8 +105,8 @@ export function TerminalPreview() {
         overflow: "hidden",
         border: `1px solid ${p.line}`,
         background: termTheme.bg,
-        padding: 10,
-        height: 240,
+        padding: rem(10),
+        height: rem(240),
         boxSizing: "border-box",
       }}
     >

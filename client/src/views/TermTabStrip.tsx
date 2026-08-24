@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { BTN_RESET, Icon, NO_AUTOCORRECT } from "@/components/primitives";
 import { pressActivate } from "@/components/a11y";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
@@ -137,7 +137,7 @@ export function TermTabStrip({
         background: bg,
         borderBottom: `1px solid ${p.line}`,
         flexShrink: 0,
-        minHeight: 38,
+        minHeight: rem(38),
       }}
     >
       {/* content-sized so the "+" sits right after the last tab (not shoved to the
@@ -212,11 +212,11 @@ export function TermTabStrip({
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 8,
-                padding: "0 12px",
+                gap: rem(8),
+                padding: `0 ${rem(12)}`,
                 cursor: "pointer",
                 flexShrink: 0,
-                maxWidth: 220,
+                maxWidth: rem(220),
                 // clip so a long title truncates inside the tab instead of spilling over
                 overflow: "hidden",
                 borderRight: `1px solid ${p.line}`,
@@ -228,8 +228,8 @@ export function TermTabStrip({
               {/* solid dot = connected; hollow ring = not — shape backs up the colour */}
               <span
                 style={{
-                  width: 7,
-                  height: 7,
+                  width: rem(7),
+                  height: rem(7),
                   flexShrink: 0,
                   borderRadius: "50%",
                   background: state === "online" ? dotColor : "transparent",
@@ -253,14 +253,14 @@ export function TermTabStrip({
                   onBlur={commitRename}
                   {...NO_AUTOCORRECT}
                   style={{
-                    width: 120,
+                    width: rem(120),
                     background: p.bg2,
                     border: `1px solid ${p.line2}`,
                     borderRadius: 6,
                     color: p.txt,
                     fontFamily: MONO,
-                    fontSize: 13,
-                    padding: "2px 6px",
+                    fontSize: TEXT.base,
+                    padding: `${rem(2)} ${rem(6)}`,
                     outline: "none",
                   }}
                 />
@@ -268,7 +268,7 @@ export function TermTabStrip({
                 <span
                   style={{
                     fontFamily: MONO,
-                    fontSize: 13,
+                    fontSize: TEXT.base,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -285,10 +285,10 @@ export function TermTabStrip({
                   title={t("terminal.tab.paneCount", { n: panes })}
                   style={{
                     flexShrink: 0,
-                    fontSize: 11,
+                    fontSize: TEXT.micro,
                     fontWeight: 700,
                     lineHeight: 1,
-                    padding: "2px 4px",
+                    padding: `${rem(2)} ${rem(4)}`,
                     borderRadius: 6,
                     color: p.txt3,
                     background: p.bg2,
@@ -325,7 +325,7 @@ export function TermTabStrip({
           aria-haspopup="menu"
           aria-expanded={adding}
           style={{
-            width: 38,
+            width: rem(38),
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

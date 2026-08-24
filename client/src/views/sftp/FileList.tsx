@@ -3,8 +3,8 @@
 // and the empty/loading/error states; delegates the actual actions to the pane.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { usePalette } from "@/theme/ThemeProvider";
-import { UI } from "@/theme/tokens";
+import { usePalette, useTheme } from "@/theme/ThemeProvider";
+import { designPx, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
@@ -63,6 +63,7 @@ export function FileList({
   // drop the fixed metadata columns before they crowd the name / overflow the row —
   // modified (widest, RU dates) first, then perms. Keeps header + rows in sync since
   // both derive from showModified/showPerms.
+  const { uiScale } = useTheme();
   const rootRef = useRef<HTMLDivElement>(null);
   const [paneW, setPaneW] = useState(0);
   useEffect(() => {
@@ -77,8 +78,16 @@ export function FileList({
 
   const hasMtime = useMemo(() => entries.some((e) => e.mtime != null), [entries]);
   const hasPerms = useMemo(() => entries.some((e) => e.mode != null), [entries]);
-  const showModified = hasMtime && !isMobile && !(paneW > 0 && paneW < 400);
-  const showPerms = hasPerms && !isMobile && !(paneW > 0 && paneW < 320);
+  // In DESIGN pixels: the columns being dropped are made of type, so the width at
+  // which they crowd grows with it. Measured in CSS pixels the pane looks roomy at
+  // 150 % while its own contents no longer fit.
+  //
+  // Derived from the scale rather than measured again, so this re-decides when
+  // the type grows without the pane's CSS width changing — a full-width pane in
+  // an unmoved window is exactly that case, and no ResizeObserver would fire.
+  const paneDesign = paneW > 0 ? designPx(paneW, uiScale) : 0;
+  const showModified = hasMtime && !isMobile && !(paneDesign > 0 && paneDesign < 400);
+  const showPerms = hasPerms && !isMobile && !(paneDesign > 0 && paneDesign < 320);
 
   const display = useMemo(() => displayEntries(entries, filter, sort), [entries, filter, sort]);
 
@@ -144,10 +153,13 @@ export function FileList({
         cursor: "pointer",
         padding: 0,
         fontFamily: UI,
-        fontSize: 11,
+        fontSize: TEXT.micro,
         fontWeight: 600,
         color: sort.key === k ? p.txt2 : p.txt3,
-        width: w,
+        // Design pixels — these have to stay equal to the matching column widths
+        // in FileRow, which are `rem`. In CSS pixels the header would drift left
+        // of its own column at every scale but 100 %.
+        width: w ? rem(w) : undefined,
         textAlign: align ?? "left",
         flex: w ? undefined : 1,
       }}
@@ -166,25 +178,25 @@ export function FileList({
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          gap: 10,
-          padding: 20,
+          gap: rem(10),
+          padding: rem(20),
           textAlign: "center",
         }}
       >
         <Icon name="alert" size={22} color={p.red} />
-        <div style={{ fontSize: 13, color: p.txt2 }}>{t("sftp.loadFailed")}</div>
+        <div style={{ fontSize: TEXT.base, color: p.txt2 }}>{t("sftp.loadFailed")}</div>
         {error && (
-          <div style={{ fontSize: 12, color: p.txt3, maxWidth: 300, wordBreak: "break-word" }}>{error}</div>
+          <div style={{ fontSize: TEXT.small, color: p.txt3, maxWidth: rem(300), wordBreak: "break-word" }}>{error}</div>
         )}
         <button
           onClick={onRetry}
           style={{
-            fontSize: 13,
+            fontSize: TEXT.base,
             color: p.accentText,
             background: "transparent",
             border: `1px solid ${p.accentLine}`,
             borderRadius: 8,
-            padding: "4px 12px",
+            padding: `${rem(4)} ${rem(12)}`,
             cursor: "pointer",
           }}
         >
@@ -201,7 +213,7 @@ export function FileList({
         role="listbox"
         aria-label={t("nav.sftp")}
         onKeyDown={onKeyDown}
-        style={{ flex: 1, overflow: "auto", padding: 6, outline: "none" }}
+        style={{ flex: 1, overflow: "auto", padding: rem(6), outline: "none" }}
       >
         {/* Header lives INSIDE the scroll body (sticky) so it shares the rows'
             content box + scrollbar inset and stays aligned. Left pad 33 == a
@@ -214,8 +226,8 @@ export function FileList({
               zIndex: 1,
               display: "flex",
               alignItems: "center",
-              gap: 9,
-              padding: "5px 10px 5px 33px",
+              gap: rem(9),
+              padding: `${rem(5)} ${rem(10)} ${rem(5)} ${rem(33)}`,
               background: p.bg1,
               borderBottom: `1px solid ${p.line}`,
             }}
@@ -240,17 +252,17 @@ export function FileList({
               <div
                 key={i}
                 style={{
-                  height: isMobile ? 44 : 30,
-                  margin: "0 4px",
+                  height: isMobile ? rem(44) : rem(30),
+                  margin: `0 ${rem(4)}`,
                   borderRadius: 8,
                   display: "flex",
                   alignItems: "center",
-                  padding: "0 10px",
-                  gap: 9,
+                  padding: `0 ${rem(10)}`,
+                  gap: rem(9),
                 }}
               >
-                <div style={{ width: 14, height: 14, borderRadius: 6, background: p.bg2 }} />
-                <div style={{ flex: 1, height: 9, borderRadius: 6, background: p.bg2, maxWidth: 120 + i * 18 }} />
+                <div style={{ width: rem(14), height: rem(14), borderRadius: 6, background: p.bg2 }} />
+                <div style={{ flex: 1, height: rem(9), borderRadius: 6, background: p.bg2, maxWidth: rem(120) + i * 18 }} />
               </div>
             ))
           : display.map((e, idx) => (
@@ -280,14 +292,14 @@ export function FileList({
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              gap: 8,
-              padding: "28px 12px",
+              gap: rem(8),
+              padding: `${rem(28)} ${rem(12)}`,
               textAlign: "center",
               color: p.txt3,
             }}
           >
             <Icon name={filter.trim() ? "search" : "folderOpen"} size={20} color={p.txt3} />
-            <span style={{ fontSize: 13 }}>
+            <span style={{ fontSize: TEXT.base }}>
               {filter.trim() && entries.length > 0 ? t("sftp.noMatches", { q: filter.trim() }) : t("sftp.empty")}
             </span>
           </div>

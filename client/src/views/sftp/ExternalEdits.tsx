@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Icon, Btn, IconBtn } from "@/components/primitives";
 import { Modal } from "@/components/Modal";
 import { useTranslation } from "@/i18n";
@@ -70,12 +70,12 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: rem(10), padding: `${rem(6)} 0`, minWidth: 0 }}>
         <Icon name="pencil" size={13} color={stateTone(edit, p)} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div
             style={{
-              fontSize: 13,
+              fontSize: TEXT.base,
               color: p.txt,
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -91,7 +91,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
               opened. */}
           <div
             style={{
-              fontSize: 11,
+              fontSize: TEXT.micro,
               fontFamily: MONO,
               color: p.txt3,
               whiteSpace: "nowrap",
@@ -103,7 +103,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
             {t("sftp.extEdit.copyAt", { path: edit.localPath })}
           </div>
         </div>
-        <span style={{ fontSize: 12, color: stateTone(edit, p), flexShrink: 0 }}>{status}</span>
+        <span style={{ fontSize: TEXT.small, color: stateTone(edit, p), flexShrink: 0 }}>{status}</span>
         {edit.state === "conflict" && (
           <Btn size="sm" variant="outline" onClick={() => setAsking(true)}>
             {t("sftp.extEdit.resolve")}
@@ -162,7 +162,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
             </>
           }
         >
-          <div style={{ fontSize: 13, color: p.txt }}>{t("sftp.extEdit.discardBody")}</div>
+          <div style={{ fontSize: TEXT.base, color: p.txt }}>{t("sftp.extEdit.discardBody")}</div>
         </Modal>
       )}
 
@@ -193,7 +193,7 @@ function EditRow({ edit, sourceFor }: { edit: LiveEdit; sourceFor: SessionLookup
             </>
           }
         >
-          <div style={{ fontSize: 13, color: p.txt }}>
+          <div style={{ fontSize: TEXT.base, color: p.txt }}>
             {t(edit.conflictReason === "unknown" ? "sftp.extEdit.unknownBody" : "sftp.extEdit.conflictBody")}
           </div>
         </Modal>
@@ -212,10 +212,10 @@ export function ExternalEdits({ sourceFor }: { sourceFor: SessionLookup }) {
       style={{
         borderTop: `1px solid ${p.line}`,
         background: p.bg1,
-        padding: "6px 22px 8px",
+        padding: `${rem(6)} ${rem(22)} ${rem(8)}`,
       }}
     >
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.3, color: p.txt3, textTransform: "uppercase" }}>
+      <div style={{ fontSize: TEXT.micro, fontWeight: 700, letterSpacing: rem(0.3), color: p.txt3, textTransform: "uppercase" }}>
         {t("sftp.extEdit.section")}
       </div>
       {edits.map((e) => (
@@ -223,7 +223,7 @@ export function ExternalEdits({ sourceFor }: { sourceFor: SessionLookup }) {
       ))}
       {/* Said once, under the list, rather than in a dialog nobody reads: the
           copies are plaintext, and they go away when the app does. */}
-      <div style={{ fontSize: 11, color: p.txt3, marginTop: 2 }}>{t("sftp.extEdit.plaintextNote")}</div>
+      <div style={{ fontSize: TEXT.micro, color: p.txt3, marginTop: rem(2) }}>{t("sftp.extEdit.plaintextNote")}</div>
     </div>
   );
 }

@@ -11,12 +11,16 @@ import {
   AppThemeFamily,
   Density,
   DEFAULT_TERM_PREFS,
+  DEFAULT_UI_SCALE,
+  detectUiScale,
   HostsLayout,
   EffMode,
   isHexColor,
   Mode,
   Palette,
   resolveAppPalette,
+  rootFontPx,
+  sanitizeUiScale,
   TERM_FONTS,
   TERM_LINK,
   TERM_SCROLLBACK_LIMIT,
@@ -26,8 +30,10 @@ import {
   TermPrefs,
   TermTheme,
   TermThemePalette,
+  UiScale,
   validateTermThemeImport,
 } from "./tokens";
+import { isDesktopOs } from "@/bridge/platform";
 
 interface ThemeCtx {
   p: Palette;
@@ -43,6 +49,11 @@ interface ThemeCtx {
   setAccent: (a: AccentKey) => void;
   density: Density;
   setDensity: (d: Density) => void;
+  /** Interface scale, in percent. Sets the ROOT font size and nothing else —
+   *  every migrated size is a `rem` off it, so no consumer reads this to size
+   *  itself. Device-local, like density; never synced. */
+  uiScale: UiScale;
+  setUiScale: (s: UiScale) => void;
   hostsLayout: HostsLayout;
   setHostsLayout: (h: HostsLayout) => void;
   termThemeId: string;
@@ -160,6 +171,22 @@ function lsSet(key: string, val: string) {
   }
 }
 
+const UI_SCALE_KEY = "unissh.uiScale";
+
+/** The user's EXPLICIT interface scale, or `null` for "never said" — the same
+ *  tri-state the custom title bar uses, and for the same reason: only the second
+ *  state may be overridden by detection at boot. A present-but-garbage value
+ *  (hand-edited, or written by a schema this build does not know) still counts as
+ *  an answer — it sanitises to 100 % rather than reopening the question. */
+function lsUiScale(): UiScale | null {
+  try {
+    const v = localStorage.getItem(UI_SCALE_KEY);
+    return v === null ? null : sanitizeUiScale(v);
+  } catch {
+    return null;
+  }
+}
+
 // One-time store migration to the family + mode + per-mode-terminal-override model.
 // Guarded by unissh.themeV, runs at import (before the provider mounts) so the state
 // initializers read migrated values. The legacy default unissh.term="nebula" means
@@ -239,6 +266,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [hostsLayout, setHostsLayoutState] = useState<HostsLayout>(() =>
     lsGet("unissh.hostsLayout", "cards") === "list" ? "list" : "cards",
   );
+  const [uiScale, setUiScaleState] = useState<UiScale>(() => lsUiScale() ?? DEFAULT_UI_SCALE);
   // Manual terminal-theme overrides, one per effective mode. null → follow the
   // theme's linked default (TERM_LINK). Empty string in storage means "no override".
   const [termOverrideDark, setTermOverrideDarkState] = useState<string | null>(
@@ -305,6 +333,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const setHostsLayout = (h: HostsLayout) => {
     setHostsLayoutState(h);
     lsSet("unissh.hostsLayout", h);
+  };
+  const setUiScale = (v: UiScale) => {
+    setUiScaleState(v);
+    // Writing the key is also what ENDS boot-time detection, for good: from here
+    // on the display never gets a vote, so plugging in a monitor cannot undo a
+    // choice the user made by looking at the result.
+    lsSet(UI_SCALE_KEY, String(v));
   };
   const cycleMode = () => {
     const order: Mode[] = ["light", "dark", "auto"];
@@ -389,6 +424,41 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // The one place the scale is expressed. Everything else is `rem`.
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${rootFontPx(uiScale)}px`;
+  }, [uiScale]);
+
+  // First launch only: start a HiDPI user somewhere readable instead of at 100 %.
+  // Desktop only — a phone already scales through the OS, and its device pixel
+  // ratio says nothing about how big the type looks in the hand. Deliberately not
+  // persisted (see lsUiScale): leaving the key unset keeps the answer live, so
+  // moving the same profile between a scaled and an unscaled session keeps doing
+  // the right thing instead of freezing whichever ran first.
+  useEffect(() => {
+    if (!isDesktopOs() || lsUiScale() !== null) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const factor = await getCurrentWindow().scaleFactor();
+        if (cancelled) return;
+        // Asked AGAIN, after the awaits. The guard above ran before a dynamic
+        // import and an IPC round trip, and "detection never overrides an
+        // explicit choice" has to hold across that gap too — otherwise a user
+        // quick enough to pick a scale while the window was still answering
+        // would watch their choice get overwritten by the display.
+        if (lsUiScale() !== null) return;
+        setUiScaleState(detectUiScale(factor, window.devicePixelRatio));
+      } catch {
+        /* no window to ask (browser preview), or the platform declined — 100 % */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // reflect into CSS vars (focus ring follows accent, desk follows palette)
   useEffect(() => {
     const root = document.documentElement;
@@ -412,6 +482,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setAccent,
     density,
     setDensity,
+    uiScale,
+    setUiScale,
     hostsLayout,
     setHostsLayout,
     termThemeId,

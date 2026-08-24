@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { UI } from "@/theme/tokens";
+import { rem, TEXT, UI } from "@/theme/tokens";
 import { Icon } from "@/components/primitives";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
@@ -54,13 +54,13 @@ export function TabStrip({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 6,
-        padding: "8px 10px",
+        gap: rem(6),
+        padding: `${rem(8)} ${rem(10)}`,
         borderBottom: `1px solid ${p.line}`,
         background: p.bg2,
       }}
     >
-      <div role="tablist" style={{ display: "flex", alignItems: "center", gap: 6, overflowX: "auto", flex: 1, minWidth: 0 }}>
+      <div role="tablist" style={{ display: "flex", alignItems: "center", gap: rem(6), overflowX: "auto", flex: 1, minWidth: 0 }}>
         {tabs.map((tab) => {
         const on = tab.id === activeId;
         const drop = tab.id === dropTargetId;
@@ -88,15 +88,15 @@ export function TabStrip({
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 6,
+              gap: rem(6),
               flexShrink: 0,
-              padding: "5px 9px",
+              padding: `${rem(5)} ${rem(9)}`,
               borderRadius: 8,
               cursor: "pointer",
               fontFamily: UI,
-              fontSize: 13,
+              fontSize: TEXT.base,
               fontWeight: on ? 700 : 500,
-              minHeight: isMobile ? 38 : undefined,
+              minHeight: isMobile ? rem(38) : undefined,
               color: on ? p.txt : p.txt2,
               background: drop ? p.bg3 : "transparent",
               boxShadow: drop
@@ -108,7 +108,7 @@ export function TabStrip({
             }}
           >
             <Icon name={tab.kind === "local" ? "drive" : "server"} size={13} color={on ? p.txt2 : p.txt3} />
-            <span style={{ whiteSpace: "nowrap", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>
+            <span style={{ whiteSpace: "nowrap", maxWidth: rem(200), overflow: "hidden", textOverflow: "ellipsis" }}>
               {tab.label}
             </span>
             {tab.kind === "remote" && (
@@ -125,7 +125,7 @@ export function TabStrip({
                   background: "transparent",
                   border: "none",
                   padding: 0,
-                  marginLeft: 1,
+                  marginLeft: rem(1),
                   cursor: "pointer",
                   color: p.txt3,
                 }}
@@ -152,8 +152,8 @@ export function TabStrip({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            width: isMobile ? 38 : 26,
-            height: isMobile ? 38 : 26,
+            width: isMobile ? rem(38) : rem(26),
+            height: isMobile ? rem(38) : rem(26),
             borderRadius: 8,
             border: `1px solid ${p.line}`,
             background: p.bg1,

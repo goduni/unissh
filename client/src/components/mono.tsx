@@ -7,7 +7,7 @@
 
 import React, { useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
-import { MONO, RADIUS, UI } from "@/theme/tokens";
+import { MONO, RADIUS, rem, TEXT, UI } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconName, Spinner } from "@/components/primitives";
 import { useMenu } from "@/components/a11y";
 
@@ -41,7 +41,7 @@ export function Card({
         background: p.bg0,
         border: `1px solid ${active ? p.accentLine : p.line}`,
         borderRadius: compact ? RADIUS.cardCompact : RADIUS.card,
-        padding: compact ? 13 : 18,
+        padding: compact ? rem(13) : rem(18),
         boxShadow: active ? `inset 0 0 0 1px ${p.accentLine}` : "none",
         cursor: onClick ? "pointer" : undefined,
         ...style,
@@ -79,8 +79,8 @@ export function HairlineRow({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 14,
-        padding: compact ? "9px 6px" : "14px 6px",
+        gap: rem(14),
+        padding: compact ? `${rem(9)} ${rem(6)}` : `${rem(14)} ${rem(6)}`,
         borderTop: first ? undefined : `1px solid ${p.line}`,
         background: active ? p.bg2 : "transparent",
         cursor: onClick ? "pointer" : undefined,
@@ -112,10 +112,10 @@ export function FactRow({
         display: "flex",
         alignItems: "baseline",
         justifyContent: "space-between",
-        gap: 12,
-        padding: "10px 0",
+        gap: rem(12),
+        padding: `${rem(10)} 0`,
         borderTop: first ? undefined : `1px solid ${p.line}`,
-        fontSize: 13,
+        fontSize: TEXT.base,
       }}
     >
       <span style={{ color: p.txt3, flexShrink: 0 }}>{label}</span>
@@ -150,8 +150,8 @@ export function MetaChip({
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 5,
-        fontSize: 12,
+        gap: rem(5),
+        fontSize: TEXT.small,
         fontWeight: 600,
         color: c,
         fontFamily: mono ? MONO : UI,
@@ -186,8 +186,8 @@ export function FlatAvatar({
   return (
     <span
       style={{
-        width: size,
-        height: size,
+        width: rem(size),
+        height: rem(size),
         flexShrink: 0,
         borderRadius: shape === "round" ? "50%" : Math.round(size * 0.28),
         background: p.bg3,
@@ -197,7 +197,7 @@ export function FlatAvatar({
         alignItems: "center",
         justifyContent: "center",
         fontWeight: 700,
-        fontSize: Math.round(size * 0.42),
+        fontSize: rem(Math.round(size * 0.42)),
       }}
     >
       {(name || "?").trim()[0]?.toUpperCase() || "?"}
@@ -255,7 +255,7 @@ export function UnderlineTabs<T extends string>({
       // Wrap to a second row rather than spill off the edge / over an adjacent
       // primary action when the (RU) tab labels don't fit; minWidth:0 lets the
       // strip shrink inside a nowrap header instead of forcing it wider.
-      style={{ display: "flex", flexWrap: "wrap", gap, rowGap: 4, minWidth: 0 }}
+      style={{ display: "flex", flexWrap: "wrap", gap: rem(gap), rowGap: rem(4), minWidth: 0 }}
     >
       {tabs.map((tb) => {
         const on = tb.value === value;
@@ -271,11 +271,11 @@ export function UnderlineTabs<T extends string>({
             style={{
               ...BTN_RESET,
               position: "relative",
-              padding: "0 0 10px",
+              padding: `0 0 ${rem(10)}`,
               display: "inline-flex",
               alignItems: "center",
-              gap: 7,
-              fontSize: 13,
+              gap: rem(7),
+              fontSize: TEXT.base,
               fontWeight: on ? 700 : 600,
               color: on ? p.txt : p.txt3,
               cursor: "pointer",
@@ -283,7 +283,7 @@ export function UnderlineTabs<T extends string>({
           >
             {tb.label}
             {tb.count != null && (
-              <span style={{ fontFamily: MONO, fontSize: 11, color: on ? p.txt2 : p.txt3 }}>
+              <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: on ? p.txt2 : p.txt3 }}>
                 {tb.count}
               </span>
             )}
@@ -345,8 +345,8 @@ export function RowOverflowMenu({ items, ariaLabel }: { items: OverflowItem[]; a
         onClick={() => setOpen((o) => !o)}
         onKeyDown={openKey}
         style={{
-          width: 30,
-          height: 30,
+          width: rem(30),
+          height: rem(30),
           borderRadius: RADIUS.chip,
           border: "none",
           background: open ? p.bg3 : "transparent",
@@ -370,13 +370,13 @@ export function RowOverflowMenu({ items, ariaLabel }: { items: OverflowItem[]; a
             position: "absolute",
             top: "100%",
             right: 0,
-            marginTop: 6,
+            marginTop: rem(6),
             zIndex: 30,
-            minWidth: 180,
+            minWidth: rem(180),
             background: p.bg2,
             border: `1px solid ${p.line2}`,
             borderRadius: RADIUS.menu,
-            padding: 6,
+            padding: rem(6),
             boxShadow: p.shadow,
           }}
         >
@@ -394,11 +394,11 @@ export function RowOverflowMenu({ items, ariaLabel }: { items: OverflowItem[]; a
                 width: "100%",
                 display: "flex",
                 alignItems: "center",
-                gap: 9,
-                padding: "8px 10px",
+                gap: rem(9),
+                padding: `${rem(8)} ${rem(10)}`,
                 borderRadius: RADIUS.chip,
                 cursor: "pointer",
-                fontSize: 13,
+                fontSize: TEXT.base,
                 fontWeight: 500,
                 color: it.danger ? p.red : p.txt2,
               }}
@@ -429,8 +429,8 @@ export function SyncBadge({ state, label, title }: { state: SyncState; label: st
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
-        fontSize: 11,
+        gap: rem(4),
+        fontSize: TEXT.micro,
         fontWeight: 600,
         color,
         // nowrap alone floors this badge at its label's full min-content width and

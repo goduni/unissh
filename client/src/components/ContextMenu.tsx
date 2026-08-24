@@ -7,6 +7,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { useIsMobile } from "@/store/responsive";
 import { Icon, type IconName } from "@/components/primitives";
 import { BottomSheet } from "@/components/Modal";
+import { rem, TEXT } from "@/theme/tokens";
 
 export interface MenuItem {
   icon?: IconName;
@@ -69,16 +70,16 @@ export function ContextMenu({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
+        gap: rem(10),
         width: "100%",
-        padding: isMobile ? "13px 12px" : "7px 10px",
+        padding: isMobile ? `${rem(13)} ${rem(12)}` : `${rem(7)} ${rem(10)}`,
         borderRadius: 8,
         border: "1px solid transparent",
         background: "transparent",
         color: it.disabled ? p.txt3 : it.danger ? p.red : p.txt,
         cursor: it.disabled ? "default" : "pointer",
         textAlign: "left",
-        fontSize: isMobile ? 15 : 13,
+        fontSize: isMobile ? rem(15) : TEXT.base,
         fontWeight: 500,
         opacity: it.disabled ? 0.5 : 1,
       }}
@@ -98,9 +99,9 @@ export function ContextMenu({
     return (
       <BottomSheet onClose={onClose}>
         {title && (
-          <div style={{ fontSize: 13, fontWeight: 700, color: p.txt3, padding: "0 12px 8px" }}>{title}</div>
+          <div style={{ fontSize: TEXT.base, fontWeight: 700, color: p.txt3, padding: `0 ${rem(12)} ${rem(8)}` }}>{title}</div>
         )}
-        <div role="menu" aria-label={title} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <div role="menu" aria-label={title} style={{ display: "flex", flexDirection: "column", gap: rem(2) }}>
           {items.map((it, i) => (
             <Row key={i} it={it} />
           ))}
@@ -127,16 +128,16 @@ export function ContextMenu({
           position: "fixed",
           left: pos.left,
           top: pos.top,
-          minWidth: 190,
+          minWidth: rem(190),
           background: p.bg1,
           border: `1px solid ${p.line2}`,
           borderRadius: 12,
           boxShadow: p.shadow,
-          padding: 5,
+          padding: rem(5),
         }}
       >
         {title && (
-          <div style={{ fontSize: 11, fontWeight: 700, color: p.txt3, padding: "4px 10px 6px" }}>{title}</div>
+          <div style={{ fontSize: TEXT.micro, fontWeight: 700, color: p.txt3, padding: `${rem(4)} ${rem(10)} ${rem(6)}` }}>{title}</div>
         )}
         {items.map((it, i) => (
           <Row key={i} it={it} />

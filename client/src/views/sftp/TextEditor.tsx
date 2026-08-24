@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Icon, Btn, Spinner } from "@/components/primitives";
 import { useKeyboardInset } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
@@ -113,7 +113,7 @@ export function TextEditor({
   });
 
   const message = (txt: string) => (
-    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: p.txt3, fontSize: 13, padding: 24, textAlign: "center" }}>
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: p.txt3, fontSize: TEXT.base, padding: rem(24), textAlign: "center" }}>
       {txt}
     </div>
   );
@@ -135,14 +135,14 @@ export function TextEditor({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
+          gap: rem(10),
           padding: "calc(env(safe-area-inset-top) + 12px) 16px 12px",
           borderBottom: `1px solid ${p.line}`,
           background: p.bg1,
         }}
       >
         <Icon name="note" size={16} color={p.accentText} />
-        <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <span style={{ fontFamily: MONO, fontSize: TEXT.base, fontWeight: 600, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {name}
           {dirty ? " •" : ""}
         </span>
@@ -161,13 +161,13 @@ export function TextEditor({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 10,
-            padding: "10px 16px",
+            gap: rem(10),
+            padding: `${rem(10)} ${rem(16)}`,
             background: p.bg2,
             borderBottom: `1px solid ${p.line}`,
           }}
         >
-          <span style={{ flex: 1, fontSize: 13, color: p.txt2 }}>{t("sftp.editor.discardQ")}</span>
+          <span style={{ flex: 1, fontSize: TEXT.base, color: p.txt2 }}>{t("sftp.editor.discardQ")}</span>
           <Btn variant="ghost" size="sm" onClick={() => setConfirmClose(false)}>
             {t("common.cancel")}
           </Btn>
@@ -203,7 +203,7 @@ export function TextEditor({
               background: p.bg0,
               color: p.txt,
               fontFamily: MONO,
-              fontSize: 16, // ≥16px avoids iOS zoom-on-focus
+              fontSize: TEXT.lead, // ≥16px avoids iOS zoom-on-focus
               lineHeight: 1.5,
               padding: "16px 16px calc(16px + env(safe-area-inset-bottom))",
               boxSizing: "border-box",
