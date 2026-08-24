@@ -22,9 +22,16 @@
 //! Mobile is untouched. Nothing here is compiled for iOS or Android: app
 //! backgrounding on a phone is a different question with a different answer.
 
+// The suspend hand-off below is Linux/Windows only — macOS cannot hold a
+// suspend open at all (see `macos.rs`), so on that target none of this is
+// compiled and the imports would be dead.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::sync::Mutex;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::time::Duration;
 
 use serde::Serialize;
