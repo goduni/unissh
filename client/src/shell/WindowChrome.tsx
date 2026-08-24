@@ -6,9 +6,9 @@
 
 import React, { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { isTauri, osPlatform } from "@/bridge/platform";
+import { isDesktopOs, isTauri, osPlatform } from "@/bridge/platform";
 import { useApp } from "@/store/app";
-import { windowControlsLayout, type ControlsLayout } from "@/shell/windowControls";
+import { chromeBarHeight, windowControlsLayout, type ControlsLayout } from "@/shell/windowControls";
 
 /** The window-controls layout, live: it moves the moment either setting changes,
  *  with no restart. The decision itself is `windowControlsLayout` — everything
@@ -18,6 +18,18 @@ export function useWindowControls(): ControlsLayout {
   const customChrome = useApp((s) => s.customChrome);
   const stored = useApp((s) => s.windowControlsSide);
   return windowControlsLayout({ platform: osPlatform(), stored, customChrome });
+}
+
+/** The strip at the top of the window that the title bar occupies, in design
+ *  px — 0 when the window manager owns the frame, and 0 where there is no
+ *  window at all. A full-window overlay uses it as its `top`.
+ *
+ *  Gated on the BINARY's platform, not the device flag: the phone-shell preview
+ *  on a desktop OS is still a frameless window with our bar on it. Same
+ *  reasoning as the unlock overlay's drag strip. */
+export function useChromeInset(): number {
+  const customChrome = useApp((s) => s.customChrome);
+  return isDesktopOs() && customChrome ? chromeBarHeight(osPlatform()) : 0;
 }
 
 type ResizeDirection = Parameters<ReturnType<typeof getCurrentWindow>["startResizeDragging"]>[0];

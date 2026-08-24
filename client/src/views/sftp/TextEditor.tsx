@@ -8,6 +8,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Icon, Btn, Spinner } from "@/components/primitives";
 import { useKeyboardInset } from "@/store/responsive";
+import { useChromeInset } from "@/shell/WindowChrome";
 import { useTranslation } from "@/i18n";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
@@ -49,6 +50,7 @@ export function TextEditor({
   const [saving, setSaving] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const kbInset = useKeyboardInset();
+  const chromeInset = useChromeInset();
 
   useEffect(() => {
     if (size > MAX_EDIT_BYTES) {
@@ -122,7 +124,16 @@ export function TextEditor({
     <div
       style={{
         position: "fixed",
-        inset: 0,
+        // Below the title bar, not over it. This is a full-window overlay, and
+        // the window's controls live in that strip: on macOS the OS draws its
+        // traffic lights on top of whatever is there, so they landed on the file
+        // name; on Windows and Linux our own buttons went UNDER it, leaving a
+        // window that could not be moved or closed while a file was open. Zero
+        // where the window manager owns the frame, and on a phone.
+        top: rem(chromeInset),
+        left: 0,
+        right: 0,
+        bottom: 0,
         zIndex: 200,
         display: "flex",
         flexDirection: "column",

@@ -8,7 +8,7 @@
 // buttons used to be, or two sets of them.
 
 import { describe, expect, it } from "vitest";
-import { windowControlsLayout, LEFT_ORDER, RIGHT_ORDER } from "./windowControls";
+import { chromeBarHeight, windowControlsLayout, LEFT_ORDER, RIGHT_ORDER } from "./windowControls";
 
 const layout = (platform: string, stored: string | null, customChrome = true) =>
   windowControlsLayout({ platform, stored, customChrome });
@@ -74,6 +74,23 @@ describe("windowControlsLayout", () => {
     // "unknown" — neither may get controls, and neither may throw.
     for (const platform of ["android", "ios", "unknown", ""]) {
       expect(layout(platform, null)).toEqual({ kind: "none" });
+    }
+  });
+});
+
+describe("chromeBarHeight", () => {
+  it("is shorter on macOS, where the traffic lights set the line", () => {
+    expect(chromeBarHeight("macos")).toBe(38);
+    expect(chromeBarHeight("windows")).toBe(44);
+    expect(chromeBarHeight("linux")).toBe(44);
+  });
+
+  // The number a full-window overlay starts below. If the bar and the overlay
+  // ever disagree, the overlay eats the window controls — on Windows and Linux
+  // that is a window nobody can close.
+  it("is the number the title bar itself uses", () => {
+    for (const platform of ["macos", "windows", "linux"]) {
+      expect(chromeBarHeight(platform)).toBeGreaterThan(0);
     }
   });
 });

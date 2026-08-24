@@ -44,6 +44,21 @@ export type ControlsLayout =
   | { kind: "native" }
   | { kind: "none" };
 
+/** How tall the title bar we draw is, in design px.
+ *
+ *  macOS runs it shorter on purpose: the traffic lights sit on the OS's own
+ *  line, which we never move, and 38 puts the bar's centreline on that line
+ *  instead of 5px below it.
+ *
+ *  It lives here because the bar is no longer the only thing that has to know:
+ *  anything covering the window has to start below the bar, or it covers the
+ *  window controls with it — which on macOS merely puts the traffic lights on
+ *  top of someone's content, and on Windows and Linux takes away the only way
+ *  to close the window. */
+export function chromeBarHeight(platform: string): number {
+  return platform === "macos" ? 38 : 44;
+}
+
 /** Platforms where we draw the controls ourselves. macOS is deliberately absent
  *  — it is the `native` case, not a side we get to choose. */
 const CUSTOM_PLATFORMS = ["windows", "linux"];

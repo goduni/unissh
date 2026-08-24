@@ -21,7 +21,8 @@ import { Icon } from "@/components/primitives";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
 import { ResizeEdges, useWindowControls } from "@/shell/WindowChrome";
-import { isDesktopOs, isMac } from "@/bridge/platform";
+import { isDesktopOs, osPlatform } from "@/bridge/platform";
+import { chromeBarHeight } from "@/shell/windowControls";
 import { opensSettings, terminalOwnsTabDigits } from "@/support/hotkeys";
 import { createSystemLockWatcher, handleSystemLockEvent } from "@/support/systemLock";
 import type { SystemLockEventPayload, SystemLockWatcher } from "@/support/systemLock";
@@ -711,7 +712,7 @@ export function App() {
         <div
           data-tauri-drag-region
           style={{
-            height: isMac() ? rem(38) : rem(44),
+            height: rem(chromeBarHeight(osPlatform())),
             flexShrink: 0,
             display: "flex",
             alignItems: "center",
