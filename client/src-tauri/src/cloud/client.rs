@@ -401,7 +401,7 @@ mod base_url_tests {
 
 #[cfg(test)]
 mod tls_hint_tests {
-    use super::tls_hint;
+    use super::{root_cause, tls_hint};
 
     /// The strings are what rustls actually produces, lowercased by
     /// `error_chain`: a private-CA server is the case the hint exists for.
