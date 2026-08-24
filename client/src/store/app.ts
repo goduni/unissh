@@ -705,9 +705,28 @@ const canSwapDecorations = (): boolean => osPlatform() === "linux" || osPlatform
  *  Windows was excluded alongside it for a weaker reason — untested, with no
  *  reported use — and is now in: users there asked for the system frame, which
  *  is also what brings back snap layouts, the window menu and the maximize
- *  hover flyout. It needs a pass on real Windows hardware before a release goes
- *  out: the macOS lesson is that "it compiles and the setting toggles" is not
- *  evidence for this call. */
+ *  hover flyout. It is NOT the macOS shape of risk, and that is worth writing
+ *  down so nobody re-reads this and re-adds the guard out of sympathy:
+ *
+ *    - A top-level tao window on Windows carries `WS_CAPTION | WS_SYSMENU` at
+ *      all times; `to_window_styles()` sets them unconditionally and the
+ *      decorations marker never clears them off a non-child window. So the
+ *      system menu and Alt+F4 exist even while undecorated — this cannot
+ *      produce a window with no way to close it, which is exactly what the
+ *      macOS call does produce.
+ *    - "Undecorated" there is the WM_NCCALCSIZE handler returning 0, and it
+ *      reads the LIVE flag on every message. The toggle flips that flag and
+ *      forces SWP_FRAMECHANGED, so Windows simply re-asks and gets the other
+ *      answer. Symmetric and re-evaluated, not surgery on a style mask.
+ *    - tauri-runtime-wry has a `#[cfg(windows)]` branch on this exact
+ *      transition (attach/detach of the undecorated resize handler), so it is
+ *      a path someone wrote Windows code for, not one nobody considered.
+ *
+ *  What that reasoning still cannot see is everything the eye judges: the
+ *  client area shrinks by the caption height when the frame returns, the
+ *  undecorated-shadow insets unwind, and the toggle may be thrown while
+ *  maximized. So it still owes a pass on real hardware before a release —
+ *  "doesn't brick the window" is now well argued, "looks right" is not. */
 const applyWindowDecorations = async (customChrome: boolean): Promise<void> => {
   if (!canSwapDecorations()) return;
   try {
