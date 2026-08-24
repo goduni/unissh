@@ -243,15 +243,45 @@ fn retry_after_secs(resp: &Response) -> u64 {
 }
 
 fn transport_err(e: reqwest::Error) -> ApiError {
+    let chain = error_chain(&e);
+    // The whole chain goes to the log whatever we end up showing: the line the
+    // user can paste is short by necessity, and the one that identifies the
+    // failure is not always the one we chose to surface.
+    log::warn!("cloud: request failed — {chain}");
     let mut message = e.to_string();
-    if let Some(hint) = tls_hint(&error_chain(&e)) {
+    if let Some(hint) = tls_hint(&chain) {
         message.push_str(" — ");
         message.push_str(hint);
+    } else if let Some(cause) = root_cause(&e) {
+        // Without this the message is reqwest's outer Display and nothing else:
+        // "error sending request for url (...)", which is true of a DNS failure,
+        // a refused connection, an unreachable network and a timeout alike. That
+        // is the same way #34 hid for a whole release — a message naming the
+        // request instead of the reason — and it costs a round trip through the
+        // user every time. TLS keeps its written instruction; everything else at
+        // least says what happened.
+        message.push_str(" — ");
+        message.push_str(&cause);
     }
     ApiError::Server {
         code: "network".into(),
         message,
     }
+}
+
+/// The deepest `source()` of an error, when it says something the outer Display
+/// does not. `None` when there is no source, or when it is already contained in
+/// what the caller is about to show — repeating it would only make the line
+/// longer without making it clearer.
+fn root_cause(e: &dyn std::error::Error) -> Option<String> {
+    let outer = e.to_string();
+    let mut deepest: Option<String> = None;
+    let mut cur = e.source();
+    while let Some(err) = cur {
+        deepest = Some(err.to_string());
+        cur = err.source();
+    }
+    deepest.filter(|d| !d.is_empty() && !outer.contains(d.as_str()))
 }
 
 /// Flatten an error and its `source()` chain into one lowercase haystack. The
@@ -396,6 +426,50 @@ mod tls_hint_tests {
     fn ordinary_transport_failures_get_no_hint() {
         assert!(tls_hint("error sending request; connection refused; ").is_none());
         assert!(tls_hint("operation timed out; ").is_none());
+    }
+
+    /// The half that was missing: a failure that is NOT about certificates still
+    /// has to say what it was. Everything below reaches the user as the same
+    /// "error sending request for url (...)" until the cause is appended.
+    #[test]
+    fn root_cause_is_appended_when_there_is_no_tls_hint() {
+        #[derive(Debug)]
+        struct Err2(&'static str, Option<Box<Err2>>);
+        impl std::fmt::Display for Err2 {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Err2 {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1
+                    .as_deref()
+                    .map(|e| e as &(dyn std::error::Error + 'static))
+            }
+        }
+
+        let deep = Err2(
+            "error sending request for url (https://x/v1/relay/poll)",
+            Some(Box::new(Err2(
+                "client error (Connect)",
+                Some(Box::new(Err2("dns error: Name or service not known", None))),
+            ))),
+        );
+        assert_eq!(
+            root_cause(&deep).as_deref(),
+            Some("dns error: Name or service not known"),
+        );
+
+        // Nothing to add: no source at all.
+        assert!(root_cause(&Err2("error sending request", None)).is_none());
+
+        // Nothing to add: the source is already inside what will be shown, so
+        // appending it would only lengthen the line.
+        let echo = Err2(
+            "error sending request: connection refused",
+            Some(Box::new(Err2("connection refused", None))),
+        );
+        assert!(root_cause(&echo).is_none());
     }
 }
 
