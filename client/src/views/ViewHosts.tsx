@@ -1679,7 +1679,14 @@ export function ViewHosts() {
         height: touch ? SIZE.tapMin : rem(30),
         padding: touch ? `0 ${rem(6)} 0 ${rem(12)}` : `0 ${rem(4)} 0 ${rem(9)}`,
         borderRadius: RADIUS.ctl,
-        background: p.bg2,
+        // A field sits ONE step above its own surface, not on a fixed rung. The
+        // title bar and the host picker both draw their search on bg1 and fill it
+        // with bg2 — one step. This screen's ground is bg0, so the same literal
+        // token lands two steps up and reads as a lit block on the darkest
+        // surface in the palette. The mono family collapses bg0 and bg1 on
+        // purpose, and there bg2 IS the first distinct step, which is what has
+        // always shipped and must not move.
+        background: p.bg1 === p.bg0 ? p.bg2 : p.bg1,
         // Focus reads on the frame, matching the sort control's open state.
         border: `1px solid ${searchFocus ? p.line2 : p.line}`,
       }}
