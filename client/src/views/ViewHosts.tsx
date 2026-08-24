@@ -1562,8 +1562,8 @@ export function ViewHosts() {
   const cursorIdx = shown.length === 0 ? -1 : Math.min(cursor, shown.length - 1);
   // Paint the highlight only while the keys that move it will actually arrive:
   // the box focused AND something typed. A ring left behind after the user clicks
-  // away advertises an Enter that goes nowhere — which is the "как будто теряется
-  // фокус с верхнего совпадения" this screen was reported for to begin with.
+  // away advertises an Enter that goes nowhere — the same "as if focus is lost"
+  // this screen was reported for to begin with.
   const searching = searchFocus && query.trim() !== "";
   const moveCursor = (delta: number) => {
     const next = nextRow(cursorIdx, delta, shown.length);
