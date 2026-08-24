@@ -30,6 +30,7 @@ import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
 import { suspendExternalEdits } from "@/sftp/external-edit";
 import { planGroupMove } from "@/store/groupMove";
 import type { LockGrace } from "@/support/systemLock";
+import type { ControlsSide } from "@/shell/windowControls";
 
 /** What closed the vault. `manual` is the lock action or the ⌘L shortcut;
  *  `idle` is the inactivity timer; the other two come from the OS telling us
@@ -453,6 +454,12 @@ interface AppStore {
    *  everywhere else. */
   customChrome: boolean;
   setCustomChrome: (on: boolean) => void;
+  /** Which end of the title bar our window controls sit at — the user's stored
+   *  answer, RAW, with `null` meaning "never asked". Nothing reads this
+   *  directly: pass it to `windowControlsLayout`, which is the one place that
+   *  turns it (and the platform, and `customChrome`) into a layout. */
+  windowControlsSide: string | null;
+  setWindowControlsSide: (side: ControlsSide) => void;
   setSftpParallelism: (n: number) => void;
   setSftpExternalEditDefault: (v: boolean) => void;
 
@@ -665,22 +672,63 @@ const lsCustomChrome = (): boolean | null => {
   }
 };
 
+/** The user's EXPLICIT choice of which end of the title bar the window controls
+ *  sit at, or `null` for "never said" — a tri-state for the same reason as the
+ *  one above. Read RAW: sanitising a stored side is `windowControlsLayout`'s
+ *  job, and it is the only place that knows what the platform default is. */
+const lsWindowControlsSide = (): string | null => {
+  try {
+    return localStorage.getItem("unissh.windowControls");
+  } catch {
+    return null;
+  }
+};
+
+/** Where the frame can be swapped at runtime at all. Everything that has to
+ *  agree about that — the initial state, boot, and the apply itself — reads it
+ *  here rather than each spelling out its own platform list. */
+const canSwapDecorations = (): boolean => osPlatform() === "linux" || osPlatform() === "windows";
+
 /** Hand the frame to the window manager, or take it back. Best-effort by
  *  design: on a browser preview there is no window to decorate, and a compositor
  *  is free to ignore the request — neither is worth failing a boot over, and the
  *  title bar we draw is already correct for whichever answer we get.
  *
- *  LINUX ONLY, and that is not caution, it is a bug this already caused. On
+ *  NEVER ON macOS, and that is not caution, it is a bug this already caused. On
  *  macOS `decorations: false` in tauri.conf is NOT the same state as calling
  *  `setDecorations(false)` at runtime: the window created from the config keeps
  *  the real traffic lights and the rounded corners (which is exactly why
  *  `isMac()` suppresses our own controls everywhere), while the runtime call
  *  drops the window to a borderless style mask and takes both away — a square
- *  window with no close button. Windows is excluded for a weaker reason: the
- *  swap has no reported use there and is untested, and the macOS lesson is that
- *  runtime decoration changes are not the portable no-op they look like. */
+ *  window with no close button. That exclusion is permanent.
+ *
+ *  Windows was excluded alongside it for a weaker reason — untested, with no
+ *  reported use — and is now in: users there asked for the system frame, which
+ *  is also what brings back snap layouts, the window menu and the maximize
+ *  hover flyout. It is NOT the macOS shape of risk, and that is worth writing
+ *  down so nobody re-reads this and re-adds the guard out of sympathy:
+ *
+ *    - A top-level tao window on Windows carries `WS_CAPTION | WS_SYSMENU` at
+ *      all times; `to_window_styles()` sets them unconditionally and the
+ *      decorations marker never clears them off a non-child window. So the
+ *      system menu and Alt+F4 exist even while undecorated — this cannot
+ *      produce a window with no way to close it, which is exactly what the
+ *      macOS call does produce.
+ *    - "Undecorated" there is the WM_NCCALCSIZE handler returning 0, and it
+ *      reads the LIVE flag on every message. The toggle flips that flag and
+ *      forces SWP_FRAMECHANGED, so Windows simply re-asks and gets the other
+ *      answer. Symmetric and re-evaluated, not surgery on a style mask.
+ *    - tauri-runtime-wry has a `#[cfg(windows)]` branch on this exact
+ *      transition (attach/detach of the undecorated resize handler), so it is
+ *      a path someone wrote Windows code for, not one nobody considered.
+ *
+ *  What that reasoning still cannot see is everything the eye judges: the
+ *  client area shrinks by the caption height when the frame returns, the
+ *  undecorated-shadow insets unwind, and the toggle may be thrown while
+ *  maximized. So it still owes a pass on real hardware before a release —
+ *  "doesn't brick the window" is now well argued, "looks right" is not. */
 const applyWindowDecorations = async (customChrome: boolean): Promise<void> => {
-  if (osPlatform() !== "linux") return;
+  if (!canSwapDecorations()) return;
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().setDecorations(!customChrome);
@@ -795,12 +843,15 @@ export const useApp = create<AppStore>((set, get) => ({
   // every non-tiling desktop are right without waiting on IPC. `boot` replaces
   // it with the detected answer when the user has never chosen.
   //
-  // Pinned to `true` off Linux, and not merely defaulted to it: on macOS the
-  // traffic lights are drawn by the OS over our bar and the bar is what reserves
-  // their 38px strip, so a `false` here would leave them floating on top of
-  // content. The setting is hidden there for the same reason — this line is what
-  // makes a stale localStorage value from another machine harmless too.
-  customChrome: osPlatform() === "linux" ? (lsCustomChrome() ?? true) : true,
+  // Pinned to `true` wherever the frame cannot be swapped at runtime, and not
+  // merely defaulted to it: on macOS the traffic lights are drawn by the OS over
+  // our bar and the bar is what reserves their 38px strip, so a `false` here
+  // would leave them floating on top of content. The setting is hidden there for
+  // the same reason — this line is what makes a stale localStorage value from
+  // another machine harmless too. Windows now reads the stored value alongside
+  // Linux; a phone has no frame either way.
+  customChrome: canSwapDecorations() ? (lsCustomChrome() ?? true) : true,
+  windowControlsSide: lsWindowControlsSide(),
   sftpParallelism: lsSftpParallelism(),
   sftpExternalEditDefault: lsExternalEditDefault(),
   lastConnected: lsLastConnected(),
@@ -828,17 +879,24 @@ export const useApp = create<AppStore>((set, get) => ({
 
   boot: async () => {
     void refineLangFromSystem(); // refine language from OS locale on first run
-    // Window chrome — Linux only, matching where the state can vary at all (see
-    // the initial value). Off Linux this whole block is skipped rather than
-    // relying on the detector returning false and the apply being a no-op:
-    // two layers agreeing by accident is how the macOS window ended up square
-    // and buttonless in the first place.
+    // Window chrome. Every branch below names its platform outright rather than
+    // leaning on the apply's own guard to no-op: two layers agreeing by accident
+    // is how the macOS window ended up square and buttonless in the first place.
     //
-    // Only when the user has never chosen — an explicit setting is never
-    // second-guessed by detection, on this boot or any later one. Deliberately
-    // NOT persisted: leaving the key unset keeps the answer live, so moving the
-    // same vault between a tiling session and a plain desktop keeps doing the
-    // right thing instead of freezing whatever ran first.
+    // The window-manager question is Linux's alone, and only when the user has
+    // never chosen — an explicit setting is never second-guessed by detection,
+    // on this boot or any later one. Deliberately NOT persisted: leaving the key
+    // unset keeps the answer live, so moving the same vault between a tiling
+    // session and a plain desktop keeps doing the right thing instead of
+    // freezing whatever ran first.
+    //
+    // Windows has no such question, and gets NO call until the user has actually
+    // answered one. The window is born undecorated from tauri.conf, so on an
+    // untouched install `setDecorations(false)` would be asking for the state
+    // the window is already in — a no-op in theory, and this is precisely the
+    // call whose Windows behaviour nothing here has ever executed. An untouched
+    // Windows install therefore boots down exactly the path it does today, and
+    // the new call reaches only the people who went and asked for it.
     if (osPlatform() === "linux") {
       if (lsCustomChrome() === null) {
         void api
@@ -851,6 +909,8 @@ export const useApp = create<AppStore>((set, get) => ({
       } else {
         void applyWindowDecorations(get().customChrome);
       }
+    } else if (osPlatform() === "windows" && lsCustomChrome() !== null) {
+      void applyWindowDecorations(get().customChrome);
     }
     // Push the persisted keepalive interval to the core before any connection.
     void api
@@ -1355,6 +1415,17 @@ export const useApp = create<AppStore>((set, get) => ({
     // tiling WM that draws no title bar at all this is exactly the bare window
     // the user already has for everything else.
     void applyWindowDecorations(on);
+  },
+  setWindowControlsSide: (side) => {
+    set({ windowControlsSide: side });
+    try {
+      // Written even when it matches the platform default: "right, because I
+      // said so" has to outlive a later change of default, and an unset key is
+      // the only thing that means "never asked".
+      localStorage.setItem("unissh.windowControls", side);
+    } catch {
+      /* ignore */
+    }
   },
   setKeepaliveSecs: (secs) => {
     const v = Number.isFinite(secs) && secs >= 0 ? Math.round(secs) : 15;

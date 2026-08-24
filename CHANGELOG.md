@@ -227,6 +227,43 @@ egress path rather than a convenience, upgrade everyone who uses that vault
 before setting one; this build refuses to connect past a proxy it cannot
 understand, but it cannot make an older build do the same.
 
+### Changed
+
+- **The window buttons moved to the right on Windows and Linux, and the order
+  changed with them.** UniSSH draws its own title bar there, and it had been
+  drawing close / minimize / maximize in the top-*left* corner — macOS's layout,
+  on desktops that have never used it. Two people reported the same thing from
+  two different channels, which is what separates a wrong default from a matter
+  of taste: the one button everybody reaches for without looking was in the wrong
+  corner, and worse, **close** sat exactly where Windows puts **minimize**.
+
+  They are now on the right, in minimize / maximize / close order, so the corner
+  your hand goes to is the one your desktop taught it. **This will move the
+  buttons on upgrade** for everyone on Windows and Linux — that is the point of
+  the change, but it is a visible one. **Settings → Appearance → Window
+  controls** puts them back on the left, in the old order, and remembers it. The
+  order follows the side rather than being a second setting of its own: nobody
+  wants close between the other two, and offering the two axes separately is the
+  only way to end up there.
+
+  **macOS is untouched** and is offered neither control. Its traffic lights are
+  drawn by the system over our bar, in the corner every Mac window uses, and the
+  bar's only job there is to reserve their strip — which it still does, and still
+  gives back in full screen.
+
+- **"Draw our own title bar" is now available on Windows, not just Linux.** Turn
+  it off and you get the real system frame: the platform's own buttons, and with
+  them snap layouts, the window menu and the maximize hover flyout that a
+  custom-drawn bar cannot offer. Our own controls disappear rather than doubling
+  up, and so does the window-controls setting — with a system frame there are no
+  buttons of ours left to place. Linux behaviour is unchanged, including the
+  part where an untouched setting keeps following your desktop: off under a
+  tiling window manager, on everywhere else. macOS stays out, and not from
+  caution — the runtime call that would do it there produces a square window
+  with no close button.
+
+  Vault format and server protocol: unchanged.
+
 ### Fixed
 
 - **Every cloud/server operation on Android failed with `event loop thread

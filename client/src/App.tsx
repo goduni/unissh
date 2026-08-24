@@ -20,7 +20,7 @@ import { useTranslation } from "@/i18n";
 import { Icon } from "@/components/primitives";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
-import { ResizeEdges } from "@/shell/WindowChrome";
+import { ResizeEdges, useWindowControls } from "@/shell/WindowChrome";
 import { isDesktopOs, isMac } from "@/bridge/platform";
 import { opensSettings, terminalOwnsTabDigits } from "@/support/hotkeys";
 import { createSystemLockWatcher, handleSystemLockEvent } from "@/support/systemLock";
@@ -142,6 +142,9 @@ export function App() {
   const route = useApp((s) => s.route);
   const device = useApp((s) => s.device);
   const customChrome = useApp((s) => s.customChrome);
+  // Only the phone-shell preview strip below uses this, but it is a hook and so
+  // is read unconditionally, ahead of the mobile/desktop fork.
+  const controls = useWindowControls();
   const overlay = useApp((s) => s.overlay);
   const unlocked = useApp((s) => s.unlocked);
   const autolockMin = useApp((s) => s.autolockMin);
@@ -649,13 +652,18 @@ export function App() {
               height: rem(36),
               display: "flex",
               alignItems: "center",
+              // The strip holds nothing but the controls, so the side setting is
+              // the whole of its layout. macOS and the system-frame case render
+              // no controls at all and leave a bare drag strip, which is right.
+              justifyContent:
+                controls.kind === "custom" && controls.side === "right" ? "flex-end" : "flex-start",
               padding: `0 ${rem(10)}`,
               background: p.bg1,
               borderBottom: `1px solid ${p.line}`,
               zIndex: 10,
             }}
           >
-            {!isMac() && <WindowControls />}
+            <WindowControls />
           </div>
         )}
         {showApp && <MobileApp />}

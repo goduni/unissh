@@ -35,6 +35,8 @@ import type {
   TermTheme,
 } from "@/theme/tokens";
 import { Btn, Field, Icon, Input, NO_AUTOCORRECT, Segmented, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
+import { useWindowControls } from "@/shell/WindowChrome";
+import type { ControlsSide } from "@/shell/windowControls";
 import { exportPath } from "@/support/paths";
 import { ServerVaultsSection } from "./ServerVaultsSection";
 import { Modal } from "@/components/Modal";
@@ -242,6 +244,12 @@ function SettingsAppearance() {
   const setGpuRendering = useApp((s) => s.setGpuRendering);
   const customChrome = useApp((s) => s.customChrome);
   const setCustomChrome = useApp((s) => s.setCustomChrome);
+  const setWindowControlsSide = useApp((s) => s.setWindowControlsSide);
+  // Both the row's visibility and the segment it lights come from the one
+  // decision: `custom` is exactly "we draw the buttons, so their corner is a
+  // question worth asking". macOS (`native`), the system frame and a browser
+  // preview (`none`) are not offered a choice that cannot apply.
+  const controls = useWindowControls();
   const p = usePalette();
   const { t } = useTranslation();
   const isMobile = useNarrow(); // width-aware: also true on a narrow desktop window
@@ -425,17 +433,33 @@ function SettingsAppearance() {
         />
       </SettingRow>
 
-      {/* Linux desktop only. A phone window has no frame to hand anywhere; macOS
-          has one it must keep, because the traffic lights are drawn by the OS on
-          top of our bar and it is our bar that reserves their strip — turning it
-          off there leaves them floating over content, and the runtime decoration
-          call that would compensate instead strips the window bare. Windows is
-          left out as untested rather than impossible. Until this is touched the
-          answer comes from the window manager on every boot; the first toggle
-          freezes it to a choice. */}
-      {!isPhone && osPlatform() === "linux" && (
+      {/* Linux and Windows desktops. A phone window has no frame to hand anywhere;
+          macOS has one it must keep, because the traffic lights are drawn by the
+          OS on top of our bar and it is our bar that reserves their strip —
+          turning it off there leaves them floating over content, and the runtime
+          decoration call that would compensate instead strips the window bare.
+          On Linux, until this is touched the answer comes from the window
+          manager on every boot; the first toggle freezes it to a choice. */}
+      {!isPhone && (osPlatform() === "linux" || osPlatform() === "windows") && (
         <SettingRow title={t("settings.customChromeTitle")} desc={t("settings.customChromeDesc")}>
           <Toggle checked={customChrome} onChange={setCustomChrome} />
+        </SettingRow>
+      )}
+      {/* Right beside it, and gone with it: with the system frame on there are no
+          buttons of ours left to place. */}
+      {!isPhone && controls.kind === "custom" && (
+        <SettingRow
+          title={t("settings.windowControlsTitle")}
+          desc={t("settings.windowControlsDesc")}
+        >
+          <Segmented<ControlsSide>
+            value={controls.side}
+            onChange={setWindowControlsSide}
+            options={[
+              { value: "left", label: t("settings.windowControlsLeft") },
+              { value: "right", label: t("settings.windowControlsRight") },
+            ]}
+          />
         </SettingRow>
       )}
 
