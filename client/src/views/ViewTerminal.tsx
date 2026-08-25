@@ -1026,6 +1026,11 @@ async function runStartupSnippets(
   const lpTimer = useRef<number | null>(null);
   const lpFired = useRef(false);
   const lpStart = useRef<{ x: number; y: number } | null>(null);
+  // Where the finger was when we last scrolled, and the sub-line remainder it
+  // left behind. Without carrying the remainder a slow drag never accumulates a
+  // whole line and the terminal simply refuses to move.
+  const dragY = useRef<number | null>(null);
+  const dragRest = useRef(0);
   const clearLp = () => {
     if (lpTimer.current != null) {
       window.clearTimeout(lpTimer.current);
@@ -1046,6 +1051,16 @@ async function runStartupSnippets(
         position: "absolute",
         inset: 0,
         background: termTheme.bg,
+        // Nothing here is the platform's to scroll. xterm's scrollable element is
+        // `.xterm-viewport`, but the text is painted in `.xterm-screen`, which sits
+        // over it — so a finger on the output lands on a layer that does not
+        // scroll, and neither does any ancestor. On a desktop this never showed:
+        // the wheel event bubbles and xterm handles it itself. On a phone the
+        // platform went looking for anything it could move instead and found the
+        // whole shell, which is why swiping the terminal slid the entire interface.
+        // Taking the gesture ourselves (onTouchMove) is what actually scrolls the
+        // scrollback; this line stops the platform competing for the same finger.
+        touchAction: "none",
         // Inner breathing room so the shell text isn't flush against the chrome
         // edges. Same colour as the terminal, so it reads as padding, not a frame.
         padding: rem(8),
@@ -1062,6 +1077,8 @@ async function runStartupSnippets(
         if (!tt) return;
         lpFired.current = false;
         lpStart.current = { x: tt.clientX, y: tt.clientY };
+        dragY.current = tt.clientY;
+        dragRest.current = 0;
         const { x, y } = lpStart.current;
         clearLp();
         lpTimer.current = window.setTimeout(() => {
@@ -1078,13 +1095,34 @@ async function runStartupSnippets(
         if (!s || !tt) return;
         // Tolerate jitter; only a real drag/scroll cancels the press.
         if (Math.hypot(tt.clientX - s.x, tt.clientY - s.y) > 10) clearLp();
+
+        // Drag the scrollback. The row height comes from the rendered box and
+        // xterm's own row count rather than from its private renderer metrics, so
+        // it follows the terminal zoom without reaching into internals.
+        const term = xtermRef.current;
+        const host = hostRef.current;
+        if (!term || !host || dragY.current === null || term.rows < 1) return;
+        const cell = host.clientHeight / term.rows;
+        if (cell <= 0) return;
+        const moved = tt.clientY - dragY.current + dragRest.current;
+        const lines = Math.trunc(moved / cell);
+        if (lines === 0) return;
+        // Finger down reveals older output, which is what every other scrollable
+        // surface on the device does.
+        term.scrollLines(-lines);
+        dragY.current = tt.clientY;
+        dragRest.current = moved - lines * cell;
       }}
       onTouchEnd={(e) => {
         clearLp();
+        dragY.current = null;
         // Swallow the synthetic click/selection that would follow the press.
         if (lpFired.current) e.preventDefault();
       }}
-      onTouchCancel={clearLp}
+      onTouchCancel={() => {
+        clearLp();
+        dragY.current = null;
+      }}
     >
       <div ref={hostRef} style={{ width: "100%", height: "100%" }} />
       {/* Split panes get an explicit ✕ on hover so closing one is discoverable
