@@ -126,6 +126,11 @@ function HostCard({
       style={{
         position: "relative",
         cursor: "pointer",
+        // Capping the TRACK is only half of it: a grid item's own `min-width` is
+        // `auto`, which is min-content again, so the card would still push out of
+        // a track that fits. The pair is what makes "as wide as there is room"
+        // actually hold.
+        minWidth: 0,
         // A left accent bar, the same language the command palette uses for its
         // highlight. NOT an outline: `[role="button"]:focus-visible` is already
         // `2px solid var(--uh-focus)` at offset 2, and --uh-focus IS p.accent
@@ -2336,8 +2341,17 @@ export function ViewHosts() {
                 // security-relevant datum — down to nothing. The card also carries
                 // permanent Connect/SFTP buttons there, which a 248px track cannot
                 // hold alongside anything readable.
+                // `minmax(0, …)`, not a bare `1fr`. `1fr` is `minmax(auto, 1fr)`,
+                // and that `auto` minimum is the ITEM's min-content — so a card
+                // holding something that refuses to shrink (the touch layout's
+                // permanent Connect button, which cannot ellipsise a label people
+                // have to read) widens the track past the container instead of
+                // being made to fit. The list's scroller is `overflow: auto`, so
+                // the excess turned the whole screen into something you drag
+                // sideways to read the end of a card. Zero as the floor lets the
+                // track be exactly as wide as there is room for.
                 gridTemplateColumns: touch
-                  ? "1fr"
+                  ? "minmax(0, 1fr)"
                   : `repeat(auto-fill, minmax(${rem(248)}, 1fr))`,
                 gap: rem(12),
               }}
