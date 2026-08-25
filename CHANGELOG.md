@@ -408,7 +408,9 @@ understand, but it cannot make an older build do the same.
   the layout toggle are a frame and nothing else, and it was the only filled box
   among them — a grey pill against white on the light theme, a lit slab on the
   dark one. The frame alone says "field" next to neighbours that say it the same
-  way, and focus still moves that frame.
+  way, and focus still moves that frame. Its text matches them too now — the same
+  size and weight as the sort control beside it, and a prompt in the same grey as
+  every other label in that row, where before the engine picked that grey itself.
 
 - **A reconnected pane could paste `^[[200~` into your shell.** A pane keeps its
   terminal across a reconnect so the scrollback survives — but the dead session's
