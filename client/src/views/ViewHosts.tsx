@@ -1668,6 +1668,16 @@ export function ViewHosts() {
   // One search box for both shells — the desktop toolbar and the touch row — so
   // the two cannot drift into filtering differently. Only one branch ever mounts,
   // so the ref and the input id stay unambiguous.
+  // The field carries no fill of its own. It sits in a row of controls that are
+  // all frame-and-no-fill — the sort control, the layout toggle — and a filled
+  // box beside them read as a lit slab dropped onto the screen rather than one
+  // more control: a grey pill against white on the light twin, and on the dark
+  // one a block whose warmth had nothing to do with any palette we ship. The
+  // frame alone is enough to say "field" next to neighbours that say it the same
+  // way, and it leaves focus, which already moves the frame to `line2`, as the
+  // one thing that changes. What the autofill repaint in theme.css covers is
+  // therefore the screen's own ground, not a fill of ours.
+  const searchGround = p.bg0;
   const searchBox = (
     <div
       style={{
@@ -1691,7 +1701,7 @@ export function ViewHosts() {
         // surface in the palette. The mono family collapses bg0 and bg1 on
         // purpose, and there bg2 IS the first distinct step, which is what has
         // always shipped and must not move.
-        background: p.bg1 === p.bg0 ? p.bg2 : p.bg1,
+        background: "transparent",
         // Focus reads on the frame, matching the sort control's open state.
         border: `1px solid ${searchFocus ? p.line2 : p.line}`,
       }}
@@ -1708,6 +1718,7 @@ export function ViewHosts() {
         placeholder={t("hosts.searchPlaceholder")}
         aria-label={t("hosts.searchPlaceholder")}
         style={{
+          ["--uh-field" as string]: searchGround,
           flex: 1,
           minWidth: 0,
           height: "100%",

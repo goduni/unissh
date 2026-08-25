@@ -465,6 +465,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     root.style.setProperty("--uh-focus", p.accent);
     root.style.setProperty("--uh-desk", p.desk);
     root.style.setProperty("--uh-txt", p.txt);
+    // Fallback ground for the autofill repaint in theme.css, for any input
+    // that does not name the surface it sits on.
+    root.style.setProperty("--uh-ground", p.bg0);
     // Tell the webview which scheme IT is painting into. index.html declares
     // `color-scheme: dark light`, which says "this page supports both" and
     // leaves the choice to the OS — so everything the engine draws itself
