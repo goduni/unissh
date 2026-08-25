@@ -389,6 +389,20 @@ understand, but it cannot make an older build do the same.
   fit exactly that kind of unshrinkable content instead of making it fit. The
   desktop layout keeps its 248px floor and is unchanged.
 
+- **The search field wore a colour from no theme we ship.** On macOS and on the
+  phones the filter box on Hosts came out brown against the dark theme, and a
+  foreign grey against the light one. Neither is ours — the field is filled from
+  the palette, and no palette here has a brown in it. The colour was the engine's
+  own. `index.html` tells the webview the page supports both schemes and leaves
+  the choice to the OS, and nothing ever narrowed that to the theme you actually
+  picked, so everything the engine draws for itself — autofill fills, scrollbars,
+  the caret, form-control defaults — followed your **system** setting instead.
+  On a dark Mac that dropped WebKit's dark autofill wash, a desaturated yellow
+  that reads brown, into our dark interface; with the app set to light on that
+  same Mac it dropped the engine's dark greys into our light one. The webview is
+  now told which scheme it is painting into, and autofill is stopped from
+  washing a field we have already coloured.
+
 - **A reconnected pane could paste `^[[200~` into your shell.** A pane keeps its
   terminal across a reconnect so the scrollback survives — but the dead session's
   app may have left private terminal modes switched on, and the fresh shell on
