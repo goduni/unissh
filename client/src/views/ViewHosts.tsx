@@ -1706,9 +1706,10 @@ export function ViewHosts() {
         border: `1px solid ${searchFocus ? p.line2 : p.line}`,
       }}
     >
-      <Icon name="search" size={touch ? 17 : 14} color={p.txt3} />
+      <Icon name="search" size={touch ? 17 : 14} color={p.txt2} />
       <input
         {...NO_AUTOCORRECT}
+        className="uh-prompt"
         ref={searchRef}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -1719,6 +1720,11 @@ export function ViewHosts() {
         aria-label={t("hosts.searchPlaceholder")}
         style={{
           ["--uh-field" as string]: searchGround,
+          // The prompt is a label like the sort control's, so it is the sort
+          // control's resting label colour — not an opacity the engine picks off
+          // `color`, which is what made one grey in this row disagree with the
+          // rest of it.
+          ["--uh-placeholder" as string]: p.txt2,
           flex: 1,
           minWidth: 0,
           height: "100%",
@@ -1727,6 +1733,8 @@ export function ViewHosts() {
           background: "transparent",
           color: p.txt,
           fontFamily: UI,
+          // Matches the sort control beside it: same size, same weight.
+          fontWeight: 600,
           // 16px or iOS zooms the whole page on focus. The desktop has no such
           // problem and 16px there would tower over every other control.
           fontSize: touch ? TEXT.lead : TEXT.base,

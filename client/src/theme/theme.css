@@ -215,6 +215,16 @@ button {
   font-family: inherit;
 }
 
+/* A placeholder is a label, not faded text. Left alone the engine derives one
+   from `color` at an opacity of its own choosing, which is how a field's prompt
+   ends up a different grey from every other label in the same row. Opting in by
+   class rather than globally: the fields that want their prompt to match a
+   neighbouring control say so, and nothing else moves. */
+.uh-prompt::placeholder {
+  color: var(--uh-placeholder, currentColor);
+  opacity: 1;
+}
+
 /* The engine paints an autofilled field itself, and it paints that wash with a
    priority the author's `background` does not beat — setting one on the input
    composites under it rather than replacing it. WebKit's wash is a yellow that
