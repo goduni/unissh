@@ -436,6 +436,13 @@ understand, but it cannot make an older build do the same.
   at startup; the chown is now a command, and the error is in troubleshooting so
   it can be searched for.
 
+- **A dependency advisory, on the server side only.** `h2` accepted and queued
+  empty DATA frames without limit, so a peer that never drained its streams
+  could push a server's memory up until it overflowed and panicked
+  (RUSTSEC-2026-0258, low severity). The server reaches h2 only through hyper,
+  and the client is not affected — it keeps its own lock file, which never
+  carried the advisory. Taken at `h2` 0.4.17.
+
 ### Compatibility
 
 **Vault format and server protocol are unchanged** — local storage schema
