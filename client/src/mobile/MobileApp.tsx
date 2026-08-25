@@ -449,6 +449,35 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
 
       {/* horizontally-scrollable special-keys accessory row */}
       <div style={{ flexShrink: 0, display: "flex", gap: 6, padding: "10px 12px", overflowX: "auto", overscrollBehavior: "contain", borderTop: `1px solid ${p.line}`, background: p.bg1 }}>
+        {/* Put the keyboard away. First in the row, and pinned there rather than
+            left to scroll off, because on a phone the keyboard covers about two
+            fifths of the screen and there was no way at all to dismiss it while a
+            session was open — you could type at a terminal you could not read.
+            Blurring the focused element is the whole mechanism: the on-screen
+            keyboard follows focus, so dropping focus puts it away. `activeElement`
+            rather than the terminal's textarea by name, so this also works from
+            the search box or anything else the row might sit under later. */}
+        <button
+          onClick={() => (document.activeElement as HTMLElement | null)?.blur()}
+          aria-label={t("mobile.hideKeyboard")}
+          title={t("mobile.hideKeyboard")}
+          style={{
+            flexShrink: 0,
+            minWidth: 44,
+            height: 44,
+            borderRadius: 8,
+            background: p.bg3,
+            border: `1px solid ${p.line}`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: p.txt2,
+            padding: "0 10px",
+            cursor: "pointer",
+          }}
+        >
+          <Icon name="cd" size={16} />
+        </button>
         {KEY_SEQ.map((k) => (
           <button
             key={k.label}
@@ -939,8 +968,20 @@ export function MobileApp() {
         paddingRight: "env(safe-area-inset-right)",
         // The bottom inset lives here, not on the tab bar: the bar hides on every
         // pushed frame, so delegating it there ran Settings/Secrets/Known/Tunnels/
-        // SFTP right under the home indicator. The keyboard, when up, supersedes it.
-        paddingBottom: kbInset || "env(safe-area-inset-bottom)",
+        // SFTP right under the home indicator.
+        paddingBottom: "env(safe-area-inset-bottom)",
+        // The keyboard is taken off the HEIGHT, not added as padding, and that is
+        // the whole difference. `100dvh` (theme.css) follows the browser's own
+        // disappearing chrome and knows nothing about an on-screen keyboard, so
+        // with one up the shell stayed a full screen tall inside a viewport that
+        // was two fifths shorter. Padding moved the content around inside that box
+        // but left the box itself oversized, and an oversized fixed box is exactly
+        // what the system lets you pan around — which is what "the whole interface
+        // slides up when I swipe" was.
+        //
+        // Correct whichever way the platform reports a keyboard: where the layout
+        // viewport really does shrink, `kbInset` is 0 and this subtracts nothing.
+        ...(kbInset ? { height: `calc(100dvh - ${kbInset}px)` } : null),
         overflow: "hidden",
         // Desktop preview of the phone shell: the frameless window's chrome
         // strip (App.tsx) owns the top 36px — start below it instead of

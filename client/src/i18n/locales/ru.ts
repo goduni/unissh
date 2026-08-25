@@ -708,6 +708,7 @@ export const ru = {
     }
   },
   mobile: {
+    hideKeyboard: "Убрать клавиатуру",
     "vault": "Хранилище",
     "vaultLower": "хранилище",
     "noVaults": "Нет хранилищ",

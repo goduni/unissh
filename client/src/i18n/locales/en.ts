@@ -670,6 +670,7 @@ export const en = {
     }
   },
   mobile: {
+    hideKeyboard: "Hide the keyboard",
     "vault": "Vault",
     "vaultLower": "vault",
     "noVaults": "No vaults",
