@@ -1,7 +1,7 @@
 {
   "name": "unissh-server-ui",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "description": "UniSSH Server — self-hosted zero-knowledge admin panel (React + Vite SPA)",
   "scripts": {
