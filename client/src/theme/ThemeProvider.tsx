@@ -464,9 +464,21 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const root = document.documentElement;
     root.style.setProperty("--uh-focus", p.accent);
     root.style.setProperty("--uh-desk", p.desk);
+    root.style.setProperty("--uh-txt", p.txt);
+    // Tell the webview which scheme IT is painting into. index.html declares
+    // `color-scheme: dark light`, which says "this page supports both" and
+    // leaves the choice to the OS — so everything the engine draws itself
+    // (autofill fills, scrollbars, the caret, form-control defaults) followed
+    // the system setting rather than the theme the user picked here. On a dark
+    // Mac that put WebKit's dark autofill wash — a desaturated yellow that
+    // reads brown — inside our dark UI, and the engine's dark greys inside our
+    // light one, which is why a field we never coloured looked like neither
+    // theme. Naming the effective mode makes the engine paint in the same
+    // scheme the app is in, on every platform.
+    root.style.colorScheme = effMode;
     document.body.style.background = p.desk;
     document.body.style.color = p.txt;
-  }, [p]);
+  }, [p, effMode]);
 
   const value: ThemeCtx = {
     p,

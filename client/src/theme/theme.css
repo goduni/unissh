@@ -215,6 +215,26 @@ button {
   font-family: inherit;
 }
 
+/* The engine paints an autofilled field itself, and it paints it BEHIND the
+   author background — so our fields, which are transparent inputs inside a
+   styled wrapper, cannot cover it: `background` on the input is composited
+   over the wash rather than replacing it. WebKit's wash is a yellow that goes
+   brown once the dark scheme is on; Chromium's is a blue. Clipping that
+   background to the glyphs is the one thing that removes it without pretending
+   to know the surface underneath, which varies per field. The text colour has
+   to be restated too — `color` alone does not survive autofill, and clipping to
+   text would otherwise leave the wash showing through the letters themselves. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: var(--uh-txt, inherit);
+}
+
 /* xterm fills its container; we theme it per terminal palette at runtime */
 .xterm,
 .xterm-viewport {
