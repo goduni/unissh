@@ -23,11 +23,39 @@ const MAX_RETRY_AFTER_SECS: u64 = 5;
 /// Process-global blocking HTTP client (connection pool reuse). Initialised lazily
 /// on first use — which always happens inside `spawn_blocking`, so the inner
 /// current-thread runtime is never created from within Tauri's async runtime.
+///
+/// `platform_tls::configure` is the identity function on every target but
+/// Android, where it swaps in a certificate verifier that can tell a revoked
+/// certificate apart from one Android was simply unable to ask about. It sits
+/// here rather than at the call site because the TLS backend is a property of
+/// the client, fixed once when it is built.
+///
+/// One consequence to know about before adding a TLS option here: on Android
+/// that swap hands `reqwest` a finished rustls config, and `reqwest` then uses it
+/// verbatim. Its own TLS knobs — `min_tls_version`/`max_tls_version`, `tls_sni`,
+/// `add_root_certificate`, `danger_accept_invalid_certs`, ALPN — are read on the
+/// path we no longer take, so calling one of them here would work everywhere and
+/// silently do nothing on Android. Nothing calls them today; the settings they
+/// would have produced are reproduced by hand in `platform_tls/android.rs`, and
+/// anything new has to be added in both places.
+///
+/// The `build()` failure is logged rather than swallowed. It is unreachable
+/// today, but there is exactly one way to reach it and it is worth naming:
+/// `tls_backend_preconfigured` downcasts its argument at run time, so a rustls
+/// major bump that leaves `reqwest` and this crate on two different copies of the
+/// crate compiles cleanly and fails right here. Falling back to `Client::new()`
+/// is safe — it is the plain platform verifier, i.e. today's behaviour — but it
+/// also silently restores the very Android bug the wrapper exists to fix, and a
+/// silent restoration is not something to discover from a bug report.
 static HTTP: Lazy<Client> = Lazy::new(|| {
-    Client::builder()
-        .user_agent(concat!("unissh-client/", env!("CARGO_PKG_VERSION")))
+    let builder =
+        Client::builder().user_agent(concat!("unissh-client/", env!("CARGO_PKG_VERSION")));
+    crate::platform_tls::configure(builder)
         .build()
-        .unwrap_or_else(|_| Client::new())
+        .unwrap_or_else(|e| {
+            log::error!("cloud: HTTP client build failed ({e}) — falling back to a default client");
+            Client::new()
+        })
 });
 
 /// The shared blocking client. MUST be called from a blocking context.

@@ -7434,6 +7434,7 @@ dependencies = [
  "objc2-foundation",
  "once_cell",
  "reqwest",
+ "rustls",
  "rustls-platform-verifier",
  "serde",
  "serde_json",

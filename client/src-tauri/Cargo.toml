@@ -68,6 +68,32 @@ tauri-plugin-biometric = "2"
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.22", default-features = false }
 rustls-platform-verifier = "0.7"
+# DELETE WITH src/platform_tls/android.rs — this line exists only for that file
+# and has no other caller. Named directly so it can wrap the verifier above: the
+# same Android facility reports "certificate revoked" when it merely had no OCSP
+# responder to ask, which is now the norm for Let's Encrypt and Google Trust
+# Services and broke every cloud request on Android. Wrapping a
+# `ServerCertVerifier` means naming rustls types, and reqwest does not re-export
+# the crate.
+#
+# The SAME semver caveat as above, and it bites HARDER here, because it is a
+# RUNTIME trap rather than a compile-time one: `tls_backend_preconfigured` takes
+# `impl Any` and downcasts at run time, so a second copy of the crate type-checks
+# perfectly and fails inside `Client::build()` with "Unknown TLS backend passed to
+# `use_preconfigured_tls`". src/cloud/client.rs logs that, then falls back to a
+# default client — safe, but back to the Android bug this fixes.
+#
+# `default-features = false` is load-bearing, not tidiness: rustls's defaults add
+# `logging` and `prefer-post-quantum`, and the latter changes the ClientHello key
+# share on every connection — a behaviour change nothing here asked for. The three
+# features named are exactly the ones reqwest asks for itself (`std` + `tls12` on
+# the dependency, `aws-lc-rs` via its `__rustls-aws-lc-rs`), so this activates
+# nothing new and features unify on the single resolved crate. `aws-lc-rs` is
+# named rather than inherited on purpose: android.rs writes
+# `rustls::crypto::aws_lc_rs` by hand, and that module only exists behind this
+# feature — leaving it to reqwest would mean a change in reqwest's own feature
+# wiring silently breaks a file no PR-time CI job compiles.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
 
 # In-place auto-update, desktop only. There is no mobile updater: Android/iOS
 # ship as sideload artifacts and are re-installed by hand. Update payloads are
