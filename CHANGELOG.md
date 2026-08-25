@@ -30,7 +30,7 @@ starts with `0.`:
 - **Server and client are versioned together but deploy separately.** Upgrade the
   server first; a newer server serves older clients, the reverse is not promised.
 
-## [Unreleased]
+## [0.4.0] — 2026-08-25
 
 ### Added
 
@@ -196,6 +196,87 @@ starts with `0.`:
   built-in now also keep an explicit bright ramp across a restart, where before
   the saved copy silently fell back to a derived one.
 
+- **The terminal has a clipboard in both directions.** A remote `tmux` with
+  `set-clipboard on`, `zellij` or `nvim` copying to the system clipboard sends
+  OSC 52, and UniSSH dropped it — the multiplexer said "copied to clipboard" and
+  nothing arrived, so the only way out was fighting Option/Shift for a local
+  selection under an app that had taken the mouse. Those writes now land in your
+  clipboard. Deliberately **write-only**: the `?` form of the sequence, which
+  asks the terminal to *read* your clipboard back to the remote host, is never
+  answered — that is an exfiltration channel, and no amount of convenience buys
+  it. Oversized or malformed payloads are ignored rather than clobbering what
+  you already copied.
+
+  Keyboard paste on Linux and Windows: `Ctrl+V` and `Ctrl+Shift+V` both work.
+  Windows had no keyboard paste at all, because WebView2 never delivers a native
+  paste to the terminal; macOS keeps the system's own `⌘V`.
+
+- **SFTP: make a file, not just a folder.** The pane could create a directory
+  and not an empty file, so an arbitrary new file meant uploading a placeholder
+  from somewhere else. **New file** sits next to **New folder** in the toolbar
+  and the context menu. It creates *exclusively* — the server is asked for a
+  create-if-absent open, so a name that already exists comes back as "«x» already
+  exists" and the file behind it is untouched; losing that race costs an error
+  message rather than a blanked file. Name validation is now shared by new
+  folder, new file and rename, which also stops `.` and `..` reaching the server.
+
+- **SFTP: edit a remote file in your own editor.** Open a remote file in whatever
+  your OS opens it with — vim, VS Code, Preview — and every save is pushed back
+  until you stop. The pane lists what is being edited, with the copy's path and a
+  stop button. **Settings → SFTP** chooses whether **Open** means the built-in
+  editor or the external one; the other stays in the file menu either way.
+
+  Two things worth knowing before you use it. The copy handed to the editor is
+  **the file in the clear** — it lives in a private `0700` scratch directory and
+  is the only unencrypted copy — and it is deleted when the edit stops, when the
+  app quits, and wholesale at startup, which is what covers a crash. And if the
+  remote file changed underneath you, the upload stops and asks: overwrite, keep
+  both, or keep theirs. Locking the vault suspends watching without deleting the
+  copy, since editing elsewhere is exactly what makes this window idle enough to
+  auto-lock. Desktop only.
+
+- **Settings opens over your session, and answers `⌘,`.** It was a route, so
+  opening it took the whole screen away from a running terminal, and there was no
+  `⌘,` binding at all — a toolbar button and the command palette were the only
+  ways in. `⌘,` / `Ctrl+,` now opens and closes it, over the current view on the
+  desktop, matched on the physical key so a Cyrillic or Dvorak layout still
+  reaches it. Every entry point behaves the same way, including the title-bar
+  button, the palette and the terminal's theme chip. A phone keeps Settings as a
+  full screen: there is no room to show a session behind a panel.
+
+- **The shortcut sheet documents copy, paste and selection — and three chords it
+  had been printing wrong.** Copy-on-select has worked since the first commit,
+  and Option (macOS) or Shift elsewhere selects inside an app that has taken the
+  mouse, but none of it was written down, so it read as missing. The sheet behind
+  `⌘/` went from eight rows to eighteen in three labelled groups. Writing it down
+  meant checking each row against the code that implements it, and three were
+  lying: terminal zoom reset, section switching by digit off macOS, and the chord
+  that opens the sheet itself all printed a `Shift` that turns the key into `)`,
+  `@` or `?` and never matched. All three now print, and are, the bare `Ctrl`
+  form.
+
+- **The server's first-run setup code survives a restart.** Someone
+  self-hosting hit a port conflict, restarted the container to fix it, and lost
+  the setup code with the scrollback — the instance was still unclaimed and its
+  data intact, but the only ways back were knowing an environment variable or the
+  `reclaim` command. `unissh-server setup-code` now reports where the code stands
+  (pinned in config, issued on an earlier boot, never issued, or claimed), and
+  `unissh-server setup-code --rotate` mints a new one, taking effect immediately
+  with no restart. It refuses on a claimed instance — `reclaim` is that path —
+  and on a code pinned in the config, where a rotated value would be silently
+  overwritten at the next boot. The unclaimed boot log now names that command,
+  `docker compose exec` form included, instead of an environment variable.
+
+- **The published ports are yours to move.** Both compose stacks hard-coded
+  Caddy's host ports, so a machine already serving something on 80 or 443 had to
+  edit a tracked file and own a merge conflict on that line at every upgrade.
+  `UNISSH_HTTP_PORT` and `UNISSH_HTTPS_PORT` now carry today's values as their
+  defaults, the HTTPS one moving its HTTP/3 UDP mapping with it so the two cannot
+  drift apart. With neither set, the rendered compose config is byte-identical to
+  before. Moving the HTTP port breaks ACME's HTTP-01 challenge, which is answered
+  on the real public `:80` — that caveat and its two ways out are documented next
+  to the variables.
+
 - **Connect through an HTTP, SOCKS4 or SOCKS5 proxy.** A host can now carry an
   outbound proxy alongside (or instead of) a jump host: the proxy wraps the
   first TCP hop — the target, or the first bastion of a `ProxyJump` chain, so
@@ -280,7 +361,97 @@ understand, but it cannot make an older build do the same.
   Android keeps verifying against the **system** trust store, like every other
   platform, so a self-hosted server behind a private CA still works by installing
   that CA's root on the device — no bundled root list. Desktop behaviour is
-  unchanged. Vault format: unchanged. Server protocol: unchanged.
+  unchanged.
+
+- **A terminal on a phone would not scroll.** Dragging the output moved the whole
+  interface sideways and left the text exactly where it was. The layer under your
+  finger is the one xterm paints on, not the one it scrolls, and with nothing
+  scrollable beneath the gesture the platform went looking for something it could
+  move and found the app. A vertical drag now scrolls the scrollback, following
+  the terminal's own zoom, and finger-down reveals older output like every other
+  surface on the device. Desktops never saw this and are unchanged.
+
+- **The on-screen keyboard made the whole interface slidable.** With a keyboard
+  up you could pan the app around by roughly the keyboard's height. The shell was
+  sized in viewport units, which follow the browser's disappearing chrome and know
+  nothing about a keyboard, so it stayed a full screen tall inside a viewport that
+  was much shorter — and an oversized fixed box is exactly what a platform lets
+  you drag. The keyboard now comes off the shell's *height*. A device that
+  already shrank its layout viewport measures a zero inset and is untouched.
+  There is also, at last, **a key that puts the keyboard away**: it was covering
+  two fifths of the output you were trying to read, and the only escape was
+  leaving the session.
+
+- **A host card could push a narrow phone screen sideways.** On a 360dp screen
+  the card ran past the right edge and turned the list into something you drag
+  horizontally to read. The touch layout gives every card a permanent **Connect**
+  button whose label must stay readable, and a grid track sized `1fr` widens to
+  fit exactly that kind of unshrinkable content instead of making it fit. The
+  desktop layout keeps its 248px floor and is unchanged.
+
+- **A reconnected pane could paste `^[[200~` into your shell.** A pane keeps its
+  terminal across a reconnect so the scrollback survives — but the dead session's
+  app may have left private terminal modes switched on, and the fresh shell on
+  the other end starts from defaults. Stale bracketed paste wrapped every paste
+  in escape codes that a server which never enabled the mode printed literally;
+  stale mouse tracking ate clicks, a stale alternate screen hid the scrollback,
+  and stale synchronized output looked like a hang. Reconnecting now switches
+  those modes back off — exactly what a well-behaved app sends on exit — instead
+  of resetting the terminal, which would destroy the scrollback the pane was kept
+  alive for.
+
+- **An error that named the request instead of the reason.** A failed cloud
+  operation reported reqwest's outer message — "error sending request for
+  url (…)" — which is equally true of a DNS failure, a refused connection, an
+  unreachable network and a timeout. That is how the Android bug above hid for a
+  whole release. The deepest cause is now appended when it adds anything, and the
+  full chain is logged either way. A TLS failure goes further and says what to
+  do: an untrusted issuer names installing that CA's root into this machine's
+  trust store, with distinct wording for a hostname mismatch and an expired
+  certificate.
+
+- **A documented renewal path that ended in an outage.** `deploy/` told operators
+  that rewriting `fullchain.pem` / `privkey.pem` was enough and no command was
+  needed. Watching it disproved that: Caddy loads a file-based certificate once
+  and keeps serving it — swapped under a running container, the original was
+  still on the wire 75 seconds later, and a plain `caddy reload` is a no-op
+  because the config has not changed. `caddy reload --force` or a restart is
+  required, and that is now stated everywhere the file mode is mentioned, with a
+  deploy hook to wire it into. The same page also handed out a `chmod 600` for a
+  key that must be readable by the container's user, which makes the server exit
+  at startup; the chown is now a command, and the error is in troubleshooting so
+  it can be searched for.
+
+### Compatibility
+
+**Vault format and server protocol are unchanged** — local storage schema
+version 9, server HTTP surface `/v1`, the same baseline every release since
+0.1.3 has held. Nothing in this release migrates a vault or asks a server to
+speak differently, so an older client and this one can share both.
+
+The one forward-compatibility caveat is the proxy, and it is stated in full
+under **Added**: an older client reads a proxied profile without error and
+connects **directly**, because its rule is to preserve fields it does not
+understand rather than refuse the record. If a proxy is your mandated egress
+path rather than a convenience, upgrade everyone who uses that vault first.
+
+**Two visible changes land without asking.** On Windows and Linux the window
+buttons move to the right in the platform's order — **Settings → Appearance →
+Window controls** puts them back. On macOS, "lock when the screen locks" fires
+when the screensaver or display sleep starts, whatever your "require password
+after…" delay says; that is what the OS reports and the behaviour is
+deliberate.
+
+Everything else added here is local and per-device, and none of it syncs:
+interface scale, the window-controls and title-bar settings, the choice between
+the built-in and an external editor, and the plaintext scratch copies an
+external edit makes (which are deleted when the edit stops, on quit, and
+wholesale at startup).
+
+**Operators:** `UNISSH_HTTP_PORT` and `UNISSH_HTTPS_PORT` default to today's
+values, so an unchanged deployment renders a byte-identical compose config.
+`unissh-server setup-code --rotate` takes effect on a running server with no
+restart, and refuses on a claimed instance or a code pinned in the config.
 
 ## [0.3.1] — 2026-08-10
 
@@ -801,7 +972,7 @@ The baseline everything below is measured against: local storage schema
 version 9, server HTTP surface `/v1`. Both are unchanged as of 0.1.3 — no
 release so far has broken a vault or a deployed server.
 
-[Unreleased]: https://github.com/goduni/unissh/compare/v0.3.1...HEAD
+[0.4.0]: https://github.com/goduni/unissh/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/goduni/unissh/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/goduni/unissh/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/goduni/unissh/compare/v0.1.3...v0.2.0
