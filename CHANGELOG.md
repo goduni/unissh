@@ -403,6 +403,13 @@ understand, but it cannot make an older build do the same.
   now told which scheme it is painting into, and autofill is stopped from
   washing a field we have already coloured.
 
+  **The field also stopped carrying a fill.** With the colour right it still read
+  as foreign, and that part was ours: it sat in a row where the sort control and
+  the layout toggle are a frame and nothing else, and it was the only filled box
+  among them — a grey pill against white on the light theme, a lit slab on the
+  dark one. The frame alone says "field" next to neighbours that say it the same
+  way, and focus still moves that frame.
+
 - **A reconnected pane could paste `^[[200~` into your shell.** A pane keeps its
   terminal across a reconnect so the scrollback survives — but the dead session's
   app may have left private terminal modes switched on, and the fresh shell on
