@@ -107,7 +107,7 @@ tauri-plugin-updater = "2"
 # neither mobile OS lets the app browse outside its sandbox, so there is nothing
 # to switch between there. `disk` is the only feature we need — the default set
 # also pulls process/CPU/network collection we would never call.
-sysinfo = { version = "0.38", default-features = false, features = ["disk"] }
+sysinfo = { version = "0.39", default-features = false, features = ["disk"] }
 # Only used to relaunch into the freshly installed version once the updater has
 # swapped the bundle on disk. Pulled in beside the updater rather than globally:
 # nothing else in the app restarts the process.
