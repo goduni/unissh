@@ -140,7 +140,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -151,7 +151,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -171,26 +171,14 @@ dependencies = [
 
 [[package]]
 name = "argon2"
-version = "0.5.3"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+checksum = "134c52ddac6d63c576bef8168db10c83c49c26444ecbc68060fef078925a901c"
 dependencies = [
  "base64ct",
- "blake2 0.10.6",
- "cpufeatures 0.2.17",
- "password-hash 0.5.0",
-]
-
-[[package]]
-name = "argon2"
-version = "0.6.0-rc.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7af50940b73bf4e16c15c448a2b121c63f2d68e3e54b6a8731673cb4aa0cdff5"
-dependencies = [
- "base64ct",
- "blake2 0.11.0-rc.6",
+ "blake2",
  "cpufeatures 0.3.0",
- "password-hash 0.6.1",
+ "password-hash",
 ]
 
 [[package]]
@@ -393,9 +381,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64"
-version = "0.23.0"
+version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64ct"
@@ -451,18 +439,9 @@ dependencies = [
 
 [[package]]
 name = "blake2"
-version = "0.10.6"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
-dependencies = [
- "digest 0.10.7",
-]
-
-[[package]]
-name = "blake2"
-version = "0.11.0-rc.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "061f1a09225e328e1ffbb378d2d49923c0ca5fee19fb5ac1cc9c1e9d52b93690"
+checksum = "5b5d4d889834ee8ecfc0f8426ad30faf7cdcb10f741a8e6d7224d95325479f6f"
 dependencies = [
  "digest 0.11.3",
 ]
@@ -578,7 +557,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -704,9 +683,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.4"
+version = "4.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91e0c145792ef73a6ad36d27c75ac09f1832222a3c209689d90f534685ee5b7"
+checksum = "473c7e07f409a8d772161724aa8db6a765a2532a70f9667eeb7b49d3d02fbdca"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -714,9 +693,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.2"
+version = "4.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
+checksum = "7b48fea5a88e9ae728a2dcbedbfc0e730f7d60da42e1cb049a83c9fb8b789889"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1280,7 +1259,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1826,9 +1805,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "1.4.2"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6970f50e31d6fc17d3fa27329444bfa74e196cf62e95052a3f6fee181dba6425"
+checksum = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
 dependencies = [
  "bytes",
  "itoa",
@@ -2149,7 +2128,7 @@ dependencies = [
  "jni-sys",
  "log",
  "simd_cesu8",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "walkdir",
  "windows-link",
 ]
@@ -2318,9 +2297,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.33"
+version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "loom"
@@ -2406,7 +2385,7 @@ dependencies = [
  "metrics-util",
  "quanta",
  "rustls",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
 ]
@@ -2526,7 +2505,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2730,7 +2709,7 @@ dependencies = [
  "log",
  "rand 0.10.1",
  "sha2 0.11.0",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
  "windows",
  "windows-strings",
@@ -2767,21 +2746,11 @@ dependencies = [
 
 [[package]]
 name = "password-hash"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
-dependencies = [
- "base64ct",
- "rand_core 0.6.4",
- "subtle",
-]
-
-[[package]]
-name = "password-hash"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aab41826031698d6ffcd9cff78ef56ef998e39dc7e5067cdfebe373842d4723b"
 dependencies = [
+ "getrandom 0.4.3",
  "phc",
 ]
 
@@ -2870,6 +2839,7 @@ checksum = "44dc769b75f93afdddd8c7fa12d685292ddeff1e66f7f0f3a234cf1818afe892"
 dependencies = [
  "base64ct",
  "ctutils",
+ "getrandom 0.4.3",
 ]
 
 [[package]]
@@ -3149,7 +3119,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "web-time",
@@ -3171,7 +3141,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tinyvec",
  "tracing",
  "web-time",
@@ -3461,7 +3431,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
 dependencies = [
  "hashbrown 0.16.1",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -3481,9 +3451,9 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.62.4"
+version = "0.63.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8b67b5a0d8068c89dcbe9d95df986af7a851d1f3c604525274c37468e60464f"
+checksum = "35bab1b87d915817d5d9cc352637cd40d5f0b298a48c6309af9156a4addc3031"
 dependencies = [
  "aes 0.9.1",
  "aws-lc-rs",
@@ -3544,7 +3514,7 @@ dependencies = [
  "ssh-encoding 0.3.0",
  "ssh-key 0.7.0-rc.11",
  "subtle",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
  "typenum",
  "universal-hash 0.6.1",
@@ -3600,14 +3570,14 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "rustls"
-version = "0.23.42"
+version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c54fcab019b409d04215d3a17cb438fd7fbf192ee61461f20f4fe18704bc138"
+checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -3659,7 +3629,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4095,7 +4065,7 @@ checksum = "0d585997b0ac10be3c5ee635f1bab02d512760d14b7c468801ac8a01d9ae5f1d"
 dependencies = [
  "num-bigint",
  "num-traits",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "time",
 ]
 
@@ -4139,7 +4109,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4242,7 +4212,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "smallvec",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -4283,7 +4253,7 @@ dependencies = [
  "sqlx-postgres",
  "sqlx-sqlite",
  "syn 2.0.118",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
  "url",
 ]
@@ -4310,7 +4280,7 @@ dependencies = [
  "sha1",
  "sha2 0.11.0",
  "sqlx-core",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
@@ -4344,7 +4314,7 @@ dependencies = [
  "smallvec",
  "sqlx-core",
  "stringprep",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tracing",
  "whoami",
 ]
@@ -4368,7 +4338,7 @@ dependencies = [
  "percent-encoding",
  "serde",
  "sqlx-core",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tracing",
  "url",
 ]
@@ -4463,7 +4433,7 @@ version = "0.7.0-rc.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9a32fae177b74a22aa9c5b01bf7e68b33545be32d9e381e248058d2adc15ce3"
 dependencies = [
- "argon2 0.6.0-rc.8",
+ "argon2",
  "bcrypt-pbkdf 0.11.0",
  "ctutils",
  "ed25519-dalek 3.0.0",
@@ -4570,7 +4540,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4593,11 +4563,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.19"
+version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
+checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
 dependencies = [
- "thiserror-impl 2.0.19",
+ "thiserror-impl 2.0.20",
 ]
 
 [[package]]
@@ -4613,9 +4583,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.19"
+version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
+checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5149,7 +5119,7 @@ dependencies = [
 name = "unissh-crypto"
 version = "0.4.0"
 dependencies = [
- "argon2 0.5.3",
+ "argon2",
  "chacha20poly1305",
  "ed25519-dalek 2.2.0",
  "hex",
@@ -5157,7 +5127,7 @@ dependencies = [
  "rand_core 0.6.4",
  "sha2 0.10.9",
  "subtle",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "zeroize",
 ]
 
@@ -5165,7 +5135,7 @@ dependencies = [
 name = "unissh-ffi"
 version = "0.4.0"
 dependencies = [
- "base64 0.23.0",
+ "base64 0.23.1",
  "hex",
  "hkdf 0.12.4",
  "log",
@@ -5174,7 +5144,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
  "uniffi",
  "unissh-crypto",
@@ -5198,7 +5168,7 @@ dependencies = [
  "sha2 0.10.9",
  "spake2",
  "subtle",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "unissh-crypto",
  "unissh-storage",
  "zeroize",
@@ -5213,7 +5183,7 @@ dependencies = [
  "portable-pty",
  "shell-words",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -5223,7 +5193,7 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-server",
- "base64 0.23.0",
+ "base64 0.23.1",
  "bytes",
  "clap",
  "ed25519-dalek 2.2.0",
@@ -5242,7 +5212,7 @@ dependencies = [
  "sha2 0.11.0",
  "sqlx",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
  "tower",
  "tower-http 0.7.0",
@@ -5271,7 +5241,7 @@ dependencies = [
  "sha2 0.10.9",
  "signature 2.2.0",
  "ssh-key 0.6.7",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "unissh-keychain",
  "unissh-storage",
  "unissh-vault",
@@ -5286,7 +5256,7 @@ dependencies = [
  "russh",
  "subtle",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "tokio",
  "unissh-ssh-agent",
  "unissh-storage",
@@ -5300,7 +5270,7 @@ dependencies = [
  "hex",
  "rusqlite",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "zeroize",
 ]
 
@@ -5309,7 +5279,7 @@ name = "unissh-sync"
 version = "0.4.0"
 dependencies = [
  "log",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "unissh-crypto",
  "unissh-keychain",
  "unissh-storage",
@@ -5322,7 +5292,7 @@ name = "unissh-vault"
 version = "0.4.0"
 dependencies = [
  "sha2 0.10.9",
- "thiserror 2.0.19",
+ "thiserror 2.0.20",
  "unissh-crypto",
  "unissh-keychain",
  "unissh-storage",
@@ -5388,9 +5358,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.24.0"
+version = "1.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
+checksum = "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -5579,7 +5549,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
