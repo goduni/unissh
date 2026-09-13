@@ -268,10 +268,26 @@ fn onboarding_path_a_unlock_from_server_blob() {
     // Device B: empty instance, accepts the keyset blob "from the server" (Path A).
     let dir_b = tempfile::tempdir().unwrap();
     let core_b = new_core(dir_b.path());
+    assert!(!dir_b.path().join("inst.db").exists());
     core_b
         .unlock_from_server_blob(keyset_blob.clone(), Some("pw".to_string()), secret.clone())
         .unwrap();
     assert!(core_b.is_unlocked());
+
+    // Recovery creates the DB with the recovered keyset's key. It remains
+    // usable after the process exits, without the server or a new identity.
+    core_b
+        .create_vault("local".into(), "Recovered".into())
+        .unwrap();
+    core_b.lock();
+    drop(core_b);
+    let restarted = new_core(dir_b.path());
+    restarted.unlock(Some("pw".into()), secret.clone()).unwrap();
+    assert!(restarted
+        .list_vaults()
+        .unwrap()
+        .iter()
+        .any(|v| v.name == "Recovered"));
 
     // a corrupt keyset blob → a typed error, not a panic
     let dir_c = tempfile::tempdir().unwrap();
@@ -287,6 +303,49 @@ fn onboarding_path_a_unlock_from_server_blob() {
         core_d.unlock_from_server_blob(keyset_blob, Some("wrong".to_string()), secret),
         Err(unissh_ffi::FfiError::InvalidCredentials)
     ));
+}
+
+#[test]
+fn onboarding_path_a_refuses_another_identity_without_damaging_local_data() {
+    let remote_dir = tempfile::tempdir().unwrap();
+    let remote = new_core(remote_dir.path());
+    let remote_secret = remote.create_account(Some("same password".into())).unwrap();
+    let remote_blob = std::fs::read(remote_dir.path().join("keyset.bin")).unwrap();
+
+    let local_dir = tempfile::tempdir().unwrap();
+    let local = new_core(local_dir.path());
+    let local_secret = local.create_account(Some("same password".into())).unwrap();
+    local
+        .create_vault("local".into(), "Keep me".into())
+        .unwrap();
+    let local_blob = std::fs::read(local_dir.path().join("keyset.bin")).unwrap();
+
+    let error = local
+        .unlock_from_server_blob(remote_blob, Some("same password".into()), remote_secret)
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("wrong database key or corrupt database"));
+    assert_eq!(
+        std::fs::read(local_dir.path().join("keyset.bin")).unwrap(),
+        local_blob
+    );
+    assert!(local
+        .list_vaults()
+        .unwrap()
+        .iter()
+        .any(|v| v.name == "Keep me"));
+    local.lock();
+    drop(local);
+    let restarted = new_core(local_dir.path());
+    restarted
+        .unlock(Some("same password".into()), local_secret)
+        .unwrap();
+    assert!(restarted
+        .list_vaults()
+        .unwrap()
+        .iter()
+        .any(|v| v.name == "Keep me"));
 }
 
 /// NEGATIVE (anti-rollback, server-tz §13.13b): `unlock_from_server_blob` must
