@@ -396,6 +396,12 @@ jobs:
         shell: bash
         run: echo "OPENSSL_RUST_USE_NASM=0" >> "$GITHUB_ENV"
 
+      # Exercise recovery with real crypto/SQLCipher on every desktop host.
+      # Release mode shares compiled dependencies with the bundle build below.
+      - name: Test recovery (Tauri crate)
+        run: cargo test --locked --release --lib cloud::recovery::tests -- --test-threads=1
+        working-directory: client/src-tauri
+
       - name: Build & bundle (Tauri)
         uses: tauri-apps/tauri-action@v1
         env:
