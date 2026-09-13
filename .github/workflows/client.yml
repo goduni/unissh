@@ -323,20 +323,10 @@ jobs:
           workspaces: client/src-tauri
 
       - name: Install client npm deps
-        # Force a fresh, platform-correct resolve of native optional deps.
-        # @tauri-apps/cli (and Vite/oxc/rolldown) ship per-platform native
-        # binaries via optionalDependencies. A package-lock generated on one OS
-        # makes BOTH `npm ci` AND `npm install` skip the other OSes' binaries on
-        # those runners (npm optional-deps bug npm/cli#4828) -> "Cannot find
-        # module @tauri-apps/cli-<plat>". Removing the lock + node_modules first
-        # forces npm to resolve THIS runner's optionals from scratch.
-        # `rm -rf` needs a POSIX shell: on windows-latest the default `run:` shell
-        # is PowerShell, where `rm -rf` errors out (`rm`->Remove-Item has no -rf).
-        # Git Bash ships on every runner here, so pin bash for this one step.
-        shell: bash
-        run: |
-          rm -rf node_modules package-lock.json
-          npm install --no-audit --no-fund
+        # The lockfile includes native optional packages for every desktop host.
+        # Preserve the tested dependency versions: resolving without it can also
+        # crash npm's dependency resolver before compilation (null edgesOut).
+        run: npm ci --include=optional --no-audit --no-fund
         working-directory: client
 
       # Frontend unit tests. Run once (Linux) rather than per-platform: they are
@@ -652,11 +642,7 @@ jobs:
           echo "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Install client npm deps
-        # Same fresh-resolve rationale as the desktop job (npm/cli#4828).
-        shell: bash
-        run: |
-          rm -rf node_modules package-lock.json
-          npm install --no-audit --no-fund
+        run: npm ci --include=optional --no-audit --no-fund
         working-directory: client
 
       # `tauri android init` scaffolds the project with TAURI'S OWN default icons
@@ -1073,10 +1059,7 @@ jobs:
           key: ios
 
       - name: Install client npm deps
-        shell: bash
-        run: |
-          rm -rf node_modules package-lock.json
-          npm install --no-audit --no-fund
+        run: npm ci --include=optional --no-audit --no-fund
         working-directory: client
 
       # Same scaffold-then-overwrite hazard as the Android job — see the comment
