@@ -30,6 +30,19 @@ starts with `0.`:
 - **Server and client are versioned together but deploy separately.** Upgrade the
   server first; a newer server serves older clients, the reverse is not promised.
 
+## [Unreleased]
+
+**Compatibility:** vault/database formats and server protocol unchanged.
+
+### Fixed
+
+- Existing self-hosted identities can sign in directly from a fresh device's
+  onboarding screen. Escrow and Emergency-Kit recovery remember the installed
+  identity's Secret Key in the OS keychain when available.
+- Global shortcuts use Cmd on macOS and Ctrl+Shift on Windows/Linux, leaving
+  bare Ctrl letters to the terminal. Section, help and zoom shortcuts use the
+  same modifier and recognize shifted physical keys; the shortcut sheet matches.
+
 ## [0.4.0] — 2026-08-25
 
 ### Added

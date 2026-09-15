@@ -49,17 +49,8 @@ export function shortcutGroups(mac: boolean): ShortcutGroup[] {
         // and this is every desktop's own preferences chord anyway. Toggles —
         // the panel opens over the current view, so the same keys put it away.
         { keys: mac ? "⌘," : "Ctrl+,", labelKey: "feedback.shortcut.openSettings" },
-        // Bare Ctrl off macOS, and NOT documented as "terminal tabs when already
-        // there" the way ⌘T is. App.tsx matches sections by e.key with no e.code
-        // fallback, and Shift turns a digit into "!@#$%^&*(" on the usual
-        // layouts, so Ctrl+Shift+2 reaches nothing there. Inside the terminal
-        // that same Ctrl+Shift+2 jumps to tab 2 (useTerminalShortcuts reads
-        // e.code) — a second meaning this row deliberately does not promise.
-        { keys: mac ? "⌘1–9" : "Ctrl+1–9", labelKey: "feedback.shortcut.switchSections" },
-        // Bare Ctrl off macOS for the same reason: Shift+/ is "?", which neither
-        // App.tsx nor APP_CHORD_KEYS accepts. A sheet that misprints the chord
-        // opening the sheet is the one row nobody would forgive.
-        { keys: mac ? "⌘/" : "Ctrl+/", labelKey: "feedback.shortcut.thisHelp" },
+        { keys: `${mod}1–9`, labelKey: "feedback.shortcut.switchSections" },
+        { keys: `${mod}/`, labelKey: "feedback.shortcut.thisHelp" },
       ],
     },
     {
@@ -81,10 +72,7 @@ export function shortcutGroups(mac: boolean): ShortcutGroup[] {
         // tab — see paneFocusStep in shell/useTerminalShortcuts.
         { keys: `${mod}←→`, labelKey: "feedback.shortcut.focusPane" },
         { keys: "Ctrl+Tab", labelKey: "feedback.shortcut.cycleTabs" },
-        // Bare Ctrl off macOS, not the Ctrl+Shift the rest of the sheet prints:
-        // App.tsx binds zoom on meta||ctrl and matches by e.key, and Shift turns
-        // 0 into ")" on most layouts — so Ctrl+Shift+0 would not reset anything.
-        { keys: mac ? "⌘ +/−/0" : "Ctrl +/−/0", labelKey: "feedback.shortcut.termZoom" },
+        { keys: mac ? "⌘ +/−/0" : "Ctrl+Shift +/−/0", labelKey: "feedback.shortcut.termZoom" },
         // Only bound when the shell emits OSC 133 marks, hence the caveat in the
         // label — otherwise these keys keep whatever meaning the shell gives them.
         { keys: mac ? "⌘⇧↑↓" : "Ctrl+Shift+↑↓", labelKey: "feedback.shortcut.promptJump" },
