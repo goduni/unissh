@@ -9,6 +9,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, rgba, TEXT, UI } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
+import { recoverInstance } from "@/store/recovery";
 import { isDesktopOs } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
 import { useWindowControls } from "@/shell/WindowChrome";
@@ -377,6 +378,10 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
       >
         {busy ? <Spinner size={16} color={p.accentInk} /> : t("onboarding.generateSecretKey")}
       </Btn>
+      <Btn full variant="ghost" disabled={busy} style={{ marginTop: rem(10) }}
+        onClick={() => useApp.getState().setOverlay("recover")}>
+        {t("serverCloud.branchIdentity")} · {t("serverCloud.identityCta")}
+      </Btn>
       <button
         onClick={() => useApp.getState().setOverlay("join")}
         disabled={busy}
@@ -397,6 +402,67 @@ function Onboarding({ onCreated }: { onCreated: (secretKey: string) => void }) {
         {t("onboarding.haveAccount")}{" "}
         <span style={{ color: p.accentText, fontWeight: 600 }}>{t("onboarding.connectDevice")}</span>
       </button>
+    </Modal>
+  );
+}
+
+function RecoverIdentity() {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const [baseUrl, setBaseUrl] = useState("");
+  const [handle, setHandle] = useState("");
+  const [password, setPassword] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const recover = async () => {
+    if (busy || !baseUrl.trim() || !handle.trim() || !secretKey.trim()) return;
+    setBusy(true);
+    try {
+      await recoverInstance(baseUrl, handle, password, secretKey);
+      setPassword("");
+      setSecretKey("");
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal>
+      <h1 style={{ margin: `0 0 ${rem(10)}`, fontSize: TEXT.h2 }}>{t("serverCloud.branchIdentity")}</h1>
+      <p style={{ color: p.txt2, fontSize: TEXT.base, lineHeight: 1.5 }}>{t("serverCloud.identityHint")}</p>
+      <form onSubmit={(e) => { e.preventDefault(); void recover(); }}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void recover(); } }}>
+        <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0,
+          display: "flex", flexDirection: "column", gap: rem(14) }}>
+        <Field label={t("serverCloud.baseUrl")}>
+          <Input {...ENTRY_BOX} value={baseUrl} onChange={setBaseUrl} autoFocus
+            placeholder={t("serverCloud.baseUrlPlaceholder")} />
+        </Field>
+        <Field label={t("serverCloud.handle")}>
+          <Input {...ENTRY_BOX} value={handle} onChange={setHandle}
+            placeholder={t("serverCloud.handlePlaceholder")} />
+        </Field>
+        <Field label={t("serverCloud.identityPassword")}>
+          <Input {...ENTRY_BOX} type="password" value={password} onChange={setPassword}
+            placeholder={t("serverCloud.identityPasswordPlaceholder")} />
+        </Field>
+        <Field label={t("serverCloud.identitySecretKey")}>
+          <Input {...ENTRY_BOX} type="password" mono value={secretKey} onChange={setSecretKey}
+            placeholder={t("serverCloud.identitySecretKeyPlaceholder")} />
+        </Field>
+        <Btn onClick={() => void recover()} full disabled={busy || !baseUrl.trim() || !handle.trim() || !secretKey.trim()}>
+          {busy ? <Spinner size={16} color={p.accentInk} /> : t("serverCloud.identityCta")}
+        </Btn>
+        {/* Recovery can install the local identity before enrollment/login fails.
+            Re-read status on Back instead of offering create_account over its DB. */}
+        <Btn full variant="ghost" onClick={() => void useApp.getState().boot()}>
+          {t("common.back")}
+        </Btn>
+        </fieldset>
+      </form>
     </Modal>
   );
 }
@@ -1214,6 +1280,9 @@ export function EntryOverlays() {
   }
   if (overlay === "unlock") {
     return <Unlock />;
+  }
+  if (overlay === "recover") {
+    return <RecoverIdentity />;
   }
   if (overlay === "join") {
     return <JoinDevice onBack={() => setOverlay(instanceExists ? "unlock" : "onboarding")} />;
