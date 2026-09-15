@@ -10,7 +10,7 @@ name: CI
 # list verbatim — keep the two copies in sync.
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/**"]
     paths:
       - "rust-core/**"
       - "server/**"
