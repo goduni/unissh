@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Toolchain (channel 1.94 + rustfmt/clippy) comes from rust-toolchain.toml.
+      # Toolchain (channel 1.95 + rustfmt/clippy) comes from rust-toolchain.toml.
       - uses: Swatinem/rust-cache@v2
       - name: Install build deps (OpenSSL + C toolchain for bundled-sqlcipher)
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev clang
@@ -85,7 +85,7 @@ jobs:
             openssh-server openssh-client \
             pkg-config libssl-dev clang
       - uses: Swatinem/rust-cache@v2
-      # rust:bookworm ships a recent stable toolchain; rust-toolchain.toml (1.94)
+      # rust:bookworm ships a recent stable toolchain; rust-toolchain.toml (1.95)
       # is honored by cargo via rustup inside the image.
       - run: cargo test --workspace
 

@@ -54,7 +54,7 @@ core keeps forwarding off by default and prefers ProxyJump).
 
 ## Prerequisites
 
-- Node 20.19+ / 22.12+ (Vite 8 requirement) and Rust 1.85+.
+- Node 20.19+ / 22.12+ (Vite 8 requirement) and Rust 1.95+.
 - **Linux desktop build:** `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev
   libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev libxdo-dev libayatana-appindicator3-dev`.
 - **iOS:** macOS + Xcode + CocoaPods. **Android:** Android Studio + SDK + NDK.

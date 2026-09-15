@@ -314,7 +314,7 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
-      # Toolchain channel (1.94) + components: the standalone client/src-tauri
+      # Toolchain channel (1.95) + components: the standalone client/src-tauri
       # workspace inherits the pin from the repo-root rust-toolchain.toml, which
       # rustup discovers by walking up parent dirs (no per-crate toolchain file).
       - name: Cache Rust (client/src-tauri standalone workspace)

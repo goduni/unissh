@@ -4,7 +4,7 @@ version = "0.4.0"
 description = "UniSSH — cross-platform SSH client"
 authors = ["UniSSH"]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.95"
 
 # This empty table pins src-tauri as its own workspace root, so Cargo does not try
 # to attach it to the sibling rust-core workspace reached via the path dependency.
