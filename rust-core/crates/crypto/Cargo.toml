@@ -10,14 +10,14 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-# KDF
-argon2 = "0.6"
+# KDF: only the raw key-derivation API is used; salts come from our rand_core
+# below. Default PHC/password-hash features pull in a separate getrandom 0.4
+# backend, which is not configured for the admin panel's wasm target.
+argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 # Default symmetric cipher (192-bit nonce, does not depend on AES-NI)
 # Held at 0.10 with the rest of the aligned generation. 0.11 moves to
-# crypto-common 0.2, which pulls getrandom 0.4 — and getrandom 0.4 has NO
-# backend on wasm32-unknown-unknown, so the admin panel's crypto bundle stops
-# compiling (`cannot find function inner_u32 in module backends`). The host
-# build gives no hint of this, which is why it looked landable.
+# crypto-common 0.2 and a newer RNG generation, which needs separate browser
+# backend configuration. Upgrade the aligned stack together and verify wasm.
 chacha20poly1305 = "0.10"
 # Public-key encryption: HPKE RFC 9180, DHKEM(X25519, HKDF-SHA256).
 # Version 0.12 keeps rand_core 0.6 — the same generation as dalek 2.x/chacha 0.10

@@ -34,6 +34,12 @@ starts with `0.`:
 
 **Compatibility:** vault/database formats and server protocol unchanged.
 
+### Changed
+
+- Update Argon2 to 0.6 with explicit key-derivation features for native and
+  browser builds. Frozen Argon2 0.5.3 key vectors verify password-derived key
+  compatibility; no vault migration is required.
+
 ### Fixed
 
 - Existing self-hosted identities can sign in directly from a fresh device's
