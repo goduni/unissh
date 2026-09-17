@@ -52,5 +52,5 @@ tempfile = "3"
 # and that name has exactly one definition.
 unissh-local-pty = { path = "../local-pty" }
 # In-process SSH server for password-authentication tests (hermetic).
-russh = "0.62"
+russh = "0.63"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
