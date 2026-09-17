@@ -9,11 +9,11 @@
 #   Stage 3 (caddy) : official caddy:2 serving the built dist same-origin and
 #                     reverse-proxying the API to the internal server service.
 #
-# Pinned to Rust 1.94 per rust-toolchain.toml.
+# Pinned to Rust 1.95 per rust-toolchain.toml.
 # =============================================================================
 
 # ---- Stage 1: build the crypto-wasm package ---------------------------------
-FROM rust:1.94-slim AS wasm
+FROM rust:1.95-slim AS wasm
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown

@@ -9,7 +9,7 @@ This is a genuinely useful standalone product on its own: a fully working single
 
 ## Prerequisites
 
-You need the [core build prerequisites](../install/): Rust 1.94+, a C toolchain, and system OpenSSL. No network access is required.
+You need the [core build prerequisites](../install/): Rust 1.95+, a C toolchain, and system OpenSSL. No network access is required.
 
 ## End-to-end flow
 

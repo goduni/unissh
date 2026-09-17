@@ -16,6 +16,7 @@ pub mod config;
 pub mod identity;
 pub mod oidc;
 pub mod onboard;
+mod recovery;
 pub mod tokens;
 pub mod transport;
 

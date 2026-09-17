@@ -58,7 +58,7 @@ export type Route =
 //   neither unlockable nor recreatable, so we explain + offer a safe reset.
 // "retry": instance_status itself failed (transient backend error) — don't
 //   mislead a returning user into onboarding; offer a retry instead.
-export type Overlay = "onboarding" | "kit" | "unlock" | "repair" | "retry" | "join" | null;
+export type Overlay = "onboarding" | "kit" | "unlock" | "repair" | "retry" | "join" | "recover" | null;
 export type ModalKind =
   | null
   | { kind: "host"; edit?: ConnectionProfile }

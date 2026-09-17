@@ -9,7 +9,7 @@
 
 import { isMac } from "@/bridge/platform";
 
-/** Keys App.tsx binds with Cmd/Ctrl. Deliberately not "every letter": ⌘A is
+/** Keys App.tsx binds with Cmd / Ctrl+Shift. Deliberately not "every letter": ⌘A is
  *  xterm's select-all and ⌘C/⌘V are the browser's clipboard, so claiming those
  *  would trade one broken shortcut for three. */
 const APP_CHORD_KEYS = new Set([
@@ -54,6 +54,15 @@ export function hasAppModifier(ev: KeyboardEvent, mac = isMac()): boolean {
   return mac ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && ev.shiftKey && !ev.metaKey;
 }
 
+/** Resolve the physical application key, including Shift+digits/punctuation.
+ *  Share this with xterm so a handled shortcut never also sends terminal input. */
+export function appShortcutKey(ev: KeyboardEvent): string {
+  if (/^Key[A-Z]$/.test(ev.code)) return ev.code.slice(3).toLowerCase();
+  if (/^Digit[0-9]$/.test(ev.code)) return ev.code.slice(5);
+  const punctuation: Record<string, string> = { Slash: "/", Period: ".", Equal: "=", Minus: "-" };
+  return punctuation[ev.code] ?? ev.key.toLowerCase();
+}
+
 /** ⌘, on macOS, Ctrl+, elsewhere — every desktop's own "open preferences" chord,
  *  and the one people press before looking for a menu.
  *
@@ -78,7 +87,7 @@ export function isAppChord(ev: KeyboardEvent): boolean {
   // so it is asked before the general rule would reject it.
   if (opensSettings(ev)) return true;
   if (!hasAppModifier(ev)) return false;
-  return APP_CHORD_KEYS.has(ev.key.toLowerCase());
+  return APP_CHORD_KEYS.has(appShortcutKey(ev));
 }
 
 /** Whether a digit chord belongs to the terminal's tabs rather than to the
