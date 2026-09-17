@@ -11,7 +11,7 @@ license.workspace = true
 
 [dependencies]
 # KDF
-argon2 = "0.5"
+argon2 = "0.6"
 # Default symmetric cipher (192-bit nonce, does not depend on AES-NI)
 # Held at 0.10 with the rest of the aligned generation. 0.11 moves to
 # crypto-common 0.2, which pulls getrandom 0.4 — and getrandom 0.4 has NO
