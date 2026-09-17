@@ -514,18 +514,16 @@ pub(crate) async fn materialize(
             )
             .await?;
         }
-        Some(ObjectTag::AccountState) => {
+        Some(ObjectTag::AccountState) if p.obj_version.is_some() => {
             // S3: compaction of self-authored account-state (tag 7). LWW semantics:
             // strictly older versions from the same author will never win → prune them.
-            if p.obj_version.is_some() {
-                if let Some(author) = p.author_pubkey.clone() {
-                    tx.exec(
-                        "DELETE FROM objects WHERE object_tag = 7 \
-                         AND author_pubkey = ? AND obj_version < ?",
-                        vec![Val::b(author), opt_u64(p.obj_version)?],
-                    )
-                    .await?;
-                }
+            if let Some(author) = p.author_pubkey.clone() {
+                tx.exec(
+                    "DELETE FROM objects WHERE object_tag = 7 \
+                     AND author_pubkey = ? AND obj_version < ?",
+                    vec![Val::b(author), opt_u64(p.obj_version)?],
+                )
+                .await?;
             }
         }
         // Item / Audit / Keyset — only the append-only log (no derived tables here).

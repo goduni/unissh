@@ -4040,7 +4040,7 @@ impl Core {
                     }
                 }
             }
-            out.sort_by(|a, b| b.started_unix.cmp(&a.started_unix));
+            out.sort_by_key(|recording| std::cmp::Reverse(recording.started_unix));
             Ok(out)
         })
     }

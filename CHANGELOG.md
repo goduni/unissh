@@ -43,6 +43,12 @@ starts with `0.`:
   bare Ctrl letters to the terminal. Section, help and zoom shortcuts use the
   same modifier and recognize shifted physical keys; the shortcut sheet matches.
 
+### Security
+
+- Update rustls to 0.23.45 in the server/core and native client lockfiles to
+  reject TLS 1.3 handshake messages crossing encryption-level boundaries
+  (RUSTSEC-2026-0285).
+
 ## [0.4.0] — 2026-08-25
 
 ### Added

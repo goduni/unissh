@@ -102,7 +102,7 @@ npm run tauri ios init      && npm run tauri ios dev
 npm run tauri android init  && npm run tauri android dev
 ```
 
-**Prerequisites (clients):** Node 20.19+ / 22.12+ and Rust 1.94+. Linux desktop also needs the WebKitGTK stack: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev libxdo-dev libayatana-appindicator3-dev`. iOS needs Xcode + CocoaPods; Android needs Android Studio + SDK + NDK.
+**Prerequisites (clients):** Node 20.19+ / 22.12+ and Rust 1.95+. Linux desktop also needs the WebKitGTK stack: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev libxdo-dev libayatana-appindicator3-dev`. iOS needs Xcode + CocoaPods; Android needs Android Studio + SDK + NDK.
 </details>
 
 On first launch you pick a **Local** or **Cloud** vault. Local needs nothing else — you're done. For **Cloud** sync across devices or a team, stand up a server next.
@@ -169,7 +169,7 @@ cp server/config.example.toml server/config.toml      # then edit
 ./target/release/unissh-server migrate --config server/config.toml   # also auto-applied on serve
 ./target/release/unissh-server --config server/config.toml
 ```
-Requires Rust 1.94+ (`rust-toolchain.toml`) and a C toolchain (for bundled SQLCipher in the dev/test path). Without the bundled Caddy you must terminate TLS yourself — set `tls_cert`/`tls_key` for in-process rustls, or put your own reverse proxy in front and set `trust_proxy=true`.
+Requires Rust 1.95+ (`rust-toolchain.toml`) and a C toolchain (for bundled SQLCipher in the dev/test path). Without the bundled Caddy you must terminate TLS yourself — set `tls_cert`/`tls_key` for in-process rustls, or put your own reverse proxy in front and set `trust_proxy=true`.
 </details>
 
 ### C. Open the admin panel
@@ -575,7 +575,7 @@ cd client && npm install && npm run tauri build   # full desktop bundles
 
 Prefer raw cargo? `cargo build --workspace` / `cargo test --workspace` from the repo root do the core+server build directly.
 
-**Toolchain:** Rust **1.94+** (`rust-toolchain.toml`), a C toolchain + system OpenSSL (for bundled SQLCipher), Node 20.19+/22.12+, and `wasm-pack` + the `wasm32-unknown-unknown` target for the admin panel. Each component has its own README with platform specifics.
+**Toolchain:** Rust **1.95+** (`rust-toolchain.toml`), a C toolchain + system OpenSSL (for bundled SQLCipher), Node 20.19+/22.12+, and `wasm-pack` + the `wasm32-unknown-unknown` target for the admin panel. Each component has its own README with platform specifics.
 
 The core's per-crate map (crypto, keychain, storage, vault, ssh-agent, ssh-transport, ffi, cli, sync) and architecture are in [`rust-core/README.md`](rust-core/README.md).
 
