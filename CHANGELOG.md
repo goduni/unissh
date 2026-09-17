@@ -36,6 +36,9 @@ starts with `0.`:
 
 ### Changed
 
+- Update russh to 0.63.3 and adapt host-key verification to its new API while
+  preserving plain-key TOFU/pinning. Host CA trust remains unsupported; host
+  certificates are not negotiated or accepted as ordinary pinned keys.
 - Update Argon2 to 0.6 with explicit key-derivation features for native and
   browser builds. Frozen Argon2 0.5.3 key vectors verify password-derived key
   compatibility; no vault migration is required.

@@ -11,7 +11,7 @@ use russh::client::{
     Session,
 };
 use russh::keys::agent::AgentIdentity;
-use russh::keys::{HashAlg, PublicKey};
+use russh::keys::{HashAlg, PublicKey, PublicKeyOrCertificate};
 use russh::MethodKind;
 use russh::{Channel, ChannelMsg, ChannelOpenFailure, Signer};
 use subtle::ConstantTimeEq;
@@ -283,6 +283,8 @@ impl AlgorithmPolicy {
                     russh::kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
                 ]),
                 key: std::borrow::Cow::Borrowed(&[russh::keys::Algorithm::Ed25519]),
+                // Host CA trust is not implemented; keep plain-key TOFU/pinning.
+                host_key_certificates: std::borrow::Cow::Borrowed(&[]),
                 cipher: std::borrow::Cow::Borrowed(&[
                     russh::cipher::CHACHA20_POLY1305,
                     russh::cipher::AES_256_GCM,
@@ -390,8 +392,18 @@ impl Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::ssh_key::PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, TransportError> {
+        // A certificate is not a trusted bare key. Until a host CA policy exists,
+        // reject it even when its embedded key matches a pin, and never record it
+        // as a TOFU candidate. Certificate negotiation is disabled in both policies.
+        let PublicKeyOrCertificate::PublicKey {
+            key: server_public_key,
+            ..
+        } = server_public_key
+        else {
+            return Ok(false);
+        };
         let bytes = server_public_key
             .to_openssh()
             .map_err(|e| TransportError::KeyEncoding(e.to_string()))?
@@ -1732,9 +1744,84 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{answer_from_password, require_loopback, PromptField};
+    use super::{
+        answer_from_password, require_loopback, AlgorithmPolicy, ClientHandler, PromptField,
+    };
     use crate::error::TransportError;
+    use russh::client::Handler;
+    use russh::keys::ssh_key::{certificate, private::Ed25519Keypair};
+    use russh::keys::{PrivateKey, PublicKeyOrCertificate};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
     use zeroize::Zeroizing;
+
+    fn host_key_handler(expected_host_key: Option<Vec<u8>>) -> ClientHandler {
+        ClientHandler {
+            expected_host_key,
+            observed_host_key: Arc::new(Mutex::new(None)),
+            remote_forwards: Arc::new(Mutex::new(HashMap::new())),
+            agent_forward: None,
+        }
+    }
+
+    #[test]
+    fn host_certificates_are_not_negotiated_without_a_ca_trust_policy() {
+        for policy in [AlgorithmPolicy::Balanced, AlgorithmPolicy::Modern] {
+            assert!(policy.preferred().host_key_certificates.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn bare_host_keys_preserve_tofu_and_pin_checks() {
+        let key = PrivateKey::from(Ed25519Keypair::from_seed(&[7; 32]));
+        let encoded = key.public_key().to_openssh().unwrap().into_bytes();
+        let other = PrivateKey::from(Ed25519Keypair::from_seed(&[8; 32]));
+        let wrong_pin = other.public_key().to_openssh().unwrap().into_bytes();
+        let presented = PublicKeyOrCertificate::from(key.public_key().clone());
+        for (pin, accepted) in [
+            (None, true),
+            (Some(encoded.clone()), true),
+            (Some(wrong_pin), false),
+        ] {
+            let mut handler = host_key_handler(pin);
+            assert_eq!(
+                handler.check_server_key(&presented).await.unwrap(),
+                accepted
+            );
+            // A mismatch still exposes the observed public key to the existing
+            // fingerprint-confirmation flow, but never makes it trusted.
+            assert_eq!(
+                *handler.observed_host_key.lock().unwrap(),
+                Some(encoded.clone())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn host_certificate_is_never_accepted_or_recorded_as_a_plain_key() {
+        let key = PrivateKey::from(Ed25519Keypair::from_seed(&[7; 32]));
+        let ca = PrivateKey::from(Ed25519Keypair::from_seed(&[8; 32]));
+        let mut builder = certificate::Builder::new(
+            vec![9; 32],
+            key.public_key().key_data().clone(),
+            0,
+            u64::MAX,
+        )
+        .unwrap();
+        builder.cert_type(certificate::CertType::Host).unwrap();
+        builder.valid_principal("test.example").unwrap();
+        let cert = builder.sign(&ca).unwrap();
+        let plain_pin = key.public_key().to_openssh().unwrap().into_bytes();
+        let cert_pin = cert.to_openssh().unwrap().into_bytes();
+        let presented = PublicKeyOrCertificate::Certificate(cert);
+        // Even a valid certificate containing an already-pinned key does not
+        // establish CA trust. It must not enter the ordinary TOFU/repin flow.
+        for pin in [None, Some(plain_pin), Some(cert_pin)] {
+            let mut handler = host_key_handler(pin);
+            assert!(!handler.check_server_key(&presented).await.unwrap());
+            assert!(handler.observed_host_key.lock().unwrap().is_none());
+        }
+    }
 
     fn hidden(prompt: &str) -> PromptField {
         PromptField {
