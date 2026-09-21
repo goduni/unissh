@@ -4,7 +4,7 @@ version = "0.4.0"
 description = "UniSSH — cross-platform SSH client"
 authors = ["UniSSH"]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 
 # This empty table pins src-tauri as its own workspace root, so Cargo does not try
 # to attach it to the sibling rust-core workspace reached via the path dependency.
@@ -101,6 +101,9 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 # executed — that key, not a code-signing certificate, is what makes an unsigned
 # distributable safely updatable (see .github/workflows/client.yml).
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+unissh-mcp = { path = "../../rust-core/crates/mcp" }
+unissh-automation = { path = "../../rust-core/crates/automation", features = ["core"] }
+tokio = { version = "1", features = ["sync", "time"] }
 tauri-plugin-updater = "2"
 # Mounted volumes for the SFTP local pane's drive picker (Windows drive letters
 # with their labels, /Volumes on macOS, mount points on Linux). Desktop-only:

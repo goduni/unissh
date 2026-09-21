@@ -54,7 +54,7 @@ core keeps forwarding off by default and prefers ProxyJump).
 
 ## Prerequisites
 
-- Node 20.19+ / 22.12+ (Vite 8 requirement) and Rust 1.85+.
+- Node 20.19+ / 22.12+ (Vite 8 requirement) and the Rust toolchain pinned in `../rust-toolchain.toml` (desktop MCP requires 1.88+).
 - **Linux desktop build:** `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev
   libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev libxdo-dev libayatana-appindicator3-dev`.
 - **iOS:** macOS + Xcode + CocoaPods. **Android:** Android Studio + SDK + NDK.
@@ -79,3 +79,11 @@ npm run tauri android init && npm run tauri android dev
 - `tsc --noEmit` — **0 errors**; `vite build` — **passes**.
 - A full `cargo build`/`tauri build` (codegen + link) and on-device runs require a machine with a
   display and adequate disk — not performed in the headless build environment.
+
+## Desktop MCP
+
+[Setup, tool examples and security limits](../docs/desktop-mcp.md) describe the
+optional server in Settings → MCP. It is embedded in Tauri, uses native temporary
+grants and per-command approvals, and owns SSH connections independently of the
+terminal registry. No sidecar binary or server-control-plane change is needed.
+Mobile does not compile or expose the listener.

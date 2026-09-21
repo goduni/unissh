@@ -15,6 +15,7 @@
 // The pure decision logic below (`updatesSupported`, `shouldCheckNow`) is kept free
 // of Tauri and localStorage so it can be tested directly — see updater.test.ts.
 
+import { mcpRevoke } from "./mcp";
 import { logDebug, logError, logInfo } from "@/bridge/log";
 import { osPlatform } from "@/bridge/platform";
 
@@ -247,6 +248,8 @@ export async function installUpdate(): Promise<InstallResult> {
   if (!pending) return { status: "manual", message: "no pending update" };
 
   try {
+    // Revoke natively before an installer can terminate this process.
+    await mcpRevoke();
     await pending.downloadAndInstall();
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

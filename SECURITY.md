@@ -373,3 +373,29 @@ you can *decrypt*). These are known and explained in
 isn't a vulnerability, but a way to make a documented limitation *worse* than
 documented is — including anything that lets the SSO/escrow surface **yield a
 decryption key**, which it must never do.
+
+## Embedded desktop MCP
+
+MCP is an opt-in loopback HTTP API inside the desktop application. A random
+256-bit bearer token identifies a registered integration; its versioned local
+configuration stores only a SHA-256 digest. Tokens never grant SSH access alone.
+Native temporary grants select saved targets, and native confirmation approves
+an immutable command once. SSH keys, server passwords and authentication answers
+are not exposed as MCP tools, arguments or results. Every hop requires a pinned
+host key and uses the existing Core credential and Personal identity checks.
+
+Grants, sessions and output are ephemeral and bound to the native vault revision.
+Revocation precedes transport cleanup. Lock, observed screen lock/suspend, expiry,
+app lifecycle changes and relevant vault mutations invalidate access; polling
+cannot renew it. HTTP reconnect does not restore a grant or replay a command.
+The embedding logger excludes all `rmcp` diagnostic targets at every level,
+including tracing-to-log events: SDK diagnostics can contain raw arguments and
+output. Automation audit messages contain only IDs, decisions, outcomes and byte
+counts; command/output text is not logged.
+
+Loopback HTTP does not provide server authentication or OS-user isolation. A local
+process can impersonate an absent listener and steal its client's token. Native
+approval reduces this token's authority but does not make a compromised desktop
+safe. Approved command output may go to the AI provider and can include remote
+secrets. Cancellation cannot guarantee termination of detached remote processes.
+See [desktop MCP setup and limits](docs/desktop-mcp.md) and the threat model.

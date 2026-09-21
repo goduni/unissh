@@ -338,3 +338,44 @@ For the primitives and key hierarchy, see the
 and [`rust-core/crates/sync/README.md`](rust-core/crates/sync/README.md) for the
 verify-before-apply pipeline. To report a vulnerability, see
 [`SECURITY.md`](SECURITY.md).
+
+## Local AI automation (desktop MCP)
+
+The opt-in MCP listener adds a local plaintext boundary from an authenticated AI
+application to a native authorization broker. It binds IPv4 loopback only,
+validates exact Host, rejects Origin/query credentials, and authenticates every
+request. The caller receives only granted opaque target IDs and aliases, owned
+session/task metadata and approved command output. Its connection parameters
+cannot override credentials or destinations. No approval, signing, vault-export
+or terminal-tab attachment tool is exposed. Host trust, Personal destination binding and complete jump
+routes remain Core responsibilities; MCP forbids TOFU for every hop.
+
+An integration token and its transient grant are separate authorities. Grants
+expire monotonically, require an unlocked native Core, and are invalidated by
+security-relevant storage revisions, including synced changes. Final command
+admission is serialized with revocation and Core mutation. Output access is checked
+on every read. A late authentication/output callback cannot restore revoked
+records. Registered tokens persist locally as digests; grants and connections do
+not survive process restart. Token rotation creates a new integration identity
+and revokes the previous identity so already-authenticated requests cannot inherit
+new permissions. Sharing one token intentionally shares one integration's scope.
+
+A malicious model can request a dangerous command or return misleading output.
+The native UI displays the immutable command with escaped controls and requires a
+separate decision; no shell safety classifier or output-redaction claim is made.
+After approval, remote shell authority can read secrets or cause irreversible
+effects. Output can leave the device through the chosen AI provider. Closing an
+SSH channel cannot recall those effects or guarantee remote child termination.
+
+Local malware, a hostile OS administrator, and port impersonation are not isolated
+by localhost. Bearer authentication authenticates the caller, not the server; an
+impostor listener can capture tokens. Browser requests are rejected, but an
+arbitrary local process can forge headers. The feature assumes a trusted desktop
+environment and offers no cross-user sandbox guarantee. Only observed native OS
+lock/suspend events can revoke immediately; desktops without those signals still
+have manual vault lock and native grant/runtime deadlines. Separate loopback
+namespaces (remote IDEs/containers/WSL) are unsupported, not exposed through LAN.
+
+This feature changes neither ciphertext sync nor vault/AAD formats. Its separately
+versioned local digest configuration is not synced. Temporary SQLite revision
+triggers observe security-relevant writes without a persistent schema migration.

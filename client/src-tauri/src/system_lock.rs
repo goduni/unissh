@@ -6,12 +6,10 @@
 //! tick while asleep. This module is the missing half: a small native listener
 //! per desktop, each of which emits one application event.
 //!
-//! Everything past the emit lives in the front end. The Rust side never touches
-//! vault state; the event is routed into the same `lockInstance()` the lock
-//! button and the idle timer call, so there stays exactly one place where
-//! zeroize can be got wrong. The grace period, the dedup, the "already locked"
-//! guard and the setting are all decided there too (`support/systemLock.ts`) —
-//! which is why this file reports what happened and nothing else.
+//! MCP grants are revoked in Rust before emitting, independently of the webview.
+//! Vault locking still uses the frontend's common `lockInstance()` path and its
+//! grace/deduplication policy (`support/systemLock.ts`). MCP revocation does not
+//! inherit that grace period or the optional frontend auto-lock setting.
 //!
 //! **Emitting is best-effort**, following the precedent of the auth-prompt and
 //! agent-approval observers: a listener that cannot be registered logs and
@@ -69,6 +67,12 @@ fn emit(app: &AppHandle, signal: SystemLockSignal) {
 }
 
 fn emit_with_token(app: &AppHandle, signal: SystemLockSignal, token: Option<u64>) {
+    if matches!(
+        signal,
+        SystemLockSignal::ScreenLock | SystemLockSignal::Suspend
+    ) {
+        crate::mcp::revoke(app);
+    }
     log::info!("system-lock: {signal:?}");
     let _ = app.emit("system-lock", SystemLockEvent { signal, token });
 }

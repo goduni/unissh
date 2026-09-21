@@ -161,8 +161,13 @@ impl AppPrompter {
     }
 }
 
-impl AuthPrompter for AppPrompter {
-    fn prompt(&self, request: AuthPromptRequest) -> Option<Vec<String>> {
+impl AppPrompter {
+    pub fn prompt_until(
+        &self,
+        request: AuthPromptRequest,
+        cancelled: impl Fn() -> bool,
+        deadline: std::time::Instant,
+    ) -> Option<Vec<String>> {
         let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
         // Capacity 1, not a rendezvous: `answer` runs on a Tauri command thread
         // and should hand the answer over and return, not block until the core
@@ -199,9 +204,35 @@ impl AuthPrompter for AppPrompter {
         // forever. Kept just under the core's own interactive budget so the
         // timeout that fires is this one, with the connection torn down
         // deliberately rather than by an opaque handshake deadline.
-        let answers = rx.recv_timeout(Duration::from_secs(290)).ok().flatten();
+        let mut answered = false;
+        let answers = loop {
+            if cancelled() || std::time::Instant::now() >= deadline {
+                break None;
+            }
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(answer) => {
+                    answered = true;
+                    break answer;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break None,
+            }
+        };
         self.pending.lock().expect("prompt map").remove(&id);
+        if !answered {
+            let _ = self.app.emit("auth-prompt-cancelled", id);
+        }
         answers
+    }
+}
+
+impl AuthPrompter for AppPrompter {
+    fn prompt(&self, request: AuthPromptRequest) -> Option<Vec<String>> {
+        self.prompt_until(
+            request,
+            || false,
+            std::time::Instant::now() + Duration::from_secs(290),
+        )
     }
 }
 

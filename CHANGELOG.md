@@ -30,6 +30,22 @@ starts with `0.`:
 - **Server and client are versioned together but deploy separately.** Upgrade the
   server first; a newer server serves older clients, the reverse is not promised.
 
+## [Unreleased]
+
+### Added
+
+- Opt-in embedded desktop MCP over authenticated loopback HTTP, with temporary
+  host grants, per-command native confirmation, persistent SSH sessions or a
+  separate connection per command, bounded output polling and cancellation.
+  See [setup and security limits](docs/desktop-mcp.md).
+
+### Compatibility
+
+- Vault format, AAD encodings and encrypted-sync protocol are unchanged. MCP
+  registration uses a separate version-1 local digest configuration; mobile has
+  no MCP listener. Desktop builds require Rust 1.88 or newer (the pinned project
+  toolchain satisfies this).
+
 ## [0.4.0] — 2026-08-25
 
 ### Added

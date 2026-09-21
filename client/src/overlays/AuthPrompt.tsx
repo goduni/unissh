@@ -52,6 +52,7 @@ export function AuthPrompt() {
 
   useEffect(() => {
     let dispose: (() => void) | undefined;
+    let cancelDispose: (() => void) | undefined;
     let alive = true;
     (async () => {
       const un = await listen<PromptRequest>("auth-prompt", (e) => {
@@ -75,12 +76,19 @@ export function AuthPrompt() {
           return next;
         });
       });
+      const cancelUn = await listen<number>("auth-prompt-cancelled", e => {
+        queue.current = queue.current.filter(r => r.id !== e.payload);
+        setReq(cur => cur?.id === e.payload ? queue.current.shift() ?? null : cur);
+      });
+      if (alive) cancelDispose = cancelUn;
+      else cancelUn();
       if (alive) dispose = un;
       else un();
     })();
     return () => {
       alive = false;
       dispose?.();
+      cancelDispose?.();
     };
   }, []);
 

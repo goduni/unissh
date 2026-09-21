@@ -89,7 +89,14 @@ pub async fn instance_status(state: State<'_, AppState>) -> ApiResult<InstanceSt
 /// complete or unlocked instance: it only ever removes stray files that cannot
 /// form an openable instance anyway. Surfaced behind an explicit user confirm.
 #[tauri::command]
-pub async fn reset_partial_instance(state: State<'_, AppState>) -> ApiResult<()> {
+pub async fn reset_partial_instance(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    #[cfg(desktop)]
+    crate::mcp::revoke(&app);
+    #[cfg(mobile)]
+    let _ = app;
     // Never touch a complete instance — that's real, recoverable data. Check this
     // FIRST and synchronously, so there is no `.await` window before the guard.
     if state.instance_exists() {
@@ -124,7 +131,11 @@ pub async fn reset_partial_instance(state: State<'_, AppState>) -> ApiResult<()>
 /// first), so a misclick from inside the app can't destroy reachable data.
 /// Idempotent: already-missing files are the desired end state.
 #[tauri::command]
-pub async fn reset_instance(state: State<'_, AppState>) -> ApiResult<()> {
+pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
+    #[cfg(desktop)]
+    crate::mcp::revoke(&app);
+    #[cfg(mobile)]
+    let _ = app;
     // Never wipe an instance the caller can actually open. Check synchronously
     // (no `.await` before it) so there is no unlocked->reset race window.
     let core = state.core.clone();
@@ -279,7 +290,11 @@ pub async fn unlock(
 }
 
 #[tauri::command]
-pub async fn lock(state: State<'_, AppState>) -> ApiResult<()> {
+pub async fn lock(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
+    #[cfg(desktop)]
+    crate::mcp::revoke(&app);
+    #[cfg(mobile)]
+    let _ = app;
     // Drop every live object first (sessions/tunnels/sftp close on drop).
     state.sessions.clear();
     state.tunnels.clear();

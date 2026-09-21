@@ -43,6 +43,7 @@ import { EntryOverlays } from "@/overlays/Entry";
 import { Modals } from "@/overlays/Modals";
 import { ViewRecordings } from "@/views/ViewRecordings";
 import { ViewSnippets } from "@/views/ViewSnippets";
+import { McpApproval } from "@/overlays/McpApproval";
 import { AuthPrompt } from "@/overlays/AuthPrompt";
 import { AgentApproval } from "@/overlays/AgentApproval";
 import { CommandPalette } from "@/overlays/CommandPalette";
@@ -670,6 +671,7 @@ export function App() {
         {showApp && <MobileApp />}
         <EntryOverlays />
         {showApp && <Modals />}
+        {showApp && isDesktopOs() && <McpApproval />}
         {showApp && <AuthPrompt />}
         {showApp && <AgentApproval />}
         {showApp && <CommandPalette />}
@@ -757,7 +759,8 @@ export function App() {
       {/* overlays */}
       <EntryOverlays />
       {showApp && <Modals />}
-      {showApp && <AuthPrompt />}
+      {showApp && isDesktopOs() && <McpApproval />}
+        {showApp && <AuthPrompt />}
       {showApp && <CommandPalette />}
       {showApp && <SettingsOverlay />}
       {showApp && <ImportPreview />}

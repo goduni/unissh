@@ -5,6 +5,8 @@ mod commands;
 mod dto;
 mod error;
 mod keychain;
+#[cfg(desktop)]
+mod mcp;
 mod observers;
 mod platform_tls;
 mod state;
@@ -56,6 +58,18 @@ pub fn run() {
     let (log_level, log_overrides) = log_filter_from_env();
     let mut log_builder = tauri_plugin_log::Builder::new()
         .level(log_level)
+        // SDK diagnostics include raw commands/output, even at info level.
+        .filter(|m| {
+            #[cfg(desktop)]
+            {
+                unissh_mcp::diagnostics_allowed(m.target())
+            }
+            #[cfg(mobile)]
+            {
+                let _ = m;
+                true
+            }
+        })
         // Bounded retention: rotate at ~5 MB and keep the current + one rotated
         // file (~10 MB cap) — enough history to diagnose, but it never grows
         // forever (the plugin default is a tiny 40 KB).
@@ -119,6 +133,12 @@ pub fn run() {
             let prompter =
                 std::sync::Arc::new(crate::observers::AppPrompter::new(app.handle().clone()));
             core.set_auth_prompter(Some(prompter.clone()));
+            #[cfg(desktop)]
+            {
+                let controller = mcp::Controller::new(core.clone(), prompter.clone(), dir.join("mcp.json"));
+                controller.resume();
+                app.manage(controller);
+            }
             app.manage(prompter);
             // Registered up front for the same reason: a forwarded agent that
             // finds no approver refuses every signature, which is safe but looks
@@ -217,6 +237,17 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(desktop)] mcp::mcp_status,
+            #[cfg(desktop)] mcp::mcp_set_enabled,
+            #[cfg(desktop)] mcp::mcp_create_integration,
+            #[cfg(desktop)] mcp::mcp_rotate_integration,
+            #[cfg(desktop)] mcp::mcp_delete_integration,
+            #[cfg(desktop)] mcp::mcp_grant,
+            #[cfg(desktop)] mcp::mcp_revoke,
+            #[cfg(desktop)] mcp::mcp_approve,
+            #[cfg(desktop)] mcp::mcp_targets,
+            #[cfg(desktop)] mcp::mcp_close_session,
+            #[cfg(desktop)] mcp::mcp_cancel_command,
             // account / instance
             commands::instance_status,
             commands::reset_partial_instance,
@@ -428,6 +459,14 @@ pub fn run() {
             // cloud audit (read-only)
             cloud::commands::server_audit_query,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running UniSSH");
+        .build(tauri::generate_context!())
+        .expect("error while building UniSSH")
+        .run(|app, event| {
+            #[cfg(desktop)]
+            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+                mcp::revoke(app);
+            }
+            #[cfg(mobile)]
+            let _ = (app, event);
+        });
 }
