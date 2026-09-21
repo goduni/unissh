@@ -88,6 +88,8 @@ impl core::fmt::Debug for Auth {
 /// Parameters for connecting to a single host.
 #[derive(Clone)]
 pub struct ConnectOptions {
+    /// Refuse unknown host keys before authentication; never learn a key automatically.
+    pub require_pinned: bool,
     /// Host (name or IP).
     pub host: String,
     /// Port.
@@ -123,6 +125,7 @@ impl ConnectOptions {
     /// Constructor.
     pub fn new(host: impl Into<String>, port: u16, user: impl Into<String>, auth: Auth) -> Self {
         Self {
+            require_pinned: false,
             host: host.into(),
             port,
             user: user.into(),
@@ -730,10 +733,21 @@ impl SshClient {
 
     /// Terminates the connection.
     pub async fn disconnect(&self) -> Result<(), TransportError> {
-        self.handle
+        let result = self
+            .handle
             .disconnect(russh::Disconnect::ByApplication, "", "")
-            .await?;
-        Ok(())
+            .await;
+        for hop in self._hops.iter().rev() {
+            let _ = hop
+                .disconnect(russh::Disconnect::ByApplication, "", "")
+                .await;
+        }
+        result.map_err(TransportError::from)
+    }
+
+    /// Whether the target or an owned jump connection has closed. Never reconnects.
+    pub fn is_closed(&self) -> bool {
+        self.handle.is_closed() || self._hops.iter().any(|h| h.is_closed())
     }
 
     /// Opens an interactive shell session with a PTY. The output (PTY stdout/stderr)
@@ -848,6 +862,13 @@ impl ExecHandle {
     /// Writes to the command's stdin.
     pub async fn write_stdin(&self, data: &[u8]) -> Result<(), TransportError> {
         self.write.data_bytes(data.to_vec()).await?;
+        Ok(())
+    }
+
+    /// End stdin without closing the output channel. Noninteractive automation
+    /// calls this immediately; interactive callers may continue using write_stdin.
+    pub async fn close_stdin(&self) -> Result<(), TransportError> {
+        self.write.eof().await?;
         Ok(())
     }
 
@@ -1017,6 +1038,9 @@ async fn establish_tcp(
     remote_forwards: RemoteForwards,
 ) -> Result<Handle<ClientHandler>, TransportError> {
     let expected = known_hosts.get(&opts.host, opts.port)?;
+    if opts.require_pinned && expected.is_none() {
+        return Err(TransportError::HostUntrusted);
+    }
     let observed = Arc::new(Mutex::new(None));
     let handler = ClientHandler {
         expected_host_key: expected.clone(),
@@ -1055,6 +1079,9 @@ where
     R: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let expected = known_hosts.get(&opts.host, opts.port)?;
+    if opts.require_pinned && expected.is_none() {
+        return Err(TransportError::HostUntrusted);
+    }
     let observed = Arc::new(Mutex::new(None));
     let handler = ClientHandler {
         expected_host_key: expected.clone(),

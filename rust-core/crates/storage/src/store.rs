@@ -29,6 +29,7 @@ pub const DB_KEY_LEN: usize = 32;
 /// Storage for a single instance.
 pub struct Storage {
     conn: Connection,
+    automation_epoch: u64,
 }
 
 impl std::fmt::Debug for Storage {
@@ -82,9 +83,51 @@ impl Storage {
         // `check_consistency`, NOT the engine.
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
-        let storage = Storage { conn };
+        static NEXT_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let storage = Storage {
+            conn,
+            automation_epoch: NEXT_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        };
         migrate(&storage.conn)?;
+        // Connection-local only: no on-disk migration or change to signed formats.
+        // Triggers cover every writer, including verified sync and bulk DELETE.
+        storage.conn.execute_batch("CREATE TEMP TABLE automation_revision (revision INTEGER NOT NULL); INSERT INTO automation_revision VALUES (0);")?;
+        for table in [
+            "vaults",
+            "items",
+            "known_hosts",
+            "membership_manifests",
+            "membership_grants",
+            "pinned_member_keys",
+            "vault_epoch_floor",
+            "vault_trust_anchor",
+            "account_state",
+            "cert_meta",
+        ] {
+            for event in ["INSERT", "UPDATE", "DELETE"] {
+                storage.conn.execute_batch(&format!("CREATE TEMP TRIGGER automation_{table}_{event} AFTER {event} ON main.{table} BEGIN UPDATE automation_revision SET revision = revision + 1; END;"))?;
+            }
+        }
         Ok(storage)
+    }
+
+    /// Process-local authorization snapshot. Changes to vault/trust/identity data
+    /// invalidate automation grants conservatively; reads, audit and sync cursors do not.
+    /// Reopening the database always changes the epoch, including lock/unlock.
+    pub fn automation_revision(&self) -> Result<[u64; 2], StorageError> {
+        let revision: i64 =
+            self.conn
+                .query_row("SELECT revision FROM automation_revision", [], |r| r.get(0))?;
+        // TEMP triggers observe this connection. SQLite's data_version also
+        // catches commits from another local connection/process using the same
+        // instance, so those writes cannot leave an old grant valid.
+        let external: i64 = self
+            .conn
+            .pragma_query_value(None, "data_version", |r| r.get(0))?;
+        Ok([
+            self.automation_epoch,
+            (revision as u64).wrapping_add(external as u64),
+        ])
     }
 
     // --- meta (arbitrary open instance metadata) ---

@@ -51,6 +51,7 @@ impl ApiError {
 impl From<FfiError> for ApiError {
     fn from(e: FfiError) -> Self {
         match e {
+            FfiError::HostUntrusted => ApiError::other("Verify the SSH host key in UniSSH first."),
             FfiError::Locked => ApiError::Locked,
             FfiError::InvalidCredentials => ApiError::InvalidCredentials,
             FfiError::NotFound => ApiError::NotFound,

@@ -231,3 +231,16 @@ The contract includes `Core`, `sshExec`, `generateSshKey`, `JumpHost`,
 The [`unissh-cli`](../cli) crate (the `unissh` binary) uses this facade for an end-to-end
 scenario from the terminal: `init → create-vault → gen-key → exec` (with `--jump` for
 ProxyJump).
+
+## Native automation connections
+
+The Rust-only `automation` module resolves saved profiles through the existing
+Personal identity contract and opens a `ManagedConnection` without a PTY. Each
+`exec` uses an independent channel on that transport and closes stdin. Policy
+contains a native cancellation flag, deadline and storage revision; each hop
+requires an already pinned host key. Revision checks guard credential use and
+final dispatch; a native monitor closes invalid connections independently of UI
+polling. The type is not a generic UniFFI dispatcher or a secret-export DTO.
+
+`unissh-automation` owns grants, per-command approval, idempotency and output;
+Core owns authentication, signing, transport and revision serialization.

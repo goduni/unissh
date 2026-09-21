@@ -4958,3 +4958,113 @@ fn a_local_recording_survives_the_auto_lock_that_kills_it() {
         "the recording exists but is missing what the session printed"
     );
 }
+
+#[test]
+fn automation_managed_connection_reuse_stdin_and_revision_invalidation() {
+    use std::sync::{Arc, Mutex};
+    use unissh_ffi::{automation::ConnectionPolicy, CancelToken, ExecObserver, FfiError};
+    #[derive(Default)]
+    struct Output {
+        bytes: Mutex<Vec<u8>>,
+        exit: Mutex<Option<i32>>,
+    }
+    impl ExecObserver for Output {
+        fn on_stdout(&self, bytes: Vec<u8>) {
+            self.bytes.lock().unwrap().extend(bytes);
+        }
+        fn on_stderr(&self, _: Vec<u8>) {}
+        fn on_exit(&self, code: i32) {
+            *self.exit.lock().unwrap() = Some(code);
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".into(), "V".into()).unwrap();
+    let public = core.generate_ssh_key("v".into(), "key".into()).unwrap();
+    let sshd = TestSshd::start(&public);
+    save_profile(&core, "host", "127.0.0.1", sshd.port, "key", &[]);
+    let target = core.automation_target("v".into(), "host".into()).unwrap();
+    let policy = |revision| ConnectionPolicy {
+        revision,
+        cancel: CancelToken::new(),
+        deadline: Instant::now() + Duration::from_secs(30),
+    };
+    assert!(matches!(
+        core.automation_connect(&target, policy(target.revision), None),
+        Err(FfiError::HostUntrusted)
+    ));
+    core.ssh_exec(
+        "127.0.0.1".into(),
+        sshd.port,
+        "root".into(),
+        agent_auth("v", "key"),
+        "true".into(),
+        vec![],
+        None,
+    )
+    .unwrap();
+    let target = core.automation_target("v".into(), "host".into()).unwrap();
+    let connection = core
+        .automation_connect(&target, policy(target.revision), None)
+        .unwrap();
+    let exec = |command: &str| {
+        let out = Arc::new(Output::default());
+        let handle = connection
+            .exec(
+                command,
+                out.clone(),
+                CancelToken::new(),
+                Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !handle.has_exited() {
+            assert!(Instant::now() < until, "managed exec stalled");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(*out.exit.lock().unwrap(), Some(0));
+        let bytes = out.bytes.lock().unwrap().clone();
+        bytes
+    };
+    let first = exec("export UNISSH_MCP_TEST=yes; printf '%s' \"$SSH_CONNECTION\"");
+    assert_eq!(
+        first,
+        exec("test -z \"$UNISSH_MCP_TEST\" && printf '%s' \"$SSH_CONNECTION\"")
+    );
+    assert!(
+        exec("cat").is_empty(),
+        "stdin EOF must complete without user input"
+    );
+    let active = connection
+        .exec(
+            "sleep 10",
+            Arc::new(Output::default()),
+            CancelToken::new(),
+            Instant::now() + Duration::from_secs(20),
+        )
+        .unwrap();
+    active.close();
+    assert!(
+        connection.is_valid(),
+        "channel cancellation preserves a healthy explicit connection"
+    );
+    assert_eq!(exec("printf reused"), b"reused");
+    core.forget_host("127.0.0.1".into(), sshd.port).unwrap();
+    assert!(!connection.is_valid());
+    assert!(connection
+        .exec(
+            "true",
+            Arc::new(Output::default()),
+            CancelToken::new(),
+            Instant::now() + Duration::from_secs(5)
+        )
+        .is_err());
+    assert!(matches!(
+        core.automation_connect(&target, policy(target.revision), None),
+        Err(FfiError::Locked)
+    ));
+    connection.close();
+    core.lock();
+    assert!(matches!(core.automation_revision(), Err(FfiError::Locked)));
+}
