@@ -1,4 +1,4 @@
-//! Bound even idle/partial-header connections before HTTP parsing allocates a task.
+//! Bound socket count and inactivity. HTTP header deadlines are enforced by Hyper.
 use std::{
     future::Future,
     io,
@@ -44,7 +44,7 @@ impl axum::serve::Listener for LimitedListener {
                         LimitedStream {
                             stream,
                             _slot: slot,
-                            deadline: Box::pin(tokio::time::sleep(Duration::from_secs(60))),
+                            deadline: Box::pin(tokio::time::sleep(IDLE_TIMEOUT)),
                         },
                         addr,
                     )
@@ -62,7 +62,13 @@ pub(crate) struct LimitedStream {
     _slot: OwnedSemaphorePermit,
     deadline: Pin<Box<Sleep>>,
 }
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 impl LimitedStream {
+    fn active(&mut self) {
+        self.deadline
+            .as_mut()
+            .reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
+    }
     fn expired(&mut self, cx: &mut Context<'_>) -> bool {
         self.deadline.as_mut().poll(cx).is_ready()
     }
@@ -76,7 +82,12 @@ impl AsyncRead for LimitedStream {
         if self.expired(cx) {
             return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
         }
-        Pin::new(&mut self.stream).poll_read(cx, buf)
+        let before = buf.filled().len();
+        let result = Pin::new(&mut self.stream).poll_read(cx, buf);
+        if matches!(&result, Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            self.active();
+        }
+        result
     }
 }
 impl AsyncWrite for LimitedStream {
@@ -88,7 +99,11 @@ impl AsyncWrite for LimitedStream {
         if self.expired(cx) {
             return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
         }
-        Pin::new(&mut self.stream).poll_write(cx, buf)
+        let result = Pin::new(&mut self.stream).poll_write(cx, buf);
+        if matches!(&result, Poll::Ready(Ok(n)) if *n > 0) {
+            self.active();
+        }
+        result
     }
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.stream).poll_flush(cx)

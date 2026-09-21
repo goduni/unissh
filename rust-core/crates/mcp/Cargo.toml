@@ -11,6 +11,8 @@ description = "Embedded loopback MCP transport for the UniSSH desktop client"
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
 rmcp = { version = "=3.4.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
@@ -25,7 +27,7 @@ tempfile = "3"
 
 [dev-dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
-tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "test-util"] }
 
 # The native log bridge must suppress SDK payloads even at maximum verbosity.
 tracing = { version = "0.1", features = ["log-always"] }

@@ -2,14 +2,20 @@ use std::{
     io,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
+use axum::serve::Listener;
 use axum::{
     extract::{Request, State},
     http::{header, request::Parts, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     Router,
+};
+use hyper_util::{
+    rt::{TokioIo, TokioTimer},
+    service::TowerToHyperService,
 };
 use rmcp::{
     model::{
@@ -84,12 +90,39 @@ impl LocalServer {
         let router = Router::new()
             .route_service("/mcp", service)
             .layer(middleware::from_fn_with_state(guard, authorize));
-        axum::serve(
-            crate::limited_listener::LimitedListener::new(self.listener),
-            router,
-        )
-        .with_graceful_shutdown(cancellation.cancelled_owned())
-        .await
+        // Keep a separate header deadline: refreshing socket inactivity must not
+        // let a client keep incomplete headers alive by trickling individual bytes.
+        let mut listener = crate::limited_listener::LimitedListener::new(self.listener);
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => break,
+                _ = connections.join_next(), if !connections.is_empty() => {},
+                (stream, _) = listener.accept() => {
+                    let service = TowerToHyperService::new(router.clone());
+                    let stop = cancellation.clone();
+                    connections.spawn(async move {
+                        let mut http = hyper::server::conn::http1::Builder::new();
+                        http.timer(TokioTimer::new())
+                            .header_read_timeout(Duration::from_secs(60));
+                        let connection = http.serve_connection(TokioIo::new(stream), service);
+                        tokio::pin!(connection);
+                        tokio::select! {
+                            biased;
+                            _ = stop.cancelled() => {
+                                connection.as_mut().graceful_shutdown();
+                                let _ = connection.await;
+                            },
+                            _ = &mut connection => {},
+                        }
+                    });
+                }
+            }
+        }
+        // Dropping/aborting the owner also drops JoinSet and closes its sockets.
+        while connections.join_next().await.is_some() {}
+        Ok(())
     }
 }
 

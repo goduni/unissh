@@ -180,6 +180,24 @@ impl Broker {
         broker
     }
 
+    /// A timed-out transport can leave a blocking native prompt behind. Signal
+    /// its cancellation before publishing a failed session/run or releasing slots.
+    fn connect(
+        &self,
+        target: &Target,
+        stop: Cancel,
+        deadline: Instant,
+        attribution: &str,
+    ) -> Result<Arc<dyn Connection>> {
+        let result = self
+            .executor
+            .connect(target, stop.clone(), deadline, attribution);
+        if result.is_err() {
+            cancel(&stop);
+        }
+        result
+    }
+
     /// Native picker revision, not an authorization credential. A later lock,
     /// revoke or target mutation invalidates an already displayed grant form.
     pub fn grant_ticket(&self) -> Result<String> {
@@ -476,18 +494,15 @@ impl Broker {
                 let result = session_json(&sid, &state.sessions[&sid]);
                 let broker = self.clone();
                 std::thread::spawn(move || {
-                    let connection =
-                        broker
-                            .executor
-                            .connect(&target, stop.clone(), deadline, &attribution);
+                    let connection = broker.connect(&target, stop.clone(), deadline, &attribution);
                     let mut state = lock(&broker.state);
                     if let Some(s) = state
                         .sessions
                         .get_mut(&sid)
-                        .filter(|s| !cancelled(&s.cancel))
+                        .filter(|s| s.state == "connecting")
                     {
                         match connection {
-                            Ok(c) => {
+                            Ok(c) if !cancelled(&s.cancel) => {
                                 s.connection = Some(Arc::new(LiveConnection {
                                     inner: c,
                                     _slot: permit,
@@ -495,6 +510,12 @@ impl Broker {
                                 }));
                                 s.state = "ready";
                                 s.idle = Instant::now();
+                            }
+                            Ok(c) => {
+                                s.state = "closed";
+                                s.error = Some(ToolError::GrantExpired);
+                                drop(state);
+                                c.close();
                             }
                             Err(e) => {
                                 s.state = "closed";
@@ -807,7 +828,6 @@ impl Broker {
             let connection = match connection {
                 Some(c) => Ok(c),
                 None => broker
-                    .executor
                     .connect(&target, stop.clone(), deadline, &attribution)
                     .map(|c| {
                         let (slot, owner_slot) = slot.expect("implicit slots");
@@ -868,7 +888,7 @@ impl Broker {
                 if run.finished_at.is_none() {
                     finish(
                         run,
-                        if cancelled(&stop) {
+                        if cancelled(&stop) && (connection.is_ok() || run.state == "cancelling") {
                             "cancelled"
                         } else {
                             "failed"

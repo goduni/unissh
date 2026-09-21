@@ -370,3 +370,110 @@ async fn claude_cli_http_interoperability() {
         "CLI did not connect: {text}"
     );
 }
+
+struct DelayedOutput(tokio::sync::Notify);
+impl Backend for DelayedOutput {
+    fn call(&self, _: IntegrationId, _: ToolRequest) -> BackendResult<'_> {
+        Box::pin(async move {
+            self.0.notify_one();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(json!({"state":"running","chunks":[]}))
+        })
+    }
+}
+
+// Paused time with real sockets: keep the runtime awake so only our explicit
+// advances move the clock, instead of automatically jumping to network deadlines.
+struct ManualClock(tokio::task::JoinHandle<()>);
+impl ManualClock {
+    fn start() -> Self {
+        tokio::time::pause();
+        Self(tokio::spawn(async {
+            loop {
+                tokio::task::yield_now().await;
+            }
+        }))
+    }
+}
+impl Drop for ManualClock {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+#[tokio::test]
+async fn reused_connection_finishes_poll_across_original_socket_deadline() {
+    let backend = Arc::new(DelayedOutput(tokio::sync::Notify::new()));
+    let fixture = Fixture::start(backend.clone()).await;
+    fixture
+        .rpc(json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
+        .await;
+    let _clock = ManualClock::start();
+    tokio::time::advance(Duration::from_secs(50)).await;
+    let request = fixture
+        .post(call(
+            "get_command",
+            json!({"run_id":"fixture","wait_ms":30000}),
+        ))
+        .bearer_auth("test-alpha")
+        .timeout(Duration::from_secs(40));
+    let response =
+        tokio::spawn(async move { request.send().await.unwrap().json::<Value>().await.unwrap() });
+    backend.0.notified().await;
+    tokio::time::advance(Duration::from_secs(15)).await;
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !response.is_finished(),
+        "the old socket age must not abort an active poll"
+    );
+    tokio::time::advance(Duration::from_secs(16)).await;
+    assert_eq!(
+        response.await.unwrap()["result"]["structuredContent"]["state"],
+        "running"
+    );
+}
+
+#[tokio::test]
+async fn trickled_headers_still_have_an_absolute_deadline() {
+    let fixture = Fixture::start(Arc::new(NoGrants)).await;
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", fixture.port))
+        .await
+        .unwrap();
+    socket
+        .write_all(
+            format!(
+                "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+                fixture.port
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut headers = Vec::new();
+    while !headers.ends_with(b"\r\n\r\n") {
+        headers.push(socket.read_u8().await.unwrap());
+    }
+    assert!(String::from_utf8_lossy(&headers).contains("401"));
+    // The first response proves this exact connection is accepted and being polled.
+    let _clock = ManualClock::start();
+    socket
+        .write_all(b"GET /mcp HTTP/1.1\r\nX-Slow: ")
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    for _ in 0..2 {
+        tokio::time::advance(Duration::from_secs(20)).await;
+        socket.write_all(b"x").await.unwrap();
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+    }
+    tokio::time::advance(Duration::from_secs(21)).await;
+    let mut response = Vec::new();
+    socket.read_to_end(&mut response).await.unwrap();
+    assert!(response.is_empty() || String::from_utf8_lossy(&response).contains("408"));
+}

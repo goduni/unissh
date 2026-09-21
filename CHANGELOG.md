@@ -39,6 +39,12 @@ starts with `0.`:
   separate connection per command, bounded output polling and cancellation.
   See [setup and security limits](docs/desktop-mcp.md).
 
+### Fixed
+
+- Authentication prompt cancellation preserves other queued requests; MCP command
+  approvals wait for authentication dialogs. Failed MCP connections dismiss their
+  pending authentication prompts, and active HTTP requests survive connection reuse.
+
 ### Compatibility
 
 - Vault format, AAD encodings and encrypted-sync protocol are unchanged. MCP

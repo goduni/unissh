@@ -617,3 +617,77 @@ async fn cancelling_a_run_preserves_only_explicit_connections() {
         b.revoke(None);
     }
 }
+
+#[derive(Default)]
+struct FailedConnect {
+    prompt_cancel: std::sync::Mutex<Option<Cancel>>,
+}
+impl Executor for FailedConnect {
+    fn revision(&self) -> Result<[u64; 2]> {
+        Ok([1, 0])
+    }
+    fn resolve(&self, vault: &str, profile: &str) -> Result<Target> {
+        Fake::default().resolve(vault, profile)
+    }
+    fn connect(
+        &self,
+        _: &Target,
+        stop: Cancel,
+        _: Instant,
+        _: &str,
+    ) -> Result<Arc<dyn Connection>> {
+        // A timed-out SSH future leaves the blocking prompter holding this flag.
+        *self.prompt_cancel.lock().unwrap() = Some(stop);
+        Err(ToolError::TargetUnavailable)
+    }
+}
+
+#[tokio::test]
+async fn failed_connections_cancel_native_prompts_in_both_modes() {
+    for explicit in [true, false] {
+        let executor = Arc::new(FailedConnect::default());
+        let broker = Broker::new(executor.clone());
+        let target_id = target(&broker, "a").await;
+        if explicit {
+            call(
+                &broker,
+                "a",
+                "open_ssh_session",
+                json!({"target_id":target_id,"request_key":"open"}),
+            )
+            .await
+            .unwrap();
+        } else {
+            let run = call(&broker, "a", "run_command", json!({"session_id":null,"target_id":target_id,"command":"true","request_key":"run"})).await.unwrap();
+            broker
+                .approve(run["run_id"].as_str().unwrap(), true)
+                .unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let review = broker.review();
+                let done = if explicit {
+                    review["sessions"][0]["state"] == "closed"
+                } else {
+                    review["runs"][0]["state"] == "failed"
+                };
+                if done {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            executor
+                .prompt_cancel
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .load(Ordering::SeqCst),
+            "the closed operation must dismiss its orphaned native prompt"
+        );
+    }
+}

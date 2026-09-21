@@ -5,6 +5,7 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
 import { mcpApprove, visibleCommand } from "@/bridge/mcp";
+import { useAuthPrompts } from "@/store/authPrompt";
 import { clearMcp, refreshMcp, useMcp } from "@/store/mcp";
 
 export function McpApproval() {
@@ -12,13 +13,14 @@ export function McpApproval() {
   const status = useMcp(s => s.status); const failed = useMcp(s => s.failed);
   const [selected, setSelected] = useState<string | null>(null); const [busy, setBusy] = useState(false); const [error, setError] = useState(false);
   useEffect(() => { void refreshMcp(); const timer = setInterval(() => { void refreshMcp(); }, 1000); return () => { clearInterval(timer); clearMcp(); }; }, []);
+  const authenticating = useAuthPrompts(state => state.requests.length > 0);
   const pending = status?.activity.runs.filter(r => r.state === "awaiting_approval") ?? [];
   // Newly arriving requests must never replace the command currently being reviewed.
   const selectedRun = pending.find(r => r.run_id === selected);
   useEffect(() => {
     if (!selectedRun) { setSelected(pending[0]?.run_id ?? null); setError(false); }
   }, [selectedRun, pending[0]?.run_id]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!selectedRun || selectedRun.command === undefined || !selectedRun.target) return null;
+  if (authenticating || !selectedRun || selectedRun.command === undefined || !selectedRun.target) return null;
   const run = selectedRun; const target = run.target!;
   const decide = async (allowed: boolean) => {
     if (busy) return; setBusy(true); setError(false);

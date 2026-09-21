@@ -5366,6 +5366,8 @@ dependencies = [
  "axum",
  "base64 0.23.0",
  "getrandom 0.4.3",
+ "hyper",
+ "hyper-util",
  "log",
  "reqwest",
  "rmcp",

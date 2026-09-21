@@ -9,7 +9,7 @@
 // the server's `echo` flag — that flag is the server stating whether the answer
 // is a secret.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "@/i18n";
@@ -18,20 +18,7 @@ import { Btn, Field, Input, NO_AUTOCORRECT } from "@/components/primitives";
 import { useDialogFocus } from "@/components/a11y";
 import { rem, TEXT } from "@/theme/tokens";
 
-interface PromptField {
-  prompt: string;
-  echo: boolean;
-}
-
-interface PromptRequest {
-  id: number;
-  host: string;
-  port: number;
-  user: string;
-  name: string;
-  instruction: string;
-  prompts: PromptField[];
-}
+import { clearAuthPrompts, dismissAuthPrompt, enqueueAuthPrompt, useAuthPrompts, type AuthPromptRequest } from "@/store/authPrompt";
 
 async function answer(id: number, answers: string[] | null) {
   try {
@@ -44,18 +31,15 @@ async function answer(id: number, answers: string[] | null) {
 }
 
 export function AuthPrompt() {
-  const [req, setReq] = useState<PromptRequest | null>(null);
-  // A queue, not a single slot: a fleet run across many hosts can raise several
-  // prompts, and dropping the later ones would leave those connections blocked
-  // with nothing on screen to explain why.
-  const queue = useRef<PromptRequest[]>([]);
+  const req = useAuthPrompts(state => state.requests[0]);
 
   useEffect(() => {
     let dispose: (() => void) | undefined;
     let cancelDispose: (() => void) | undefined;
     let alive = true;
     (async () => {
-      const un = await listen<PromptRequest>("auth-prompt", (e) => {
+      const un = await listen<AuthPromptRequest>("auth-prompt", (e) => {
+        if (!alive) return;
         const next = e.payload;
         // A round with no fields AND no text is not a question. RFC 4256 allows
         // num-prompts=0 so a server can say something mid-authentication, and
@@ -68,17 +52,10 @@ export function AuthPrompt() {
           void answer(next.id, []);
           return;
         }
-        setReq((cur) => {
-          if (cur) {
-            queue.current.push(next);
-            return cur;
-          }
-          return next;
-        });
+        enqueueAuthPrompt(next);
       });
       const cancelUn = await listen<number>("auth-prompt-cancelled", e => {
-        queue.current = queue.current.filter(r => r.id !== e.payload);
-        setReq(cur => cur?.id === e.payload ? queue.current.shift() ?? null : cur);
+        if (alive) dismissAuthPrompt(e.payload);
       });
       if (alive) cancelDispose = cancelUn;
       else cancelUn();
@@ -89,6 +66,7 @@ export function AuthPrompt() {
       alive = false;
       dispose?.();
       cancelDispose?.();
+      clearAuthPrompts();
     };
   }, []);
 
@@ -101,12 +79,12 @@ export function AuthPrompt() {
     <PromptDialog
       key={req.id}
       req={req}
-      onDone={() => setReq(queue.current.shift() ?? null)}
+      onDone={() => dismissAuthPrompt(req.id)}
     />
   );
 }
 
-function PromptDialog({ req, onDone }: { req: PromptRequest; onDone: () => void }) {
+function PromptDialog({ req, onDone }: { req: AuthPromptRequest; onDone: () => void }) {
   const { t } = useTranslation();
   const [values, setValues] = useState<string[]>(() => req.prompts.map(() => ""));
   const [busy, setBusy] = useState(false);
