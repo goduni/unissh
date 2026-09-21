@@ -1,0 +1,32 @@
+[package]
+name = "unissh-mcp"
+version.workspace = true
+edition.workspace = true
+# rmcp 3.x requires 1.88; the repository toolchain is pinned to 1.94.
+rust-version = "1.88"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Embedded loopback MCP transport for the UniSSH desktop client"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+rmcp = { version = "=3.4.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["net", "rt", "sync", "time", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+sha2 = "0.10"
+subtle = "2"
+getrandom = "0.4"
+base64 = "0.23"
+tempfile = "3"
+
+[dev-dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread"] }
+
+# The native log bridge must suppress SDK payloads even at maximum verbosity.
+tracing = { version = "0.1", features = ["log-always"] }
+log = "0.4"

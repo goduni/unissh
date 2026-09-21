@@ -62,7 +62,7 @@ jobs:
       - name: Install build deps (OpenSSL + C toolchain for bundled-sqlcipher)
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev clang
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --features unissh-automation/core -- -D warnings
       # Logs must carry metadata only — fail if a log/print call interpolates a
       # secret-bearing value (see SECURITY.md "Logging and redaction").
       - name: Log redaction guard
@@ -87,7 +87,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # rust:bookworm ships a recent stable toolchain; rust-toolchain.toml (1.94)
       # is honored by cargo via rustup inside the image.
-      - run: cargo test --workspace
+      - run: cargo test --workspace --features unissh-automation/core
+
+  mcp-platform:
+    name: MCP loopback (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      # Pure adapter tests need neither a display nor SSH credentials. They cover
+      # real loopback sockets, native digest persistence, guards and SDK logging.
+      - run: cargo test -p unissh-mcp
 
   deny:
     name: cargo-deny (supply chain)
