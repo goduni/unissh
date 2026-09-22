@@ -59,12 +59,8 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
-      # `npm ci` here, unlike client.yml's `rm -rf node_modules && npm install`.
-      # That dance exists because a lockfile resolved on one OS makes npm skip the
-      # other OSes' native optionalDependencies (npm/cli#4828) — a cross-platform
-      # matrix problem. This job is Linux-only, on the platform the lockfile was
-      # resolved on, so the deterministic install is both correct and faster.
-      - run: npm ci --no-audit --no-fund
+      # Use the same locked dependency tree as the native client builds.
+      - run: npm ci --include=optional --no-audit --no-fund
         working-directory: client
 
       - run: npm run lint
