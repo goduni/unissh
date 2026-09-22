@@ -383,7 +383,8 @@ impl Broker {
         Ok(())
     }
 
-    /// Revoke admission and output first. Cleanup is dispatched without the state lock.
+    /// Invalidate live admission/output; saved consent is retained. Native explicit
+    /// revocation uses `forget_access`. Cleanup runs without the state lock.
     pub fn revoke(&self, owner: Option<&str>) {
         let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
         self.revocation_epoch.fetch_add(1, Ordering::SeqCst);
@@ -424,6 +425,22 @@ impl Broker {
         }
     }
 
+    fn revoke_expired(&self, owner: &str, epoch: &str) {
+        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        // The sweep's revision/owner list may predate a concurrent native grant.
+        // Recheck both identity and expiry under the same gate as grant publication.
+        let revision = self.executor.revision().ok();
+        let expired = lock(&self.state).grants.get(owner).is_some_and(|g| {
+            g.epoch == epoch
+                && (g.until.is_some_and(|until| Instant::now() >= until)
+                    || Some(g.revision) != revision)
+        });
+        if expired {
+            self.revocation_epoch.fetch_add(1, Ordering::SeqCst);
+            self.revoke_inner(Some(owner));
+        }
+    }
+
     fn sweep(&self) {
         let revision = self.executor.revision().ok();
         let now = Instant::now();
@@ -433,10 +450,10 @@ impl Broker {
             .filter(|(_, g)| {
                 g.until.is_some_and(|until| now >= until) || Some(g.revision) != revision
             })
-            .map(|(o, _)| o.clone())
+            .map(|(o, g)| (o.clone(), g.epoch.clone()))
             .collect();
-        for owner in expired {
-            self.revoke(Some(&owner));
+        for (owner, epoch) in expired {
+            self.revoke_expired(&owner, &epoch);
         }
         self.restore_access();
         // Never call Core while holding the broker state: exec callbacks acquire
@@ -1444,6 +1461,30 @@ mod deadlines {
         .data(false, vec![1, 2, 3]);
         assert_eq!(lock(&b.state).retained_bytes, 0);
         assert_eq!(b.approve(&rid, true), Err(ToolError::ApprovalExpired));
+        assert!(b.review()["grants"].as_array().unwrap().is_empty());
+    }
+    #[test]
+    fn stale_expiry_work_cannot_revoke_replaced_or_currently_valid_grants() {
+        let b = Broker::new(Arc::new(ExecutorFixture));
+        b.grant("a", "old".into(), vec![("v".into(), "p".into())], 30)
+            .unwrap();
+        let old_epoch = lock(&b.state).grants["a"].epoch.clone();
+        b.grant(
+            "a",
+            "replacement".into(),
+            vec![("v".into(), "p".into())],
+            None,
+        )
+        .unwrap();
+        b.revoke_expired("a", &old_epoch);
+        let current = lock(&b.state).grants["a"].epoch.clone();
+        // Also handle a stale revision read followed by a snapshot of the new grant.
+        b.revoke_expired("a", &current);
+        assert_eq!(b.review()["grants"][0]["label"], "replacement");
+        // Genuine expiration is still enforced by that same admission path.
+        lock(&b.state).grants.get_mut("a").unwrap().until =
+            Some(Instant::now() - Duration::from_secs(1));
+        b.revoke_expired("a", &current);
         assert!(b.review()["grants"].as_array().unwrap().is_empty());
     }
 }
