@@ -17,3 +17,21 @@ describe("MCP recording extension", () => {
       .toMatchObject({ cwd: null, outcome: "interrupted", exitCode: null, truncated: true });
   });
 });
+
+import { exportRecording } from "./recordings";
+
+describe("recording exports", () => {
+  const cast = JSON.stringify({ version: 2, unissh_mcp: { version: 1, application: "Agent", command: "printf hi", cwd: null, outcome: "completed", exit_code: 0, truncated: false } }) + '\n[0,"o","hello"]\n[1,"o"," world\\n"]\n';
+  it("preserves raw JSON events and leaves cast exports byte-identical", () => {
+    expect(exportRecording(cast, "cast")).toBe(cast);
+    const json = JSON.parse(exportRecording(cast, "json"));
+    expect(json.header.unissh_mcp.command).toBe("printf hi");
+    expect(json.events).toHaveLength(2);
+  });
+  it("exports readable command context and output without terminal escapes", () => {
+    const text = exportRecording(cast, "txt");
+    expect(text).toContain("Command: printf hi");
+    expect(text).toContain("hello world\n");
+    expect(exportRecording('{"version":2}\n[0,"o","\\u001b[31mred\\u001b[0m"]\n', "txt")).toBe("red");
+  });
+});

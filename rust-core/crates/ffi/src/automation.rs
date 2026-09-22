@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 pub struct Target {
     pub vault_id: String,
     pub profile_id: String,
+    pub vault: String,
+    pub groups: Vec<String>,
+    pub tags: Vec<String>,
     pub label: String,
     pub host: String,
     pub port: u16,
@@ -72,6 +75,40 @@ impl Core {
     ) -> Result<Target, FfiError> {
         let revision = self.automation_revision()?;
         let p = self.get_connection(vault_id.clone(), profile_id.clone())?;
+        let vault = self
+            .list_vaults()?
+            .into_iter()
+            .find(|v| v.vault_id == vault_id)
+            .map(|v| v.name)
+            .unwrap_or_default();
+        let all_groups = self.list_groups(vault_id.clone())?;
+        // Include ancestors and nested membership without exposing sibling inventory.
+        let mut included = std::collections::BTreeSet::new();
+        loop {
+            let before = included.len();
+            for group in &all_groups {
+                if group
+                    .member_ids
+                    .iter()
+                    .any(|id| id == &profile_id || included.contains(id))
+                {
+                    included.insert(group.group_id.clone());
+                }
+                if included.contains(&group.group_id) {
+                    if let Some(parent) = &group.parent_id {
+                        included.insert(parent.clone());
+                    }
+                }
+            }
+            if before == included.len() {
+                break;
+            }
+        }
+        let groups = all_groups
+            .into_iter()
+            .filter(|g| included.contains(&g.group_id))
+            .map(|g| g.label)
+            .collect();
         let prompt_password = matches!(p.auth, ProfileAuth::PromptPassword);
         let (user, auth) = if matches!(p.auth, ProfileAuth::Personal) {
             let destination = self.personal_destination(
@@ -95,6 +132,9 @@ impl Core {
             return Err(FfiError::Locked);
         }
         Ok(Target {
+            vault,
+            groups,
+            tags: p.tags,
             vault_id,
             profile_id,
             label: p.label,
@@ -232,6 +272,17 @@ impl ManagedConnection {
         command_cancel: Arc<CancelToken>,
         deadline: Instant,
     ) -> Result<Arc<ManagedExec>, FfiError> {
+        self.exec_with_input(command, None, observer, command_cancel, deadline)
+    }
+
+    pub fn exec_with_input(
+        &self,
+        command: &str,
+        stdin: Option<&str>,
+        observer: Arc<dyn ExecObserver>,
+        command_cancel: Arc<CancelToken>,
+        deadline: Instant,
+    ) -> Result<Arc<ManagedExec>, FfiError> {
         let _admission = lock_recover(&self.admission);
         let state = lock_recover(&self.state);
         self.policy.check(state.as_ref().ok_or(FfiError::Locked)?)?;
@@ -241,6 +292,7 @@ impl ManagedConnection {
         let result = self.rt.block_on(async {
             let dispatch = async {
                 let handle = self.client.exec_stream(command, Arc::new(ExecSinkBridge(observer))).await?;
+                if let Some(input) = stdin { handle.write_stdin(input.as_bytes()).await?; }
                 handle.close_stdin().await?;
                 Ok::<_, unissh_ssh_transport::TransportError>(handle)
             };

@@ -4,6 +4,12 @@
 
 export const en = {
   mcp: {
+    commandCeiling: "Commands up to {{count}} min",
+    commandLimit: "Maximum command duration",
+    commandMinutes: "{{count}} min",
+    commandLimitHint: "Each command can run for up to this limit (1–1440 minutes). The agent may request less time. Access expiry still applies.",
+    environment: "Environment variables",
+    standardInput: "Standard input",
     "approvalMode": "Command confirmation",
     "approvalModes": { "manual": "Confirm in UniSSH", "trusted": "Trust application" },
     "approvalHints": {
@@ -256,12 +262,25 @@ export const en = {
   },
 
   recordings: {
+    mcpSettings: "MCP recording settings",
+    settingsSaved: "Recording settings saved",
+    captureLimit: "Output per command (16–512 KiB)",
+    retention: "Keep MCP recordings",
+    keepForever: "Until I delete them",
+    keepDays: "For a number of days",
+    days: "Days (1–3650)",
+    settingsHint: "Applies on this device to hosts with recording enabled. Capture also stops at 8,192 output chunks. Terminal recordings are unaffected.",
+    retentionHint: "Older MCP recordings are deleted when opening recordings or saving a new recording. Deletions sync to other devices. Saving applies this rule to existing recordings too.",
+    search: "Search host, application or command",
+    failuresOnly: "Unsuccessful MCP commands",
+    exportFormat: "Export format",
+    noMatches: "No recordings match these filters.",
     open: "Recording",
     capturing: "Recording…",
     saveFailed: "Recording could not be saved",
     cwd: "Working directory",
     exitCode: "Exit {{code}}",
-    mcpTruncated: "Partial output — the command reached the recording limit (512 KiB or 8,192 output chunks).",
+    mcpTruncated: "Partial output — the configured capture limit or 8,192 output chunks was reached.",
     outcome: { completed: "Completed", failed: "Failed / outcome unknown", cancelled: "Cancelled", interrupted: "Interrupted by vault lock" },
     empty: "No recordings yet. Turn on “Record sessions” for a host to start capturing.",
     play: "Play",

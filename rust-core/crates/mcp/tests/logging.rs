@@ -59,7 +59,7 @@ async fn sdk_payloads_never_reach_the_embedding_log_sink() {
     let response: Value = client.post(&url)
         .bearer_auth("TOKEN_SENTINEL_9c31")
         .header("Accept", "application/json, text/event-stream")
-        .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"session_id":null,"target_id":"t","request_key":"k","command":"COMMAND_SENTINEL_738c"}}}))
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"session_id":null,"target_id":"t","request_key":"k","command":"COMMAND_SENTINEL_738c","stdin":"STDIN_SENTINEL_410a","env":{"VALUE":"ENV_SENTINEL_420b"}}}}))
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(
         response["result"]["structuredContent"]["sentinel"],
@@ -76,6 +76,8 @@ async fn sdk_payloads_never_reach_the_embedding_log_sink() {
     for secret in [
         "TOKEN_SENTINEL",
         "COMMAND_SENTINEL",
+        "STDIN_SENTINEL",
+        "ENV_SENTINEL",
         "OUTPUT_SENTINEL",
         "NOTIFICATION_SENTINEL",
         "FILTER_SENTINEL",

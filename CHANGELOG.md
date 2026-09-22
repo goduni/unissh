@@ -34,6 +34,14 @@ starts with `0.`:
 
 ### Added
 
+- MCP host context, caller-owned command discovery, access/limit diagnostics,
+  bounded stdin and environment variables, native command-duration limits and
+  opt-in progress notifications during pending calls.
+- Host-enabled encrypted MCP command recordings with playback, search, failure
+  filtering, CAST/TXT/JSON export and device-local capture/retention controls.
+  Retention is disabled by default; terminal recordings are unaffected. Existing
+  recordings remain readable; vault encryption and server protocols are unchanged.
+
 - Opt-in embedded desktop MCP over authenticated loopback HTTP, with temporary
   host grants, per-command native confirmation, persistent SSH sessions or a
   separate connection per command, bounded output polling and cancellation.

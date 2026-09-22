@@ -12,6 +12,84 @@ use zeroize::Zeroize;
 const MAX_BYTES: usize = 512 * 1024;
 const MAX_EVENTS: usize = 8192;
 
+/// Device-local native preferences. No MCP tool may change capture or retention.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordingPreferences {
+    pub max_bytes: u32,
+    /// None keeps recordings until explicitly deleted. Cleanup runs on list/save.
+    pub retention_days: Option<u32>,
+}
+impl Default for RecordingPreferences {
+    fn default() -> Self {
+        Self {
+            max_bytes: MAX_BYTES as u32,
+            retention_days: None,
+        }
+    }
+}
+const PREFERENCES_KEY: &str = "mcp.recording_preferences.v1";
+fn preferences(state: &CoreState) -> Result<RecordingPreferences, FfiError> {
+    state
+        .storage
+        .get_meta(PREFERENCES_KEY)
+        .map_err(FfiError::other)?
+        .map(|bytes| serde_json::from_slice(&bytes).map_err(FfiError::other))
+        .transpose()
+        .map(|p| p.unwrap_or_default())
+}
+impl Core {
+    pub fn mcp_recording_preferences(&self) -> Result<RecordingPreferences, FfiError> {
+        self.with_state(preferences)
+    }
+    pub fn set_mcp_recording_preferences(
+        &self,
+        value: RecordingPreferences,
+    ) -> Result<(), FfiError> {
+        if !(16 * 1024..=MAX_BYTES as u32).contains(&value.max_bytes)
+            || value
+                .retention_days
+                .is_some_and(|days| !(1..=3650).contains(&days))
+        {
+            return Err(FfiError::other("invalid recording preferences"));
+        }
+        self.with_state(|state| {
+            state
+                .storage
+                .set_meta(
+                    PREFERENCES_KEY,
+                    &serde_json::to_vec(&value).map_err(FfiError::other)?,
+                )
+                .map_err(FfiError::other)
+        })
+    }
+}
+/// Only authenticated/decrypted MCP recording metadata can authorize retention.
+/// Tombstones propagate through normal encrypted vault sync.
+pub(super) fn prune(state: &CoreState, vault: &Vault<'_>) -> Result<(), FfiError> {
+    let Some(days) = preferences(state)?.retention_days else {
+        return Ok(());
+    };
+    let cutoff = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_sub(u64::from(days) * 86400);
+    for item in vault.list_items().map_err(FfiError::other)? {
+        if item.item_type != ITEM_TYPE_RECORDING {
+            continue;
+        }
+        if let Some(record) = vault.get_item(&item.item_id).map_err(FfiError::other)? {
+            if let Ok(meta) = serde_json::from_slice::<StoredRecordingMeta>(&record.content) {
+                if meta.mcp.is_some() && meta.started_unix < cutoff {
+                    vault.delete_item(&item.item_id).map_err(map_vault_err)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 struct Event {
     time: f64,
     stderr: bool,
@@ -24,6 +102,8 @@ struct Buffer {
     exit: Option<Option<u32>>,
     status: &'static str,
     command: Zeroizing<String>,
+    stdin: Option<Zeroizing<String>>,
+    env: Environment,
     cwd: Option<Zeroizing<String>>,
 }
 
@@ -40,6 +120,7 @@ pub struct CommandRecording {
     started_unix: u64,
     start: Instant,
     buffer: Mutex<Buffer>,
+    max_bytes: usize,
 }
 
 impl Core {
@@ -52,6 +133,30 @@ impl Core {
         application: &str,
         command: &str,
         cwd: Option<&str>,
+    ) -> Result<Option<Arc<CommandRecording>>, FfiError> {
+        self.automation_recording_with_input(
+            target,
+            run_id,
+            application,
+            command,
+            cwd,
+            None,
+            &BTreeMap::new(),
+        )
+    }
+
+    /// Capture all immutable inputs before registering the recorder, so a
+    /// concurrent Core lock cannot persist a partially initialized transcript.
+    #[allow(clippy::too_many_arguments)]
+    pub fn automation_recording_with_input(
+        &self,
+        target: &automation::Target,
+        run_id: &str,
+        application: &str,
+        command: &str,
+        cwd: Option<&str>,
+        stdin: Option<&str>,
+        env: &BTreeMap<String, String>,
     ) -> Result<Option<Arc<CommandRecording>>, FfiError> {
         let mut guard = self.locked_state();
         let state = guard.as_mut().ok_or(FfiError::Locked)?;
@@ -84,7 +189,9 @@ impl Core {
         {
             return Err(FfiError::other("recording already exists"));
         }
+        let max_bytes = preferences(state)?.max_bytes as usize;
         let recording = Arc::new(CommandRecording {
+            max_bytes,
             state: Arc::downgrade(&self.state),
             vault_id,
             vault_key,
@@ -106,6 +213,8 @@ impl Core {
                 exit: None,
                 status: "recording",
                 command: Zeroizing::new(command.into()),
+                stdin: stdin.map(|s| Zeroizing::new(s.to_owned())),
+                env: Environment(env.clone()),
                 cwd: cwd.map(|s| Zeroizing::new(s.into())),
             }),
         });
@@ -123,7 +232,7 @@ impl CommandRecording {
         if b.status != "recording" || bytes.is_empty() {
             return;
         }
-        let keep = bytes.len().min(MAX_BYTES.saturating_sub(b.bytes));
+        let keep = bytes.len().min(self.max_bytes.saturating_sub(b.bytes));
         if keep == 0 || b.events.len() == MAX_EVENTS {
             b.truncated = true;
             return;
@@ -177,6 +286,7 @@ impl CommandRecording {
         };
         let meta = McpRecordingMeta {
             application: self.application.clone(),
+            command: Some(b.command.to_string()),
             outcome: outcome.into(),
             exit_code: b.exit.flatten(),
         };
@@ -187,6 +297,7 @@ impl CommandRecording {
                 "title": self.label,
                 "unissh_mcp": { "version": 1, "application": self.application,
                     "host": self.host, "port": self.port, "user": self.user,
+                    "stdin": b.stdin.as_ref().map(|s| s.as_str()), "env": &*b.env,
                     "command": b.command.as_str(), "cwd": b.cwd.as_deref().map(|s| s.as_str()),
                     "outcome": outcome, "exit_code": meta.exit_code,
                     "truncated": b.truncated, "duration_secs": duration,
@@ -236,6 +347,9 @@ impl CommandRecording {
             vault
                 .put_item(self.recording_id.as_bytes(), ITEM_TYPE_RECORDING, &json)
                 .map_err(FfiError::other)?;
+            if prune(state, &vault).is_err() {
+                log::warn!("MCP recording retention cleanup failed");
+            }
             Ok(())
         })();
         b.status = if result.is_ok() { "saved" } else { "failed" };
@@ -245,6 +359,13 @@ impl CommandRecording {
         stored.asciicast.zeroize();
         b.events.clear();
         b.command.zeroize();
+        b.stdin = None;
+        b.env.zeroize();
+        if let Some(meta) = &mut stored.mcp {
+            if let Some(command) = &mut meta.command {
+                command.zeroize();
+            }
+        }
         b.cwd = None;
     }
 }
@@ -295,9 +416,79 @@ fn preview(pending: &mut Vec<u8>, bytes: &[u8], final_chunk: bool) -> String {
     safe
 }
 
+/// BTreeMap keys cannot be mutated in place; wipe every secret value before drop.
+#[derive(Clone)]
+struct Environment(BTreeMap<String, String>);
+impl std::ops::Deref for Environment {
+    type Target = BTreeMap<String, String>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Environment {
+    fn zeroize(&mut self) {
+        for value in self.0.values_mut() {
+            zeroize::Zeroize::zeroize(value);
+        }
+        self.0.clear();
+    }
+}
+impl Drop for Environment {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retention_is_disabled_by_default_and_never_deletes_terminal_recordings() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("db").to_str().unwrap().into(),
+            dir.path().join("keyset").to_str().unwrap().into(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".into(), "Vault".into()).unwrap();
+        core.with_state(|state| {
+            let vault = Vault::open(&state.storage, &state.keyset, b"v").map_err(FfiError::other)?;
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            for (id, mcp, started) in [("old-mcp",true,1),("old-terminal",false,1),("recent-mcp",true,now)] {
+                let body = serde_json::json!({"label":"recording","host":"example","user":"user","started_unix":started,
+                    "duration_secs":1.0,"truncated":false,"asciicast":"{\"version\":2,\"unissh_mcp\":{\"command\":\"legacy command\"}}\n",
+                    "mcp":if mcp { serde_json::json!({"application":"Agent","outcome":"completed","exitCode":0}) } else { serde_json::Value::Null }});
+                vault.put_item(id.as_bytes(), ITEM_TYPE_RECORDING, &serde_json::to_vec(&body).unwrap()).map_err(FfiError::other)?;
+            }
+            Ok(())
+        }).unwrap();
+        let records = core.list_recordings("v".into()).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records
+                .iter()
+                .find(|r| r.recording_id == "old-mcp")
+                .unwrap()
+                .mcp
+                .as_ref()
+                .unwrap()
+                .command
+                .as_deref(),
+            Some("legacy command")
+        );
+        core.set_mcp_recording_preferences(RecordingPreferences {
+            max_bytes: MAX_BYTES as u32,
+            retention_days: Some(30),
+        })
+        .unwrap();
+        let revision = core.automation_revision().unwrap();
+        let remaining = core.list_recordings("v".into()).unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert!(remaining.iter().any(|r| r.recording_id == "old-terminal"));
+        assert!(remaining.iter().any(|r| r.recording_id == "recent-mcp"));
+        assert_eq!(core.automation_revision().unwrap(), revision);
+    }
+
     #[test]
     fn preview_handles_split_utf8_binary_and_terminal_controls() {
         let mut p = Vec::new();

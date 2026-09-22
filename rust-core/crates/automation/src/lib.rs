@@ -43,6 +43,9 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub struct TargetInfo {
     pub vault_id: String,
     pub profile_id: String,
+    pub vault: String,
+    pub groups: Vec<String>,
+    pub tags: Vec<String>,
     pub label: String,
     pub host: String,
     pub port: u16,
@@ -67,6 +70,7 @@ pub trait Connection: Send + Sync {
     fn exec(
         &self,
         command: &str,
+        stdin: Option<&str>,
         sink: Arc<dyn Output>,
         cancel: Cancel,
         deadline: Instant,
@@ -82,6 +86,7 @@ pub trait Recording: Send + Sync {
     fn review(&self) -> Value;
 }
 pub trait Executor: Send + Sync + 'static {
+    #[allow(clippy::too_many_arguments)]
     fn record(
         &self,
         _target: &Target,
@@ -89,6 +94,8 @@ pub trait Executor: Send + Sync + 'static {
         _application: &str,
         _command: &str,
         _cwd: Option<&str>,
+        _stdin: Option<&str>,
+        _env: &BTreeMap<String, String>,
     ) -> Result<Option<Arc<dyn Recording>>> {
         Ok(None)
     }
@@ -117,6 +124,7 @@ pub enum ApprovalMode {
 }
 
 struct Grant {
+    max_timeout_ms: u32,
     approval_mode: ApprovalMode,
     slots: Arc<Semaphore>,
     epoch: String,
@@ -145,6 +153,8 @@ struct Run {
     session: Option<String>,
     key: String,
     command: Zeroizing<String>,
+    stdin: Option<Zeroizing<String>>,
+    env: Environment,
     cwd: Option<Zeroizing<String>>,
     timeout_ms: u32,
     state: &'static str,
@@ -271,6 +281,31 @@ impl Broker {
         ticket: &str,
         approval_mode: ApprovalMode,
     ) -> Result<()> {
+        self.grant_with_limits(
+            owner,
+            label,
+            targets,
+            seconds,
+            ticket,
+            approval_mode,
+            600_000,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn grant_with_limits(
+        &self,
+        owner: &str,
+        label: String,
+        targets: Vec<(String, String)>,
+        seconds: Option<u32>,
+        ticket: &str,
+        approval_mode: ApprovalMode,
+        max_timeout_ms: u32,
+    ) -> Result<()> {
+        if !(1..=86_400_000).contains(&max_timeout_ms) {
+            return Err(ToolError::TimeoutLimit);
+        }
         if owner.is_empty() || targets.is_empty() || targets.len() > 64 || seconds == Some(0) {
             return Err(ToolError::TargetUnavailable);
         }
@@ -306,6 +341,7 @@ impl Broker {
         lock(&self.state).grants.insert(
             owner.into(),
             Grant {
+                max_timeout_ms,
                 approval_mode,
                 slots: Arc::new(Semaphore::new(4)),
                 epoch: id(),
@@ -442,6 +478,30 @@ impl Broker {
 
     fn request(self: &Arc<Self>, owner: String, request: ToolRequest) -> Result<Value> {
         self.sweep();
+        if let ToolRequest::GetAccessStatus(r) = &request {
+            if r.cursor.is_some() {
+                return Err(ToolError::TargetUnavailable);
+            }
+            let revision = self.executor.revision();
+            let state = lock(&self.state);
+            let grant = state.grants.get(&owner).filter(|g| {
+                revision.as_ref().is_ok_and(|r| *r == g.revision)
+                    && g.until.is_none_or(|d| Instant::now() < d)
+            });
+            let error = revision
+                .err()
+                .or_else(|| grant.is_none().then_some(ToolError::GrantRequired));
+            let max = grant.map_or(600_000, |g| g.max_timeout_ms);
+            return Ok(
+                json!({"status": error.map_or("ready".to_string(), |e| serde_json::to_value(e).unwrap().as_str().unwrap().to_owned()),
+                "message": error.map_or("Access is ready.", ToolError::message),
+                "approval_mode": grant.map(|g| g.approval_mode),
+                "remaining_seconds": grant.and_then(|g| g.until).map(|d| d.saturating_duration_since(Instant::now()).as_secs()),
+                "limits": {"max_timeout_ms": max, "default_timeout_ms": 120_000u32.min(max), "max_connections": 4, "max_active_commands": 8, "max_retained_commands": RECORDS_PER_GRANT, "max_session_records":32,
+                    "output_per_run_bytes":OUTPUT_PER_RUN,"output_page_bytes":PAGE_BYTES,
+                    "output_retention_seconds":600, "idle_session_seconds":300, "stdin_bytes":32768, "env_bytes":16384}}),
+            );
+        }
         // Authentication alone never unlocks Core or creates a grant.
         let revision = self.executor.revision()?;
         let _admission = if matches!(
@@ -459,12 +519,28 @@ impl Broker {
         }
         let epoch = grant.epoch.clone();
         match request {
+            ToolRequest::GetAccessStatus(_) => unreachable!("handled before grant gate"),
+            ToolRequest::ListCommands(r) => {
+                if r.cursor.is_some() {
+                    return Err(ToolError::TargetUnavailable);
+                }
+                Ok(
+                    json!({"commands": state.runs.iter().filter(|(_, r)| r.owner == owner).map(|(id,r)| {
+                    let mut value = run_json(id,r);
+                    value["request_key"] = json!(r.key);
+                    value["command_preview"] = json!(r.command.chars().take(256).collect::<String>());
+                    value["exit_code"] = json!(r.exit_code);
+                    value["elapsed_ms"] = json!(r.started_at.map_or(0, |start| r.finished_at.unwrap_or_else(Instant::now).saturating_duration_since(start).as_millis() as u64));
+                    value
+                }).collect::<Vec<_>>()}),
+                )
+            }
             ToolRequest::ListTargets(r) => {
                 if r.cursor.is_some() {
                     return Err(ToolError::TargetUnavailable);
                 }
                 Ok(
-                    json!({"targets":grant.targets.iter().map(|(id,t)| json!({"target_id":id,"alias":t.info.label,"available":true})).collect::<Vec<_>>()}),
+                    json!({"targets":grant.targets.iter().map(|(id,t)| json!({"target_id":id,"alias":t.info.label,"available":true,"vault":t.info.vault,"groups":t.info.groups,"tags":t.info.tags})).collect::<Vec<_>>()}),
                 )
             }
             ToolRequest::ListSessions(r) => {
@@ -603,7 +679,7 @@ impl Broker {
                 Ok(result)
             }
             ToolRequest::RunCommand(r) => {
-                let (session, target_id, command, key, timeout_ms, cwd) = match r {
+                let (session, target_id, command, key, timeout_ms, cwd, stdin, env) = match r {
                     RunCommand::Existing(r) => {
                         let s = state
                             .sessions
@@ -615,8 +691,10 @@ impl Broker {
                             s.target.clone(),
                             r.command,
                             r.request_key,
-                            r.timeout_ms.unwrap_or(120_000),
+                            r.timeout_ms.unwrap_or(120_000.min(grant.max_timeout_ms)),
                             r.cwd,
+                            r.stdin,
+                            r.env,
                         )
                     }
                     RunCommand::OneShot(r) => (
@@ -624,10 +702,15 @@ impl Broker {
                         r.target_id,
                         r.command,
                         r.request_key,
-                        r.timeout_ms.unwrap_or(120_000),
+                        r.timeout_ms.unwrap_or(120_000.min(grant.max_timeout_ms)),
                         r.cwd,
+                        r.stdin,
+                        r.env,
                     ),
                 };
+                if timeout_ms > grant.max_timeout_ms {
+                    return Err(ToolError::TimeoutLimit);
+                }
                 if let Some((rid, r)) = state
                     .runs
                     .iter()
@@ -636,6 +719,8 @@ impl Broker {
                     return if r.session == session
                         && r.target == target_id
                         && *r.command == command
+                        && r.stdin.as_ref().map(|v| v.as_str()) == stdin.as_deref()
+                        && *r.env == env
                         && r.timeout_ms == timeout_ms
                         && r.cwd.as_ref().map(|v| v.as_str()) == cwd.as_deref()
                     {
@@ -685,6 +770,8 @@ impl Broker {
                         session,
                         key,
                         command: Zeroizing::new(command),
+                        stdin: stdin.map(Zeroizing::new),
+                        env: Environment(env),
                         cwd: cwd.map(Zeroizing::new),
                         timeout_ms,
                         state: if approval_mode == ApprovalMode::Manual {
@@ -784,14 +871,14 @@ impl Broker {
         self.sweep();
         let state = lock(&self.state);
         json!({
-            "grants":state.grants.iter().map(|(owner,g)|json!({"integration_id":owner,"label":g.label,"approval_mode":g.approval_mode,"remaining_seconds":g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),"targets":g.targets.values().map(|t|&t.info).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+            "grants":state.grants.iter().map(|(owner,g)|json!({"integration_id":owner,"label":g.label,"approval_mode":g.approval_mode,"max_timeout_ms":g.max_timeout_ms,"remaining_seconds":g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),"targets":g.targets.values().map(|t|&t.info).collect::<Vec<_>>()})).collect::<Vec<_>>(),
             "sessions":state.sessions.iter().map(|(id,s)|{let mut v=session_json(id,s);v["integration_id"]=json!(s.owner);v["target"]=state.grants.get(&s.owner).and_then(|g|g.targets.get(&s.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);v["idle_seconds"]=json!(Duration::from_secs(300).saturating_sub(s.idle.elapsed()).as_secs());v}).collect::<Vec<_>>(),
             "runs":state.runs.iter().map(|(id,r)|{
                 let mut v=run_json(id,r);v["integration_id"]=json!(r.owner);
                 v["recording"]=r.recording.as_ref().map(|r|r.review()).unwrap_or(Value::Null);
                 v["target"]=state.grants.get(&r.owner).and_then(|g|g.targets.get(&r.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);
                 if r.state=="awaiting_approval" {
-                    v["cwd"]=json!(r.cwd.as_ref().map(|cwd| cwd.as_str()));v["command"]=json!(&*r.command);v["timeout_ms"]=json!(r.timeout_ms);v["approval_remaining_seconds"]=json!(r.approval_until.saturating_duration_since(Instant::now()).as_secs());
+                    v["stdin"]=json!(r.stdin.as_ref().map(|s|s.as_str()));v["env"]=json!(&*r.env);v["cwd"]=json!(r.cwd.as_ref().map(|cwd| cwd.as_str()));v["command"]=json!(&*r.command);v["timeout_ms"]=json!(r.timeout_ms);v["approval_remaining_seconds"]=json!(r.approval_until.saturating_duration_since(Instant::now()).as_secs());
                     v["target"]=state.grants.get(&r.owner).and_then(|g|g.targets.get(&r.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);
                 } v
             }).collect::<Vec<_>>()
@@ -876,9 +963,14 @@ impl Broker {
         );
         let original_command = run.command.clone();
         let cwd = run.cwd.clone();
+        let stdin = run.stdin.clone();
+        let env = run.env.clone();
         let stop = run.cancel.clone();
-        let command =
-            working_directory::command(&run.command, run.cwd.as_ref().map(|cwd| cwd.as_str()));
+        let command = working_directory::with_env(
+            &run.command,
+            run.cwd.as_ref().map(|cwd| cwd.as_str()),
+            &run.env,
+        );
         let rid = run_id.to_string();
         let run = state.runs.get_mut(run_id).unwrap();
         run.state = if connection.is_none() {
@@ -897,6 +989,8 @@ impl Broker {
                 &attribution,
                 &original_command,
                 cwd.as_ref().map(|cwd| cwd.as_str()),
+                stdin.as_ref().map(|s| s.as_str()),
+                &env,
             ) {
                 Ok(recording) => recording,
                 Err(error) => {
@@ -939,6 +1033,7 @@ impl Broker {
                 }
                 let handle = c.inner.exec(
                     &command,
+                    stdin.as_ref().map(|s| s.as_str()),
                     Arc::new(RunSink {
                         broker: Arc::downgrade(&broker),
                         run: rid.clone(),
@@ -1187,6 +1282,29 @@ impl Output for RunSink {
     }
 }
 
+/// BTreeMap keys cannot be mutated in place; wipe every secret value before drop.
+#[derive(Clone)]
+struct Environment(BTreeMap<String, String>);
+impl std::ops::Deref for Environment {
+    type Target = BTreeMap<String, String>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Environment {
+    fn zeroize(&mut self) {
+        for value in self.0.values_mut() {
+            zeroize::Zeroize::zeroize(value);
+        }
+        self.0.clear();
+    }
+}
+impl Drop for Environment {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 #[cfg(test)]
 mod deadlines {
     use super::*;
@@ -1198,6 +1316,9 @@ mod deadlines {
         fn resolve(&self, v: &str, p: &str) -> Result<Target> {
             Ok(Target {
                 info: TargetInfo {
+                    vault: "Test vault".into(),
+                    groups: vec![],
+                    tags: vec![],
                     vault_id: v.into(),
                     profile_id: p.into(),
                     label: "fixture".into(),

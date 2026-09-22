@@ -3,6 +3,7 @@ import { Btn, Field, Icon, Input } from "@/components/primitives";
 import { useTranslation } from "@/i18n";
 import type { McpApprovalMode, McpSelection, McpTarget } from "@/bridge/mcp";
 
+import { McpCommandLimit } from "./McpCommandLimit";
 import { McpDurationPicker } from "./McpDurationPicker";
 import { durationSeconds, initialDuration } from "./duration";
 
@@ -14,6 +15,7 @@ export function McpAccessEditor({
   initial,
   initialSeconds,
   initialApprovalMode,
+  initialMaxTimeoutMs = 600000,
   busy,
   onSave,
   onCancel,
@@ -22,8 +24,9 @@ export function McpAccessEditor({
   initial: McpTarget[];
   initialSeconds: number | null;
   initialApprovalMode: McpApprovalMode;
+  initialMaxTimeoutMs?: number;
   busy: boolean;
-  onSave: (targets: McpTarget[], seconds: number | null, approvalMode: McpApprovalMode) => void;
+  onSave: (targets: McpTarget[], seconds: number | null, approvalMode: McpApprovalMode, maxTimeoutMs: number) => void;
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
@@ -34,6 +37,8 @@ export function McpAccessEditor({
   );
   const [search, setSearch] = useState("");
   const [approvalMode, setApprovalMode] = useState(initialApprovalMode);
+  const [maxTimeoutMs, setMaxTimeoutMs] = useState(initialMaxTimeoutMs);
+  const validLimit = Number.isInteger(maxTimeoutMs / 60000) && maxTimeoutMs >= 60000 && maxTimeoutMs <= 86400000;
   const [consent, setConsent] = useState(false);
   const [duration, setDuration] = useState(() =>
     initialDuration(initialSeconds),
@@ -69,12 +74,12 @@ export function McpAccessEditor({
         e.preventDefault();
         if (
           !busy &&
-          consent &&
+          consent && validLimit &&
           chosen.length > 0 &&
           chosen.length <= 64 &&
           seconds !== undefined
         )
-          onSave(chosen, seconds, approvalMode);
+          onSave(chosen, seconds, approvalMode, maxTimeoutMs);
       }}
     >
       <fieldset disabled={busy}>
@@ -223,6 +228,7 @@ export function McpAccessEditor({
             {t(`mcp.approvalHints.${approvalMode}`)}
           </p>
         </fieldset>
+        <McpCommandLimit value={maxTimeoutMs} onChange={value => { setMaxTimeoutMs(value); setConsent(false); }} />
         <McpDurationPicker value={duration} onChange={setDuration} />
         <p className="mcp-lifecycle-hint">{t("mcp.accessLifetime")}</p>
         <label className="mcp-check mcp-consent">
@@ -238,7 +244,7 @@ export function McpAccessEditor({
             type="submit"
             disabled={
               busy ||
-              !consent ||
+              !consent || !validLimit ||
               !chosen.length ||
               chosen.length > 64 ||
               seconds === undefined

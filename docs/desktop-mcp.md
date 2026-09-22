@@ -122,7 +122,7 @@ For one connection per command, explicitly pass null:
 The one-shot connection opens after native approval or immediately under a trusted grant and closes on completion, failure,
 expiry or cancellation. Omitting `session_id` is invalid. A non-null session
 rejects `target_id`; neither mode accepts address, user or credential overrides.
-Stdin is closed immediately. No PTY, interactive shell, forwarding, file transfer,
+Optional `stdin` supplies up to 32 KiB of UTF-8 (including NUL), followed by EOF. Omitted stdin closes immediately. Optional `env` supplies up to 64 literal POSIX environment variables, at most 16 KiB of names and values. Names use `[A-Za-z_][A-Za-z0-9_]*`; values cannot contain NUL. Variables and cwd require a POSIX shell and apply only to this exec. Both inputs appear in native manual review. The total encoded HTTP request remains limited to 128 KiB. No PTY, interactive shell, forwarding, file transfer,
 local command, key export, or vault-reveal tool is exposed.
 
 `run_command` always returns a `run_id` and the same output-page fields as
@@ -156,12 +156,46 @@ Existing clients must honor `encoding` and use the output cursor returned by
 `run_command` when continuing, or start at `"0"` to deliberately reread output.
 
 If a submission response is lost, repeat the same request with the same
-`request_key`. Different command, cwd, target/session or timeout arguments with an
+`request_key`. Different command, stdin, env, cwd, target/session or timeout arguments with an
 existing key yield `request_conflict`. Changing only `wait_ms` is permitted.
 Request keys are limited to 128 UTF-8 bytes. Use a new key only for an intentionally
 new operation. No SSH reconnect or command
 replay occurs automatically. HTTP disconnects do not close an SSH session or undo
 an accepted command.
+
+## Context, command discovery and access status
+
+`list_targets` includes the allowed host's vault name, matching group/ancestor labels
+and tags. It does not expose other hosts, credentials or vault notes. These labels
+are context, not permission rules or instructions to the agent.
+
+`list_commands` returns this integration's retained commands, including `run_id`,
+`request_key`, target/session IDs, a 256-character command preview, state, exit code
+and elapsed milliseconds. Use it to recover a run ID after reconnecting, then
+`get_command` to read output. It excludes other integrations, stdin and environment
+values. At most 128 records are returned; cursor pagination is not supported.
+Regrant/revocation removes these records. Command metadata and request keys remain
+until the grant ends; output expires after 10 minutes. At the record limit, renew
+the native grant to start a new command history.
+
+`get_access_status` works even without a grant or while Core is locked. It returns
+an actionable status/message, approval mode, remaining grant time (null for no
+expiry), command time limits and connection/output/input limits. It never unlocks
+Core or lists targets. Once an expired/revoked grant is swept, status is
+`grant_required`; no persistent grant history is exposed.
+
+Clients may include `_meta.progressToken` on tool calls. During a pending wait,
+UniSSH emits `notifications/progress` with elapsed seconds and a fixed message,
+without command text/output. These are request-liveness updates, not a percentage
+of remote work completed. The transport switches to SSE when notifications are
+needed; ordinary short calls keep JSON responses. Updates stop at the tool response.
+For asynchronous operations, continue polling `get_command`/`list_ssh_sessions`.
+
+Example with input, environment and a short wait:
+
+```json
+{"session_id":null,"target_id":"<target-id>","command":"cat; printf '%s' \"$DEPLOY_ENV\"","stdin":"hello\n","env":{"DEPLOY_ENV":"staging"},"cwd":"/srv/app","request_key":"<unique-key>","wait_ms":1000}
+```
 
 ## Permissions, limits and troubleshooting
 
@@ -180,8 +214,10 @@ an accepted command.
   hours or days). No expiry does not bypass lock, restart or
   revision invalidation. Explicit idle sessions close after 5 minutes.
   Listing and polling do not renew either lifetime. Approvals expire after
-  2 minutes. Command timeout defaults to 2 minutes, with a 10-minute maximum
-  bounded by the grant when it has an expiry. Review displays the exact immutable command in escaped
+  2 minutes. Command timeout defaults to 2 minutes (or the grant ceiling when lower).
+  The native access editor sets the command ceiling from 1 to 1,440 minutes,
+  defaulting to 10 minutes. The grant expiry still bounds execution. Requests
+  above this ceiling return `timeout_limit`; an MCP argument cannot raise it. Review displays the exact immutable command in escaped
   JSON string notation, so newlines, terminal controls and bidi controls are visible.
 - There are at most 8 SSH connections overall and 4 simultaneous connections
   per grant, shared by explicit and one-shot modes, 8 outstanding commands per
@@ -230,15 +266,28 @@ releasing encryption keys and marks them interrupted. Recording failures appear
 in native command history while that history is retained; recordings are not a
 durable audit guarantee against process crashes, disk failures or vault removal.
 
-Capture retains at most **512 KiB of raw output or 8,192 chunks per command**,
+Capture defaults to **512 KiB of raw output or 8,192 chunks per command**,
 whichever comes first; partial recordings are explicitly marked. The cap is
 separate from the agent's output buffer. Recordings have the same encryption,
 sync, export and deletion behavior as existing terminal recordings, so command
-text and output may persist and sync when this preference is enabled.
+text, stdin, environment values and output may persist and sync when this preference is enabled.
+
+**Recordings → MCP recording settings** configures the local capture cap (16–512 KiB)
+and retention (1–3,650 days, or keep until manually deleted, the default). Capture
+settings affect new commands. Retention applies to existing MCP recordings when
+a vault recording list is opened or a new MCP recording is saved. Deletions use
+normal tombstones and sync; interactive terminal recordings are excluded. These
+preferences are local to the device, apply across its vaults and cannot be changed
+through MCP. Native recording search covers host, application and command; an
+unsuccessful-command filter includes nonzero/unknown exits and interrupted runs.
+
+Export format choices are CAST (original asciicast), TXT (readable command context
+and preview), and JSON (`header` plus standard `events`, with raw MCP events still
+inside `header.unissh_mcp`). TXT is for reading, not lossless binary interchange.
 
 Export remains asciicast v2: standard `o` events provide a readable preview with
 terminal control sequences escaped. The optional header field `unissh_mcp` is a
-**version 1** extension containing `application`, `host`, `port`, `user`, `command`, `cwd`, `outcome`,
+**version 1** extension containing `application`, `host`, `port`, `user`, `command`, `cwd`, optional `stdin`/`env`, `outcome`,
 `exit_code`, `truncated`, `duration_secs`, and `events`. Each original event has a
 relative `time`, `stream` (`stdout` or `stderr`), `encoding: "base64"`, and `data`.
 These raw events preserve binary bytes and stream identity losslessly up to the

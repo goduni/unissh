@@ -1983,3 +1983,19 @@ pub fn submit_auth_prompt(
 ) {
     prompter.answer(id, answers);
 }
+
+#[tauri::command]
+pub async fn mcp_recording_preferences(
+    state: State<'_, AppState>,
+) -> ApiResult<unissh_ffi::automation_recording::RecordingPreferences> {
+    let core = state.core.clone();
+    blocking(move || core.mcp_recording_preferences()).await
+}
+#[tauri::command]
+pub async fn set_mcp_recording_preferences(
+    value: unissh_ffi::automation_recording::RecordingPreferences,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking(move || core.set_mcp_recording_preferences(value)).await
+}

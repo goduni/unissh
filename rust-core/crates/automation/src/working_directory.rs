@@ -12,6 +12,24 @@ pub(super) fn command(command: &str, cwd: Option<&str>) -> Zeroizing<String> {
     }
 }
 
+/// Names are validated by the MCP contract; values are single-quoted literals.
+/// Export failures (including readonly shell variables) prevent execution.
+pub(super) fn with_env(
+    command_text: &str,
+    cwd: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Zeroizing<String> {
+    let mut source = Zeroizing::new(String::new());
+    for (key, value) in env {
+        source.push_str(&format!(
+            "export {key}='{}' || exit\n",
+            value.replace('\'', "'\\''")
+        ));
+    }
+    source.push_str(&command(command_text, cwd));
+    source
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,5 +70,32 @@ mod tests {
         assert!(!result.status.success());
         assert!(!marker.exists());
         assert_ne!(std::env::current_dir().unwrap(), dir);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod env_tests {
+    use super::*;
+    #[test]
+    fn shell_environment_is_literal_and_export_errors_prevent_execution() {
+        let value = "hello ' $(echo injected); $HOME\nworld";
+        let env = [("VALUE".to_owned(), value.to_owned())]
+            .into_iter()
+            .collect();
+        let source = with_env("printf '%s' \"$VALUE\"", None, &env);
+        let output = std::process::Command::new("sh")
+            .args(["-c", &source])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, value.as_bytes());
+        let env = [("UID".to_owned(), "123".to_owned())].into_iter().collect();
+        let source = with_env("printf should-not-run", None, &env);
+        let output = std::process::Command::new("bash")
+            .args(["-c", &source])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
     }
 }

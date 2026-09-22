@@ -507,7 +507,7 @@ export interface RecordingRequest {
 }
 
 export interface RecordingMeta {
-  mcp?: { application: string; outcome: string; exitCode: number | null } | null;
+  mcp?: { command?: string | null; application: string; outcome: string; exitCode: number | null } | null;
   recordingId: string;
   label: string;
   host: string;
@@ -1031,3 +1031,7 @@ export const serverAuditQuery = (sinceSeq?: number, serverId?: string) =>
     sinceSeq: sinceSeq ?? null,
     serverId: serverId ?? null,
   });
+
+export interface McpRecordingPreferences { maxBytes: number; retentionDays: number | null }
+export const mcpRecordingPreferences = () => invoke<McpRecordingPreferences>("mcp_recording_preferences");
+export const setMcpRecordingPreferences = (value: McpRecordingPreferences) => invoke<void>("set_mcp_recording_preferences", { value });

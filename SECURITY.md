@@ -415,3 +415,14 @@ releases keys; it does not spool plaintext to disk. Process crashes and storage
 failures can still lose recordings. Only local mutations confined to recording
 items (type 10) are exempt from automation revision invalidation; type transitions,
 credential/target/trust changes and external-connection writes still invalidate it.
+
+MCP initial stdin and environment values are bounded, included in immutable
+manual review and request-key matching, and never treated as SSH authentication.
+Environment names use portable POSIX identifiers and values are quoted literally.
+Native grants bound command duration; tool arguments cannot raise that ceiling.
+Recordings include these inputs when host recording is enabled. Their native
+retention preference defaults to no automatic deletion; configured cleanup only
+deletes authenticated MCP recording items and propagates ordinary sync tombstones.
+Access diagnostics and command discovery expose only the authenticated integration's
+policy and retained tasks. Progress notifications contain fixed text and elapsed
+time, stop with their request, and never extend grants.

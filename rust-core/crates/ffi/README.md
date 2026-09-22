@@ -236,7 +236,8 @@ ProxyJump).
 
 The Rust-only `automation` module resolves saved profiles through the existing
 Personal identity contract and opens a `ManagedConnection` without a PTY. Each
-`exec` uses an independent channel on that transport and closes stdin. Policy
+`exec` uses an independent channel on that transport and closes stdin.
+`exec_with_input` writes bounded initial UTF-8 input before EOF on that channel. Policy
 contains a native cancellation flag, deadline and storage revision; each hop
 requires an already pinned host key. Revision checks guard credential use and
 final dispatch; a native monitor closes invalid connections independently of UI
@@ -252,3 +253,9 @@ recording item. CoreState flushes its active registry before keys are dropped on
 lock/replacement. Stored recording metadata has an optional MCP field; existing
 records remain readable. Asciicast v2 exports carry a version 1 `unissh_mcp`
 header extension with original stream bytes in addition to the readable preview.
+
+MCP recording preferences are native device-local settings: 16–512 KiB raw output
+per command and optional 1–3,650 day retention (disabled by default). Retention
+only deletes decrypted MCP recording items, using ordinary vault tombstones.
+Records preserve command inputs; command metadata is optional for compatibility,
+and legacy command search reads the existing cast header without rewriting it.

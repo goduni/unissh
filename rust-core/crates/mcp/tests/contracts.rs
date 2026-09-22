@@ -54,7 +54,7 @@ fn runtime_rejects_credentials_identity_overrides_and_invalid_limits() {
         request(json!({"session_id":"s","command":"true","request_key":"x".repeat(129)})).is_err()
     );
     assert!(request(json!({"session_id":"s","command":"true\0false","request_key":"k"})).is_err());
-    for timeout in [json!(0), json!(600001), json!(-1), json!(1.5), json!("1")] {
+    for timeout in [json!(0), json!(86400001), json!(-1), json!(1.5), json!("1")] {
         assert!(request(
             json!({"session_id":"s", "command":"pwd", "request_key":"k", "timeout_ms":timeout})
         )
@@ -81,6 +81,8 @@ fn discovery_describes_only_the_supported_tools() {
     assert_eq!(
         names,
         [
+            "get_access_status",
+            "list_commands",
             "list_targets",
             "open_ssh_session",
             "list_ssh_sessions",
@@ -90,7 +92,7 @@ fn discovery_describes_only_the_supported_tools() {
             "cancel_command"
         ]
     );
-    let schema = serde_json::to_value(&tools[4].input_schema).unwrap();
+    let schema = serde_json::to_value(&tools[6].input_schema).unwrap();
     assert_eq!(schema["type"], "object");
     for variant in ["ExistingSessionCommand", "OneShotCommand"] {
         let definition = &schema["$defs"][variant];
@@ -141,4 +143,27 @@ fn cwd_and_wait_limits_are_explicit_without_accepting_approval_overrides() {
         );
         assert_eq!(result.is_ok(), ms <= 30000);
     }
+}
+
+#[test]
+fn command_input_is_bounded_and_environment_names_cannot_inject_shell_syntax() {
+    let base = json!({"session_id":"s","command":"cat","request_key":"k"});
+    for env in [
+        json!({"BAD-NAME":"x"}),
+        json!({"1BAD":"x"}),
+        json!({"A;touch /tmp/x":"x"}),
+        json!({"OK":"x\0"}),
+        json!({"OK":"x".repeat(16385)}),
+    ] {
+        let mut args = base.clone();
+        args["env"] = env;
+        assert!(request(args).is_err());
+    }
+    let mut args = base.clone();
+    args["stdin"] = json!("x".repeat(32769));
+    assert!(request(args).is_err());
+    let mut args = base;
+    args["env"] = json!({"VALUE":"' $(touch /tmp/nope)\n"});
+    args["stdin"] = json!("hello\0world");
+    assert!(request(args).is_ok());
 }

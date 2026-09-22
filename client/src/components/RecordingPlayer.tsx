@@ -124,6 +124,8 @@ export function RecordingPlayer({ cast, onClose, title }: { cast: string; onClos
           <pre style={{ fontFamily: MONO, fontSize: TEXT.small, whiteSpace: "pre-wrap", overflowWrap: "anywhere", background: p.bg2, borderRadius: 8, padding: rem(12), margin: `${rem(10)} 0` }}>
             {visibleCommand(mcp.command)}
           </pre>
+          {mcp.stdin !== undefined && <details><summary>{t("mcp.standardInput")}</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "20vh", overflow: "auto", fontFamily: MONO }}>{visibleCommand(mcp.stdin)}</pre></details>}
+          {mcp.env && Object.keys(mcp.env).length > 0 && <details><summary>{t("mcp.environment")}</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "20vh", overflow: "auto", fontFamily: MONO }}>{Object.entries(mcp.env).map(([key, value]) => `${key}=${visibleCommand(value)}`).join("\n")}</pre></details>}
           {mcp.cwd && <div style={{ fontSize: TEXT.small, color: p.txt2, overflowWrap: "anywhere" }}>{t("recordings.cwd")}: <code>{visibleCommand(mcp.cwd)}</code></div>}
           {mcp.truncated && <p style={{ fontSize: TEXT.small, color: p.amber }}>{t("recordings.mcpTruncated")}</p>}
         </div>

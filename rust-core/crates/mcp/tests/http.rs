@@ -104,7 +104,7 @@ async fn legacy_initialize_discovery_and_fail_closed_calls() {
     let list = fixture
         .rpc(json!({"jsonrpc":"2.0", "id":2,"method":"tools/list"}))
         .await;
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 9);
     for name in ["list_targets", "list_ssh_sessions"] {
         let result = fixture.rpc(call(name, json!({}))).await;
         assert_eq!(result["result"]["isError"], true);
@@ -476,4 +476,58 @@ async fn trickled_headers_still_have_an_absolute_deadline() {
     let mut response = Vec::new();
     socket.read_to_end(&mut response).await.unwrap();
     assert!(response.is_empty() || String::from_utf8_lossy(&response).contains("408"));
+}
+
+struct SlowBackend;
+impl Backend for SlowBackend {
+    fn call(&self, _: IntegrationId, _: ToolRequest) -> BackendResult<'_> {
+        Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(1250)).await;
+            Ok(json!({"commands":[]}))
+        })
+    }
+}
+#[tokio::test]
+async fn progress_is_opt_in_and_ends_with_the_request() {
+    let fixture = Fixture::start(Arc::new(SlowBackend)).await;
+    let mut request = call("list_commands", json!({}));
+    request["params"]["_meta"] = json!({"progressToken":"progress-test"});
+    let response = fixture
+        .post(request)
+        .bearer_auth("test-alpha")
+        .send()
+        .await
+        .unwrap();
+    assert!(response.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/event-stream"));
+    let body = response.text().await.unwrap();
+    let messages: Vec<Value> = body
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("data: ")
+                .or_else(|| line.strip_prefix("data:"))
+        })
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+    assert!(messages
+        .iter()
+        .any(|m| m["method"] == "notifications/progress"
+            && m["params"]["progressToken"] == "progress-test"));
+    assert!(messages.last().unwrap().get("result").is_some());
+    let response = fixture
+        .post(call("list_commands", json!({})))
+        .bearer_auth("test-alpha")
+        .send()
+        .await
+        .unwrap();
+    assert!(response.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("application/json"));
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["result"]["structuredContent"]["commands"],
+        json!([])
+    );
 }

@@ -9,7 +9,7 @@ Grants can be unbounded (`None`) or timed (a positive `u32` number of seconds). 
 persisted; lock, restart and revocation still invalidate unbounded grants. Security-relevant vault/trust/identity writes
 conservatively invalidate all current grants, including verified sync changes.
 Explicit SSH connections expire after five idle minutes. The native grant chooses
-manual confirmation (default, two-minute immutable review of command and cwd) or
+manual confirmation (default, two-minute immutable review of command, cwd, stdin and env) or
 trusted application (immediate execution). MCP cannot select or elevate this
 policy. Both paths share admission checks and cancellation. A null session creates
 an owned one-shot connection after authorization. Neither mode retries commands.
@@ -38,3 +38,11 @@ must run outside the broker state lock. Core owns the active registry, encrypted
 writes and lock-time partial flush. Recording references/status appear only in
 native review, never in MCP tool responses. See `docs/desktop-mcp.md` for limits
 and the versioned export extension.
+
+The native `grant_with_limits` API sets a command-duration ceiling (default 10
+minutes, at most 24 hours). MCP timeout arguments can only reduce it. Bounded
+initial stdin is followed by EOF; POSIX environment values are quoted literally.
+Inputs participate in submission-key conflicts and are shown in native review.
+`list_commands` is grant/caller scoped; `get_access_status` can explain missing
+access without exposing target inventory. Target context contains only the granted
+host's vault/group labels and tags. No remote file or standalone note tools exist.

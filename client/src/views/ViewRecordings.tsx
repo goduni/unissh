@@ -5,13 +5,18 @@
 // in-app player exists so you don't have to leave to check a recording, not to
 // be the only way to read one.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import * as api from "@/bridge/api";
+import { visibleCommand } from "@/bridge/mcp";
 import { apiErrorMessage } from "@/bridge/types";
 import { useTranslation, tDyn } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT } from "@/theme/tokens";
-import { Btn, Icon, Spinner } from "@/components/primitives";
+import { Btn, Icon, Input, Spinner } from "@/components/primitives";
+import { McpRecordingSettings } from "./mcp/McpRecordingSettings";
+import { exportRecording, type RecordingExportFormat } from "@/support/recordings";
+import "./mcp/mcp.css";
+import "./recordings.css";
 import { RecordingPlayer } from "@/components/RecordingPlayer";
 import { toast } from "@/store/toast";
 import { useApp } from "@/store/app";
@@ -37,6 +42,9 @@ export function ViewRecordings() {
   const p = usePalette();
   const isMobile = useNarrow();
   const vaultId = useApp((s) => s.vaultId) ?? "";
+  const [query, setQuery] = useState("");
+  const [failuresOnly, setFailuresOnly] = useState(false);
+  const [format, setFormat] = useState<RecordingExportFormat>("cast");
   const [items, setItems] = useState<api.RecordingMeta[] | null>(null);
   const [playing, setPlaying] = useState<{ cast: string; title: string } | null>(null);
 
@@ -57,6 +65,12 @@ export function ViewRecordings() {
     void reload();
   }, [reload]);
 
+  const visible = items?.filter(m => {
+    const failed = !!m.mcp && (m.mcp.outcome !== "completed" || m.mcp.exitCode !== 0);
+    return (!failuresOnly || failed) && [m.label, m.host, m.user, m.mcp?.application, m.mcp?.command]
+      .some(text => text?.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  });
+
   const play = async (m: api.RecordingMeta) => {
     try {
       const cast = await api.getRecording(vaultId, m.recordingId);
@@ -70,18 +84,12 @@ export function ViewRecordings() {
     try {
       const cast = await api.getRecording(vaultId, m.recordingId);
       const path = await save({
-        defaultPath: await exportPath(`${m.label.replace(/[^\w.-]+/g, "_")}-${m.startedUnix}.cast`),
-        filters: [{ name: "asciicast", extensions: ["cast"] }],
+        defaultPath: await exportPath(`${m.label.replace(/[^\w.-]+/g, "_")}-${m.startedUnix}.${format}`),
+        filters: [{ name: format === "cast" ? "asciicast" : format.toUpperCase(), extensions: [format] }],
       });
       if (!path) return;
-      // The suffix is asked for above and still has to be enforced here: the
-      // native save panel owns the final name, it lets the user delete the
-      // extension, and on macOS `.cast` is not a registered type so the panel
-      // drops it from the name field on its own. asciinema and every web player
-      // pick the format by extension, so a file saved without one is a recording
-      // nothing will open. Add it rather than explain it.
-      const target = path.toLowerCase().endsWith(".cast") ? path : `${path}.cast`;
-      await writeTextFile(target, cast);
+      const target = path.toLowerCase().endsWith(`.${format}`) ? path : `${path}.${format}`;
+      await writeTextFile(target, exportRecording(cast, format));
       toast(t("recordings.exported"), "ok");
     } catch (e) {
       toast(apiErrorMessage(e), "err");
@@ -104,13 +112,15 @@ export function ViewRecordings() {
     <div
       className="uh-view"
       style={{
+        "--mcp-bg": p.bg0, "--mcp-surface": p.bg1, "--mcp-hover": p.bg2, "--mcp-line": p.line,
+        "--mcp-text": p.txt, "--mcp-muted": p.txt2, "--mcp-accent": p.accent, "--mcp-danger": p.red,
         flex: 1,
         display: "flex",
         flexDirection: "column",
         minWidth: 0,
         background: p.bg0,
-        overflow: "hidden",
-      }}
+        overflow: "auto",
+      } as CSSProperties}
     >
       <div
         style={{
@@ -130,11 +140,22 @@ export function ViewRecordings() {
         </span>
       </div>
 
+      <div className="recording-toolbar">
+        <div className="recording-search"><Input aria-label={t("recordings.search")} placeholder={t("recordings.search")} value={query} onChange={setQuery} /></div>
+        <label className="mcp-check"><input type="checkbox" checked={failuresOnly} onChange={e => setFailuresOnly(e.target.checked)} />{t("recordings.failuresOnly")}</label>
+        <fieldset className="recording-formats"><legend className="mcp-field-label">{t("recordings.exportFormat")}</legend>
+          <div className="mcp-choice-group">{(["cast", "txt", "json"] as const).map(choice => <label className="mcp-choice" key={choice}>
+            <input type="radio" name="recording-export-format" checked={format === choice} onChange={() => setFormat(choice)} /><span>{choice.toUpperCase()}</span>
+          </label>)}</div>
+        </fieldset>
+        <McpRecordingSettings onSaved={() => void reload()} />
+      </div>
+
       <div
         className="uh-stagger"
         style={{
-          flex: 1,
-          overflow: "auto",
+          flex: "1 0 auto",
+          overflow: "visible",
           padding: isMobile ? `${rem(4)} ${rem(16)} ${rem(18)}` : `${rem(4)} ${rem(22)} ${rem(18)}`,
         }}
       >
@@ -142,13 +163,13 @@ export function ViewRecordings() {
           <div style={{ padding: `${rem(40)} 0`, textAlign: "center" }}>
             <Spinner />
           </div>
-        ) : items.length === 0 ? (
+        ) : visible?.length === 0 ? (
           <div style={{ padding: `${rem(40)} 0`, textAlign: "center", fontSize: TEXT.base, color: p.txt3 }}>
-            {t("recordings.empty")}
+            {t(items.length === 0 ? "recordings.empty" : "recordings.noMatches")}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: rem(8), minWidth: isMobile ? 0 : rem(680) }}>
-            {items.map((m) => (
+            {visible?.map((m) => (
               <div
                 key={m.recordingId}
                 style={{
@@ -174,6 +195,7 @@ export function ViewRecordings() {
                     <span>· {tDyn(`recordings.outcome.${m.mcp.outcome}`)}</span>
                     {m.mcp.exitCode !== null && <span>· {t("recordings.exitCode", { code: m.mcp.exitCode })}</span>}
                   </div>}
+                  {m.mcp?.command && <div title={visibleCommand(m.mcp.command)} style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.txt2, marginTop: rem(4), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{visibleCommand(m.mcp.command)}</div>}
                   {m.truncated && (
                     <div style={{ fontSize: rem(11.5), color: p.amber, marginTop: rem(2) }}>
                       {t(m.mcp ? "recordings.mcpTruncated" : "recordings.truncated")}

@@ -77,7 +77,17 @@ fn lock_flushes_partial_capture_and_late_handle_cannot_write_after_unlock() {
     let (_dir, core, kit) = setup();
     let target = core.automation_target("v".into(), "h".into()).unwrap();
     let rec = core
-        .automation_recording(&target, "lock", "Agent", "sleep 30", None)
+        .automation_recording_with_input(
+            &target,
+            "lock",
+            "Agent",
+            "sleep 30",
+            None,
+            Some("saved input"),
+            &[("VALUE".into(), "saved environment".into())]
+                .into_iter()
+                .collect(),
+        )
         .unwrap()
         .unwrap();
     rec.data(false, b"before lock");
@@ -89,6 +99,8 @@ fn lock_flushes_partial_capture_and_late_handle_cannot_write_after_unlock() {
     rec.finish("completed");
     let m = cast(&core, "lock")["unissh_mcp"].clone();
     assert_eq!(m["outcome"], "interrupted");
+    assert_eq!(m["stdin"], "saved input");
+    assert_eq!(m["env"]["VALUE"], "saved environment");
     assert_eq!(m["events"].as_array().unwrap().len(), 1);
     assert!(core
         .automation_recording(&target, "stale", "Agent", "true", None)
@@ -189,4 +201,94 @@ fn concurrent_item_creation_is_not_overwritten_by_recording_save() {
             .unwrap(),
         "keep"
     );
+}
+
+#[test]
+fn native_capture_preferences_persist_and_inputs_remain_in_encrypted_recordings() {
+    use unissh_ffi::automation_recording::RecordingPreferences;
+    let (_dir, core, kit) = setup();
+    assert_eq!(
+        core.mcp_recording_preferences().unwrap().retention_days,
+        None
+    );
+    assert!(core
+        .set_mcp_recording_preferences(RecordingPreferences {
+            max_bytes: 1,
+            retention_days: None
+        })
+        .is_err());
+    core.set_mcp_recording_preferences(RecordingPreferences {
+        max_bytes: 16384,
+        retention_days: Some(30),
+    })
+    .unwrap();
+    let target = core.automation_target("v".into(), "h".into()).unwrap();
+    let rec = core
+        .automation_recording_with_input(
+            &target,
+            "input",
+            "Agent",
+            "cat",
+            None,
+            Some("hello"),
+            &[("VALUE".into(), "literal".into())].into_iter().collect(),
+        )
+        .unwrap()
+        .unwrap();
+    rec.data(false, &vec![b'x'; 20000]);
+    rec.exited(Some(0));
+    rec.finish("completed");
+    let body = cast(&core, "input");
+    assert_eq!(body["unissh_mcp"]["stdin"], "hello");
+    assert_eq!(body["unissh_mcp"]["env"]["VALUE"], "literal");
+    assert_eq!(body["unissh_mcp"]["truncated"], true);
+    assert_eq!(
+        STANDARD
+            .decode(body["unissh_mcp"]["events"][0]["data"].as_str().unwrap())
+            .unwrap()
+            .len(),
+        16384
+    );
+    assert_eq!(
+        core.list_recordings("v".into()).unwrap()[0]
+            .mcp
+            .as_ref()
+            .unwrap()
+            .command
+            .as_deref(),
+        Some("cat")
+    );
+    core.lock();
+    core.unlock(None, kit).unwrap();
+    assert_eq!(core.mcp_recording_preferences().unwrap().max_bytes, 16384);
+}
+
+#[test]
+fn target_context_contains_only_matching_groups_and_tags() {
+    let (_dir, core, _) = setup();
+    let mut profile = core.get_connection("v".into(), "h".into()).unwrap();
+    profile.tags = vec!["production".into()];
+    core.save_connection("v".into(), profile).unwrap();
+    for (id, label, members, parent) in [
+        ("root", "Servers", vec![], None),
+        ("web", "Web", vec!["h".into()], Some("root".into())),
+        ("private", "Other", vec![], None),
+    ] {
+        core.save_group(
+            "v".into(),
+            unissh_ffi::ServerGroup {
+                group_id: id.into(),
+                label: label.into(),
+                member_ids: members,
+                parent_id: parent,
+            },
+        )
+        .unwrap();
+    }
+    let target = core.automation_target("v".into(), "h".into()).unwrap();
+    assert_eq!(target.vault, "V");
+    assert_eq!(target.tags, vec!["production"]);
+    assert!(target.groups.contains(&"Servers".into()));
+    assert!(target.groups.contains(&"Web".into()));
+    assert!(!target.groups.contains(&"Other".into()));
 }

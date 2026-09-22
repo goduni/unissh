@@ -36,6 +36,7 @@ impl Connection for Conn {
     fn exec(
         &self,
         command: &str,
+        _stdin: Option<&str>,
         sink: Arc<dyn Output>,
         _: Cancel,
         _: Instant,
@@ -78,6 +79,9 @@ impl Executor for Fake {
     fn resolve(&self, vault: &str, profile: &str) -> Result<Target> {
         Ok(Target {
             info: TargetInfo {
+                vault: "Test vault".into(),
+                groups: vec![],
+                tags: vec![],
                 vault_id: vault.into(),
                 profile_id: profile.into(),
                 label: "test".into(),
@@ -1104,6 +1108,8 @@ impl Executor for RecordingExecutor {
         _: &str,
         _: &str,
         _: Option<&str>,
+        _: Option<&str>,
+        _: &std::collections::BTreeMap<String, String>,
     ) -> Result<Option<Arc<dyn Recording>>> {
         let c = Arc::new(Capture::default());
         self.captures.lock().unwrap().push(c.clone());
@@ -1183,4 +1189,76 @@ async fn revocation_removes_output_but_finalizes_the_recording() {
         "cancelled"
     );
     assert!(b.review()["runs"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn access_status_discovery_and_input_dedup_are_caller_scoped() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let missing = call(&b, "a", "get_access_status", json!({})).await.unwrap();
+    assert_eq!(missing["status"], "grant_required");
+    let target = target(&b, "a").await;
+    let ready = call(&b, "a", "get_access_status", json!({})).await.unwrap();
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["limits"]["max_timeout_ms"], 600000);
+    let args = json!({"session_id":null,"target_id":target,"command":"cat","request_key":"input", "stdin":"hello", "env":{"VALUE":"literal"}});
+    let run = call(&b, "a", "run_command", args.clone()).await.unwrap();
+    for field in ["stdin", "env"] {
+        let mut changed = args.clone();
+        changed[field] = if field == "stdin" {
+            json!("other")
+        } else {
+            json!({"VALUE":"other"})
+        };
+        assert_eq!(
+            call(&b, "a", "run_command", changed).await.unwrap_err(),
+            ToolError::RequestConflict
+        );
+    }
+    let review = b.review();
+    assert_eq!(review["runs"][0]["stdin"], "hello");
+    assert_eq!(review["runs"][0]["env"]["VALUE"], "literal");
+    let listed = call(&b, "a", "list_commands", json!({})).await.unwrap();
+    assert_eq!(listed["commands"][0]["run_id"], run["run_id"]);
+    assert_eq!(listed["commands"][0]["request_key"], "input");
+    assert!(listed["commands"][0].get("stdin").is_none());
+    target_for_other(&b).await;
+    assert_eq!(
+        call(&b, "other", "list_commands", json!({})).await.unwrap()["commands"],
+        json!([])
+    );
+    b.revoke(Some("a"));
+    assert_eq!(
+        call(&b, "a", "get_access_status", json!({})).await.unwrap()["status"],
+        "grant_required"
+    );
+    assert!(call(&b, "a", "list_commands", json!({})).await.is_err());
+}
+
+async fn target_for_other(b: &Arc<Broker>) {
+    target(b, "other").await;
+}
+
+#[tokio::test]
+async fn only_native_grant_can_raise_command_timeout() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let target = target(&b, "a").await;
+    assert_eq!(call(&b,"a","run_command",json!({"session_id":null,"target_id":target,"command":"true","request_key":"long","timeout_ms":600001})).await.unwrap_err(), ToolError::TimeoutLimit);
+    let ticket = b.grant_ticket().unwrap();
+    b.grant_with_limits(
+        "a",
+        "Agent".into(),
+        vec![("v".into(), "p".into())],
+        None,
+        &ticket,
+        ApprovalMode::Manual,
+        3600000,
+    )
+    .unwrap();
+    let targets = call(&b, "a", "list_targets", json!({})).await.unwrap();
+    let target = &targets["targets"][0]["target_id"];
+    assert_eq!(
+        call(&b, "a", "get_access_status", json!({})).await.unwrap()["limits"]["max_timeout_ms"],
+        3600000
+    );
+    assert!(call(&b,"a","run_command",json!({"session_id":null,"target_id":target,"command":"true","request_key":"long","timeout_ms":3600000})).await.is_ok());
 }

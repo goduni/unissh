@@ -386,6 +386,8 @@ pub fn run() {
             commands::ssh_config_report_at_path,
             commands::system_agent_keys,
             commands::list_recordings,
+            commands::mcp_recording_preferences,
+            commands::set_mcp_recording_preferences,
             commands::get_recording,
             commands::delete_recording,
             commands::save_snippet,

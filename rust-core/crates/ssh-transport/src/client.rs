@@ -866,7 +866,7 @@ impl ExecHandle {
     }
 
     /// End stdin without closing the output channel. Noninteractive automation
-    /// calls this immediately; interactive callers may continue using write_stdin.
+    /// calls this after any initial input; interactive callers may continue using write_stdin.
     pub async fn close_stdin(&self) -> Result<(), TransportError> {
         self.write.eof().await?;
         Ok(())

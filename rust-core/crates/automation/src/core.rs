@@ -34,13 +34,15 @@ impl Executor for CoreExecutor {
         application: &str,
         command: &str,
         cwd: Option<&str>,
+        stdin: Option<&str>,
+        env: &BTreeMap<String, String>,
     ) -> Result<Option<Arc<dyn Recording>>> {
         let target = target
             .payload
             .downcast_ref::<unissh_ffi::automation::Target>()
             .ok_or(ToolError::TargetUnavailable)?;
         self.core
-            .automation_recording(target, run_id, application, command, cwd)
+            .automation_recording_with_input(target, run_id, application, command, cwd, stdin, env)
             .map(|r| r.map(|r| r as Arc<dyn Recording>))
             .map_err(error)
     }
@@ -54,6 +56,9 @@ impl Executor for CoreExecutor {
             .map_err(error)?;
         Ok(Target {
             info: TargetInfo {
+                vault: t.vault.clone(),
+                groups: t.groups.clone(),
+                tags: t.tags.clone(),
                 vault_id: t.vault_id.clone(),
                 profile_id: t.profile_id.clone(),
                 label: t.label.clone(),
@@ -103,13 +108,15 @@ impl Connection for CoreConnection {
     fn exec(
         &self,
         command: &str,
+        stdin: Option<&str>,
         sink: Arc<dyn Output>,
         cancel: Cancel,
         deadline: Instant,
     ) -> Result<Arc<dyn Command>> {
         self.0
-            .exec(
+            .exec_with_input(
                 command,
+                stdin,
                 Arc::new(Sink(sink)),
                 CancelToken::from_shared(cancel),
                 deadline,

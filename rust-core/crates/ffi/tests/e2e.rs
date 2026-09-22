@@ -5036,6 +5036,24 @@ fn automation_managed_connection_reuse_stdin_and_revision_invalidation() {
         exec("cat").is_empty(),
         "stdin EOF must complete without user input"
     );
+    let input = "line one\nUTF-8: привет\0tail";
+    let out = Arc::new(Output::default());
+    let handle = connection
+        .exec_with_input(
+            "cat",
+            Some(input),
+            out.clone(),
+            CancelToken::new(),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    while !handle.has_exited() {
+        assert!(Instant::now() < until, "stdin EOF stalled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(*out.exit.lock().unwrap(), Some(0));
+    assert_eq!(&*out.bytes.lock().unwrap(), input.as_bytes());
     let active = connection
         .exec(
             "sleep 10",

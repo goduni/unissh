@@ -17,6 +17,7 @@ impl Connection for Execution {
     fn exec(
         &self,
         _: &str,
+        _stdin: Option<&str>,
         sink: Arc<dyn Output>,
         _: Cancel,
         _: Instant,
@@ -38,6 +39,9 @@ impl Executor for Execution {
     fn resolve(&self, v: &str, p: &str) -> Result<Target> {
         Ok(Target {
             info: TargetInfo {
+                vault: "Test vault".into(),
+                groups: vec![],
+                tags: vec![],
                 vault_id: v.into(),
                 profile_id: p.into(),
                 label: "Fixture".into(),

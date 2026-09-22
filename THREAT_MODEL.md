@@ -395,3 +395,11 @@ Recording-only local item writes do not change authorization snapshots. Changes
 into or out of recording type still do, and external SQLite commits conservatively
 invalidate snapshots regardless of item type. The cryptographic envelope and AAD
 encodings are unchanged.
+
+Command stdin and environment values follow the same untrusted-agent boundary as
+command text: native review/deduplication binds them, input sizes are bounded,
+values are quoted rather than interpolated, and optional host recordings persist
+them encrypted. Caller-owned task discovery excludes those inputs and foreign
+integrations. Native command limits cannot be increased through MCP. Native-only
+retention is off by default and never removes interactive terminal recordings;
+when enabled, its deletion tombstones sync like explicit recording deletions.

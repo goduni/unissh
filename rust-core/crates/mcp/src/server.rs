@@ -227,7 +227,36 @@ impl ServerHandler for Handler {
                     None,
                 )
             })?;
-        let result = match self.backend.call(identity, parsed).await {
+        let operation = self.backend.call(identity, parsed);
+        tokio::pin!(operation);
+        let token = context.meta.get_progress_token();
+        let started = tokio::time::Instant::now();
+        let mut ticks =
+            tokio::time::interval_at(started + Duration::from_secs(1), Duration::from_secs(1));
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Notifications belong only to this outstanding request. Dropping HTTP
+        // waiting does not cancel a broker-owned command or extend its grant.
+        let outcome = loop {
+            tokio::select! {
+                biased;
+                result = &mut operation => break result,
+                _ = ticks.tick(), if token.is_some() => {
+                    let notification = rmcp::model::ProgressNotificationParam::new(
+                        token.clone().expect("guarded token"), started.elapsed().as_secs_f64(),
+                    ).with_message("Waiting for SSH operation; progress counts elapsed seconds.");
+                    // A slow/disconnected consumer must not delay the operation.
+                    let send = context.peer.notify_progress(notification);
+                    tokio::pin!(send);
+                    tokio::select! {
+                        biased;
+                        result = &mut operation => break result,
+                        _ = &mut send => {},
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+                    }
+                }
+            }
+        };
+        let result = match outcome {
             Ok(value) => CallToolResult::structured(value),
             Err(error) => CallToolResult::structured_error(serde_json::json!({
                 "code": error, "message": error.message()

@@ -35,6 +35,8 @@ export function McpApproval() {
     </div>}>
     <p style={{ margin: 0, overflowWrap: "anywhere" }}><strong>{target.label}</strong><br />{target.user}@{target.host}:{target.port}</p>
     <pre style={{ margin: 0, padding: rem(14), background: p.bg2, color: p.txt, borderRadius: 8, whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "35vh", overflow: "auto", fontFamily: MONO }}>{visibleCommand(run.command!)}</pre>
+    {run.env && Object.keys(run.env).length > 0 && <details><summary>{t("mcp.environment")}</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "25vh", overflow: "auto" }}>{Object.entries(run.env).map(([key, value]) => `${key}=${visibleCommand(value)}`).join("\n")}</pre></details>}
+    {run.stdin != null && <details><summary>{t("mcp.standardInput")}</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "25vh", overflow: "auto" }}>{visibleCommand(run.stdin)}</pre></details>}
     {run.cwd && <p style={{ margin: 0, overflowWrap: "anywhere" }}>{t("mcp.cwd")}: <code>{visibleCommand(run.cwd)}</code></p>}
     {run.approval_remaining_seconds !== undefined && <p role="status" style={{ margin: 0 }}>{t("mcp.approvalExpires", { seconds: run.approval_remaining_seconds })}</p>}
     <p style={{ margin: 0 }}>{t("mcp.runtime", { seconds: Math.ceil((run.timeout_ms ?? 120000) / 1000) })}</p>

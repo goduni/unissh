@@ -398,7 +398,7 @@ export function ViewMcp() {
                       <div>
                         <h3>{t("mcp.hostAccess")}</h3>
                         <p>{grant ? duration(grant) : t("mcp.noGrant")}</p>
-                        {grant && <p className="mcp-policy-summary">{t(`mcp.approvalModes.${grant.approval_mode ?? "manual"}`)}</p>}
+                        {grant && <p className="mcp-policy-summary"><span>{t(`mcp.approvalModes.${grant.approval_mode ?? "manual"}`)}</span> · {t("mcp.commandCeiling", { count: (grant.max_timeout_ms ?? 600000) / 60000 })}</p>}
                       </div>
                       <div className="mcp-actions">
                         <Btn
@@ -431,9 +431,10 @@ export function ViewMcp() {
                         initial={grant?.targets ?? []}
                         initialSeconds={grant?.remaining_seconds ?? null}
                         initialApprovalMode={grant?.approval_mode ?? "manual"}
+                        initialMaxTimeoutMs={grant?.max_timeout_ms ?? 600000}
                         busy={busy}
                         onCancel={() => setEditor(null)}
-                        onSave={(targets, seconds, approvalMode) =>
+                        onSave={(targets, seconds, approvalMode, maxTimeoutMs) =>
                           void act(async () => {
                             await api.mcpGrant(
                               integration.id,
@@ -441,6 +442,7 @@ export function ViewMcp() {
                               seconds,
                               editor.selection.ticket,
                               approvalMode,
+                              maxTimeoutMs,
                             );
                             if (alive.current) setEditor(null);
                           })

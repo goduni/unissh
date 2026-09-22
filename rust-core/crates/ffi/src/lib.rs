@@ -1310,12 +1310,23 @@ impl Drop for CoreState {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct McpRecordingMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
     pub application: String,
     pub outcome: String,
     pub exit_code: Option<u32>,
+}
+
+impl std::fmt::Debug for McpRecordingMeta {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpRecordingMeta")
+            .field("command", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Root core object for the UI. Manages a single local instance.
@@ -4051,13 +4062,38 @@ impl Core {
                 &resolve_vid(&state.storage, &vault_id),
             )
             .map_err(FfiError::other)?;
+            automation_recording::prune(state, &vault)?;
             let mut out = Vec::new();
             for m in vault.list_items().map_err(FfiError::other)? {
                 if m.item_type != ITEM_TYPE_RECORDING {
                     continue;
                 }
                 if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content) {
+                    if let Ok(mut r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content)
+                    {
+                        if let Some(meta) = r.mcp.as_mut().filter(|m| m.command.is_none()) {
+                            #[derive(serde::Deserialize)]
+                            struct CommandHeader {
+                                unissh_mcp: Option<CommandText>,
+                            }
+                            #[derive(serde::Deserialize)]
+                            struct CommandText {
+                                command: Option<String>,
+                            }
+                            if let Ok(legacy) =
+                                serde_json::from_slice::<StoredRecording>(&item.content)
+                            {
+                                meta.command = legacy
+                                    .asciicast
+                                    .lines()
+                                    .next()
+                                    .and_then(|line| {
+                                        serde_json::from_str::<CommandHeader>(line).ok()
+                                    })
+                                    .and_then(|header| header.unissh_mcp)
+                                    .and_then(|m| m.command);
+                            }
+                        }
                         out.push(RecordingMeta {
                             recording_id: String::from_utf8_lossy(&m.item_id).to_string(),
                             mcp: r.mcp,

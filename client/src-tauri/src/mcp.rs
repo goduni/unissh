@@ -253,6 +253,7 @@ pub async fn mcp_grant(
     seconds: Option<u32>,
     ticket: String,
     approval_mode: Option<ApprovalMode>,
+    max_timeout_ms: Option<u32>,
 ) -> ApiResult<()> {
     let serial = state.running.lock().await;
     if serial.is_none() {
@@ -266,7 +267,7 @@ pub async fn mcp_grant(
         .ok_or_else(|| ApiError::other("Integration is unavailable."))?;
     let broker = state.broker.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        broker.grant_with_policy(
+        broker.grant_with_limits(
             &id,
             record.label,
             targets
@@ -276,6 +277,7 @@ pub async fn mcp_grant(
             seconds,
             &ticket,
             approval_mode.unwrap_or_default(),
+            max_timeout_ms.unwrap_or(600_000),
         )
     })
     .await?
