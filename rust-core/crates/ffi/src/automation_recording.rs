@@ -66,26 +66,54 @@ impl Core {
 }
 /// Only authenticated/decrypted MCP recording metadata can authorize retention.
 /// Tombstones propagate through normal encrypted vault sync.
-pub(super) fn prune(state: &CoreState, vault: &Vault<'_>) -> Result<(), FfiError> {
+pub(super) fn retention_cutoff(state: &CoreState) -> Result<Option<u64>, FfiError> {
     let Some(days) = preferences(state)?.retention_days else {
+        return Ok(None);
+    };
+    Ok(Some(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(u64::from(days) * 86400),
+    ))
+}
+
+#[derive(Default)]
+pub(super) struct RetentionSweep {
+    after: Option<Vec<u8>>,
+    next: Option<Instant>,
+}
+
+/// Save-time cleanup is incremental: at most four payloads per minute per vault.
+/// Listing already reads every recording and applies retention in that same pass.
+fn prune(state: &CoreState, vault: &Vault<'_>, vault_key: &[u8]) -> Result<(), FfiError> {
+    let Some(cutoff) = retention_cutoff(state)? else {
         return Ok(());
     };
-    let cutoff = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .saturating_sub(u64::from(days) * 86400);
-    for item in vault.list_items().map_err(FfiError::other)? {
-        if item.item_type != ITEM_TYPE_RECORDING {
-            continue;
-        }
-        if let Some(record) = vault.get_item(&item.item_id).map_err(FfiError::other)? {
+    let mut sweeps = lock_recover(&state.recording_retention);
+    let sweep = sweeps.entry(vault_key.to_vec()).or_default();
+    if sweep.next.is_some_and(|next| Instant::now() < next) {
+        return Ok(());
+    }
+    sweep.next = Some(Instant::now() + std::time::Duration::from_secs(60));
+    let items = state
+        .storage
+        .item_ids_page(vault_key, ITEM_TYPE_RECORDING, sweep.after.as_deref(), 5)
+        .map_err(FfiError::other)?;
+    let finished = items.len() <= 4;
+    for item_id in items.into_iter().take(4) {
+        if let Some(record) = vault.get_item(&item_id).map_err(FfiError::other)? {
             if let Ok(meta) = serde_json::from_slice::<StoredRecordingMeta>(&record.content) {
                 if meta.mcp.is_some() && meta.started_unix < cutoff {
-                    vault.delete_item(&item.item_id).map_err(map_vault_err)?;
+                    vault.delete_item(&item_id).map_err(map_vault_err)?;
                 }
             }
         }
+        sweep.after = Some(item_id);
+    }
+    if finished {
+        sweep.after = None;
     }
     Ok(())
 }
@@ -347,7 +375,7 @@ impl CommandRecording {
             vault
                 .put_item(self.recording_id.as_bytes(), ITEM_TYPE_RECORDING, &json)
                 .map_err(FfiError::other)?;
-            if prune(state, &vault).is_err() {
+            if prune(state, &vault, &self.vault_key).is_err() {
                 log::warn!("MCP recording retention cleanup failed");
             }
             Ok(())
@@ -487,6 +515,38 @@ mod tests {
         assert!(remaining.iter().any(|r| r.recording_id == "old-terminal"));
         assert!(remaining.iter().any(|r| r.recording_id == "recent-mcp"));
         assert_eq!(core.automation_revision().unwrap(), revision);
+    }
+
+    #[test]
+    fn save_time_retention_is_bounded_and_throttled() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("db").to_str().unwrap().into(),
+            dir.path().join("keyset").to_str().unwrap().into(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".into(), "Vault".into()).unwrap();
+        core.set_mcp_recording_preferences(RecordingPreferences {
+            max_bytes: MAX_BYTES as u32,
+            retention_days: Some(30),
+        })
+        .unwrap();
+        core.with_state(|state| {
+            let vault = Vault::open(&state.storage,&state.keyset,b"v").map_err(FfiError::other)?;
+            for n in 0..9 {
+                let body = serde_json::json!({"label":"old","host":"example","user":"u","started_unix":1,"duration_secs":1.0,"truncated":false,"asciicast":"", "mcp":{"application":"Agent","outcome":"completed","exitCode":0}});
+                vault.put_item(format!("old-{n}").as_bytes(),ITEM_TYPE_RECORDING,&serde_json::to_vec(&body).unwrap()).map_err(FfiError::other)?;
+            }
+            prune(state,&vault,b"v")?;
+            assert_eq!(vault.list_items().unwrap().len(),5);
+            prune(state,&vault,b"v")?;
+            assert_eq!(vault.list_items().unwrap().len(),5);
+            lock_recover(&state.recording_retention).get_mut(b"v".as_slice()).unwrap().next = None;
+            prune(state,&vault,b"v")?;
+            assert_eq!(vault.list_items().unwrap().len(),1);
+            Ok(())
+        }).unwrap();
+        assert!(core.list_recordings("v".into()).unwrap().is_empty());
     }
 
     #[test]

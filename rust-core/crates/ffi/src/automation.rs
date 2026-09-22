@@ -61,6 +61,21 @@ impl ConnectionPolicy {
 }
 
 impl Core {
+    /// Device-local permissions live inside SQLCipher and are never vault-synced.
+    pub fn automation_access_load(&self) -> Result<Option<Vec<u8>>, FfiError> {
+        self.with_state(|s| s.storage.get_meta("mcp.access.v1").map_err(FfiError::other))
+    }
+    pub fn automation_access_save(&self, bytes: &[u8]) -> Result<(), FfiError> {
+        self.with_state(|s| {
+            s.storage
+                .set_meta("mcp.access.v1", bytes)
+                .map_err(FfiError::other)
+        })
+    }
+    pub fn automation_access_fingerprint(&self) -> Result<Vec<u8>, FfiError> {
+        self.with_state(|s| s.storage.automation_fingerprint().map_err(FfiError::other))
+    }
+
     /// A lock/unlock or security-relevant local/synced write changes this snapshot.
     pub fn automation_revision(&self) -> Result<[u64; 2], FfiError> {
         self.with_state(|s| s.storage.automation_revision().map_err(FfiError::other))

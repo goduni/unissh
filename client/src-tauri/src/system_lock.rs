@@ -66,12 +66,37 @@ fn emit(app: &AppHandle, signal: SystemLockSignal) {
     emit_with_token(app, signal, None);
 }
 
+static SCREEN_LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn is_screen_locked() -> bool {
+    SCREEN_LOCKED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Wake alone must not restore access while the OS screen remains locked.
+fn wake(app: &AppHandle) {
+    if !is_screen_locked() {
+        crate::mcp::resume_access(app);
+    }
+}
+
 fn emit_with_token(app: &AppHandle, signal: SystemLockSignal, token: Option<u64>) {
+    match signal {
+        SystemLockSignal::ScreenLock => {
+            SCREEN_LOCKED.store(true, std::sync::atomic::Ordering::SeqCst)
+        }
+        SystemLockSignal::ScreenUnlock => {
+            SCREEN_LOCKED.store(false, std::sync::atomic::Ordering::SeqCst)
+        }
+        SystemLockSignal::Suspend => {}
+    }
     if matches!(
         signal,
         SystemLockSignal::ScreenLock | SystemLockSignal::Suspend
     ) {
         crate::mcp::revoke(app);
+    }
+    if matches!(signal, SystemLockSignal::ScreenUnlock) {
+        crate::mcp::resume_access(app);
     }
     log::info!("system-lock: {signal:?}");
     let _ = app.emit("system-lock", SystemLockEvent { signal, token });

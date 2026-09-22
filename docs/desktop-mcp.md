@@ -202,17 +202,23 @@ Example with input, environment and a short wait:
 - Tokens identify integrations, not individual chats. Processes using the same
   token share that integration's grant and visibility. Create separate tokens
   for independent clients.
-- A token cannot unlock UniSSH or grant access. Lock/unlock and app restart never
-  restore grants. Revocation, expiry, token rotation/deletion, disabling MCP,
-  observed OS screen lock/suspend, app exit/reset/update and security-relevant
-  vault changes invalidate access. Native deadlines do not rely on UI timers.
-- Revision invalidation is deliberately conservative: any vault item, membership,
-  identity or trusted-key mutation, including verified sync, revokes current
-  grants. Regrant after editing/syncing; MCP never silently follows a changed host.
+- A token cannot unlock UniSSH or create permission. Native host selections,
+  approval mode, command ceiling and absolute expiry are saved on this device
+  inside its encrypted database. They resume after unlock/restart when the
+  security configuration is unchanged. SSH connections, commands and output are
+  never restored or replayed. Lock/sleep stops current work immediately.
+- Revoking access, rotating/deleting a token removes its saved permission.
+  Disabling MCP pauses access until enabled again. A temporary permission keeps
+  its original expiry across restart; polling cannot extend it.
+- Revision invalidation is deliberately conservative: vault, identity, membership
+  and trusted-key changes stop current work. Restoration compares a versioned
+  fingerprint of the current security records with the consented state; changes
+  require confirmation again. Recording bodies and sync bookkeeping are excluded.
+  The editor keeps previous host choices even when renewed consent is required.
 - Grants can have no time limit or a finite expiry (a positive `u32` number of
   seconds through the native API; the UI offers presets and custom minutes,
-  hours or days). No expiry does not bypass lock, restart or
-  revision invalidation. Explicit idle sessions close after 5 minutes.
+  hours or days). No expiry does not bypass lock or
+  security checks. Explicit idle sessions close after 5 minutes.
   Listing and polling do not renew either lifetime. Approvals expire after
   2 minutes. Command timeout defaults to 2 minutes (or the grant ceiling when lower).
   The native access editor sets the command ceiling from 1 to 1,440 minutes,
@@ -275,7 +281,9 @@ text, stdin, environment values and output may persist and sync when this prefer
 **Recordings → MCP recording settings** configures the local capture cap (16–512 KiB)
 and retention (1–3,650 days, or keep until manually deleted, the default). Capture
 settings affect new commands. Retention applies to existing MCP recordings when
-a vault recording list is opened or a new MCP recording is saved. Deletions use
+a vault recording list is opened, in the same read pass. New MCP saves also
+advance incremental cleanup (at most four recording payloads per minute per vault);
+cleanup does not scan the full archive on every command. Deletions use
 normal tombstones and sync; interactive terminal recordings are excluded. These
 preferences are local to the device, apply across its vaults and cannot be changed
 through MCP. Native recording search covers host, application and command; an

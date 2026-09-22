@@ -19,9 +19,11 @@ use unissh_mcp::{
 };
 use zeroize::Zeroizing;
 
+mod access;
 #[cfg(feature = "core")]
 pub mod core;
 mod output;
+pub use access::SavedAccess;
 mod working_directory;
 
 pub type Result<T> = std::result::Result<T, ToolError>;
@@ -39,7 +41,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TargetInfo {
     pub vault_id: String,
     pub profile_id: String,
@@ -86,6 +88,15 @@ pub trait Recording: Send + Sync {
     fn review(&self) -> Value;
 }
 pub trait Executor: Send + Sync + 'static {
+    fn load_access(&self) -> Result<Vec<SavedAccess>> {
+        Ok(Vec::new())
+    }
+    fn save_access(&self, _access: &[SavedAccess]) -> Result<()> {
+        Ok(())
+    }
+    fn access_fingerprint(&self) -> Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
     #[allow(clippy::too_many_arguments)]
     fn record(
         &self,
@@ -192,6 +203,8 @@ pub struct Broker {
     slots: Arc<Semaphore>,
     admission: RwLock<()>,
     revocation_epoch: AtomicU64,
+    suspended: AtomicBool,
+    access_revision: Mutex<Option<[u64; 2]>>,
 }
 
 impl Broker {
@@ -203,6 +216,8 @@ impl Broker {
             slots: Arc::new(Semaphore::new(8)),
             admission: RwLock::new(()),
             revocation_epoch: AtomicU64::new(0),
+            suspended: AtomicBool::new(false),
+            access_revision: Mutex::new(None),
         });
         let weak = Arc::downgrade(&broker);
         std::thread::spawn(move || loop {
@@ -316,6 +331,7 @@ impl Broker {
         {
             return Err(ToolError::GrantExpired);
         }
+        let fingerprint = self.executor.access_fingerprint()?;
         let mut resolved = BTreeMap::new();
         for (vault, profile) in targets {
             let target = self.executor.resolve(&vault, &profile)?;
@@ -331,12 +347,24 @@ impl Broker {
         if self.revocation_epoch.load(Ordering::SeqCst) != generation {
             return Err(ToolError::GrantExpired);
         }
+        if self.suspended.load(Ordering::SeqCst) {
+            return Err(ToolError::Locked);
+        }
         {
             let state = lock(&self.state);
             if state.grants.len() >= GRANTS_TOTAL && !state.grants.contains_key(owner) {
                 return Err(ToolError::Busy);
             }
         }
+        self.save_grant(
+            owner,
+            &label,
+            &resolved,
+            seconds,
+            approval_mode,
+            max_timeout_ms,
+            fingerprint,
+        )?;
         self.revoke_inner(Some(owner));
         lock(&self.state).grants.insert(
             owner.into(),
@@ -410,6 +438,7 @@ impl Broker {
         for owner in expired {
             self.revoke(Some(&owner));
         }
+        self.restore_access();
         // Never call Core while holding the broker state: exec callbacks acquire
         // this mutex while Core serializes dispatch with vault mutation.
         let connections: Vec<_> = lock(&self.state)
@@ -869,8 +898,10 @@ impl Broker {
 
     pub fn review(&self) -> Value {
         self.sweep();
+        let saved_access = self.saved_access_review();
         let state = lock(&self.state);
         json!({
+            "saved_access":saved_access,
             "grants":state.grants.iter().map(|(owner,g)|json!({"integration_id":owner,"label":g.label,"approval_mode":g.approval_mode,"max_timeout_ms":g.max_timeout_ms,"remaining_seconds":g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),"targets":g.targets.values().map(|t|&t.info).collect::<Vec<_>>()})).collect::<Vec<_>>(),
             "sessions":state.sessions.iter().map(|(id,s)|{let mut v=session_json(id,s);v["integration_id"]=json!(s.owner);v["target"]=state.grants.get(&s.owner).and_then(|g|g.targets.get(&s.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);v["idle_seconds"]=json!(Duration::from_secs(300).saturating_sub(s.idle.elapsed()).as_secs());v}).collect::<Vec<_>>(),
             "runs":state.runs.iter().map(|(id,r)|{

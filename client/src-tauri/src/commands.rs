@@ -281,12 +281,18 @@ pub async fn create_account(
 
 #[tauri::command]
 pub async fn unlock(
+    app: tauri::AppHandle,
     password: Option<String>,
     secret_key_hex: String,
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
     let core = state.core.clone();
-    blocking(move || core.unlock(password, secret_key_hex)).await
+    blocking(move || core.unlock(password, secret_key_hex)).await?;
+    #[cfg(desktop)]
+    crate::mcp::resume_access(&app);
+    #[cfg(mobile)]
+    let _ = app;
+    Ok(())
 }
 
 #[tauri::command]

@@ -5,9 +5,11 @@ The default build uses an executor trait for deterministic tests. The `core`
 feature connects it to UniSSH's existing vault, Personal identity resolver and SSH
 transport. HTTP cannot create grants, approve commands or supply authentication.
 
-Grants can be unbounded (`None`) or timed (a positive `u32` number of seconds). They are never
-persisted; lock, restart and revocation still invalidate unbounded grants. Security-relevant vault/trust/identity writes
-conservatively invalidate all current grants, including verified sync changes.
+Grants can be unbounded (`None`) or timed (a positive `u32` number of seconds). Native consent persists in the Core encrypted local database, separately from live
+grants. Lock/suspend stops work; native unlock/wake can restore consent if its
+security fingerprint and absolute expiry still match. Revocation deletes saved
+consent. Security-relevant vault/trust/identity changes require renewed consent;
+the editor retains host choices. No command or SSH session is replayed.
 Explicit SSH connections expire after five idle minutes. The native grant chooses
 manual confirmation (default, two-minute immutable review of command, cwd, stdin and env) or
 trusted application (immediate execution). MCP cannot select or elevate this
@@ -26,7 +28,8 @@ Published chunks/cursors are immutable and bytes in these buffers count toward l
 Discarded output is marked truncated while the SSH reader continues draining.
 Cancellation closes a channel; detached remote processes may continue.
 
-`Broker::grant`, `grant_with_policy`, `approve`, `review` and `revoke` are trusted native APIs. Keep
+`Broker::grant`, `grant_with_policy`, `approve`, `review`, `forget_access`,
+`suspend` and `resume` are trusted native APIs. Keep
 them out of the MCP router. Install native SDK log suppression before binding
 real broker data to HTTP, as documented by `unissh-mcp`.
 

@@ -42,11 +42,11 @@ export function exportRecording(cast: string, format: RecordingExportFormat): st
     ...(details.stdin === undefined ? [] : [`Standard input: ${JSON.stringify(details.stdin)}`]),
     ...(details.env === undefined ? [] : [`Environment: ${JSON.stringify(details.env)}`]),
     `Outcome: ${details.outcome}`, `Exit code: ${details.exitCode ?? "unknown"}`,
-    `Truncated: ${details.truncated}`, "", "Output:",
+    `Truncated: ${details.truncated}`, "", "Output:", "",
   ].join("\n") : "";
   // The cast preview already handles split UTF-8, binary bytes and terminal controls.
   // Strip terminal escape sequences for readable exports of interactive recordings.
   const output = events.filter((e): e is [number, string, string] =>
     Array.isArray(e) && e[1] === "o" && typeof e[2] === "string").map(e => e[2]).join("");
-  return preamble + output.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "");
+  return preamble + output.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\](?:[^\x07\x1b]|\x1b(?!\\))*(?:\x07|\x1b\\)/g, "");
 }

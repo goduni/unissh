@@ -1297,6 +1297,7 @@ struct CoreState {
     /// perform an HPKE VK unwrap for every vault on every call.
     vault_names: HashMap<Vec<u8>, String>,
     automation_recordings: HashMap<String, Arc<automation_recording::CommandRecording>>,
+    recording_retention: Mutex<HashMap<Vec<u8>, automation_recording::RetentionSweep>>,
 }
 
 impl Drop for CoreState {
@@ -1462,6 +1463,7 @@ impl Core {
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
             automation_recordings: HashMap::new(),
+            recording_retention: Mutex::new(HashMap::new()),
         });
         log::info!("instance created (password-protected: {has_password})");
         // Emergency Kit: we zeroize the intermediate hex copy; the string returned through the FFI
@@ -1548,6 +1550,7 @@ impl Core {
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
             automation_recordings: HashMap::new(),
+            recording_retention: Mutex::new(HashMap::new()),
         });
         log::info!("instance unlocked");
         Ok(())
@@ -2251,6 +2254,7 @@ impl Core {
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
             automation_recordings: HashMap::new(),
+            recording_retention: Mutex::new(HashMap::new()),
         });
         log::info!("instance unlocked from server keyset");
         Ok(())
@@ -2471,6 +2475,7 @@ impl Core {
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
             automation_recordings: HashMap::new(),
+            recording_retention: Mutex::new(HashMap::new()),
         });
         // The SHARED account Secret Key (identical on all devices, model A):
         // we return hex so the Tauri layer can store it in THIS device's keychain
@@ -4062,7 +4067,7 @@ impl Core {
                 &resolve_vid(&state.storage, &vault_id),
             )
             .map_err(FfiError::other)?;
-            automation_recording::prune(state, &vault)?;
+            let cutoff = automation_recording::retention_cutoff(state)?;
             let mut out = Vec::new();
             for m in vault.list_items().map_err(FfiError::other)? {
                 if m.item_type != ITEM_TYPE_RECORDING {
@@ -4071,6 +4076,10 @@ impl Core {
                 if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
                     if let Ok(mut r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content)
                     {
+                        if r.mcp.is_some() && cutoff.is_some_and(|cutoff| r.started_unix < cutoff) {
+                            vault.delete_item(&m.item_id).map_err(map_vault_err)?;
+                            continue;
+                        }
                         if let Some(meta) = r.mcp.as_mut().filter(|m| m.command.is_none()) {
                             #[derive(serde::Deserialize)]
                             struct CommandHeader {

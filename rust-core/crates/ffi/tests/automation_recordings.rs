@@ -292,3 +292,33 @@ fn target_context_contains_only_matching_groups_and_tags() {
     assert!(target.groups.contains(&"Web".into()));
     assert!(!target.groups.contains(&"Other".into()));
 }
+
+#[test]
+fn access_binding_and_saved_consent_survive_reopen_but_detect_security_changes() {
+    let (dir, core, kit) = setup();
+    let binding = core.automation_access_fingerprint().unwrap();
+    core.automation_access_save(b"[]").unwrap();
+    let target = core.automation_target("v".into(), "h".into()).unwrap();
+    let recording = core
+        .automation_recording(&target, "binding", "Agent", "true", None)
+        .unwrap()
+        .unwrap();
+    recording.finish("completed");
+    assert_eq!(binding, core.automation_access_fingerprint().unwrap());
+    core.lock();
+    assert!(core.automation_access_load().is_err());
+    core.unlock(None, kit.clone()).unwrap();
+    assert_eq!(binding, core.automation_access_fingerprint().unwrap());
+    assert_eq!(core.automation_access_load().unwrap(), Some(b"[]".to_vec()));
+    drop(core);
+    let core = Core::new(
+        dir.path().join("db").to_str().unwrap().into(),
+        dir.path().join("keyset").to_str().unwrap().into(),
+    );
+    core.unlock(None, kit).unwrap();
+    assert_eq!(binding, core.automation_access_fingerprint().unwrap());
+    let mut profile = core.get_connection("v".into(), "h".into()).unwrap();
+    profile.host = "changed.example".into();
+    core.save_connection("v".into(), profile).unwrap();
+    assert_ne!(binding, core.automation_access_fingerprint().unwrap());
+}

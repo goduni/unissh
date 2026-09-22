@@ -201,9 +201,12 @@ pub async fn keychain_get_secret_key() -> ApiResult<Option<String>> {
 /// kept only for the explicit "show my Secret Key" reveal UI.
 #[tauri::command]
 pub async fn keychain_unlock(
+    app: tauri::AppHandle,
     password: Option<String>,
     state: tauri::State<'_, crate::state::AppState>,
 ) -> ApiResult<()> {
+    #[cfg(not(desktop))]
+    let _ = &app;
     #[cfg(native_keychain)]
     {
         let raw = off_main(get_secret_key_now)
@@ -215,7 +218,10 @@ pub async fn keychain_unlock(
             .filter(|c| !c.is_whitespace() && *c != '-')
             .collect();
         let core = state.core.clone();
-        crate::commands::blocking(move || core.unlock(password, secret_key_hex)).await
+        crate::commands::blocking(move || core.unlock(password, secret_key_hex)).await?;
+        #[cfg(desktop)]
+        crate::mcp::resume_access(&app);
+        Ok(())
     }
     #[cfg(not(native_keychain))]
     {

@@ -60,7 +60,9 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass};
-use objc2_app_kit::{NSWorkspace, NSWorkspaceWillSleepNotification};
+use objc2_app_kit::{
+    NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceWillSleepNotification,
+};
 use objc2_foundation::{
     NSDistributedNotificationCenter, NSNotificationSuspensionBehavior, NSString,
 };
@@ -90,6 +92,11 @@ define_class!(
         #[unsafe(method(unisshScreenIsUnlocked:))]
         fn screen_is_unlocked(&self, _notification: *mut AnyObject) {
             emit(&self.ivars().app, SystemLockSignal::ScreenUnlock);
+        }
+
+        #[unsafe(method(unisshDidWake:))]
+        fn did_wake(&self, _notification: *mut AnyObject) {
+            super::wake(&self.ivars().app);
         }
 
         #[unsafe(method(unisshWillSleep:))]
@@ -123,6 +130,7 @@ pub fn start(app: &AppHandle) {
         sel!(unisshScreenIsLocked:),
         sel!(unisshScreenIsUnlocked:),
         sel!(unisshWillSleep:),
+        sel!(unisshDidWake:),
     ];
     if !selectors.iter().all(|s| observer.respondsToSelector(*s)) {
         log::warn!("system-lock: observer is missing its selectors; not watching");
@@ -154,6 +162,14 @@ pub fn start(app: &AppHandle) {
                 &observer,
                 selectors[2],
                 Some(NSWorkspaceWillSleepNotification),
+                None,
+            );
+        NSWorkspace::sharedWorkspace()
+            .notificationCenter()
+            .addObserver_selector_name_object(
+                &observer,
+                selectors[3],
+                Some(NSWorkspaceDidWakeNotification),
                 None,
             );
     }

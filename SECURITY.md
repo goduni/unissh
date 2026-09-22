@@ -389,11 +389,18 @@ revision checks, deadlines and revocation. SSH keys, server passwords and authen
 are not exposed as MCP tools, arguments or results. Every hop requires a pinned
 host key and uses the existing Core credential and Personal identity checks.
 
-Grants may have no time limit or a finite expiry. Grants, sessions and output are
-ephemeral and bound to the native vault revision.
-Revocation precedes transport cleanup. Lock, observed screen lock/suspend, expiry,
-app lifecycle changes and relevant vault mutations invalidate access; polling
-cannot renew it. HTTP reconnect does not restore a grant or replay a command.
+Native consent may have no time limit or an absolute expiry. Device-local version 1
+consent metadata is stored inside SQLCipher; it contains target references/display
+metadata, policy and a security-state fingerprint, never SSH credentials. It is not
+synced. Live grants, sessions and output remain ephemeral and revision-bound.
+Lock, observed screen lock/suspend and exit stop work before cleanup. Native
+unlock/wake/restart can restore consent only while Core is unlocked, the original
+expiry is valid and current security records match. Changed security data requires
+renewed consent. Explicit revoke and token rotation/deletion remove saved consent.
+Connections and commands are never restored/replayed; HTTP cannot resume a native
+suspension or renew consent. Queued native resume callbacks cannot override newer
+lock/revocation events. Full encrypted database snapshot rollback remains outside
+this local consent scheme's guarantees, like other device-local metadata.
 The embedding logger excludes all `rmcp` diagnostic targets at every level,
 including tracing-to-log events: SDK diagnostics can contain raw arguments and
 output. Automation audit messages contain only IDs, decisions, outcomes and byte

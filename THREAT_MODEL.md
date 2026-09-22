@@ -350,13 +350,18 @@ cannot override credentials or destinations. No approval, signing, vault-export
 or terminal-tab attachment tool is exposed. Host trust, Personal destination binding and complete jump
 routes remain Core responsibilities; MCP forbids TOFU for every hop.
 
-An integration token and its transient grant are separate authorities. Grants
-may be unbounded or expire monotonically, require an unlocked native Core, and are invalidated by
+An integration token and native consent are separate authorities. Live grants
+require an unlocked native Core and are invalidated by
 security-relevant storage revisions, including synced changes. Final command
 admission is serialized with revocation and Core mutation. Output access is checked
 on every read. A late authentication/output callback cannot restore revoked
-records. Registered tokens persist locally as digests; grants and connections do
-not survive process restart. Token rotation creates a new integration identity
+records. Tokens persist locally as digests. Native consent is separately saved in
+versioned local SQLCipher metadata, with an absolute expiry or no expiry. Native
+unlock/restart restores consent only after checking current security records;
+changed records require consent again. Connections and tasks never survive restart.
+An OS lock/suspend prevents restoration until a native unlock/wake; a wake does not
+resume while an observed screen lock remains active. Explicit revoke deletes saved
+consent. Token rotation creates a new integration identity
 and revokes the previous identity so already-authenticated requests cannot inherit
 new permissions. Sharing one token intentionally shares one integration's scope.
 

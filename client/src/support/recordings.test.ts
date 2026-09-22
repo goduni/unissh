@@ -31,7 +31,19 @@ describe("recording exports", () => {
   it("exports readable command context and output without terminal escapes", () => {
     const text = exportRecording(cast, "txt");
     expect(text).toContain("Command: printf hi");
-    expect(text).toContain("hello world\n");
+    expect(text).toContain("Output:\nhello world\n");
     expect(exportRecording('{"version":2}\n[0,"o","\\u001b[31mred\\u001b[0m"]\n', "txt")).toBe("red");
+  });
+});
+
+
+describe("terminal control stripping", () => {
+  const text = (chunks: string[]) => exportRecording(JSON.stringify({ version: 2 }) + "\n" + chunks.map((s, i) => JSON.stringify([i, "o", s])).join("\n"), "txt");
+  it.each(["\x07", "\x1b\\"])("preserves hyperlink labels with terminator %j", end => {
+    expect(text([`\x1b]8;;https://example.test${end}IMPORTANT RESULT\x1b]8;;${end} after\n`])).toBe("IMPORTANT RESULT after\n");
+    expect(text([`\x1b]0;first${end}one\x1b]0;second${end}two`])).toBe("onetwo");
+  });
+  it("handles OSC and CSI split across recorded events", () => {
+    expect(text(["\x1b]8;;https://example.test\x1b", "\\label\x1b]8;;", "\x1b\\ \x1b[", "31mred\x1b[0m"])).toBe("label red");
   });
 });

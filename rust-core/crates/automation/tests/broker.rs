@@ -1262,3 +1262,149 @@ async fn only_native_grant_can_raise_command_timeout() {
     );
     assert!(call(&b,"a","run_command",json!({"session_id":null,"target_id":target,"command":"true","request_key":"long","timeout_ms":3600000})).await.is_ok());
 }
+
+#[derive(Default)]
+struct DurableFake {
+    inner: Fake,
+    saved: std::sync::Mutex<Vec<SavedAccess>>,
+    fingerprint: AtomicU64,
+    locked: std::sync::atomic::AtomicBool,
+}
+impl Executor for DurableFake {
+    fn revision(&self) -> Result<[u64; 2]> {
+        if self.locked.load(Ordering::SeqCst) {
+            Err(ToolError::Locked)
+        } else {
+            self.inner.revision()
+        }
+    }
+    fn resolve(&self, vault: &str, profile: &str) -> Result<Target> {
+        self.inner.resolve(vault, profile)
+    }
+    fn connect(
+        &self,
+        target: &Target,
+        cancel: Cancel,
+        deadline: Option<Instant>,
+        attribution: &str,
+    ) -> Result<Arc<dyn Connection>> {
+        self.inner.connect(target, cancel, deadline, attribution)
+    }
+    fn load_access(&self) -> Result<Vec<SavedAccess>> {
+        self.revision()?;
+        Ok(self.saved.lock().unwrap().clone())
+    }
+    fn save_access(&self, access: &[SavedAccess]) -> Result<()> {
+        *self.saved.lock().unwrap() = access.to_vec();
+        Ok(())
+    }
+    fn access_fingerprint(&self) -> Result<Vec<u8>> {
+        Ok(self
+            .fingerprint
+            .load(Ordering::SeqCst)
+            .to_le_bytes()
+            .to_vec())
+    }
+}
+#[test]
+fn saved_access_survives_restart_and_suspend_without_replaying_work() {
+    let e = Arc::new(DurableFake::default());
+    let b = Broker::new(e.clone());
+    b.grant_with_limits(
+        "a",
+        "Agent".into(),
+        vec![("v".into(), "h".into())],
+        None,
+        &b.grant_ticket().unwrap(),
+        ApprovalMode::Trusted,
+        3_600_000,
+    )
+    .unwrap();
+    b.suspend();
+    assert!(b.review()["grants"].as_array().unwrap().is_empty());
+    assert_eq!(
+        b.review()["saved_access"][0]["targets"][0]["profile_id"],
+        "h"
+    );
+    b.resume();
+    assert_eq!(b.review()["grants"][0]["approval_mode"], "trusted");
+    drop(b);
+    e.inner.revision.fetch_add(1, Ordering::SeqCst);
+    let restarted = Broker::new(e.clone());
+    assert_eq!(restarted.review()["grants"][0]["max_timeout_ms"], 3_600_000);
+    assert!(restarted.review()["runs"].as_array().unwrap().is_empty());
+    assert!(restarted.review()["sessions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(e.inner.connects.load(Ordering::SeqCst), 0);
+    restarted.forget_access(Some("a")).unwrap();
+    restarted.suspend();
+    restarted.resume();
+    assert!(restarted.review()["grants"].as_array().unwrap().is_empty());
+    assert!(e.saved.lock().unwrap().is_empty());
+}
+#[test]
+fn saved_access_fails_closed_on_lock_and_changed_security_data() {
+    let e = Arc::new(DurableFake::default());
+    let b = Broker::new(e.clone());
+    b.grant("a", "Agent".into(), vec![("v".into(), "h".into())], None)
+        .unwrap();
+    e.locked.store(true, Ordering::SeqCst);
+    assert!(b.review()["grants"].as_array().unwrap().is_empty());
+    e.locked.store(false, Ordering::SeqCst);
+    e.inner.revision.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(b.review()["grants"].as_array().unwrap().len(), 1);
+    e.fingerprint.fetch_add(1, Ordering::SeqCst);
+    e.inner.revision.fetch_add(1, Ordering::SeqCst);
+    assert!(b.review()["grants"].as_array().unwrap().is_empty());
+    assert_eq!(
+        b.review()["saved_access"][0]["targets"][0]["profile_id"],
+        "h"
+    );
+    b.suspend();
+    b.resume();
+    assert!(b.review()["grants"].as_array().unwrap().is_empty());
+}
+#[test]
+fn saved_access_does_not_restart_expiry_and_revoke_all_is_persistent() {
+    let e = Arc::new(DurableFake::default());
+    let b = Broker::new(e.clone());
+    b.grant(
+        "a",
+        "Agent".into(),
+        vec![("v".into(), "h".into())],
+        Some(3600),
+    )
+    .unwrap();
+    b.grant("b", "Agent".into(), vec![("v".into(), "h".into())], None)
+        .unwrap();
+    let mut saved = serde_json::to_value(e.saved.lock().unwrap().clone()).unwrap();
+    saved[0]["expires_unix"] = json!(1);
+    *e.saved.lock().unwrap() = serde_json::from_value(saved).unwrap();
+    drop(b);
+    let restarted = Broker::new(e.clone());
+    let grants = restarted.review()["grants"].as_array().unwrap().clone();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0]["integration_id"], "b");
+    restarted.forget_access(None).unwrap();
+    restarted.suspend();
+    restarted.resume();
+    assert!(restarted.review()["grants"].as_array().unwrap().is_empty());
+    assert!(e.saved.lock().unwrap().is_empty());
+}
+
+#[test]
+fn queued_unlock_cannot_undo_a_newer_lock() {
+    let e = Arc::new(DurableFake::default());
+    let b = Broker::new(e);
+    b.grant("a", "Agent".into(), vec![("v".into(), "h".into())], None)
+        .unwrap();
+    b.suspend();
+    let queued = b.lifecycle_epoch();
+    b.suspend();
+    b.resume_if_current(queued);
+    assert!(b.review()["grants"].as_array().unwrap().is_empty());
+    b.resume();
+    assert_eq!(b.review()["grants"].as_array().unwrap().len(), 1);
+}

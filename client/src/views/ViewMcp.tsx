@@ -71,6 +71,8 @@ export function ViewMcp() {
   const grant = status?.activity.grants.find(
     (g) => g.integration_id === integration?.id,
   );
+  const savedAccess = status?.activity.saved_access?.find(g => g.integration_id === integration?.id);
+  const accessChoices = grant ?? savedAccess;
   const sessions =
     status?.activity.sessions.filter(
       (s) => s.integration_id === integration?.id,
@@ -318,7 +320,7 @@ export function ViewMcp() {
               ) : (
                 <p className="mcp-aside-hint">{t("mcp.appsHint")}</p>
               )}
-              {!!status.activity.grants.length && (
+              {!!(status.activity.grants.length || status.activity.saved_access?.length) && (
                 <Btn
                   variant="ghost"
                   wrap
@@ -397,7 +399,7 @@ export function ViewMcp() {
                     <div className="mcp-section-heading">
                       <div>
                         <h3>{t("mcp.hostAccess")}</h3>
-                        <p>{grant ? duration(grant) : t("mcp.noGrant")}</p>
+                        <p>{grant ? duration(grant) : t(savedAccess ? "mcp.savedAccessInactive" : "mcp.noGrant")}</p>
                         {grant && <p className="mcp-policy-summary"><span>{t(`mcp.approvalModes.${grant.approval_mode ?? "manual"}`)}</span> · {t("mcp.commandCeiling", { count: (grant.max_timeout_ms ?? 600000) / 60000 })}</p>}
                       </div>
                       <div className="mcp-actions">
@@ -408,7 +410,7 @@ export function ViewMcp() {
                         >
                           {t(grant ? "mcp.editAccess" : "mcp.grant")}
                         </Btn>
-                        {grant && (
+                        {accessChoices && (
                           <Btn
                             variant="ghost"
                             disabled={busy}
@@ -428,10 +430,10 @@ export function ViewMcp() {
                       <McpAccessEditor
                         key={editor.selection.ticket + editor.id}
                         selection={editor.selection}
-                        initial={grant?.targets ?? []}
-                        initialSeconds={grant?.remaining_seconds ?? null}
-                        initialApprovalMode={grant?.approval_mode ?? "manual"}
-                        initialMaxTimeoutMs={grant?.max_timeout_ms ?? 600000}
+                        initial={accessChoices?.targets ?? []}
+                        initialSeconds={accessChoices?.remaining_seconds ?? null}
+                        initialApprovalMode={accessChoices?.approval_mode ?? "manual"}
+                        initialMaxTimeoutMs={accessChoices?.max_timeout_ms ?? 600000}
                         busy={busy}
                         onCancel={() => setEditor(null)}
                         onSave={(targets, seconds, approvalMode, maxTimeoutMs) =>

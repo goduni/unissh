@@ -27,6 +27,21 @@ fn error(e: FfiError) -> ToolError {
     }
 }
 impl Executor for CoreExecutor {
+    fn load_access(&self) -> Result<Vec<SavedAccess>> {
+        self.core
+            .automation_access_load()
+            .map_err(error)?
+            .map(|bytes| serde_json::from_slice(&bytes).map_err(|_| ToolError::TargetUnavailable))
+            .transpose()
+            .map(|s| s.unwrap_or_default())
+    }
+    fn save_access(&self, access: &[SavedAccess]) -> Result<()> {
+        let bytes = serde_json::to_vec(access).map_err(|_| ToolError::TargetUnavailable)?;
+        self.core.automation_access_save(&bytes).map_err(error)
+    }
+    fn access_fingerprint(&self) -> Result<Vec<u8>> {
+        self.core.automation_access_fingerprint().map_err(error)
+    }
     fn record(
         &self,
         target: &Target,

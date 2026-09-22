@@ -1194,6 +1194,7 @@ pub async fn server_keyset_push(
 /// Requires an active session (a keyless first-time device should use Path B).
 #[tauri::command]
 pub async fn server_keyset_pull_and_unlock(
+    app: tauri::AppHandle,
     password: Option<String>,
     secret_key_hex: String,
     server_id: Option<String>,
@@ -1208,7 +1209,12 @@ pub async fn server_keyset_pull_and_unlock(
         core.unlock_from_server_blob(blob, password, secret_key_hex)
             .map_err(ApiError::from)
     })
-    .await
+    .await?;
+    #[cfg(desktop)]
+    crate::mcp::resume_access(&app);
+    #[cfg(mobile)]
+    let _ = app;
+    Ok(())
 }
 
 /// Fetch the escrow Argon2id params for a `handle` from a server (PUBLIC — no session).
@@ -1325,6 +1331,7 @@ async fn self_enroll_login_and_persist(
 /// and the keyset-signed registration leave the device.
 #[tauri::command]
 pub async fn server_escrow_fetch_and_unlock(
+    app: tauri::AppHandle,
     base_url: String,
     handle: String,
     password: Option<String>,
@@ -1362,6 +1369,10 @@ pub async fn server_escrow_fetch_and_unlock(
     .await?;
 
     // Keep escrow's fetched account id as the link identity and its handle on the link.
+    #[cfg(desktop)]
+    crate::mcp::resume_access(&app);
+    #[cfg(mobile)]
+    let _ = app;
     self_enroll_login_and_persist(&state, base_url, Some(account_id), Some(handle)).await
 }
 
@@ -1378,6 +1389,7 @@ pub async fn server_escrow_fetch_and_unlock(
 /// registration leaves the device.
 #[tauri::command]
 pub async fn server_import_keyset_and_unlock(
+    app: tauri::AppHandle,
     base_url: String,
     keyset_blob: Vec<u8>,
     password: Option<String>,
@@ -1395,6 +1407,10 @@ pub async fn server_import_keyset_and_unlock(
     })
     .await?;
     // Offline import carries no handle (escrow keys off one); the account's handle syncs later.
+    #[cfg(desktop)]
+    crate::mcp::resume_access(&app);
+    #[cfg(mobile)]
+    let _ = app;
     self_enroll_login_and_persist(&state, base_url, None, None).await
 }
 

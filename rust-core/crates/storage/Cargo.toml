@@ -13,6 +13,7 @@ license.workspace = true
 thiserror = "2"
 zeroize = "1.8"
 hex = "0.4"
+sha2 = "0.10"
 
 # SQLite + SQLCipher, built from source. SQLCipher links OpenSSL (libcrypto):
 #   * Linux / macOS: link the system OpenSSL (libssl-dev / macOS system) — small & fast.

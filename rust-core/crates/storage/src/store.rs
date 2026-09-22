@@ -138,7 +138,67 @@ impl Storage {
         ])
     }
 
+    /// Bounded candidate scan without loading any encrypted item payloads.
+    /// Type metadata only selects candidates; callers must authenticate content.
+    pub fn item_ids_page(
+        &self,
+        vault_id: &[u8],
+        item_type: u32,
+        after: Option<&[u8]>,
+        limit: u32,
+    ) -> Result<Vec<Vec<u8>>, StorageError> {
+        let mut statement = self.conn.prepare("SELECT item_id FROM items WHERE vault_id = ?1 AND item_type = ?2 AND tombstone = 0 AND (?3 IS NULL OR item_id > ?3) ORDER BY item_id LIMIT ?4")?;
+        let rows =
+            statement.query_map(params![vault_id, item_type, after, limit], |row| row.get(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     // --- meta (arbitrary open instance metadata) ---
+
+    /// Versioned local access binding, stable across reopen and sync bookkeeping.
+    /// Hash ciphertext and trust records, never recording payloads. This is not a
+    /// wire/AAD encoding or a substitute for the vault's signature verification.
+    pub fn automation_fingerprint(&self) -> Result<Vec<u8>, StorageError> {
+        use rusqlite::types::ValueRef;
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        digest.update(b"unissh.local-mcp-access.v1");
+        for query in [
+            "SELECT vault_id,sync_target,name_blob,wrapped_vk,version,tombstone,signature,author_pubkey,key_epoch,cache_policy,sync_tenant FROM vaults ORDER BY vault_id",
+            "SELECT vault_id,item_id,item_type,content_blob,wrapped_item_key,version,tombstone,signature,author_pubkey,key_epoch FROM items WHERE item_type != 10 ORDER BY vault_id,item_id",
+            "SELECT host,port,host_key FROM known_hosts ORDER BY host,port",
+            "SELECT vault_id,key_epoch,manifest_blob,signature,author_pubkey FROM membership_manifests ORDER BY vault_id,key_epoch",
+            "SELECT vault_id,member_pubkey,key_epoch,role,wrapped_vk,signature,author_pubkey,not_after FROM membership_grants ORDER BY vault_id,member_pubkey,key_epoch",
+            "SELECT account_id,member_pubkey,fingerprint FROM pinned_member_keys ORDER BY account_id",
+            "SELECT vault_id,key_epoch FROM vault_epoch_floor ORDER BY vault_id",
+            "SELECT vault_id,genesis_owner_pubkey FROM vault_trust_anchor ORDER BY vault_id",
+            "SELECT author_pubkey,version,payload,signature FROM account_state ORDER BY author_pubkey",
+            "SELECT vault_id,item_id,not_before,not_after,serial FROM cert_meta ORDER BY vault_id,item_id",
+        ] {
+            digest.update((query.len() as u64).to_le_bytes());
+            digest.update(query.as_bytes());
+            let mut statement = self.conn.prepare(query)?;
+            let columns = statement.column_count();
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                digest.update([0xff]);
+                for index in 0..columns {
+                    match row.get_ref(index)? {
+                        ValueRef::Null => digest.update([0]),
+                        ValueRef::Integer(n) => { digest.update([1]); digest.update(n.to_le_bytes()); }
+                        ValueRef::Real(n) => { digest.update([2]); digest.update(n.to_bits().to_le_bytes()); }
+                        value @ (ValueRef::Text(_) | ValueRef::Blob(_)) => {
+                            let (kind, bytes) = match value { ValueRef::Text(b) => (3,b), ValueRef::Blob(b) => (4,b), _ => unreachable!() };
+                            digest.update([kind]);
+                            digest.update((bytes.len() as u64).to_le_bytes());
+                            digest.update(bytes);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(digest.finalize().to_vec())
+    }
 
     /// Writes an instance metadata value (e.g. instance_id).
     pub fn set_meta(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {

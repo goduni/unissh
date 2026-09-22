@@ -97,3 +97,44 @@ fn external_recording_writes_remain_conservative() {
     writer.purge_vault_data(b"v").unwrap();
     assert_eq!(local, writer.automation_revision().unwrap());
 }
+
+#[test]
+fn durable_access_binding_ignores_bookkeeping_but_tracks_content_and_trust() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    let s = Storage::open(&path, &[3; 32]).unwrap();
+    let empty = s.automation_fingerprint().unwrap();
+    s.set_meta("mcp.access.v1", b"[]").unwrap();
+    assert_eq!(empty, s.automation_fingerprint().unwrap());
+    s.put_known_host("example", 22, b"key").unwrap();
+    let trusted = s.automation_fingerprint().unwrap();
+    assert_ne!(empty, trusted);
+    let mut item = unissh_storage::ItemRecord {
+        vault_id: b"v".to_vec(),
+        item_id: b"h".to_vec(),
+        item_type: 1,
+        content_blob: vec![1],
+        wrapped_item_key: vec![],
+        version: 1,
+        tombstone: false,
+        signature: vec![],
+        author_pubkey: vec![],
+        created_at: 0,
+        updated_at: 0,
+        key_epoch: 0,
+    };
+    s.put_item(&item).unwrap();
+    let host = s.automation_fingerprint().unwrap();
+    assert_ne!(trusted, host);
+    s.mark_item_dirty(b"v", b"h").unwrap();
+    assert_eq!(host, s.automation_fingerprint().unwrap());
+    item.item_id = b"recording".to_vec();
+    item.item_type = 10;
+    s.put_item(&item).unwrap();
+    assert_eq!(host, s.automation_fingerprint().unwrap());
+    drop(s);
+    let reopened = Storage::open(&path, &[3; 32]).unwrap();
+    assert_eq!(host, reopened.automation_fingerprint().unwrap());
+    reopened.remove_known_host("example", 22).unwrap();
+    assert_ne!(host, reopened.automation_fingerprint().unwrap());
+}

@@ -39,9 +39,9 @@ use windows_sys::Win32::System::RemoteDesktop::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
-    TranslateMessage, CW_USEDEFAULT, DEVICE_NOTIFY_WINDOW_HANDLE, MSG, PBT_APMSUSPEND,
-    WM_POWERBROADCAST, WM_WTSSESSION_CHANGE, WNDCLASSW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
-    WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+    TranslateMessage, CW_USEDEFAULT, DEVICE_NOTIFY_WINDOW_HANDLE, MSG, PBT_APMRESUMEAUTOMATIC,
+    PBT_APMSUSPEND, WM_POWERBROADCAST, WM_WTSSESSION_CHANGE, WNDCLASSW, WS_EX_TOOLWINDOW,
+    WS_OVERLAPPED, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 
 use super::{emit, emit_suspend_and_wait, SystemLockSignal};
@@ -129,9 +129,6 @@ unsafe extern "system" fn wnd_proc(
                 WTS_SESSION_UNLOCK => emit(app, SystemLockSignal::ScreenUnlock),
                 _ => {}
             },
-            // Only the "we are going down" event matters. A resume finds the
-            // vault already locked and has nothing to add.
-            //
             // This blocks until the front end confirms the vault is shut, which
             // is safe precisely because this window proc runs on the listener's
             // OWN thread: the UI thread stays free to service the webview that
@@ -140,6 +137,7 @@ unsafe extern "system" fn wnd_proc(
             WM_POWERBROADCAST if wparam as u32 == PBT_APMSUSPEND => {
                 emit_suspend_and_wait(app);
             }
+            WM_POWERBROADCAST if wparam as u32 == PBT_APMRESUMEAUTOMATIC => super::wake(app),
             _ => {}
         }
     }

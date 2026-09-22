@@ -74,6 +74,7 @@ impl Controller {
             core: core.clone(),
             prompts: Arc::new(Prompts(prompts)),
         }));
+        broker.suspend();
         Arc::new(Self {
             broker,
             core,
@@ -102,7 +103,8 @@ impl Controller {
     async fn enable(self: &Arc<Self>, enabled: bool, port: u16) -> ApiResult<()> {
         let mut running = self.running.lock().await;
         let broker = self.broker.clone();
-        tauri::async_runtime::spawn_blocking(move || broker.revoke(None)).await?;
+        tauri::async_runtime::spawn_blocking(move || broker.suspend()).await?;
+        let resume_epoch = self.broker.lifecycle_epoch();
         if let Some(mut old) = running.take() {
             old.stop.cancel();
             if tokio::time::timeout(std::time::Duration::from_secs(2), &mut old.task)
@@ -144,17 +146,20 @@ impl Controller {
             if server.serve(token).await.is_err() {
                 if let Some(this) = weak.upgrade() {
                     *this.error.lock().unwrap() = Some("listener_failed");
-                    this.broker.revoke(None);
+                    this.broker.suspend();
                 }
             }
         });
         *running = Some(Running { stop, task, port });
+        if !crate::system_lock::is_screen_locked() {
+            self.broker.resume_if_current(resume_epoch);
+        }
         *self.error.lock().unwrap() = None;
         Ok(())
     }
     /// Called natively before screen lock/suspend/exit, independent of the webview.
     pub fn revoke(&self) {
-        self.broker.revoke(None);
+        self.broker.suspend();
     }
     async fn status(self: &Arc<Self>) -> ApiResult<Value> {
         let running = self.running.lock().await;
@@ -184,6 +189,23 @@ impl Controller {
 pub fn revoke(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         controller.revoke();
+    }
+}
+
+pub fn resume_access(app: &tauri::AppHandle) {
+    if let Some(controller) = app.try_state::<Arc<Controller>>() {
+        let controller = controller.inner().clone();
+        let epoch = controller.broker.lifecycle_epoch();
+        tauri::async_runtime::spawn(async move {
+            let running = controller.running.lock().await;
+            if running
+                .as_ref()
+                .is_some_and(|r| !r.task.inner().is_finished())
+                && !crate::system_lock::is_screen_locked()
+            {
+                controller.broker.resume_if_current(epoch);
+            }
+        });
     }
 }
 
@@ -219,7 +241,9 @@ pub async fn mcp_rotate_integration(
     let _serial = state.running.lock().await;
     let broker = state.broker.clone();
     let old = id.clone();
-    tauri::async_runtime::spawn_blocking(move || broker.revoke(Some(&old))).await?;
+    tauri::async_runtime::spawn_blocking(move || broker.forget_access(Some(&old)))
+        .await?
+        .map_err(|e| ApiError::other(e.message()))?;
     let (id, token) = state
         .credentials()?
         .rotate(&id)
@@ -234,7 +258,9 @@ pub async fn mcp_delete_integration(
     let _serial = state.running.lock().await;
     let broker = state.broker.clone();
     let old = id.clone();
-    tauri::async_runtime::spawn_blocking(move || broker.revoke(Some(&old))).await?;
+    tauri::async_runtime::spawn_blocking(move || broker.forget_access(Some(&old)))
+        .await?
+        .map_err(|e| ApiError::other(e.message()))?;
     state
         .credentials()?
         .delete(&id)
@@ -287,7 +313,9 @@ pub async fn mcp_grant(
 pub async fn mcp_revoke(state: State<'_, Arc<Controller>>, id: Option<String>) -> ApiResult<()> {
     let _serial = state.running.lock().await;
     let broker = state.broker.clone();
-    tauri::async_runtime::spawn_blocking(move || broker.revoke(id.as_deref())).await?;
+    tauri::async_runtime::spawn_blocking(move || broker.forget_access(id.as_deref()))
+        .await?
+        .map_err(|e| ApiError::other(e.message()))?;
     Ok(())
 }
 #[tauri::command]

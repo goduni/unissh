@@ -259,3 +259,10 @@ per command and optional 1–3,650 day retention (disabled by default). Retentio
 only deletes decrypted MCP recording items, using ordinary vault tombstones.
 Records preserve command inputs; command metadata is optional for compatibility,
 and legacy command search reads the existing cast header without rewriting it.
+
+Native MCP consent uses versioned `mcp.access.v1` instance metadata inside SQLCipher,
+not vault items or synced settings. A stable security-state fingerprint excludes
+recordings and sync cursors/dirty flags. It detects relevant changes across process
+restarts while ordinary in-memory revisions still protect live SSH dispatch.
+Save-time recording cleanup decrypts at most four payloads per minute per vault;
+listing applies retention during its existing payload read pass.

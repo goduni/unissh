@@ -54,10 +54,17 @@ starts with `0.`:
 - MCP access selection shows vaults alongside their hosts, offers duration presets
   and custom minutes/hours/days, and includes client-specific connection guides.
 - MCP host grants can have no time limit. Tokens remain valid until rotation or
-  deletion; vault lock, restart and security changes still revoke host access.
+  deletion. Native access choices now persist in version 1 device-local encrypted
+  metadata and resume after unlock/restart if security data is unchanged. Timed
+  access retains its original expiry; revoke/rotation deletes saved permission.
+  Existing databases remain readable; vault/wire encodings are unchanged.
   MCP session results return a nullable `expires_at` for unbounded grants.
 
 ### Fixed
+
+- TXT recording exports preserve visible text between terminal OSC sequences.
+- MCP recording cleanup advances in bounded, throttled batches on save and shares
+  the existing history read pass, avoiding a full archive scan per command.
 
 - Authentication prompt cancellation preserves other queued requests; MCP command
   approvals wait for authentication dialogs. Failed MCP connections dismiss their
