@@ -23,13 +23,15 @@ pub struct Target {
 pub struct ConnectionPolicy {
     pub revision: [u64; 2],
     pub cancel: Arc<CancelToken>,
-    pub deadline: Instant,
+    pub deadline: Option<Instant>,
 }
 
 impl ConnectionPolicy {
     pub(super) fn check(&self, state: &CoreState) -> Result<(), FfiError> {
         if self.cancel.is_cancelled()
-            || Instant::now() >= self.deadline
+            || self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
             || state
                 .storage
                 .automation_revision()
@@ -250,7 +252,7 @@ impl ManagedConnection {
                 biased;
                 _ = cancellation => Err(FfiError::ssh("command dispatch outcome unknown")),
                 result = tokio::time::timeout(
-                    Duration::from_secs(5).min(self.policy.deadline.min(deadline).saturating_duration_since(Instant::now())), dispatch
+                    Duration::from_secs(5).min(self.policy.deadline.map_or(deadline, |until| until.min(deadline)).saturating_duration_since(Instant::now())), dispatch
                 ) => result.map_err(|_| FfiError::ssh("command dispatch outcome unknown"))?.map_err(map_transport_err),
             }
         });

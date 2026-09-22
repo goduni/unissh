@@ -46,6 +46,7 @@ export type Route =
   | "sftp"
   | "tunnels"
   | "known"
+  | "mcp"
   | "recordings"
   | "snippets"
   | "keys"

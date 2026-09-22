@@ -35,6 +35,7 @@ import { shouldRetryOnResume } from "@/views/terminal/paneSession";
 import { ViewRun } from "@/views/ViewRun";
 import { ViewSftp } from "@/views/sftp/ViewSftp";
 import { ViewTunnels } from "@/views/ViewTunnels";
+import { ViewMcp } from "@/views/ViewMcp";
 import { ViewKnown } from "@/views/ViewKnown";
 import { ViewSecrets } from "@/views/ViewSecrets";
 import { ViewSettings } from "@/views/ViewSettings";
@@ -70,6 +71,8 @@ function RenderView() {
       return null; // rendered persistently in App() so panes/cwd/selection survive navigation
     case "tunnels":
       return <ViewTunnels />;
+    case "mcp":
+      return isDesktopOs() ? <ViewMcp /> : <ViewHosts />;
     case "known":
       return <ViewKnown />;
     case "recordings":

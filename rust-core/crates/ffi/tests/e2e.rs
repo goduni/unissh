@@ -4988,7 +4988,7 @@ fn automation_managed_connection_reuse_stdin_and_revision_invalidation() {
     let policy = |revision| ConnectionPolicy {
         revision,
         cancel: CancelToken::new(),
-        deadline: Instant::now() + Duration::from_secs(30),
+        deadline: Some(Instant::now() + Duration::from_secs(30)),
     };
     assert!(matches!(
         core.automation_connect(&target, policy(target.revision), None),
@@ -5005,9 +5005,9 @@ fn automation_managed_connection_reuse_stdin_and_revision_invalidation() {
     )
     .unwrap();
     let target = core.automation_target("v".into(), "host".into()).unwrap();
-    let connection = core
-        .automation_connect(&target, policy(target.revision), None)
-        .unwrap();
+    let mut unlimited = policy(target.revision);
+    unlimited.deadline = None;
+    let connection = core.automation_connect(&target, unlimited, None).unwrap();
     let exec = |command: &str| {
         let out = Arc::new(Output::default());
         let handle = connection

@@ -39,6 +39,14 @@ starts with `0.`:
   separate connection per command, bounded output polling and cancellation.
   See [setup and security limits](docs/desktop-mcp.md).
 
+### Changed
+
+- Desktop MCP is now a main-menu workspace with per-application access, activity
+  and token management. Select a vault before choosing its hosts.
+- MCP host grants can have no time limit. Tokens remain valid until rotation or
+  deletion; vault lock, restart and security changes still revoke host access.
+  MCP session results return a nullable `expires_at` for unbounded grants.
+
 ### Fixed
 
 - Authentication prompt cancellation preserves other queued requests; MCP command

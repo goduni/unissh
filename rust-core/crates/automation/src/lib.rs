@@ -80,7 +80,7 @@ pub trait Executor: Send + Sync + 'static {
         &self,
         target: &Target,
         cancel: Cancel,
-        deadline: Instant,
+        deadline: Option<Instant>,
         attribution: &str,
     ) -> Result<Arc<dyn Connection>>;
 }
@@ -95,7 +95,7 @@ struct Grant {
     epoch: String,
     label: String,
     revision: [u64; 2],
-    until: Instant,
+    until: Option<Instant>,
     targets: BTreeMap<String, Target>,
 }
 struct Session {
@@ -108,7 +108,7 @@ struct Session {
     cancel: Cancel,
     connection: Option<Arc<LiveConnection>>,
     idle: Instant,
-    expires_at: u64,
+    expires_at: Option<u64>,
 }
 struct Chunk {
     stderr: bool,
@@ -186,7 +186,7 @@ impl Broker {
         &self,
         target: &Target,
         stop: Cancel,
-        deadline: Instant,
+        deadline: Option<Instant>,
         attribution: &str,
     ) -> Result<Arc<dyn Connection>> {
         let result = self
@@ -212,7 +212,7 @@ impl Broker {
         owner: &str,
         label: String,
         targets: Vec<(String, String)>,
-        seconds: u32,
+        seconds: impl Into<Option<u32>>,
     ) -> Result<()> {
         let ticket = self.grant_ticket()?;
         self.grant_with_ticket(owner, label, targets, seconds, &ticket)
@@ -223,13 +223,14 @@ impl Broker {
         owner: &str,
         label: String,
         targets: Vec<(String, String)>,
-        seconds: u32,
+        seconds: impl Into<Option<u32>>,
         ticket: &str,
     ) -> Result<()> {
+        let seconds = seconds.into();
         if owner.is_empty()
             || targets.is_empty()
             || targets.len() > 64
-            || !(1..=1800).contains(&seconds)
+            || seconds.is_some_and(|seconds| !(1..=1800).contains(&seconds))
         {
             return Err(ToolError::TargetUnavailable);
         }
@@ -269,11 +270,11 @@ impl Broker {
                 epoch: id(),
                 label,
                 revision,
-                until: Instant::now() + Duration::from_secs(seconds.into()),
+                until: seconds.map(|seconds| Instant::now() + Duration::from_secs(seconds.into())),
                 targets: resolved,
             },
         );
-        log::info!("MCP grant issued: integration={owner}, ttl_seconds={seconds}");
+        log::info!("MCP grant issued: integration={owner}, ttl_seconds={seconds:?}");
         Ok(())
     }
 
@@ -324,7 +325,9 @@ impl Broker {
         let expired: Vec<_> = lock(&self.state)
             .grants
             .iter()
-            .filter(|(_, g)| now >= g.until || Some(g.revision) != revision)
+            .filter(|(_, g)| {
+                g.until.is_some_and(|until| now >= until) || Some(g.revision) != revision
+            })
             .map(|(o, _)| o.clone())
             .collect();
         for owner in expired {
@@ -410,7 +413,7 @@ impl Broker {
         };
         let mut state = lock(&self.state);
         let grant = state.grants.get(&owner).ok_or(ToolError::GrantRequired)?;
-        if grant.revision != revision || Instant::now() >= grant.until {
+        if grant.revision != revision || grant.until.is_some_and(|until| Instant::now() >= until) {
             return Err(ToolError::GrantExpired);
         }
         let epoch = grant.epoch.clone();
@@ -484,11 +487,13 @@ impl Broker {
                         cancel: stop.clone(),
                         connection: None,
                         idle: Instant::now(),
-                        expires_at: SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs()
-                            + deadline.saturating_duration_since(Instant::now()).as_secs(),
+                        expires_at: deadline.map(|deadline| {
+                            SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                                + deadline.saturating_duration_since(Instant::now()).as_secs()
+                        }),
                     },
                 );
                 let result = session_json(&sid, &state.sessions[&sid]);
@@ -736,7 +741,7 @@ impl Broker {
         self.sweep();
         let state = lock(&self.state);
         json!({
-            "grants":state.grants.iter().map(|(owner,g)|json!({"integration_id":owner,"label":g.label,"remaining_seconds":g.until.saturating_duration_since(Instant::now()).as_secs(),"targets":g.targets.values().map(|t|&t.info).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+            "grants":state.grants.iter().map(|(owner,g)|json!({"integration_id":owner,"label":g.label,"remaining_seconds":g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),"targets":g.targets.values().map(|t|&t.info).collect::<Vec<_>>()})).collect::<Vec<_>>(),
             "sessions":state.sessions.iter().map(|(id,s)|{let mut v=session_json(id,s);v["integration_id"]=json!(s.owner);v["target"]=state.grants.get(&s.owner).and_then(|g|g.targets.get(&s.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);v["idle_seconds"]=json!(Duration::from_secs(300).saturating_sub(s.idle.elapsed()).as_secs());v}).collect::<Vec<_>>(),
             "runs":state.runs.iter().map(|(id,r)|{
                 let mut v=run_json(id,r);v["integration_id"]=json!(r.owner);
@@ -770,16 +775,17 @@ impl Broker {
         let grant = state
             .grants
             .get(&run.owner)
-            .filter(|g| g.epoch == run.epoch && Instant::now() < g.until)
+            .filter(|g| g.epoch == run.epoch && g.until.is_none_or(|until| Instant::now() < until))
             .ok_or(ToolError::GrantExpired)?;
         let target = grant
             .targets
             .get(&run.target)
             .cloned()
             .ok_or(ToolError::TargetUnavailable)?;
+        let runtime_deadline = Instant::now() + Duration::from_millis(run.timeout_ms.into());
         let deadline = grant
             .until
-            .min(Instant::now() + Duration::from_millis(run.timeout_ms.into()));
+            .map_or(runtime_deadline, |until| until.min(runtime_deadline));
         let attribution = grant.label.clone();
         let (connection, slot) = if let Some(sid) = &run.session {
             let s = state
@@ -828,7 +834,7 @@ impl Broker {
             let connection = match connection {
                 Some(c) => Ok(c),
                 None => broker
-                    .connect(&target, stop.clone(), deadline, &attribution)
+                    .connect(&target, stop.clone(), Some(deadline), &attribution)
                     .map(|c| {
                         let (slot, owner_slot) = slot.expect("implicit slots");
                         Arc::new(LiveConnection {
@@ -983,10 +989,9 @@ impl Output for RunSink {
         };
         let mut state = lock(&b.state);
         if !state.runs.get(&self.run).is_some_and(|r| {
-            state
-                .grants
-                .get(&r.owner)
-                .is_some_and(|g| g.epoch == r.epoch && Instant::now() < g.until)
+            state.grants.get(&r.owner).is_some_and(|g| {
+                g.epoch == r.epoch && g.until.is_none_or(|until| Instant::now() < until)
+            })
         }) {
             return;
         }
@@ -1071,7 +1076,7 @@ mod deadlines {
             &self,
             _: &Target,
             _: Cancel,
-            _: Instant,
+            _: Option<Instant>,
             _: &str,
         ) -> Result<Arc<dyn Connection>> {
             Err(ToolError::TargetUnavailable)
@@ -1139,7 +1144,8 @@ mod deadlines {
     #[test]
     fn expired_lease_drops_output_before_housekeeping_runs() {
         let (b, rid) = pending();
-        lock(&b.state).grants.get_mut("a").unwrap().until = Instant::now() - Duration::from_secs(1);
+        lock(&b.state).grants.get_mut("a").unwrap().until =
+            Some(Instant::now() - Duration::from_secs(1));
         RunSink {
             broker: Arc::downgrade(&b),
             run: rid.clone(),

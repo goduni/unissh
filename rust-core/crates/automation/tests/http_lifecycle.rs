@@ -49,7 +49,13 @@ impl Executor for Execution {
             payload: Arc::new(()),
         })
     }
-    fn connect(&self, _: &Target, _: Cancel, _: Instant, _: &str) -> Result<Arc<dyn Connection>> {
+    fn connect(
+        &self,
+        _: &Target,
+        _: Cancel,
+        _: Option<Instant>,
+        _: &str,
+    ) -> Result<Arc<dyn Connection>> {
         Ok(Arc::new(Execution(self.0.clone())))
     }
 }

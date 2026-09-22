@@ -379,12 +379,13 @@ decryption key**, which it must never do.
 MCP is an opt-in loopback HTTP API inside the desktop application. A random
 256-bit bearer token identifies a registered integration; its versioned local
 configuration stores only a SHA-256 digest. Tokens never grant SSH access alone.
-Native temporary grants select saved targets, and native confirmation approves
+Native revocable grants select saved targets, and native confirmation approves
 an immutable command once. SSH keys, server passwords and authentication answers
 are not exposed as MCP tools, arguments or results. Every hop requires a pinned
 host key and uses the existing Core credential and Personal identity checks.
 
-Grants, sessions and output are ephemeral and bound to the native vault revision.
+Grants may have no time limit or a finite expiry. Grants, sessions and output are
+ephemeral and bound to the native vault revision.
 Revocation precedes transport cleanup. Lock, observed screen lock/suspend, expiry,
 app lifecycle changes and relevant vault mutations invalidate access; polling
 cannot renew it. HTTP reconnect does not restore a grant or replay a command.

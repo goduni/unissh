@@ -1,20 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export interface McpTarget { vault_id: string; profile_id: string; label: string; host: string; port: number; user: string }
+export interface McpSelection { targets: McpTarget[]; vaults: { id: string; name: string }[]; ticket: string }
 export interface McpIntegration { id: string; label: string }
-export interface McpSession { target?: McpTarget; expires_at: number; idle_seconds: number; session_id: string; target_id: string; state: string; integration_id: string; error: string | null }
+export interface McpSession { target?: McpTarget; expires_at: number | null; idle_seconds: number; session_id: string; target_id: string; state: string; integration_id: string; error: string | null }
 export interface McpRun { session_id: string | null; run_id: string; state: string; integration_id: string; error: string | null; command?: string; target?: McpTarget; timeout_ms?: number; approval_remaining_seconds?: number }
 export interface McpStatus {
   enabled: boolean; port: number; endpoint: string; error: string | null; integrations: McpIntegration[];
-  activity: { grants: { integration_id: string; remaining_seconds: number; targets: McpTarget[] }[]; sessions: McpSession[]; runs: McpRun[] };
+  activity: { grants: { integration_id: string; remaining_seconds: number | null; targets: McpTarget[] }[]; sessions: McpSession[]; runs: McpRun[] };
 }
 export const mcpStatus = () => invoke<McpStatus>("mcp_status");
 export const mcpEnable = (enabled: boolean, port: number) => invoke<void>("mcp_set_enabled", { enabled, port });
 export const mcpCreate = (label: string) => invoke<{ id: string; token: string }>("mcp_create_integration", { label });
 export const mcpRotate = (id: string) => invoke<{ id: string; token: string }>("mcp_rotate_integration", { id });
 export const mcpDelete = (id: string) => invoke<void>("mcp_delete_integration", { id });
-export const mcpTargets = () => invoke<{ targets: McpTarget[]; ticket: string }>("mcp_targets");
-export const mcpGrant = (id: string, targets: McpTarget[], seconds: number, ticket: string) => invoke<void>("mcp_grant", { id, targets: targets.map(({ vault_id, profile_id }) => ({ vault_id, profile_id })), seconds, ticket });
+export const mcpTargets = () => invoke<McpSelection>("mcp_targets");
+export const mcpGrant = (id: string, targets: McpTarget[], seconds: number | null, ticket: string) => invoke<void>("mcp_grant", { id, targets: targets.map(({ vault_id, profile_id }) => ({ vault_id, profile_id })), seconds, ticket });
 export const mcpRevoke = (id: string | null = null) => invoke<void>("mcp_revoke", { id });
 export const mcpApprove = (runId: string, allowed: boolean) => invoke<void>("mcp_approve", { runId, allowed });
 export const mcpCloseSession = (sessionId: string) => invoke<void>("mcp_close_session", { sessionId });

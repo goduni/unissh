@@ -1,7 +1,7 @@
 # Desktop MCP access
 
 UniSSH can expose selected saved SSH hosts to a local AI application through an
-embedded MCP server. Enable it in **Settings → MCP** on desktop. The server runs
+embedded MCP server. Open **MCP** in the desktop main menu to enable it. The server runs
 inside UniSSH at `http://127.0.0.1:<port>/mcp`; there is no companion executable,
 cloud relay, or change to your SSH servers. It is disabled by default.
 
@@ -15,14 +15,15 @@ cloud relay, or change to your SSH servers. It is disabled by default.
    port is saved. An occupied saved port produces an error and requires an
    explicit port change.
 3. Add an integration, for example “Local coding assistant”. Copy the token
-   when it is shown; only its digest is stored. Rotating a token revokes its old
-   permissions and connections. Deleting the integration disables its token.
+   when it is shown; only its digest is stored. The token itself has no expiry.
+   Rotating a token revokes its old permissions and connections. Deleting the integration disables its token.
 4. Configure your AI application with the displayed endpoint and an
    `Authorization: Bearer <TOKEN>` header. The copied configuration contains a
    placeholder, never the actual token. Keep the real token in the application's
    secret storage or private user configuration, outside a Git repository.
-5. Grant that integration access to specific saved hosts for 1–30 minutes and
-   acknowledge that command output can be sent to the AI provider. Each command
+5. Grant access to saved hosts with **No expiry** or a **30-minute** limit.
+   Choose a vault first, then select its hosts; selections can span several vaults.
+   Acknowledge that command output can be sent to the AI provider. Each command
    still requires a separate confirmation in UniSSH.
 
 A Streamable HTTP client that accepts custom headers can use this configuration:
@@ -113,10 +114,12 @@ an accepted command.
 - Revision invalidation is deliberately conservative: any vault item, membership,
   identity or trusted-key mutation, including verified sync, revokes current
   grants. Regrant after editing/syncing; MCP never silently follows a changed host.
-- The maximum grant is 30 minutes; explicit idle sessions close after 5 minutes.
+- Grants can have no time limit or a finite expiry (1–30 minutes through the native
+  API; the UI offers 30 minutes). No expiry does not bypass lock, restart or
+  revision invalidation. Explicit idle sessions close after 5 minutes.
   Listing and polling do not renew either lifetime. Approvals expire after
   2 minutes. Command timeout defaults to 2 minutes, with a 10-minute maximum
-  bounded by the grant. Review displays the exact immutable command in escaped
+  bounded by the grant when it has an expiry. Review displays the exact immutable command in escaped
   JSON string notation, so newlines, terminal controls and bidi controls are visible.
 - There are at most 8 SSH connections overall and 4 simultaneous connections
   per grant, shared by explicit and one-shot modes, 8 outstanding commands per
@@ -144,3 +147,6 @@ owner-only permissions on Unix and the application's user-directory ACL on Windo
 It contains digests and metadata, never raw tokens, grants or SSH credentials.
 Unknown/corrupt versions disable MCP instead of resetting trust. No vault format,
 AAD encoding, encrypted-sync wire format or database schema migration is added.
+
+Session results expose `expires_at: null` when the grant has no expiry. A Unix
+timestamp is returned for timed grants. Idle closure and revocation apply to both.

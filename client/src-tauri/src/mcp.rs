@@ -250,7 +250,7 @@ pub async fn mcp_grant(
     state: State<'_, Arc<Controller>>,
     id: String,
     targets: Vec<TargetRef>,
-    seconds: u32,
+    seconds: Option<u32>,
     ticket: String,
 ) -> ApiResult<()> {
     let serial = state.running.lock().await;
@@ -304,7 +304,9 @@ pub async fn mcp_targets(state: State<'_, Arc<Controller>>) -> ApiResult<Value> 
     tauri::async_runtime::spawn_blocking(move||{
         let ticket = broker.grant_ticket().map_err(|e| ApiError::other(e.message()))?;
         let mut targets=Vec::new();
+        let mut vaults=Vec::new();
         for vault in core.list_vaults()? {
+            vaults.push(json!({"id":vault.vault_id,"name":vault.name}));
             for p in core.list_connections(vault.vault_id.clone())? {
                 targets.push(json!({"vault_id":vault.vault_id,"profile_id":p.profile_id,"label":p.label,"host":p.host,"port":p.port,"user":p.user}));
             }
@@ -312,7 +314,7 @@ pub async fn mcp_targets(state: State<'_, Arc<Controller>>) -> ApiResult<Value> 
         if broker.grant_ticket().map_err(|e| ApiError::other(e.message()))? != ticket {
             return Err(ApiError::other("Hosts changed. Select them again."));
         }
-        Ok(json!({"targets":targets,"ticket":ticket}))
+        Ok(json!({"targets":targets,"vaults":vaults,"ticket":ticket}))
     }).await?
 }
 

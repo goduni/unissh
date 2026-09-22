@@ -85,7 +85,7 @@ impl Executor for Fake {
         &self,
         _: &Target,
         stop: Cancel,
-        _: Instant,
+        _: Option<Instant>,
         _: &str,
     ) -> Result<Arc<dyn Connection>> {
         if stop.load(Ordering::SeqCst) {
@@ -346,7 +346,13 @@ impl Executor for Delayed {
         }
         self.fake.resolve(v, p)
     }
-    fn connect(&self, _: &Target, _: Cancel, _: Instant, _: &str) -> Result<Arc<dyn Connection>> {
+    fn connect(
+        &self,
+        _: &Target,
+        _: Cancel,
+        _: Option<Instant>,
+        _: &str,
+    ) -> Result<Arc<dyn Connection>> {
         self.pause(); // Deliberately ignore cancellation to simulate a late auth reply.
         self.fake.connects.fetch_add(1, Ordering::SeqCst);
         Ok(Arc::new(Conn {
@@ -633,7 +639,7 @@ impl Executor for FailedConnect {
         &self,
         _: &Target,
         stop: Cancel,
-        _: Instant,
+        _: Option<Instant>,
         _: &str,
     ) -> Result<Arc<dyn Connection>> {
         // A timed-out SSH future leaves the blocking prompter holding this flag.
@@ -690,4 +696,64 @@ async fn failed_connections_cancel_native_prompts_in_both_modes() {
             "the closed operation must dismiss its orphaned native prompt"
         );
     }
+}
+
+#[tokio::test]
+async fn unbounded_grant_keeps_command_limits_and_explicit_revocation() {
+    let f = Arc::new(Fake::default());
+    let b = Broker::new(f.clone());
+    b.grant("a", "a".into(), vec![("v".into(), "p".into())], None)
+        .unwrap();
+    assert!(b.review()["grants"][0]["remaining_seconds"].is_null());
+    let targets = call(&b, "a", "list_targets", json!({})).await.unwrap();
+    let target = targets["targets"][0]["target_id"].as_str().unwrap();
+    let session = call(
+        &b,
+        "a",
+        "open_ssh_session",
+        json!({"target_id":target,"request_key":"open"}),
+    )
+    .await
+    .unwrap();
+    assert!(session["expires_at"].is_null());
+    let run = call(&b, "a", "run_command", json!({"target_id":target,"session_id":null,"request_key":"run","command":"hold","timeout_ms":30})).await.unwrap();
+    let rid = run["run_id"].as_str().unwrap();
+    assert_eq!(run["state"], "awaiting_approval");
+    assert_eq!(f.execs.load(Ordering::SeqCst), 0);
+    b.approve(rid, true).unwrap();
+    let done = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let r = call(&b, "a", "get_command", json!({"run_id":rid}))
+                .await
+                .unwrap();
+            if r["state"] != "running" && r["state"] != "connecting" {
+                break r;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_ne!(done["state"], "completed");
+    assert_eq!(b.review()["grants"].as_array().unwrap().len(), 1);
+    b.revoke(Some("a"));
+    assert!(b.review()["grants"].as_array().unwrap().is_empty());
+    assert_eq!(
+        call(&b, "a", "list_targets", json!({})).await,
+        Err(ToolError::GrantRequired)
+    );
+}
+
+#[tokio::test]
+async fn unbounded_grant_still_requires_new_consent_after_vault_mutation() {
+    let f = Arc::new(Fake::default());
+    let b = Broker::new(f.clone());
+    b.grant("a", "a".into(), vec![("v".into(), "p".into())], None)
+        .unwrap();
+    f.revision.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(
+        call(&b, "a", "list_targets", json!({})).await,
+        Err(ToolError::GrantRequired)
+    );
+    assert!(b.review()["grants"].as_array().unwrap().is_empty());
 }

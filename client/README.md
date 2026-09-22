@@ -83,7 +83,7 @@ npm run tauri android init && npm run tauri android dev
 ## Desktop MCP
 
 [Setup, tool examples and security limits](../docs/desktop-mcp.md) describe the
-optional server in Settings → MCP. It is embedded in Tauri, uses native temporary
+optional server under MCP in the main menu. It is embedded in Tauri, uses native revocable
 grants and per-command approvals, and owns SSH connections independently of the
 terminal registry. No sidecar binary or server-control-plane change is needed.
 Mobile does not compile or expose the listener.

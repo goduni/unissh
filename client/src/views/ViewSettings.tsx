@@ -80,8 +80,6 @@ import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useUpdate } from "@/store/update";
 import { updatesSupported } from "@/bridge/updater";
 import { osPlatform } from "@/bridge/platform";
-import { SettingsMcp } from "./SettingsMcp";
-import { isDesktopOs } from "@/bridge/platform";
 import { SettingsSupport } from "./SettingsSupport";
 import { TerminalPreview } from "./TerminalPreview";
 
@@ -4635,13 +4633,12 @@ function SettingsCloud() {
 }
 
 // ── shell ──────────────────────────────────────────────────────
-type TabId = "mcp" | "appearance" | "general" | "vaults" | "cloud" | "security" | "about" | "support";
+type TabId = "appearance" | "general" | "vaults" | "cloud" | "security" | "about" | "support";
 const SETTINGS_TABS: { id: TabId; icon: IconName; labelKey: string }[] = [
   { id: "appearance", icon: "sliders", labelKey: "settings.tabAppearance" },
   { id: "general", icon: "refresh", labelKey: "settings.tabGeneral" },
   { id: "vaults", icon: "layers", labelKey: "vault.manage" },
   { id: "cloud", icon: "cloud", labelKey: "serverCloud.tab" },
-  { id: "mcp", icon: "link", labelKey: "mcp.tab" },
   { id: "security", icon: "shieldcheck", labelKey: "settings.tabSecurity" },
   { id: "about", icon: "note", labelKey: "settings.tabAbout" },
   { id: "support", icon: "heart", labelKey: "support.tab" },
@@ -4691,7 +4688,7 @@ export function ViewSettings() {
             {t("settings.heading")}
           </h1>
         )}
-        {SETTINGS_TABS.filter(tb => tb.id !== "mcp" || isDesktopOs()).map((tb) => {
+        {SETTINGS_TABS.map((tb) => {
           const on = tab === tb.id;
           return (
             <button
@@ -4743,7 +4740,6 @@ export function ViewSettings() {
           {tab === "general" && <SettingsGeneral />}
           {tab === "vaults" && <SettingsVaults />}
           {tab === "cloud" && <SettingsCloud />}
-          {tab === "mcp" && isDesktopOs() && <SettingsMcp />}
           {tab === "security" && <SettingsSecurity />}
           {tab === "about" && <SettingsAbout />}
           {tab === "support" && <SettingsSupport />}

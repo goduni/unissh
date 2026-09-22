@@ -351,7 +351,7 @@ or terminal-tab attachment tool is exposed. Host trust, Personal destination bin
 routes remain Core responsibilities; MCP forbids TOFU for every hop.
 
 An integration token and its transient grant are separate authorities. Grants
-expire monotonically, require an unlocked native Core, and are invalidated by
+may be unbounded or expire monotonically, require an unlocked native Core, and are invalidated by
 security-relevant storage revisions, including synced changes. Final command
 admission is serialized with revocation and Core mutation. Output access is checked
 on every read. A late authentication/output callback cannot restore revoked

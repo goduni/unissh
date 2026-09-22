@@ -1,0 +1,192 @@
+import { useState } from "react";
+import { Btn, Field, Icon, Input } from "@/components/primitives";
+import { useTranslation } from "@/i18n";
+import type { McpSelection, McpTarget } from "@/bridge/mcp";
+
+export const targetKey = (target: McpTarget) =>
+  JSON.stringify([target.vault_id, target.profile_id]);
+
+export function McpAccessEditor({
+  selection,
+  initial,
+  initialSeconds,
+  busy,
+  onSave,
+  onCancel,
+}: {
+  selection: McpSelection;
+  initial: McpTarget[];
+  initialSeconds: number | null;
+  busy: boolean;
+  onSave: (targets: McpTarget[], seconds: number | null) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [vault, setVault] = useState(initial[0]?.vault_id ?? "");
+  const [selected, setSelected] = useState(
+    () => new Set(initial.map(targetKey)),
+  );
+  const [search, setSearch] = useState("");
+  const [consent, setConsent] = useState(false);
+  const [duration, setDuration] = useState(
+    initialSeconds === null ? "forever" : "30",
+  );
+  const chosen = selection.targets.filter((target) =>
+    selected.has(targetKey(target)),
+  );
+  const query = search.trim().toLocaleLowerCase();
+  const visible = selection.targets.filter(
+    (target) =>
+      target.vault_id === vault &&
+      `${target.label} ${target.user} ${target.host}`
+        .toLocaleLowerCase()
+        .includes(query),
+  );
+  const setChecked = (targets: McpTarget[], checked: boolean) =>
+    setSelected((previous) => {
+      const next = new Set(previous);
+      for (const target of targets) {
+        if (checked) next.add(targetKey(target));
+        else next.delete(targetKey(target));
+      }
+      return next;
+    });
+  const allChecked =
+    visible.length > 0 &&
+    visible.every((target) => selected.has(targetKey(target)));
+  return (
+    <form
+      className="mcp-access-editor"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!busy && consent && chosen.length > 0 && chosen.length <= 64)
+          onSave(chosen, duration === "forever" ? null : Number(duration) * 60);
+      }}
+    >
+      <fieldset disabled={busy}>
+        <Field label={t("mcp.chooseVault")}>
+          <select
+            aria-label={t("mcp.chooseVault")}
+            autoFocus
+            value={vault}
+            onChange={(e) => {
+              setVault(e.target.value);
+              setSearch("");
+            }}
+          >
+            <option value="" disabled>
+              {t("mcp.chooseVaultPlaceholder")}
+            </option>
+            {selection.vaults.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {!selection.vaults.length && <p>{t("mcp.noTargets")}</p>}
+        {vault && (
+          <div className="mcp-host-picker">
+            <Field label={t("mcp.searchHosts")}>
+              <Input
+                icon="search"
+                value={search}
+                onChange={setSearch}
+                placeholder={t("mcp.searchPlaceholder")}
+              />
+            </Field>
+            {!!visible.length && (
+              <label className="mcp-check mcp-select-all">
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  onChange={(e) => setChecked(visible, e.target.checked)}
+                />
+                <span>{t("mcp.selectVisible")}</span>
+              </label>
+            )}
+            <div className="mcp-host-options">
+              {visible.map((target) => (
+                <label className="mcp-check mcp-host" key={targetKey(target)}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(targetKey(target))}
+                    onChange={(e) => setChecked([target], e.target.checked)}
+                  />
+                  <span>
+                    <strong>{target.label}</strong>
+                    <small>
+                      {target.user}@{target.host}:{target.port}
+                    </small>
+                  </span>
+                </label>
+              ))}
+            </div>
+            {!visible.length && (
+              <p className="mcp-hint">
+                {t(query ? "mcp.noMatches" : "mcp.vaultEmpty")}
+              </p>
+            )}
+          </div>
+        )}
+        {!!chosen.length && (
+          <div className="mcp-selection-summary">
+            <strong>
+              {t("mcp.selectedHosts", {
+                hosts: t("count.hosts", { count: chosen.length }),
+              })}
+            </strong>
+            <div>
+              {selection.vaults
+                .filter((v) =>
+                  chosen.some((target) => target.vault_id === v.id),
+                )
+                .map((v) => (
+                  <span key={v.id}>
+                    <Icon name="layers" size={14} />
+                    {v.name} ·{" "}
+                    {chosen.filter((target) => target.vault_id === v.id).length}
+                  </span>
+                ))}
+            </div>
+          </div>
+        )}
+        {chosen.length > 64 && (
+          <p className="mcp-error" role="alert">
+            {t("mcp.tooManyHosts")}
+          </p>
+        )}
+        <Field label={t("mcp.duration")}>
+          <select
+            aria-label={t("mcp.duration")}
+            value={duration}
+            onChange={(e) => setDuration(e.target.value)}
+          >
+            <option value="forever">{t("mcp.noExpiry")}</option>
+            <option value="30">{t("mcp.thirtyMinutes")}</option>
+          </select>
+        </Field>
+        <p className="mcp-hint">{t("mcp.accessLifetime")}</p>
+        <label className="mcp-check mcp-consent">
+          <input
+            type="checkbox"
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+          />
+          <span>{t("mcp.disclosure")}</span>
+        </label>
+        <div className="mcp-actions">
+          <Btn
+            type="submit"
+            disabled={busy || !consent || !chosen.length || chosen.length > 64}
+          >
+            {t("mcp.allow")}
+          </Btn>
+          <Btn type="button" variant="ghost" disabled={busy} onClick={onCancel}>
+            {t("common.cancel")}
+          </Btn>
+        </div>
+      </fieldset>
+    </form>
+  );
+}

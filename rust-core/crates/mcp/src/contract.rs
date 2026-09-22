@@ -225,8 +225,8 @@ pub struct TargetsResult {
 }
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct SessionResult {
-    /// Upper bound on connection lifetime, in Unix seconds; idle closure may be earlier.
-    pub expires_at: u64,
+    /// Upper bound in Unix seconds, or null for no grant expiry. Idle closure may be earlier.
+    pub expires_at: Option<u64>,
     pub session_id: String,
     pub target_id: String,
     pub state: String,

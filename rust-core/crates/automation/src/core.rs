@@ -52,16 +52,21 @@ impl Executor for CoreExecutor {
         &self,
         target: &Target,
         cancel: Cancel,
-        deadline: Instant,
+        deadline: Option<Instant>,
         attribution: &str,
     ) -> Result<Arc<dyn Connection>> {
         let target = target
             .payload
             .downcast_ref::<unissh_ffi::automation::Target>()
             .ok_or(ToolError::TargetUnavailable)?;
-        let prompt = self
-            .prompts
-            .for_connection(attribution, cancel.clone(), deadline);
+        let prompt = self.prompts.for_connection(
+            attribution,
+            cancel.clone(),
+            deadline.map_or_else(
+                || Instant::now() + Duration::from_secs(330),
+                |until| until.min(Instant::now() + Duration::from_secs(330)),
+            ),
+        );
         self.core
             .automation_connect(
                 target,
