@@ -395,6 +395,7 @@ export function ViewMcp() {
                       <div>
                         <h3>{t("mcp.hostAccess")}</h3>
                         <p>{grant ? duration(grant) : t("mcp.noGrant")}</p>
+                        {grant && <p className="mcp-policy-summary">{t(`mcp.approvalModes.${grant.approval_mode ?? "manual"}`)}</p>}
                       </div>
                       <div className="mcp-actions">
                         <Btn
@@ -426,15 +427,17 @@ export function ViewMcp() {
                         selection={editor.selection}
                         initial={grant?.targets ?? []}
                         initialSeconds={grant?.remaining_seconds ?? null}
+                        initialApprovalMode={grant?.approval_mode ?? "manual"}
                         busy={busy}
                         onCancel={() => setEditor(null)}
-                        onSave={(targets, seconds) =>
+                        onSave={(targets, seconds, approvalMode) =>
                           void act(async () => {
                             await api.mcpGrant(
                               integration.id,
                               targets,
                               seconds,
                               editor.selection.ticket,
+                              approvalMode,
                             );
                             if (alive.current) setEditor(null);
                           })
@@ -498,6 +501,7 @@ export function ViewMcp() {
                         </div>
                         {[
                           "awaiting_approval",
+                          "queued",
                           "connecting",
                           "running",
                           "cancelling",

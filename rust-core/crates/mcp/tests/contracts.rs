@@ -40,7 +40,8 @@ fn runtime_rejects_credentials_identity_overrides_and_invalid_limits() {
         "integration_id",
         "grant_id",
         "env",
-        "cwd",
+        "approval_mode",
+        "approved",
     ] {
         let mut args = json!({"session_id":"s", "command":"pwd", "request_key":"k"});
         args[field] = json!("should-never-be-accepted");
@@ -103,4 +104,41 @@ fn discovery_describes_only_the_supported_tools() {
         schema["$defs"]["OneShotCommand"]["properties"]["session_id"]["type"],
         "null"
     );
+}
+
+#[test]
+fn cwd_and_wait_limits_are_explicit_without_accepting_approval_overrides() {
+    for session in [json!("s"), Value::Null] {
+        let mut args = json!({"session_id":session,"command":"pwd","request_key":"k","cwd":"/srv/space ' $HOME","wait_ms":30000});
+        if session.is_null() {
+            args["target_id"] = json!("t");
+        }
+        assert!(request(args.clone()).is_ok());
+        for cwd in [
+            json!(""),
+            json!("relative"),
+            json!("~/project"),
+            json!("/bad\0path"),
+            json!(format!("/{}", "x".repeat(32768))),
+            json!(12),
+        ] {
+            args["cwd"] = cwd;
+            assert!(request(args.clone()).is_err());
+        }
+        args["cwd"] = Value::Null;
+        for wait in [json!(30001), json!(-1), json!(1.5), json!("100")] {
+            args["wait_ms"] = wait;
+            assert!(request(args.clone()).is_err());
+        }
+    }
+    for ms in [0, 30000, 30001] {
+        let result = parse(
+            "open_ssh_session",
+            json!({"target_id":"t","request_key":"open","wait_ms":ms})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(result.is_ok(), ms <= 30000);
+    }
 }

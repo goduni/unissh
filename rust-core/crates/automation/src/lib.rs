@@ -1,8 +1,7 @@
 //! Native authorization broker. HTTP callers cannot grant access or approve commands.
 #![forbid(unsafe_code)]
 
-use base64::{engine::general_purpose::STANDARD, Engine};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     any::Any,
@@ -22,6 +21,8 @@ use zeroize::Zeroizing;
 
 #[cfg(feature = "core")]
 pub mod core;
+mod output;
+mod working_directory;
 
 pub type Result<T> = std::result::Result<T, ToolError>;
 pub type Cancel = Arc<AtomicBool>;
@@ -90,7 +91,16 @@ struct LiveConnection {
     _slot: OwnedSemaphorePermit,
     _owner_slot: OwnedSemaphorePermit,
 }
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    #[default]
+    Manual,
+    Trusted,
+}
+
 struct Grant {
+    approval_mode: ApprovalMode,
     slots: Arc<Semaphore>,
     epoch: String,
     label: String,
@@ -110,10 +120,6 @@ struct Session {
     idle: Instant,
     expires_at: Option<u64>,
 }
-struct Chunk {
-    stderr: bool,
-    data: Vec<u8>,
-}
 struct Run {
     id: String,
     owner: String,
@@ -122,6 +128,7 @@ struct Run {
     session: Option<String>,
     key: String,
     command: Zeroizing<String>,
+    cwd: Option<Zeroizing<String>>,
     timeout_ms: u32,
     state: &'static str,
     error: Option<ToolError>,
@@ -130,7 +137,7 @@ struct Run {
     finished_at: Option<Instant>,
     started_at: Option<Instant>,
     exit_code: Option<u32>,
-    chunks: Vec<Chunk>,
+    output: output::OutputBuffer,
     bytes: usize,
     truncated: bool,
 }
@@ -226,7 +233,26 @@ impl Broker {
         seconds: impl Into<Option<u32>>,
         ticket: &str,
     ) -> Result<()> {
-        let seconds = seconds.into();
+        self.grant_with_policy(
+            owner,
+            label,
+            targets,
+            seconds.into(),
+            ticket,
+            ApprovalMode::Manual,
+        )
+    }
+
+    /// Only the trusted native grant UI may choose a command approval policy.
+    pub fn grant_with_policy(
+        &self,
+        owner: &str,
+        label: String,
+        targets: Vec<(String, String)>,
+        seconds: Option<u32>,
+        ticket: &str,
+        approval_mode: ApprovalMode,
+    ) -> Result<()> {
         if owner.is_empty() || targets.is_empty() || targets.len() > 64 || seconds == Some(0) {
             return Err(ToolError::TargetUnavailable);
         }
@@ -262,6 +288,7 @@ impl Broker {
         lock(&self.state).grants.insert(
             owner.into(),
             Grant {
+                approval_mode,
                 slots: Arc::new(Semaphore::new(4)),
                 epoch: id(),
                 label,
@@ -270,7 +297,7 @@ impl Broker {
                 targets: resolved,
             },
         );
-        log::info!("MCP grant issued: integration={owner}, ttl_seconds={seconds:?}");
+        log::info!("MCP grant issued: integration={owner}, ttl_seconds={seconds:?}, approval_mode={approval_mode:?}");
         Ok(())
     }
 
@@ -348,9 +375,9 @@ impl Broker {
             if run
                 .finished_at
                 .is_some_and(|t| now.duration_since(t) >= Duration::from_secs(600))
-                && !run.chunks.is_empty()
+                && !run.output.is_empty()
             {
-                run.chunks.clear();
+                run.output.clear();
                 run.bytes = 0;
                 run.error = Some(ToolError::OutputExpired);
             }
@@ -547,7 +574,7 @@ impl Broker {
                     .filter(|run| run.owner == owner && run.session.as_ref() == Some(&r.session_id))
                 {
                     cancel(&run.cancel);
-                    if run.state == "awaiting_approval" {
+                    if matches!(run.state, "awaiting_approval" | "queued") {
                         finish(run, "cancelled", None);
                     }
                 }
@@ -558,7 +585,7 @@ impl Broker {
                 Ok(result)
             }
             ToolRequest::RunCommand(r) => {
-                let (session, target_id, command, key, timeout_ms) = match r {
+                let (session, target_id, command, key, timeout_ms, cwd) = match r {
                     RunCommand::Existing(r) => {
                         let s = state
                             .sessions
@@ -571,6 +598,7 @@ impl Broker {
                             r.command,
                             r.request_key,
                             r.timeout_ms.unwrap_or(120_000),
+                            r.cwd,
                         )
                     }
                     RunCommand::OneShot(r) => (
@@ -579,6 +607,7 @@ impl Broker {
                         r.command,
                         r.request_key,
                         r.timeout_ms.unwrap_or(120_000),
+                        r.cwd,
                     ),
                 };
                 if let Some((rid, r)) = state
@@ -590,8 +619,9 @@ impl Broker {
                         && r.target == target_id
                         && *r.command == command
                         && r.timeout_ms == timeout_ms
+                        && r.cwd.as_ref().map(|v| v.as_str()) == cwd.as_deref()
                     {
-                        Ok(run_json(rid, r))
+                        output::page(rid, r, None)
                     } else {
                         Err(ToolError::RequestConflict)
                     };
@@ -625,31 +655,57 @@ impl Broker {
                 {
                     return Err(ToolError::Busy);
                 }
+                let approval_mode = grant.approval_mode;
                 let rid = id();
                 state.runs.insert(
                     rid.clone(),
                     Run {
                         id: rid.clone(),
-                        owner,
+                        owner: owner.clone(),
                         epoch,
                         target: target_id,
                         session,
                         key,
                         command: Zeroizing::new(command),
+                        cwd: cwd.map(Zeroizing::new),
                         timeout_ms,
-                        state: "awaiting_approval",
+                        state: if approval_mode == ApprovalMode::Manual {
+                            "awaiting_approval"
+                        } else {
+                            "queued"
+                        },
                         error: None,
                         cancel: Arc::new(AtomicBool::new(false)),
                         approval_until: Instant::now() + Duration::from_secs(120),
                         finished_at: None,
                         started_at: None,
                         exit_code: None,
-                        chunks: Vec::new(),
+                        output: output::OutputBuffer::default(),
                         bytes: 0,
                         truncated: false,
                     },
                 );
-                Ok(run_json(&rid, &state.runs[&rid]))
+                drop(state);
+                if approval_mode == ApprovalMode::Trusted {
+                    if let Err(error) = self.start_run(&rid, true, ApprovalMode::Trusted) {
+                        if let Some(run) = lock(&self.state)
+                            .runs
+                            .get_mut(&rid)
+                            .filter(|run| run.finished_at.is_none())
+                        {
+                            finish(run, "failed", Some(error));
+                        }
+                        return Err(error);
+                    }
+                }
+                self.request(
+                    owner,
+                    ToolRequest::GetCommand(unissh_mcp::contract::GetCommand {
+                        run_id: rid,
+                        output_cursor: None,
+                        wait_ms: None,
+                    }),
+                )
             }
             ToolRequest::GetCommand(r) => {
                 let run = state
@@ -657,35 +713,7 @@ impl Broker {
                     .get(&r.run_id)
                     .filter(|r| r.owner == owner)
                     .ok_or(ToolError::OutcomeUnknown)?;
-                if run.error == Some(ToolError::OutputExpired) {
-                    return Err(ToolError::OutputExpired);
-                }
-                let cursor = r
-                    .output_cursor
-                    .as_deref()
-                    .unwrap_or("0")
-                    .parse::<usize>()
-                    .map_err(|_| ToolError::OutputExpired)?;
-                if cursor > run.chunks.len() {
-                    return Err(ToolError::OutputExpired);
-                }
-                let mut bytes = 0;
-                let mut next = cursor;
-                let mut chunks = Vec::new();
-                for chunk in run.chunks.iter().skip(cursor) {
-                    if bytes + chunk.data.len() > PAGE_BYTES {
-                        break;
-                    }
-                    chunks.push(json!({"cursor":next.to_string(),"stream":if chunk.stderr {"stderr"} else {"stdout"},"encoding":"base64","data":STANDARD.encode(&chunk.data)}));
-                    bytes += chunk.data.len();
-                    next += 1;
-                }
-                let mut result = run_json(&r.run_id, run);
-                result["chunks"] = json!(chunks);
-                result["next_cursor"] = json!(next.to_string());
-                result["truncated"] = json!(run.truncated);
-                result["exit_code"] = json!(run.exit_code);
-                Ok(result)
+                output::page(&r.run_id, run, r.output_cursor.as_deref())
             }
             ToolRequest::CancelCommand(r) => {
                 let run = state
@@ -695,7 +723,7 @@ impl Broker {
                     .ok_or(ToolError::OutcomeUnknown)?;
                 if run.finished_at.is_none() {
                     cancel(&run.cancel);
-                    if run.state == "awaiting_approval" {
+                    if matches!(run.state, "awaiting_approval" | "queued") {
                         finish(run, "cancelled", None);
                     } else {
                         run.state = "cancelling";
@@ -737,13 +765,13 @@ impl Broker {
         self.sweep();
         let state = lock(&self.state);
         json!({
-            "grants":state.grants.iter().map(|(owner,g)|json!({"integration_id":owner,"label":g.label,"remaining_seconds":g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),"targets":g.targets.values().map(|t|&t.info).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+            "grants":state.grants.iter().map(|(owner,g)|json!({"integration_id":owner,"label":g.label,"approval_mode":g.approval_mode,"remaining_seconds":g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),"targets":g.targets.values().map(|t|&t.info).collect::<Vec<_>>()})).collect::<Vec<_>>(),
             "sessions":state.sessions.iter().map(|(id,s)|{let mut v=session_json(id,s);v["integration_id"]=json!(s.owner);v["target"]=state.grants.get(&s.owner).and_then(|g|g.targets.get(&s.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);v["idle_seconds"]=json!(Duration::from_secs(300).saturating_sub(s.idle.elapsed()).as_secs());v}).collect::<Vec<_>>(),
             "runs":state.runs.iter().map(|(id,r)|{
                 let mut v=run_json(id,r);v["integration_id"]=json!(r.owner);
                 v["target"]=state.grants.get(&r.owner).and_then(|g|g.targets.get(&r.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);
                 if r.state=="awaiting_approval" {
-                    v["command"]=json!(&*r.command);v["timeout_ms"]=json!(r.timeout_ms);v["approval_remaining_seconds"]=json!(r.approval_until.saturating_duration_since(Instant::now()).as_secs());
+                    v["cwd"]=json!(r.cwd.as_ref().map(|cwd| cwd.as_str()));v["command"]=json!(&*r.command);v["timeout_ms"]=json!(r.timeout_ms);v["approval_remaining_seconds"]=json!(r.approval_until.saturating_duration_since(Instant::now()).as_secs());
                     v["target"]=state.grants.get(&r.owner).and_then(|g|g.targets.get(&r.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);
                 } v
             }).collect::<Vec<_>>()
@@ -751,10 +779,19 @@ impl Broker {
     }
 
     pub fn approve(self: &Arc<Self>, run_id: &str, allowed: bool) -> Result<()> {
+        self.start_run(run_id, allowed, ApprovalMode::Manual)
+    }
+
+    fn start_run(self: &Arc<Self>, run_id: &str, allowed: bool, mode: ApprovalMode) -> Result<()> {
         self.sweep();
         let mut state = lock(&self.state);
         let run = state.runs.get(run_id).ok_or(ToolError::ApprovalExpired)?;
-        if run.state != "awaiting_approval"
+        if run.state
+            != if mode == ApprovalMode::Manual {
+                "awaiting_approval"
+            } else {
+                "queued"
+            }
             || cancelled(&run.cancel)
             || Instant::now() >= run.approval_until
         {
@@ -773,6 +810,9 @@ impl Broker {
             .get(&run.owner)
             .filter(|g| g.epoch == run.epoch && g.until.is_none_or(|until| Instant::now() < until))
             .ok_or(ToolError::GrantExpired)?;
+        if grant.approval_mode != mode {
+            return Err(ToolError::ApprovalDenied);
+        }
         let target = grant
             .targets
             .get(&run.target)
@@ -810,12 +850,13 @@ impl Broker {
             )
         };
         log::info!(
-            "MCP approval accepted: integration_id={}, target_id={}, run_id={run_id}",
+            "MCP run authorized: integration_id={}, target_id={}, run_id={run_id}, approval_mode={mode:?}",
             run.owner,
             run.target
         );
         let stop = run.cancel.clone();
-        let command = run.command.clone();
+        let command =
+            working_directory::command(&run.command, run.cwd.as_ref().map(|cwd| cwd.as_str()));
         let rid = run_id.to_string();
         let run = state.runs.get_mut(run_id).unwrap();
         run.state = if connection.is_none() {
@@ -914,10 +955,19 @@ impl Backend for Broker {
         let broker = self.weak.upgrade();
         Box::pin(async move {
             let broker = broker.ok_or(ToolError::GrantExpired)?;
-            let poll = match &request {
-                ToolRequest::GetCommand(r) => Some(r.clone()),
-                _ => None,
+            enum Wait {
+                Session,
+                Run,
+                Output(unissh_mcp::contract::GetCommand),
+            }
+            let (wait, ms) = match &request {
+                ToolRequest::OpenSession(r) => (Some(Wait::Session), r.wait_ms),
+                ToolRequest::RunCommand(RunCommand::Existing(r)) => (Some(Wait::Run), r.wait_ms),
+                ToolRequest::RunCommand(RunCommand::OneShot(r)) => (Some(Wait::Run), r.wait_ms),
+                ToolRequest::GetCommand(r) => (Some(Wait::Output(r.clone())), r.wait_ms),
+                _ => (None, None),
             };
+            let until = tokio::time::Instant::now() + Duration::from_millis(ms.unwrap_or(0).into());
             let call_broker = broker.clone();
             let owner = integration.0;
             let call_owner = owner.clone();
@@ -925,29 +975,69 @@ impl Backend for Broker {
                 tokio::task::spawn_blocking(move || call_broker.request(call_owner, request))
                     .await
                     .map_err(|_| ToolError::OutcomeUnknown)??;
-            let Some(poll) = poll.filter(|r| r.wait_ms.unwrap_or(0) > 0) else {
+            let Some(wait) = wait.filter(|_| ms.unwrap_or(0) > 0) else {
                 return Ok(first);
             };
-            if first["chunks"].as_array().is_some_and(|c| !c.is_empty())
-                || matches!(
-                    first["state"].as_str(),
+            let done = |result: &Value| {
+                matches!(
+                    result["state"].as_str(),
                     Some("completed" | "failed" | "cancelled" | "denied")
                 )
-            {
-                return Ok(first);
+            };
+            match &wait {
+                Wait::Session if first["state"] != "connecting" => return Ok(first),
+                Wait::Run if first["state"] == "awaiting_approval" || done(&first) => {
+                    return Ok(first)
+                }
+                Wait::Output(_)
+                    if first["chunks"].as_array().is_some_and(|c| !c.is_empty())
+                        || done(&first) =>
+                {
+                    return Ok(first)
+                }
+                _ => {}
             }
-            let until = tokio::time::Instant::now()
-                + Duration::from_millis(poll.wait_ms.unwrap_or(0).into());
             loop {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                tokio::time::sleep_until(
+                    until.min(tokio::time::Instant::now() + Duration::from_millis(20)),
+                )
+                .await;
                 let b = broker.clone();
                 let o = owner.clone();
-                let p = poll.clone();
-                let result =
-                    tokio::task::spawn_blocking(move || b.request(o, ToolRequest::GetCommand(p)))
-                        .await
-                        .map_err(|_| ToolError::OutcomeUnknown)??;
-                if result != first || tokio::time::Instant::now() >= until {
+                let poll = match &wait {
+                    Wait::Session => ToolRequest::ListSessions(unissh_mcp::contract::ListRequest {
+                        cursor: None,
+                    }),
+                    Wait::Run => ToolRequest::GetCommand(unissh_mcp::contract::GetCommand {
+                        run_id: first["run_id"]
+                            .as_str()
+                            .ok_or(ToolError::OutcomeUnknown)?
+                            .into(),
+                        output_cursor: None,
+                        wait_ms: None,
+                    }),
+                    Wait::Output(poll) => ToolRequest::GetCommand(poll.clone()),
+                };
+                let mut result = tokio::task::spawn_blocking(move || b.request(o, poll))
+                    .await
+                    .map_err(|_| ToolError::OutcomeUnknown)??;
+                let ready = match &wait {
+                    Wait::Session => {
+                        result = result["sessions"]
+                            .as_array()
+                            .and_then(|sessions| {
+                                sessions
+                                    .iter()
+                                    .find(|s| s["session_id"] == first["session_id"])
+                            })
+                            .cloned()
+                            .ok_or(ToolError::SessionClosed)?;
+                        result["state"] != "connecting"
+                    }
+                    Wait::Run => done(&result),
+                    Wait::Output(_) => result != first,
+                };
+                if ready || tokio::time::Instant::now() >= until {
                     return Ok(result);
                 }
             }
@@ -965,6 +1055,7 @@ fn finish(run: &mut Run, state: &'static str, error: Option<ToolError>) {
     );
     run.state = state;
     run.error = error;
+    run.output.flush();
     run.finished_at = Some(Instant::now());
 }
 fn session_json(id: &str, s: &Session) -> Value {
@@ -1003,17 +1094,7 @@ impl Output for RunSink {
             .len()
             .min(remaining)
             .min(OUTPUT_PER_RUN.saturating_sub(run.bytes));
-        let mut saved = 0;
-        for chunk in bytes[..kept].chunks(16 * 1024) {
-            if run.chunks.len() >= 4096 {
-                break;
-            }
-            run.chunks.push(Chunk {
-                stderr,
-                data: chunk.to_vec(),
-            });
-            saved += chunk.len();
-        }
+        let saved = run.output.push(stderr, &bytes[..kept]);
         run.bytes += saved;
         run.truncated |= saved < bytes.len();
         state.retained_bytes += saved;

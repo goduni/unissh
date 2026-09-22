@@ -8,17 +8,24 @@ transport. HTTP cannot create grants, approve commands or supply authentication.
 Grants can be unbounded (`None`) or timed (a positive `u32` number of seconds). They are never
 persisted; lock, restart and revocation still invalidate unbounded grants. Vault/trust/identity writes
 conservatively invalidate all current grants, including verified sync changes.
-Explicit SSH connections expire after five idle minutes; each command needs a
-separate, immutable native approval within two minutes. A null session creates
-an owned one-shot connection after approval. Neither mode retries commands.
+Explicit SSH connections expire after five idle minutes. The native grant chooses
+manual confirmation (default, two-minute immutable review of command and cwd) or
+trusted application (immediate execution). MCP cannot select or elevate this
+policy. Both paths share admission checks and cancellation. A null session creates
+an owned one-shot connection after authorization. Neither mode retries commands.
+Optional bounded waits on open/run preserve asynchronous execution and deduplication;
+wait expiry does not cancel the operation. cwd is a literal absolute POSIX directory
+for one exec; it never changes the reusable connection's shell state.
 
 Eight physical connections overall, four connections per grant shared by both
 modes, bounded
 records, 1 MiB output per run and 8 MiB total bound resource use. Output pages use
-base64 chunks to preserve binary and split UTF-8 bytes; callers decode explicitly.
+UTF-8 text where valid and base64 for binary/NUL or invalid UTF-8. Each stream
+buffers at most three incomplete UTF-8 bytes; termination flushes them losslessly.
+Published chunks/cursors are immutable and bytes in these buffers count toward limits.
 Discarded output is marked truncated while the SSH reader continues draining.
 Cancellation closes a channel; detached remote processes may continue.
 
-`Broker::grant`, `approve`, `review` and `revoke` are trusted native APIs. Keep
+`Broker::grant`, `grant_with_policy`, `approve`, `review` and `revoke` are trusted native APIs. Keep
 them out of the MCP router. Install native SDK log suppression before binding
 real broker data to HTTP, as documented by `unissh-mcp`.

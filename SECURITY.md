@@ -379,8 +379,13 @@ decryption key**, which it must never do.
 MCP is an opt-in loopback HTTP API inside the desktop application. A random
 256-bit bearer token identifies a registered integration; its versioned local
 configuration stores only a SHA-256 digest. Tokens never grant SSH access alone.
-Native revocable grants select saved targets, and native confirmation approves
-an immutable command once. SSH keys, server passwords and authentication answers
+Native revocable grants select saved targets and a command approval mode.
+Manual mode (the default) requires native confirmation of an immutable command
+and optional working directory. Trusted mode is explicitly selected in the native
+UI and permits immediate execution with the SSH user's authority; the external
+application controls its own confirmations, which UniSSH cannot attest. MCP calls
+cannot set or change grant policy. Both modes share final execution admission,
+revision checks, deadlines and revocation. SSH keys, server passwords and authentication answers
 are not exposed as MCP tools, arguments or results. Every hop requires a pinned
 host key and uses the existing Core credential and Personal identity checks.
 
@@ -395,7 +400,7 @@ output. Automation audit messages contain only IDs, decisions, outcomes and byte
 counts; command/output text is not logged.
 
 Loopback HTTP does not provide server authentication or OS-user isolation. A local
-process can impersonate an absent listener and steal its client's token. Native
+process can impersonate an absent listener and steal its client's token. In manual mode, native
 approval reduces this token's authority but does not make a compromised desktop
 safe. Approved command output may go to the AI provider and can include remote
 secrets. Cancellation cannot guarantee termination of detached remote processes.

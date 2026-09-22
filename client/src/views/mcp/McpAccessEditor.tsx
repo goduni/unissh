@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import { Btn, Field, Icon, Input } from "@/components/primitives";
 import { useTranslation } from "@/i18n";
-import type { McpSelection, McpTarget } from "@/bridge/mcp";
+import type { McpApprovalMode, McpSelection, McpTarget } from "@/bridge/mcp";
 
 import { McpDurationPicker } from "./McpDurationPicker";
 import { durationSeconds, initialDuration } from "./duration";
@@ -13,6 +13,7 @@ export function McpAccessEditor({
   selection,
   initial,
   initialSeconds,
+  initialApprovalMode,
   busy,
   onSave,
   onCancel,
@@ -20,8 +21,9 @@ export function McpAccessEditor({
   selection: McpSelection;
   initial: McpTarget[];
   initialSeconds: number | null;
+  initialApprovalMode: McpApprovalMode;
   busy: boolean;
-  onSave: (targets: McpTarget[], seconds: number | null) => void;
+  onSave: (targets: McpTarget[], seconds: number | null, approvalMode: McpApprovalMode) => void;
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
@@ -31,6 +33,7 @@ export function McpAccessEditor({
     () => new Set(initial.map(targetKey)),
   );
   const [search, setSearch] = useState("");
+  const [approvalMode, setApprovalMode] = useState(initialApprovalMode);
   const [consent, setConsent] = useState(false);
   const [duration, setDuration] = useState(() =>
     initialDuration(initialSeconds),
@@ -71,7 +74,7 @@ export function McpAccessEditor({
           chosen.length <= 64 &&
           seconds !== undefined
         )
-          onSave(chosen, seconds);
+          onSave(chosen, seconds, approvalMode);
       }}
     >
       <fieldset disabled={busy}>
@@ -200,6 +203,26 @@ export function McpAccessEditor({
             {t("mcp.tooManyHosts")}
           </p>
         )}
+        <fieldset className="mcp-approval-policy">
+          <legend className="mcp-field-label">{t("mcp.approvalMode")}</legend>
+          <div className="mcp-choice-group">
+            {(["manual", "trusted"] as const).map((mode) => (
+              <label className="mcp-choice" key={mode}>
+                <input
+                  type="radio"
+                  name={`${id}-approval`}
+                  checked={approvalMode === mode}
+                  aria-describedby={`${id}-approval-hint`}
+                  onChange={() => { setApprovalMode(mode); setConsent(false); }}
+                />
+                <span>{t(`mcp.approvalModes.${mode}`)}</span>
+              </label>
+            ))}
+          </div>
+          <p id={`${id}-approval-hint`} className="mcp-policy-hint">
+            {t(`mcp.approvalHints.${approvalMode}`)}
+          </p>
+        </fieldset>
         <McpDurationPicker value={duration} onChange={setDuration} />
         <p className="mcp-lifecycle-hint">{t("mcp.accessLifetime")}</p>
         <label className="mcp-check mcp-consent">
@@ -208,7 +231,7 @@ export function McpAccessEditor({
             checked={consent}
             onChange={(e) => setConsent(e.target.checked)}
           />
-          <span>{t("mcp.disclosure")}</span>
+          <span>{t(approvalMode === "trusted" ? "mcp.trustedDisclosure" : "mcp.disclosure")}</span>
         </label>
         <div className="mcp-actions">
           <Btn

@@ -13,7 +13,7 @@ use std::{
 use tauri::{Manager, State};
 use unissh_automation::{
     core::{CoreExecutor, PromptFactory},
-    Broker, Cancel,
+    ApprovalMode, Broker, Cancel,
 };
 use unissh_ffi::{AuthPromptRequest, AuthPrompter, Core};
 use unissh_mcp::{credentials::Credentials, CancellationToken, LocalServer};
@@ -252,6 +252,7 @@ pub async fn mcp_grant(
     targets: Vec<TargetRef>,
     seconds: Option<u32>,
     ticket: String,
+    approval_mode: Option<ApprovalMode>,
 ) -> ApiResult<()> {
     let serial = state.running.lock().await;
     if serial.is_none() {
@@ -265,7 +266,7 @@ pub async fn mcp_grant(
         .ok_or_else(|| ApiError::other("Integration is unavailable."))?;
     let broker = state.broker.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        broker.grant_with_ticket(
+        broker.grant_with_policy(
             &id,
             record.label,
             targets
@@ -274,6 +275,7 @@ pub async fn mcp_grant(
                 .collect(),
             seconds,
             &ticket,
+            approval_mode.unwrap_or_default(),
         )
     })
     .await?

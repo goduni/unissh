@@ -4,6 +4,14 @@
 
 export const en = {
   mcp: {
+    "approvalMode": "Command confirmation",
+    "approvalModes": { "manual": "Confirm in UniSSH", "trusted": "Trust application" },
+    "approvalHints": {
+      "manual": "Review and approve each command in UniSSH before it runs.",
+      "trusted": "Commands run immediately on the selected hosts, with the SSH user's permissions. Configure confirmations in your AI application; UniSSH cannot verify that it asks you."
+    },
+    "trustedDisclosure": "I allow this application to run commands without confirmation in UniSSH and receive their output, including data it may send to its AI provider.",
+    "cwd": "Working directory",
     "guide": {
       "client": "AI application",
       "other": "Other client",
@@ -14,7 +22,7 @@ export const en = {
       "docs": "{{client}} documentation",
       "enableFirst": "Enable MCP first to get the current connection address.",
       "replaceToken": "Replace <TOKEN> with the token for this application. It was shown once when you created or rotated it. Keep the completed configuration private and out of Git.",
-      "local": "Run the AI application on this device and keep UniSSH open and unlocked. Choose hosts above to grant access; every command asks for confirmation here.",
+      "local": "Run the AI application on this device and keep UniSSH open and unlocked. Choose hosts and a command confirmation mode above to grant access.",
       "instructions": {
         "claude": "Run this command in your terminal to add UniSSH to your personal Claude Code configuration, across projects.",
         "codex": "Add this section to your personal Codex config.toml. If a UniSSH section already exists, update it instead of adding a duplicate.",
@@ -41,7 +49,7 @@ export const en = {
     "newToken": "Application token",
     "hostAccess": "Host access",
     "editAccess": "Edit access",
-    "accessHint": "Choose a vault, then the hosts this application may use. Each command still asks for your approval.",
+    "accessHint": "Choose a vault, then the hosts this application may use. Choose whether to confirm commands here or trust the application.",
     "connectHelp": "Connect your AI application",
     "chooseVault": "Vault",
     "chooseVaultPlaceholder": "Choose a vault first",
@@ -119,6 +127,7 @@ export const en = {
   "configuration_invalid": "The local MCP configuration is invalid. Access is disabled.",
   "listener_failed": "The local listener stopped. Disable and enable MCP to retry.",
   "state": {
+    "queued": "Queued",
     "connecting": "Connecting",
     "ready": "Ready",
     "closed": "Closed",

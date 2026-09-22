@@ -361,10 +361,14 @@ and revokes the previous identity so already-authenticated requests cannot inher
 new permissions. Sharing one token intentionally shares one integration's scope.
 
 A malicious model can request a dangerous command or return misleading output.
-The native UI displays the immutable command with escaped controls and requires a
-separate decision; no shell safety classifier or output-redaction claim is made.
-After approval, remote shell authority can read secrets or cause irreversible
-effects. Output can leave the device through the chosen AI provider. Closing an
+In manual mode, the native UI displays the immutable command and optional cwd
+with escaped controls and requires a separate decision. The explicitly selected
+trusted-application mode bypasses per-command native confirmation for the granted
+targets; it trusts the token holder to apply its own approval policy. An agent's
+claim of user approval is not verified and never enables this mode. Grant edits
+replace the old scope and revoke its runs/sessions. No shell safety classifier or
+output-redaction claim is made. Authorized remote shell authority can read secrets
+or cause irreversible effects in either mode. Output can leave the device through the chosen AI provider. Closing an
 SSH channel cannot recall those effects or guarantee remote child termination.
 
 Local malware, a hostile OS administrator, and port impersonation are not isolated

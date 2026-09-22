@@ -41,6 +41,14 @@ impl Connection for Conn {
         _: Instant,
     ) -> Result<Arc<dyn Command>> {
         self.execs.fetch_add(1, Ordering::SeqCst);
+        if command == "split-text" {
+            sink.data(false, b"hello \xf0\x9f".to_vec());
+            sink.data(true, b"warning \xe2".to_vec());
+            sink.data(false, b"\x8c\x8d\n".to_vec());
+            sink.data(true, b"\x82\xac\n".to_vec());
+            sink.exited(Some(0));
+            return Ok(Arc::new(Cmd(self.command_closes.clone())));
+        }
         sink.data(
             false,
             if command == "large" {
@@ -792,4 +800,259 @@ async fn unbounded_grant_still_requires_new_consent_after_vault_mutation() {
         Err(ToolError::GrantRequired)
     );
     assert!(b.review()["grants"].as_array().unwrap().is_empty());
+}
+
+async fn trusted_target(b: &Broker, owner: &str) -> String {
+    let ticket = b.grant_ticket().unwrap();
+    b.grant_with_policy(
+        owner,
+        owner.into(),
+        vec![("v".into(), "p".into())],
+        None,
+        &ticket,
+        ApprovalMode::Trusted,
+    )
+    .unwrap();
+    call(b, owner, "list_targets", json!({})).await.unwrap()["targets"][0]["target_id"]
+        .as_str()
+        .unwrap()
+        .into()
+}
+
+#[tokio::test]
+async fn trusted_commands_wait_return_readable_output_and_deduplicate() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    let t = trusted_target(&b, "a").await;
+    assert_eq!(b.review()["grants"][0]["approval_mode"], "trusted");
+    let args = json!({"session_id":null,"target_id":t,"command":"split-text","request_key":"k","wait_ms":1000});
+    let r = call(&b, "a", "run_command", args.clone()).await.unwrap();
+    assert_eq!(r["state"], "completed");
+    assert_eq!(r["exit_code"], 0);
+    let chunks = r["chunks"].as_array().unwrap();
+    assert!(chunks.iter().all(|c| c["encoding"] == "utf8"));
+    for (stream, text) in [("stdout", "hello 🌍\n"), ("stderr", "warning €\n")] {
+        assert_eq!(
+            chunks
+                .iter()
+                .filter(|c| c["stream"] == stream)
+                .map(|c| c["data"].as_str().unwrap())
+                .collect::<String>(),
+            text
+        );
+    }
+    let mut retry = args.clone();
+    retry["wait_ms"] = json!(0);
+    assert_eq!(
+        call(&b, "a", "run_command", retry).await.unwrap()["run_id"],
+        r["run_id"]
+    );
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 1);
+    let next = call(
+        &b,
+        "a",
+        "get_command",
+        json!({"run_id":r["run_id"],"output_cursor":r["next_cursor"]}),
+    )
+    .await
+    .unwrap();
+    assert!(next["chunks"].as_array().unwrap().is_empty());
+    assert_eq!(
+        call(&b, "other", "get_command", json!({"run_id":r["run_id"]}))
+            .await
+            .unwrap_err(),
+        ToolError::GrantRequired
+    );
+}
+
+#[tokio::test]
+async fn open_wait_returns_ready_and_trusted_persistent_execution_reuses_connection() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    let t = trusted_target(&b, "a").await;
+    let open = json!({"target_id":t,"request_key":"open","wait_ms":1000});
+    let session = call(&b, "a", "open_ssh_session", open.clone())
+        .await
+        .unwrap();
+    assert_eq!(session["state"], "ready");
+    assert_eq!(
+        call(&b, "a", "open_ssh_session", open).await.unwrap()["session_id"],
+        session["session_id"]
+    );
+    for key in ["one", "two"] {
+        let r = call(&b, "a", "run_command", json!({"session_id":session["session_id"],"command":"pwd","request_key":key,"wait_ms":1000})).await.unwrap();
+        assert_eq!(r["state"], "completed");
+        assert_eq!(r["chunks"][0]["encoding"], "base64"); // NUL marks this fixture as binary.
+    }
+    assert_eq!(fake.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn cwd_is_reviewed_and_bound_to_submission_while_wait_never_approves() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    let t = target(&b, "a").await;
+    let mut args = json!({"session_id":null,"target_id":t,"command":"pwd","cwd":"/srv/a ' $HOME","request_key":"k","wait_ms":30000});
+    let r = tokio::time::timeout(
+        Duration::from_secs(1),
+        call(&b, "a", "run_command", args.clone()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(r["state"], "awaiting_approval");
+    assert_eq!(b.review()["runs"][0]["cwd"], args["cwd"]);
+    assert_eq!(b.review()["runs"][0]["command"], "pwd");
+    args["cwd"] = json!("/srv/other");
+    assert_eq!(
+        call(&b, "a", "run_command", args).await.unwrap_err(),
+        ToolError::RequestConflict
+    );
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 0);
+    b.revoke(Some("a"));
+    assert_eq!(
+        b.approve(r["run_id"].as_str().unwrap(), true).unwrap_err(),
+        ToolError::ApprovalExpired
+    );
+}
+
+#[tokio::test]
+async fn trusted_wait_is_bounded_and_revocation_interrupts_waiting() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    let t = trusted_target(&b, "a").await;
+    let start = Instant::now();
+    let r = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"hold","request_key":"hold","wait_ms":60}),
+    )
+    .await
+    .unwrap();
+    assert!(start.elapsed() >= Duration::from_millis(60));
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert_eq!(r["state"], "running");
+    let other = b.clone();
+    let retry = tokio::spawn(async move {
+        call(&other, "a", "run_command", json!({"session_id":null,"target_id":t,"command":"hold","request_key":"hold","wait_ms":30000})).await
+    });
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    b.revoke(Some("a"));
+    assert!(tokio::time::timeout(Duration::from_secs(1), retry)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn replacing_trusted_access_with_manual_revokes_old_runs_and_defaults_remain_manual() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    let t = trusted_target(&b, "a").await;
+    let old = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"hold","request_key":"old","wait_ms":30}),
+    )
+    .await
+    .unwrap();
+    let t = target(&b, "a").await;
+    assert_eq!(b.review()["grants"][0]["approval_mode"], "manual");
+    assert_eq!(
+        call(&b, "a", "get_command", json!({"run_id":old["run_id"]}))
+            .await
+            .unwrap_err(),
+        ToolError::OutcomeUnknown
+    );
+    let new = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"pwd","request_key":"new","wait_ms":1000}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(new["state"], "awaiting_approval");
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn revoking_trusted_access_during_connection_prevents_execution_after_late_auth() {
+    let fake = Arc::new(Fake::default());
+    let delayed = Arc::new(Delayed {
+        fake: fake.clone(),
+        entered: false.into(),
+        release: false.into(),
+        resolve: false,
+    });
+    let b = Broker::new(delayed.clone());
+    let t = trusted_target(&b, "a").await;
+    let run = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"pwd","request_key":"late"}),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !delayed.entered.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+    b.revoke(Some("a"));
+    delayed.release.store(true, Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while fake.closes.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 0);
+    assert!(
+        call(&b, "a", "get_command", json!({"run_id":run["run_id"]}))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn waiting_for_open_is_bounded_and_does_not_reopen_or_survive_revocation() {
+    let fake = Arc::new(Fake::default());
+    let delayed = Arc::new(Delayed {
+        fake: fake.clone(),
+        entered: false.into(),
+        release: false.into(),
+        resolve: false,
+    });
+    let b = Broker::new(delayed.clone());
+    let t = target(&b, "a").await;
+    let args = json!({"target_id":t,"request_key":"open","wait_ms":50});
+    let start = Instant::now();
+    let s = call(&b, "a", "open_ssh_session", args.clone())
+        .await
+        .unwrap();
+    assert_eq!(s["state"], "connecting");
+    assert!(start.elapsed() >= Duration::from_millis(50));
+    let other = b.clone();
+    let mut retry = args;
+    retry["wait_ms"] = json!(30000);
+    let wait = tokio::spawn(async move { call(&other, "a", "open_ssh_session", retry).await });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    b.revoke(Some("a"));
+    delayed.release.store(true, Ordering::SeqCst);
+    assert!(tokio::time::timeout(Duration::from_secs(1), wait)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 0);
 }

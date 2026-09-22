@@ -12,7 +12,16 @@ The initial implementation provides seven tools and strict request decoding:
 `run_command` requires an explicit `session_id`. A string selects an existing
 SSH connection and forbids `target_id`; null requires `target_id` and selects a
 one-shot connection. Commands use independent exec channels, not shared shell
-state. Submission keys are for the broker to deduplicate, not JSON-RPC IDs.
+state. Optional cwd selects a literal absolute POSIX directory for that invocation.
+Open/run accept wait_ms (0..30000, default 0) for short operations; waiting never
+authorizes commands or changes grant/runtime deadlines. Run returns an output page
+and next_cursor, including when still awaiting native approval. UTF-8 text chunks
+use encoding=utf8; binary or invalid bytes use base64. Clients must honor encoding
+and continue pagination after completion. Submission keys bind command, cwd,
+target/session and timeout, but not wait_ms; they are not JSON-RPC IDs.
+
+Command admission follows the native grant policy (manual confirmation by default,
+or explicitly trusted application). No tool argument can elevate that policy.
 
 `LocalServer::bind` accepts a port, never a bind address. Requests require the
 exact loopback authority and a bearer credential; browser Origin headers and

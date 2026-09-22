@@ -24,8 +24,12 @@ cloud relay, or change to your SSH servers. It is disabled by default.
 5. Grant access to saved hosts with **No expiry**, a preset duration, or a custom
    number of minutes, hours or days. The duration starts when you grant access.
    Choose a vault first, then select its hosts; selections can span several vaults.
-   Acknowledge that command output can be sent to the AI provider. Each command
-   still requires a separate confirmation in UniSSH.
+   Choose **Confirm in UniSSH** (the default) to review each command, or explicitly
+   select **Trust application** to execute commands immediately on these hosts
+   with the SSH user's permissions. In trusted mode, configure confirmations in
+   your AI client; UniSSH cannot verify that the client asks you. Acknowledge that
+   command output can be sent to the AI provider. Editing access replaces the
+   previous grant and cancels its sessions/runs; MCP tools cannot change this policy.
 
 A Streamable HTTP client that accepts custom headers can use this configuration:
 
@@ -75,15 +79,16 @@ the same device as UniSSH; a remote agent cannot reach this loopback endpoint.
 | Tool | Purpose |
 | --- | --- |
 | `list_targets` | Get opaque IDs and aliases for the current grant |
-| `open_ssh_session` | Open a persistent non-PTY SSH connection asynchronously |
+| `open_ssh_session` | Open a persistent non-PTY SSH connection, optionally waiting for readiness |
 | `list_ssh_sessions` | Inspect this integration's explicit connections |
 | `close_ssh_session` | Cancel its work and close its owned connection chain |
-| `run_command` | Submit an immutable command for native confirmation |
+| `run_command` | Run an immutable command under the native grant policy, optionally waiting for completion |
 | `get_command` | Poll state and read bounded stdout/stderr pages |
 | `cancel_command` | Cancel a pending command or close its active exec channel |
 
 For a persistent connection, call `open_ssh_session` with `target_id` and a unique
-`request_key`, wait until `list_ssh_sessions` reports `ready`, then submit:
+`request_key`. Pass `wait_ms` (0..30,000) to wait for readiness in the same call;
+if it still returns `connecting`, poll `list_ssh_sessions`. Then submit:
 
 ```json
 {"session_id":"<session-id>","command":"uname -a","request_key":"<unique-key>"}
@@ -94,28 +99,65 @@ They share neither a shell nor working directory/environment changes. Only one
 pending/running command is admitted per explicit session. MCP connections never
 attach to the user's terminal tabs.
 
+Use `cwd` for an individual command's working directory:
+
+```json
+{"session_id":"<session-id>","command":"git status --short","cwd":"/srv/my project","request_key":"<unique-key>","wait_ms":1000}
+```
+
+`cwd` must be an absolute POSIX path (at most 32 KiB, no NUL); omitted/null uses
+the SSH server's initial directory. It is quoted literally: spaces and quotes
+work, while `~`, `$HOME` and command substitutions are not expanded. This option
+requires a POSIX-compatible remote shell. If changing directory fails, the
+command is not executed. Both command and directory appear in manual review and
+are bound to the submission key. A preceding `cd` or `export` in another exec
+never affects this invocation.
+
 For one connection per command, explicitly pass null:
 
 ```json
 {"session_id":null,"target_id":"<target-id>","command":"df -h","request_key":"<unique-key>"}
 ```
 
-The one-shot connection opens after approval and closes on completion, failure,
+The one-shot connection opens after native approval or immediately under a trusted grant and closes on completion, failure,
 expiry or cancellation. Omitting `session_id` is invalid. A non-null session
 rejects `target_id`; neither mode accepts address, user or credential overrides.
 Stdin is closed immediately. No PTY, interactive shell, forwarding, file transfer,
 local command, key export, or vault-reveal tool is exposed.
 
-`run_command` returns a `run_id` in `awaiting_approval`. Poll `get_command` with
-that ID and optionally `output_cursor` and `wait_ms` (up to 30,000). Chunks retain
-separate stdout/stderr streams and encode raw bytes as base64; decode bytes in
-order and preserve decoder state across chunks if displaying UTF-8. Advance to
-`next_cursor`; `truncated` means some bytes were discarded while SSH output kept
-draining. A nonzero `exit_code` is a completed remote process, not transport
-success for the command's purpose.
+`run_command` always returns a `run_id` and the same output-page fields as
+`get_command`: `chunks`, `next_cursor`, `truncated`, and `exit_code`. With manual
+confirmation it immediately returns `awaiting_approval`, even with `wait_ms`.
+With trusted access, optional `wait_ms` (0..30,000; omitted/zero means no wait)
+waits for completion, returning the current state and first output page when the
+wait expires. The command continues asynchronously. The wait does not extend
+`timeout_ms` or the grant lifetime, and disconnecting never cancels a run.
+
+Continue with `get_command` using `run_id` and the returned `next_cursor` as
+`output_cursor`. Its optional `wait_ms` waits for new output or a state change.
+Drain pages even after `completed` until `chunks` is empty. Chunks keep separate
+stdout/stderr streams: `encoding: "utf8"` carries literal text, while
+`encoding: "base64"` preserves invalid UTF-8 or binary data containing NUL.
+Honor the encoding per chunk; do not base64-decode UTF-8 text. For example:
+
+```json
+{"cursor":"0","stream":"stdout","encoding":"utf8","data":"hello\n"}
+```
+
+Partial UTF-8 characters are buffered independently for each stream (up to three
+bytes) across SSH packets and internal chunk boundaries. At termination an
+incomplete character is returned as base64, never replaced. Published chunks and
+cursors stay immutable. Stream-local byte order is preserved; a partial character
+can appear after an intervening chunk from the other stream. `truncated` means
+some bytes were discarded while SSH output kept draining. A nonzero `exit_code`
+is a completed remote process, not transport success for the command's purpose.
+
+Existing clients must honor `encoding` and use the output cursor returned by
+`run_command` when continuing, or start at `"0"` to deliberately reread output.
 
 If a submission response is lost, repeat the same request with the same
-`request_key`. Different arguments with an existing key yield `request_conflict`.
+`request_key`. Different command, cwd, target/session or timeout arguments with an
+existing key yield `request_conflict`. Changing only `wait_ms` is permitted.
 Request keys are limited to 128 UTF-8 bytes. Use a new key only for an intentionally
 new operation. No SSH reconnect or command
 replay occurs automatically. HTTP disconnects do not close an SSH session or undo

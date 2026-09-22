@@ -18,6 +18,9 @@ pub struct OpenSession {
     pub target_id: String,
     #[schemars(length(min = 1, max = 128))]
     pub request_key: String,
+    /// Wait up to 30 seconds for readiness; omitted or zero returns immediately.
+    #[schemars(range(max = 30_000))]
+    pub wait_ms: Option<u32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -39,6 +42,12 @@ pub struct ExistingSessionCommand {
     pub request_key: String,
     #[schemars(range(min = 1, max = 600_000))]
     pub timeout_ms: Option<u32>,
+    /// Absolute POSIX directory for this exec only. No ~ or variable expansion.
+    #[schemars(length(min = 1, max = 32768), pattern(r"^/"))]
+    pub cwd: Option<String>,
+    /// Wait up to 30 seconds for completion/output; never approves a command.
+    #[schemars(range(max = 30_000))]
+    pub wait_ms: Option<u32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -55,6 +64,12 @@ pub struct OneShotCommand {
     pub request_key: String,
     #[schemars(range(min = 1, max = 600_000))]
     pub timeout_ms: Option<u32>,
+    /// Absolute POSIX directory for this exec only. No ~ or variable expansion.
+    #[schemars(length(min = 1, max = 32768), pattern(r"^/"))]
+    pub cwd: Option<String>,
+    /// Wait up to 30 seconds for completion/output; never approves a command.
+    #[schemars(range(max = 30_000))]
+    pub wait_ms: Option<u32>,
 }
 
 /// The variants are disjoint: a target override on an existing session is invalid.
@@ -117,18 +132,23 @@ pub fn parse(name: &str, arguments: JsonObject) -> Result<ToolRequest, InvalidRe
     let valid = match &request {
         ToolRequest::ListTargets(_) | ToolRequest::ListSessions(_) => true,
         ToolRequest::OpenSession(r) => {
-            !r.target_id.is_empty() && !r.request_key.is_empty() && r.request_key.len() <= 128
+            !r.target_id.is_empty()
+                && !r.request_key.is_empty()
+                && r.request_key.len() <= 128
+                && valid_wait(r.wait_ms)
         }
         ToolRequest::CloseSession(r) => !r.session_id.is_empty(),
         ToolRequest::RunCommand(RunCommand::Existing(r)) => {
-            !r.session_id.is_empty() && valid_command(&r.command, &r.request_key, r.timeout_ms)
+            !r.session_id.is_empty()
+                && valid_command(&r.command, &r.request_key, r.timeout_ms, r.cwd.as_deref())
+                && valid_wait(r.wait_ms)
         }
         ToolRequest::RunCommand(RunCommand::OneShot(r)) => {
-            !r.target_id.is_empty() && valid_command(&r.command, &r.request_key, r.timeout_ms)
+            !r.target_id.is_empty()
+                && valid_command(&r.command, &r.request_key, r.timeout_ms, r.cwd.as_deref())
+                && valid_wait(r.wait_ms)
         }
-        ToolRequest::GetCommand(r) => {
-            !r.run_id.is_empty() && r.wait_ms.is_none_or(|ms| ms <= 30_000)
-        }
+        ToolRequest::GetCommand(r) => !r.run_id.is_empty() && valid_wait(r.wait_ms),
         ToolRequest::CancelCommand(r) => !r.run_id.is_empty(),
     };
     valid
@@ -136,10 +156,21 @@ pub fn parse(name: &str, arguments: JsonObject) -> Result<ToolRequest, InvalidRe
         .ok_or(InvalidRequest::InvalidArguments)
 }
 
-fn valid_command(command: &str, request_key: &str, timeout: Option<u32>) -> bool {
+fn valid_wait(wait: Option<u32>) -> bool {
+    wait.is_none_or(|ms| ms <= 30_000)
+}
+
+fn valid_command(
+    command: &str,
+    request_key: &str,
+    timeout: Option<u32>,
+    cwd: Option<&str>,
+) -> bool {
     !command.is_empty()
         && command.len() <= 32 * 1024
         && !command.contains('\0')
+        && cwd
+            .is_none_or(|path| path.starts_with('/') && path.len() <= 32768 && !path.contains('\0'))
         && !request_key.is_empty()
         && request_key.len() <= 128
         && timeout.is_none_or(|ms| (1..=600_000).contains(&ms))
@@ -166,11 +197,11 @@ fn tool<T: JsonSchema>(name: &'static str, description: &'static str, read: bool
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         tool::<ListRequest>("list_targets", "List servers allowed by the current UniSSH grant.", true),
-        tool::<OpenSession>("open_ssh_session", "Open a reusable SSH connection to an allowed target. Poll list_ssh_sessions until ready. This does not approve commands.", false),
+        tool::<OpenSession>("open_ssh_session", "Open a reusable SSH connection to an allowed target. Optional wait_ms (0..30000, default 0) waits for readiness; otherwise poll list_ssh_sessions. A connection does not share shell state or approve commands.", false),
         tool::<ListRequest>("list_ssh_sessions", "List this integration's explicit SSH connections and their states. User terminal tabs and one-shot connections are excluded.", true),
         tool::<CloseSession>("close_ssh_session", "Close an SSH connection and cancel its commands. Detached remote processes may continue.", false),
-        tool::<RunCommand>("run_command", "Submit a command for approval in UniSSH. Use session_id for an open connection, or explicit null plus target_id for a one-shot connection. Commands have independent shell state. Reuse request_key only to recover the same submission.", false),
-        tool::<GetCommand>("get_command", "Get this integration's command state and a bounded page of output. Polling does not renew SSH permissions.", true),
+        tool::<RunCommand>("run_command", "Run a command under the native grant policy: manual confirmation or trusted application. Use session_id for an open connection, or explicit null plus target_id for a one-shot connection. Every command has independent shell state: cd and exports never persist. Optional cwd is an absolute POSIX path for this invocation, without expansion. Optional wait_ms (0..30000, default 0) waits for completion; awaiting_approval returns immediately. The result includes an output page; continue get_command using next_cursor. Reuse request_key only for the same command, cwd, target/session and timeout; changing wait_ms is allowed.", false),
+        tool::<GetCommand>("get_command", "Get command state and a bounded output page. Chunks use encoding=utf8 for text or base64 for binary bytes; honor encoding per chunk. Resume using next_cursor, even after completion, until no more chunks. Optional wait_ms (0..30000) waits for new output or completion. Polling never renews permissions.", true),
         tool::<CancelCommand>("cancel_command", "Cancel a command's channel. This does not guarantee termination of detached remote processes.", false),
     ];
     for t in &mut tools {
@@ -178,7 +209,7 @@ pub fn tools() -> Vec<Tool> {
             "list_targets" => schemars::schema_for!(TargetsResult),
             "list_ssh_sessions" => schemars::schema_for!(SessionsResult),
             "open_ssh_session" | "close_ssh_session" => schemars::schema_for!(SessionResult),
-            "get_command" => schemars::schema_for!(CommandOutputResult),
+            "get_command" | "run_command" => schemars::schema_for!(CommandOutputResult),
             _ => schemars::schema_for!(RunResult),
         };
         t.output_schema = Some(std::sync::Arc::new(
@@ -245,10 +276,18 @@ pub struct RunResult {
     pub error: Option<ToolError>,
 }
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputEncoding {
+    Utf8,
+    Base64,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
 pub struct OutputChunk {
     pub cursor: String,
     pub stream: String,
-    pub encoding: String,
+    /// utf8 is literal text; base64 preserves binary or invalid UTF-8 bytes.
+    pub encoding: OutputEncoding,
     pub data: String,
 }
 #[derive(Serialize, Deserialize, JsonSchema)]

@@ -138,3 +138,60 @@ async fn reconnect_retry_native_approval_and_rotation_preserve_authority() {
     stop.cancel();
     serving.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn trusted_http_wait_returns_utf8_and_cannot_elevate_manual_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let credentials = Arc::new(Credentials::load(dir.path().join("mcp.json")).unwrap());
+    let (owner, token) = credentials.create("Fixture".into()).unwrap();
+    let executor = Arc::new(Execution::default());
+    let broker = Broker::new(executor.clone());
+    let server = LocalServer::bind(0, credentials, broker.clone())
+        .await
+        .unwrap();
+    let url = format!("http://{}/mcp", server.local_addr().unwrap());
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(server.serve(stop.clone()));
+    broker
+        .grant_with_policy(
+            &owner,
+            "Fixture".into(),
+            vec![("v".into(), "p".into())],
+            None,
+            &broker.grant_ticket().unwrap(),
+            ApprovalMode::Trusted,
+        )
+        .unwrap();
+    let target = rpc(&url, &token, "list_targets", json!({})).await["result"]["structuredContent"]
+        ["targets"][0]["target_id"]
+        .clone();
+    let session = rpc(
+        &url,
+        &token,
+        "open_ssh_session",
+        json!({"target_id":target,"request_key":"open","wait_ms":1000}),
+    )
+    .await["result"]["structuredContent"]
+        .clone();
+    assert_eq!(session["state"], "ready");
+    let args = json!({"session_id":session["session_id"],"command":"pwd","cwd":"/srv/project","request_key":"run","wait_ms":1000});
+    let result =
+        rpc(&url, &token, "run_command", args.clone()).await["result"]["structuredContent"].clone();
+    assert_eq!(result["state"], "completed");
+    assert_eq!(result["chunks"][0]["encoding"], "utf8");
+    assert_eq!(result["chunks"][0]["data"], "approved result");
+    let retry = rpc(&url, &token, "run_command", args).await["result"]["structuredContent"].clone();
+    assert_eq!(retry, result);
+    assert_eq!(executor.0.load(Ordering::SeqCst), 1);
+    broker
+        .grant(&owner, "Fixture".into(), vec![("v".into(), "p".into())], 30)
+        .unwrap();
+    let target = rpc(&url, &token, "list_targets", json!({})).await["result"]["structuredContent"]
+        ["targets"][0]["target_id"]
+        .clone();
+    let args = json!({"session_id":null,"target_id":target,"command":"pwd","request_key":"manual","wait_ms":1000,"approval_mode":"trusted"});
+    assert!(rpc(&url, &token, "run_command", args).await["error"].is_object());
+    assert_eq!(executor.0.load(Ordering::SeqCst), 1);
+    stop.cancel();
+    serving.await.unwrap().unwrap();
+}
