@@ -462,18 +462,30 @@
 }
 .mcp-select-all {
   margin-top: 0.75rem;
-  padding-bottom: 0.75rem;
+  padding: 0 0.75rem 0.75rem;
   border-bottom: 1px solid var(--mcp-line);
 }
 .mcp-host-options {
   max-height: 18rem;
   overflow: auto;
+  display: grid;
+  gap: 0.125rem;
+  padding-block: 0.25rem;
 }
 .mcp-host-options .mcp-host {
-  border-bottom: 1px solid var(--mcp-line);
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
 }
-.mcp-host-options .mcp-host:hover {
+.mcp-host-options .mcp-host:has(input:enabled):hover,
+.mcp-host-options .mcp-host:has(input:focus-visible) {
   background: var(--mcp-hover);
+}
+.mcp-host-options .mcp-host:has(input:focus-visible) {
+  outline: 2px solid var(--mcp-accent);
+  outline-offset: -2px;
+}
+.mcp-check:has(input:disabled) {
+  cursor: default;
 }
 .mcp-selection-summary {
   font-size: 0.8125rem;
@@ -569,6 +581,19 @@
   margin: 0;
   font-size: 0.8125rem;
 }
+.mcp-agent-choices .mcp-choice > span {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.mcp-agent-logo {
+  display: block;
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+  background: currentColor;
+  mask: var(--mcp-agent-logo) center / contain no-repeat;
+}
 .mcp-guide-code {
   min-width: 0;
   border: 1px solid var(--mcp-line);
@@ -584,9 +609,34 @@
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--mcp-line);
 }
-.mcp-guide-code-heading > code {
+.mcp-guide-code-file {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   min-width: 0;
   color: var(--mcp-muted);
+}
+.mcp-code-language {
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--mcp-line);
+  border-radius: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.mcp-code-key {
+  color: var(--mcp-code-key);
+}
+.mcp-code-string {
+  color: var(--mcp-code-string);
+}
+.mcp-code-keyword {
+  color: var(--mcp-code-keyword);
+}
+.mcp-code-placeholder {
+  color: var(--mcp-code-keyword);
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
 }
 .mcp-guide-code pre {
   margin: 0;

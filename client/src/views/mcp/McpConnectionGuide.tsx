@@ -1,6 +1,8 @@
 import { useId, useState } from "react";
 import { Btn } from "@/components/primitives";
 import { useTranslation } from "@/i18n";
+import { McpAgentLogo } from "./McpAgentLogo";
+import { McpSnippet } from "./McpSnippet";
 import {
   CONNECTION_DOCS,
   MCP_CLIENTS,
@@ -43,6 +45,9 @@ export function McpConnectionGuide({
     other: "JSON",
   };
   const copyKey = `guide-${client}-${version}-${endpoint}`;
+  const snippet = connectionSnippet(client, endpoint, version);
+  const language =
+    client === "claude" ? "Shell" : client === "codex" ? "TOML" : "JSON";
   const docs =
     client === "other"
       ? null
@@ -53,7 +58,7 @@ export function McpConnectionGuide({
     <div className="mcp-connection-guide">
       <fieldset>
         <legend className="mcp-field-label">{t("mcp.guide.client")}</legend>
-        <div className="mcp-choice-group">
+        <div className="mcp-choice-group mcp-agent-choices">
           {MCP_CLIENTS.map((option) => (
             <label className="mcp-choice" key={option}>
               <input
@@ -62,7 +67,10 @@ export function McpConnectionGuide({
                 checked={client === option}
                 onChange={() => setClient(option)}
               />
-              <span>{names[option]}</span>
+              <span>
+                <McpAgentLogo client={option} />
+                {names[option]}
+              </span>
             </label>
           ))}
         </div>
@@ -94,15 +102,16 @@ export function McpConnectionGuide({
         <>
           <div className="mcp-guide-code">
             <div className="mcp-guide-code-heading">
-              <code>{files[client]}</code>
+              <div className="mcp-guide-code-file">
+                <span className="mcp-code-language">{language}</span>
+                {client !== "other" && <code>{files[client]}</code>}
+              </div>
               <Btn
                 type="button"
                 variant="ghost"
                 icon="copy"
                 disabled={busy}
-                onClick={() =>
-                  onCopy(copyKey, connectionSnippet(client, endpoint, version))
-                }
+                onClick={() => onCopy(copyKey, snippet)}
               >
                 {t(copied === copyKey ? "mcp.copied" : "mcp.guide.copy")}
               </Btn>
@@ -111,7 +120,7 @@ export function McpConnectionGuide({
               tabIndex={0}
               aria-label={t("mcp.guide.snippet", { client: names[client] })}
             >
-              <code>{connectionSnippet(client, endpoint, version)}</code>
+              <McpSnippet source={snippet} language={language} />
             </pre>
           </div>
           <p>{t("mcp.guide.replaceToken")}</p>
