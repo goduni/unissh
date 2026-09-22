@@ -244,3 +244,11 @@ polling. The type is not a generic UniFFI dispatcher or a secret-export DTO.
 
 `unissh-automation` owns grants, per-command approval, idempotency and output;
 Core owns authentication, signing, transport and revision serialization.
+
+The Rust-only `automation_recording` module captures host-enabled MCP command
+recordings. Transport callbacks take only a bounded recorder buffer lock;
+finalization takes Core state before the buffer and writes a normal encrypted
+recording item. CoreState flushes its active registry before keys are dropped on
+lock/replacement. Stored recording metadata has an optional MCP field; existing
+records remain readable. Asciicast v2 exports carry a version 1 `unissh_mcp`
+header extension with original stream bytes in addition to the readable preview.

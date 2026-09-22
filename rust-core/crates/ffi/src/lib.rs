@@ -59,6 +59,7 @@ use unissh_vault::{
 };
 
 pub mod automation;
+pub mod automation_recording;
 mod ssh_include;
 
 uniffi::setup_scaffolding!();
@@ -327,7 +328,7 @@ pub struct ConnectionProfile {
     /// meaningless without saying *where*, and a global flag would mean running
     /// it on every host — which is how a convenience becomes an accident.
     pub startup_snippet_ids: Vec<String>,
-    /// Record interactive sessions with this host.
+    /// Record interactive sessions and MCP commands with this host.
     ///
     /// Per host rather than global: recording production is a requirement,
     /// recording a homelab is noise, and unlike an algorithm policy there is a
@@ -705,6 +706,8 @@ struct StoredRecording {
     started_unix: u64,
     duration_secs: f64,
     truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp: Option<McpRecordingMeta>,
     /// The asciicast v2 document.
     asciicast: String,
     #[serde(flatten)]
@@ -726,6 +729,8 @@ struct StoredRecordingMeta {
     started_unix: u64,
     duration_secs: f64,
     truncated: bool,
+    #[serde(default)]
+    mcp: Option<McpRecordingMeta>,
 }
 
 /// Serializable body of a host-chain reference (B2.2).
@@ -1291,6 +1296,26 @@ struct CoreState {
     /// Cache of decrypted vault names (vault_id → name), so that `list_vaults` does not
     /// perform an HPKE VK unwrap for every vault on every call.
     vault_names: HashMap<Vec<u8>, String>,
+    automation_recordings: HashMap<String, Arc<automation_recording::CommandRecording>>,
+}
+
+impl Drop for CoreState {
+    fn drop(&mut self) {
+        // Still have the storage and keys. No callback acquires Core state while
+        // holding a recorder lock; transport workers can only append to buffers.
+        let recordings = std::mem::take(&mut self.automation_recordings);
+        for recording in recordings.into_values() {
+            recording.save(self, "interrupted");
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRecordingMeta {
+    pub application: String,
+    pub outcome: String,
+    pub exit_code: Option<u32>,
 }
 
 /// Root core object for the UI. Manages a single local instance.
@@ -1425,6 +1450,7 @@ impl Core {
             keyset: unlocked,
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
+            automation_recordings: HashMap::new(),
         });
         log::info!("instance created (password-protected: {has_password})");
         // Emergency Kit: we zeroize the intermediate hex copy; the string returned through the FFI
@@ -1510,6 +1536,7 @@ impl Core {
             keyset: unlocked,
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
+            automation_recordings: HashMap::new(),
         });
         log::info!("instance unlocked");
         Ok(())
@@ -2212,6 +2239,7 @@ impl Core {
             keyset: unlocked,
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
+            automation_recordings: HashMap::new(),
         });
         log::info!("instance unlocked from server keyset");
         Ok(())
@@ -2431,6 +2459,7 @@ impl Core {
             keyset: unlocked,
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
+            automation_recordings: HashMap::new(),
         });
         // The SHARED account Secret Key (identical on all devices, model A):
         // we return hex so the Tauri layer can store it in THIS device's keychain
@@ -4031,6 +4060,7 @@ impl Core {
                     if let Ok(r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content) {
                         out.push(RecordingMeta {
                             recording_id: String::from_utf8_lossy(&m.item_id).to_string(),
+                            mcp: r.mcp,
                             label: r.label,
                             host: r.host,
                             user: r.user,
@@ -7217,6 +7247,7 @@ pub struct SystemAgentKeyFfi {
 /// A recorded session, without its body — for listing.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct RecordingMeta {
+    pub mcp: Option<McpRecordingMeta>,
     /// Item id in the vault.
     pub recording_id: String,
     /// Label, usually the host's.
@@ -7808,6 +7839,7 @@ impl RecordingSaver {
             duration_secs: duration,
             truncated,
             asciicast: body,
+            mcp: None,
             extra: BTreeMap::new(),
         };
         let json = match serde_json::to_vec(&stored) {

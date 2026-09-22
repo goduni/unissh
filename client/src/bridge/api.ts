@@ -507,6 +507,7 @@ export interface RecordingRequest {
 }
 
 export interface RecordingMeta {
+  mcp?: { application: string; outcome: string; exitCode: number | null } | null;
   recordingId: string;
   label: string;
   host: string;

@@ -383,3 +383,15 @@ namespaces (remote IDEs/containers/WSL) are unsupported, not exposed through LAN
 This feature changes neither ciphertext sync nor vault/AAD formats. Its separately
 versioned local digest configuration is not synced. Temporary SQLite revision
 triggers observe security-relevant writes without a persistent schema migration.
+
+Opt-in host recording also persists MCP command transcripts in encrypted vault
+items. This deliberately extends command/output lifetime beyond the ephemeral
+broker buffer; normal vault sharing, sync and explicit export apply. Recordings
+are bounded operational history, not tamper-proof or crash-durable audit logs.
+Their versioned optional MCP content extension preserves raw stream bytes while
+the standard asciicast preview escapes terminal controls. Lock saves partial
+captures while Core still has keys; late callbacks cannot reopen a saved capture.
+Recording-only local item writes do not change authorization snapshots. Changes
+into or out of recording type still do, and external SQLite commits conservatively
+invalidate snapshots regardless of item type. The cryptographic envelope and AAD
+encodings are unchanged.

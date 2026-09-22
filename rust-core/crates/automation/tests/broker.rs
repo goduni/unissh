@@ -1056,3 +1056,131 @@ async fn waiting_for_open_is_bounded_and_does_not_reopen_or_survive_revocation()
         .is_err());
     assert_eq!(fake.execs.load(Ordering::SeqCst), 0);
 }
+
+#[derive(Default)]
+struct Capture {
+    bytes: AtomicUsize,
+    finishes: AtomicUsize,
+    outcome: std::sync::Mutex<String>,
+}
+impl Recording for Capture {
+    fn data(&self, _: bool, bytes: &[u8]) {
+        self.bytes.fetch_add(bytes.len(), Ordering::SeqCst);
+    }
+    fn exited(&self, _: Option<u32>) {}
+    fn finish(&self, outcome: &str) {
+        *self.outcome.lock().unwrap() = outcome.into();
+        self.finishes.fetch_add(1, Ordering::SeqCst);
+    }
+    fn review(&self) -> Value {
+        json!({"status": "saved"})
+    }
+}
+#[derive(Default)]
+struct RecordingExecutor {
+    fake: Fake,
+    captures: std::sync::Mutex<Vec<Arc<Capture>>>,
+}
+impl Executor for RecordingExecutor {
+    fn revision(&self) -> Result<[u64; 2]> {
+        self.fake.revision()
+    }
+    fn resolve(&self, v: &str, p: &str) -> Result<Target> {
+        self.fake.resolve(v, p)
+    }
+    fn connect(
+        &self,
+        t: &Target,
+        c: Cancel,
+        d: Option<Instant>,
+        a: &str,
+    ) -> Result<Arc<dyn Connection>> {
+        self.fake.connect(t, c, d, a)
+    }
+    fn record(
+        &self,
+        _: &Target,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<Option<Arc<dyn Recording>>> {
+        let c = Arc::new(Capture::default());
+        self.captures.lock().unwrap().push(c.clone());
+        Ok(Some(c))
+    }
+}
+#[tokio::test]
+async fn recordings_capture_before_output_limits_and_finalize_without_polling() {
+    let executor = Arc::new(RecordingExecutor::default());
+    let b = Broker::new(executor.clone());
+    let t = target(&b, "a").await;
+    let args = json!({"session_id":null,"target_id":t,"command":"large","request_key":"record"});
+    let run = call(&b, "a", "run_command", args.clone()).await.unwrap();
+    assert!(executor.captures.lock().unwrap().is_empty());
+    b.approve(run["run_id"].as_str().unwrap(), true).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if executor
+                .captures
+                .lock()
+                .unwrap()
+                .first()
+                .is_some_and(|c| c.finishes.load(Ordering::SeqCst) == 1)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    call(&b, "a", "run_command", args).await.unwrap();
+    let captures = executor.captures.lock().unwrap();
+    assert_eq!(captures.len(), 1);
+    assert_eq!(captures[0].bytes.load(Ordering::SeqCst), 2 * 1024 * 1024);
+    assert_eq!(*captures[0].outcome.lock().unwrap(), "completed");
+    assert_eq!(b.review()["runs"][0]["recording"]["status"], "saved");
+}
+#[tokio::test]
+async fn revocation_removes_output_but_finalizes_the_recording() {
+    let executor = Arc::new(RecordingExecutor::default());
+    let b = Broker::new(executor.clone());
+    let t = target(&b, "a").await;
+    let run = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"hold","request_key":"hold-record"}),
+    )
+    .await
+    .unwrap();
+    b.approve(run["run_id"].as_str().unwrap(), true).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while executor.fake.execs.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    b.revoke(Some("a"));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if executor.captures.lock().unwrap()[0]
+                .finishes
+                .load(Ordering::SeqCst)
+                == 1
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        *executor.captures.lock().unwrap()[0].outcome.lock().unwrap(),
+        "cancelled"
+    );
+    assert!(b.review()["runs"].as_array().unwrap().is_empty());
+}

@@ -6,6 +6,8 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { useTranslation, tDyn } from "@/i18n";
 import { writeSecretToClipboard } from "@/bridge/clipboard";
 import * as api from "@/bridge/mcp";
+import { getRecording } from "@/bridge/api";
+import { RecordingPlayer } from "@/components/RecordingPlayer";
 import { refreshMcp, useMcp } from "@/store/mcp";
 import { useApp } from "@/store/app";
 import { McpAccessEditor } from "./mcp/McpAccessEditor";
@@ -18,6 +20,7 @@ export function ViewMcp() {
   const { t, i18n } = useTranslation();
   const status = useMcp((s) => s.status);
   const failed = useMcp((s) => s.failed);
+  const [recording, setRecording] = useState<{ cast: string; title: string } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState("");
@@ -498,7 +501,21 @@ export function ViewMcp() {
                             · {tDyn(`mcp.state.${r.state}`)}
                             {r.error && ` · ${tDyn(`mcp.errors.${r.error}`)}`}
                           </p>
+                          {r.recording && r.recording.status !== "saved" && (
+                            <p role="status" style={{ color: r.recording.status === "failed" ? p.red : p.txt2 }}>
+                              {t(r.recording.status === "failed" ? "recordings.saveFailed" : "recordings.capturing")}
+                            </p>
+                          )}
                         </div>
+                        {r.recording?.status === "saved" && (
+                          <Btn variant="ghost" size="sm" icon="play" disabled={busy}
+                            onClick={() => void act(async () => {
+                              const cast = await getRecording(r.recording!.vault_id, r.recording!.recording_id);
+                              if (alive.current) setRecording({ cast, title: r.target?.label ?? t("mcp.command") });
+                            })}>
+                            {t("recordings.open")}
+                          </Btn>
+                        )}
                         {[
                           "awaiting_approval",
                           "queued",
@@ -540,6 +557,7 @@ export function ViewMcp() {
           </span>
         </>
       )}
+      {recording && <RecordingPlayer cast={recording.cast} title={recording.title} onClose={() => setRecording(null)} />}
     </div>
   );
 }

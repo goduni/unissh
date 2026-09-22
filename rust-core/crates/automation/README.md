@@ -6,7 +6,7 @@ feature connects it to UniSSH's existing vault, Personal identity resolver and S
 transport. HTTP cannot create grants, approve commands or supply authentication.
 
 Grants can be unbounded (`None`) or timed (a positive `u32` number of seconds). They are never
-persisted; lock, restart and revocation still invalidate unbounded grants. Vault/trust/identity writes
+persisted; lock, restart and revocation still invalidate unbounded grants. Security-relevant vault/trust/identity writes
 conservatively invalidate all current grants, including verified sync changes.
 Explicit SSH connections expire after five idle minutes. The native grant chooses
 manual confirmation (default, two-minute immutable review of command and cwd) or
@@ -29,3 +29,12 @@ Cancellation closes a channel; detached remote processes may continue.
 `Broker::grant`, `grant_with_policy`, `approve`, `review` and `revoke` are trusted native APIs. Keep
 them out of the MCP router. Install native SDK log suppression before binding
 real broker data to HTTP, as documented by `unissh-mcp`.
+
+Host-enabled MCP recordings are created after native authorization through the
+Core executor. The transport sink captures before broker retention limits;
+blocking workers finalize independently of polling and preserve cancellation
+history even after revocation removes broker rows. Recorder creation/finalization
+must run outside the broker state lock. Core owns the active registry, encrypted
+writes and lock-time partial flush. Recording references/status appear only in
+native review, never in MCP tool responses. See `docs/desktop-mcp.md` for limits
+and the versioned export extension.

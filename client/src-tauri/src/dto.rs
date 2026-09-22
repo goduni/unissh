@@ -1558,6 +1558,7 @@ impl From<ffi::LocalShellInfo> for LocalShellInfo {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingMeta {
+    pub mcp: Option<ffi::McpRecordingMeta>,
     pub recording_id: String,
     pub label: String,
     pub host: String,
@@ -1571,6 +1572,7 @@ pub struct RecordingMeta {
 impl From<ffi::RecordingMeta> for RecordingMeta {
     fn from(m: ffi::RecordingMeta) -> Self {
         RecordingMeta {
+            mcp: m.mcp,
             recording_id: m.recording_id,
             label: m.label,
             host: m.host,

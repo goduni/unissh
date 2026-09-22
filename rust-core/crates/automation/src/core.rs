@@ -27,6 +27,23 @@ fn error(e: FfiError) -> ToolError {
     }
 }
 impl Executor for CoreExecutor {
+    fn record(
+        &self,
+        target: &Target,
+        run_id: &str,
+        application: &str,
+        command: &str,
+        cwd: Option<&str>,
+    ) -> Result<Option<Arc<dyn Recording>>> {
+        let target = target
+            .payload
+            .downcast_ref::<unissh_ffi::automation::Target>()
+            .ok_or(ToolError::TargetUnavailable)?;
+        self.core
+            .automation_recording(target, run_id, application, command, cwd)
+            .map(|r| r.map(|r| r as Arc<dyn Recording>))
+            .map_err(error)
+    }
     fn revision(&self) -> Result<[u64; 2]> {
         self.core.automation_revision().map_err(error)
     }
@@ -123,5 +140,20 @@ impl ExecObserver for Sink {
     }
     fn on_exit(&self, code: i32) {
         self.0.exited(u32::try_from(code).ok());
+    }
+}
+
+impl Recording for unissh_ffi::automation_recording::CommandRecording {
+    fn data(&self, stderr: bool, bytes: &[u8]) {
+        self.data(stderr, bytes);
+    }
+    fn exited(&self, code: Option<u32>) {
+        self.exited(code);
+    }
+    fn finish(&self, outcome: &str) {
+        self.finish(outcome);
+    }
+    fn review(&self) -> Value {
+        json!({"vault_id": self.vault_id, "recording_id": self.recording_id, "status": self.status()})
     }
 }

@@ -212,3 +212,35 @@ AAD encoding, encrypted-sync wire format or database schema migration is added.
 
 Session results expose `expires_at: null` when the grant has no expiry. A Unix
 timestamp is returned for timed grants. Idle closure and revocation apply to both.
+
+## Command recordings
+
+The host's **Record sessions** preference also records authorized MCP commands.
+Each executed command has its own encrypted recording in the host's vault,
+including one-shot commands and commands on a persistent SSH connection. Denied
+requests are not recorded. Recording does not depend on the agent polling output.
+The MCP caller cannot enable, disable, read or delete recordings through MCP tools.
+
+Open a saved recording from native MCP command history or **Recordings**, where
+it is marked **MCP** with the integration's native application label. Replay shows
+the original command, explicit working directory, outcome and exit code. A nonzero
+exit code is retained even though the transport completed normally. Failed and
+cancelled runs are saved too. Vault lock flushes unfinished captures before
+releasing encryption keys and marks them interrupted. Recording failures appear
+in native command history while that history is retained; recordings are not a
+durable audit guarantee against process crashes, disk failures or vault removal.
+
+Capture retains at most **512 KiB of raw output or 8,192 chunks per command**,
+whichever comes first; partial recordings are explicitly marked. The cap is
+separate from the agent's output buffer. Recordings have the same encryption,
+sync, export and deletion behavior as existing terminal recordings, so command
+text and output may persist and sync when this preference is enabled.
+
+Export remains asciicast v2: standard `o` events provide a readable preview with
+terminal control sequences escaped. The optional header field `unissh_mcp` is a
+**version 1** extension containing `application`, `host`, `port`, `user`, `command`, `cwd`, `outcome`,
+`exit_code`, `truncated`, `duration_secs`, and `events`. Each original event has a
+relative `time`, `stream` (`stdout` or `stderr`), `encoding: "base64"`, and `data`.
+These raw events preserve binary bytes and stream identity losslessly up to the
+capture limit; the readable preview may replace invalid UTF-8. Existing terminal
+recordings and their encrypted envelopes require no migration.

@@ -405,3 +405,13 @@ approval reduces this token's authority but does not make a compromised desktop
 safe. Approved command output may go to the AI provider and can include remote
 secrets. Cancellation cannot guarantee termination of detached remote processes.
 See [desktop MCP setup and limits](docs/desktop-mcp.md) and the threat model.
+
+When a host enables session recording, authorized MCP commands are also persisted
+as encrypted recording items in that host's vault. Command text, cwd, application
+label and captured output then follow normal vault sync/export policy. The caller
+has no recording control or retrieval tool. Core bounds raw capture and event
+count, records partial/outcome metadata, and flushes active captures before lock
+releases keys; it does not spool plaintext to disk. Process crashes and storage
+failures can still lose recordings. Only local mutations confined to recording
+items (type 10) are exempt from automation revision invalidation; type transitions,
+credential/target/trust changes and external-connection writes still invalidate it.

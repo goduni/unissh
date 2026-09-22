@@ -6,7 +6,7 @@ export interface McpTarget { vault_id: string; profile_id: string; label: string
 export interface McpSelection { targets: McpTarget[]; vaults: { id: string; name: string }[]; ticket: string }
 export interface McpIntegration { id: string; label: string }
 export interface McpSession { target?: McpTarget; expires_at: number | null; idle_seconds: number; session_id: string; target_id: string; state: string; integration_id: string; error: string | null }
-export interface McpRun { session_id: string | null; run_id: string; state: string; integration_id: string; error: string | null; command?: string; cwd?: string | null; target?: McpTarget; timeout_ms?: number; approval_remaining_seconds?: number }
+export interface McpRun { recording?: { vault_id: string; recording_id: string; status: "recording" | "saved" | "failed" } | null; session_id: string | null; run_id: string; state: string; integration_id: string; error: string | null; command?: string; cwd?: string | null; target?: McpTarget; timeout_ms?: number; approval_remaining_seconds?: number }
 export interface McpStatus {
   enabled: boolean; port: number; endpoint: string; error: string | null; integrations: McpIntegration[];
   activity: { grants: { integration_id: string; remaining_seconds: number | null; approval_mode: McpApprovalMode; targets: McpTarget[] }[]; sessions: McpSession[]; runs: McpRun[] };

@@ -105,7 +105,15 @@ impl Storage {
             "cert_meta",
         ] {
             for event in ["INSERT", "UPDATE", "DELETE"] {
-                storage.conn.execute_batch(&format!("CREATE TEMP TRIGGER automation_{table}_{event} AFTER {event} ON main.{table} BEGIN UPDATE automation_revision SET revision = revision + 1; END;"))?;
+                // Recordings cannot supply credentials or targets. Check both sides
+                // of UPDATE so changing a security item into a recording still revokes.
+                let condition = match (table, event) {
+                    ("items", "INSERT") => "WHEN NEW.item_type != 10",
+                    ("items", "DELETE") => "WHEN OLD.item_type != 10",
+                    ("items", "UPDATE") => "WHEN OLD.item_type != 10 OR NEW.item_type != 10",
+                    _ => "",
+                };
+                storage.conn.execute_batch(&format!("CREATE TEMP TRIGGER automation_{table}_{event} AFTER {event} ON main.{table} {condition} BEGIN UPDATE automation_revision SET revision = revision + 1; END;"))?;
             }
         }
         Ok(storage)

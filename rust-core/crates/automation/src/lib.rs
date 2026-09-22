@@ -74,7 +74,24 @@ pub trait Connection: Send + Sync {
     fn valid(&self) -> bool;
     fn close(&self);
 }
+/// A native recording remains independent of output retention and HTTP polling.
+pub trait Recording: Send + Sync {
+    fn data(&self, stderr: bool, bytes: &[u8]);
+    fn exited(&self, code: Option<u32>);
+    fn finish(&self, outcome: &str);
+    fn review(&self) -> Value;
+}
 pub trait Executor: Send + Sync + 'static {
+    fn record(
+        &self,
+        _target: &Target,
+        _run_id: &str,
+        _application: &str,
+        _command: &str,
+        _cwd: Option<&str>,
+    ) -> Result<Option<Arc<dyn Recording>>> {
+        Ok(None)
+    }
     fn revision(&self) -> Result<[u64; 2]>;
     fn resolve(&self, vault: &str, profile: &str) -> Result<Target>;
     fn connect(
@@ -137,6 +154,7 @@ struct Run {
     finished_at: Option<Instant>,
     started_at: Option<Instant>,
     exit_code: Option<u32>,
+    recording: Option<Arc<dyn Recording>>,
     output: output::OutputBuffer,
     bytes: usize,
     truncated: bool,
@@ -679,6 +697,7 @@ impl Broker {
                         approval_until: Instant::now() + Duration::from_secs(120),
                         finished_at: None,
                         started_at: None,
+                        recording: None,
                         exit_code: None,
                         output: output::OutputBuffer::default(),
                         bytes: 0,
@@ -769,6 +788,7 @@ impl Broker {
             "sessions":state.sessions.iter().map(|(id,s)|{let mut v=session_json(id,s);v["integration_id"]=json!(s.owner);v["target"]=state.grants.get(&s.owner).and_then(|g|g.targets.get(&s.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);v["idle_seconds"]=json!(Duration::from_secs(300).saturating_sub(s.idle.elapsed()).as_secs());v}).collect::<Vec<_>>(),
             "runs":state.runs.iter().map(|(id,r)|{
                 let mut v=run_json(id,r);v["integration_id"]=json!(r.owner);
+                v["recording"]=r.recording.as_ref().map(|r|r.review()).unwrap_or(Value::Null);
                 v["target"]=state.grants.get(&r.owner).and_then(|g|g.targets.get(&r.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);
                 if r.state=="awaiting_approval" {
                     v["cwd"]=json!(r.cwd.as_ref().map(|cwd| cwd.as_str()));v["command"]=json!(&*r.command);v["timeout_ms"]=json!(r.timeout_ms);v["approval_remaining_seconds"]=json!(r.approval_until.saturating_duration_since(Instant::now()).as_secs());
@@ -854,6 +874,8 @@ impl Broker {
             run.owner,
             run.target
         );
+        let original_command = run.command.clone();
+        let cwd = run.cwd.clone();
         let stop = run.cancel.clone();
         let command =
             working_directory::command(&run.command, run.cwd.as_ref().map(|cwd| cwd.as_str()));
@@ -867,6 +889,26 @@ impl Broker {
         run.started_at = Some(Instant::now());
         let broker = self.clone();
         std::thread::spawn(move || {
+            // Core state must never be acquired while holding broker state:
+            // an exec callback may be waiting to publish output to the broker.
+            let recording = match broker.executor.record(
+                &target,
+                &rid,
+                &attribution,
+                &original_command,
+                cwd.as_ref().map(|cwd| cwd.as_str()),
+            ) {
+                Ok(recording) => recording,
+                Err(error) => {
+                    if let Some(run) = lock(&broker.state).runs.get_mut(&rid) {
+                        finish(run, "failed", Some(error));
+                    }
+                    return;
+                }
+            };
+            if let Some(run) = lock(&broker.state).runs.get_mut(&rid) {
+                run.recording = recording.clone();
+            }
             let implicit = connection.is_none();
             let connection = match connection {
                 Some(c) => Ok(c),
@@ -900,6 +942,7 @@ impl Broker {
                     Arc::new(RunSink {
                         broker: Arc::downgrade(&broker),
                         run: rid.clone(),
+                        recording: recording.clone(),
                     }),
                     stop.clone(),
                     deadline,
@@ -927,6 +970,11 @@ impl Broker {
                 }
             }
             let mut state = lock(&broker.state);
+            let mut outcome = if cancelled(&stop) {
+                "cancelled"
+            } else {
+                "failed"
+            };
             if let Some(run) = state.runs.get_mut(&rid) {
                 if run.finished_at.is_none() {
                     finish(
@@ -939,11 +987,16 @@ impl Broker {
                         result.err().or(Some(ToolError::OutcomeUnknown)),
                     );
                 }
+                outcome = run.state;
                 if let Some(sid) = run.session.clone() {
                     if let Some(s) = state.sessions.get_mut(&sid) {
                         s.idle = Instant::now();
                     }
                 }
+            }
+            drop(state);
+            if let Some(recording) = recording {
+                recording.finish(outcome);
             }
         });
         Ok(())
@@ -1066,11 +1119,15 @@ fn run_json(id: &str, r: &Run) -> Value {
 }
 
 struct RunSink {
+    recording: Option<Arc<dyn Recording>>,
     broker: Weak<Broker>,
     run: String,
 }
 impl Output for RunSink {
     fn data(&self, stderr: bool, bytes: Vec<u8>) {
+        if let Some(recording) = &self.recording {
+            recording.data(stderr, &bytes);
+        }
         let Some(b) = self.broker.upgrade() else {
             return;
         };
@@ -1100,6 +1157,9 @@ impl Output for RunSink {
         state.retained_bytes += saved;
     }
     fn exited(&self, code: Option<u32>) {
+        if let Some(recording) = &self.recording {
+            recording.exited(code);
+        }
         let Some(b) = self.broker.upgrade() else {
             return;
         };
@@ -1195,6 +1255,7 @@ mod deadlines {
     fn output_expiry_is_explicit_and_late_callbacks_cannot_repopulate_it() {
         let (b, rid) = pending();
         let sink = RunSink {
+            recording: None,
             broker: Arc::downgrade(&b),
             run: rid.clone(),
         };
@@ -1224,6 +1285,7 @@ mod deadlines {
         lock(&b.state).grants.get_mut("a").unwrap().until =
             Some(Instant::now() - Duration::from_secs(1));
         RunSink {
+            recording: None,
             broker: Arc::downgrade(&b),
             run: rid.clone(),
         }
