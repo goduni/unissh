@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Btn, Field, Icon, Input } from "@/components/primitives";
 import { usePalette } from "@/theme/ThemeProvider";
 import { useTranslation, tDyn } from "@/i18n";
@@ -8,11 +9,13 @@ import * as api from "@/bridge/mcp";
 import { refreshMcp, useMcp } from "@/store/mcp";
 import { useApp } from "@/store/app";
 import { McpAccessEditor } from "./mcp/McpAccessEditor";
+import { formatDuration } from "./mcp/duration";
+import { McpConnectionGuide } from "./mcp/McpConnectionGuide";
 import "./mcp/mcp.css";
 
 export function ViewMcp() {
   const p = usePalette();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const status = useMcp((s) => s.status);
   const failed = useMcp((s) => s.failed);
   const [selected, setSelected] = useState<string | null>(null);
@@ -78,7 +81,9 @@ export function ViewMcp() {
   const duration = (g: NonNullable<typeof grant>) =>
     g.remaining_seconds === null
       ? t("mcp.noExpiry")
-      : t("mcp.remaining", { minutes: Math.ceil(g.remaining_seconds / 60) });
+      : t("mcp.remaining", {
+          duration: formatDuration(g.remaining_seconds, i18n.language),
+        });
   const copy = (kind: string, text: string, secret = false) =>
     void act(async () => {
       if (secret) await writeSecretToClipboard(text);
@@ -169,11 +174,9 @@ export function ViewMcp() {
                   variant="outline"
                   disabled={busy}
                   icon="copy"
-                  onClick={() =>
-                    copy("config", api.mcpConfiguration(status.endpoint))
-                  }
+                  onClick={() => copy("endpoint", status.endpoint)}
                 >
-                  {t(copied === "config" ? "mcp.copied" : "mcp.copyConfig")}
+                  {t(copied === "endpoint" ? "mcp.copied" : "mcp.copyEndpoint")}
                 </Btn>
               )}
               <Btn
@@ -514,8 +517,15 @@ export function ViewMcp() {
                   </section>
                   <details className="mcp-help">
                     <summary>{t("mcp.connectHelp")}</summary>
-                    <p>{t("mcp.configHelp")}</p>
-                    <p>{t("mcp.localOnly")}</p>
+                    <McpConnectionGuide
+                      key={integration.id}
+                      endpoint={status.endpoint}
+                      enabled={status.enabled}
+                      busy={busy}
+                      copied={copied}
+                      onCopy={copy}
+                      onOpenDocs={(url) => void act(() => openUrl(url))}
+                    />
                   </details>
                 </>
               )}

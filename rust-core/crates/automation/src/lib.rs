@@ -227,11 +227,7 @@ impl Broker {
         ticket: &str,
     ) -> Result<()> {
         let seconds = seconds.into();
-        if owner.is_empty()
-            || targets.is_empty()
-            || targets.len() > 64
-            || seconds.is_some_and(|seconds| !(1..=1800).contains(&seconds))
-        {
+        if owner.is_empty() || targets.is_empty() || targets.len() > 64 || seconds == Some(0) {
             return Err(ToolError::TargetUnavailable);
         }
         let (generation, revision): (u64, [u64; 2]) =

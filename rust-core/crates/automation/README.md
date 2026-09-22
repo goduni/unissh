@@ -5,7 +5,7 @@ The default build uses an executor trait for deterministic tests. The `core`
 feature connects it to UniSSH's existing vault, Personal identity resolver and SSH
 transport. HTTP cannot create grants, approve commands or supply authentication.
 
-Grants can be unbounded (`None`) or timed (1–1800 seconds). They are never
+Grants can be unbounded (`None`) or timed (a positive `u32` number of seconds). They are never
 persisted; lock, restart and revocation still invalidate unbounded grants. Vault/trust/identity writes
 conservatively invalidate all current grants, including verified sync changes.
 Explicit SSH connections expire after five idle minutes; each command needs a

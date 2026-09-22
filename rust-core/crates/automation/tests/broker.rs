@@ -699,6 +699,42 @@ async fn failed_connections_cancel_native_prompts_in_both_modes() {
 }
 
 #[tokio::test]
+async fn custom_grant_duration_accepts_long_leases_without_becoming_unbounded() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    for seconds in [1, 1801, 3600, 86400, 604800, u32::MAX] {
+        b.grant("a", "a".into(), vec![("v".into(), "p".into())], seconds)
+            .unwrap();
+        let remaining = b.review()["grants"][0]["remaining_seconds"]
+            .as_u64()
+            .unwrap();
+        assert!(remaining <= u64::from(seconds));
+        assert!(remaining >= u64::from(seconds) - 1);
+    }
+    // Zero is invalid and must not replace the existing authorization.
+    assert_eq!(
+        b.grant("a", "a".into(), vec![("v".into(), "p".into())], 0),
+        Err(ToolError::TargetUnavailable)
+    );
+    let targets = call(&b, "a", "list_targets", json!({})).await.unwrap();
+    let target = targets["targets"][0]["target_id"].as_str().unwrap();
+    let session = call(
+        &b,
+        "a",
+        "open_ssh_session",
+        json!({"target_id":target,"request_key":"long"}),
+    )
+    .await
+    .unwrap();
+    assert!(session["expires_at"].as_u64().unwrap() > u64::from(u32::MAX));
+    b.revoke(Some("a"));
+    assert!(b.review()["grants"].as_array().unwrap().is_empty());
+    assert_eq!(
+        call(&b, "a", "list_targets", json!({})).await,
+        Err(ToolError::GrantRequired)
+    );
+}
+
+#[tokio::test]
 async fn unbounded_grant_keeps_command_limits_and_explicit_revocation() {
     let f = Arc::new(Fake::default());
     let b = Broker::new(f.clone());

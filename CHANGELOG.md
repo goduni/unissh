@@ -43,6 +43,8 @@ starts with `0.`:
 
 - Desktop MCP is now a main-menu workspace with per-application access, activity
   and token management. Select a vault before choosing its hosts.
+- MCP access selection shows vaults alongside their hosts, offers duration presets
+  and custom minutes/hours/days, and includes client-specific connection guides.
 - MCP host grants can have no time limit. Tokens remain valid until rotation or
   deletion; vault lock, restart and security changes still revoke host access.
   MCP session results return a nullable `expires_at` for unbounded grants.

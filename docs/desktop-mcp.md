@@ -21,7 +21,8 @@ cloud relay, or change to your SSH servers. It is disabled by default.
    `Authorization: Bearer <TOKEN>` header. The copied configuration contains a
    placeholder, never the actual token. Keep the real token in the application's
    secret storage or private user configuration, outside a Git repository.
-5. Grant access to saved hosts with **No expiry** or a **30-minute** limit.
+5. Grant access to saved hosts with **No expiry**, a preset duration, or a custom
+   number of minutes, hours or days. The duration starts when you grant access.
    Choose a vault first, then select its hosts; selections can span several vaults.
    Acknowledge that command output can be sent to the AI provider. Each command
    still requires a separate confirmation in UniSSH.
@@ -50,6 +51,24 @@ require validation on those applications/devices. Manual bearer-header
 provisioning is supported; OAuth discovery
 and browser login are not implemented. Clients requiring OAuth or stdio-only
 servers are unsupported.
+
+### Client-specific setup
+
+Expand **Connect your AI application** in an application's MCP workspace. Select
+your client to get its configuration format, copy it, and replace `<TOKEN>` with
+that application's token. The examples use the listener's current address and
+never embed the token automatically. Enable MCP before copying a configuration.
+
+| Client | Setup shown in UniSSH | Reference |
+| --- | --- | --- |
+| Claude Code | `claude mcp add --transport http --scope user` with a bearer header | [Claude Code MCP](https://code.claude.com/docs/en/mcp) |
+| Codex | `[mcp_servers.UniSSH]` with `url` and `http_headers` in `~/.codex/config.toml` | [Codex MCP](https://developers.openai.com/codex/mcp) |
+| OpenCode | Remote server with `oauth: false` in the personal OpenCode configuration; select 1.x or 2.x to match its schema | [OpenCode 1.x](https://opencode.ai/docs/mcp-servers/), [OpenCode 2.x](https://opencode.ai/v2/docs/mcp-servers) |
+| Cursor | `url` and `headers` under `mcpServers` in `~/.cursor/mcp.json` | [Cursor MCP](https://cursor.com/docs/mcp) |
+
+Merge file-based examples with existing settings rather than replacing the whole
+file. Keep token-bearing configuration outside version control. Run the client on
+the same device as UniSSH; a remote agent cannot reach this loopback endpoint.
 
 ## Tools and connection lifetime
 
@@ -114,8 +133,9 @@ an accepted command.
 - Revision invalidation is deliberately conservative: any vault item, membership,
   identity or trusted-key mutation, including verified sync, revokes current
   grants. Regrant after editing/syncing; MCP never silently follows a changed host.
-- Grants can have no time limit or a finite expiry (1–30 minutes through the native
-  API; the UI offers 30 minutes). No expiry does not bypass lock, restart or
+- Grants can have no time limit or a finite expiry (a positive `u32` number of
+  seconds through the native API; the UI offers presets and custom minutes,
+  hours or days). No expiry does not bypass lock, restart or
   revision invalidation. Explicit idle sessions close after 5 minutes.
   Listing and polling do not renew either lifetime. Approvals expire after
   2 minutes. Command timeout defaults to 2 minutes, with a 10-minute maximum

@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Btn, Field, Icon, Input } from "@/components/primitives";
 import { useTranslation } from "@/i18n";
 import type { McpSelection, McpTarget } from "@/bridge/mcp";
+
+import { McpDurationPicker } from "./McpDurationPicker";
+import { durationSeconds, initialDuration } from "./duration";
 
 export const targetKey = (target: McpTarget) =>
   JSON.stringify([target.vault_id, target.profile_id]);
@@ -22,15 +25,17 @@ export function McpAccessEditor({
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
+  const id = useId();
   const [vault, setVault] = useState(initial[0]?.vault_id ?? "");
   const [selected, setSelected] = useState(
     () => new Set(initial.map(targetKey)),
   );
   const [search, setSearch] = useState("");
   const [consent, setConsent] = useState(false);
-  const [duration, setDuration] = useState(
-    initialSeconds === null ? "forever" : "30",
+  const [duration, setDuration] = useState(() =>
+    initialDuration(initialSeconds),
   );
+  const seconds = durationSeconds(duration);
   const chosen = selection.targets.filter((target) =>
     selected.has(targetKey(target)),
   );
@@ -59,76 +64,115 @@ export function McpAccessEditor({
       className="mcp-access-editor"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!busy && consent && chosen.length > 0 && chosen.length <= 64)
-          onSave(chosen, duration === "forever" ? null : Number(duration) * 60);
+        if (
+          !busy &&
+          consent &&
+          chosen.length > 0 &&
+          chosen.length <= 64 &&
+          seconds !== undefined
+        )
+          onSave(chosen, seconds);
       }}
     >
       <fieldset disabled={busy}>
-        <Field label={t("mcp.chooseVault")}>
-          <select
-            aria-label={t("mcp.chooseVault")}
-            autoFocus
-            value={vault}
-            onChange={(e) => {
-              setVault(e.target.value);
-              setSearch("");
-            }}
-          >
-            <option value="" disabled>
-              {t("mcp.chooseVaultPlaceholder")}
-            </option>
-            {selection.vaults.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        {!selection.vaults.length && <p>{t("mcp.noTargets")}</p>}
-        {vault && (
-          <div className="mcp-host-picker">
-            <Field label={t("mcp.searchHosts")}>
-              <Input
-                icon="search"
-                value={search}
-                onChange={setSearch}
-                placeholder={t("mcp.searchPlaceholder")}
-              />
-            </Field>
-            {!!visible.length && (
-              <label className="mcp-check mcp-select-all">
-                <input
-                  type="checkbox"
-                  checked={allChecked}
-                  onChange={(e) => setChecked(visible, e.target.checked)}
+        <div className="mcp-target-picker">
+          <fieldset className="mcp-vault-picker">
+            <legend className="mcp-field-label">{t("mcp.chooseVault")}</legend>
+            <div className="mcp-vault-options">
+              {selection.vaults.map((v, index) => {
+                const count = selection.targets.filter(
+                  (target) => target.vault_id === v.id,
+                ).length;
+                const selectedCount = chosen.filter(
+                  (target) => target.vault_id === v.id,
+                ).length;
+                return (
+                  <label className="mcp-vault-option" key={v.id}>
+                    <input
+                      type="radio"
+                      name={`${id}-vault`}
+                      value={v.id}
+                      autoFocus={v.id === vault || (!vault && index === 0)}
+                      checked={vault === v.id}
+                      onChange={() => {
+                        setVault(v.id);
+                        setSearch("");
+                      }}
+                    />
+                    <span className="mcp-vault-row">
+                      <Icon name="layers" size={18} />
+                      <span className="mcp-vault-name">
+                        <strong>{v.name}</strong>
+                        <small>{t("count.hosts", { count })}</small>
+                      </span>
+                      {!!selectedCount && (
+                        <span
+                          className="mcp-vault-count"
+                          aria-label={t("mcp.selectedHosts", {
+                            hosts: t("count.hosts", { count: selectedCount }),
+                          })}
+                        >
+                          <Icon name="check" size={12} />
+                          {selectedCount}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            {!selection.vaults.length && <p>{t("mcp.noTargets")}</p>}
+          </fieldset>
+          {vault ? (
+            <div className="mcp-host-picker">
+              <Field label={t("mcp.searchHosts")}>
+                <Input
+                  icon="search"
+                  value={search}
+                  onChange={setSearch}
+                  placeholder={t("mcp.searchPlaceholder")}
                 />
-                <span>{t("mcp.selectVisible")}</span>
-              </label>
-            )}
-            <div className="mcp-host-options">
-              {visible.map((target) => (
-                <label className="mcp-check mcp-host" key={targetKey(target)}>
+              </Field>
+              {!!visible.length && (
+                <label className="mcp-check mcp-select-all">
                   <input
                     type="checkbox"
-                    checked={selected.has(targetKey(target))}
-                    onChange={(e) => setChecked([target], e.target.checked)}
+                    checked={allChecked}
+                    onChange={(e) => setChecked(visible, e.target.checked)}
                   />
-                  <span>
-                    <strong>{target.label}</strong>
-                    <small>
-                      {target.user}@{target.host}:{target.port}
-                    </small>
-                  </span>
+                  <span>{t("mcp.selectVisible")}</span>
                 </label>
-              ))}
+              )}
+              <div className="mcp-host-options">
+                {visible.map((target) => (
+                  <label className="mcp-check mcp-host" key={targetKey(target)}>
+                    <input
+                      type="checkbox"
+                      checked={selected.has(targetKey(target))}
+                      onChange={(e) => setChecked([target], e.target.checked)}
+                    />
+                    <span>
+                      <strong>{target.label}</strong>
+                      <small>
+                        {target.user}@{target.host}:{target.port}
+                      </small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {!visible.length && (
+                <p className="mcp-hint">
+                  {t(query ? "mcp.noMatches" : "mcp.vaultEmpty")}
+                </p>
+              )}
             </div>
-            {!visible.length && (
-              <p className="mcp-hint">
-                {t(query ? "mcp.noMatches" : "mcp.vaultEmpty")}
-              </p>
-            )}
-          </div>
-        )}
+          ) : (
+            <div className="mcp-picker-empty">
+              <Icon name="layers" size={22} />
+              <p>{t("mcp.chooseVaultPlaceholder")}</p>
+            </div>
+          )}
+        </div>
         {!!chosen.length && (
           <div className="mcp-selection-summary">
             <strong>
@@ -156,17 +200,8 @@ export function McpAccessEditor({
             {t("mcp.tooManyHosts")}
           </p>
         )}
-        <Field label={t("mcp.duration")}>
-          <select
-            aria-label={t("mcp.duration")}
-            value={duration}
-            onChange={(e) => setDuration(e.target.value)}
-          >
-            <option value="forever">{t("mcp.noExpiry")}</option>
-            <option value="30">{t("mcp.thirtyMinutes")}</option>
-          </select>
-        </Field>
-        <p className="mcp-hint">{t("mcp.accessLifetime")}</p>
+        <McpDurationPicker value={duration} onChange={setDuration} />
+        <p className="mcp-lifecycle-hint">{t("mcp.accessLifetime")}</p>
         <label className="mcp-check mcp-consent">
           <input
             type="checkbox"
@@ -178,7 +213,13 @@ export function McpAccessEditor({
         <div className="mcp-actions">
           <Btn
             type="submit"
-            disabled={busy || !consent || !chosen.length || chosen.length > 64}
+            disabled={
+              busy ||
+              !consent ||
+              !chosen.length ||
+              chosen.length > 64 ||
+              seconds === undefined
+            }
           >
             {t("mcp.allow")}
           </Btn>
