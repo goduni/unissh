@@ -8,9 +8,9 @@
 # (docker-compose is configured for this automatically.)
 
 # Pin the builder to Debian 12 (bookworm, glibc 2.36) to MATCH the distroless
-# cc-debian12 runtime below. Plain `rust:1.94-slim` tracks Debian 13 (glibc 2.38+),
+# cc-debian12 runtime below. Plain `rust:1.95-slim` tracks Debian 13 (glibc 2.38+),
 # whose binaries fail on cc-debian12 with `GLIBC_2.38 not found`.
-FROM rust:1.94-slim-bookworm AS chef
+FROM rust:1.95-slim-bookworm AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config libssl-dev cmake clang && rm -rf /var/lib/apt/lists/*
 # cargo-chef is built here rather than pulled from a prebuilt third-party image.

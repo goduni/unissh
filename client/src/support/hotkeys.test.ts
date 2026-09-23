@@ -58,9 +58,8 @@ describe("terminalOwnsTabDigits", () => {
     expect(terminalOwnsTabDigits("terminal", shifted, false)).toBe(true);
   });
 
-  it("keeps a bare Ctrl+1 off macOS routing to the sections", () => {
-    // The terminal never claims it (its chord needs Shift), so App.tsx must not
-    // stand down — this is the one way to reach a section from the terminal there.
+  it("does not treat bare Ctrl+1 as a terminal tab shortcut", () => {
+    // Neither application handler claims it now: both require Ctrl+Shift.
     expect(terminalOwnsTabDigits("terminal", ev({ key: "1", code: "Digit1", ctrlKey: true }), false)).toBe(false);
   });
 

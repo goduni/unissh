@@ -1326,8 +1326,8 @@ async fn self_enroll_login_and_persist(
 /// and persists the link. `password` is `None` for passwordless/SSO accounts; `secret_key_hex`
 /// is the account Secret Key (from the Emergency Kit). A wrong password/key → the server's 403.
 ///
-/// Zero-knowledge: `password` / `secret_key_hex` flow ONLY into the core FFI (to derive
-/// `K_auth` and unwrap the blob) — never logged, never sent; only the derived `K_auth`
+/// Zero-knowledge: credentials are used locally by the core FFI; the installed
+/// Secret Key is remembered in the OS keychain. Only the derived `K_auth`
 /// and the keyset-signed registration leave the device.
 #[tauri::command]
 pub async fn server_escrow_fetch_and_unlock(
@@ -1362,8 +1362,13 @@ pub async fn server_escrow_fetch_and_unlock(
         // 3–4. Fetch the escrowed keyset blob + the account it belongs to, then install +
         //       unlock it locally (this loads the keyset the self-enroll tail signs with).
         let (blob, account_id) = identity::escrow_fetch(http, &base, &hd, &k_auth)?;
-        core.unlock_from_server_blob(blob, password, secret_key_hex)
-            .map_err(ApiError::from)?;
+        super::recovery::install_keyset(
+            &core,
+            blob,
+            password,
+            secret_key_hex,
+            crate::keychain::save_secret_key_now,
+        )?;
         Ok(account_id)
     })
     .await?;
@@ -1402,8 +1407,13 @@ pub async fn server_import_keyset_and_unlock(
     // ONLY the core here). Unlike escrow there is no fetch to learn the account id from — the
     // follow-up self-enroll returns it (the same keyset resolves the same account).
     blocking_api(move || {
-        core.unlock_from_server_blob(keyset_blob, password, secret_key_hex)
-            .map_err(ApiError::from)
+        super::recovery::install_keyset(
+            &core,
+            keyset_blob,
+            password,
+            secret_key_hex,
+            crate::keychain::save_secret_key_now,
+        )
     })
     .await?;
     // Offline import carries no handle (escrow keys off one); the account's handle syncs later.

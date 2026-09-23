@@ -9,7 +9,7 @@ UniSSH ships four GitHub Actions workflows: continuous integration for the Rust 
 
 Runs on every push to `main`, every pull request, and weekly on a schedule (to surface new advisories via cargo-deny). Three jobs:
 
-- **`lint`** — a log-redaction guard (`scripts/check-log-redaction.py`), then `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings`. The toolchain (channel 1.94 + rustfmt/clippy) comes from `rust-toolchain.toml`.
+- **`lint`** — a log-redaction guard (`scripts/check-log-redaction.py`), then `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings`. The toolchain (channel 1.95 + rustfmt/clippy) comes from `rust-toolchain.toml`.
 - **`test`** — `cargo test --workspace` inside a `rust:bookworm` **root container**. The sshd-backed integration tests are designed to run as root against a self-spawned `sshd`, so the container provides a privileged, reproducible environment; it installs `openssh-server`/`openssh-client` plus the OpenSSL headers and C toolchain for bundled SQLCipher.
 - **`deny`** — `cargo-deny check advisories bans sources licenses`, reading `deny.toml` from the repo root and, separately, from the two excluded workspaces (`client/src-tauri`, `server-ui/crypto-wasm`) — a supply-chain gate over all three lockfiles.
 

@@ -3,7 +3,7 @@ title: Build from source
 description: Build and test UniSSH from source — the just task runner for the monorepo, cargo for the core and server, and wasm-pack for the admin panel.
 ---
 
-UniSSH builds from source with **[`just`](https://github.com/casey/just)** as the monorepo task runner over `cargo`, `npm`, and `wasm-pack`. Make sure you have the [prerequisites](../../overview/install/) first: Rust 1.94+, a C toolchain, system OpenSSL, Node 20.19+/22.12+, and `just`.
+UniSSH builds from source with **[`just`](https://github.com/casey/just)** as the monorepo task runner over `cargo`, `npm`, and `wasm-pack`. Make sure you have the [prerequisites](../../overview/install/) first: Rust 1.95+, a C toolchain, system OpenSSL, Node 20.19+/22.12+, and `just`.
 
 ## The `just` targets
 

@@ -58,7 +58,7 @@ Everything below is for compiling a component yourself. The [Quickstart](../quic
 
 For the Rust workspace (core + server) you need:
 
-- **Rust 1.94+** — pinned in `rust-toolchain.toml`; `rustup` honors it automatically.
+- **Rust 1.95+** — pinned in `rust-toolchain.toml`; `rustup` honors it automatically.
 - A **C toolchain** and the system **OpenSSL** development headers — required for the bundled **SQLCipher** that backs the local encrypted database.
 - **[`just`](https://github.com/casey/just)** — the monorepo task runner. Run `just` with no arguments to list targets.
 
@@ -91,7 +91,7 @@ See [Server configuration](../../operations/configuration/) and [Docker Compose 
 
 ### client (Tauri 2 desktop / mobile)
 
-- **Node 20.19+ / 22.12+** and **Rust 1.85+**.
+- **Node 20.19+ / 22.12+** and **Rust 1.95+**.
 - The sibling `rust-core/` must be present — the client consumes it as a path dependency (`unissh-ffi`).
 
 **Linux desktop build** additionally needs the WebKitGTK and supporting dev packages:

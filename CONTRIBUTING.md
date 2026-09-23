@@ -34,7 +34,7 @@ The task runner is [`just`](https://github.com/casey/just) (see `justfile`); run
 
 **Toolchain:**
 
-- **Rust 1.94** — pinned by `rust-toolchain.toml` (with `rustfmt` + `clippy`), so `rustup` picks it up automatically.
+- **Rust 1.95** — pinned by `rust-toolchain.toml` (with `rustfmt` + `clippy`), so `rustup` picks it up automatically.
 - **A C toolchain + system OpenSSL** — needed for the bundled SQLCipher in the dev/test path.
 - **Node 20.19+ / 22.12+** — for the frontends (`server-ui/`, `client/`).
 - **`wasm-pack` + the `wasm32-unknown-unknown` target** — only for the admin panel's wasm crypto bundle:

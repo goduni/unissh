@@ -1,6 +1,6 @@
 # unissh-ssh-transport
 
-UniSSH SSH transport on [`russh`](https://crates.io/crates/russh) `0.61` (spec 10.4).
+UniSSH SSH transport on [`russh`](https://crates.io/crates/russh) `0.63` (spec 10.4).
 Builds on `ssh-agent` (key-based authentication) and `storage` (host key TOFU/pinning).
 
 ## Features
@@ -21,6 +21,9 @@ Builds on `ssh-agent` (key-based authentication) and `storage` (host key TOFU/pi
   `storage.known_hosts`; on subsequent ones it is verified. A mismatch →
   `TransportError::HostKeyMismatch { host, port, fingerprint }` (protection against MITM,
   spec 5.4). Consciously "trust the new key" — `trust_host_key(host, port, storage)`.
+- **Certificates:** user certificates are supported for client authentication.
+  Host certificates/host CA trust are not yet supported ([#89](https://github.com/goduni/unissh/issues/89));
+  certificate negotiation stays disabled and presented host certificates are rejected.
 - **Import of `~/.ssh/config`** — `SshConfig` (directives `Host`/`HostName`/`Port`/
   `User`/`IdentityFile`/`ProxyJump`, `*`/`?` patterns, "first value wins"
   semantics; `host_aliases()` — the list of concrete aliases for import).

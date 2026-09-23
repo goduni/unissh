@@ -21,6 +21,44 @@ fn deterministic() {
 }
 
 #[test]
+fn matches_argon2_0_5_3_keys() {
+    // Frozen outputs from argon2 0.5.3, Argon2id v0x13, with a 32-byte key.
+    // Existing encrypted keysets must unlock with the same password after a
+    // dependency upgrade: a same-version round-trip cannot catch this regression.
+    let cases = [
+        (
+            65536,
+            3,
+            1,
+            "84724983f9d88b4e19321a45d33f5e65351160e6d5d989338d28f6e1536e2f26",
+        ),
+        (
+            19456,
+            2,
+            1,
+            "a74b109e02c0d61365d57ce4ef083d0b615e585c3f7ddeef10c21fd400a2b08f",
+        ),
+        (
+            19456,
+            2,
+            2,
+            "979e7455dca02c93d18612617d2cc23bd34c033791dfef6f7fdb2570830275f2",
+        ),
+    ];
+    for (mem_kib, iterations, parallelism, expected) in cases {
+        let params = KdfParams {
+            mem_kib,
+            iterations,
+            parallelism,
+            salt: vec![0x12; 16],
+        };
+        let restored = KdfParams::from_blob(&params.to_blob().unwrap()).unwrap();
+        let key = derive_key(b"compatibility-test-password", &restored).unwrap();
+        assert_eq!(hex::encode(key.expose_bytes()), expected);
+    }
+}
+
+#[test]
 fn different_salt_differs() {
     let k1 = derive_key(b"pw", &fast(1)).unwrap();
     let k2 = derive_key(b"pw", &fast(2)).unwrap();

@@ -55,6 +55,13 @@ starts with `0.`:
 
 ### Changed
 
+- Update russh to 0.63.3 and adapt host-key verification to its new API while
+  preserving plain-key TOFU/pinning. Host CA trust remains unsupported; host
+  certificates are not negotiated or accepted as ordinary pinned keys.
+- Update Argon2 to 0.6 with explicit key-derivation features for native and
+  browser builds. Frozen Argon2 0.5.3 key vectors verify password-derived key
+  compatibility; no vault migration is required.
+
 - Desktop MCP is now a main-menu workspace with per-application access, activity
   and token management. Select a vault before choosing its hosts.
 - MCP access selection shows vaults alongside their hosts, offers duration presets
@@ -68,6 +75,13 @@ starts with `0.`:
 
 ### Fixed
 
+- Existing self-hosted identities can sign in directly from a fresh device's
+  onboarding screen. Escrow and Emergency-Kit recovery remember the installed
+  identity's Secret Key in the OS keychain when available.
+- Global shortcuts use Cmd on macOS and Ctrl+Shift on Windows/Linux, leaving
+  bare Ctrl letters to the terminal. Section, help and zoom shortcuts use the
+  same modifier and recognize shifted physical keys; the shortcut sheet matches.
+
 - TXT recording exports preserve visible text between terminal OSC sequences.
 - MCP recording cleanup advances in bounded, throttled batches on save and shares
   the existing history read pass, avoiding a full archive scan per command.
@@ -76,11 +90,17 @@ starts with `0.`:
   approvals wait for authentication dialogs. Failed MCP connections dismiss their
   pending authentication prompts, and active HTTP requests survive connection reuse.
 
+### Security
+
+- Update rustls to 0.23.45 in the server/core and native client lockfiles to
+  reject TLS 1.3 handshake messages crossing encryption-level boundaries
+  (RUSTSEC-2026-0285).
+
 ### Compatibility
 
 - Vault format, AAD encodings and encrypted-sync protocol are unchanged. MCP
   registration uses a separate version-1 local digest configuration; mobile has
-  no MCP listener. Desktop builds require Rust 1.88 or newer (the pinned project
+  no MCP listener. Desktop builds require Rust 1.95 or newer (the pinned project
   toolchain satisfies this).
 
 ## [0.4.0] — 2026-08-25

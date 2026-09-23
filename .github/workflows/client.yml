@@ -314,7 +314,7 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
-      # Toolchain channel (1.94) + components: the standalone client/src-tauri
+      # Toolchain channel (1.95) + components: the standalone client/src-tauri
       # workspace inherits the pin from the repo-root rust-toolchain.toml, which
       # rustup discovers by walking up parent dirs (no per-crate toolchain file).
       - name: Cache Rust (client/src-tauri standalone workspace)
@@ -386,6 +386,12 @@ jobs:
         if: matrix.platform == 'windows-11-arm'
         shell: bash
         run: echo "OPENSSL_RUST_USE_NASM=0" >> "$GITHUB_ENV"
+
+      # Exercise recovery with real crypto/SQLCipher on every desktop host.
+      # Release mode shares compiled dependencies with the bundle build below.
+      - name: Test recovery (Tauri crate)
+        run: cargo test --locked --release --lib cloud::recovery::tests -- --test-threads=1
+        working-directory: client/src-tauri
 
       - name: Build & bundle (Tauri)
         uses: tauri-apps/tauri-action@v1
@@ -607,7 +613,7 @@ jobs:
           cache-dependency-path: client/package-lock.json
 
       - name: Setup Java (AGP)
-        uses: actions/setup-java@v5.6.0
+        uses: actions/setup-java@v6.0.0
         with:
           distribution: temurin
           java-version: "17"
