@@ -255,6 +255,30 @@ AAD encoding, encrypted-sync wire format or database schema migration is added.
 Session results expose `expires_at: null` when the grant has no expiry. A Unix
 timestamp is returned for timed grants. Idle closure and revocation apply to both.
 
+## Desktop activity
+
+The application's **Activity** section lists SSH connections and commands for the
+current access period. Active commands appear first; filters select all commands,
+active work or errors. Each row shows the command, host, working directory when
+specified, local start time, elapsed duration and exit status. A nonzero exit is
+an error even when SSH execution completed normally. Unknown remote outcomes are
+explicitly labelled; the UI never treats a missing exit code as success.
+
+Expand a command to view its full text, directory, runtime limit, termination
+reason and retained stdout/stderr. Standard input and environment values are
+collapsed by default. Text is rendered as plain text with terminal controls
+removed or escaped; binary chunks remain labelled base64. Output is paginated
+and refreshed while expanded, with explicit truncation and expiry notices.
+This works even when the host's **Record sessions** preference is off: it reads
+the existing broker buffer, not a new SSH connection or a persistent recording.
+Output remains available for 10 minutes after completion within the existing
+retention limits. Replacing/revoking access, locking or restarting clears this
+live history; saved recordings can be opened separately.
+
+The native inspector validates the current integration and grant epoch. It is
+not exposed as an MCP tool. No credential fields or new persistent formats are
+introduced.
+
 ## Command recordings
 
 The host's **Record sessions** preference also records authorized MCP commands.

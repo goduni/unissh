@@ -29,7 +29,7 @@ Discarded output is marked truncated while the SSH reader continues draining.
 Cancellation closes a channel; detached remote processes may continue.
 
 `Broker::grant`, `grant_with_policy`, `approve`, `review`, `forget_access`,
-`suspend` and `resume` are trusted native APIs. Keep
+`suspend`, `resume` and `inspect_command` are trusted native APIs. Keep
 them out of the MCP router. Install native SDK log suppression before binding
 real broker data to HTTP, as documented by `unissh-mcp`.
 
@@ -49,3 +49,10 @@ Inputs participate in submission-key conflicts and are shown in native review.
 `list_commands` is grant/caller scoped; `get_access_status` can explain missing
 access without exposing target inventory. Target context contains only the granted
 host's vault/group labels and tags. No remote file or standalone note tools exist.
+
+Native activity summaries include bounded command previews, wall-clock timestamps,
+monotonic elapsed times and exit codes. The desktop inspector reads full inputs
+and paginated retained stdout/stderr only for the current owner/grant epoch; it
+never opens another SSH connection. Expired output leaves command metadata
+available until the grant history is cleared. These additions do not change MCP
+tool responses or add an MCP tool.

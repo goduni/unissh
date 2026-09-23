@@ -59,7 +59,13 @@ impl Connection for Conn {
             },
         );
         if command != "hold" {
-            sink.exited(Some(0));
+            sink.exited(if command == "unknown-exit" {
+                None
+            } else if command == "nonzero" {
+                Some(7)
+            } else {
+                Some(0)
+            });
         }
         Ok(Arc::new(Cmd(self.command_closes.clone())))
     }
@@ -1407,4 +1413,132 @@ fn queued_unlock_cannot_undo_a_newer_lock() {
     assert!(b.review()["grants"].as_array().unwrap().is_empty());
     b.resume();
     assert_eq!(b.review()["grants"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn native_activity_reads_unrecorded_output_and_checks_owner_and_epoch() {
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    let t = target(&b, "a").await;
+    target(&b, "b").await;
+    let submitted = call(
+        &b,
+        "a",
+        "run_command",
+        json!({"session_id":null,"target_id":t,"command":"split-text","request_key":"native"}),
+    )
+    .await
+    .unwrap();
+    let rid = submitted["run_id"].as_str().unwrap();
+    let pending = b.review()["runs"][0].clone();
+    assert_eq!(pending["command_preview"], "split-text");
+    assert!(pending["created_unix_ms"].as_u64().unwrap() > 0);
+    assert!(pending["started_unix_ms"].is_null());
+    assert!(pending["elapsed_ms"].is_null());
+    assert_eq!(
+        b.inspect_command("b", rid, None),
+        Err(ToolError::OutcomeUnknown)
+    );
+    b.approve(rid, true).unwrap();
+    wait(&b, "a", rid).await;
+    let details = b.inspect_command("a", rid, None).unwrap();
+    assert_eq!(details["command"], "split-text");
+    assert_eq!(details["exit_code"], 0);
+    assert!(!details["chunks"].as_array().unwrap().is_empty());
+    assert_eq!(details["has_more"], false);
+    assert_eq!(
+        b.inspect_command("a", rid, details["next_cursor"].as_str())
+            .unwrap()["chunks"],
+        json!([])
+    );
+    let review = b.review()["runs"][0].clone();
+    assert!(review["recording"].is_null());
+    assert!(
+        review["started_unix_ms"].as_u64().unwrap() >= pending["created_unix_ms"].as_u64().unwrap()
+    );
+    assert!(review["elapsed_ms"].is_u64());
+    assert_eq!(review["exit_code"], 0);
+    assert_eq!(fake.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 1);
+    // A new grant cannot read the previous grant's buffers, even for the same owner.
+    target(&b, "a").await;
+    assert_eq!(
+        b.inspect_command("a", rid, None),
+        Err(ToolError::OutcomeUnknown)
+    );
+    b.revoke(Some("a"));
+    assert_eq!(
+        b.inspect_command("a", rid, None),
+        Err(ToolError::GrantRequired)
+    );
+    target(&b, "a").await;
+    fake.revision.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(
+        b.inspect_command("a", rid, None),
+        Err(ToolError::GrantRequired)
+    );
+}
+
+#[tokio::test]
+async fn native_activity_pages_retained_output_and_reports_nonzero_and_unknown_exit() {
+    let b = Broker::new(Arc::new(Fake::default()));
+    let t = target(&b, "a").await;
+    for (command, exit) in [
+        ("nonzero", json!(7)),
+        ("unknown-exit", Value::Null),
+        ("large", json!(0)),
+    ] {
+        let run = call(
+            &b,
+            "a",
+            "run_command",
+            json!({"session_id":null,"target_id":t,"command":command,"request_key":command}),
+        )
+        .await
+        .unwrap();
+        let rid = run["run_id"].as_str().unwrap();
+        b.approve(rid, true).unwrap();
+        wait(&b, "a", rid).await;
+        let mut details = b.inspect_command("a", rid, None).unwrap();
+        assert_eq!(
+            details["state"],
+            if command == "unknown-exit" {
+                "failed"
+            } else {
+                "completed"
+            }
+        );
+        assert_eq!(details["exit_code"], exit);
+        let review = b.review();
+        assert_eq!(
+            review["runs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["run_id"] == rid)
+                .unwrap()["exit_code"],
+            exit
+        );
+        if command == "large" {
+            assert_eq!(details["truncated"], true);
+            assert_eq!(details["has_more"], true);
+            let mut bytes = 0;
+            loop {
+                bytes += details["chunks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|c| c["data"].as_str().unwrap().len())
+                    .sum::<usize>();
+                if details["has_more"] == false {
+                    break;
+                }
+                let cursor = details["next_cursor"].as_str().unwrap();
+                let next = b.inspect_command("a", rid, Some(cursor)).unwrap();
+                assert_ne!(details["next_cursor"], next["next_cursor"]);
+                details = next;
+            }
+            assert_eq!(bytes, 1024 * 1024);
+        }
+    }
 }

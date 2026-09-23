@@ -145,6 +145,9 @@ struct Grant {
     targets: BTreeMap<String, Target>,
 }
 struct Session {
+    created_unix_ms: u64,
+    connected_at: Option<Instant>,
+    connected_unix_ms: Option<u64>,
     owner: String,
     epoch: String,
     target: String,
@@ -157,6 +160,8 @@ struct Session {
     expires_at: Option<u64>,
 }
 struct Run {
+    created_unix_ms: u64,
+    started_unix_ms: Option<u64>,
     id: String,
     owner: String,
     epoch: String,
@@ -177,6 +182,7 @@ struct Run {
     exit_code: Option<u32>,
     recording: Option<Arc<dyn Recording>>,
     output: output::OutputBuffer,
+    output_expired: bool,
     bytes: usize,
     truncated: bool,
 }
@@ -479,7 +485,7 @@ impl Broker {
             {
                 run.output.clear();
                 run.bytes = 0;
-                run.error = Some(ToolError::OutputExpired);
+                run.output_expired = true;
             }
         }
         let active: Vec<_> = state
@@ -641,6 +647,9 @@ impl Broker {
                 state.sessions.insert(
                     sid.clone(),
                     Session {
+                        created_unix_ms: unix_ms(),
+                        connected_at: None,
+                        connected_unix_ms: None,
                         owner: owner.clone(),
                         epoch,
                         target: r.target_id,
@@ -677,6 +686,8 @@ impl Broker {
                                     _owner_slot: owner_slot,
                                 }));
                                 s.state = "ready";
+                                s.connected_at = Some(Instant::now());
+                                s.connected_unix_ms = Some(unix_ms());
                                 s.idle = Instant::now();
                             }
                             Ok(c) => {
@@ -809,6 +820,8 @@ impl Broker {
                 state.runs.insert(
                     rid.clone(),
                     Run {
+                        created_unix_ms: unix_ms(),
+                        started_unix_ms: None,
                         id: rid.clone(),
                         owner: owner.clone(),
                         epoch,
@@ -833,6 +846,7 @@ impl Broker {
                         recording: None,
                         exit_code: None,
                         output: output::OutputBuffer::default(),
+                        output_expired: false,
                         bytes: 0,
                         truncated: false,
                     },
@@ -920,9 +934,9 @@ impl Broker {
         json!({
             "saved_access":saved_access,
             "grants":state.grants.iter().map(|(owner,g)|json!({"integration_id":owner,"label":g.label,"approval_mode":g.approval_mode,"max_timeout_ms":g.max_timeout_ms,"remaining_seconds":g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),"targets":g.targets.values().map(|t|&t.info).collect::<Vec<_>>()})).collect::<Vec<_>>(),
-            "sessions":state.sessions.iter().map(|(id,s)|{let mut v=session_json(id,s);v["integration_id"]=json!(s.owner);v["target"]=state.grants.get(&s.owner).and_then(|g|g.targets.get(&s.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);v["idle_seconds"]=json!(Duration::from_secs(300).saturating_sub(s.idle.elapsed()).as_secs());v}).collect::<Vec<_>>(),
+            "sessions":state.sessions.iter().map(|(id,s)|{let mut v=session_json(id,s);v["created_unix_ms"]=json!(s.created_unix_ms);v["connected_unix_ms"]=json!(s.connected_unix_ms);v["connected_elapsed_ms"]=json!(s.connected_at.filter(|_| s.state=="ready").map(|at|at.elapsed().as_millis() as u64));v["integration_id"]=json!(s.owner);v["target"]=state.grants.get(&s.owner).and_then(|g|g.targets.get(&s.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);v["idle_seconds"]=json!(Duration::from_secs(300).saturating_sub(s.idle.elapsed()).as_secs());v}).collect::<Vec<_>>(),
             "runs":state.runs.iter().map(|(id,r)|{
-                let mut v=run_json(id,r);v["integration_id"]=json!(r.owner);
+                let mut v=native_run_json(id,r);v["integration_id"]=json!(r.owner);
                 v["recording"]=r.recording.as_ref().map(|r|r.review()).unwrap_or(Value::Null);
                 v["target"]=state.grants.get(&r.owner).and_then(|g|g.targets.get(&r.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);
                 if r.state=="awaiting_approval" {
@@ -931,6 +945,52 @@ impl Broker {
                 } v
             }).collect::<Vec<_>>()
         })
+    }
+
+    /// Trusted desktop inspector. Reads the same bounded buffer as MCP without
+    /// opening SSH or depending on optional persistent session recording.
+    pub fn inspect_command(
+        &self,
+        owner: &str,
+        run_id: &str,
+        cursor: Option<&str>,
+    ) -> Result<Value> {
+        self.sweep();
+        let revision = self.executor.revision()?;
+        let _admission = self.admission.read().unwrap_or_else(|e| e.into_inner());
+        let state = lock(&self.state);
+        let grant = state.grants.get(owner).ok_or(ToolError::GrantRequired)?;
+        if grant.revision != revision || grant.until.is_some_and(|until| Instant::now() >= until) {
+            return Err(ToolError::GrantExpired);
+        }
+        let run = state
+            .runs
+            .get(run_id)
+            .filter(|r| r.owner == owner && r.epoch == grant.epoch)
+            .ok_or(ToolError::OutcomeUnknown)?;
+        let mut value = match output::page(run_id, run, cursor) {
+            Ok(value) => value,
+            Err(ToolError::OutputExpired) => {
+                json!({"chunks":[],"next_cursor":"0","output_error":"output_expired"})
+            }
+            Err(e) => return Err(e),
+        };
+        value["has_more"] = json!(
+            value["output_error"].is_null()
+                && run
+                    .output
+                    .has_more(value["next_cursor"].as_str().unwrap_or("0"))
+        );
+        value["command"] = json!(&*run.command);
+        value["cwd"] = json!(run.cwd.as_deref().map(|s| s.as_str()));
+        value["stdin"] = json!(run.stdin.as_deref().map(|s| s.as_str()));
+        value["env"] = json!(&*run.env);
+        value["timeout_ms"] = json!(run.timeout_ms);
+        value["state"] = json!(run.state);
+        value["error"] = json!(run.error);
+        value["run_id"] = json!(run_id);
+        value["exit_code"] = json!(run.exit_code);
+        Ok(value)
     }
 
     pub fn approve(self: &Arc<Self>, run_id: &str, allowed: bool) -> Result<()> {
@@ -1027,6 +1087,7 @@ impl Broker {
             "running"
         };
         run.started_at = Some(Instant::now());
+        run.started_unix_ms = Some(unix_ms());
         let broker = self.clone();
         std::thread::spawn(move || {
             // Core state must never be acquired while holding broker state:
@@ -1254,6 +1315,26 @@ fn finish(run: &mut Run, state: &'static str, error: Option<ToolError>) {
     run.output.flush();
     run.finished_at = Some(Instant::now());
 }
+fn unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+fn native_run_json(id: &str, run: &Run) -> Value {
+    let mut value = run_json(id, run);
+    value["command_preview"] = json!(run.command.chars().take(256).collect::<String>());
+    value["cwd"] = json!(run.cwd.as_deref().map(|s| s.as_str()));
+    value["created_unix_ms"] = json!(run.created_unix_ms);
+    value["started_unix_ms"] = json!(run.started_unix_ms);
+    value["elapsed_ms"] = json!(run.started_at.map(|at| run
+        .finished_at
+        .unwrap_or_else(Instant::now)
+        .saturating_duration_since(at)
+        .as_millis() as u64));
+    value["exit_code"] = json!(run.exit_code);
+    value
+}
 fn session_json(id: &str, s: &Session) -> Value {
     json!({"session_id":id,"target_id":s.target,"state":s.state,"error":s.error,"expires_at":s.expires_at})
 }
@@ -1438,7 +1519,7 @@ mod deadlines {
         b.sweep();
         sink.data(false, vec![4, 5, 6]);
         let request = ToolRequest::GetCommand(unissh_mcp::contract::GetCommand {
-            run_id: rid,
+            run_id: rid.clone(),
             output_cursor: None,
             wait_ms: None,
         });
@@ -1447,6 +1528,27 @@ mod deadlines {
             Err(ToolError::OutputExpired)
         );
         assert_eq!(lock(&b.state).retained_bytes, 0);
+        let details = b.inspect_command("a", &rid, None).unwrap();
+        assert_eq!(details["output_error"], "output_expired");
+        assert_eq!(details["command"], "true");
+        assert_eq!(details["state"], "completed");
+        assert_eq!(details["has_more"], false);
+        assert_eq!(details["chunks"], json!([]));
+    }
+    #[test]
+    fn output_expiry_preserves_the_original_command_failure() {
+        let (b, rid) = pending();
+        {
+            let mut state = lock(&b.state);
+            let run = state.runs.get_mut(&rid).unwrap();
+            run.output.push(false, b"partial output");
+            finish(run, "failed", Some(ToolError::OutcomeUnknown));
+            run.finished_at = Some(Instant::now() - Duration::from_secs(601));
+        }
+        let details = b.inspect_command("a", &rid, None).unwrap();
+        assert_eq!(details["error"], "outcome_unknown");
+        assert_eq!(details["output_error"], "output_expired");
+        assert_eq!(details["chunks"], json!([]));
     }
     #[test]
     fn expired_lease_drops_output_before_housekeeping_runs() {

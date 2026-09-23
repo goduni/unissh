@@ -15,6 +15,11 @@ pub(super) struct OutputBuffer {
     pending: [Vec<u8>; 2],
 }
 impl OutputBuffer {
+    pub(super) fn has_more(&self, cursor: &str) -> bool {
+        cursor
+            .parse::<usize>()
+            .is_ok_and(|cursor| cursor < self.chunks.len())
+    }
     pub(super) fn is_empty(&self) -> bool {
         self.chunks.is_empty() && self.pending.iter().all(Vec::is_empty)
     }
@@ -67,7 +72,7 @@ impl OutputBuffer {
 }
 
 pub(super) fn page(id: &str, run: &Run, cursor: Option<&str>) -> Result<Value> {
-    if run.error == Some(ToolError::OutputExpired) {
+    if run.output_expired {
         return Err(ToolError::OutputExpired);
     }
     let cursor = cursor

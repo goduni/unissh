@@ -370,3 +370,18 @@ pub async fn mcp_cancel_command(
         .await?
         .map_err(|e| ApiError::other(e.message()))
 }
+
+#[tauri::command]
+pub async fn mcp_inspect_command(
+    state: State<'_, Arc<Controller>>,
+    integration_id: String,
+    run_id: String,
+    output_cursor: Option<String>,
+) -> ApiResult<Value> {
+    let broker = state.broker.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        broker.inspect_command(&integration_id, &run_id, output_cursor.as_deref())
+    })
+    .await?
+    .map_err(|e| ApiError::other(e.message()))
+}

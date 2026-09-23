@@ -4,6 +4,34 @@
 
 export const en = {
   mcp: {
+    activityDetails: {
+      "readFailed": "Command details are unavailable. Access may have changed.",
+      "retry": "Try again",
+      "loading": "Loading command…",
+      "defaultDirectory": "SSH user’s home directory",
+      "output": "Output",
+      "outputStream": "Output stream",
+      "allOutput": "All",
+      "outputExpired": "Output is kept for 10 minutes after completion and is no longer available here. If a recording was saved, you can still open it.",
+      "truncated": "Output reached the retention limit. Only the retained portion is shown.",
+      "binary": "binary · base64",
+      "waitingOutput": "Waiting for output…",
+      "noOutput": "No output in this stream.",
+      "nonzeroExit": "Failed",
+      "unknownExit": "Exit status unknown",
+      "stop": "Stop",
+      "historyHint": "Commands from the current access period. Live output is available without recording; it is kept for 10 minutes after completion.",
+      "connections": "SSH connections",
+      "connectedFor": "Connected for {{duration}}",
+      "commands": "Commands",
+      "filter": "Filter commands",
+      "filters": {
+        "all": "All",
+        "active": "Active",
+        "failed": "Errors"
+      },
+      "noMatches": "No commands match this filter."
+    },
     commandCeiling: "Commands up to {{count}} min",
     commandLimit: "Maximum command duration",
     commandMinutes: "{{count}} min",
@@ -90,7 +118,7 @@ export const en = {
     "oneShot": "One-shot command",
 
   "tab": "MCP",
-  "description": "Connect a local AI app to selected SSH hosts. UniSSH keeps SSH credentials and asks you before each command.",
+  "description": "Connect a local AI app to selected SSH hosts. SSH credentials stay in UniSSH; you choose how commands are approved.",
   "port": "Local port (0 chooses a free port)",
   "enable": "Enable MCP",
   "disable": "Disable MCP",
@@ -118,8 +146,8 @@ export const en = {
   "copyEndpoint": "Copy address",
   "revokeAll": "Revoke all access",
   "configHelp": "Replace <TOKEN> in the copied configuration with the token in your local AI client. Keep that configuration private. Changes to vault data or trusted host keys revoke existing access.",
-  "activity": "Sessions and commands",
-  "noActivity": "No SSH sessions or commands yet.",
+  "activity": "Activity",
+  "noActivity": "Commands will appear here when this application runs them on your hosts.",
   "session": "SSH session",
   "command": "Command",
   "approvalExpires": "This request expires in {{seconds}} seconds",

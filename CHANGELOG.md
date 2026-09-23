@@ -34,6 +34,9 @@ starts with `0.`:
 
 ### Added
 
+- Desktop MCP activity with command previews, host context, timing, exit status,
+  filters and expandable live stdout/stderr independent of session recording.
+
 - MCP host context, caller-owned command discovery, access/limit diagnostics,
   bounded stdin and environment variables, native command-duration limits and
   opt-in progress notifications during pending calls.

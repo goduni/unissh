@@ -248,6 +248,7 @@ pub fn run() {
             #[cfg(desktop)] mcp::mcp_targets,
             #[cfg(desktop)] mcp::mcp_close_session,
             #[cfg(desktop)] mcp::mcp_cancel_command,
+            #[cfg(desktop)] mcp::mcp_inspect_command,
             // account / instance
             commands::instance_status,
             commands::reset_partial_instance,

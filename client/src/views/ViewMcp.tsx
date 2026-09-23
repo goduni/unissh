@@ -10,6 +10,8 @@ import { getRecording } from "@/bridge/api";
 import { RecordingPlayer } from "@/components/RecordingPlayer";
 import { refreshMcp, useMcp } from "@/store/mcp";
 import { useApp } from "@/store/app";
+import { McpActivity } from "./mcp/McpActivity";
+import { MONO } from "@/theme/tokens";
 import { McpAccessEditor } from "./mcp/McpAccessEditor";
 import { formatDuration } from "./mcp/duration";
 import { McpConnectionGuide } from "./mcp/McpConnectionGuide";
@@ -139,6 +141,9 @@ export function ViewMcp() {
     "--mcp-muted": p.txt2,
     "--mcp-accent": p.accent,
     "--mcp-danger": p.red,
+    "--mcp-success": p.green,
+    "--mcp-accent-text": p.accentText,
+    "--mcp-mono": MONO,
   } as CSSProperties;
   return (
     <div className="uh-view mcp-view" style={style}>
@@ -458,88 +463,15 @@ export function ViewMcp() {
                       </p>
                     )}
                   </section>
-                  <section
-                    className="mcp-section"
-                    aria-label={t("mcp.activity")}
-                  >
-                    <h3>{t("mcp.activity")}</h3>
-                    {!sessions.length && !runs.length && (
-                      <p className="mcp-hint">{t("mcp.noActivity")}</p>
-                    )}
-                    {sessions.map((s) => (
-                      <div className="mcp-activity" key={s.session_id}>
-                        <Icon name="terminal" size={17} />
-                        <div>
-                          <strong>{s.target?.label ?? t("mcp.session")}</strong>
-                          <p>
-                            {t("mcp.session")} · {tDyn(`mcp.state.${s.state}`)}
-                            {s.error && ` · ${tDyn(`mcp.errors.${s.error}`)}`}
-                            {s.state === "ready" &&
-                              ` · ${t("mcp.idle", { seconds: s.idle_seconds })}`}
-                          </p>
-                        </div>
-                        {s.state !== "closed" && (
-                          <Btn
-                            variant="ghost"
-                            disabled={busy}
-                            onClick={() =>
-                              void act(() => api.mcpCloseSession(s.session_id))
-                            }
-                          >
-                            {t("common.close")}
-                          </Btn>
-                        )}
-                      </div>
-                    ))}
-                    {runs.map((r) => (
-                      <div className="mcp-activity" key={r.run_id}>
-                        <Icon name="terminal" size={17} />
-                        <div>
-                          <strong>{r.target?.label ?? t("mcp.command")}</strong>
-                          <p>
-                            {t(
-                              r.session_id
-                                ? "mcp.sessionCommand"
-                                : "mcp.oneShot",
-                            )}{" "}
-                            · {tDyn(`mcp.state.${r.state}`)}
-                            {r.error && ` · ${tDyn(`mcp.errors.${r.error}`)}`}
-                          </p>
-                          {r.recording && r.recording.status !== "saved" && (
-                            <p role="status" style={{ color: r.recording.status === "failed" ? p.red : p.txt2 }}>
-                              {t(r.recording.status === "failed" ? "recordings.saveFailed" : "recordings.capturing")}
-                            </p>
-                          )}
-                        </div>
-                        {r.recording?.status === "saved" && (
-                          <Btn variant="ghost" size="sm" icon="play" disabled={busy}
-                            onClick={() => void act(async () => {
-                              const cast = await getRecording(r.recording!.vault_id, r.recording!.recording_id);
-                              if (alive.current) setRecording({ cast, title: r.target?.label ?? t("mcp.command") });
-                            })}>
-                            {t("recordings.open")}
-                          </Btn>
-                        )}
-                        {[
-                          "awaiting_approval",
-                          "queued",
-                          "connecting",
-                          "running",
-                          "cancelling",
-                        ].includes(r.state) && (
-                          <Btn
-                            variant="ghost"
-                            disabled={busy}
-                            onClick={() =>
-                              void act(() => api.mcpCancelCommand(r.run_id))
-                            }
-                          >
-                            {t("common.cancel")}
-                          </Btn>
-                        )}
-                      </div>
-                    ))}
-                  </section>
+                  <McpActivity key={integration.id} sessions={sessions} runs={runs} busy={busy}
+                    onClose={id => void act(() => api.mcpCloseSession(id))}
+                    onCancel={id => void act(() => api.mcpCancelCommand(id))}
+                    onRecording={run => void act(async () => {
+                      if (!run.recording) return;
+                      const cast = await getRecording(run.recording.vault_id, run.recording.recording_id);
+                      if (alive.current) setRecording({ cast, title: run.target?.label ?? t("mcp.command") });
+                    })}
+                  />
                   <details className="mcp-help">
                     <summary>{t("mcp.connectHelp")}</summary>
                     <McpConnectionGuide

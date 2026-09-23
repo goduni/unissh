@@ -5,8 +5,8 @@ export type McpApprovalMode = "manual" | "trusted";
 export interface McpTarget { vault_id: string; profile_id: string; label: string; host: string; port: number; user: string }
 export interface McpSelection { targets: McpTarget[]; vaults: { id: string; name: string }[]; ticket: string }
 export interface McpIntegration { id: string; label: string }
-export interface McpSession { target?: McpTarget; expires_at: number | null; idle_seconds: number; session_id: string; target_id: string; state: string; integration_id: string; error: string | null }
-export interface McpRun { recording?: { vault_id: string; recording_id: string; status: "recording" | "saved" | "failed" } | null; session_id: string | null; run_id: string; state: string; integration_id: string; error: string | null; command?: string; stdin?: string | null; env?: Record<string, string>; cwd?: string | null; target?: McpTarget; timeout_ms?: number; approval_remaining_seconds?: number }
+export interface McpSession { created_unix_ms?: number; connected_unix_ms?: number | null; connected_elapsed_ms?: number | null; target?: McpTarget; expires_at: number | null; idle_seconds: number; session_id: string; target_id: string; state: string; integration_id: string; error: string | null }
+export interface McpRun { command_preview?: string; created_unix_ms?: number; started_unix_ms?: number | null; elapsed_ms?: number | null; exit_code?: number | null; recording?: { vault_id: string; recording_id: string; status: "recording" | "saved" | "failed" } | null; session_id: string | null; run_id: string; state: string; integration_id: string; error: string | null; command?: string; stdin?: string | null; env?: Record<string, string>; cwd?: string | null; target?: McpTarget; timeout_ms?: number; approval_remaining_seconds?: number }
 export interface McpAccess { integration_id: string; remaining_seconds: number | null; approval_mode: McpApprovalMode; max_timeout_ms: number; targets: McpTarget[] }
 export interface McpStatus {
   enabled: boolean; port: number; endpoint: string; error: string | null; integrations: McpIntegration[];
@@ -32,3 +32,12 @@ export function visibleCommand(command: string): string {
 export function mcpConfiguration(endpoint: string): string {
   return JSON.stringify({ mcpServers: { UniSSH: { type: "http", url: endpoint, headers: { Authorization: "Bearer <TOKEN>" } } } }, null, 2);
 }
+
+export interface McpOutputChunk { cursor: string; stream: "stdout" | "stderr"; encoding: "utf8" | "base64"; data: string }
+export interface McpCommandDetails {
+  run_id: string; command: string; cwd: string | null; stdin: string | null; env: Record<string, string>;
+  timeout_ms: number; state: string; error: string | null; exit_code: number | null;
+  chunks: McpOutputChunk[]; next_cursor: string; has_more: boolean; truncated?: boolean; output_error?: string;
+}
+export const mcpInspectCommand = (integrationId: string, runId: string, outputCursor: string | null = null) =>
+  invoke<McpCommandDetails>("mcp_inspect_command", { integrationId, runId, outputCursor });

@@ -221,25 +221,6 @@
   color: var(--mcp-muted);
   margin-top: 0.1875rem;
 }
-.mcp-activity {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.875rem 0;
-  border-bottom: 1px solid var(--mcp-line);
-}
-.mcp-activity:last-child {
-  border: 0;
-}
-.mcp-activity > div {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.mcp-activity p {
-  font-size: 0.8125rem;
-  margin-top: 0.25rem;
-}
 .mcp-empty {
   max-width: 32rem;
   padding: 3rem 0;
