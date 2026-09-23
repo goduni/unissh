@@ -1,9 +1,10 @@
 import { useId, useState, type CSSProperties } from "react";
-import { Btn, Icon } from "@/components/primitives";
+import { Btn, Icon, Input } from "@/components/primitives";
 import { useTranslation, tDyn } from "@/i18n";
 import type { McpRun, McpSession } from "@/bridge/mcp";
 import { commandText, elapsed, isActiveRun, isFailedRun, sortRuns } from "./activity";
 import { McpCommandDetails } from "./McpCommandDetails";
+import { useActivitySearch } from "./useActivitySearch";
 import "./activity.css";
 
 const actionStyle: CSSProperties = {
@@ -48,11 +49,14 @@ function RunRow({ run, busy, onCancel, onRecording }: Actions & { run: McpRun })
   </article>;
 }
 
-export function McpActivity({ sessions, runs, busy, onClose, onCancel, onRecording }: Actions & { sessions: McpSession[]; runs: McpRun[]; onClose: (id: string) => void }) {
+export function McpActivity({ integrationId, sessions, runs, busy, onClose, onCancel, onRecording }: Actions & { integrationId: string; sessions: McpSession[]; runs: McpRun[]; onClose: (id: string) => void }) {
   const { t, i18n } = useTranslation();
   const [filter, setFilter] = useState<"all" | "active" | "failed">("all");
-  const counts = { all: runs.length, active: runs.filter(isActiveRun).length, failed: runs.filter(isFailedRun).length };
-  const visible = sortRuns(runs).filter(run => filter === "all" || (filter === "active" ? isActiveRun(run) : isFailedRun(run)));
+  const [search, setSearch] = useState("");
+  const query = search.trim();
+  const { matches, searching, failed: searchFailed, retry } = useActivitySearch(integrationId, runs, query);
+  const counts = { all: matches.length, active: matches.filter(isActiveRun).length, failed: matches.filter(isFailedRun).length };
+  const visible = sortRuns(matches).filter(run => filter === "all" || (filter === "active" ? isActiveRun(run) : isFailedRun(run)));
   const orderedSessions = [...sessions].sort((a,b) => Number(b.state !== "closed") - Number(a.state !== "closed") || (b.created_unix_ms ?? 0) - (a.created_unix_ms ?? 0));
   return <section className="mcp-section mcp-activity-section" aria-label={t("mcp.activity")}>
     <h3>{t("mcp.activity")}</h3>
@@ -75,7 +79,15 @@ export function McpActivity({ sessions, runs, busy, onClose, onCancel, onRecordi
     <div className="mcp-command-toolbar"><h4>{t("mcp.activityDetails.commands")}</h4><div className="mcp-activity-filters" role="group" aria-label={t("mcp.activityDetails.filter")}>
       {(["all", "active", "failed"] as const).map(value => <button type="button" key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{t(`mcp.activityDetails.filters.${value}`)} <span>{counts[value]}</span></button>)}
     </div></div>
-    {visible.length ? <div className="mcp-command-list">{visible.map(run => <RunRow key={run.run_id} run={run} busy={busy} onCancel={onCancel} onRecording={onRecording} />)}</div> : <p className="mcp-activity-empty">{t(runs.length ? "mcp.activityDetails.noMatches" : "mcp.noActivity")}</p>}
+    <div className="mcp-activity-search">
+      <label><span className="mcp-search-label">{t("mcp.activityDetails.search")}</span><Input icon="search" value={search} onChange={value => setSearch(Array.from(value).slice(0, 512).join(""))} placeholder={t("mcp.activityDetails.searchPlaceholder")} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setSearch(""); } }} /></label>
+      {query && <span className="mcp-activity-action"><Btn variant="outline" size="sm" style={actionStyle} onClick={() => setSearch("")}>{t("common.clear")}</Btn></span>}
+      {query && <span className="mcp-search-count" role="status">{searching ? t("mcp.activityDetails.searching") : searchFailed ? t("mcp.activityDetails.searchFailed") : t("mcp.activityDetails.searchCount", { shown: visible.length, total: runs.length })}</span>}
+      {searchFailed && <span className="mcp-activity-action"><Btn variant="outline" size="sm" style={actionStyle} onClick={retry}>{t("mcp.activityDetails.retry")}</Btn></span>}
+    </div>
+    <div aria-busy={searching}>
+    {searching ? <p className="mcp-activity-empty">{t("mcp.activityDetails.searching")}</p> : searchFailed ? null : visible.length ? <div className="mcp-command-list">{visible.map(run => <RunRow key={run.run_id} run={run} busy={busy} onCancel={onCancel} onRecording={onRecording} />)}</div> : <p className="mcp-activity-empty">{t(query ? "mcp.activityDetails.noSearchMatches" : runs.length ? "mcp.activityDetails.noMatches" : "mcp.noActivity")}</p>}
+    </div>
     </div>
   </section>;
 }

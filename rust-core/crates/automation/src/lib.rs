@@ -182,7 +182,6 @@ struct Run {
     exit_code: Option<u32>,
     recording: Option<Arc<dyn Recording>>,
     output: output::OutputBuffer,
-    output_expired: bool,
     bytes: usize,
     truncated: bool,
 }
@@ -477,15 +476,6 @@ impl Broker {
         for run in state.runs.values_mut() {
             if run.state == "awaiting_approval" && now >= run.approval_until {
                 finish(run, "denied", Some(ToolError::ApprovalExpired));
-            }
-            if run
-                .finished_at
-                .is_some_and(|t| now.duration_since(t) >= Duration::from_secs(600))
-                && !run.output.is_empty()
-            {
-                run.output.clear();
-                run.bytes = 0;
-                run.output_expired = true;
             }
         }
         let active: Vec<_> = state
@@ -846,7 +836,6 @@ impl Broker {
                         recording: None,
                         exit_code: None,
                         output: output::OutputBuffer::default(),
-                        output_expired: false,
                         bytes: 0,
                         truncated: false,
                     },
@@ -945,6 +934,56 @@ impl Broker {
                 } v
             }).collect::<Vec<_>>()
         })
+    }
+
+    /// Native-only search over full commands and target context, without
+    /// copying command bodies or output into every desktop status poll.
+    pub fn search_commands(&self, owner: &str, query: &str) -> Result<Vec<String>> {
+        if query.chars().count() > 512 {
+            return Err(ToolError::Busy);
+        }
+        self.sweep();
+        let revision = self.executor.revision()?;
+        let _admission = self.admission.read().unwrap_or_else(|e| e.into_inner());
+        let state = lock(&self.state);
+        let grant = state.grants.get(owner).ok_or(ToolError::GrantRequired)?;
+        if grant.revision != revision || grant.until.is_some_and(|until| Instant::now() >= until) {
+            return Err(ToolError::GrantExpired);
+        }
+        let query = query.to_lowercase();
+        let terms: Vec<_> = query.split_whitespace().collect();
+        Ok(state
+            .runs
+            .iter()
+            .filter(|(_, run)| {
+                if run.owner != owner || run.epoch != grant.epoch {
+                    return false;
+                }
+                let Some(target) = grant.targets.get(&run.target) else {
+                    return false;
+                };
+                let address = format!(
+                    "{}@{}:{}",
+                    target.info.user, target.info.host, target.info.port
+                );
+                let fields: [&str; 6] = [
+                    &run.command,
+                    run.cwd.as_ref().map_or("", |s| s.as_str()),
+                    &target.info.label,
+                    &target.info.host,
+                    &target.info.user,
+                    &address,
+                ];
+                let fields: Vec<_> = fields
+                    .iter()
+                    .map(|s| Zeroizing::new(s.to_lowercase()))
+                    .collect();
+                terms
+                    .iter()
+                    .all(|term| fields.iter().any(|field| field.contains(*term)))
+            })
+            .map(|(id, _)| id.clone())
+            .collect())
     }
 
     /// Trusted desktop inspector. Reads the same bounded buffer as MCP without
@@ -1502,53 +1541,37 @@ mod deadlines {
         assert_eq!(b.review()["runs"][0]["state"], "denied");
     }
     #[test]
-    fn output_expiry_is_explicit_and_late_callbacks_cannot_repopulate_it() {
+    fn output_survives_elapsed_time_and_preserves_cursors_until_revocation() {
         let (b, rid) = pending();
         let sink = RunSink {
             recording: None,
             broker: Arc::downgrade(&b),
             run: rid.clone(),
         };
-        sink.data(false, vec![1, 2, 3]);
+        sink.data(false, b"retained output".to_vec());
         {
             let mut state = lock(&b.state);
             let run = state.runs.get_mut(&rid).unwrap();
-            finish(run, "completed", None);
-            run.finished_at = Some(Instant::now() - Duration::from_secs(601));
-        }
-        b.sweep();
-        sink.data(false, vec![4, 5, 6]);
-        let request = ToolRequest::GetCommand(unissh_mcp::contract::GetCommand {
-            run_id: rid.clone(),
-            output_cursor: None,
-            wait_ms: None,
-        });
-        assert_eq!(
-            b.request("a".into(), request),
-            Err(ToolError::OutputExpired)
-        );
-        assert_eq!(lock(&b.state).retained_bytes, 0);
-        let details = b.inspect_command("a", &rid, None).unwrap();
-        assert_eq!(details["output_error"], "output_expired");
-        assert_eq!(details["command"], "true");
-        assert_eq!(details["state"], "completed");
-        assert_eq!(details["has_more"], false);
-        assert_eq!(details["chunks"], json!([]));
-    }
-    #[test]
-    fn output_expiry_preserves_the_original_command_failure() {
-        let (b, rid) = pending();
-        {
-            let mut state = lock(&b.state);
-            let run = state.runs.get_mut(&rid).unwrap();
-            run.output.push(false, b"partial output");
             finish(run, "failed", Some(ToolError::OutcomeUnknown));
-            run.finished_at = Some(Instant::now() - Duration::from_secs(601));
+            run.finished_at = Some(Instant::now() - Duration::from_secs(24 * 3600));
         }
         let details = b.inspect_command("a", &rid, None).unwrap();
         assert_eq!(details["error"], "outcome_unknown");
-        assert_eq!(details["output_error"], "output_expired");
-        assert_eq!(details["chunks"], json!([]));
+        assert_eq!(details["chunks"][0]["data"], "retained output");
+        assert!(details["output_error"].is_null());
+        let cursor = details["next_cursor"].as_str();
+        sink.data(false, b"late callback".to_vec());
+        assert_eq!(
+            b.inspect_command("a", &rid, cursor).unwrap()["chunks"],
+            json!([])
+        );
+        assert_eq!(lock(&b.state).retained_bytes, 15);
+        b.revoke(Some("a"));
+        assert_eq!(lock(&b.state).retained_bytes, 0);
+        assert_eq!(
+            b.inspect_command("a", &rid, None),
+            Err(ToolError::GrantRequired)
+        );
     }
     #[test]
     fn expired_lease_drops_output_before_housekeeping_runs() {

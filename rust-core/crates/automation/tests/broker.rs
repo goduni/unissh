@@ -1542,3 +1542,56 @@ async fn native_activity_pages_retained_output_and_reports_nonzero_and_unknown_e
         }
     }
 }
+
+#[tokio::test]
+async fn native_search_matches_full_commands_and_host_context_without_executing_or_leaking_inputs()
+{
+    let fake = Arc::new(Fake::default());
+    let b = Broker::new(fake.clone());
+    let t = target(&b, "a").await;
+    let other = target(&b, "b").await;
+    let command = format!("{} ПрИвЕт [prod]", "x".repeat(300));
+    let run = call(&b, "a", "run_command", json!({"session_id":null,"target_id":t,"command":command,"cwd":"/srv/reports","stdin":"hidden-stdin","env":{"PRIVATE":"hidden-value"},"request_key":"search"})).await.unwrap();
+    let rid = run["run_id"].as_str().unwrap().to_string();
+    call(&b, "b", "run_command", json!({"session_id":null,"target_id":other,"command":"other app only","request_key":"search"})).await.unwrap();
+    for query in [
+        "ПРИВЕТ",
+        " localhost  REPORTS привет ",
+        "test@localhost:22",
+        "[prod]",
+        "",
+    ] {
+        assert_eq!(
+            b.search_commands("a", query).unwrap(),
+            vec![rid.clone()],
+            "query {query}"
+        );
+    }
+    for query in [
+        "hidden-stdin",
+        "hidden-value",
+        "PRIVATE",
+        "other app only",
+        "missing",
+    ] {
+        assert!(b.search_commands("a", query).unwrap().is_empty());
+    }
+    assert!(b.search_commands("b", "привет").unwrap().is_empty());
+    assert_eq!(
+        b.search_commands("a", &"x".repeat(513)),
+        Err(ToolError::Busy)
+    );
+    assert_eq!(fake.connects.load(Ordering::SeqCst), 0);
+    assert_eq!(fake.execs.load(Ordering::SeqCst), 0);
+    b.approve(&rid, false).unwrap();
+    assert_eq!(b.search_commands("a", "привет").unwrap(), vec![rid]);
+    b.revoke(Some("a"));
+    assert_eq!(
+        b.search_commands("a", "привет"),
+        Err(ToolError::GrantRequired)
+    );
+    target(&b, "a").await;
+    assert!(b.search_commands("a", "привет").unwrap().is_empty());
+    fake.revision.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(b.search_commands("a", ""), Err(ToolError::GrantRequired));
+}

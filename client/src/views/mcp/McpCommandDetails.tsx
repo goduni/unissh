@@ -24,7 +24,7 @@ export function McpCommandDetails({ run }: { run: McpRun }) {
         setDetails(result);
         setChunks(previous => result.output_error ? [] : mergeOutput(previous, result.chunks));
         cursor = result.next_cursor;
-        if (!result.output_error) timer = setTimeout(() => { void poll(); }, result.has_more ? 50 : isActiveState(result.state) ? 1000 : 5000);
+        if (!result.output_error && (result.has_more || isActiveState(result.state))) timer = setTimeout(() => { void poll(); }, result.has_more ? 50 : 1000);
       } catch {
         if (alive) { setDetails(null); setChunks([]); setError(true); }
       }

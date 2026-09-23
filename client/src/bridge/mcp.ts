@@ -41,3 +41,6 @@ export interface McpCommandDetails {
 }
 export const mcpInspectCommand = (integrationId: string, runId: string, outputCursor: string | null = null) =>
   invoke<McpCommandDetails>("mcp_inspect_command", { integrationId, runId, outputCursor });
+
+export const mcpSearchCommands = (integrationId: string, query: string) =>
+  invoke<string[]>("mcp_search_commands", { integrationId, query });

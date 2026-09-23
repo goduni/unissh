@@ -5,6 +5,12 @@
 export const en = {
   mcp: {
     activityDetails: {
+      "noSearchMatches": "No commands match this search and status filter.",
+      "searchCount": "Showing {{shown}} of {{total}} commands",
+      "searchFailed": "Search is unavailable. Try again.",
+      "searching": "Searching…",
+      "searchPlaceholder": "Command, host or directory",
+      "search": "Search commands",
       "readFailed": "Command details are unavailable. Access may have changed.",
       "retry": "Try again",
       "loading": "Loading command…",
@@ -12,7 +18,7 @@ export const en = {
       "output": "Output",
       "outputStream": "Output stream",
       "allOutput": "All",
-      "outputExpired": "Output is kept for 10 minutes after completion and is no longer available here. If a recording was saved, you can still open it.",
+      "outputExpired": "Output is unavailable. Collapse and reopen this command to retry, or open its saved recording.",
       "truncated": "Output reached the retention limit. Only the retained portion is shown.",
       "binary": "binary · base64",
       "waitingOutput": "Waiting for output…",
@@ -20,7 +26,7 @@ export const en = {
       "nonzeroExit": "Failed",
       "unknownExit": "Exit status unknown",
       "stop": "Stop",
-      "historyHint": "Commands from the current access period. Live output is available without recording; it is kept for 10 minutes after completion.",
+      "historyHint": "Activity and retained output stay in memory until UniSSH closes. Locking, access expiry, replacement or revocation clears them. Output size limits still apply.",
       "connections": "SSH connections",
       "connectedFor": "Connected for {{duration}}",
       "commands": "Commands",
@@ -187,7 +193,7 @@ export const en = {
     "busy": "Operation busy",
     "approval_denied": "Command denied",
     "approval_expired": "Approval expired",
-    "output_expired": "Output expired",
+    "output_expired": "Output unavailable",
     "outcome_unknown": "Remote outcome unknown; do not retry automatically",
     "request_conflict": "Request key reused with different arguments"
   }

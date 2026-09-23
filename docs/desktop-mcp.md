@@ -175,8 +175,8 @@ and elapsed milliseconds. Use it to recover a run ID after reconnecting, then
 `get_command` to read output. It excludes other integrations, stdin and environment
 values. At most 128 records are returned; cursor pagination is not supported.
 Regrant/revocation removes these records. Command metadata and request keys remain
-until the grant ends; output expires after 10 minutes. At the record limit, renew
-the native grant to start a new command history.
+until the grant ends or the application closes; retained output has no time-based
+expiry. At the record limit, renew the native grant to start a new command history.
 
 `get_access_status` works even without a grant or while Core is locked. It returns
 an actionable status/message, approval mode, remaining grant time (null for no
@@ -230,8 +230,9 @@ Example with input, environment and a short wait:
   integration, 128 command records
   per grant / 256 overall, and 32 KiB per command. Resource exhaustion returns
   `busy`. Output retains up to 1 MiB per run / 8 MiB total, pages up to 64 KiB,
-  for at most 10 minutes and never beyond the grant. Evicted output reports
-  `output_expired`. Regranting discards previous records and IDs.
+  until application exit and never beyond the grant, without a time-based expiry.
+  At byte limits, additional output is discarded and marked truncated; existing
+  retained output is not evicted. Invalid output cursors report `output_expired`. Regranting discards previous records and IDs.
 - Cancellation closes local SSH channels; it cannot prove that detached remote
   children stopped or reverse filesystem/network effects. Treat `outcome_unknown`
   as uncertain execution, not permission to retry.
@@ -259,7 +260,10 @@ timestamp is returned for timed grants. Idle closure and revocation apply to bot
 
 The application's **Activity** section lists SSH connections and commands for the
 current access period. Active commands appear first; filters select all commands,
-active work or errors. Each row shows the command, host, working directory when
+active work or errors. Search combines with the status filter and matches all
+query words, case-insensitively, against full command text, host name/address/user
+and working directory. Search runs in the native broker and returns matching IDs;
+it does not search stdout/stderr, stdin or environment values. Each row shows the command, host, working directory when
 specified, local start time, elapsed duration and exit status. A nonzero exit is
 an error even when SSH execution completed normally. Unknown remote outcomes are
 explicitly labelled; the UI never treats a missing exit code as success.
@@ -268,12 +272,12 @@ Expand a command to view its full text, directory, runtime limit, termination
 reason and retained stdout/stderr. Standard input and environment values are
 collapsed by default. Text is rendered as plain text with terminal controls
 removed or escaped; binary chunks remain labelled base64. Output is paginated
-and refreshed while expanded, with explicit truncation and expiry notices.
+and refreshed while expanded, with explicit truncation and unavailable-output notices.
 This works even when the host's **Record sessions** preference is off: it reads
 the existing broker buffer, not a new SSH connection or a persistent recording.
-Output remains available for 10 minutes after completion within the existing
-retention limits. Replacing/revoking access, locking or restarting clears this
-live history; saved recordings can be opened separately.
+Retained output remains in memory until the application closes, within the
+existing byte and record limits; it no longer expires after 10 minutes. Replacing
+or revoking access, access expiry, locking or restarting clears this live history; saved recordings can be opened separately.
 
 The native inspector validates the current integration and grant epoch. It is
 not exposed as an MCP tool. No credential fields or new persistent formats are

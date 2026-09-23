@@ -34,6 +34,9 @@ starts with `0.`:
 
 ### Added
 
+- MCP activity search across full commands, hosts and directories; retained output
+  now lasts until application exit or grant cleanup instead of expiring after 10 minutes.
+
 - Desktop MCP activity with command previews, host context, timing, exit status,
   filters and expandable live stdout/stderr independent of session recording.
 

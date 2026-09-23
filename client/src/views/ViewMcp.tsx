@@ -465,7 +465,7 @@ export function ViewMcp() {
                       </p>
                     )}
                   </section>
-                  <McpActivity key={integration.id} sessions={sessions} runs={runs} busy={busy}
+                  <McpActivity key={integration.id} integrationId={integration.id} sessions={sessions} runs={runs} busy={busy}
                     onClose={id => void act(() => api.mcpCloseSession(id))}
                     onCancel={id => void act(() => api.mcpCancelCommand(id))}
                     onRecording={run => void act(async () => {

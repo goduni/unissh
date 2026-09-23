@@ -20,13 +20,6 @@ impl OutputBuffer {
             .parse::<usize>()
             .is_ok_and(|cursor| cursor < self.chunks.len())
     }
-    pub(super) fn is_empty(&self) -> bool {
-        self.chunks.is_empty() && self.pending.iter().all(Vec::is_empty)
-    }
-    pub(super) fn clear(&mut self) {
-        self.chunks.clear();
-        self.pending.iter_mut().for_each(Vec::clear);
-    }
     pub(super) fn push(&mut self, stderr: bool, bytes: &[u8]) -> usize {
         // Reserve one final chunk for each stream's incomplete scalar.
         if self.chunks.len() >= 4094 || bytes.is_empty() {
@@ -72,9 +65,6 @@ impl OutputBuffer {
 }
 
 pub(super) fn page(id: &str, run: &Run, cursor: Option<&str>) -> Result<Value> {
-    if run.output_expired {
-        return Err(ToolError::OutputExpired);
-    }
     let cursor = cursor
         .unwrap_or("0")
         .parse::<usize>()

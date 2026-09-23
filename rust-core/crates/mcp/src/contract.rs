@@ -234,7 +234,7 @@ fn tool<T: JsonSchema>(name: &'static str, description: &'static str, read: bool
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         tool::<ListRequest>("get_access_status", "Inspect this application's native grant, approval mode, expiry and execution limits. Works while UniSSH is locked; never unlocks or grants access. Cursor is unsupported.", true),
-        tool::<ListRequest>("list_commands", "List this application's retained commands (up to 128), including request keys, previews, status and exit codes. No output or other applications' commands. Cursor is unsupported. Command metadata and request keys remain until the grant ends; output expires after 10 minutes.", true),
+        tool::<ListRequest>("list_commands", "List this application's retained commands (up to 128), including request keys, previews, status and exit codes. No output or other applications' commands. Cursor is unsupported. Command metadata, request keys and retained output remain in memory until the grant ends or the app closes. Output size limits still apply.", true),
         tool::<ListRequest>("list_targets", "List servers allowed by the current UniSSH grant.", true),
         tool::<OpenSession>("open_ssh_session", "Open a reusable SSH connection to an allowed target. Optional wait_ms (0..30000, default 0) waits for readiness; otherwise poll list_ssh_sessions. A connection does not share shell state or approve commands.", false),
         tool::<ListRequest>("list_ssh_sessions", "List this integration's explicit SSH connections and their states. User terminal tabs and one-shot connections are excluded.", true),
@@ -362,7 +362,7 @@ impl ToolError {
             Self::Busy => "The requested operation is busy. Try again later.",
             Self::ApprovalDenied => "The command was denied in UniSSH.",
             Self::ApprovalExpired => "The command approval request expired.",
-            Self::OutputExpired => "The retained command output has expired.",
+            Self::OutputExpired => "The output cursor is invalid or unavailable. Read the retained command again without an output cursor; do not rerun the command.",
             Self::OutcomeUnknown => {
                 "The remote outcome is unknown. Do not automatically repeat the command."
             }

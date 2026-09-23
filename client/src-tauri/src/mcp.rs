@@ -385,3 +385,15 @@ pub async fn mcp_inspect_command(
     .await?
     .map_err(|e| ApiError::other(e.message()))
 }
+
+#[tauri::command]
+pub async fn mcp_search_commands(
+    state: State<'_, Arc<Controller>>,
+    integration_id: String,
+    query: String,
+) -> ApiResult<Vec<String>> {
+    let broker = state.broker.clone();
+    tauri::async_runtime::spawn_blocking(move || broker.search_commands(&integration_id, &query))
+        .await?
+        .map_err(|e| ApiError::other(e.message()))
+}
