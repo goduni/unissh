@@ -33,7 +33,7 @@ export function McpCommandDetails({ run }: { run: McpRun }) {
     return () => { alive = false; clearTimeout(timer); };
   }, [run.integration_id, run.run_id, retry]);
   const groups = useMemo(() => outputGroups(chunks, stream).map(group => ({ ...group, data: group.encoding === "base64" ? group.data : readableOutput(group.data) })), [chunks, stream]);
-  if (error) return <div className="mcp-inspect-error" role="alert"><p>{t("mcp.activityDetails.readFailed")}</p><Btn variant="outline" size="sm" onClick={() => setRetry(n => n + 1)}>{t("mcp.activityDetails.retry")}</Btn></div>;
+  if (error) return <div className="mcp-inspect-error" role="alert"><p>{t("mcp.activityDetails.readFailed")}</p><span className="mcp-activity-action"><Btn variant="outline" size="sm" style={{ background: "var(--mcp-action-bg, transparent)", borderColor: "var(--mcp-action-border, var(--mcp-line-strong))" }} onClick={() => setRetry(n => n + 1)}>{t("mcp.activityDetails.retry")}</Btn></span></div>;
   if (!details) return <div className="mcp-inspect-loading" role="status"><Spinner />{t("mcp.activityDetails.loading")}</div>;
   return <div className="mcp-command-inspector">
     <div className="mcp-inspect-command"><span className="mcp-field-label">{t("mcp.command")}</span><pre>{commandText(details.command)}</pre></div>
@@ -46,6 +46,7 @@ export function McpCommandDetails({ run }: { run: McpRun }) {
       {details.stdin !== null && <details><summary>{t("mcp.standardInput")}</summary><pre>{commandText(details.stdin)}</pre></details>}
       {Object.keys(details.env).length > 0 && <details><summary>{t("mcp.environment")}</summary><pre>{Object.entries(details.env).map(([name, value]) => `${name}=${commandText(value)}`).join("\n")}</pre></details>}
     </div>}
+    <div className="mcp-output-panel">
     <div className="mcp-output-heading"><h5>{t("mcp.activityDetails.output")}</h5>
       <div className="mcp-streams" role="group" aria-label={t("mcp.activityDetails.outputStream")}>{(["all", "stdout", "stderr"] as const).map(value => <label key={value}>
         <input type="radio" name={`${id}-stream`} value={value} checked={stream === value} onChange={() => setStream(value)} />
@@ -55,11 +56,12 @@ export function McpCommandDetails({ run }: { run: McpRun }) {
     {details.output_error ? <p className="mcp-output-notice" role="status">{t("mcp.activityDetails.outputExpired")}</p> : <>
       {details.truncated && <p className="mcp-output-notice" role="status">{t("mcp.activityDetails.truncated")}</p>}
       <div className="mcp-command-output" tabIndex={0} role="region" aria-label={t("mcp.activityDetails.output")}>
-        {groups.length ? groups.map(group => <div key={group.cursor} className="mcp-output-part">
+        {groups.length ? groups.map(group => <div key={group.cursor} className="mcp-output-part" data-stream={group.stream}>
           <span className="mcp-output-stream">{group.stream}{group.encoding === "base64" && ` · ${t("mcp.activityDetails.binary")}`}</span>
           <pre>{group.data}</pre>
         </div>) : <p>{t(isActiveState(details.state) ? "mcp.activityDetails.waitingOutput" : "mcp.activityDetails.noOutput")}</p>}
       </div>
     </>}
+    </div>
   </div>;
 }

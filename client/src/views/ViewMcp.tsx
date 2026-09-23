@@ -137,6 +137,8 @@ export function ViewMcp() {
     "--mcp-surface": p.bg1,
     "--mcp-hover": p.bg2,
     "--mcp-line": p.line,
+    "--mcp-line-strong": p.line2,
+    "--mcp-pressed": p.bg3,
     "--mcp-text": p.txt,
     "--mcp-muted": p.txt2,
     "--mcp-accent": p.accent,
