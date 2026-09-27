@@ -2,7 +2,7 @@
 name = "unissh-mcp"
 version.workspace = true
 edition.workspace = true
-# rmcp 3.x requires 1.88; the repository toolchain is pinned to 1.94.
+# rmcp 3.x requires 1.88; the repository toolchain is pinned to 1.95.
 rust-version = "1.88"
 authors.workspace = true
 license.workspace = true

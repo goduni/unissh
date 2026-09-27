@@ -50,7 +50,7 @@ not authenticate the server endpoint or isolate hostile local OS users. A model
 provider may receive results forwarded by the local AI client.
 
 The transport pins official `rmcp` 3.4.0 (Rust 1.88 minimum; repository toolchain
-1.94). Tests exercise real loopback HTTP with both legacy initialization and
+1.95). Tests exercise real loopback HTTP with both legacy initialization and
 modern per-request protocol metadata. No user vault or real SSH server is needed.
 
 ```sh
@@ -62,5 +62,7 @@ cargo clippy -p unissh-mcp --all-targets -- -D warnings
 notes or ungranted inventory. `list_commands` discovers caller-owned retained
 runs. `get_access_status` reports native policy and limits without granting access.
 Native command ceilings default to 10 minutes and can be raised up to 24 hours.
+`limits.output_retention_seconds` is null: retained output has no time-based
+expiry, but remains bounded by byte/record caps and the current grant's lifetime.
 Optional request `_meta.progressToken` receives request-bound elapsed-time updates;
 long asynchronous work still uses polling after the tool response.

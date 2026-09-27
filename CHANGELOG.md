@@ -75,6 +75,9 @@ starts with `0.`:
 
 ### Fixed
 
+- MCP access status reports no time-based output expiry, matching retained command
+  history; `limits.output_retention_seconds` is now nullable.
+
 - Existing self-hosted identities can sign in directly from a fresh device's
   onboarding screen. Escrow and Emergency-Kit recovery remember the installed
   identity's Secret Key in the OS keychain when available.

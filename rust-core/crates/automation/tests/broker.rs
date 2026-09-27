@@ -1202,10 +1202,16 @@ async fn access_status_discovery_and_input_dedup_are_caller_scoped() {
     let b = Broker::new(Arc::new(Fake::default()));
     let missing = call(&b, "a", "get_access_status", json!({})).await.unwrap();
     assert_eq!(missing["status"], "grant_required");
+    let missing: unissh_mcp::contract::AccessStatusResult =
+        serde_json::from_value(missing).unwrap();
+    assert_eq!(missing.limits.output_retention_seconds, None);
     let target = target(&b, "a").await;
     let ready = call(&b, "a", "get_access_status", json!({})).await.unwrap();
     assert_eq!(ready["status"], "ready");
     assert_eq!(ready["limits"]["max_timeout_ms"], 600000);
+    assert_eq!(ready["limits"]["output_retention_seconds"], Value::Null);
+    let status: unissh_mcp::contract::AccessStatusResult = serde_json::from_value(ready).unwrap();
+    assert_eq!(status.limits.output_retention_seconds, None);
     let args = json!({"session_id":null,"target_id":target,"command":"cat","request_key":"input", "stdin":"hello", "env":{"VALUE":"literal"}});
     let run = call(&b, "a", "run_command", args.clone()).await.unwrap();
     for field in ["stdin", "env"] {

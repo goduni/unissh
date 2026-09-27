@@ -541,7 +541,7 @@ impl Broker {
                 "remaining_seconds": grant.and_then(|g| g.until).map(|d| d.saturating_duration_since(Instant::now()).as_secs()),
                 "limits": {"max_timeout_ms": max, "default_timeout_ms": 120_000u32.min(max), "max_connections": 4, "max_active_commands": 8, "max_retained_commands": RECORDS_PER_GRANT, "max_session_records":32,
                     "output_per_run_bytes":OUTPUT_PER_RUN,"output_page_bytes":PAGE_BYTES,
-                    "output_retention_seconds":600, "idle_session_seconds":300, "stdin_bytes":32768, "env_bytes":16384}}),
+                    "output_retention_seconds":null, "idle_session_seconds":300, "stdin_bytes":32768, "env_bytes":16384}}),
             );
         }
         // Authentication alone never unlocks Core or creates a grant.

@@ -388,7 +388,8 @@ pub struct AccessLimits {
     pub max_session_records: u32,
     pub output_per_run_bytes: u32,
     pub output_page_bytes: u32,
-    pub output_retention_seconds: u32,
+    /// Null means no time-based expiry; grant lifetime and byte/record caps still apply.
+    pub output_retention_seconds: Option<u32>,
     pub idle_session_seconds: u32,
     pub stdin_bytes: u32,
     pub env_bytes: u32,

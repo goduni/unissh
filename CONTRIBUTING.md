@@ -21,7 +21,7 @@ It's a monorepo. One root virtual Cargo workspace covers the core crates plus th
 
 | Path | What it is |
 | --- | --- |
-| `rust-core/` | The Rust core — 9 crates (`crypto`, `keychain`, `storage`, `vault`, `ssh-agent`, `ssh-transport`, `ffi`, `cli`, `sync`). All crypto, blob formats, storage, SSH, and agent logic lives **only** here. Architecture truth: the crate map in `rust-core/README.md`, the per-crate READMEs, and the [architecture docs](https://unissh.dev/architecture/system-overview/). |
+| `rust-core/` | The Rust core — 12 crates (`crypto`, `keychain`, `storage`, `vault`, `ssh-agent`, `ssh-transport`, `local-pty`, `ffi`, `cli`, `sync`, `automation`, `mcp`). All crypto, blob formats, storage, SSH, and agent logic lives **only** here. Architecture truth: the crate map in `rust-core/README.md`, the per-crate READMEs, and the [architecture docs](https://unissh.dev/architecture/system-overview/). |
 | `server/` | The self-hosted server (axum). Control plane only — metadata, encrypted blobs, access policy, audit, sync. SSH traffic never flows through it. |
 | `server-ui/` | The web admin panel — a zero-knowledge React SPA with real in-browser crypto via a wasm bundle (`server-ui/crypto-wasm/`). |
 | `client/` | The Tauri v2 + React desktop/mobile client (macOS, Windows, Linux, iOS, Android). |

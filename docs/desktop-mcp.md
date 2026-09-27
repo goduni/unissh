@@ -85,6 +85,8 @@ the same device as UniSSH; a remote agent cannot reach this loopback endpoint.
 | `run_command` | Run an immutable command under the native grant policy, optionally waiting for completion |
 | `get_command` | Poll state and read bounded stdout/stderr pages |
 | `cancel_command` | Cancel a pending command or close its active exec channel |
+| `list_commands` | Discover this integration's retained commands and run IDs |
+| `get_access_status` | Inspect native access policy, remaining grant time and resource limits |
 
 For a persistent connection, call `open_ssh_session` with `target_id` and a unique
 `request_key`. Pass `wait_ms` (0..30,000) to wait for readiness in the same call;
@@ -183,6 +185,8 @@ an actionable status/message, approval mode, remaining grant time (null for no
 expiry), command time limits and connection/output/input limits. It never unlocks
 Core or lists targets. Once an expired/revoked grant is swept, status is
 `grant_required`; no persistent grant history is exposed.
+`limits.output_retention_seconds` is null because output has no time-based expiry;
+byte/record caps and grant cleanup still bound retention.
 
 Clients may include `_meta.progressToken` on tool calls. During a pending wait,
 UniSSH emits `notifications/progress` with elapsed seconds and a fixed message,
