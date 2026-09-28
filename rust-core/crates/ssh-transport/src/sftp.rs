@@ -46,6 +46,7 @@ const FXP_OPEN: u8 = 3;
 const FXP_CLOSE: u8 = 4;
 const FXP_READ: u8 = 5;
 const FXP_WRITE: u8 = 6;
+const FXP_LSTAT: u8 = 7;
 const FXP_SETSTAT: u8 = 9;
 const FXP_OPENDIR: u8 = 11;
 const FXP_READDIR: u8 = 12;
@@ -55,6 +56,8 @@ const FXP_RMDIR: u8 = 15;
 const FXP_REALPATH: u8 = 16;
 const FXP_STAT: u8 = 17;
 const FXP_RENAME: u8 = 18;
+const FXP_READLINK: u8 = 19;
+const FXP_SYMLINK: u8 = 20;
 const FXP_STATUS: u8 = 101;
 const FXP_HANDLE: u8 = 102;
 const FXP_DATA: u8 = 103;
@@ -511,8 +514,17 @@ where
 
     /// stat by path.
     pub async fn stat(&mut self, path: &str) -> Result<FileStat, TransportError> {
+        self.path_stat(FXP_STAT, path).await
+    }
+
+    /// Metadata for the link itself, including dangling links.
+    pub async fn lstat(&mut self, path: &str) -> Result<FileStat, TransportError> {
+        self.path_stat(FXP_LSTAT, path).await
+    }
+
+    async fn path_stat(&mut self, request: u8, path: &str) -> Result<FileStat, TransportError> {
         let id = self.alloc_id();
-        let mut b = vec![FXP_STAT];
+        let mut b = vec![request];
         b.extend_from_slice(&id.to_be_bytes());
         put_string(&mut b, path.as_bytes());
         self.send(&b).await?;
@@ -529,6 +541,37 @@ where
             mode: perms.unwrap_or(0),
             mtime: mtime.map(u64::from).unwrap_or(0),
         })
+    }
+
+    /// Read the literal target without resolving relative or dangling links.
+    pub async fn readlink(&mut self, path: &str) -> Result<String, TransportError> {
+        let id = self.alloc_id();
+        let mut b = vec![FXP_READLINK];
+        b.extend_from_slice(&id.to_be_bytes());
+        put_string(&mut b, path.as_bytes());
+        self.send(&b).await?;
+        let (typ, body) = self.read_for(id).await?;
+        if typ != FXP_NAME {
+            return Err(self.as_status_err(typ, &body));
+        }
+        let mut r = Reader::new(&body);
+        r.u32()?;
+        if r.u32()? != 1 {
+            return Err(sftp_err("invalid readlink name count"));
+        }
+        String::from_utf8(r.string()?)
+            .map_err(|_| sftp_err("symbolic link target is not valid UTF-8"))
+    }
+
+    /// Create a link. OpenSSH v3 uses target then link path on the wire.
+    pub async fn symlink(&mut self, target: &str, path: &str) -> Result<(), TransportError> {
+        let id = self.alloc_id();
+        let mut b = vec![FXP_SYMLINK];
+        b.extend_from_slice(&id.to_be_bytes());
+        put_string(&mut b, target.as_bytes());
+        put_string(&mut b, path.as_bytes());
+        self.send(&b).await?;
+        self.expect_ok(id).await
     }
 
     /// Creates a directory.

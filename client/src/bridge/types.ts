@@ -312,6 +312,7 @@ export interface SftpFileStat {
 
 export interface LocalEntry {
   name: string;
+  isSymlink: boolean;
   isDir: boolean;
   size: number;
   mtime: number;

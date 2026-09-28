@@ -14,7 +14,7 @@ export function hasConflict(target: Entry | null): boolean {
 /** Resume only makes sense when a strictly shorter, non-dir partial exists; the
  *  core's resumable upload/download appends from `offset` keeping the prefix. */
 export function canResume(target: Entry | null, sourceSize: number): boolean {
-  return target != null && !target.isDir && target.size > 0 && target.size < sourceSize;
+  return target != null && !target.isDir && !target.isSymlink && target.size > 0 && target.size < sourceSize;
 }
 
 /** Rolling throughput over a real time window, independent of callback frequency.
@@ -110,6 +110,7 @@ export class Semaphore {
 export interface WalkItem {
   relPath: string; // path relative to the walk root, joined with "/"
   isDir: boolean;
+  isSymlink?: boolean;
   size: number;
 }
 
@@ -144,7 +145,7 @@ export async function collectTree(
       signal?.throwIfAborted();
       if (!isSafeName(e.name)) continue;
       const childRel = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDir) {
+      if (e.isDir && !e.isSymlink) {
         // File entries already have their relative path and size. Only a
         // directory needs an absolute path for its next listing; local join()
         // is a native IPC, so doing it for every file serializes large scans.
@@ -152,7 +153,7 @@ export async function collectTree(
         dirs.push(childRel);
         sub.push(visit(childAbs, childRel));
       } else {
-        files.push({ relPath: childRel, isDir: false, size: e.size });
+        files.push({ relPath: childRel, isDir: false, size: e.isSymlink ? 0 : e.size, ...(e.isSymlink ? { isSymlink: true } : {}) });
       }
     }
     await Promise.all(sub);
@@ -172,12 +173,12 @@ export async function* walk(src: FileSource, root: string, rel = ""): AsyncGener
     // server triggering infinite recursion or a path-traversal write.
     if (!isSafeName(e.name)) continue;
     const childRel = rel ? `${rel}/${e.name}` : e.name;
-    if (e.isDir) {
+    if (e.isDir && !e.isSymlink) {
       const childAbs = await src.join(root, e.name);
       yield { relPath: childRel, isDir: true, size: 0 };
       yield* walk(src, childAbs, childRel);
     } else {
-      yield { relPath: childRel, isDir: false, size: e.size };
+      yield { relPath: childRel, isDir: false, size: e.isSymlink ? 0 : e.size, ...(e.isSymlink ? { isSymlink: true } : {}) };
     }
   }
 }

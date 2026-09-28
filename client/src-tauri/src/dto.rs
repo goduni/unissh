@@ -1180,6 +1180,7 @@ pub struct SftpFileStat {
 #[serde(rename_all = "camelCase")]
 pub struct LocalEntry {
     pub name: String,
+    pub is_symlink: bool,
     pub is_dir: bool,
     pub size: u64,
     pub mtime: u64,

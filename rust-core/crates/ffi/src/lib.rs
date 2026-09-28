@@ -9097,6 +9097,30 @@ impl SftpFfi {
         })
     }
 
+    /// Metadata without following the final symbolic link.
+    pub fn lstat(&self, path: String) -> Result<SftpFileStat, FfiError> {
+        self.with_sftp(|rt, s| {
+            let st = rt.block_on(s.lstat(&path)).map_err(map_transport_err)?;
+            Ok(SftpFileStat {
+                size: st.size,
+                is_dir: st.is_dir,
+                mode: st.mode,
+                mtime: st.mtime,
+            })
+        })
+    }
+
+    pub fn readlink(&self, path: String) -> Result<String, FfiError> {
+        self.with_sftp(|rt, s| rt.block_on(s.readlink(&path)).map_err(map_transport_err))
+    }
+
+    pub fn symlink(&self, target: String, path: String) -> Result<(), FfiError> {
+        self.with_sftp(|rt, s| {
+            rt.block_on(s.symlink(&target, &path))
+                .map_err(map_transport_err)
+        })
+    }
+
     /// Canonicalizes a path.
     pub fn realpath(&self, path: String) -> Result<String, FfiError> {
         self.with_sftp(|rt, s| rt.block_on(s.realpath(&path)).map_err(map_transport_err))

@@ -41,8 +41,13 @@ export interface FileSource {
   id: string;
   label: string;
   list(path: string): Promise<Entry[]>;
-  /** Stat one path, or null if it does not exist (used for conflict checks). */
+  /** Stat one path, following links, or null if it does not exist. */
   stat(path: string): Promise<Entry | null>;
+  /** Metadata for the link itself, including dangling links. */
+  lstat(path: string): Promise<Entry | null>;
+  readlink(path: string): Promise<string>;
+  symlink(target: string, path: string, targetIsDir: boolean): Promise<void>;
+  unlink(path: string): Promise<void>;
   realpath(path: string): Promise<string>;
   mkdir(path: string): Promise<void>;
   /** Create an empty file, failing if the path is already taken. */
@@ -96,6 +101,7 @@ class RemoteSource implements FileSource {
       .map((e: SftpEntry) => ({
         name: e.filename,
         isDir: e.isDir,
+        isSymlink: (e.mode & 0o170000) === 0o120000,
         size: e.size,
         mtime: e.mtime || undefined,
         mode: e.mode || undefined,
@@ -103,12 +109,19 @@ class RemoteSource implements FileSource {
         gid: e.gid || undefined,
       }));
   }
-  async stat(path: string): Promise<Entry | null> {
+  stat(path: string): Promise<Entry | null> {
+    return this.metadata(path, true);
+  }
+  lstat(path: string): Promise<Entry | null> {
+    return this.metadata(path, false);
+  }
+  private async metadata(path: string, follow: boolean): Promise<Entry | null> {
     try {
-      const s = await this.withReopen(() => api.sftpStat(this.id, path));
+      const s = await this.withReopen(() => follow ? api.sftpStat(this.id, path) : api.sftpLstat(this.id, path));
       return {
         name: baseName(path),
         isDir: s.isDir,
+        isSymlink: (s.mode & 0o170000) === 0o120000,
         size: s.size,
         mtime: s.mtime || undefined,
         mode: s.mode || undefined,
@@ -119,6 +132,15 @@ class RemoteSource implements FileSource {
       if (/\bstatus 2\b/.test(apiErrorMessage(error))) return null;
       throw error;
     }
+  }
+  readlink(path: string): Promise<string> {
+    return this.withReopen(() => api.sftpReadlink(this.id, path));
+  }
+  symlink(target: string, path: string): Promise<void> {
+    return this.withReopen(() => api.sftpSymlink(this.id, target, path));
+  }
+  unlink(path: string): Promise<void> {
+    return this.remove(path);
   }
   realpath(path: string): Promise<string> {
     return this.withReopen(() => api.sftpRealpath(this.id, path));
@@ -175,7 +197,7 @@ class LocalSource implements FileSource {
     const list = await api.localListDir(path);
     return list
       .filter((e) => isSafeName(e.name))
-      .map((e) => ({ name: e.name, isDir: e.isDir, size: e.size, mtime: e.mtime || undefined }));
+      .map((e) => ({ name: e.name, isDir: e.isDir && !e.isSymlink, isSymlink: e.isSymlink, size: e.size, mtime: e.mtime || undefined }));
   }
   async stat(path: string): Promise<Entry | null> {
     try {
@@ -190,6 +212,19 @@ class LocalSource implements FileSource {
       if (/\bos error [23]\b|\bENOENT\b/i.test(apiErrorMessage(error))) return null;
       throw error;
     }
+  }
+  async lstat(path: string): Promise<Entry | null> {
+    const entry = await api.localLstat(path);
+    return entry ? { ...entry, isDir: entry.isDir && !entry.isSymlink } : null;
+  }
+  readlink(path: string): Promise<string> {
+    return api.localReadlink(path);
+  }
+  symlink(target: string, path: string, targetIsDir: boolean): Promise<void> {
+    return api.localSymlink(target, path, targetIsDir);
+  }
+  unlink(path: string): Promise<void> {
+    return api.localUnlink(path);
   }
   async realpath(path: string): Promise<string> {
     return path;

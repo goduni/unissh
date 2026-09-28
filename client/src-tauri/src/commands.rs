@@ -1673,12 +1673,97 @@ pub async fn local_list_dir(path: String) -> ApiResult<Vec<dto::LocalEntry>> {
                 .unwrap_or(0);
             out.push(dto::LocalEntry {
                 name,
+                is_symlink: md.as_ref().is_some_and(|m| m.is_symlink()),
                 is_dir,
                 size,
                 mtime,
             });
         }
         Ok(out)
+    })
+    .await?
+}
+
+/// Local transfer metadata must not follow links (including dangling links).
+#[tauri::command]
+pub async fn local_lstat(path: String) -> ApiResult<Option<dto::LocalEntry>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let md = match std::fs::symlink_metadata(&path) {
+            Ok(md) => md,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(ApiError::other(e)),
+        };
+        Ok(Some(dto::LocalEntry {
+            name: std::path::Path::new(&path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            is_dir: md.is_dir(),
+            is_symlink: md.is_symlink(),
+            size: md.len(),
+            mtime: md
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        }))
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn local_readlink(path: String) -> ApiResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::read_link(path)
+            .map_err(ApiError::other)?
+            .into_os_string()
+            .into_string()
+            .map_err(|_| ApiError::other("Symbolic link target is not valid UTF-8"))
+    })
+    .await?
+}
+
+/// Like native upload/download, these operate on paths selected for a transfer.
+/// Keep the target literal: resolving it breaks relative and dangling links.
+#[tauri::command]
+pub async fn local_symlink(target: String, path: String, target_is_dir: bool) -> ApiResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(unix)]
+        {
+            let _ = target_is_dir;
+            std::os::unix::fs::symlink(target, path).map_err(ApiError::other)
+        }
+        #[cfg(windows)]
+        {
+            if target_is_dir {
+                std::os::windows::fs::symlink_dir(target, path)
+            } else {
+                std::os::windows::fs::symlink_file(target, path)
+            }
+            .map_err(ApiError::other)
+        }
+    })
+    .await?
+}
+
+/// Unlink only the link, never recursively remove or follow its referent.
+#[tauri::command]
+pub async fn local_unlink(path: String) -> ApiResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let md = std::fs::symlink_metadata(&path).map_err(ApiError::other)?;
+        if !md.is_symlink() {
+            return Err(ApiError::other("Expected a symbolic link"));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileTypeExt;
+            if md.file_type().is_symlink_dir() {
+                return std::fs::remove_dir(path).map_err(ApiError::other);
+            }
+        }
+        std::fs::remove_file(path).map_err(ApiError::other)
     })
     .await?
 }
@@ -1797,6 +1882,37 @@ pub async fn sftp_stat(
     let s = get_sftp(&state, &id)?;
     let st = blocking(move || s.stat(path)).await?;
     Ok(st.into())
+}
+
+#[tauri::command]
+pub async fn sftp_lstat(
+    id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::SftpFileStat> {
+    let s = get_sftp(&state, &id)?;
+    Ok(blocking(move || s.lstat(path)).await?.into())
+}
+
+#[tauri::command]
+pub async fn sftp_readlink(
+    id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> ApiResult<String> {
+    let s = get_sftp(&state, &id)?;
+    blocking(move || s.readlink(path)).await
+}
+
+#[tauri::command]
+pub async fn sftp_symlink(
+    id: String,
+    target: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let s = get_sftp(&state, &id)?;
+    blocking(move || s.symlink(target, path)).await
 }
 
 #[tauri::command]
@@ -2004,4 +2120,48 @@ pub async fn set_mcp_recording_preferences(
 ) -> ApiResult<()> {
     let core = state.core.clone();
     blocking(move || core.set_mcp_recording_preferences(value)).await
+}
+
+#[cfg(test)]
+mod local_symlink_tests {
+    use super::{local_list_dir, local_lstat, local_readlink, local_symlink, local_unlink};
+
+    #[test]
+    fn preserves_links_and_unlinks_without_touching_referents() {
+        tauri::async_runtime::block_on(async {
+            let temp = tempfile::tempdir().unwrap();
+            let path = |name: &str| temp.path().join(name).to_str().unwrap().to_owned();
+            std::fs::create_dir(path("lib")).unwrap();
+            std::fs::write(path("data"), b"contents must survive").unwrap();
+            for (name, target, is_dir) in [
+                ("lib64", "lib".to_owned(), true),
+                ("file-link", "data".to_owned(), false),
+                ("absolute", path("data"), false),
+                ("broken", "missing".to_owned(), false),
+                ("loop", "loop".to_owned(), false),
+            ] {
+                local_symlink(target.clone(), path(name), is_dir)
+                    .await
+                    .unwrap();
+                assert_eq!(local_readlink(path(name)).await.unwrap(), target);
+                let md = local_lstat(path(name)).await.unwrap().unwrap();
+                assert!(md.is_symlink);
+                let entries = local_list_dir(path("")).await.unwrap();
+                assert!(entries.iter().find(|e| e.name == name).unwrap().is_symlink);
+                assert!(local_symlink("other".into(), path(name), false)
+                    .await
+                    .is_err());
+                assert_eq!(local_readlink(path(name)).await.unwrap(), target);
+                local_unlink(path(name)).await.unwrap();
+                assert!(local_lstat(path(name)).await.unwrap().is_none());
+            }
+            assert!(local_unlink(path("data")).await.is_err());
+            assert!(local_unlink(path("lib")).await.is_err());
+            assert!(temp.path().join("lib").is_dir());
+            assert_eq!(
+                std::fs::read(path("data")).unwrap(),
+                b"contents must survive"
+            );
+        });
+    }
 }

@@ -640,6 +640,15 @@ export const sftpOpen = (a: ConnectArgs, parallelism: number) =>
 export const sftpListDir = (id: string, path: string) =>
   invoke<SftpEntry[]>("sftp_list_dir", { id, path });
 export const localListDir = (path: string) => invoke<LocalEntry[]>("local_list_dir", { path });
+export const localLstat = (path: string) => invoke<LocalEntry | null>("local_lstat", { path });
+export const localReadlink = (path: string) => invoke<string>("local_readlink", { path });
+export const localSymlink = (target: string, path: string, targetIsDir: boolean) =>
+  invoke<void>("local_symlink", { target, path, targetIsDir });
+export const localUnlink = (path: string) => invoke<void>("local_unlink", { path });
+export const sftpLstat = (id: string, path: string) => invoke<SftpFileStat>("sftp_lstat", { id, path });
+export const sftpReadlink = (id: string, path: string) => invoke<string>("sftp_readlink", { id, path });
+export const sftpSymlink = (id: string, target: string, path: string) =>
+  invoke<void>("sftp_symlink", { id, target, path });
 /** Mounted volumes (drives) — empty on mobile, where there is nothing to pick. */
 export const localVolumes = () => invoke<LocalVolume[]>("local_volumes");
 export const sftpStat = (id: string, path: string) =>

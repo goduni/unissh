@@ -27,7 +27,9 @@ function deferred<T>() {
 }
 const source = (kind: "local" | "remote"): FileSource => ({
   kind, id: kind, label: kind, join: async (a: string, b: string) => `${a}/${b}`,
-  stat: vi.fn().mockResolvedValue(null), list: kind === "remote"
+  stat: vi.fn().mockResolvedValue(null), lstat: vi.fn().mockResolvedValue(null),
+  readlink: vi.fn(), symlink: vi.fn().mockResolvedValue(undefined),
+  remove: vi.fn().mockResolvedValue(undefined), unlink: vi.fn().mockResolvedValue(undefined), list: kind === "remote"
     ? vi.fn().mockRejectedValue(new Error("Directory listing unavailable"))
     : vi.fn().mockResolvedValue([]), mkdir: vi.fn().mockResolvedValue(undefined),
 } as unknown as FileSource);
@@ -48,9 +50,9 @@ beforeEach(() => {
 describe("transfer lifecycle", () => {
   it("cancels while stat is hung and ignores its late result", async () => {
     const dest = source("remote"); const stat = deferred<null>();
-    vi.mocked(dest.stat).mockReturnValue(stat.promise);
+    vi.mocked(dest.lstat).mockReturnValue(stat.promise);
     const run = startTransfer(transfer(), source("local"), dest, resolver);
-    await vi.waitFor(() => expect(dest.stat).toHaveBeenCalled());
+    await vi.waitFor(() => expect(dest.lstat).toHaveBeenCalled());
     cancelTransfer("t"); await run;
     expect(current().state).toBe("cancelled");
     stat.resolve(null); await Promise.resolve();
@@ -96,7 +98,7 @@ describe("transfer lifecycle", () => {
     expect(current().state).toBe("cancelled");
   });
   it("releases the serialized conflict queue when its prompt is cancelled", async () => {
-    const dest = source("remote"); vi.mocked(dest.stat).mockResolvedValue({ name: "file", size: 10, isDir: false });
+    const dest = source("remote"); vi.mocked(dest.lstat).mockResolvedValue({ name: "file", size: 10, isDir: false });
     const prompt = vi.fn().mockImplementationOnce(() => new Promise(() => {})).mockResolvedValue({ choice: "skip", applyAll: false });
     const serialized = serializeResolver(prompt);
     const one = startTransfer(transfer("one"), source("local"), dest, serialized);
@@ -142,7 +144,7 @@ describe("accounting and failed parallel work", () => {
   it("measures only new bytes after resuming and decays during a stall", async () => {
     vi.useFakeTimers();
     try {
-      const to = source("remote"); vi.mocked(to.stat).mockResolvedValue({name:"a",size:80,isDir:false});
+      const to = source("remote"); vi.mocked(to.lstat).mockResolvedValue({name:"a",size:80,isDir:false});
       const write = deferred<boolean>(); api.sftpUpload.mockReturnValue(write.promise);
       const run = startTransfer(transfer(), source("local"), to, async () => ({choice:"resume",applyAll:true}));
       await vi.advanceTimersByTimeAsync(0);
@@ -161,7 +163,7 @@ describe("accounting and failed parallel work", () => {
     try {
       const from = source("local"); const to = source("remote");
       vi.mocked(from.list).mockResolvedValue([{name:"a",size:1000,isDir:false},{name:"b",size:100,isDir:false}]);
-      vi.mocked(to.stat).mockResolvedValueOnce({name:"a",size:1000,isDir:false}).mockResolvedValue(null);
+      vi.mocked(to.lstat).mockResolvedValueOnce({name:"a",size:1000,isDir:false}).mockResolvedValue(null);
       const write = deferred<boolean>(); api.sftpUpload.mockReturnValue(write.promise);
       const run = startTransfer(transfer("t", "dir"), from, to, async () => ({choice:"skip",applyAll:true}));
       await vi.advanceTimersByTimeAsync(1000);
@@ -175,7 +177,7 @@ describe("parallel conflict state", () => {
   it.each(["skip", "overwrite"] as const)("keeps waiting after %s until every folder conflict is resolved", async (choice) => {
     const from = source("local"); const to = source("remote");
     vi.mocked(from.list).mockResolvedValue([{name:"a",size:100,isDir:false},{name:"b",size:100,isDir:false}]);
-    vi.mocked(to.stat).mockResolvedValue({name:"file",size:10,isDir:false});
+    vi.mocked(to.lstat).mockResolvedValue({name:"file",size:10,isDir:false});
     const first = deferred<{choice:"skip" | "overwrite";applyAll:boolean}>();
     const write = deferred<boolean>();
     api.sftpUpload.mockReturnValue(write.promise);
@@ -202,7 +204,7 @@ describe("conflict wait timing", () => {
     let run: Promise<void> | undefined;
     try {
       const to = source("remote");
-      vi.mocked(to.stat).mockResolvedValue({name:"file",size:10,isDir:false});
+      vi.mocked(to.lstat).mockResolvedValue({name:"file",size:10,isDir:false});
       const answer = deferred<{choice:"overwrite";applyAll:boolean}>();
       api.sftpUpload.mockReturnValue(write.promise);
       run = startTransfer(transfer(), source("local"), to, () => answer.promise);
@@ -222,7 +224,7 @@ describe("conflict wait timing", () => {
   it("pauses every outstanding conflict without restoring active state", async () => {
     const from = source("local"); const to = source("remote");
     vi.mocked(from.list).mockResolvedValue([{name:"a",size:100,isDir:false},{name:"b",size:100,isDir:false}]);
-    vi.mocked(to.stat).mockResolvedValue({name:"file",size:10,isDir:false});
+    vi.mocked(to.lstat).mockResolvedValue({name:"file",size:10,isDir:false});
     const prompt = vi.fn().mockImplementation(() => new Promise(() => {}));
     const run = startTransfer(transfer("t", "dir"), from, to, serializeResolver(prompt), new Semaphore(2));
     await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
@@ -295,7 +297,7 @@ describe("folder preparation and parallel throughput", () => {
       expect(peak).toBe(8);
       expect(api.sftpUpload).toHaveBeenCalledTimes(216);
       expect(to.list).toHaveBeenCalledExactlyOnceWith("/dst/file");
-      expect(to.stat).not.toHaveBeenCalled();
+      expect(to.lstat).not.toHaveBeenCalled();
       expect(api.cancelNew).toHaveBeenCalledTimes(1);
       expect(new Set(api.sftpUpload.mock.calls.map((args) => args[5])).size).toBe(1);
       expect(api.cancelDispose).toHaveBeenCalledTimes(1);
@@ -309,7 +311,7 @@ describe("folder preparation and parallel throughput", () => {
     const from = source("local"); const to = source("remote");
     vi.mocked(from.list).mockResolvedValue([{ name: "a", size: 100, isDir: false }, { name: "b", size: 100, isDir: false }]);
     vi.mocked(to.list).mockResolvedValue([{ name: "a", size: 50, isDir: false }]);
-    vi.mocked(to.stat).mockImplementation(async (path) => path.endsWith("/a") ? { name: "a", size: 50, isDir: false } : null);
+    vi.mocked(to.lstat).mockImplementation(async (path) => path.endsWith("/a") ? { name: "a", size: 50, isDir: false } : null);
     const answer = deferred<{ choice: "skip"; applyAll: boolean }>();
     const prompt = vi.fn().mockReturnValue(answer.promise);
     api.sftpUpload.mockRejectedValue(new Error("sftp error: status 4: Failure"));
@@ -336,10 +338,10 @@ describe("folder preparation and parallel throughput", () => {
     const from = source("local"); const to = source("remote");
     vi.mocked(from.list).mockResolvedValue([{ name: "a", size: 100, isDir: false }]);
     vi.mocked(to.list).mockResolvedValue([{ name: "a", size: 7, isDir: false, mode }]);
-    vi.mocked(to.stat).mockResolvedValue({ name: "a", size: 50, isDir: false });
+    vi.mocked(to.lstat).mockResolvedValue({ name: "a", size: 50, isDir: false });
     const prompt = vi.fn().mockResolvedValue({ choice: "resume", applyAll: true });
     await startTransfer(transfer("t", "dir"), from, to, prompt);
-    expect(to.stat).toHaveBeenCalledExactlyOnceWith("/dst/file/a");
+    expect(to.lstat).toHaveBeenCalledExactlyOnceWith("/dst/file/a");
     expect(prompt.mock.calls[0][0].targetSize).toBe(50);
     expect(api.sftpUpload.mock.calls[0][3]).toBe(50);
     expect(current().state).toBe("done");
@@ -349,10 +351,10 @@ describe("folder preparation and parallel throughput", () => {
     const from = source("local"); const to = source("remote");
     vi.mocked(from.list).mockResolvedValue([{ name: "a.txt", size: 100, isDir: false }]);
     vi.mocked(to.list).mockResolvedValue([{ name: "A.txt", size: 50, isDir: false, mode: 0o100644 }]);
-    vi.mocked(to.stat).mockResolvedValue({ name: "a.txt", size: 50, isDir: false });
+    vi.mocked(to.lstat).mockResolvedValue({ name: "a.txt", size: 50, isDir: false });
     const prompt = vi.fn().mockResolvedValue({ choice: "skip", applyAll: false });
     await startTransfer(transfer("t", "dir"), from, to, prompt);
-    expect(to.stat).toHaveBeenCalledExactlyOnceWith("/dst/file/a.txt");
+    expect(to.lstat).toHaveBeenCalledExactlyOnceWith("/dst/file/a.txt");
     expect(prompt).toHaveBeenCalledOnce();
     expect(api.sftpUpload).not.toHaveBeenCalled();
     expect(current().state).toBe("done");
@@ -379,5 +381,101 @@ describe("folder preparation and parallel throughput", () => {
     expect(new Set(paths).size).toBe(2);
     expect(api.sftpUpload.mock.calls.map((args) => args[1]).sort()).toEqual([...paths].sort());
     expect(api.cancelNew).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("symbolic link transfers", () => {
+  it.each([
+    ["remote", "local"], ["local", "remote"], ["remote", "remote"], ["local", "local"],
+  ] as const)("preserves nested links in a %s → %s folder copy", async (src, dst) => {
+    const from = source(src); const to = source(dst);
+    vi.mocked(from.list).mockImplementation(async (path) => path === "/file"
+      ? [{ name: ".venv", isDir: true, size: 0 }]
+      : [{ name: "lib64", isDir: false, isSymlink: true, size: 3 }]);
+    vi.mocked(from.readlink).mockResolvedValue("lib");
+    vi.mocked(from.stat).mockResolvedValue({ name: "lib64", isDir: true, size: 4096 });
+    await startTransfer(transfer("t", "dir"), from, to, resolver);
+    expect(to.symlink).toHaveBeenCalledWith("lib", "/dst/file/.venv/lib64", dst === "local");
+    expect(api.sftpDownload).not.toHaveBeenCalled();
+    expect(api.sftpUpload).not.toHaveBeenCalled();
+    expect(current()).toMatchObject({ state: "done", filesDone: 1, bytesDone: 0, bytesTotal: 0 });
+  });
+
+  it.each(["../missing", "/absolute/missing", "lib", "self"])("preserves the literal target %s for a loose link", async (target) => {
+    const from = source("remote"); const to = source("local");
+    vi.mocked(from.readlink).mockResolvedValue(target);
+    const t = transfer(); t.isSymlink = true;
+    await startTransfer(t, from, to, resolver);
+    expect(to.symlink).toHaveBeenCalledWith(target, "/dst/file", false);
+    expect(api.sftpDownload).not.toHaveBeenCalled();
+    expect(current()).toMatchObject({ state: "done", filesDone: 1, bytesTotal: 0 });
+  });
+
+  it.each([false, true])("unlinks a destination link before writing a source with isSymlink=%s", async (isSymlink) => {
+    const from = source("local"); const to = source("remote");
+    const existing = { name: "file", isDir: false, isSymlink: true, size: 3 };
+    vi.mocked(to.lstat).mockResolvedValue(existing);
+    vi.mocked(from.readlink).mockResolvedValue("lib");
+    const t = transfer(); t.isSymlink = isSymlink;
+    await startTransfer(t, from, to, resolver);
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ resumable: false, sameSize: false }), expect.any(AbortSignal));
+    expect(to.unlink).toHaveBeenCalledExactlyOnceWith("/dst/file");
+    const write = isSymlink ? to.symlink : api.sftpUpload;
+    expect(vi.mocked(to.unlink).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(write).mock.invocationCallOrder[0]);
+    expect(to.remove).not.toHaveBeenCalled();
+    expect(current().state).toBe("done");
+  });
+
+  it.each(["skip", "keepboth"] as const)("honors %s without unlinking the destination", async (choice) => {
+    const from = source("remote"); const to = source("local");
+    vi.mocked(from.readlink).mockResolvedValue("lib");
+    vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: false, isSymlink: true, size: 3 });
+    vi.mocked(to.list).mockResolvedValue([{ name: "file", isDir: false, isSymlink: true, size: 3 }]);
+    const t = transfer(); t.isSymlink = true;
+    await startTransfer(t, from, to, async () => ({ choice, applyAll: true }));
+    expect(to.unlink).not.toHaveBeenCalled();
+    expect(to.remove).not.toHaveBeenCalled();
+    if (choice === "skip") expect(to.symlink).not.toHaveBeenCalled();
+    else {
+      expect(to.symlink).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(to.symlink).mock.calls[0][1]).not.toBe("/dst/file");
+    }
+    expect(current().state).toBe("done");
+  });
+
+  it("leaves an existing file intact if reading the source link fails", async () => {
+    const from = source("remote"); const to = source("local");
+    vi.mocked(from.readlink).mockRejectedValue(new Error("readlink denied"));
+    vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: false, size: 50 });
+    const t = transfer(); t.isSymlink = true;
+    await startTransfer(t, from, to, resolver);
+    expect(to.remove).not.toHaveBeenCalled();
+    expect(to.symlink).not.toHaveBeenCalled();
+    expect(current()).toMatchObject({ state: "error", error: "readlink denied" });
+  });
+
+  it("refuses to traverse an existing destination directory link", async () => {
+    const from = source("remote"); const to = source("local");
+    vi.mocked(from.list).mockResolvedValue([{ name: "a", isDir: false, size: 100 }]);
+    vi.mocked(to.mkdir).mockRejectedValue(new Error("already exists"));
+    vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: true, isSymlink: true, size: 3 });
+    await startTransfer(transfer("t", "dir"), from, to, resolver);
+    expect(api.sftpDownload).not.toHaveBeenCalled();
+    expect(current()).toMatchObject({ state: "error", error: "/dst/file: already exists" });
+  });
+
+  it("waits for a pending symlink write before finishing cancellation", async () => {
+    const from = source("remote"); const to = source("local");
+    vi.mocked(from.readlink).mockResolvedValue("lib");
+    const write = deferred<void>(); vi.mocked(to.symlink).mockReturnValue(write.promise);
+    const t = transfer(); t.isSymlink = true;
+    const run = startTransfer(t, from, to, resolver);
+    await vi.waitFor(() => expect(to.symlink).toHaveBeenCalled());
+    cancelTransfer(t.id);
+    await startTransfer(t, from, to, resolver);
+    expect(current().state).toBe("cancelling");
+    expect(to.symlink).toHaveBeenCalledTimes(1);
+    write.resolve(); await run;
+    expect(current().state).toBe("cancelled");
   });
 });

@@ -105,3 +105,22 @@ describe("interruptible queue", () => {
     await rejected;
   });
 });
+
+describe("symlink scanning", () => {
+  it.each(["parallel", "streaming"])("never follows links in the %s scan, even when marked as directories", async (mode) => {
+    const list = vi.fn().mockResolvedValue([
+      { name: "lib64", isDir: true, isSymlink: true, size: 3 },
+      { name: "python", isDir: false, isSymlink: true, size: 80 },
+      { name: "loop", isDir: true, isSymlink: true, size: 1 },
+    ]);
+    const join = vi.fn();
+    const src = { list, join } as unknown as FileSource;
+    const files = mode === "parallel"
+      ? (await collectTree(src, "/venv", new Semaphore(2))).files
+      : await (async () => { const result = []; for await (const it of walk(src, "/venv")) result.push(it); return result; })();
+    expect(files).toHaveLength(3);
+    expect(files.every((it) => it.isSymlink && !it.isDir && it.size === 0)).toBe(true);
+    expect(list).toHaveBeenCalledExactlyOnceWith("/venv");
+    expect(join).not.toHaveBeenCalled();
+  });
+});

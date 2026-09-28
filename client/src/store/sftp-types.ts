@@ -9,6 +9,7 @@
 export interface Entry {
   name: string;
   isDir: boolean;
+  isSymlink?: boolean;
   size: number;
   mtime?: number;
   mode?: number;
@@ -70,6 +71,7 @@ export interface Transfer {
   toDir: string; // destination directory on the target source
   fromPath: string; // absolute source path
   kind: "file" | "dir";
+  isSymlink?: boolean;
   bytesDone: number;
   bytesTotal: number;
   sourceSize?: number; // original file size, before accounting for relay legs

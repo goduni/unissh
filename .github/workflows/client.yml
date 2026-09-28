@@ -393,6 +393,10 @@ jobs:
         run: cargo test --locked --release --lib cloud::recovery::tests -- --test-threads=1
         working-directory: client/src-tauri
 
+      - name: Test local symbolic links (Tauri crate)
+        run: cargo test --locked --release --lib commands::local_symlink_tests -- --test-threads=1
+        working-directory: client/src-tauri
+
       - name: Build & bundle (Tauri)
         uses: tauri-apps/tauri-action@v1
         env:

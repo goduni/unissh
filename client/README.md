@@ -50,6 +50,14 @@ Path permissions still come from `src-tauri/capabilities/default.json`; the
 plugin's default deny rules still apply. Keep this setting when changing scopes:
 without it, `$HOME/**` excludes dot-prefixed path components on Unix.
 
+SFTP copies preserve symbolic links as links, without scanning or downloading
+what they point to. Conflict checks use non-following metadata; overwrite removes
+an existing link before writing, and directory creation rejects existing links
+inside the destination tree. Native local link operations preserve literal targets,
+including dangling links. On Windows, creating links requires the OS to permit
+symlink creation; dangling links use the file-link type because their target type
+is unknown. Absolute link targets remain absolute and may not exist on another host.
+
 ## Honesty to the core
 
 The prototype showed some indicators the core cannot back; these were intentionally dropped or made

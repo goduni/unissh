@@ -188,12 +188,32 @@ async function fileLeg(
   return true;
 }
 
+/** Prepare a leaf without ever writing through an existing destination link.
+ * Read the source first so a readlink failure leaves the old destination intact.
+ * Writes stay attached to the semaphore permit until they settle on cancel. */
+async function prepareLeaf(
+  from: FileSource, to: FileSource, fromPath: string, toPath: string,
+  isSymlink: boolean, existing: Entry | null, ctrl: Control,
+): Promise<void> {
+  const target = isSymlink ? await abortable(from.readlink(fromPath), ctrl.abort.signal) : undefined;
+  // Windows requires a directory/file hint when creating a link. A dangling or
+  // cyclic target cannot supply it; preserve its literal target as a file link.
+  const targetIsDir = isSymlink && to.kind === "local"
+    ? (await abortable(from.stat(fromPath).catch(() => null), ctrl.abort.signal))?.isDir ?? false
+    : false;
+  ctrl.abort.signal.throwIfAborted();
+  if (existing?.isSymlink) await to.unlink(toPath);
+  else if (isSymlink && existing) await to.remove(toPath);
+  ctrl.abort.signal.throwIfAborted();
+  if (target !== undefined) await to.symlink(target, toPath, targetIsDir);
+}
+
 async function ensureDir(src: FileSource, path: string): Promise<void> {
   await src.mkdir(path).catch(async (error: unknown) => {
     // Only an existing directory is harmless. A swallowed mkdir failure made
     // later file writes fail with an unrelated, context-free SFTP status 4.
-    const existing = await src.stat(path).catch(() => null);
-    if (!existing?.isDir) throw new Error(`${path}: ${apiErrorMessage(error)}`);
+    const existing = await src.lstat(path).catch(() => null);
+    if (!existing?.isDir || existing.isSymlink) throw new Error(`${path}: ${apiErrorMessage(error)}`);
   });
 }
 
@@ -229,18 +249,19 @@ async function runFile(
     ctrl.patch({ state: "active" });
     let name = t.label;
     let toPath = await to.join(t.toDir, name);
-    const target = await abortable(to.stat(toPath), ctrl.abort.signal);
+    const target = await abortable(to.lstat(toPath), ctrl.abort.signal);
+    let replaceTarget = target;
     let offset = 0;
 
     if (target?.isDir) throw new Error(`"${name}" already exists as a folder`);
     if (target) {
-      const resumable = canResume(target, t.bytesTotal) && legResumable(from, to);
+      const resumable = !t.isSymlink && canResume(target, t.bytesTotal) && legResumable(from, to);
       const res = await resolveConflict(resolver, {
         name,
         targetSize: target.size,
         sourceSize: t.bytesTotal,
         resumable,
-        sameSize: target.size === t.bytesTotal,
+        sameSize: !t.isSymlink && !target.isSymlink && target.size === t.bytesTotal,
       }, ctrl);
       if (res.choice === "skip") {
         ctrl.patch({ filesDone: 1, bytesDone: t.bytesTotal, bytesTotal: t.bytesTotal });
@@ -254,6 +275,7 @@ async function runFile(
           listing.map((e) => e.name),
         );
         toPath = await to.join(t.toDir, name);
+        replaceTarget = null;
         offset = 0;
       }
       // overwrite → offset stays 0
@@ -261,6 +283,11 @@ async function runFile(
 
     ctrl.patch({ state: "active", offset, label: name });
     ctrl.abort.signal.throwIfAborted();
+    await prepareLeaf(from, to, t.fromPath, toPath, !!t.isSymlink, replaceTarget, ctrl);
+    if (t.isSymlink) {
+      ctrl.patch({ filesDone: 1, bytesDone: 0, bytesTotal: 0 });
+      return;
+    }
     let previous = offset;
     let finalTotal = from.kind === "remote" && to.kind === "remote" ? t.bytesTotal * 2 : t.bytesTotal;
     ctrl.patch({ bytesDone: offset, bytesTotal: finalTotal });
@@ -388,12 +415,12 @@ async function runDir(
     const absTo = await targetPath(it.relPath);
     const entries = await listingFor(parent);
     let existing = entries?.get(name) ?? null;
-    // READDIR describes a symlink itself; STAT follows it, as the write does.
+    // Preserve link metadata; never follow it when deciding what to replace.
     // Local filesystems may also alias names by case or Unicode normalization.
     const regular = existing?.mode !== undefined && (existing.mode & 0o170000) === 0o100000;
     const possibleAlias = !existing && foldedNames.get(parent)?.has(foldName(name));
     if (!entries || to.kind === "local" || possibleAlias || (existing && !existing.isDir && !regular)) {
-      existing = await abortable(to.stat(absTo), ctrl.abort.signal);
+      existing = await abortable(to.lstat(absTo), ctrl.abort.signal);
     }
     if (existing?.isDir) throw new Error(`"${it.relPath}" already exists as a folder`);
     return { it, name, parent, absTo, entries, existing };
@@ -410,7 +437,7 @@ async function runDir(
     }
     names.add(file.name);
   }
-  const plan: { it: WalkItem; absTo: string; offset: number }[] = [];
+  const plan: { it: WalkItem; absTo: string; offset: number; replaceTarget: Entry | null }[] = [];
   let allConflicts: ConflictResolution | undefined;
   // Settle every conflict BEFORE starting file writes. Previously one leg could
   // fail and abort a sibling's dialog while the user was choosing an action.
@@ -418,15 +445,16 @@ async function runDir(
     ctrl.abort.signal.throwIfAborted();
     const { it, existing } = file;
     let { absTo } = file;
+    let replaceTarget = existing;
     let offset = 0;
     if (existing) {
-      const resumable = canResume(existing, it.size) && legResumable(from, to);
+      const resumable = !it.isSymlink && canResume(existing, it.size) && legResumable(from, to);
       // The batch resolver also remembers apply-all across top-level transfers.
       // Cache it here to avoid toggling waiting/active and synchronously rendering
       // the queue twice for every remaining file in this folder.
       const res = allConflicts ?? await resolveConflict(resolver, {
         name: it.relPath, targetSize: existing.size, sourceSize: it.size,
-        resumable, sameSize: existing.size === it.size,
+        resumable, sameSize: !it.isSymlink && !existing.isSymlink && existing.size === it.size,
       }, ctrl);
       if (res.applyAll) allConflicts = res;
       if (res.choice === "skip") {
@@ -443,17 +471,25 @@ async function runDir(
         const name = dedupeName(file.name, names);
         names.add(name);
         absTo = await to.join(file.parent, name);
+        replaceTarget = null;
       } else {
         offset = res.choice === "resume" && resumable ? existing.size : 0;
       }
     }
-    plan.push({ it, absTo, offset });
+    plan.push({ it, absTo, offset, replaceTarget });
   }
   ctrl.patch({ state: "active", bytesDone, filesDone });
 
-  const transferOne = async ({ it, absTo, offset }: typeof plan[number]): Promise<boolean> => {
+  const transferOne = async ({ it, absTo, offset, replaceTarget }: typeof plan[number]): Promise<boolean> => {
     if (ctrl.abort.signal.aborted) return false;
     const absFrom = await sourcePath(it.relPath);
+    await prepareLeaf(from, to, absFrom, absTo, !!it.isSymlink, replaceTarget, ctrl);
+    if (it.isSymlink) {
+      filesDone += 1;
+      ctrl.lastProgressAt = now();
+      publishProgress();
+      return true;
+    }
     // A resumed prefix already exists on the target — count it as done up front.
     if (offset > 0) bump(offset, false);
     let prev = offset; // last absolute position reported for THIS file
@@ -528,7 +564,7 @@ export async function startTransfer(
   controls.set(t.id, ctrl);
   // A remote relay counts two network legs; preserve the original source size
   // so retry never mistakes that work total for the file size.
-  t = { ...t, bytesTotal: t.sourceSize ?? t.bytesTotal };
+  t = { ...t, bytesTotal: t.isSymlink ? 0 : t.sourceSize ?? t.bytesTotal };
   ctrl.patch({ state: t.kind === "dir" ? "scanning" : "queued", error: undefined,
     sourceSize: t.bytesTotal, bytesDone: 0, filesDone: 0, speedBps: 0, etaSec: Infinity, stalled: false });
   let spd = new Speedometer();

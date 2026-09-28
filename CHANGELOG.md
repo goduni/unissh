@@ -80,6 +80,12 @@ starts with `0.`:
 
 ### Fixed
 
+- SFTP folder and single-item transfers preserve symbolic links, including
+  relative and dangling targets. Links such as `.venv/lib64 -> lib` no longer
+  fail as ordinary file downloads or use the link length as a file size.
+  Overwrite replaces destination links without modifying their referents;
+  existing directory links inside the destination tree are rejected.
+
 - Applying a conflict choice to all files in an SFTP folder no longer repeatedly
   switches queue state for each file, blocking the interface. File completion
   updates are coalesced while preserving final progress and per-file retry choices.
