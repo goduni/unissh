@@ -44,6 +44,12 @@ src-tauri/                Rust backend
 - **Security boundary respected:** the UI never receives plaintext private keys (only public keys +
   fingerprints + session data). Password/note reveal is the only type-gated exception.
 
+The filesystem plugin sets `requireLiteralLeadingDot: false` so recursive SFTP
+copies can include hidden directories such as `.git` and `.claude` on Unix.
+Path permissions still come from `src-tauri/capabilities/default.json`; the
+plugin's default deny rules still apply. Keep this setting when changing scopes:
+without it, `$HOME/**` excludes dot-prefixed path components on Unix.
+
 ## Honesty to the core
 
 The prototype showed some indicators the core cannot back; these were intentionally dropped or made

@@ -80,6 +80,10 @@ starts with `0.`:
 
 ### Fixed
 
+- Local SFTP operations can create and access hidden files and directories inside
+  their allowed filesystem scopes on macOS and Linux, including nested `.git`
+  and `.claude` directories.
+
 - Resolve all file conflicts in an SFTP folder transfer before starting its file
   writes, so a sibling write cannot fail and dismiss an unanswered dialog.
   Preserve metadata and directory-creation failures, and show the failing file

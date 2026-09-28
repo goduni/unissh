@@ -30,6 +30,9 @@
     }
   },
   "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2MEE1ODBENTQ4NDRCOTAKUldTUVM0UlVEVmdLVnMwKzFmRkUxREVYVi9adjNwTDZTUXBTdTVLb28yS2xUSWtVSlFGcHAyM1EK",
       "endpoints": ["https://github.com/goduni/unissh/releases/latest/download/latest.json"]
