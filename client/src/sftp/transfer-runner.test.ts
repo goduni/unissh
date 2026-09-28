@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Transfer } from "@/store/sftp-types";
 import type { FileSource } from "@/bridge/sources";
+import * as sources from "@/bridge/sources";
 
 const { state, api } = vi.hoisted(() => {
   const state = {
@@ -15,7 +16,7 @@ vi.mock("@/store/app", () => ({ useApp: { getState: () => state } }));
 vi.mock("@/bridge/api", () => api);
 vi.mock("@tauri-apps/api/path", () => ({ join: async (...p: string[]) => p.join("/"), tempDir: async () => "/tmp" }));
 vi.mock("@tauri-apps/plugin-fs", () => ({ remove: vi.fn().mockResolvedValue(undefined), copyFile: vi.fn(), stat: vi.fn() }));
-import { cancelAll, cancelTransfer, pauseTransfer, startTransfer, serializeResolver } from "./transfer-runner";
+import { cancelAll, cancelTransfer, pauseTransfer, startTransfer, serializeResolver, resumeTransfer } from "./transfer-runner";
 import { Semaphore } from "./transfer-engine";
 
 function deferred<T>() {
@@ -234,6 +235,45 @@ describe("conflict wait timing", () => {
 });
 
 describe("folder preparation and parallel throughput", () => {
+  it.each(["overwrite", "skip", "resume", "keepboth"] as const)("applies %s to 216 conflicts without per-file UI state churn", async (choice) => {
+    const from = source("local"); const to = source("remote");
+    const files = Array.from({ length: 216 }, (_, i) => ({ name: `file-${i}.txt`, size: 100, isDir: false, mode: 0o100644 }));
+    vi.mocked(from.list).mockResolvedValue(files);
+    vi.mocked(to.list).mockResolvedValue(files.map((f) => ({ ...f, size: 50 })));
+    const prompt = vi.fn().mockResolvedValue({ choice, applyAll: true });
+    const patches = vi.spyOn(state, "patchTransfer");
+    vi.useFakeTimers();
+    try {
+      await startTransfer(transfer("t", "dir"), from, to, serializeResolver(prompt), new Semaphore(8));
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(patches.mock.calls.filter(([, patch]) => patch.state === "waiting")).toHaveLength(1);
+      // Store writes cause synchronous React renders. A folder must not trigger
+      // hundreds of renders in one microtask chain after applying a decision.
+      expect(patches.mock.calls.length).toBeLessThan(20);
+      expect(api.sftpUpload).toHaveBeenCalledTimes(choice === "skip" ? 0 : 216);
+      expect(current()).toMatchObject({ state: "done", filesDone: 216, bytesDone: 21600 });
+      if (choice === "resume") expect(api.sftpUpload.mock.calls.every((args) => args[3] === 50)).toBe(true);
+    } finally { patches.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it("re-evaluates automatic retry decisions for complete, partial and missing files", async () => {
+    const from = source("local"); const to = source("remote");
+    const files = ["a", "b", "c"].map((name) => ({ name, size: 100, isDir: false, mode: 0o100644 }));
+    vi.mocked(from.list).mockResolvedValue(files);
+    vi.mocked(to.list).mockResolvedValue([files[0], { ...files[1], size: 50 }]);
+    const t = transfer("t", "dir"); t.state = "paused";
+    const lookup = vi.spyOn(sources, "sourceFor").mockImplementation((ref) => ref.kind === "local" ? from : to);
+    const patches = vi.spyOn(state, "patchTransfer");
+    try {
+      await resumeTransfer("t");
+      expect(api.sftpUpload.mock.calls.map((args) => [args[2], args[3]])).toEqual([
+        ["/dst/file/b", 50], ["/dst/file/c", 0],
+      ]);
+      expect(current()).toMatchObject({ state: "done", filesDone: 3, bytesDone: 300 });
+      expect(patches.mock.calls.some(([, patch]) => patch.state === "waiting")).toBe(false);
+    } finally { lookup.mockRestore(); patches.mockRestore(); }
+  });
+
   it("transfers 216 files with eight workers, one listing and one cancel token", async () => {
     vi.useFakeTimers();
     let run: Promise<void> | undefined;

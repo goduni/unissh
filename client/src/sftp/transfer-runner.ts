@@ -69,6 +69,8 @@ async function resolveConflict(
   info: Parameters<ConflictResolver>[0],
   ctrl: Control,
 ): Promise<ConflictResolution> {
+  // Retry decisions are automatic and per-file; they never open a dialog.
+  if (resolver === autoResume) return resolver(info, ctrl.abort.signal);
   ctrl.pendingConflicts += 1;
   ctrl.patch({ state: "waiting", stalled: false });
   try {
@@ -100,7 +102,9 @@ export const teardownGeneration = (): number => teardownGen;
  *  overwritten. */
 const autoResume: ConflictResolver = async ({ resumable, sameSize }) => ({
   choice: sameSize ? "skip" : resumable ? "resume" : "overwrite",
-  applyAll: true,
+  // This automatic decision depends on each file's size; it is not a user's
+  // standing batch choice and must never be cached for the whole folder.
+  applyAll: false,
 });
 
 /** Resume-from-offset only works on the legs that actually seek/append in the
@@ -343,6 +347,12 @@ async function runDir(
   let bytesDone = 0;
   let filesDone = 0;
   let lastPatch = 0;
+  const publishProgress = (): void => {
+    const ts = now();
+    if (ts - lastPatch < PATCH_MS) return;
+    lastPatch = ts;
+    ctrl.patch({ bytesDone, filesDone });
+  };
   const bump = (delta: number, transferred = true): void => {
     if (delta <= 0 || ctrl.abort.signal.aborted) return;
     bytesDone += delta;
@@ -350,12 +360,7 @@ async function runDir(
       ctrl.moved += delta;
       ctrl.lastProgressAt = now();
     }
-    const ts = now();
-    if (ts - lastPatch < PATCH_MS) return;
-    lastPatch = ts;
-    ctrl.patch({
-      bytesDone,
-    });
+    publishProgress();
   };
 
   // Read each destination directory once, instead of one SFTP STAT round trip
@@ -406,6 +411,7 @@ async function runDir(
     names.add(file.name);
   }
   const plan: { it: WalkItem; absTo: string; offset: number }[] = [];
+  let allConflicts: ConflictResolution | undefined;
   // Settle every conflict BEFORE starting file writes. Previously one leg could
   // fail and abort a sibling's dialog while the user was choosing an action.
   for (const file of prepared) {
@@ -415,14 +421,17 @@ async function runDir(
     let offset = 0;
     if (existing) {
       const resumable = canResume(existing, it.size) && legResumable(from, to);
-      const res = await resolveConflict(resolver, {
+      // The batch resolver also remembers apply-all across top-level transfers.
+      // Cache it here to avoid toggling waiting/active and synchronously rendering
+      // the queue twice for every remaining file in this folder.
+      const res = allConflicts ?? await resolveConflict(resolver, {
         name: it.relPath, targetSize: existing.size, sourceSize: it.size,
         resumable, sameSize: existing.size === it.size,
       }, ctrl);
+      if (res.applyAll) allConflicts = res;
       if (res.choice === "skip") {
         filesDone += 1;
         bump(it.size * legs, false);
-        ctrl.patch({ filesDone, bytesDone });
         continue;
       }
       if (res.choice === "keepboth") {
@@ -440,7 +449,7 @@ async function runDir(
     }
     plan.push({ it, absTo, offset });
   }
-  ctrl.patch({ state: "active" });
+  ctrl.patch({ state: "active", bytesDone, filesDone });
 
   const transferOne = async ({ it, absTo, offset }: typeof plan[number]): Promise<boolean> => {
     if (ctrl.abort.signal.aborted) return false;
@@ -466,7 +475,7 @@ async function runDir(
     if (!ok) return false; // paused or cancelled mid-file
     if (it.size * legs > prev) bump(it.size * legs - prev, false); // true up if the last tick was short
     filesDone += 1;
-    ctrl.patch({ filesDone, bytesDone });
+    publishProgress();
     return true;
   };
 
@@ -475,6 +484,7 @@ async function runDir(
   await settleWrites(plan.map((file) => sem.run(() => transferOne(file).catch((error: unknown) => {
     throw new Error(`${file.it.relPath}: ${apiErrorMessage(error)}`);
   }), ctrl.abort.signal)), ctrl);
+  ctrl.patch({ filesDone, bytesDone });
 }
 
 /** Stop sibling legs on the first failure, but wait for writes to settle before

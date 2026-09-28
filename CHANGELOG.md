@@ -80,6 +80,10 @@ starts with `0.`:
 
 ### Fixed
 
+- Applying a conflict choice to all files in an SFTP folder no longer repeatedly
+  switches queue state for each file, blocking the interface. File completion
+  updates are coalesced while preserving final progress and per-file retry choices.
+
 - Local SFTP operations can create and access hidden files and directories inside
   their allowed filesystem scopes on macOS and Linux, including nested `.git`
   and `.claude` directories.
