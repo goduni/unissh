@@ -423,10 +423,21 @@ where
                 tokio::fs::create_dir_all(parent).await?;
             }
             let mut options = tokio::fs::OpenOptions::new();
-            options.write(true).create(true).truncate(start_offset == 0);
+            options.write(true).create(true).truncate(false);
             #[cfg(unix)]
-            options.mode(0o600);
-            options.open(local_path).await?
+            {
+                options
+                    .mode(0o600)
+                    .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+            }
+            let file = options.open(local_path).await?;
+            if !file.metadata().await?.is_file() {
+                return Err(sftp_err("destination is not a regular file"));
+            }
+            if start_offset == 0 {
+                file.set_len(0).await?;
+            }
+            file
         };
         if f.metadata().await?.len() < start_offset {
             return Err(sftp_err("local partial is shorter than resume offset"));
@@ -443,6 +454,13 @@ where
             let mut reorder: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
             let mut write_offset = start_offset; // next contiguous byte to write
             let mut next_req = start_offset; // next byte to request
+                                             // For a small known file, send only its payload and one EOF probe,
+                                             // rather than a full window of redundant reads beyond its end.
+            let mut request_limit = if metadata.size_known {
+                metadata.size
+            } else {
+                u64::MAX
+            };
             let mut eof: Option<u64> = None; // smallest offset confirmed past EOF
             let mut outcome = TransferOutcome::Completed;
             loop {
@@ -452,9 +470,14 @@ where
                 }
                 while in_flight.len() < WINDOW
                     && eof.is_none()
+                    && next_req <= request_limit
                     && next_req.saturating_sub(write_offset) < (WINDOW * CHUNK) as u64
                 {
-                    let len = CHUNK as u32;
+                    let len = if next_req < request_limit {
+                        (request_limit - next_req).min(CHUNK as u64) as u32
+                    } else {
+                        CHUNK as u32
+                    };
                     let id = self.send_read(&handle, next_req, len).await?;
                     in_flight.insert(id, (next_req, len));
                     next_req += len as u64;
@@ -477,6 +500,7 @@ where
                             return Err(self.poison(sftp_err("invalid DATA chunk length")));
                         }
                         let got = data.len() as u64;
+                        request_limit = request_limit.max(off + got);
                         // Short read (legal): re-request the remaining sub-range.
                         if got < len as u64 {
                             let rlen = len - got as u32;
@@ -1675,7 +1699,8 @@ mod integrity_tests {
         bytes: Vec<u8>,
         unknown_size: bool,
         oversized: bool,
-    ) {
+    ) -> usize {
+        let mut reads = 0;
         while let Ok((typ, body)) = peer.read_packet().await {
             let mut r = Reader::new(&body);
             let id = r.u32().unwrap();
@@ -1697,6 +1722,7 @@ mod integrity_tests {
                     put_string(&mut response, b"h");
                 }
                 FXP_READ => {
+                    reads += 1;
                     r.string().unwrap();
                     let offset = r.u64().unwrap() as usize;
                     let len = r.u32().unwrap() as usize;
@@ -1726,9 +1752,10 @@ mod integrity_tests {
                 _ => panic!("unexpected request {typ}"),
             }
             if peer.send(&response).await.is_err() {
-                return;
+                return reads;
             }
         }
+        reads
     }
 
     fn session(stream: tokio::io::DuplexStream) -> Sftp<tokio::io::DuplexStream> {
@@ -1773,7 +1800,10 @@ mod integrity_tests {
             assert_eq!(std::fs::read(file.path()).unwrap(), bytes);
             assert!(!client.is_poisoned());
             drop(client);
-            server.await.unwrap();
+            let reads = server.await.unwrap();
+            if !unknown {
+                assert_eq!(reads, length.div_ceil(CHUNK) + 1);
+            }
         }
     }
 
@@ -1829,7 +1859,17 @@ mod integrity_tests {
         let server = tokio::spawn(peer(session(server), vec![42; CHUNK * 2], false, false));
         let mut client = session(client);
         assert!(client
-            .download_to("/file", "/dev/full", 0, None, None, None)
+            .download_to_file(
+                "/file",
+                tokio::fs::File::from_std(
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open("/dev/full")
+                        .unwrap()
+                ),
+                None,
+                None
+            )
             .await
             .is_err());
         assert!(client.is_poisoned());
