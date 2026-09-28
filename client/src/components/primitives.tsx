@@ -369,6 +369,7 @@ export function ResizeHandle({
 
 export function Btn({
   children,
+  type,
   icon,
   variant = "primary",
   size = "md",
@@ -384,6 +385,7 @@ export function Btn({
   "aria-label": ariaLabel,
 }: {
   children?: React.ReactNode;
+  type?: "button" | "submit" | "reset";
   icon?: IconName;
   variant?: BtnVariant;
   size?: BtnSize;
@@ -446,6 +448,7 @@ export function Btn({
   };
   return (
     <button
+      type={type}
       ref={btnRef}
       onClick={onClick}
       disabled={disabled}

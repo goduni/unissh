@@ -35,6 +35,7 @@ import { shouldRetryOnResume } from "@/views/terminal/paneSession";
 import { ViewRun } from "@/views/ViewRun";
 import { ViewSftp } from "@/views/sftp/ViewSftp";
 import { ViewTunnels } from "@/views/ViewTunnels";
+import { ViewMcp } from "@/views/ViewMcp";
 import { ViewKnown } from "@/views/ViewKnown";
 import { ViewSecrets } from "@/views/ViewSecrets";
 import { ViewSettings } from "@/views/ViewSettings";
@@ -43,6 +44,7 @@ import { EntryOverlays } from "@/overlays/Entry";
 import { Modals } from "@/overlays/Modals";
 import { ViewRecordings } from "@/views/ViewRecordings";
 import { ViewSnippets } from "@/views/ViewSnippets";
+import { McpApproval } from "@/overlays/McpApproval";
 import { AuthPrompt } from "@/overlays/AuthPrompt";
 import { AgentApproval } from "@/overlays/AgentApproval";
 import { CommandPalette } from "@/overlays/CommandPalette";
@@ -67,6 +69,8 @@ function RenderView() {
       return null; // rendered persistently in App() so panes/cwd/selection survive navigation
     case "tunnels":
       return <ViewTunnels />;
+    case "mcp":
+      return isDesktopOs() ? <ViewMcp /> : <ViewHosts />;
     case "known":
       return <ViewKnown />;
     case "recordings":
@@ -606,6 +610,7 @@ export function App() {
         {showApp && <MobileApp />}
         <EntryOverlays />
         {showApp && <Modals />}
+        {showApp && isDesktopOs() && <McpApproval />}
         {showApp && <AuthPrompt />}
         {showApp && <AgentApproval />}
         {showApp && <CommandPalette />}
@@ -693,7 +698,8 @@ export function App() {
       {/* overlays */}
       <EntryOverlays />
       {showApp && <Modals />}
-      {showApp && <AuthPrompt />}
+      {showApp && isDesktopOs() && <McpApproval />}
+        {showApp && <AuthPrompt />}
       {showApp && <CommandPalette />}
       {showApp && <SettingsOverlay />}
       {showApp && <ImportPreview />}

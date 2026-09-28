@@ -323,9 +323,10 @@ jobs:
           workspaces: client/src-tauri
 
       - name: Install client npm deps
-        # The lockfile includes native optional packages for every desktop host.
-        # Preserve the tested dependency versions: resolving without it can also
-        # crash npm's dependency resolver before compilation (null edgesOut).
+        # The committed lock includes every supported platform's native optional
+        # packages (Tauri CLI, rolldown and lightningcss). Keep it: resolving a new
+        # dependency tree on each runner is nondeterministic and can crash npm's
+        # peer resolver. npm ci selects the optionals for the current OS/CPU.
         run: npm ci --include=optional --no-audit --no-fund
         working-directory: client
 

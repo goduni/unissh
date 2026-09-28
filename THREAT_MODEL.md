@@ -338,3 +338,73 @@ For the primitives and key hierarchy, see the
 and [`rust-core/crates/sync/README.md`](rust-core/crates/sync/README.md) for the
 verify-before-apply pipeline. To report a vulnerability, see
 [`SECURITY.md`](SECURITY.md).
+
+## Local AI automation (desktop MCP)
+
+The opt-in MCP listener adds a local plaintext boundary from an authenticated AI
+application to a native authorization broker. It binds IPv4 loopback only,
+validates exact Host, rejects Origin/query credentials, and authenticates every
+request. The caller receives only granted opaque target IDs and aliases, owned
+session/task metadata and approved command output. Its connection parameters
+cannot override credentials or destinations. No approval, signing, vault-export
+or terminal-tab attachment tool is exposed. Host trust, Personal destination binding and complete jump
+routes remain Core responsibilities; MCP forbids TOFU for every hop.
+
+An integration token and native consent are separate authorities. Live grants
+require an unlocked native Core and are invalidated by
+security-relevant storage revisions, including synced changes. Final command
+admission is serialized with revocation and Core mutation. Output access is checked
+on every read. A late authentication/output callback cannot restore revoked
+records. Tokens persist locally as digests. Native consent is separately saved in
+versioned local SQLCipher metadata, with an absolute expiry or no expiry. Native
+unlock/restart restores consent only after checking current security records;
+changed records require consent again. Connections and tasks never survive restart.
+An OS lock/suspend prevents restoration until a native unlock/wake; a wake does not
+resume while an observed screen lock remains active. Explicit revoke deletes saved
+consent. Token rotation creates a new integration identity
+and revokes the previous identity so already-authenticated requests cannot inherit
+new permissions. Sharing one token intentionally shares one integration's scope.
+
+A malicious model can request a dangerous command or return misleading output.
+In manual mode, the native UI displays the immutable command and optional cwd
+with escaped controls and requires a separate decision. The explicitly selected
+trusted-application mode bypasses per-command native confirmation for the granted
+targets; it trusts the token holder to apply its own approval policy. An agent's
+claim of user approval is not verified and never enables this mode. Grant edits
+replace the old scope and revoke its runs/sessions. No shell safety classifier or
+output-redaction claim is made. Authorized remote shell authority can read secrets
+or cause irreversible effects in either mode. Output can leave the device through the chosen AI provider. Closing an
+SSH channel cannot recall those effects or guarantee remote child termination.
+
+Local malware, a hostile OS administrator, and port impersonation are not isolated
+by localhost. Bearer authentication authenticates the caller, not the server; an
+impostor listener can capture tokens. Browser requests are rejected, but an
+arbitrary local process can forge headers. The feature assumes a trusted desktop
+environment and offers no cross-user sandbox guarantee. Only observed native OS
+lock/suspend events can revoke immediately; desktops without those signals still
+have manual vault lock and native grant/runtime deadlines. Separate loopback
+namespaces (remote IDEs/containers/WSL) are unsupported, not exposed through LAN.
+
+This feature changes neither ciphertext sync nor vault/AAD formats. Its separately
+versioned local digest configuration is not synced. Temporary SQLite revision
+triggers observe security-relevant writes without a persistent schema migration.
+
+Opt-in host recording also persists MCP command transcripts in encrypted vault
+items. This deliberately extends command/output lifetime beyond the ephemeral
+broker buffer; normal vault sharing, sync and explicit export apply. Recordings
+are bounded operational history, not tamper-proof or crash-durable audit logs.
+Their versioned optional MCP content extension preserves raw stream bytes while
+the standard asciicast preview escapes terminal controls. Lock saves partial
+captures while Core still has keys; late callbacks cannot reopen a saved capture.
+Recording-only local item writes do not change authorization snapshots. Changes
+into or out of recording type still do, and external SQLite commits conservatively
+invalidate snapshots regardless of item type. The cryptographic envelope and AAD
+encodings are unchanged.
+
+Command stdin and environment values follow the same untrusted-agent boundary as
+command text: native review/deduplication binds them, input sizes are bounded,
+values are quoted rather than interpolated, and optional host recordings persist
+them encrypted. Caller-owned task discovery excludes those inputs and foreign
+integrations. Native command limits cannot be increased through MCP. Native-only
+retention is off by default and never removes interactive terminal recordings;
+when enabled, its deletion tombstones sync like explicit recording deletions.

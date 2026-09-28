@@ -5,7 +5,7 @@ cross-platform SSH client with zero-knowledge encrypted vaults.
 **This repository is the core only** (a library): no server, no UI. It builds
 and tests standalone (offline).
 
-## Crate map (Milestone 1, steps 1–7)
+## Crate map
 
 ```
 crates/
@@ -16,12 +16,22 @@ crates/
   vault          local vault, Vault Key, per-item keys               [SPEC 5.2–5.3]
   ssh-agent      built-in in-memory agent, mlock/zeroize              [SPEC 10.1]
   ssh-transport  russh: ProxyJump, forwards, TOFU, ssh-config         [SPEC 10.4]
+  local-pty      desktop local shells and terminal I/O
+  sync           encrypted vault synchronization and verification
+  automation     native MCP grants, approvals, revocation and managed SSH exec
+  mcp            authenticated loopback HTTP adapter and nine MCP tool contracts
   ffi            UniFFI contract for the UI (no plaintext keys)       [SPEC 4]
   cli            temporary CLI harness to "kick the tires" on the core
 ```
 
 Every crate ships its own README, a documented public API, and tests
 (including negative ones). Dependencies flow bottom-up; higher layers reuse lower ones.
+
+Desktop MCP uses `mcp` for HTTP and tool contracts, `automation` for native access
+control, and the `automation/core` feature to execute through `ffi`. The adapter
+does not depend on vault storage or SSH credentials. See the
+[automation broker](crates/automation/README.md), [MCP adapter](crates/mcp/README.md)
+and [desktop setup guide](../docs/desktop-mcp.md).
 
 Milestone 1 (steps 1–7, the Definition of Done from the SPEC) is **complete**; on
 top of it the core has been extended with a set of local capabilities (see below) —

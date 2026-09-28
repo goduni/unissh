@@ -136,6 +136,100 @@ fn agent_with_key(priv_pem: &str) -> InMemoryAgent {
 }
 
 #[tokio::test]
+async fn automation_requires_a_pin_and_reuses_one_authenticated_connection() {
+    let (private, public) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&public);
+    let agent = agent_with_key(&private);
+    let storage = Storage::open_in_memory(&[0x51; 32]).unwrap();
+    let mut opts = ConnectOptions::new(
+        "127.0.0.1",
+        sshd.port,
+        "root",
+        Auth::Agent {
+            key_id: b"k".to_vec(),
+        },
+    );
+    opts.require_pinned = true;
+    assert!(matches!(
+        SshClient::connect(&opts, &agent, &storage).await,
+        Err(unissh_ssh_transport::TransportError::HostUntrusted)
+    ));
+    assert!(storage
+        .get_known_host("127.0.0.1", sshd.port)
+        .unwrap()
+        .is_none());
+    // Ordinary interactive TOFU is unchanged; automation can use that trusted pin.
+    opts.require_pinned = false;
+    SshClient::connect(&opts, &agent, &storage)
+        .await
+        .unwrap()
+        .disconnect()
+        .await
+        .unwrap();
+    opts.require_pinned = true;
+    let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+    let first = client
+        .exec("export UNISSH_MCP_TEST=changed; cd /tmp; printf '%s' \"$SSH_CONNECTION\"")
+        .await
+        .unwrap();
+    let second = client
+        .exec("test -z \"$UNISSH_MCP_TEST\" && printf '%s' \"$SSH_CONNECTION\"")
+        .await
+        .unwrap();
+    assert!(!first.stdout.is_empty());
+    assert_eq!(first.stdout, second.stdout);
+    assert_eq!(second.exit_status, Some(0));
+    client.disconnect().await.unwrap();
+    let one = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+    let one_id = one
+        .exec("printf '%s' \"$SSH_CONNECTION\"")
+        .await
+        .unwrap()
+        .stdout;
+    one.disconnect().await.unwrap();
+    let two = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+    let two_id = two
+        .exec("printf '%s' \"$SSH_CONNECTION\"")
+        .await
+        .unwrap()
+        .stdout;
+    two.disconnect().await.unwrap();
+    assert_ne!(one_id, two_id);
+}
+
+#[tokio::test]
+async fn automation_rejects_unknown_bastion_before_target_authentication() {
+    let (private, public) = generate_ed25519_openssh().unwrap();
+    let bastion = TestSshd::start(&public);
+    let target = TestSshd::start(&public);
+    let agent = agent_with_key(&private);
+    let storage = Storage::open_in_memory(&[0x52; 32]).unwrap();
+    let mut hop = ConnectOptions::new(
+        "127.0.0.1",
+        bastion.port,
+        "root",
+        Auth::Agent {
+            key_id: b"k".to_vec(),
+        },
+    );
+    let mut dest = ConnectOptions::new(
+        "127.0.0.1",
+        target.port,
+        "root",
+        Auth::Agent {
+            key_id: b"k".to_vec(),
+        },
+    );
+    hop.require_pinned = true;
+    dest.require_pinned = true;
+    assert!(matches!(
+        SshClient::connect_through(&[hop], &dest, &agent, &storage).await,
+        Err(unissh_ssh_transport::TransportError::HostUntrusted)
+    ));
+    assert!(storage.list_known_hosts().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn connect_exec_and_tofu_pinning() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);

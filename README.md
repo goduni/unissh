@@ -255,6 +255,10 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 - **Broadcast** (one keystroke stream → N live PTYs, cluster-ssh style).
 - **Fleet-push** a file to many hosts over SFTP in one shot.
 
+**Desktop MCP automation**
+- Opt-in, authenticated **loopback HTTP MCP** lets AI clients run SSH commands on explicitly granted hosts. Native confirmation is the default; trusted execution is an explicit per-application choice.
+- Per-application access, command activity, cancellation and optional encrypted recordings reuse the Rust core. Lock and suspend stop active work; no command is replayed on unlock or restart. See [setup, tools and security limits](docs/desktop-mcp.md).
+
 **SFTP & tunnels**
 - Full SFTP, including **resumable** upload/download with live progress and cancel, and **parallel multi-file transfers** over a pooled set of channels.
 - **Tunnels**: local, remote, and dynamic (**SOCKS5**); **ProxyJump** chains.
@@ -347,7 +351,7 @@ This is a single monorepo. The four primary components share one `rust-core` fou
 
 | Path           | What it is                          | Stack                                                              |
 | -------------- | ----------------------------------- | ----------------------------------------------------------------- |
-| `rust-core/`   | Shared SSH + crypto + vault core    | Rust (workspace of 9 crates), UniFFI, SQLCipher, `russh`          |
+| `rust-core/`   | Shared SSH + crypto + vault core    | Rust (12 crates), UniFFI, SQLCipher, `russh`, desktop MCP         |
 | `client/`      | Cross-platform GUI client           | **Tauri v2** + **React 18** + TypeScript + xterm.js               |
 | `server/`      | Self-hosted zero-knowledge server   | Rust, axum 0.8, sqlx (SQLite/Postgres), rustls (TLS 1.3)          |
 | `server-ui/`   | Self-hosted admin web panel         | React 18 + Vite SPA + real `rust-core` crypto compiled to **wasm**|

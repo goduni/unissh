@@ -373,3 +373,63 @@ you can *decrypt*). These are known and explained in
 isn't a vulnerability, but a way to make a documented limitation *worse* than
 documented is — including anything that lets the SSO/escrow surface **yield a
 decryption key**, which it must never do.
+
+## Embedded desktop MCP
+
+MCP is an opt-in loopback HTTP API inside the desktop application. A random
+256-bit bearer token identifies a registered integration; its versioned local
+configuration stores only a SHA-256 digest. Tokens never grant SSH access alone.
+Native revocable grants select saved targets and a command approval mode.
+Manual mode (the default) requires native confirmation of an immutable command
+and optional working directory. Trusted mode is explicitly selected in the native
+UI and permits immediate execution with the SSH user's authority; the external
+application controls its own confirmations, which UniSSH cannot attest. MCP calls
+cannot set or change grant policy. Both modes share final execution admission,
+revision checks, deadlines and revocation. SSH keys, server passwords and authentication answers
+are not exposed as MCP tools, arguments or results. Every hop requires a pinned
+host key and uses the existing Core credential and Personal identity checks.
+
+Native consent may have no time limit or an absolute expiry. Device-local version 1
+consent metadata is stored inside SQLCipher; it contains target references/display
+metadata, policy and a security-state fingerprint, never SSH credentials. It is not
+synced. Live grants, sessions and output remain ephemeral and revision-bound.
+Lock, observed screen lock/suspend and exit stop work before cleanup. Native
+unlock/wake/restart can restore consent only while Core is unlocked, the original
+expiry is valid and current security records match. Changed security data requires
+renewed consent. Explicit revoke and token rotation/deletion remove saved consent.
+Connections and commands are never restored/replayed; HTTP cannot resume a native
+suspension or renew consent. Queued native resume callbacks cannot override newer
+lock/revocation events. Full encrypted database snapshot rollback remains outside
+this local consent scheme's guarantees, like other device-local metadata.
+The embedding logger excludes all `rmcp` diagnostic targets at every level,
+including tracing-to-log events: SDK diagnostics can contain raw arguments and
+output. Automation audit messages contain only IDs, decisions, outcomes and byte
+counts; command/output text is not logged.
+
+Loopback HTTP does not provide server authentication or OS-user isolation. A local
+process can impersonate an absent listener and steal its client's token. In manual mode, native
+approval reduces this token's authority but does not make a compromised desktop
+safe. Approved command output may go to the AI provider and can include remote
+secrets. Cancellation cannot guarantee termination of detached remote processes.
+See [desktop MCP setup and limits](docs/desktop-mcp.md) and the threat model.
+
+When a host enables session recording, authorized MCP commands are also persisted
+as encrypted recording items in that host's vault. Command text, cwd, application
+label and captured output then follow normal vault sync/export policy. The caller
+has no recording control or retrieval tool. Core bounds raw capture and event
+count, records partial/outcome metadata, and flushes active captures before lock
+releases keys; it does not spool plaintext to disk. Process crashes and storage
+failures can still lose recordings. Only local mutations confined to recording
+items (type 10) are exempt from automation revision invalidation; type transitions,
+credential/target/trust changes and external-connection writes still invalidate it.
+
+MCP initial stdin and environment values are bounded, included in immutable
+manual review and request-key matching, and never treated as SSH authentication.
+Environment names use portable POSIX identifiers and values are quoted literally.
+Native grants bound command duration; tool arguments cannot raise that ceiling.
+Recordings include these inputs when host recording is enabled. Their native
+retention preference defaults to no automatic deletion; configured cleanup only
+deletes authenticated MCP recording items and propagates ordinary sync tombstones.
+Access diagnostics and command discovery expose only the authenticated integration's
+policy and retained tasks. Progress notifications contain fixed text and elapsed
+time, stop with their request, and never extend grants.

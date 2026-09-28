@@ -231,3 +231,38 @@ The contract includes `Core`, `sshExec`, `generateSshKey`, `JumpHost`,
 The [`unissh-cli`](../cli) crate (the `unissh` binary) uses this facade for an end-to-end
 scenario from the terminal: `init → create-vault → gen-key → exec` (with `--jump` for
 ProxyJump).
+
+## Native automation connections
+
+The Rust-only `automation` module resolves saved profiles through the existing
+Personal identity contract and opens a `ManagedConnection` without a PTY. Each
+`exec` uses an independent channel on that transport and closes stdin.
+`exec_with_input` writes bounded initial UTF-8 input before EOF on that channel. Policy
+contains a native cancellation flag, deadline and storage revision; each hop
+requires an already pinned host key. Revision checks guard credential use and
+final dispatch; a native monitor closes invalid connections independently of UI
+polling. The type is not a generic UniFFI dispatcher or a secret-export DTO.
+
+`unissh-automation` owns grants, per-command approval, idempotency and output;
+Core owns authentication, signing, transport and revision serialization.
+
+The Rust-only `automation_recording` module captures host-enabled MCP command
+recordings. Transport callbacks take only a bounded recorder buffer lock;
+finalization takes Core state before the buffer and writes a normal encrypted
+recording item. CoreState flushes its active registry before keys are dropped on
+lock/replacement. Stored recording metadata has an optional MCP field; existing
+records remain readable. Asciicast v2 exports carry a version 1 `unissh_mcp`
+header extension with original stream bytes in addition to the readable preview.
+
+MCP recording preferences are native device-local settings: 16–512 KiB raw output
+per command and optional 1–3,650 day retention (disabled by default). Retention
+only deletes decrypted MCP recording items, using ordinary vault tombstones.
+Records preserve command inputs; command metadata is optional for compatibility,
+and legacy command search reads the existing cast header without rewriting it.
+
+Native MCP consent uses versioned `mcp.access.v1` instance metadata inside SQLCipher,
+not vault items or synced settings. A stable security-state fingerprint excludes
+recordings and sync cursors/dirty flags. It detects relevant changes across process
+restarts while ordinary in-memory revisions still protect live SSH dispatch.
+Save-time recording cleanup decrypts at most four payloads per minute per vault;
+listing applies retention during its existing payload read pass.

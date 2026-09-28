@@ -59,9 +59,8 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
-      # Use the committed lockfile, as the Tauri build does, so checks and
-      # bundles use the same dependency versions.
-      - run: npm ci --no-audit --no-fund
+      # Use the same locked dependency tree as the native client builds.
+      - run: npm ci --include=optional --no-audit --no-fund
         working-directory: client
 
       - run: npm run lint

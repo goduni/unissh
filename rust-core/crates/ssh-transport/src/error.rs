@@ -7,6 +7,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum TransportError {
+    /// Automation requires an already trusted host key before authentication.
+    #[error("SSH host key is not trusted")]
+    HostUntrusted,
     /// SSH protocol error (russh).
     #[error("ssh protocol error: {0}")]
     Russh(#[from] russh::Error),

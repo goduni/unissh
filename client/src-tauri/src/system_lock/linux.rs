@@ -135,8 +135,8 @@ fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
                     // are finished and the machine may sleep.
                     drop(inhibitor.take());
                 } else {
-                    // Back from sleep, and the vault is already locked — nothing
-                    // to announce. Just re-arm for the next time.
+                    super::wake(app);
+                    // Re-arm the inhibitor for the next sleep.
                     inhibitor = take_sleep_inhibitor(&retake).ok();
                 }
             }

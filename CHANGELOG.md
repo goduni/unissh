@@ -32,7 +32,26 @@ starts with `0.`:
 
 ## [Unreleased]
 
-**Compatibility:** vault/database formats and server protocol unchanged.
+### Added
+
+- MCP activity search across full commands, hosts and directories; retained output
+  now lasts until application exit or grant cleanup instead of expiring after 10 minutes.
+
+- Desktop MCP activity with command previews, host context, timing, exit status,
+  filters and expandable live stdout/stderr independent of session recording.
+
+- MCP host context, caller-owned command discovery, access/limit diagnostics,
+  bounded stdin and environment variables, native command-duration limits and
+  opt-in progress notifications during pending calls.
+- Host-enabled encrypted MCP command recordings with playback, search, failure
+  filtering, CAST/TXT/JSON export and device-local capture/retention controls.
+  Retention is disabled by default; terminal recordings are unaffected. Existing
+  recordings remain readable; vault encryption and server protocols are unchanged.
+
+- Opt-in embedded desktop MCP over authenticated loopback HTTP, with temporary
+  host grants, per-command native confirmation, persistent SSH sessions or a
+  separate connection per command, bounded output polling and cancellation.
+  See [setup and security limits](docs/desktop-mcp.md).
 
 ### Changed
 
@@ -43,7 +62,21 @@ starts with `0.`:
   browser builds. Frozen Argon2 0.5.3 key vectors verify password-derived key
   compatibility; no vault migration is required.
 
+- Desktop MCP is now a main-menu workspace with per-application access, activity
+  and token management. Select a vault before choosing its hosts.
+- MCP access selection shows vaults alongside their hosts, offers duration presets
+  and custom minutes/hours/days, and includes client-specific connection guides.
+- MCP host grants can have no time limit. Tokens remain valid until rotation or
+  deletion. Native access choices now persist in version 1 device-local encrypted
+  metadata and resume after unlock/restart if security data is unchanged. Timed
+  access retains its original expiry; revoke/rotation deletes saved permission.
+  Existing databases remain readable; vault/wire encodings are unchanged.
+  MCP session results return a nullable `expires_at` for unbounded grants.
+
 ### Fixed
+
+- MCP access status reports no time-based output expiry, matching retained command
+  history; `limits.output_retention_seconds` is now nullable.
 
 - Existing self-hosted identities can sign in directly from a fresh device's
   onboarding screen. Escrow and Emergency-Kit recovery remember the installed
@@ -52,11 +85,26 @@ starts with `0.`:
   bare Ctrl letters to the terminal. Section, help and zoom shortcuts use the
   same modifier and recognize shifted physical keys; the shortcut sheet matches.
 
+- TXT recording exports preserve visible text between terminal OSC sequences.
+- MCP recording cleanup advances in bounded, throttled batches on save and shares
+  the existing history read pass, avoiding a full archive scan per command.
+
+- Authentication prompt cancellation preserves other queued requests; MCP command
+  approvals wait for authentication dialogs. Failed MCP connections dismiss their
+  pending authentication prompts, and active HTTP requests survive connection reuse.
+
 ### Security
 
 - Update rustls to 0.23.45 in the server/core and native client lockfiles to
   reject TLS 1.3 handshake messages crossing encryption-level boundaries
   (RUSTSEC-2026-0285).
+
+### Compatibility
+
+- Vault format, AAD encodings and encrypted-sync protocol are unchanged. MCP
+  registration uses a separate version-1 local digest configuration; mobile has
+  no MCP listener. Desktop builds require Rust 1.95 or newer (the pinned project
+  toolchain satisfies this).
 
 ## [0.4.0] — 2026-08-25
 

@@ -1,0 +1,13 @@
+.recording-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 0 22px 16px; }
+.recording-search { flex: 1 1 280px; min-width: 0; }
+.recording-formats { border: 0; padding: 0; margin: 0; }
+.recording-formats legend { margin-bottom: 6px; }
+.recording-settings { flex-basis: 100%; color: var(--mcp-muted); }
+.recording-settings > summary { cursor: pointer; width: fit-content; padding: 8px 0; font-size: 13px; }
+.recording-settings .mcp-access-editor { max-width: 680px; }
+@media (max-width: 600px) { .recording-toolbar { padding-inline: 16px; } }
+
+.recording-settings .mcp-duration-amount { width: 100%; }
+.recording-settings .mcp-duration-amount > input { width: 8rem; }
+.recording-settings .mcp-duration-hint { margin: 0; line-height: 1.5; }
+.recording-toolbar .mcp-check { font-size: 0.875rem; }

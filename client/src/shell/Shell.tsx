@@ -12,7 +12,7 @@ import { useExternalEdits } from "@/sftp/external-edit";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { hostDrag } from "@/support/hostDrag";
-import { isMac } from "@/bridge/platform";
+import { isDesktopOs, isMac } from "@/bridge/platform";
 import { useFullscreen, useMaximized, useWindowControls } from "@/shell/WindowChrome";
 import type { ControlButton } from "@/shell/windowControls";
 import { useNarrow } from "@/store/responsive";
@@ -733,6 +733,7 @@ const RAIL_LABEL_KEY: Partial<Record<Route, string>> = {
   keys: "nav.keys",
   tunnels: "nav.tunnels",
   known: "nav.known",
+  mcp: "mcp.tab",
   recordings: "nav.recordings",
   snippets: "nav.snippets",
 };
@@ -832,6 +833,7 @@ function SidebarRail({ onExpand }: { onExpand?: () => void }) {
           the rail is what says so from anywhere else. */}
       {item("folders", "sftp", editsNeedingAttention ? p.amber : undefined)}
       {item("radio", "run")}
+      {isDesktopOs() && item("link", "mcp")}
       {item("key", "keys")}
       {item("branch", "tunnels")}
       {item("shieldcheck", "known")}
@@ -1026,6 +1028,7 @@ export function Sidebar({
             onClick={() => ctx.go("sftp")}
           />
           <NavItem icon="radio" label={t("nav.run")} active={RUN_ROUTES.includes(route)} onClick={() => ctx.go("run")} />
+          {isDesktopOs() && <NavItem icon="link" label={t("mcp.tab")} active={route === "mcp"} onClick={() => ctx.go("mcp")} />}
         </NavGroup>
         <NavGroup label={t("shell.vaultNetworkHeader")}>
           {/* Sidebar numbers are LIVE state (open terminals, active tunnels) or

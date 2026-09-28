@@ -12,6 +12,8 @@ import * as api from "@/bridge/api";
 import { toast } from "@/store/toast";
 import { useTranslation, tDyn } from "@/i18n";
 
+import { isDesktopOs } from "@/bridge/platform";
+
 interface NavCmd {
   id: string;
   icon: IconName;
@@ -28,6 +30,7 @@ interface ActionCmd {
 }
 
 const CMD_NAV: NavCmd[] = [
+  { id: "n-mcp", icon: "link", labelKey: "mcp.tab", subKey: "mcp.description", route: "mcp" },
   { id: "n-hosts", icon: "server", labelKey: "nav.allHosts", subKey: "command.nav.hosts", route: "hosts" },
   { id: "n-terminal", icon: "terminal", labelKey: "nav.terminals", subKey: "command.nav.terminal", route: "terminal" },
   { id: "n-sftp", icon: "folders", labelKey: "nav.sftp", subKey: "command.nav.sftp", route: "sftp" },
@@ -123,7 +126,7 @@ export function CommandPalette() {
         kind: "host",
         host: h,
       }));
-    const navItems: FlatItem[] = CMD_NAV.map((c) => ({
+    const navItems: FlatItem[] = CMD_NAV.filter(c => c.route !== "mcp" || (isDesktopOs() && device !== "mobile")).map((c) => ({
       id: c.id,
       icon: c.icon,
       label: tDyn(c.labelKey),

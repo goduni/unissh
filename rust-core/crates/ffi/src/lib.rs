@@ -58,6 +58,8 @@ use unissh_vault::{
     seal_account_payload, sign_account_state, verify_chain_to_epoch, Member, Vault,
 };
 
+pub mod automation;
+pub mod automation_recording;
 mod ssh_include;
 
 uniffi::setup_scaffolding!();
@@ -130,6 +132,9 @@ fn debug_assert_off_the_runtime(what: &str) {
 /// FFI-boundary errors.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum FfiError {
+    /// Automation cannot learn host keys without a user trust decision.
+    #[error("SSH host key is not trusted")]
+    HostUntrusted,
     /// The core is locked.
     #[error("core is locked")]
     Locked,
@@ -323,7 +328,7 @@ pub struct ConnectionProfile {
     /// meaningless without saying *where*, and a global flag would mean running
     /// it on every host — which is how a convenience becomes an accident.
     pub startup_snippet_ids: Vec<String>,
-    /// Record interactive sessions with this host.
+    /// Record interactive sessions and MCP commands with this host.
     ///
     /// Per host rather than global: recording production is a requirement,
     /// recording a homelab is noise, and unlike an algorithm policy there is a
@@ -701,6 +706,8 @@ struct StoredRecording {
     started_unix: u64,
     duration_secs: f64,
     truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp: Option<McpRecordingMeta>,
     /// The asciicast v2 document.
     asciicast: String,
     #[serde(flatten)]
@@ -722,6 +729,8 @@ struct StoredRecordingMeta {
     started_unix: u64,
     duration_secs: f64,
     truncated: bool,
+    #[serde(default)]
+    mcp: Option<McpRecordingMeta>,
 }
 
 /// Serializable body of a host-chain reference (B2.2).
@@ -1287,6 +1296,38 @@ struct CoreState {
     /// Cache of decrypted vault names (vault_id → name), so that `list_vaults` does not
     /// perform an HPKE VK unwrap for every vault on every call.
     vault_names: HashMap<Vec<u8>, String>,
+    automation_recordings: HashMap<String, Arc<automation_recording::CommandRecording>>,
+    recording_retention: Mutex<HashMap<Vec<u8>, automation_recording::RetentionSweep>>,
+}
+
+impl Drop for CoreState {
+    fn drop(&mut self) {
+        // Still have the storage and keys. No callback acquires Core state while
+        // holding a recorder lock; transport workers can only append to buffers.
+        let recordings = std::mem::take(&mut self.automation_recordings);
+        for recording in recordings.into_values() {
+            recording.save(self, "interrupted");
+        }
+    }
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct McpRecordingMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub application: String,
+    pub outcome: String,
+    pub exit_code: Option<u32>,
+}
+
+impl std::fmt::Debug for McpRecordingMeta {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpRecordingMeta")
+            .field("command", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Root core object for the UI. Manages a single local instance.
@@ -1421,6 +1462,8 @@ impl Core {
             keyset: unlocked,
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
+            automation_recordings: HashMap::new(),
+            recording_retention: Mutex::new(HashMap::new()),
         });
         log::info!("instance created (password-protected: {has_password})");
         // Emergency Kit: we zeroize the intermediate hex copy; the string returned through the FFI
@@ -1506,6 +1549,8 @@ impl Core {
             keyset: unlocked,
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
+            automation_recordings: HashMap::new(),
+            recording_retention: Mutex::new(HashMap::new()),
         });
         log::info!("instance unlocked");
         Ok(())
@@ -2208,6 +2253,8 @@ impl Core {
             keyset: unlocked,
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
+            automation_recordings: HashMap::new(),
+            recording_retention: Mutex::new(HashMap::new()),
         });
         log::info!("instance unlocked from server keyset");
         Ok(())
@@ -2427,6 +2474,8 @@ impl Core {
             keyset: unlocked,
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
+            automation_recordings: HashMap::new(),
+            recording_retention: Mutex::new(HashMap::new()),
         });
         // The SHARED account Secret Key (identical on all devices, model A):
         // we return hex so the Tauri layer can store it in THIS device's keychain
@@ -2807,6 +2856,7 @@ impl Core {
         }
         let known_hosts = StateKnownHosts {
             state: Arc::clone(&self.state),
+            policy: None,
         };
         self.rt
             .block_on(trust_host_key(
@@ -4017,15 +4067,45 @@ impl Core {
                 &resolve_vid(&state.storage, &vault_id),
             )
             .map_err(FfiError::other)?;
+            let cutoff = automation_recording::retention_cutoff(state)?;
             let mut out = Vec::new();
             for m in vault.list_items().map_err(FfiError::other)? {
                 if m.item_type != ITEM_TYPE_RECORDING {
                     continue;
                 }
                 if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content) {
+                    if let Ok(mut r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content)
+                    {
+                        if r.mcp.is_some() && cutoff.is_some_and(|cutoff| r.started_unix < cutoff) {
+                            vault.delete_item(&m.item_id).map_err(map_vault_err)?;
+                            continue;
+                        }
+                        if let Some(meta) = r.mcp.as_mut().filter(|m| m.command.is_none()) {
+                            #[derive(serde::Deserialize)]
+                            struct CommandHeader {
+                                unissh_mcp: Option<CommandText>,
+                            }
+                            #[derive(serde::Deserialize)]
+                            struct CommandText {
+                                command: Option<String>,
+                            }
+                            if let Ok(legacy) =
+                                serde_json::from_slice::<StoredRecording>(&item.content)
+                            {
+                                meta.command = legacy
+                                    .asciicast
+                                    .lines()
+                                    .next()
+                                    .and_then(|line| {
+                                        serde_json::from_str::<CommandHeader>(line).ok()
+                                    })
+                                    .and_then(|header| header.unissh_mcp)
+                                    .and_then(|m| m.command);
+                            }
+                        }
                         out.push(RecordingMeta {
                             recording_id: String::from_utf8_lossy(&m.item_id).to_string(),
+                            mcp: r.mcp,
                             label: r.label,
                             host: r.host,
                             user: r.user,
@@ -5851,6 +5931,7 @@ impl Core {
 /// same handshake needs to finish.
 struct StateKnownHosts {
     state: Arc<Mutex<Option<CoreState>>>,
+    policy: Option<automation::ConnectionPolicy>,
 }
 
 impl unissh_ssh_transport::KnownHosts for StateKnownHosts {
@@ -5861,6 +5942,9 @@ impl unissh_ssh_transport::KnownHosts for StateKnownHosts {
     ) -> Result<Option<Vec<u8>>, unissh_ssh_transport::TransportError> {
         let guard = lock_recover(&self.state);
         let st = guard.as_ref().ok_or_else(locked_mid_connect)?;
+        if let Some(policy) = &self.policy {
+            policy.check(st).map_err(|_| locked_mid_connect())?;
+        }
         Ok(st.storage.get_known_host(host, port)?)
     }
 
@@ -5872,6 +5956,9 @@ impl unissh_ssh_transport::KnownHosts for StateKnownHosts {
     ) -> Result<(), unissh_ssh_transport::TransportError> {
         let guard = lock_recover(&self.state);
         let st = guard.as_ref().ok_or_else(locked_mid_connect)?;
+        if let Some(policy) = &self.policy {
+            policy.check(st).map_err(|_| locked_mid_connect())?;
+        }
         Ok(st.storage.put_known_host(host, port, key)?)
     }
 }
@@ -5879,12 +5966,16 @@ impl unissh_ssh_transport::KnownHosts for StateKnownHosts {
 /// Signing source backed by the shared core state, on the same terms.
 struct StateKeySource {
     state: Arc<Mutex<Option<CoreState>>>,
+    policy: Option<automation::ConnectionPolicy>,
 }
 
 impl unissh_ssh_transport::KeySource for StateKeySource {
     fn public_key_openssh(&self, key_id: &[u8]) -> Option<String> {
         let guard = lock_recover(&self.state);
         let st = guard.as_ref()?;
+        if let Some(policy) = &self.policy {
+            policy.check(st).ok()?;
+        }
         st.agent
             .public_key(key_id)
             .and_then(|k| k.to_openssh().ok())
@@ -5893,6 +5984,9 @@ impl unissh_ssh_transport::KeySource for StateKeySource {
     fn certificate_openssh(&self, key_id: &[u8]) -> Option<String> {
         let guard = lock_recover(&self.state);
         let st = guard.as_ref()?;
+        if let Some(policy) = &self.policy {
+            policy.check(st).ok()?;
+        }
         st.agent
             .certificate(key_id)
             .and_then(|c| c.to_openssh().ok())
@@ -5905,6 +5999,9 @@ impl unissh_ssh_transport::KeySource for StateKeySource {
     ) -> Result<(String, Vec<u8>), unissh_ssh_transport::TransportError> {
         let guard = lock_recover(&self.state);
         let st = guard.as_ref().ok_or_else(locked_mid_connect)?;
+        if let Some(policy) = &self.policy {
+            policy.check(st).map_err(|_| locked_mid_connect())?;
+        }
         let sig = st.agent.sign(key_id, data)?;
         Ok((sig.algorithm, sig.signature))
     }
@@ -5940,12 +6037,46 @@ fn connect_with_state(
     user: String,
     agent_forward: bool,
 ) -> Result<SshClient, FfiError> {
+    connect_with_policy(
+        state,
+        rt,
+        prompter,
+        approver,
+        auth,
+        jumps,
+        proxy,
+        host,
+        port,
+        user,
+        agent_forward,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn connect_with_policy(
+    state: &Arc<Mutex<Option<CoreState>>>,
+    rt: &tokio::runtime::Runtime,
+    prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
+    approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    auth: &AuthMethod,
+    jumps: &[JumpHost],
+    proxy: Option<&ProxyConfig>,
+    host: String,
+    port: u16,
+    user: String,
+    agent_forward: bool,
+    policy: Option<&automation::ConnectionPolicy>,
+) -> Result<SshClient, FfiError> {
     // Cloned out before the state lock is taken: the prompt fires while that lock
     // is held (see the note above), so reaching back for another lock here would
     // be one more chance to deadlock for no benefit.
     let prompter = lock_recover(prompter).clone();
     let mut guard = lock_recover(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;
+    if let Some(policy) = policy {
+        policy.check(st)?;
+    }
     let mut chain = Vec::with_capacity(jumps.len());
     // A referenced bastion (B2.2) carries its own proxy: if hop #1 is only
     // reachable through one, that is the proxy the first TCP dial needs. Kept
@@ -6025,6 +6156,7 @@ fn connect_with_state(
             (Some(key_id), Some(approver)) => {
                 let keys: Arc<dyn unissh_ssh_transport::KeySource> = Arc::new(StateKeySource {
                     state: Arc::clone(state),
+                    policy: policy.cloned(),
                 });
                 if let Some(public) = keys.public_key_openssh(&key_id) {
                     target =
@@ -6057,21 +6189,34 @@ fn connect_with_state(
     // outright. The transport now reaches storage and the agent through
     // `KnownHosts` / `KeySource`, which take the lock per operation and release
     // it immediately.
+    if policy.is_some() {
+        target.require_pinned = true;
+        for hop in &mut chain {
+            hop.require_pinned = true;
+        }
+    }
     drop(guard);
 
     let known_hosts = StateKnownHosts {
         state: Arc::clone(state),
+        policy: policy.cloned(),
     };
     let keys = StateKeySource {
         state: Arc::clone(state),
+        policy: policy.cloned(),
     };
-    rt.block_on(SshClient::connect_through(
-        &chain,
-        &target,
-        &keys,
-        &known_hosts,
-    ))
-    .map_err(map_transport_err)
+    rt.block_on(async {
+        let connect = SshClient::connect_through(&chain, &target, &keys, &known_hosts);
+        if let Some(policy) = policy {
+            tokio::select! {
+                biased;
+                _ = policy.invalidated(state) => { policy.cancel.cancel(); Err(FfiError::Locked) },
+                result = connect => result.map_err(map_transport_err),
+            }
+        } else {
+            connect.await.map_err(map_transport_err)
+        }
+    })
 }
 
 /// Linear backoff: the delay before attempt `attempt` (0-based) = `base_ms *
@@ -6390,6 +6535,7 @@ fn with_prompter(opts: ConnectOptions, prompter: Option<&Arc<dyn AuthPrompter>>)
 
 fn map_transport_err(e: unissh_ssh_transport::TransportError) -> FfiError {
     match e {
+        unissh_ssh_transport::TransportError::HostUntrusted => FfiError::HostUntrusted,
         // The user locked the app mid-connect: the UI already knows what to do
         // with Locked, and dressing it as an SSH failure would send them looking
         // at the host.
@@ -7146,6 +7292,7 @@ pub struct SystemAgentKeyFfi {
 /// A recorded session, without its body — for listing.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct RecordingMeta {
+    pub mcp: Option<McpRecordingMeta>,
     /// Item id in the vault.
     pub recording_id: String,
     /// Label, usually the host's.
@@ -7737,6 +7884,7 @@ impl RecordingSaver {
             duration_secs: duration,
             truncated,
             asciicast: body,
+            mcp: None,
             extra: BTreeMap::new(),
         };
         let json = match serde_json::to_vec(&stored) {
@@ -8294,6 +8442,13 @@ impl unissh_ssh_transport::SftpProgress for ProgressBridge {
 #[derive(uniffi::Object)]
 pub struct CancelToken {
     flag: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl CancelToken {
+    /// Native automation shares cancellation without exposing it through UniFFI.
+    pub fn from_shared(flag: Arc<std::sync::atomic::AtomicBool>) -> Arc<Self> {
+        Arc::new(Self { flag })
+    }
 }
 
 #[uniffi::export]

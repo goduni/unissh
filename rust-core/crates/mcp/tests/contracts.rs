@@ -1,0 +1,169 @@
+use serde_json::{json, Value};
+use unissh_mcp::contract::{parse, tools, InvalidRequest, RunCommand, ToolRequest};
+
+fn request(args: Value) -> Result<ToolRequest, InvalidRequest> {
+    parse("run_command", args.as_object().unwrap().clone())
+}
+
+#[test]
+fn run_modes_are_explicit_and_disjoint() {
+    assert!(matches!(
+        request(json!({"session_id":"s", "command":"pwd", "request_key":"k"})),
+        Ok(ToolRequest::RunCommand(RunCommand::Existing(_)))
+    ));
+    assert!(matches!(
+        request(json!({"session_id":null, "target_id":"t", "command":"pwd", "request_key":"k"})),
+        Ok(ToolRequest::RunCommand(RunCommand::OneShot(_)))
+    ));
+    for args in [
+        json!({"target_id":"t", "command":"pwd", "request_key":"k"}),
+        json!({"session_id":null, "command":"pwd", "request_key":"k"}),
+        json!({"session_id":"s", "target_id":"t", "command":"pwd", "request_key":"k"}),
+        json!({"session_id":12, "command":"pwd", "request_key":"k"}),
+        json!({"session_id":"", "command":"pwd", "request_key":"k"}),
+        json!({"session_id":"s", "command":"pwd"}),
+    ] {
+        assert!(
+            matches!(request(args.clone()), Err(InvalidRequest::InvalidArguments)),
+            "accepted {args}"
+        );
+    }
+}
+
+#[test]
+fn runtime_rejects_credentials_identity_overrides_and_invalid_limits() {
+    for field in [
+        "password",
+        "private_key",
+        "hostname",
+        "username",
+        "integration_id",
+        "grant_id",
+        "env",
+        "approval_mode",
+        "approved",
+    ] {
+        let mut args = json!({"session_id":"s", "command":"pwd", "request_key":"k"});
+        args[field] = json!("should-never-be-accepted");
+        assert!(request(args).is_err(), "accepted {field}");
+    }
+    assert!(
+        request(json!({"session_id":"s","command":"x".repeat(32769),"request_key":"k"})).is_err()
+    );
+    assert!(
+        request(json!({"session_id":"s","command":"true","request_key":"x".repeat(129)})).is_err()
+    );
+    assert!(request(json!({"session_id":"s","command":"true\0false","request_key":"k"})).is_err());
+    for timeout in [json!(0), json!(86400001), json!(-1), json!(1.5), json!("1")] {
+        assert!(request(
+            json!({"session_id":"s", "command":"pwd", "request_key":"k", "timeout_ms":timeout})
+        )
+        .is_err());
+    }
+    assert!(parse(
+        "get_command",
+        json!({"run_id":"r", "wait_ms":30001})
+            .as_object()
+            .unwrap()
+            .clone()
+    )
+    .is_err());
+    assert!(matches!(
+        parse("reveal_password", Default::default()),
+        Err(InvalidRequest::UnknownTool)
+    ));
+}
+
+#[test]
+fn discovery_describes_only_the_supported_tools() {
+    let tools = tools();
+    let names: Vec<_> = tools.iter().map(|t| t.name.as_ref()).collect();
+    assert_eq!(
+        names,
+        [
+            "get_access_status",
+            "list_commands",
+            "list_targets",
+            "open_ssh_session",
+            "list_ssh_sessions",
+            "close_ssh_session",
+            "run_command",
+            "get_command",
+            "cancel_command"
+        ]
+    );
+    let schema = serde_json::to_value(&tools[6].input_schema).unwrap();
+    assert_eq!(schema["type"], "object");
+    for variant in ["ExistingSessionCommand", "OneShotCommand"] {
+        let definition = &schema["$defs"][variant];
+        assert_eq!(definition["additionalProperties"], false);
+        assert!(definition["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("session_id")));
+    }
+    assert_eq!(
+        schema["$defs"]["OneShotCommand"]["properties"]["session_id"]["type"],
+        "null"
+    );
+}
+
+#[test]
+fn cwd_and_wait_limits_are_explicit_without_accepting_approval_overrides() {
+    for session in [json!("s"), Value::Null] {
+        let mut args = json!({"session_id":session,"command":"pwd","request_key":"k","cwd":"/srv/space ' $HOME","wait_ms":30000});
+        if session.is_null() {
+            args["target_id"] = json!("t");
+        }
+        assert!(request(args.clone()).is_ok());
+        for cwd in [
+            json!(""),
+            json!("relative"),
+            json!("~/project"),
+            json!("/bad\0path"),
+            json!(format!("/{}", "x".repeat(32768))),
+            json!(12),
+        ] {
+            args["cwd"] = cwd;
+            assert!(request(args.clone()).is_err());
+        }
+        args["cwd"] = Value::Null;
+        for wait in [json!(30001), json!(-1), json!(1.5), json!("100")] {
+            args["wait_ms"] = wait;
+            assert!(request(args.clone()).is_err());
+        }
+    }
+    for ms in [0, 30000, 30001] {
+        let result = parse(
+            "open_ssh_session",
+            json!({"target_id":"t","request_key":"open","wait_ms":ms})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(result.is_ok(), ms <= 30000);
+    }
+}
+
+#[test]
+fn command_input_is_bounded_and_environment_names_cannot_inject_shell_syntax() {
+    let base = json!({"session_id":"s","command":"cat","request_key":"k"});
+    for env in [
+        json!({"BAD-NAME":"x"}),
+        json!({"1BAD":"x"}),
+        json!({"A;touch /tmp/x":"x"}),
+        json!({"OK":"x\0"}),
+        json!({"OK":"x".repeat(16385)}),
+    ] {
+        let mut args = base.clone();
+        args["env"] = env;
+        assert!(request(args).is_err());
+    }
+    let mut args = base.clone();
+    args["stdin"] = json!("x".repeat(32769));
+    assert!(request(args).is_err());
+    let mut args = base;
+    args["env"] = json!({"VALUE":"' $(touch /tmp/nope)\n"});
+    args["stdin"] = json!("hello\0world");
+    assert!(request(args).is_ok());
+}
