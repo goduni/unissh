@@ -1,7 +1,6 @@
-// Pure transfer logic — conflict/resume decisions, EMA speed/ETA, and recursive
-// directory enumeration. No bridge calls and no store access here, so this stays
-// easy to reason about (and unit-testable if a runner is ever added). Time is
-// passed in by the caller rather than read from a clock, for the same reason.
+// Transfer logic — conflict/resume decisions, rolling speed/ETA, and recursive
+// directory enumeration through FileSource. No store access; time is passed in
+// by the caller so throughput calculations stay deterministic in tests.
 
 import type { Entry } from "@/store/sftp-types";
 import type { FileSource } from "@/bridge/sources";
@@ -145,8 +144,11 @@ export async function collectTree(
       signal?.throwIfAborted();
       if (!isSafeName(e.name)) continue;
       const childRel = rel ? `${rel}/${e.name}` : e.name;
-      const childAbs = await src.join(absDir, e.name);
       if (e.isDir) {
+        // File entries already have their relative path and size. Only a
+        // directory needs an absolute path for its next listing; local join()
+        // is a native IPC, so doing it for every file serializes large scans.
+        const childAbs = await src.join(absDir, e.name);
         dirs.push(childRel);
         sub.push(visit(childAbs, childRel));
       } else {
@@ -170,8 +172,8 @@ export async function* walk(src: FileSource, root: string, rel = ""): AsyncGener
     // server triggering infinite recursion or a path-traversal write.
     if (!isSafeName(e.name)) continue;
     const childRel = rel ? `${rel}/${e.name}` : e.name;
-    const childAbs = await src.join(root, e.name);
     if (e.isDir) {
+      const childAbs = await src.join(root, e.name);
       yield { relPath: childRel, isDir: true, size: 0 };
       yield* walk(src, childAbs, childRel);
     } else {

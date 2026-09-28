@@ -81,6 +81,7 @@ starts with `0.`:
 - SFTP transfers: stabilize live speed and ETA, exclude skipped/resumed bytes from throughput, interrupt stalled network I/O on cancel, and prevent retries from racing unfinished writes. Replace transfer cards with a collapsible activity list, explicit stop states, and individual history removal.
 - SFTP cancellation now waits for buffered local writes and interrupts channel-pool waits and channel opening; folder status stays waiting until all file conflicts are resolved.
 - Dropping files in an SFTP pane always targets its open directory, including when the pointer is over a folder row.
+- Scanning folders for SFTP transfers skips unnecessary native path calls for individual files, reducing preparation time for large local folders.
 
 - Existing self-hosted identities can sign in directly from a fresh device's
   onboarding screen. Escrow and Emergency-Kit recovery remember the installed
