@@ -55,6 +55,11 @@ starts with `0.`:
 
 ### Changed
 
+- Compact SFTP transfer cards share a bounded grid and header controls.
+- Directory transfers reuse cancellation tokens and parent paths. Remote target
+  checks reuse one listing per directory, with individual checks for ambiguous
+  entries, symlinks and servers that deny directory listing.
+
 - Update russh to 0.63.3 and adapt host-key verification to its new API while
   preserving plain-key TOFU/pinning. Host CA trust remains unsupported; host
   certificates are not negotiated or accepted as ordinary pinned keys.
@@ -75,10 +80,15 @@ starts with `0.`:
 
 ### Fixed
 
+- Resolve all file conflicts in an SFTP folder transfer before starting its file
+  writes, so a sibling write cannot fail and dismiss an unanswered dialog.
+  Preserve metadata and directory-creation failures, and show the failing file
+  in transfer errors.
+
 - MCP access status reports no time-based output expiry, matching retained command
   history; `limits.output_retention_seconds` is now nullable.
 
-- SFTP transfers: stabilize live speed and ETA, exclude skipped/resumed bytes from throughput, interrupt stalled network I/O on cancel, and prevent retries from racing unfinished writes. Replace transfer cards with a collapsible activity list, explicit stop states, and individual history removal.
+- SFTP transfers: stabilize live speed and ETA, exclude skipped/resumed bytes from throughput, interrupt stalled network I/O on cancel, and prevent retries from racing unfinished writes. Add a collapsible transfer queue, explicit stop states, and individual history removal.
 - SFTP cancellation now waits for buffered local writes and interrupts channel-pool waits and channel opening; folder status stays waiting until all file conflicts are resolved.
 - Dropping files in an SFTP pane always targets its open directory, including when the pointer is over a folder row.
 - Scanning folders for SFTP transfers skips unnecessary native path calls for individual files, reducing preparation time for large local folders.

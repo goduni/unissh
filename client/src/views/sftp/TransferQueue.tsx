@@ -50,20 +50,17 @@ function QueueRow({ transfer: item }: { transfer: Transfer }) {
     <li className="transfer-row" data-state={item.state}>
       <div className="transfer-name">
         <Icon name={item.state === "error" || item.stalled ? "alert" : item.state === "done" ? "check" : direction(item)} size={16} />
-        <span className="transfer-filename" title={item.fromPath}>{item.label}</span>
+        <span className="transfer-filename" title={`${leg(item.from)}: ${item.fromPath}\n${leg(item.to)}: ${item.toDir}`}>{item.label}</span>
+        {item.kind === "dir" && item.filesTotal > 0 && <span className="transfer-files" title={t("sftp.queue.files", { done: item.filesDone, total: item.filesTotal })}>{item.filesDone}/{item.filesTotal}</span>}
       </div>
       <div className="transfer-actions">
         {actions.map((action) => <button key={action.label} type="button" title={action.label} aria-label={`${action.label}: ${item.label}`} onClick={action.run}>
           <Icon name={action.icon} size={15} />
         </button>)}
       </div>
-      <div className="transfer-route" title={`${leg(item.from)}: ${item.fromPath} → ${leg(item.to)}: ${item.toDir}`}>
-        {leg(item.from)} <span aria-hidden="true">→</span> {leg(item.to)} · {item.toDir}
-      </div>
       <div className="transfer-metrics">
-        <span className="transfer-state">{item.stalled ? t("sftp.queue.stalled") : t(`sftp.queue.state.${item.state}`)}</span>
+        {(item.state !== "active" || item.stalled) && <span className="transfer-state">{item.stalled ? t("sftp.queue.stalled") : t(`sftp.queue.state.${item.state}`)}</span>}
         {item.bytesTotal > 0 && <span>{t("sftp.queue.progress", { done: fmtSize(item.bytesDone), total: fmtSize(item.bytesTotal) })}</span>}
-        {item.kind === "dir" && item.filesTotal > 0 && <span>{t("sftp.queue.files", { done: item.filesDone, total: item.filesTotal })}</span>}
         {(item.state === "active" || (item.state === "waiting" && item.speedBps > 0)) && <>
           <span className="transfer-speed">{t("sftp.queue.speed", { speed: fmtSize(item.speedBps) })}</span>
           {!item.stalled && item.speedBps > 0 && Number.isFinite(item.etaSec) && item.etaSec > 0 && <span>{t("sftp.queue.eta", { eta: eta(item.etaSec) })}</span>}
@@ -78,19 +75,23 @@ function QueueRow({ transfer: item }: { transfer: Transfer }) {
   );
 }
 
-function QueueBody({ transfers, id }: { transfers: Transfer[]; id: string }) {
+function QueueActions({ transfers }: { transfers: Transfer[] }) {
   const { t } = useTranslation();
   const clear = useApp((s) => s.clearFinishedTransfers);
+  return <div className="transfer-toolbar">
+    {transfers.some((item) => RUNNING.includes(item.state)) && <button type="button" title={t("sftp.queue.pauseAll")} aria-label={t("sftp.queue.pauseAll")} onClick={() => transfers.filter((item) => RUNNING.includes(item.state)).forEach((item) => pauseTransfer(item.id))}><Icon name="pause" size={15} /></button>}
+    {transfers.some((item) => item.state === "paused") && <button type="button" title={t("sftp.queue.resumeAll")} aria-label={t("sftp.queue.resumeAll")} onClick={() => transfers.filter((item) => item.state === "paused").forEach((item) => void resumeTransfer(item.id))}><Icon name="play" size={15} /></button>}
+    {transfers.some(canCancel) && <button type="button" title={t("sftp.queue.cancelAll")} aria-label={t("sftp.queue.cancelAll")} onClick={() => transfers.filter(canCancel).forEach((item) => cancelTransfer(item.id))}><Icon name="stop" size={15} /></button>}
+    {transfers.some((item) => FINISHED.includes(item.state)) && <button type="button" title={t("sftp.queue.clear")} aria-label={t("sftp.queue.clear")} onClick={clear}><Icon name="trash" size={15} /></button>}
+  </div>;
+}
+
+function QueueBody({ transfers, id }: { transfers: Transfer[]; id: string }) {
+  const { t } = useTranslation();
   // Keep unfinished work above history without shuffling active rows on every tick.
   const rows = [...transfers.filter((item) => !FINISHED.includes(item.state)), ...transfers.filter((item) => FINISHED.includes(item.state))];
   return (
     <div id={id}>
-      <div className="transfer-toolbar">
-        {transfers.some((item) => RUNNING.includes(item.state)) && <button type="button" onClick={() => transfers.filter((item) => RUNNING.includes(item.state)).forEach((item) => pauseTransfer(item.id))}>{t("sftp.queue.pauseAll")}</button>}
-        {transfers.some((item) => item.state === "paused") && <button type="button" onClick={() => transfers.filter((item) => item.state === "paused").forEach((item) => void resumeTransfer(item.id))}>{t("sftp.queue.resumeAll")}</button>}
-        {transfers.some(canCancel) && <button type="button" onClick={() => transfers.filter(canCancel).forEach((item) => cancelTransfer(item.id))}>{t("sftp.queue.cancelAll")}</button>}
-        {transfers.some((item) => FINISHED.includes(item.state)) && <button type="button" className="transfer-clear" onClick={clear}>{t("sftp.queue.clear")}</button>}
-      </div>
       <ul className="transfer-list" aria-label={t("sftp.queue.title")}>
         {rows.map((item) => <QueueRow key={item.id} transfer={item} />)}
       </ul>
@@ -110,6 +111,7 @@ function QueueSheet({ transfers, id, style, onClose }: {
         <h2 id={`${id}-title`}>{t("sftp.queue.title")}</h2>
         <button type="button" onClick={onClose} aria-label={t("common.close")}><Icon name="x" size={18} /></button>
       </div>
+      <QueueActions transfers={transfers} />
       <QueueBody transfers={transfers} id={id} />
     </div>
   </BottomSheet>;
@@ -140,19 +142,22 @@ export function TransferQueue() {
   } as CSSProperties;
   return (
     <section className="transfer-queue" style={style} aria-label={t("sftp.queue.title")}>
-      <button type="button" className="transfer-summary" aria-expanded={open} aria-controls={open ? bodyId : undefined}
-        onClick={() => isMobile ? setSheetOpen(!sheetOpen) : setExpanded(!expanded)} title={t(open ? "sftp.queue.collapse" : "sftp.queue.expand")}>
-        <Icon name="arrows" size={16} />
-        <strong>{t("sftp.queue.title")}</strong>
-        <span className="transfer-counts">
-          {running > 0 && <span>{t("sftp.queue.running", { count: running })}</span>}
-          {paused > 0 && <span>{t("sftp.queue.paused", { count: paused })}</span>}
-          {failed > 0 && <span className="transfer-error-count">{t("sftp.queue.failed", { count: failed })}</span>}
-          {finished > 0 && <span>{t("sftp.queue.finished", { count: finished })}</span>}
-        </span>
-        {active.length > 0 && <span className="transfer-summary-speed">{t("sftp.queue.speed", { speed: fmtSize(speed) })}</span>}
-        <span style={{ display: "flex", transform: open ? "none" : "rotate(180deg)" }}><Icon name="cd" size={14} /></span>
-      </button>
+      <div className="transfer-header">
+        <button type="button" className="transfer-summary" aria-expanded={open} aria-controls={open ? bodyId : undefined}
+          onClick={() => isMobile ? setSheetOpen(!sheetOpen) : setExpanded(!expanded)} title={t(open ? "sftp.queue.collapse" : "sftp.queue.expand")}>
+          <Icon name="arrows" size={16} />
+          <strong>{t("sftp.queue.title")}</strong>
+          <span className="transfer-counts">
+            {running > 0 && <span>{t("sftp.queue.running", { count: running })}</span>}
+            {paused > 0 && <span>{t("sftp.queue.paused", { count: paused })}</span>}
+            {failed > 0 && <span className="transfer-error-count">{t("sftp.queue.failed", { count: failed })}</span>}
+            {finished > 0 && <span>{t("sftp.queue.finished", { count: finished })}</span>}
+          </span>
+          {active.length > 0 && <span className="transfer-summary-speed">{t("sftp.queue.speed", { speed: fmtSize(speed) })}</span>}
+          <span style={{ display: "flex", transform: open ? "none" : "rotate(180deg)" }}><Icon name="cd" size={14} /></span>
+        </button>
+        {!isMobile && expanded && <QueueActions transfers={transfers} />}
+      </div>
       {!isMobile && expanded && <QueueBody transfers={transfers} id={bodyId} />}
       {isMobile && sheetOpen && <QueueSheet transfers={transfers} id={bodyId} style={style} onClose={() => setSheetOpen(false)} />}
     </section>

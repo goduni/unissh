@@ -26,7 +26,9 @@ function deferred<T>() {
 }
 const source = (kind: "local" | "remote"): FileSource => ({
   kind, id: kind, label: kind, join: async (a: string, b: string) => `${a}/${b}`,
-  stat: vi.fn().mockResolvedValue(null), list: vi.fn().mockResolvedValue([]), mkdir: vi.fn().mockResolvedValue(undefined),
+  stat: vi.fn().mockResolvedValue(null), list: kind === "remote"
+    ? vi.fn().mockRejectedValue(new Error("Directory listing unavailable"))
+    : vi.fn().mockResolvedValue([]), mkdir: vi.fn().mockResolvedValue(undefined),
 } as unknown as FileSource);
 function transfer(id = "t", kind: "file" | "dir" = "file"): Transfer {
   const t: Transfer = { id, kind, label: "file", from: { kind: "local" }, to: { kind: "remote", sessionId: "remote" }, fromPath: "/file", toDir: "/dst", bytesDone: 0, bytesTotal: 100, filesDone: 0, filesTotal: 1, state: "queued", speedBps: 0, etaSec: 0, offset: 0 };
@@ -134,7 +136,7 @@ describe("accounting and failed parallel work", () => {
     await startTransfer(t, from, to, resolver);
     expect(api.sftpUpload).toHaveBeenCalledTimes(2);
     b.resolve(false); await run;
-    expect(current()).toMatchObject({state:"error",error:"permission denied"});
+    expect(current()).toMatchObject({state:"error",error:"a: permission denied"});
   });
   it("measures only new bytes after resuming and decays during a stall", async () => {
     vi.useFakeTimers();
@@ -228,5 +230,114 @@ describe("conflict wait timing", () => {
     expect(current()).toMatchObject({state:"paused",stalled:false});
     expect(prompt).toHaveBeenCalledTimes(1);
     expect(api.sftpUpload).not.toHaveBeenCalled();
+  });
+});
+
+describe("folder preparation and parallel throughput", () => {
+  it("transfers 216 files with eight workers, one listing and one cancel token", async () => {
+    vi.useFakeTimers();
+    let run: Promise<void> | undefined;
+    try {
+      const from = source("local"); const to = source("remote");
+      vi.mocked(from.list).mockResolvedValue(Array.from({ length: 216 }, (_, i) => ({ name: `file-${i}`, size: 4096, isDir: false })));
+      vi.mocked(to.list).mockResolvedValue([]);
+      let active = 0; let peak = 0;
+      api.sftpUpload.mockImplementation(async (_id, _from, _to, _offset, progress) => {
+        peak = Math.max(peak, ++active);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        progress({ transferred: 4096, total: 4096 });
+        active -= 1;
+        return true;
+      });
+      run = startTransfer(transfer("t", "dir"), from, to, resolver, new Semaphore(8));
+      await vi.advanceTimersByTimeAsync(1000);
+      await run;
+      expect(peak).toBe(8);
+      expect(api.sftpUpload).toHaveBeenCalledTimes(216);
+      expect(to.list).toHaveBeenCalledExactlyOnceWith("/dst/file");
+      expect(to.stat).not.toHaveBeenCalled();
+      expect(api.cancelNew).toHaveBeenCalledTimes(1);
+      expect(new Set(api.sftpUpload.mock.calls.map((args) => args[5])).size).toBe(1);
+      expect(api.cancelDispose).toHaveBeenCalledTimes(1);
+      expect(current()).toMatchObject({ state: "done", filesDone: 216, bytesDone: 216 * 4096 });
+    } finally {
+      cancelAll(); await vi.runAllTimersAsync(); await run; vi.useRealTimers();
+    }
+  });
+
+  it("does not start a failing sibling while a conflict dialog is unanswered", async () => {
+    const from = source("local"); const to = source("remote");
+    vi.mocked(from.list).mockResolvedValue([{ name: "a", size: 100, isDir: false }, { name: "b", size: 100, isDir: false }]);
+    vi.mocked(to.list).mockResolvedValue([{ name: "a", size: 50, isDir: false }]);
+    vi.mocked(to.stat).mockImplementation(async (path) => path.endsWith("/a") ? { name: "a", size: 50, isDir: false } : null);
+    const answer = deferred<{ choice: "skip"; applyAll: boolean }>();
+    const prompt = vi.fn().mockReturnValue(answer.promise);
+    api.sftpUpload.mockRejectedValue(new Error("sftp error: status 4: Failure"));
+    const run = startTransfer(transfer("t", "dir"), from, to, prompt, new Semaphore(8));
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(current().state).toBe("waiting");
+    expect(api.sftpUpload).not.toHaveBeenCalled();
+    answer.resolve({ choice: "skip", applyAll: false });
+    await run;
+    expect(current()).toMatchObject({ state: "error", error: "b: sftp error: status 4: Failure" });
+  });
+
+  it("reserves other incoming filenames when keeping both copies", async () => {
+    const from = source("local"); const to = source("remote");
+    vi.mocked(from.list).mockResolvedValue([{ name: "a.txt", size: 100, isDir: false }, { name: "a (2).txt", size: 100, isDir: false }]);
+    vi.mocked(to.list).mockResolvedValue([{ name: "a.txt", size: 50, isDir: false, mode: 0o100644 }]);
+    await startTransfer(transfer("t", "dir"), from, to, async () => ({ choice: "keepboth", applyAll: true }), new Semaphore(8));
+    expect(api.sftpUpload.mock.calls.map((args) => args[2]).sort()).toEqual(["/dst/file/a (2).txt", "/dst/file/a (3).txt"]);
+    expect(current().state).toBe("done");
+  });
+
+  it.each([0o120777, undefined])("stats links or unknown entry types (mode %s) before resuming", async (mode) => {
+    const from = source("local"); const to = source("remote");
+    vi.mocked(from.list).mockResolvedValue([{ name: "a", size: 100, isDir: false }]);
+    vi.mocked(to.list).mockResolvedValue([{ name: "a", size: 7, isDir: false, mode }]);
+    vi.mocked(to.stat).mockResolvedValue({ name: "a", size: 50, isDir: false });
+    const prompt = vi.fn().mockResolvedValue({ choice: "resume", applyAll: true });
+    await startTransfer(transfer("t", "dir"), from, to, prompt);
+    expect(to.stat).toHaveBeenCalledExactlyOnceWith("/dst/file/a");
+    expect(prompt.mock.calls[0][0].targetSize).toBe(50);
+    expect(api.sftpUpload.mock.calls[0][3]).toBe(50);
+    expect(current().state).toBe("done");
+  });
+
+  it("verifies case aliases before deciding a target is missing", async () => {
+    const from = source("local"); const to = source("remote");
+    vi.mocked(from.list).mockResolvedValue([{ name: "a.txt", size: 100, isDir: false }]);
+    vi.mocked(to.list).mockResolvedValue([{ name: "A.txt", size: 50, isDir: false, mode: 0o100644 }]);
+    vi.mocked(to.stat).mockResolvedValue({ name: "a.txt", size: 50, isDir: false });
+    const prompt = vi.fn().mockResolvedValue({ choice: "skip", applyAll: false });
+    await startTransfer(transfer("t", "dir"), from, to, prompt);
+    expect(to.stat).toHaveBeenCalledExactlyOnceWith("/dst/file/a.txt");
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(api.sftpUpload).not.toHaveBeenCalled();
+    expect(current().state).toBe("done");
+  });
+
+  it("surfaces mkdir failure before starting writes or conflict prompts", async () => {
+    const from = source("local"); const to = source("remote");
+    vi.mocked(from.list).mockResolvedValue([{ name: "a", size: 100, isDir: false }]);
+    vi.mocked(to.mkdir).mockRejectedValue(new Error("sftp error: status 4: Failure"));
+    await startTransfer(transfer("t", "dir"), from, to, resolver);
+    expect(current()).toMatchObject({ state: "error", error: "/dst/file: sftp error: status 4: Failure" });
+    expect(api.sftpUpload).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it("uses distinct temporary files for parallel remote relays sharing a cancel token", async () => {
+    const from = source("remote"); const to = source("remote");
+    vi.mocked(from.list).mockResolvedValue([{ name: "a", size: 100, isDir: false }, { name: "b", size: 100, isDir: false }]);
+    vi.mocked(to.list).mockResolvedValue([]);
+    await startTransfer(transfer("t", "dir"), from, to, resolver, new Semaphore(2));
+    expect(current().state).toBe("done");
+    const paths = api.sftpDownload.mock.calls.map((args) => args[2]);
+    expect(paths).toHaveLength(2);
+    expect(new Set(paths).size).toBe(2);
+    expect(api.sftpUpload.mock.calls.map((args) => args[1]).sort()).toEqual([...paths].sort());
+    expect(api.cancelNew).toHaveBeenCalledTimes(1);
   });
 });

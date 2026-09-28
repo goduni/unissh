@@ -113,8 +113,11 @@ class RemoteSource implements FileSource {
         mtime: s.mtime || undefined,
         mode: s.mode || undefined,
       };
-    } catch {
-      return null;
+    } catch (error) {
+      // Only SSH_FX_NO_SUCH_FILE means absent. Treating permission/network/
+      // generic status-4 errors as absence bypassed the overwrite decision.
+      if (/\bstatus 2\b/.test(apiErrorMessage(error))) return null;
+      throw error;
     }
   }
   realpath(path: string): Promise<string> {
@@ -183,8 +186,9 @@ class LocalSource implements FileSource {
         size: s.size,
         mtime: s.mtime ? Math.floor(s.mtime.getTime() / 1000) : undefined,
       };
-    } catch {
-      return null;
+    } catch (error) {
+      if (/\bos error [23]\b|\bENOENT\b/i.test(apiErrorMessage(error))) return null;
+      throw error;
     }
   }
   async realpath(path: string): Promise<string> {

@@ -33,17 +33,17 @@ interface Control {
   patch: (patch: Partial<Transfer>) => void;
   paused: boolean;
   cancelled: boolean;
-  /** Cancel tokens of every file leg currently in flight for this transfer. A
-   *  directory transfer runs up to K legs at once, so pause/cancel must trigger
-   *  ALL of them, not just "the active one". */
-  cancelIds: Set<string>;
+  /** One native flag covers every file in this transfer. Keep it alive until
+   * all writes settle; creating/discarding a token per file adds two IPCs. */
+  cancelId?: string;
+  cancelToken?: Promise<string>;
 }
 const controls = new Map<string, Control>();
 
-/** Trigger every in-flight cancel token for a control (pause or cancel). */
+/** Abort planning and trigger the shared native token (pause or cancel). */
 function triggerAll(ctrl: Control): void {
   ctrl.abort.abort();
-  for (const cid of ctrl.cancelIds) api.cancelTrigger(cid).catch(() => {});
+  if (ctrl.cancelId) api.cancelTrigger(ctrl.cancelId).catch(() => {});
 }
 
 /** Serialize a resolver so at most one conflict prompt is pending at a time:
@@ -124,88 +124,88 @@ async function fileLeg(
   ctrl: Control,
 ): Promise<boolean> {
   if (ctrl.abort.signal.aborted) return false;
-  const cancelId = await api.cancelNew();
-  ctrl.cancelIds.add(cancelId);
-  try {
-    if (ctrl.abort.signal.aborted) return false;
-    if (from.kind === "local" && to.kind === "remote") {
-      return await api.sftpUpload(
-        to.id,
-        fromPath,
-        toPath,
-        offset,
-        (p) => onProgress(p.transferred, p.total),
-        cancelId,
-      );
-    }
-    if (from.kind === "remote" && to.kind === "local") {
-      return await api.sftpDownload(
+  ctrl.cancelToken ??= api.cancelNew().then((id) => {
+    ctrl.cancelId = id;
+    return id;
+  });
+  const cancelId = await ctrl.cancelToken;
+  if (ctrl.abort.signal.aborted) return false;
+  if (from.kind === "local" && to.kind === "remote") {
+    return await api.sftpUpload(
+      to.id,
+      fromPath,
+      toPath,
+      offset,
+      (p) => onProgress(p.transferred, p.total),
+      cancelId,
+    );
+  }
+  if (from.kind === "remote" && to.kind === "local") {
+    return await api.sftpDownload(
+      from.id,
+      fromPath,
+      toPath,
+      offset,
+      knownSize,
+      (p) => onProgress(p.transferred, p.total),
+      cancelId,
+    );
+  }
+  if (from.kind === "remote" && to.kind === "remote") {
+    // No direct server→server relay in the core: hop through a local temp file.
+    const tmp = await join(await tempDir(), `unissh-sftp-${cancelId}-${crypto.randomUUID()}.part`);
+    try {
+      const down = await api.sftpDownload(
         from.id,
         fromPath,
-        toPath,
-        offset,
+        tmp,
+        0,
         knownSize,
-        (p) => onProgress(p.transferred, p.total),
+        (p) => onProgress(p.transferred, p.total * 2),
         cancelId,
       );
+      if (!down || ctrl.abort.signal.aborted) return false;
+      return await api.sftpUpload(
+        to.id,
+        tmp,
+        toPath,
+        0,
+        (p) => onProgress(p.total + p.transferred, p.total * 2),
+        cancelId,
+      );
+    } finally {
+      await remove(tmp).catch(() => {});
     }
-    if (from.kind === "remote" && to.kind === "remote") {
-      // No direct server→server relay in the core: hop through a local temp file.
-      const tmp = await join(await tempDir(), `unissh-sftp-${cancelId}.part`);
-      try {
-        const down = await api.sftpDownload(
-          from.id,
-          fromPath,
-          tmp,
-          0,
-          knownSize,
-          (p) => onProgress(p.transferred, p.total * 2),
-          cancelId,
-        );
-        if (!down || ctrl.abort.signal.aborted) return false;
-        const cancelId2 = await api.cancelNew();
-        ctrl.cancelIds.add(cancelId2);
-        try {
-          if (ctrl.abort.signal.aborted) return false;
-          return await api.sftpUpload(
-            to.id,
-            tmp,
-            toPath,
-            0,
-            (p) => onProgress(p.total + p.transferred, p.total * 2),
-            cancelId2,
-          );
-        } finally {
-          ctrl.cancelIds.delete(cancelId2);
-          await api.cancelDispose(cancelId2).catch(() => {});
-        }
-      } finally {
-        await remove(tmp).catch(() => {});
-      }
-    }
-    // local → local
-    await copyFile(fromPath, toPath);
-    const s = await stat(toPath).catch(() => null);
-    onProgress(s?.size ?? 0, s?.size ?? 0);
-    return true;
-  } finally {
-    ctrl.cancelIds.delete(cancelId);
-    await api.cancelDispose(cancelId).catch(() => {});
   }
+  // local → local
+  await copyFile(fromPath, toPath);
+  const s = await stat(toPath).catch(() => null);
+  onProgress(s?.size ?? 0, s?.size ?? 0);
+  return true;
 }
 
 async function ensureDir(src: FileSource, path: string): Promise<void> {
-  await src.mkdir(path).catch(() => {
-    /* already exists (or a parent does) — listing/transfer will surface real errors */
+  await src.mkdir(path).catch(async (error: unknown) => {
+    // Only an existing directory is harmless. A swallowed mkdir failure made
+    // later file writes fail with an unrelated, context-free SFTP status 4.
+    const existing = await src.stat(path).catch(() => null);
+    if (!existing?.isDir) throw new Error(`${path}: ${apiErrorMessage(error)}`);
   });
 }
 
-/** Join a "/"-relative path onto a base, segment by segment, using the source's
- *  own path semantics (so local Windows separators stay correct). */
-async function joinRel(src: FileSource, base: string, rel: string): Promise<string> {
-  let p = base;
-  for (const seg of rel.split("/").filter(Boolean)) p = await src.join(p, seg);
-  return p;
+/** Resolve each parent once, retaining native Windows path semantics. */
+function treePaths(src: FileSource, root: string): (rel: string) => Promise<string> {
+  const paths = new Map<string, Promise<string>>([["", Promise.resolve(root)]]);
+  const resolve = (rel: string): Promise<string> => {
+    let path = paths.get(rel);
+    if (!path) {
+      const cut = rel.lastIndexOf("/");
+      path = resolve(cut < 0 ? "" : rel.slice(0, cut)).then((parent) => src.join(parent, rel.slice(cut + 1)));
+      paths.set(rel, path);
+    }
+    return path;
+  };
+  return resolve;
 }
 
 async function runFile(
@@ -314,6 +314,8 @@ async function runDir(
   //    on its parent's, so independent branches are created concurrently (bounded
   //    by the semaphore) instead of one round-trip at a time.
   const targetRoot = await to.join(t.toDir, t.label);
+  const sourcePath = treePaths(from, t.fromPath);
+  const targetPath = treePaths(to, targetRoot);
   ctrl.abort.signal.throwIfAborted();
   await ensureDir(to, targetRoot);
   const dirDone = new Map<string, Promise<void>>();
@@ -326,7 +328,7 @@ async function runDir(
       parent.then(async () => {
         if (ctrl.cancelled || ctrl.paused) return;
         await sem.run(async () => {
-          const path = await joinRel(to, targetRoot, rel);
+          const path = await targetPath(rel);
           ctrl.abort.signal.throwIfAborted();
           await ensureDir(to, path);
         }, ctrl.abort.signal);
@@ -336,11 +338,8 @@ async function runDir(
   await settleWrites([...dirDone.values()], ctrl);
   if (ctrl.cancelled || ctrl.paused) return;
 
-  // 3. Transfer files concurrently. Progress is aggregated across all in-flight
-  //    legs: `bytesDone`/`filesDone` are shared counters (JS is single-threaded,
-  //    so `+=` is race-free) patched at most ~10/s. Each file holds one semaphore
-  //    permit for its whole stat→resolve→transfer sequence, so global concurrency
-  //    (this transfer plus any others in the batch) never exceeds the pool size.
+  // 3. Prepare destinations, resolve conflicts, then transfer files. Aggregate
+  //    progress across concurrent legs, coalescing byte updates to ~10/s.
   let bytesDone = 0;
   let filesDone = 0;
   let lastPatch = 0;
@@ -359,46 +358,93 @@ async function runDir(
     });
   };
 
-  const transferOne = async (it: WalkItem): Promise<boolean> => {
-    if (ctrl.abort.signal.aborted) return false;
-    let absTo = await joinRel(to, targetRoot, it.relPath);
-    const absFrom = await joinRel(from, t.fromPath, it.relPath);
-    const existing: Entry | null = await abortable(to.stat(absTo), ctrl.abort.signal);
+  // Read each destination directory once, instead of one SFTP STAT round trip
+  // per file. Fall back to stat when a server allows writes but denies listing.
+  const listings = new Map<string, Promise<Map<string, Entry> | null>>();
+  const foldedNames = new Map<string, Set<string>>();
+  const foldName = (name: string): string => name.normalize("NFC").toLowerCase();
+  const listingFor = (parent: string): Promise<Map<string, Entry> | null> => {
+    let pending = listings.get(parent);
+    if (!pending) {
+      pending = abortable(to.list(parent), ctrl.abort.signal)
+        .then((entries) => {
+          foldedNames.set(parent, new Set(entries.map((entry) => foldName(entry.name))));
+          return new Map(entries.map((entry) => [entry.name, entry]));
+        })
+        .catch(() => { ctrl.abort.signal.throwIfAborted(); return null; });
+      listings.set(parent, pending);
+    }
+    return pending;
+  };
+  const prepared = await Promise.all(files.map((it) => sem.run(async () => {
+    const cut = it.relPath.lastIndexOf("/");
+    const name = it.relPath.slice(cut + 1);
+    const parent = await targetPath(cut < 0 ? "" : it.relPath.slice(0, cut));
+    const absTo = await targetPath(it.relPath);
+    const entries = await listingFor(parent);
+    let existing = entries?.get(name) ?? null;
+    // READDIR describes a symlink itself; STAT follows it, as the write does.
+    // Local filesystems may also alias names by case or Unicode normalization.
+    const regular = existing?.mode !== undefined && (existing.mode & 0o170000) === 0o100000;
+    const possibleAlias = !existing && foldedNames.get(parent)?.has(foldName(name));
+    if (!entries || to.kind === "local" || possibleAlias || (existing && !existing.isDir && !regular)) {
+      existing = await abortable(to.stat(absTo), ctrl.abort.signal);
+    }
+    if (existing?.isDir) throw new Error(`"${it.relPath}" already exists as a folder`);
+    return { it, name, parent, absTo, entries, existing };
+  }, ctrl.abort.signal)));
+
+  // Reserve incoming names too: "keep both" must not pick the name of another
+  // file in this batch that has not been written yet.
+  const reserved = new Map<string, Set<string>>();
+  for (const file of prepared) {
+    let names = reserved.get(file.parent);
+    if (!names) {
+      names = new Set(file.entries?.keys());
+      reserved.set(file.parent, names);
+    }
+    names.add(file.name);
+  }
+  const plan: { it: WalkItem; absTo: string; offset: number }[] = [];
+  // Settle every conflict BEFORE starting file writes. Previously one leg could
+  // fail and abort a sibling's dialog while the user was choosing an action.
+  for (const file of prepared) {
+    ctrl.abort.signal.throwIfAborted();
+    const { it, existing } = file;
+    let { absTo } = file;
     let offset = 0;
-    if (existing && !existing.isDir) {
-      // A collision: let the resolver decide (same-size files auto-skip under the
-      // resume/retry resolver; the interactive one honours a standing apply-all).
+    if (existing) {
       const resumable = canResume(existing, it.size) && legResumable(from, to);
       const res = await resolveConflict(resolver, {
-        name: it.relPath,
-        targetSize: existing.size,
-        sourceSize: it.size,
-        resumable,
-        sameSize: existing.size === it.size,
+        name: it.relPath, targetSize: existing.size, sourceSize: it.size,
+        resumable, sameSize: existing.size === it.size,
       }, ctrl);
       if (res.choice === "skip") {
         filesDone += 1;
         bump(it.size * legs, false);
         ctrl.patch({ filesDone, bytesDone });
-        return true;
+        continue;
       }
       if (res.choice === "keepboth") {
-        const segs = it.relPath.split("/").filter(Boolean);
-        const base = segs.pop() ?? it.relPath;
-        const parentDir = segs.length ? await joinRel(to, targetRoot, segs.join("/")) : targetRoot;
-        const listing = await abortable(to.list(parentDir), ctrl.abort.signal);
-        absTo = await to.join(
-          parentDir,
-          dedupeName(
-            base,
-            listing.map((e) => e.name),
-          ),
-        );
-        offset = 0;
+        const names = reserved.get(file.parent)!;
+        // A failed listing still needs a fresh listing for safe name allocation.
+        if (!file.entries) {
+          for (const entry of await abortable(to.list(file.parent), ctrl.abort.signal)) names.add(entry.name);
+        }
+        const name = dedupeName(file.name, names);
+        names.add(name);
+        absTo = await to.join(file.parent, name);
       } else {
         offset = res.choice === "resume" && resumable ? existing.size : 0;
       }
     }
+    plan.push({ it, absTo, offset });
+  }
+  ctrl.patch({ state: "active" });
+
+  const transferOne = async ({ it, absTo, offset }: typeof plan[number]): Promise<boolean> => {
+    if (ctrl.abort.signal.aborted) return false;
+    const absFrom = await sourcePath(it.relPath);
     // A resumed prefix already exists on the target — count it as done up front.
     if (offset > 0) bump(offset, false);
     let prev = offset; // last absolute position reported for THIS file
@@ -424,9 +470,11 @@ async function runDir(
     return true;
   };
 
-  // Launch every file; the semaphore caps how many legs actually run at once. One
-  // permit spans each file's stat→resolve→transfer so total in-flight ≤ pool size.
-  await settleWrites(files.map((it) => sem.run(() => transferOne(it), ctrl.abort.signal)), ctrl);
+  // Each file holds a shared semaphore permit until its write settles, so
+  // concurrent file legs across this batch never exceed the pool size.
+  await settleWrites(plan.map((file) => sem.run(() => transferOne(file).catch((error: unknown) => {
+    throw new Error(`${file.it.relPath}: ${apiErrorMessage(error)}`);
+  }), ctrl.abort.signal)), ctrl);
 }
 
 /** Stop sibling legs on the first failure, but wait for writes to settle before
@@ -461,7 +509,7 @@ export async function startTransfer(
   if (controls.has(t.id)) return;
   const { patchTransfer } = useApp.getState();
   const ctrl: Control = {
-    paused: false, cancelled: false, cancelIds: new Set(), abort: new AbortController(),
+    paused: false, cancelled: false, abort: new AbortController(),
     moved: 0, pendingConflicts: 0, lastProgressAt: now(),
     patch: (patch) => {
       if (controls.get(t.id) === ctrl && !ctrl.abort.signal.aborted) patchTransfer(t.id, patch);
@@ -498,6 +546,7 @@ export async function startTransfer(
     triggerAll(ctrl);
   } finally {
     clearInterval(timer);
+    if (ctrl.cancelId) await api.cancelDispose(ctrl.cancelId).catch(() => {});
     if (controls.get(t.id) === ctrl) {
       controls.delete(t.id);
       patchTransfer(t.id, { state: ctrl.cancelled ? "cancelled" : ctrl.paused ? "paused" : failure ? "error" : "done",
