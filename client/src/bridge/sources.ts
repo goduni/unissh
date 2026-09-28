@@ -37,6 +37,7 @@ export function isSftpDisconnect(msg: string): boolean {
 }
 
 export interface FileSource {
+  sameFile?(from: string, to: string): Promise<boolean>;
   withCancelToken?(id: string): FileSource;
   kind: "local" | "remote";
   id: string;
@@ -276,6 +277,7 @@ class LocalSource implements FileSource {
     return api.localUnlink(path);
   }
   realpath(path: string): Promise<string> { return api.localRealpath(path); }
+  sameFile(from: string, to: string): Promise<boolean> { return api.localSameFile(from, to); }
   commit(from: string, to: string, replace: boolean): Promise<void> { return api.localCommit(from, to, replace); }
   setMetadata(path: string, mode?: number, mtime?: number): Promise<void> { return api.localSetMetadata(path, mode === undefined ? undefined : mode & 0o777, mtime); }
   async mkdir(path: string): Promise<void> {

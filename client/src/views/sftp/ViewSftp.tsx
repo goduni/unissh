@@ -195,6 +195,7 @@ export function ViewSftp() {
     toLoc: LocationRef,
     toCwd: string,
   ) {
+    const gen = teardownGeneration();
     let fromSource, toSource;
     try {
       fromSource = sourceFor(fromLoc, sessions);
@@ -251,6 +252,7 @@ export function ViewSftp() {
         offset: 0,
       });
     }
+    if (teardownGeneration() !== gen) return;
     enqueueTransfers(built);
 
     // Run the batch's transfers concurrently, all sharing ONE semaphore sized to
@@ -259,7 +261,6 @@ export function ViewSftp() {
     // Each transfer is independent — pausing/cancelling one no longer stops the
     // rest (use pause-all / cancel-all for that). The conflict resolver is
     // serialized so parallel legs can't race the single conflict dialog.
-    const gen = teardownGeneration();
     const sem = makeTransferSemaphore();
     const serialized = serializeResolver(resolver);
     const { patchTransfer } = useApp.getState();

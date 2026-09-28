@@ -1805,31 +1805,38 @@ pub async fn local_copy_prepared(from: String, to: String) -> ApiResult<u64> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::Write;
         let mut source = open_regular(&from)?;
-        if std::fs::canonicalize(&from).map_err(ApiError::other)?
-            == std::fs::canonicalize(&to).map_err(ApiError::other)?
-        {
-            return Err(ApiError::other("Cannot copy a file onto itself"));
-        }
         let mut options = std::fs::OpenOptions::new();
         options.write(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+            use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
-            let a = source.metadata().map_err(ApiError::other)?;
-            let b = std::fs::symlink_metadata(&to).map_err(ApiError::other)?;
-            if a.dev() == b.dev() && a.ino() == b.ino() {
-                return Err(ApiError::other("Cannot copy a file onto itself"));
-            }
         }
         let mut target = options.open(to).map_err(ApiError::other)?;
         if !target.metadata().map_err(ApiError::other)?.is_file() {
             return Err(ApiError::other("Not a regular file"));
         }
+        let source_identity =
+            same_file::Handle::from_file(source.try_clone().map_err(ApiError::other)?)
+                .map_err(ApiError::other)?;
+        let target_identity =
+            same_file::Handle::from_file(target.try_clone().map_err(ApiError::other)?)
+                .map_err(ApiError::other)?;
+        if source_identity == target_identity {
+            return Err(ApiError::other("Cannot copy a file onto itself"));
+        }
         target.set_len(0).map_err(ApiError::other)?;
         let bytes = std::io::copy(&mut source, &mut target).map_err(ApiError::other)?;
         target.flush().map_err(ApiError::other)?;
         Ok(bytes)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn local_same_file(from: String, to: String) -> ApiResult<bool> {
+    tauri::async_runtime::spawn_blocking(move || {
+        same_file::is_same_file(from, to).map_err(ApiError::other)
     })
     .await?
 }
@@ -2339,7 +2346,12 @@ pub async fn sftp_reopen(id: String, state: State<'_, AppState>) -> ApiResult<()
 }
 
 #[tauri::command]
-pub async fn sftp_mkdir(id: String, path: String, state: State<'_, AppState>) -> ApiResult<()> {
+pub async fn sftp_mkdir(
+    id: String,
+    path: String,
+    cancel_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
     let s = get_sftp(&state, &id)?;
     let cancel = transfer_cancel(&state, cancel_id)?;
     blocking(move || match cancel {

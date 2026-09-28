@@ -641,6 +641,7 @@ export const sftpCommit = (id: string, from: string, to: string, replace: boolea
 export const localCreatePrivate = (path: string) => invoke<void>("local_create_private", { path });
 export const localCopyPrepared = (from: string, to: string) => invoke<number>("local_copy_prepared", { from, to });
 export const localCommit = (from: string, to: string, replace: boolean) => invoke<void>("local_commit", { from, to, replace });
+export const localSameFile = (from: string, to: string) => invoke<boolean>("local_same_file", { from, to });
 export const localRealpath = (path: string) => invoke<string>("local_realpath", { path });
 export const localReadText = (path: string, limit = 2 * 1024 * 1024) => invoke<string>("local_read_text", { path, limit });
 export const localSetMetadata = (path: string, mode?: number, mtime?: number) => invoke<void>("local_set_metadata", { path, mode, mtime });

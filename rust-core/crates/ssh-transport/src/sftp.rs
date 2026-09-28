@@ -405,7 +405,14 @@ where
         if metadata.mode != 0 && metadata.mode & S_IFMT != 0o100000 {
             return Err(sftp_err("source is not a regular file"));
         }
-        let total = metadata.size.max(known_size.unwrap_or(0));
+        let total = if metadata.size_known {
+            metadata.size
+        } else {
+            known_size.unwrap_or(0)
+        };
+        if start_offset > 0 && !metadata.size_known {
+            return Err(sftp_err("cannot resume without a known source size"));
+        }
         if metadata.size_known && start_offset > metadata.size {
             return Err(sftp_err("resume offset is beyond remote file size"));
         }
@@ -421,6 +428,9 @@ where
             options.mode(0o600);
             options.open(local_path).await?
         };
+        if f.metadata().await?.len() < start_offset {
+            return Err(sftp_err("local partial is shorter than resume offset"));
+        }
         let handle = self.open(remote, FXF_READ).await?;
         // Every exit after opening the local file must wait for its buffered
         // writes. In particular, cancelling a network wait returns through `?`
@@ -678,6 +688,9 @@ where
         self.close(&handle).await?;
         if next_offset != total || f.metadata().await?.modified()? != metadata.modified()? {
             return Err(sftp_err("source changed during upload"));
+        }
+        if let Some(progress) = &progress {
+            progress.on_progress(total, total);
         }
         Ok(outcome)
     }
@@ -1038,6 +1051,9 @@ where
                 let mut out = Vec::with_capacity((count as usize).min(MAX_DIR_PREALLOC));
                 for _ in 0..count {
                     let filename = r.string_utf8()?;
+                    if filename.is_empty() || filename.contains('/') || filename.contains('\0') {
+                        return Err(sftp_err("invalid directory entry name"));
+                    }
                     r.skip_string()?; // longname (ls -l) — not needed, do not allocate
                     let (size, perms, mtime, uid, gid) = parse_attrs(&mut r)?;
                     out.push(DirEntry {

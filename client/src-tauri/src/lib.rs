@@ -366,6 +366,7 @@ pub fn run() {
             commands::sftp_fingerprint,
             commands::sftp_set_metadata,
             commands::local_realpath,
+            commands::local_same_file,
             commands::local_create_private,
             commands::local_copy_prepared,
             commands::local_commit,

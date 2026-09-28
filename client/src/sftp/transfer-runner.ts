@@ -139,14 +139,18 @@ function unchanged(a: Entry | null, b: Entry | null): boolean {
 /** Reject same-object and descendant copies at the shared entry point. */
 async function validateTarget(t: Transfer, from: FileSource, to: FileSource): Promise<void> {
   if (from.kind !== to.kind || (from.identity ?? from.id) !== (to.identity ?? to.id)) return;
-  const source = await from.realpath(t.fromPath);
+  const windows = from.kind === "local" && /^[a-z]:|\\/i.test(t.fromPath);
+  const name = t.fromPath.split(windows ? /[\\/]/ : /\//).at(-1)!;
+  const source = t.isSymlink
+    ? await from.join(await from.realpath(await from.parent(t.fromPath)), name)
+    : await from.realpath(t.fromPath);
   const parent = await to.realpath(t.toDir);
   const target = await to.join(parent, t.label);
-  const normalized = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalized = (p: string) => (windows ? p.replace(/\\/g, "/").toLowerCase() : p).replace(/\/+$/, "");
   const a = normalized(source), b = normalized(target);
   if (a === b || (t.kind === "dir" && b.startsWith(`${a}/`))) throw new Error("Cannot copy a path into itself");
   const existing = await to.lstat(target);
-  if (existing && !existing.isSymlink && await to.realpath(target) === source) throw new Error("Cannot copy a file onto itself");
+  if (existing && !t.isSymlink && !existing.isSymlink && (await to.realpath(target) === source || await from.sameFile?.(t.fromPath, target))) throw new Error("Cannot copy a file onto itself");
 }
 
 /** Stream one file between two sources. Returns true if it completed, false if a
@@ -530,12 +534,16 @@ async function runDir(
     const absFrom = await sourcePath(it.relPath);
     const saved = ctrl.manifest.get(it.relPath)!;
     let prev = 0;
+    const alreadyComplete = saved.completed;
     const ok = await transferLeaf(from, to, absFrom, saved, !!it.isSymlink, it.size, ctrl, (transferred) => {
       bump(transferred - prev);
       prev = transferred;
     });
     if (!ok && !ctrl.abort.signal.aborted) throw new Error("Transfer interrupted");
-    if (ok) { filesDone += 1; publishProgress(); }
+    if (ok) {
+      if (alreadyComplete) bump((saved.source?.size ?? it.size) * legs, false);
+      filesDone += 1; publishProgress();
+    }
     return ok;
   };
 
@@ -651,6 +659,11 @@ export async function startTransfer(
         error: failure, speedBps: 0, etaSec: 0, stalled: false });
     }
   }
+}
+
+/** Release retained retry state when its queue row is dismissed. */
+export function forgetTransfer(id: string): void {
+  if (!controls.has(id)) manifests.delete(id);
 }
 
 export function pauseTransfer(id: string): void {

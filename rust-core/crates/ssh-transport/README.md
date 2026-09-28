@@ -16,7 +16,12 @@ Builds on `ssh-agent` (key-based authentication) and `storage` (host key TOFU/pi
   remote (`remote_forward`).
 - **SFTP** (protocol v3, a manual implementation on top of the `sftp` subsystem) —
   `SshClient::open_sftp` → `Sftp`: `list_dir`, `read_file`, `write_file`, `stat`,
-  `mkdir`/`rmdir`, `remove`, `rename`, `realpath`.
+  `mkdir`/`rmdir`, `remove`, `rename`, `realpath`. Streaming downloads read to EOF
+  rather than trusting a listing size. The 32 KiB payload and bounded request/reorder
+  window work with baseline v3 servers. `commit` uses ordinary no-replace rename
+  for new files and the advertised OpenSSH POSIX rename extension for replacement.
+  The low-level offset APIs still require callers to establish ownership and verify
+  a partial prefix; the file manager instead stages and restarts unfinished files.
 - **Host key TOFU + pinning:** on the first connect the key is pinned in
   `storage.known_hosts`; on subsequent ones it is verified. A mismatch →
   `TransportError::HostKeyMismatch { host, port, fingerprint }` (protection against MITM,

@@ -393,7 +393,7 @@ jobs:
         run: cargo test --locked --release --lib cloud::recovery::tests -- --test-threads=1
         working-directory: client/src-tauri
 
-      - name: Test local symbolic links (Tauri crate)
+      - name: Test local SFTP file integrity (Tauri crate)
         run: cargo test --locked --release --lib commands::local_symlink_tests -- --test-threads=1
         working-directory: client/src-tauri
 

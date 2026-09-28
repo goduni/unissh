@@ -51,12 +51,34 @@ plugin's default deny rules still apply. Keep this setting when changing scopes:
 without it, `$HOME/**` excludes dot-prefixed path components on Unix.
 
 SFTP copies preserve symbolic links as links, without scanning or downloading
-what they point to. Conflict checks use non-following metadata; overwrite removes
-an existing link before writing, and directory creation rejects existing links
+what they point to. Conflict checks use non-following metadata; overwrite prepares
+a sibling and atomically replaces the old entry, and directory creation rejects existing links
 inside the destination tree. Native local link operations preserve literal targets,
 including dangling links. On Windows, creating links requires the OS to permit
 symlink creation; dangling links use the file-link type because their target type
 is unknown. Absolute link targets remain absolute and may not exist on another host.
+
+### Transfer integrity
+
+- Files and links are prepared beside the destination. New names use a no-replace
+  commit; overwrites require `posix-rename@openssh.com` on an SFTP server. An
+  unsupported replacement fails with the original intact. There is no unlink fallback.
+- Pause/retry retains chosen destination names and completed items in memory.
+  An unfinished file restarts from zero; equal sizes never prove that a preexisting
+  file is a valid partial copy. Plans expire when the queue is cleared or the vault changes.
+- Ordinary Unix permission bits and modification times are preserved; directory
+  metadata is applied after children. Owners and setuid/setgid bits are not copied.
+  Remote-to-remote relays use a native anonymous temporary file.
+- File transfers share a scheduler and conflict queue. Progress is coalesced in both
+  native and UI layers. Scans use bounded workers and native cancellation.
+- The internal editor reads at most 2 MiB of actual content. Both editors recheck
+  content before saving; the external editor uses a streaming SHA-256 fingerprint.
+  These checks detect concurrent edits before commit, but SFTP v3 has no atomic
+  compare-and-replace operation against another process. It also provides no
+  snapshot of a source being modified during copying.
+- Non-UTF-8 names, unsupported special files, and invalid destination names fail
+  explicitly. Case/Unicode aliases are handled conservatively because SFTP does
+  not advertise the destination filesystem's name-comparison rules.
 
 ## Honesty to the core
 

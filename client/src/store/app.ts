@@ -26,7 +26,7 @@ import { apiErrorMessage } from "@/bridge/types";
 import { logWarn, logError, logDebug } from "@/bridge/log";
 import type { TermTheme } from "@/theme/tokens";
 import type { SftpSession, Transfer } from "@/store/sftp-types";
-import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
+import { cancelAll as cancelAllTransfers, forgetTransfer } from "@/sftp/transfer-runner";
 import { suspendExternalEdits } from "@/sftp/external-edit";
 import { planGroupMove } from "@/store/groupMove";
 import type { LockGrace } from "@/support/systemLock";
@@ -1814,15 +1814,16 @@ export const useApp = create<AppStore>((set, get) => ({
   patchTransfers: (patches) => set((s) => ({ transfers: s.transfers.map((t) => patches.has(t.id) ? { ...t, ...patches.get(t.id) } : t) })),
   patchTransfer: (id, patch) =>
     set((s) => ({ transfers: s.transfers.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
-  dismissTransfer: (id) => set((s) => ({
-    transfers: s.transfers.filter((t) => t.id !== id || !["done", "error", "cancelled", "cancelling"].includes(t.state)),
-  })),
-  clearFinishedTransfers: () =>
-    set((s) => ({
-      transfers: s.transfers.filter(
-        (t) => t.state !== "done" && t.state !== "cancelled" && t.state !== "error",
-      ),
-    })),
+  dismissTransfer: (id) => {
+    if (["done", "error", "cancelled"].includes(get().transfers.find((t) => t.id === id)?.state ?? "")) forgetTransfer(id);
+    set((s) => ({ transfers: s.transfers.filter((t) => t.id !== id || !["done", "error", "cancelled", "cancelling"].includes(t.state)) }));
+  },
+  clearFinishedTransfers: () => {
+    const finished = get().transfers.filter((t) => ["done", "cancelled", "error"].includes(t.state));
+    for (const t of finished) forgetTransfer(t.id);
+    const ids = new Set(finished.map((t) => t.id));
+    set((s) => ({ transfers: s.transfers.filter((t) => !ids.has(t.id)) }));
+  },
 
   setPendingMismatch: (m) => set({ pendingMismatch: m }),
   setPendingSftpFocus: (id) => set({ pendingSftpFocus: id }),
