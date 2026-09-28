@@ -98,9 +98,25 @@ pub struct ProgressEvent {
 
 pub struct ChannelSftpProgress {
     pub chan: Channel<ProgressEvent>,
+    last: std::sync::Mutex<Option<std::time::Instant>>,
+}
+impl ChannelSftpProgress {
+    pub fn new(chan: Channel<ProgressEvent>) -> Self {
+        Self {
+            chan,
+            last: std::sync::Mutex::new(None),
+        }
+    }
 }
 impl SftpProgressObserver for ChannelSftpProgress {
     fn on_progress(&self, transferred: u64, total: u64) {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if transferred != total
+            && last.is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(100))
+        {
+            return;
+        }
+        *last = Some(std::time::Instant::now());
         let _ = self.chan.send(ProgressEvent { transferred, total });
     }
 }

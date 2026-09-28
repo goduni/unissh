@@ -539,6 +539,8 @@ interface AppStore {
   closeSftpSession: (id: string) => void;
   patchSftpSession: (id: string, patch: Partial<SftpSession>) => void;
   enqueueTransfer: (t: Transfer) => void;
+  enqueueTransfers: (t: Transfer[]) => void;
+  patchTransfers: (patches: Map<string, Partial<Transfer>>) => void;
   patchTransfer: (id: string, patch: Partial<Transfer>) => void;
   clearFinishedTransfers: () => void;
   dismissTransfer: (id: string) => void;
@@ -1114,6 +1116,7 @@ export const useApp = create<AppStore>((set, get) => ({
       const { terminals, tunnels, broadcasts, sftpSessions } = get();
       cancelAllTransfers();
       await Promise.allSettled([
+        api.sftpInvalidate(),
         ...terminals
           .flatMap((t) => t.panes)
           .filter((p) => p.sessionId)
@@ -1181,6 +1184,7 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   lockInstance: async (reason = "manual") => {
+    cancelAllTransfers();
     try {
       await api.lock();
     } catch (e) {
@@ -1806,6 +1810,8 @@ export const useApp = create<AppStore>((set, get) => ({
       sftpSessions: s.sftpSessions.map((x) => (x.id === id ? { ...x, ...patch } : x)),
     })),
   enqueueTransfer: (t) => set((s) => ({ transfers: [...s.transfers, t] })),
+  enqueueTransfers: (transfers) => set((s) => ({ transfers: [...s.transfers, ...transfers] })),
+  patchTransfers: (patches) => set((s) => ({ transfers: s.transfers.map((t) => patches.has(t.id) ? { ...t, ...patches.get(t.id) } : t) })),
   patchTransfer: (id, patch) =>
     set((s) => ({ transfers: s.transfers.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   dismissTransfer: (id) => set((s) => ({

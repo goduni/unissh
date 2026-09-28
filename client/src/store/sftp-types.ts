@@ -7,6 +7,8 @@
  *  listing only carries them once the core surfaces them (redesign Phase 3),
  *  and the local adapter fills what the OS gives. */
 export interface Entry {
+  fileKind?: "file" | "directory" | "symlink" | "unsupported" | "unknown";
+  sizeKnown?: boolean;
   name: string;
   isDir: boolean;
   isSymlink?: boolean;

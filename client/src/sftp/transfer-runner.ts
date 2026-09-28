@@ -8,10 +8,8 @@ import { apiErrorMessage } from "@/bridge/types";
 import { useApp } from "@/store/app";
 import type { Entry, Transfer } from "@/store/sftp-types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
-import { abortable, canResume, collectTree, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
+import { abortable, collectTree, mapWorkers, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
 import { dedupeName } from "@/sftp/paths";
-import { join, tempDir } from "@tauri-apps/api/path";
-import { copyFile, remove, stat } from "@tauri-apps/plugin-fs";
 
 export interface ConflictResolution {
   choice: "overwrite" | "skip" | "keepboth" | "resume";
@@ -25,7 +23,21 @@ export type ConflictResolver = (info: {
   sameSize: boolean;
 }, signal?: AbortSignal) => Promise<ConflictResolution>;
 
+interface PlannedLeaf {
+  path: string;
+  existing: Entry | null;
+  completed: boolean;
+  skipped?: boolean;
+  source?: Entry;
+}
+const manifests = new Map<string, Map<string, PlannedLeaf>>();
+const reservedPaths = new Map<string, string>();
+const destinationKey = (source: FileSource, path: string): string => `${source.kind}:${source.identity ?? source.id}:${path.normalize("NFC").toLowerCase()}`;
+
 interface Control {
+  id: string;
+  manifest: Map<string, PlannedLeaf>;
+  tick?: (current: Transfer) => Partial<Transfer> | undefined;
   abort: AbortController;
   moved: number;
   pendingConflicts: number;
@@ -50,14 +62,14 @@ function triggerAll(ctrl: Control): void {
  *  parallel file legs would otherwise race the single conflict dialog. Once the
  *  user picks "apply to all", the underlying resolver returns synchronously, so
  *  this adds no latency to the common case. */
+let conflictTail: Promise<unknown> = Promise.resolve();
 export function serializeResolver(r: ConflictResolver): ConflictResolver {
-  let tail: Promise<unknown> = Promise.resolve();
   return (info, signal) => {
-    const result = tail.then(() => {
+    const result = conflictTail.then(() => {
       signal?.throwIfAborted();
       return abortable(r(info, signal), signal);
     });
-    tail = result.catch(() => undefined);
+    conflictTail = result.catch(() => undefined);
     return result;
   };
 }
@@ -97,22 +109,44 @@ const PATCH_MS = 100;
 let teardownGen = 0;
 export const teardownGeneration = (): number => teardownGen;
 
-/** Resolver used by the resume/retry buttons: never prompts — a destination
- *  that's already complete (same size) is skipped, a partial is resumed, else
- *  overwritten. */
-const autoResume: ConflictResolver = async ({ resumable, sameSize }) => ({
-  choice: sameSize ? "skip" : resumable ? "resume" : "overwrite",
-  // This automatic decision depends on each file's size; it is not a user's
-  // standing batch choice and must never be cached for the whole folder.
-  applyAll: false,
-});
+/** Retry can only execute a saved decision. Unknown conflicts need a new prompt. */
+const autoResume: ConflictResolver = async () => { throw new Error("The transfer plan is unavailable. Start a new transfer to resolve conflicts."); };
 
-/** Resume-from-offset only works on the legs that actually seek/append in the
- *  core: upload (local→remote) and download (remote→local). The temp-hop and
- *  local→local copy paths can't resume, so we never offer/apply an offset there
- *  (doing so would re-transfer the whole file while inflating the progress). */
-function legResumable(from: FileSource, to: FileSource): boolean {
-  return (from.kind === "local" && to.kind === "remote") || (from.kind === "remote" && to.kind === "local");
+function reserve(to: FileSource, path: string, ctrl: Control): void {
+  const key = destinationKey(to, path);
+  const owner = reservedPaths.get(key);
+  if (owner && owner !== ctrl.id) throw new Error("Another transfer is writing this destination");
+  reservedPaths.set(key, ctrl.id);
+}
+
+async function availableName(to: FileSource, parent: string, name: string, names: Iterable<string>, ctrl: Control): Promise<string> {
+  const taken = new Set(names);
+  taken.add(name);
+  while (true) {
+    const candidate = dedupeName(name, taken);
+    const path = await to.join(parent, candidate);
+    const key = destinationKey(to, path);
+    if (!reservedPaths.has(key)) { reservedPaths.set(key, ctrl.id); return candidate; }
+    taken.add(candidate);
+  }
+}
+
+function unchanged(a: Entry | null, b: Entry | null): boolean {
+  return a === null ? b === null : b !== null && a.size === b.size && a.mtime === b.mtime && a.mode === b.mode
+    && !!a.isSymlink === !!b.isSymlink && a.isDir === b.isDir;
+}
+
+/** Reject same-object and descendant copies at the shared entry point. */
+async function validateTarget(t: Transfer, from: FileSource, to: FileSource): Promise<void> {
+  if (from.kind !== to.kind || (from.identity ?? from.id) !== (to.identity ?? to.id)) return;
+  const source = await from.realpath(t.fromPath);
+  const parent = await to.realpath(t.toDir);
+  const target = await to.join(parent, t.label);
+  const normalized = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const a = normalized(source), b = normalized(target);
+  if (a === b || (t.kind === "dir" && b.startsWith(`${a}/`))) throw new Error("Cannot copy a path into itself");
+  const existing = await to.lstat(target);
+  if (existing && !existing.isSymlink && await to.realpath(target) === source) throw new Error("Cannot copy a file onto itself");
 }
 
 /** Stream one file between two sources. Returns true if it completed, false if a
@@ -156,56 +190,58 @@ async function fileLeg(
     );
   }
   if (from.kind === "remote" && to.kind === "remote") {
-    // No direct server→server relay in the core: hop through a local temp file.
-    const tmp = await join(await tempDir(), `unissh-sftp-${cancelId}-${crypto.randomUUID()}.part`);
-    try {
-      const down = await api.sftpDownload(
-        from.id,
-        fromPath,
-        tmp,
-        0,
-        knownSize,
-        (p) => onProgress(p.transferred, p.total * 2),
-        cancelId,
-      );
-      if (!down || ctrl.abort.signal.aborted) return false;
-      return await api.sftpUpload(
-        to.id,
-        tmp,
-        toPath,
-        0,
-        (p) => onProgress(p.total + p.transferred, p.total * 2),
-        cancelId,
-      );
-    } finally {
-      await remove(tmp).catch(() => {});
-    }
+    return api.sftpRelay(from.id, to.id, fromPath, toPath,
+      (p) => onProgress(p.transferred, p.total), cancelId);
   }
   // local → local
-  await copyFile(fromPath, toPath);
-  const s = await stat(toPath).catch(() => null);
-  onProgress(s?.size ?? 0, s?.size ?? 0);
+  const size = await api.localCopyPrepared(fromPath, toPath);
+  onProgress(size, size);
   return true;
 }
 
-/** Prepare a leaf without ever writing through an existing destination link.
- * Read the source first so a readlink failure leaves the old destination intact.
- * Writes stay attached to the semaphore permit until they settle on cancel. */
-async function prepareLeaf(
-  from: FileSource, to: FileSource, fromPath: string, toPath: string,
-  isSymlink: boolean, existing: Entry | null, ctrl: Control,
-): Promise<void> {
-  const target = isSymlink ? await abortable(from.readlink(fromPath), ctrl.abort.signal) : undefined;
-  // Windows requires a directory/file hint when creating a link. A dangling or
-  // cyclic target cannot supply it; preserve its literal target as a file link.
-  const targetIsDir = isSymlink && to.kind === "local"
-    ? (await abortable(from.stat(fromPath).catch(() => null), ctrl.abort.signal))?.isDir ?? false
-    : false;
-  ctrl.abort.signal.throwIfAborted();
-  if (existing?.isSymlink) await to.unlink(toPath);
-  else if (isSymlink && existing) await to.remove(toPath);
-  ctrl.abort.signal.throwIfAborted();
-  if (target !== undefined) await to.symlink(target, toPath, targetIsDir);
+/** Build a sibling completely, then publish it atomically. A failed write or
+ * unsupported symlink never removes the user's previous destination. */
+async function transferLeaf(
+  from: FileSource, to: FileSource, fromPath: string, plan: PlannedLeaf,
+  isSymlink: boolean, size: number, ctrl: Control,
+  progress: (done: number, total: number) => void,
+): Promise<boolean> {
+  const source = await from.lstat(fromPath);
+  if (!source) throw new Error("Source no longer exists");
+  if (plan.completed) {
+    if (!plan.skipped && plan.source && !unchanged(plan.source, source)) throw new Error("Source changed since the previous attempt");
+    return true;
+  }
+  if (!isSymlink && (source.fileKind === "unknown" || source.fileKind === "unsupported" || source.isDir || (source.mode && (source.mode & 0o170000) !== 0o100000))) throw new Error("Source is not a regular file");
+  reserve(to, plan.path, ctrl);
+  const parent = await to.parent(plan.path);
+  const stage = await to.join(parent, `.unissh-${crypto.randomUUID()}.part`);
+  let created = false;
+  try {
+    ctrl.abort.signal.throwIfAborted();
+    if (isSymlink) {
+      const target = await from.readlink(fromPath);
+      const dir = to.kind === "local" ? (await from.stat(fromPath).catch(() => null))?.isDir ?? false : false;
+      await to.symlink(target, stage, dir);
+      created = true;
+    } else {
+      await to.createNew(stage);
+      created = true;
+      if (!await fileLeg(from, to, fromPath, stage, 0, size, progress, ctrl)) return false;
+      const after = await from.lstat(fromPath);
+      if (!unchanged(source, after)) throw new Error("Source changed during transfer");
+      await to.setMetadata(stage, source.mode, source.mtime);
+    }
+    ctrl.abort.signal.throwIfAborted();
+    if (plan.existing && !unchanged(plan.existing, await to.lstat(plan.path))) throw new Error("Destination changed after the conflict decision");
+    await to.commit(stage, plan.path, plan.existing !== null);
+    created = false;
+    plan.completed = true;
+    plan.source = source;
+    return true;
+  } finally {
+    if (created) await (isSymlink ? to.unlink(stage) : to.remove(stage)).catch(() => {});
+  }
 }
 
 async function ensureDir(src: FileSource, path: string): Promise<void> {
@@ -240,22 +276,22 @@ async function runFile(
   ctrl: Control,
   sem: Semaphore,
 ): Promise<void> {
-  // Hold ONE semaphore permit for the whole stat→resolve→transfer sequence: this
-  // caps concurrent single-file transfers in a batch to the pool size, and the
-  // rest wait cheaply in the semaphore's JS queue rather than as blocked FFI
-  // calls. The permit is the same shared limiter a folder transfer's legs use, so
-  // a mixed batch never exceeds the pool globally.
-  await sem.run(async () => {
     ctrl.patch({ state: "active" });
     let name = t.label;
     let toPath = await to.join(t.toDir, name);
-    const target = await abortable(to.lstat(toPath), ctrl.abort.signal);
+    let saved = ctrl.manifest.get(t.fromPath);
+    if (saved?.completed) {
+      if (!saved.skipped) await transferLeaf(from, to, t.fromPath, saved, !!t.isSymlink, t.bytesTotal, ctrl, () => {});
+      ctrl.patch({ filesDone: 1, bytesDone: t.bytesTotal }); return;
+    }
+    if (saved) toPath = saved.path;
+    const target = await sem.run(() => abortable(to.lstat(toPath), ctrl.abort.signal), ctrl.abort.signal);
     let replaceTarget = target;
     let offset = 0;
 
     if (target?.isDir) throw new Error(`"${name}" already exists as a folder`);
-    if (target) {
-      const resumable = !t.isSymlink && canResume(target, t.bytesTotal) && legResumable(from, to);
+    if (target && !saved) {
+      const resumable = false;
       const res = await resolveConflict(resolver, {
         name,
         targetSize: target.size,
@@ -264,16 +300,14 @@ async function runFile(
         sameSize: !t.isSymlink && !target.isSymlink && target.size === t.bytesTotal,
       }, ctrl);
       if (res.choice === "skip") {
+        ctrl.manifest.set(t.fromPath, { path: toPath, existing: target, completed: true, skipped: true });
         ctrl.patch({ filesDone: 1, bytesDone: t.bytesTotal, bytesTotal: t.bytesTotal });
         return;
       }
       if (res.choice === "resume") offset = resumable ? target.size : 0;
       if (res.choice === "keepboth") {
         const listing = await abortable(to.list(t.toDir), ctrl.abort.signal);
-        name = dedupeName(
-          name,
-          listing.map((e) => e.name),
-        );
+        name = await availableName(to, t.toDir, name, listing.map((e) => e.name), ctrl);
         toPath = await to.join(t.toDir, name);
         replaceTarget = null;
         offset = 0;
@@ -283,26 +317,18 @@ async function runFile(
 
     ctrl.patch({ state: "active", offset, label: name });
     ctrl.abort.signal.throwIfAborted();
-    await prepareLeaf(from, to, t.fromPath, toPath, !!t.isSymlink, replaceTarget, ctrl);
-    if (t.isSymlink) {
-      ctrl.patch({ filesDone: 1, bytesDone: 0, bytesTotal: 0 });
-      return;
-    }
+    saved ??= { path: toPath, existing: replaceTarget, completed: false };
+    reserve(to, saved.path, ctrl);
+    ctrl.manifest.set(t.fromPath, saved);
+    await sem.run(async () => {
     let previous = offset;
     let finalTotal = from.kind === "remote" && to.kind === "remote" ? t.bytesTotal * 2 : t.bytesTotal;
     ctrl.patch({ bytesDone: offset, bytesTotal: finalTotal });
     let lastPatch = 0;
     // Source size is known from the listing (remote → skip a per-file stat in core).
-    const knownSize = from.kind === "remote" ? t.bytesTotal : null;
-    const ok = await fileLeg(
-      from,
-      to,
-      t.fromPath,
-      toPath,
-      offset,
-      knownSize,
+    const ok = await transferLeaf(from, to, t.fromPath, saved!, !!t.isSymlink, t.bytesTotal, ctrl,
       (transferred, total) => {
-        finalTotal = total > 0 ? total : finalTotal;
+        finalTotal = total;
         const done = transferred; // core reports the absolute position (incl. offset)
         if (ctrl.abort.signal.aborted) return;
         ctrl.moved += Math.max(0, done - previous);
@@ -316,7 +342,6 @@ async function runFile(
           bytesTotal: finalTotal,
         });
       },
-      ctrl,
     );
     if (!ok && !ctrl.abort.signal.aborted) throw new Error("Transfer interrupted");
     if (ok) ctrl.patch({ filesDone: 1, bytesDone: finalTotal });
@@ -335,7 +360,7 @@ async function runDir(
   // 1. Scan for honest totals. Sibling listings run concurrently (bounded by the
   //    shared semaphore) so a wide/deep tree doesn't stall on a serial prologue.
   if (ctrl.cancelled || ctrl.paused) return;
-  const { dirs, files } = await collectTree(from, t.fromPath, sem, ctrl.abort.signal);
+  const { dirs, files, directoryMetadata } = await collectTree(from, t.fromPath, sem, ctrl.abort.signal);
   if (ctrl.cancelled || ctrl.paused) return;
   const legs = from.kind === "remote" && to.kind === "remote" ? 2 : 1;
   const bytesTotal = files.reduce((a, f) => a + f.size * legs, 0);
@@ -344,29 +369,31 @@ async function runDir(
   // 2. Mirror the directory tree, parents before children. Each mkdir waits only
   //    on its parent's, so independent branches are created concurrently (bounded
   //    by the semaphore) instead of one round-trip at a time.
+  const dirAliases = new Set<string>();
+  for (const dir of dirs) {
+    const folded = dir.normalize("NFC").toLowerCase();
+    if (dirAliases.has(folded)) throw new Error(`Directory names may alias on the destination: ${dir}`);
+    dirAliases.add(folded);
+  }
+  const rootMetadata = await from.lstat(t.fromPath);
   const targetRoot = await to.join(t.toDir, t.label);
   const sourcePath = treePaths(from, t.fromPath);
   const targetPath = treePaths(to, targetRoot);
   ctrl.abort.signal.throwIfAborted();
   await ensureDir(to, targetRoot);
-  const dirDone = new Map<string, Promise<void>>();
-  dirDone.set("", Promise.resolve());
+  const byDepth = new Map<number, string[]>();
   for (const rel of dirs) {
-    const cut = rel.lastIndexOf("/");
-    const parent = dirDone.get(cut >= 0 ? rel.slice(0, cut) : "") ?? Promise.resolve();
-    dirDone.set(
-      rel,
-      parent.then(async () => {
-        if (ctrl.cancelled || ctrl.paused) return;
-        await sem.run(async () => {
-          const path = await targetPath(rel);
-          ctrl.abort.signal.throwIfAborted();
-          await ensureDir(to, path);
-        }, ctrl.abort.signal);
-      }),
-    );
+    const depth = rel.split("/").length;
+    const group = byDepth.get(depth) ?? [];
+    group.push(rel); byDepth.set(depth, group);
   }
-  await settleWrites([...dirDone.values()], ctrl);
+  for (const group of byDepth.values()) {
+    await mapWorkers(group, 8, (rel) => sem.run(async () => {
+      const path = await targetPath(rel);
+      ctrl.abort.signal.throwIfAborted();
+      await ensureDir(to, path);
+    }, ctrl.abort.signal), ctrl.abort.signal);
+  }
   if (ctrl.cancelled || ctrl.paused) return;
 
   // 3. Prepare destinations, resolve conflicts, then transfer files. Aggregate
@@ -408,7 +435,7 @@ async function runDir(
     }
     return pending;
   };
-  const prepared = await Promise.all(files.map((it) => sem.run(async () => {
+  const prepared = await mapWorkers(files, 8, (it) => sem.run(async () => {
     const cut = it.relPath.lastIndexOf("/");
     const name = it.relPath.slice(cut + 1);
     const parent = await targetPath(cut < 0 ? "" : it.relPath.slice(0, cut));
@@ -424,7 +451,7 @@ async function runDir(
     }
     if (existing?.isDir) throw new Error(`"${it.relPath}" already exists as a folder`);
     return { it, name, parent, absTo, entries, existing };
-  }, ctrl.abort.signal)));
+  }, ctrl.abort.signal), ctrl.abort.signal);
 
   // Reserve incoming names too: "keep both" must not pick the name of another
   // file in this batch that has not been written yet.
@@ -438,6 +465,7 @@ async function runDir(
     names.add(file.name);
   }
   const plan: { it: WalkItem; absTo: string; offset: number; replaceTarget: Entry | null }[] = [];
+  const plannedPaths = new Set<string>();
   let allConflicts: ConflictResolution | undefined;
   // Settle every conflict BEFORE starting file writes. Previously one leg could
   // fail and abort a sibling's dialog while the user was choosing an action.
@@ -447,8 +475,13 @@ async function runDir(
     let { absTo } = file;
     let replaceTarget = existing;
     let offset = 0;
+    const saved = ctrl.manifest.get(it.relPath);
+    if (saved) {
+      plan.push({ it, absTo: saved.path, offset: 0, replaceTarget: saved.existing });
+      continue;
+    }
     if (existing) {
-      const resumable = !it.isSymlink && canResume(existing, it.size) && legResumable(from, to);
+      const resumable = false;
       // The batch resolver also remembers apply-all across top-level transfers.
       // Cache it here to avoid toggling waiting/active and synchronously rendering
       // the queue twice for every remaining file in this folder.
@@ -458,6 +491,7 @@ async function runDir(
       }, ctrl);
       if (res.applyAll) allConflicts = res;
       if (res.choice === "skip") {
+        ctrl.manifest.set(it.relPath, { path: absTo, existing, completed: true, skipped: true });
         filesDone += 1;
         bump(it.size * legs, false);
         continue;
@@ -468,7 +502,7 @@ async function runDir(
         if (!file.entries) {
           for (const entry of await abortable(to.list(file.parent), ctrl.abort.signal)) names.add(entry.name);
         }
-        const name = dedupeName(file.name, names);
+        const name = await availableName(to, file.parent, file.name, names, ctrl);
         names.add(name);
         absTo = await to.join(file.parent, name);
         replaceTarget = null;
@@ -476,70 +510,75 @@ async function runDir(
         offset = res.choice === "resume" && resumable ? existing.size : 0;
       }
     }
+    // Conservatively separate incoming case/Unicode aliases, even on an
+    // endpoint whose case rules are unknown.
+    if (plannedPaths.has(destinationKey(to, absTo))) {
+      const name = await availableName(to, file.parent, file.name, reserved.get(file.parent)!, ctrl);
+      reserved.get(file.parent)!.add(name);
+      absTo = await to.join(file.parent, name);
+      replaceTarget = null;
+    }
+    plannedPaths.add(destinationKey(to, absTo));
+    reserve(to, absTo, ctrl);
+    ctrl.manifest.set(it.relPath, { path: absTo, existing: replaceTarget, completed: false });
     plan.push({ it, absTo, offset, replaceTarget });
   }
   ctrl.patch({ state: "active", bytesDone, filesDone });
 
-  const transferOne = async ({ it, absTo, offset, replaceTarget }: typeof plan[number]): Promise<boolean> => {
+  const transferOne = async ({ it }: typeof plan[number]): Promise<boolean> => {
     if (ctrl.abort.signal.aborted) return false;
     const absFrom = await sourcePath(it.relPath);
-    await prepareLeaf(from, to, absFrom, absTo, !!it.isSymlink, replaceTarget, ctrl);
-    if (it.isSymlink) {
-      filesDone += 1;
-      ctrl.lastProgressAt = now();
-      publishProgress();
-      return true;
-    }
-    // A resumed prefix already exists on the target — count it as done up front.
-    if (offset > 0) bump(offset, false);
-    let prev = offset; // last absolute position reported for THIS file
-    const knownSize = from.kind === "remote" ? it.size : null;
-    const ok = await fileLeg(
-      from,
-      to,
-      absFrom,
-      absTo,
-      offset,
-      knownSize,
-      (transferred) => {
-        bump(transferred - prev); // core reports absolute position; feed the delta
-        prev = transferred;
-      },
-      ctrl,
-    );
+    const saved = ctrl.manifest.get(it.relPath)!;
+    let prev = 0;
+    const ok = await transferLeaf(from, to, absFrom, saved, !!it.isSymlink, it.size, ctrl, (transferred) => {
+      bump(transferred - prev);
+      prev = transferred;
+    });
     if (!ok && !ctrl.abort.signal.aborted) throw new Error("Transfer interrupted");
-    if (!ok) return false; // paused or cancelled mid-file
-    if (it.size * legs > prev) bump(it.size * legs - prev, false); // true up if the last tick was short
-    filesDone += 1;
-    publishProgress();
-    return true;
+    if (ok) { filesDone += 1; publishProgress(); }
+    return ok;
   };
 
   // Each file holds a shared semaphore permit until its write settles, so
   // concurrent file legs across this batch never exceed the pool size.
-  await settleWrites(plan.map((file) => sem.run(() => transferOne(file).catch((error: unknown) => {
+  await mapWorkers(plan, 8, (file) => sem.run(() => transferOne(file).catch((error: unknown) => {
+    triggerAll(ctrl);
     throw new Error(`${file.it.relPath}: ${apiErrorMessage(error)}`);
-  }), ctrl.abort.signal)), ctrl);
-  ctrl.patch({ filesDone, bytesDone });
-}
-
-/** Stop sibling legs on the first failure, but wait for writes to settle before
- * enabling retry. Otherwise an old leg can overwrite a new attempt. */
-async function settleWrites(jobs: Promise<unknown>[], ctrl: Control): Promise<void> {
-  let failure: unknown;
-  let failed = false;
-  await Promise.allSettled(jobs.map((job) => job.catch((error: unknown) => {
-    if (!failed) { failed = true; failure = error; triggerAll(ctrl); }
-  })));
-  if (failed) throw failure;
+  }), ctrl.abort.signal), ctrl.abort.signal);
+  for (const group of [...byDepth.values()].reverse()) {
+    await mapWorkers(group, 8, (rel) => sem.run(async () => {
+      const metadata = directoryMetadata.get(rel)!;
+      await to.setMetadata(await targetPath(rel), metadata.mode, metadata.mtime);
+    }, ctrl.abort.signal), ctrl.abort.signal);
+  }
+  if (rootMetadata) await to.setMetadata(targetRoot, rootMetadata.mode, rootMetadata.mtime);
+  ctrl.patch({ filesDone, bytesDone, bytesTotal: bytesDone });
 }
 
 /** How many files this transfer may move at once. A folder transfer draws its
  *  legs from `sem`; if the caller shares one `Semaphore` across a whole batch,
  *  the pool size is honoured globally. Standalone callers (resume/retry) pass a
  *  fresh semaphore sized to the current setting. */
+let sharedSemaphore: Semaphore | undefined;
+let sharedCapacity = 0;
 export function makeTransferSemaphore(): Semaphore {
-  return new Semaphore(useApp.getState().sftpParallelism);
+  const capacity = useApp.getState().sftpParallelism;
+  if (!sharedSemaphore || (controls.size === 0 && capacity !== sharedCapacity)) {
+    sharedCapacity = capacity; sharedSemaphore = new Semaphore(capacity);
+  }
+  return sharedSemaphore;
+}
+let progressTimer: ReturnType<typeof setInterval> | undefined;
+function scheduleProgress(): void {
+  progressTimer ??= setInterval(() => {
+    const state = useApp.getState();
+    const patches = new Map<string, Partial<Transfer>>();
+    for (const transfer of state.transfers) {
+      const patch = controls.get(transfer.id)?.tick?.(transfer);
+      if (patch) patches.set(transfer.id, patch);
+    }
+    if (patches.size) state.patchTransfers(patches);
+  }, 250);
 }
 
 /** Run a transfer to completion (or until paused/cancelled). Used for fresh
@@ -555,6 +594,7 @@ export async function startTransfer(
   if (controls.has(t.id)) return;
   const { patchTransfer } = useApp.getState();
   const ctrl: Control = {
+    id: t.id, manifest: manifests.get(t.id) ?? new Map(),
     paused: false, cancelled: false, abort: new AbortController(),
     moved: 0, pendingConflicts: 0, lastProgressAt: now(),
     patch: (patch) => {
@@ -562,6 +602,7 @@ export async function startTransfer(
     },
   };
   controls.set(t.id, ctrl);
+  manifests.set(t.id, ctrl.manifest);
   // A remote relay counts two network legs; preserve the original source size
   // so retry never mistakes that work total for the file size.
   t = { ...t, bytesTotal: t.isSymlink ? 0 : t.sourceSize ?? t.bytesTotal };
@@ -569,8 +610,7 @@ export async function startTransfer(
     sourceSize: t.bytesTotal, bytesDone: 0, filesDone: 0, speedBps: 0, etaSec: Infinity, stalled: false });
   let spd = new Speedometer();
   spd.sample(0, now());
-  const timer = setInterval(() => {
-    const current = useApp.getState().transfers.find((x) => x.id === t.id);
+  ctrl.tick = (current) => {
     if (!current || ctrl.abort.signal.aborted) return;
     if (current.state !== "active" && current.state !== "waiting") {
       spd = new Speedometer();
@@ -578,23 +618,35 @@ export async function startTransfer(
       return;
     }
     spd.sample(ctrl.moved, now());
-    ctrl.patch({
+    return {
       speedBps: spd.speed(), etaSec: spd.eta(current.bytesTotal - current.bytesDone),
       stalled: current.state === "active" && now() - ctrl.lastProgressAt >= 5000,
-    });
-  }, 250);
+    };
+  };
+  scheduleProgress();
   let failure: string | undefined;
   try {
+    await validateTarget(t, from, to);
+    if (from.withCancelToken || to.withCancelToken) {
+      ctrl.cancelToken = api.cancelNew().then((id) => { ctrl.cancelId = id; return id; });
+      const token = await ctrl.cancelToken;
+      ctrl.abort.signal.throwIfAborted();
+      from = from.withCancelToken?.(token) ?? from;
+      to = to.withCancelToken?.(token) ?? to;
+    }
     if (t.kind === "file") await runFile(t, from, to, resolver, ctrl, sem);
     else await runDir(t, from, to, resolver, ctrl, sem);
   } catch (e) {
     if (!ctrl.cancelled && !ctrl.paused) failure = apiErrorMessage(e);
     triggerAll(ctrl);
   } finally {
-    clearInterval(timer);
+    ctrl.tick = undefined;
     if (ctrl.cancelId) await api.cancelDispose(ctrl.cancelId).catch(() => {});
     if (controls.get(t.id) === ctrl) {
       controls.delete(t.id);
+      if (controls.size === 0) { clearInterval(progressTimer); progressTimer = undefined; }
+      for (const [path, owner] of reservedPaths) if (owner === t.id) reservedPaths.delete(path);
+      if (ctrl.cancelled || (!ctrl.paused && !failure)) manifests.delete(t.id);
       patchTransfer(t.id, { state: ctrl.cancelled ? "cancelled" : ctrl.paused ? "paused" : failure ? "error" : "done",
         error: failure, speedBps: 0, etaSec: 0, stalled: false });
     }
@@ -625,6 +677,7 @@ export function cancelTransfer(id: string): void {
  *  running copy doesn't outlive the state it was operating on. */
 export function cancelAll(): void {
   teardownGen += 1;
+  manifests.clear();
   for (const c of controls.values()) {
     c.cancelled = true;
     triggerAll(c);

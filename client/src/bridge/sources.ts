@@ -7,9 +7,9 @@
 import * as api from "@/bridge/api";
 import { apiErrorMessage, type SftpEntry } from "@/bridge/types";
 import type { Entry, LocationRef, SftpSession } from "@/store/sftp-types";
-import { breadcrumbSegments, isSafeName, remoteJoin, remoteParent, type Crumb } from "@/sftp/paths";
+import { breadcrumbSegments, isSafeName, isPortableWindowsName, remoteJoin, remoteParent, type Crumb } from "@/sftp/paths";
 import { dirname, join } from "@tauri-apps/api/path";
-import { mkdir, open as fsOpen, readTextFile, remove, rename, stat, writeTextFile } from "@tauri-apps/plugin-fs";
+import { mkdir, remove, rename, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 
 /** An error that looks like the SFTP channel/connection dropped (server reaped
  *  an idle channel, EOF, broken pipe, "channel closed") rather than a real
@@ -37,10 +37,14 @@ export function isSftpDisconnect(msg: string): boolean {
 }
 
 export interface FileSource {
+  withCancelToken?(id: string): FileSource;
   kind: "local" | "remote";
   id: string;
+  identity?: string;
   label: string;
-  list(path: string): Promise<Entry[]>;
+  list(path: string, signal?: AbortSignal): Promise<Entry[]>;
+  commit(from: string, to: string, replace: boolean): Promise<void>;
+  setMetadata(path: string, mode?: number, mtime?: number): Promise<void>;
   /** Stat one path, following links, or null if it does not exist. */
   stat(path: string): Promise<Entry | null>;
   /** Metadata for the link itself, including dangling links. */
@@ -60,11 +64,21 @@ export interface FileSource {
   /** Change unix permissions — remote only (local FS chmod isn't exposed). */
   chmod?(path: string, mode: number): Promise<void>;
   readText(path: string): Promise<string>;
-  writeText(path: string, text: string): Promise<void>;
+  writeText(path: string, text: string, expected?: string): Promise<void>;
   join(base: string, name: string): Promise<string>;
   parent(path: string): Promise<string>;
   /** Clickable breadcrumb segments for `path` (sync; for display). */
   crumbs(path: string): Crumb[];
+}
+
+function fileKind(mode?: number): Entry["fileKind"] {
+  switch ((mode ?? 0) & 0o170000) {
+    case 0o100000: return "file";
+    case 0o040000: return "directory";
+    case 0o120000: return "symlink";
+    case 0: return "unknown";
+    default: return "unsupported";
+  }
 }
 
 function baseName(path: string): string {
@@ -76,11 +90,14 @@ function baseName(path: string): string {
 class RemoteSource implements FileSource {
   readonly kind = "remote" as const;
   readonly id: string;
+  readonly identity: string;
   readonly label: string;
-  constructor(session: SftpSession) {
+  constructor(private readonly session: SftpSession, private readonly cancelId?: string) {
     this.id = session.id;
+    this.identity = `${session.user}@${session.host.toLowerCase()}:${session.port}`;
     this.label = session.label;
   }
+  withCancelToken(id: string): FileSource { return new RemoteSource(this.session, id); }
   /** Run a remote op; if it fails because the SFTP channel was reaped by the
    *  server (e.g. "channel closed" on an idle session), reopen the channel once
    *  on the still-live SSH connection and retry. So a random mid-session drop
@@ -89,25 +106,42 @@ class RemoteSource implements FileSource {
     try {
       return await fn();
     } catch (e) {
-      if (!isSftpDisconnect(apiErrorMessage(e))) throw e;
+      if (/cancelled|session closed|generation changed/i.test(apiErrorMessage(e)) || !isSftpDisconnect(apiErrorMessage(e))) throw e;
       await api.sftpReopen(this.id);
       return await fn(); // single retry — a truly dead SSH connection still throws
     }
   }
-  async list(path: string): Promise<Entry[]> {
-    const list = await this.withReopen(() => api.sftpListDir(this.id, path));
+  async list(path: string, signal?: AbortSignal): Promise<Entry[]> {
+    let list: SftpEntry[];
+    if (this.cancelId) list = await api.sftpListDirCancel(this.id, path, this.cancelId);
+    else if (signal) {
+      const token = await api.cancelNew();
+      const cancel = () => { void api.cancelTrigger(token); };
+      signal.addEventListener("abort", cancel, { once: true });
+      try {
+        signal.throwIfAborted();
+        list = await api.sftpListDirCancel(this.id, path, token);
+      } finally {
+        signal.removeEventListener("abort", cancel);
+        await api.cancelDispose(token);
+      }
+    } else list = await this.withReopen(() => api.sftpListDir(this.id, path));
     return list
-      .filter((e: SftpEntry) => isSafeName(e.filename)) // drop "."/".." and unsafe names
-      .map((e: SftpEntry) => ({
+      .filter((e: SftpEntry) => e.filename !== "." && e.filename !== "..")
+      .map((e: SftpEntry) => {
+        if (!isSafeName(e.filename)) throw new Error("Invalid remote filename");
+        return ({
         name: e.filename,
         isDir: e.isDir,
         isSymlink: (e.mode & 0o170000) === 0o120000,
         size: e.size,
+        sizeKnown: e.sizeKnown,
         mtime: e.mtime || undefined,
         mode: e.mode || undefined,
+        fileKind: fileKind(e.mode),
         uid: e.uid || undefined,
         gid: e.gid || undefined,
-      }));
+      }); });
   }
   stat(path: string): Promise<Entry | null> {
     return this.metadata(path, true);
@@ -117,14 +151,16 @@ class RemoteSource implements FileSource {
   }
   private async metadata(path: string, follow: boolean): Promise<Entry | null> {
     try {
-      const s = await this.withReopen(() => follow ? api.sftpStat(this.id, path) : api.sftpLstat(this.id, path));
+      const s = await this.withReopen(() => follow ? api.sftpStat(this.id, path, this.cancelId) : api.sftpLstat(this.id, path, this.cancelId));
       return {
         name: baseName(path),
         isDir: s.isDir,
         isSymlink: (s.mode & 0o170000) === 0o120000,
         size: s.size,
+        sizeKnown: s.sizeKnown,
         mtime: s.mtime || undefined,
         mode: s.mode || undefined,
+        fileKind: fileKind(s.mode),
       };
     } catch (error) {
       // Only SSH_FX_NO_SUCH_FILE means absent. Treating permission/network/
@@ -134,10 +170,10 @@ class RemoteSource implements FileSource {
     }
   }
   readlink(path: string): Promise<string> {
-    return this.withReopen(() => api.sftpReadlink(this.id, path));
+    return this.withReopen(() => api.sftpReadlink(this.id, path, this.cancelId));
   }
   symlink(target: string, path: string): Promise<void> {
-    return this.withReopen(() => api.sftpSymlink(this.id, target, path));
+    return api.sftpSymlink(this.id, target, path, this.cancelId);
   }
   unlink(path: string): Promise<void> {
     return this.remove(path);
@@ -146,32 +182,44 @@ class RemoteSource implements FileSource {
     return this.withReopen(() => api.sftpRealpath(this.id, path));
   }
   mkdir(path: string): Promise<void> {
-    return this.withReopen(() => api.sftpMkdir(this.id, path));
+    return api.sftpMkdir(this.id, path, this.cancelId);
   }
   createNew(path: string): Promise<void> {
-    return this.withReopen(() => api.sftpCreateNewFile(this.id, path));
+    return api.sftpCreateNewFile(this.id, path, this.cancelId);
   }
   remove(path: string): Promise<void> {
-    return this.withReopen(() => api.sftpRemove(this.id, path));
+    return api.sftpRemove(this.id, path);
   }
   rmdir(path: string): Promise<void> {
     // Recursive — SFTP RMDIR only removes empty dirs (a non-empty one returns
     // SSH_FX_FAILURE / status 4); the core walks the tree bottom-up.
-    return this.withReopen(() => api.sftpRmdirRecursive(this.id, path));
+    return api.sftpRmdirRecursive(this.id, path);
   }
   rename(from: string, to: string): Promise<void> {
-    return this.withReopen(() => api.sftpRename(this.id, from, to));
+    return api.sftpRename(this.id, from, to);
   }
+  commit(from: string, to: string, replace: boolean): Promise<void> { return api.sftpCommit(this.id, from, to, replace, this.cancelId); }
+  setMetadata(path: string, mode?: number, mtime?: number): Promise<void> { return api.sftpSetMetadata(this.id, path, mode === undefined ? undefined : mode & 0o777, mtime, this.cancelId); }
   chmod(path: string, mode: number): Promise<void> {
-    return this.withReopen(() => api.sftpChmod(this.id, path, mode));
+    return api.sftpChmod(this.id, path, mode);
   }
   async readText(path: string): Promise<string> {
     const buf = await this.withReopen(() => api.sftpReadFile(this.id, path));
     return new TextDecoder().decode(new Uint8Array(buf));
   }
-  writeText(path: string, text: string): Promise<void> {
-    const data = Array.from(new TextEncoder().encode(text));
-    return this.withReopen(() => api.sftpWriteFile(this.id, path, data));
+  async writeText(path: string, text: string, expected?: string): Promise<void> {
+    const original = expected ?? await this.readText(path);
+    const metadata = await this.lstat(path);
+    if (metadata?.isSymlink) throw new Error("Open the symbolic link target to edit it");
+    const stage = await this.join(await this.parent(path), `.unissh-${crypto.randomUUID()}.part`);
+    await this.createNew(stage);
+    try {
+      const data = Array.from(new TextEncoder().encode(text));
+      await api.sftpWriteFile(this.id, stage, data);
+      await this.setMetadata(stage, metadata?.mode, metadata?.mtime);
+      if (await this.readText(path) !== original) throw new Error("File changed on the server. Reopen it before saving.");
+      await this.commit(stage, path, metadata !== null);
+    } finally { await this.remove(stage).catch(() => {}); }
   }
   async join(base: string, name: string): Promise<string> {
     return remoteJoin(base, name);
@@ -197,7 +245,7 @@ class LocalSource implements FileSource {
     const list = await api.localListDir(path);
     return list
       .filter((e) => isSafeName(e.name))
-      .map((e) => ({ name: e.name, isDir: e.isDir && !e.isSymlink, isSymlink: e.isSymlink, size: e.size, mtime: e.mtime || undefined }));
+      .map((e) => ({ name: e.name, isDir: e.isDir && !e.isSymlink, isSymlink: e.isSymlink, size: e.size, fileKind: fileKind(e.mode), mode: e.mode, mtime: e.mtime || undefined }));
   }
   async stat(path: string): Promise<Entry | null> {
     try {
@@ -215,7 +263,7 @@ class LocalSource implements FileSource {
   }
   async lstat(path: string): Promise<Entry | null> {
     const entry = await api.localLstat(path);
-    return entry ? { ...entry, isDir: entry.isDir && !entry.isSymlink } : null;
+    return entry ? { ...entry, fileKind: fileKind(entry.mode), isDir: entry.isDir && !entry.isSymlink } : null;
   }
   readlink(path: string): Promise<string> {
     return api.localReadlink(path);
@@ -226,16 +274,15 @@ class LocalSource implements FileSource {
   unlink(path: string): Promise<void> {
     return api.localUnlink(path);
   }
-  async realpath(path: string): Promise<string> {
-    return path;
-  }
+  realpath(path: string): Promise<string> { return api.localRealpath(path); }
+  commit(from: string, to: string, replace: boolean): Promise<void> { return api.localCommit(from, to, replace); }
+  setMetadata(path: string, mode?: number, mtime?: number): Promise<void> { return api.localSetMetadata(path, mode === undefined ? undefined : mode & 0o777, mtime); }
   async mkdir(path: string): Promise<void> {
     await mkdir(path);
   }
   async createNew(path: string): Promise<void> {
     // O_CREAT|O_EXCL. writeTextFile would truncate an existing file instead.
-    const fh = await fsOpen(path, { write: true, createNew: true });
-    await fh.close();
+    await api.localCreatePrivate(path);
   }
   async remove(path: string): Promise<void> {
     await remove(path);
@@ -247,13 +294,24 @@ class LocalSource implements FileSource {
     await rename(from, to);
   }
   async readText(path: string): Promise<string> {
-    return readTextFile(path);
+    return api.localReadText(path);
   }
-  async writeText(path: string, text: string): Promise<void> {
-    await writeTextFile(path, text);
+  async writeText(path: string, text: string, expected?: string): Promise<void> {
+    const original = expected ?? await this.readText(path);
+    const metadata = await this.lstat(path);
+    if (metadata?.isSymlink) throw new Error("Open the symbolic link target to edit it");
+    const stage = await this.join(await this.parent(path), `.unissh-${crypto.randomUUID()}.part`);
+    await this.createNew(stage);
+    try {
+      await writeTextFile(stage, text);
+      await this.setMetadata(stage, metadata?.mode, metadata?.mtime);
+      if (await this.readText(path) !== original) throw new Error("File changed on disk. Reopen it before saving.");
+      await this.commit(stage, path, metadata !== null);
+    } finally { await this.remove(stage).catch(() => {}); }
   }
   async join(base: string, name: string): Promise<string> {
     if (name === "..") return this.parent(base);
+    if (!isSafeName(name) || (/^[a-z]:|\\/i.test(base) && !isPortableWindowsName(name))) throw new Error(`Unsupported destination filename: ${name}`);
     return join(base, name);
   }
   async parent(path: string): Promise<string> {

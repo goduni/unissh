@@ -7531,6 +7531,7 @@ dependencies = [
  "dashmap",
  "jni 0.22.4",
  "keyring",
+ "libc",
  "log",
  "objc2",
  "objc2-app-kit",
@@ -7608,6 +7609,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "uniffi",
@@ -7693,8 +7695,10 @@ dependencies = [
 name = "unissh-ssh-transport"
 version = "0.4.0"
 dependencies = [
+ "libc",
  "log",
  "russh",
+ "sha2 0.10.9",
  "subtle",
  "thiserror 2.0.20",
  "tokio",

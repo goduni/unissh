@@ -635,6 +635,21 @@ export const tunnelOpenRemote = (
 export const tunnelClose = (id: string) => invoke<void>("tunnel_close", { id });
 
 // ── SFTP ───────────────────────────────────────────────────────
+export const sftpFingerprint = (id: string, path: string) => invoke<number[]>("sftp_fingerprint", { id, path });
+export const sftpInvalidate = () => invoke<void>("sftp_invalidate");
+export const sftpCommit = (id: string, from: string, to: string, replace: boolean, cancelId?: string) => invoke<void>("sftp_commit", { id, cancelId, from, to, replace });
+export const localCreatePrivate = (path: string) => invoke<void>("local_create_private", { path });
+export const localCopyPrepared = (from: string, to: string) => invoke<number>("local_copy_prepared", { from, to });
+export const localCommit = (from: string, to: string, replace: boolean) => invoke<void>("local_commit", { from, to, replace });
+export const localRealpath = (path: string) => invoke<string>("local_realpath", { path });
+export const localReadText = (path: string, limit = 2 * 1024 * 1024) => invoke<string>("local_read_text", { path, limit });
+export const localSetMetadata = (path: string, mode?: number, mtime?: number) => invoke<void>("local_set_metadata", { path, mode, mtime });
+export const sftpSetMetadata = (id: string, path: string, mode?: number, mtime?: number, cancelId?: string) => invoke<void>("sftp_set_metadata", { id, cancelId, path, mode, mtime });
+export const sftpListDirCancel = (id: string, path: string, cancelId: string) => invoke<SftpEntry[]>("sftp_list_dir_cancel", { id, path, cancelId });
+export const sftpRelay = (id: string, targetId: string, remote: string, destination: string, onProgress: (p: ProgressEvent) => void, cancelId: string) => {
+  const channel = new Channel<ProgressEvent>(); channel.onmessage = onProgress;
+  return invoke<boolean>("sftp_relay", { id, targetId, remote, destination, onProgress: channel, cancelId });
+};
 export const sftpOpen = (a: ConnectArgs, parallelism: number) =>
   invoke<string>("sftp_open", { ...a, parallelism });
 export const sftpListDir = (id: string, path: string) =>
@@ -645,20 +660,20 @@ export const localReadlink = (path: string) => invoke<string>("local_readlink", 
 export const localSymlink = (target: string, path: string, targetIsDir: boolean) =>
   invoke<void>("local_symlink", { target, path, targetIsDir });
 export const localUnlink = (path: string) => invoke<void>("local_unlink", { path });
-export const sftpLstat = (id: string, path: string) => invoke<SftpFileStat>("sftp_lstat", { id, path });
-export const sftpReadlink = (id: string, path: string) => invoke<string>("sftp_readlink", { id, path });
-export const sftpSymlink = (id: string, target: string, path: string) =>
-  invoke<void>("sftp_symlink", { id, target, path });
+export const sftpLstat = (id: string, path: string, cancelId?: string) => invoke<SftpFileStat>("sftp_lstat", { id, cancelId, path });
+export const sftpReadlink = (id: string, path: string, cancelId?: string) => invoke<string>("sftp_readlink", { id, cancelId, path });
+export const sftpSymlink = (id: string, target: string, path: string, cancelId?: string) =>
+  invoke<void>("sftp_symlink", { id, cancelId, target, path });
 /** Mounted volumes (drives) — empty on mobile, where there is nothing to pick. */
 export const localVolumes = () => invoke<LocalVolume[]>("local_volumes");
-export const sftpStat = (id: string, path: string) =>
-  invoke<SftpFileStat>("sftp_stat", { id, path });
+export const sftpStat = (id: string, path: string, cancelId?: string) =>
+  invoke<SftpFileStat>("sftp_stat", { id, cancelId, path });
 export const sftpRealpath = (id: string, path: string) =>
   invoke<string>("sftp_realpath", { id, path });
 export const sftpReopen = (id: string) => invoke<void>("sftp_reopen", { id });
-export const sftpMkdir = (id: string, path: string) => invoke<void>("sftp_mkdir", { id, path });
-export const sftpCreateNewFile = (id: string, path: string) =>
-  invoke<void>("sftp_create_new_file", { id, path });
+export const sftpMkdir = (id: string, path: string, cancelId?: string) => invoke<void>("sftp_mkdir", { id, cancelId, path });
+export const sftpCreateNewFile = (id: string, path: string, cancelId?: string) =>
+  invoke<void>("sftp_create_new_file", { id, cancelId, path });
 export const sftpRmdir = (id: string, path: string) => invoke<void>("sftp_rmdir", { id, path });
 export const sftpRmdirRecursive = (id: string, path: string) =>
   invoke<void>("sftp_rmdir_recursive", { id, path });

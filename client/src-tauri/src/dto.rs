@@ -1150,6 +1150,7 @@ pub struct SftpEntry {
     pub filename: String,
     pub is_dir: bool,
     pub size: u64,
+    pub size_known: bool,
     pub mode: u32,
     pub mtime: u64,
 }
@@ -1159,6 +1160,7 @@ impl From<ffi::SftpEntry> for SftpEntry {
             filename: e.filename,
             is_dir: e.is_dir,
             size: e.size,
+            size_known: e.size_known,
             mode: e.mode,
             mtime: e.mtime,
         }
@@ -1169,6 +1171,7 @@ impl From<ffi::SftpEntry> for SftpEntry {
 #[serde(rename_all = "camelCase")]
 pub struct SftpFileStat {
     pub size: u64,
+    pub size_known: bool,
     pub is_dir: bool,
     pub mode: u32,
     pub mtime: u64,
@@ -1180,6 +1183,7 @@ pub struct SftpFileStat {
 #[serde(rename_all = "camelCase")]
 pub struct LocalEntry {
     pub name: String,
+    pub mode: u32,
     pub is_symlink: bool,
     pub is_dir: bool,
     pub size: u64,
@@ -1203,6 +1207,7 @@ impl From<ffi::SftpFileStat> for SftpFileStat {
     fn from(s: ffi::SftpFileStat) -> Self {
         SftpFileStat {
             size: s.size,
+            size_known: s.size_known,
             is_dir: s.is_dir,
             mode: s.mode,
             mtime: s.mtime,

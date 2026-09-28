@@ -291,6 +291,7 @@ export interface GroupTargetPlan {
 }
 
 export interface SftpEntry {
+  sizeKnown?: boolean;
   filename: string;
   isDir: boolean;
   size: number;
@@ -304,6 +305,7 @@ export interface SftpEntry {
 }
 
 export interface SftpFileStat {
+  sizeKnown?: boolean;
   size: number;
   isDir: boolean;
   mode: number;
@@ -311,6 +313,7 @@ export interface SftpFileStat {
 }
 
 export interface LocalEntry {
+  mode?: number;
   name: string;
   isSymlink: boolean;
   isDir: boolean;

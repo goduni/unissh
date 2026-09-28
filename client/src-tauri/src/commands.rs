@@ -304,11 +304,13 @@ pub async fn lock(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResul
     // Drop every live object first (sessions/tunnels/sftp close on drop).
     state.sessions.clear();
     state.tunnels.clear();
-    state.sftp.clear();
+    invalidate_sftp(&state);
     state.broadcasts.clear();
     state.exec_handles.clear();
     let core = state.core.clone();
-    blocking_ok(move || core.lock()).await
+    let result = blocking_ok(move || core.lock()).await;
+    invalidate_sftp(&state);
+    result
 }
 
 #[tauri::command]
@@ -1623,18 +1625,60 @@ pub async fn sftp_open(
     parallelism: u32,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
+    let epoch = *state.sftp_epoch.lock().unwrap_or_else(|e| e.into_inner());
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
     let proxy = conv_proxy(proxy);
     let sftp =
         blocking(move || core.open_sftp(host, port, user, auth, jumps, proxy, parallelism)).await?;
+    let guard = state.sftp_epoch.lock().unwrap_or_else(|e| e.into_inner());
+    if *guard != epoch || !state.core.is_unlocked() {
+        sftp.close();
+        return Err(ApiError::other(
+            "SFTP connection expired during vault change",
+        ));
+    }
     let id = new_id();
     state.sftp.insert(id.clone(), sftp);
     Ok(id)
 }
 
+fn invalidate_sftp(state: &AppState) {
+    let mut epoch = state.sftp_epoch.lock().unwrap_or_else(|e| e.into_inner());
+    *epoch = epoch.wrapping_add(1);
+    let sessions: Vec<_> = state.sftp.iter().map(|s| s.value().clone()).collect();
+    state.sftp.clear();
+    drop(epoch);
+    for session in sessions {
+        session.close();
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_invalidate(state: State<'_, AppState>) -> ApiResult<()> {
+    invalidate_sftp(&state);
+    Ok(())
+}
+
+fn transfer_cancel(
+    state: &AppState,
+    id: Option<String>,
+) -> ApiResult<Option<Arc<unissh_ffi::CancelToken>>> {
+    id.map(|id| {
+        state
+            .cancels
+            .get(&id)
+            .map(|token| token.clone())
+            .ok_or_else(|| ApiError::not_found("cancel token"))
+    })
+    .transpose()
+}
+
 fn get_sftp(state: &AppState, id: &str) -> ApiResult<Arc<unissh_ffi::SftpFfi>> {
+    if !state.core.is_unlocked() {
+        return Err(ApiError::other("Instance is locked"));
+    }
     Ok(state
         .sftp
         .get(id)
@@ -1653,6 +1697,284 @@ pub async fn sftp_list_dir(
     Ok(v.into_iter().map(Into::into).collect())
 }
 
+fn local_mode(md: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        md.mode()
+    }
+    #[cfg(not(unix))]
+    {
+        if md.is_symlink() {
+            0o120000
+        } else if md.is_dir() {
+            0o040700
+        } else if md.is_file() {
+            0o100600
+        } else {
+            0o010000
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_fingerprint(
+    id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<u8>> {
+    let s = get_sftp(&state, &id)?;
+    blocking(move || s.fingerprint(path)).await
+}
+
+#[tauri::command]
+pub async fn sftp_commit(
+    id: String,
+    from: String,
+    to: String,
+    replace: bool,
+    cancel_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let s = get_sftp(&state, &id)?;
+    let cancel = transfer_cancel(&state, cancel_id)?;
+    blocking(move || match cancel {
+        Some(token) => s.commit_cancel(from, to, replace, token),
+        None => s.commit(from, to, replace),
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn sftp_set_metadata(
+    id: String,
+    path: String,
+    mode: Option<u32>,
+    mtime: Option<u32>,
+    cancel_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let s = get_sftp(&state, &id)?;
+    let cancel = transfer_cancel(&state, cancel_id)?;
+    blocking(move || match cancel {
+        Some(token) => s.set_metadata_cancel(path, mode, mtime, token),
+        None => s.set_metadata(path, mode, mtime),
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn local_create_private(path: String) -> ApiResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(path).map_err(ApiError::other)?;
+        Ok(())
+    })
+    .await?
+}
+
+fn open_regular(path: &str) -> ApiResult<std::fs::File> {
+    if !std::fs::symlink_metadata(path)
+        .map_err(ApiError::other)?
+        .is_file()
+    {
+        return Err(ApiError::other("Not a regular file"));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let file = options.open(path).map_err(ApiError::other)?;
+    if !file.metadata().map_err(ApiError::other)?.is_file() {
+        return Err(ApiError::other("Not a regular file"));
+    }
+    Ok(file)
+}
+
+#[tauri::command]
+pub async fn local_copy_prepared(from: String, to: String) -> ApiResult<u64> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Write;
+        let mut source = open_regular(&from)?;
+        if std::fs::canonicalize(&from).map_err(ApiError::other)?
+            == std::fs::canonicalize(&to).map_err(ApiError::other)?
+        {
+            return Err(ApiError::other("Cannot copy a file onto itself"));
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+            let a = source.metadata().map_err(ApiError::other)?;
+            let b = std::fs::symlink_metadata(&to).map_err(ApiError::other)?;
+            if a.dev() == b.dev() && a.ino() == b.ino() {
+                return Err(ApiError::other("Cannot copy a file onto itself"));
+            }
+        }
+        let mut target = options.open(to).map_err(ApiError::other)?;
+        if !target.metadata().map_err(ApiError::other)?.is_file() {
+            return Err(ApiError::other("Not a regular file"));
+        }
+        target.set_len(0).map_err(ApiError::other)?;
+        let bytes = std::io::copy(&mut source, &mut target).map_err(ApiError::other)?;
+        target.flush().map_err(ApiError::other)?;
+        Ok(bytes)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn local_realpath(path: String) -> ApiResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::canonicalize(path)
+            .map_err(ApiError::other)?
+            .into_os_string()
+            .into_string()
+            .map_err(|_| ApiError::other("Path is not valid UTF-8"))
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn local_commit(from: String, to: String, replace: bool) -> ApiResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if replace {
+            return std::fs::rename(from, to).map_err(ApiError::other);
+        }
+        // link(2) publishes the prepared inode only if the destination is absent.
+        // It also preserves a symlink inode on Unix. Never fall back to overwrite.
+        #[cfg(unix)]
+        {
+            std::fs::hard_link(&from, &to).map_err(ApiError::other)?;
+            std::fs::remove_file(from).map_err(ApiError::other)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let from: Vec<u16> = std::ffi::OsStr::new(&from)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            let to: Vec<u16> = std::ffi::OsStr::new(&to)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            // Flags=0 refuses replacement and preserves directory symlinks too.
+            if unsafe {
+                windows_sys::Win32::Storage::FileSystem::MoveFileExW(from.as_ptr(), to.as_ptr(), 0)
+            } == 0
+            {
+                return Err(ApiError::other(std::io::Error::last_os_error()));
+            }
+            Ok(())
+        }
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn local_set_metadata(
+    path: String,
+    mode: Option<u32>,
+    mtime: Option<u64>,
+) -> ApiResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(mode) = mode {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o777))
+                    .map_err(ApiError::other)?;
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        if let Some(mtime) = mtime {
+            let file = std::fs::File::open(path).map_err(ApiError::other)?;
+            file.set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime)),
+            )
+            .map_err(ApiError::other)?;
+        }
+        Ok(())
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn local_read_text(path: String, limit: u32) -> ApiResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Read;
+        let file = open_regular(&path)?;
+        if !file.metadata().map_err(ApiError::other)?.is_file() {
+            return Err(ApiError::other("Not a regular file"));
+        }
+        let mut bytes = Vec::new();
+        file.take(u64::from(limit.min(2 * 1024 * 1024)) + 1)
+            .read_to_end(&mut bytes)
+            .map_err(ApiError::other)?;
+        if bytes.len() > limit.min(2 * 1024 * 1024) as usize {
+            return Err(ApiError::other("File exceeds editor size limit"));
+        }
+        String::from_utf8(bytes).map_err(ApiError::other)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn sftp_list_dir_cancel(
+    id: String,
+    path: String,
+    cancel_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::SftpEntry>> {
+    let s = get_sftp(&state, &id)?;
+    let cancel = state
+        .cancels
+        .get(&cancel_id)
+        .ok_or_else(|| ApiError::not_found("cancel token"))?
+        .clone();
+    Ok(blocking(move || s.list_dir_cancel(path, cancel))
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn sftp_relay(
+    id: String,
+    target_id: String,
+    remote: String,
+    destination: String,
+    on_progress: Channel<ProgressEvent>,
+    cancel_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<bool> {
+    let source = get_sftp(&state, &id)?;
+    let target = get_sftp(&state, &target_id)?;
+    let cancel = state
+        .cancels
+        .get(&cancel_id)
+        .ok_or_else(|| ApiError::not_found("cancel token"))?
+        .clone();
+    let progress: Arc<dyn SftpProgressObserver> = Arc::new(ChannelSftpProgress::new(on_progress));
+    blocking(move || source.relay_to(target, remote, destination, Some(progress), Some(cancel)))
+        .await
+}
+
 /// List a LOCAL directory in one shot (name + is_dir + size + mtime), avoiding
 /// the readDir + per-file stat IPC fan-out the client would otherwise do.
 #[tauri::command]
@@ -1660,20 +1982,24 @@ pub async fn local_list_dir(path: String) -> ApiResult<Vec<dto::LocalEntry>> {
     tauri::async_runtime::spawn_blocking(move || -> ApiResult<Vec<dto::LocalEntry>> {
         let mut out = Vec::new();
         for entry in std::fs::read_dir(&path).map_err(ApiError::other)? {
-            let Ok(entry) = entry else { continue };
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let md = entry.metadata().ok();
-            let is_dir = md.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-            let size = md.as_ref().map(|m| m.len()).unwrap_or(0);
+            let entry = entry.map_err(ApiError::other)?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| ApiError::other("Filename is not valid UTF-8"))?;
+            let md = entry.metadata().map_err(ApiError::other)?;
+            let is_dir = md.is_dir();
+            let size = md.len();
             let mtime = md
-                .as_ref()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+                .modified()
+                .map_err(ApiError::other)?
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
             out.push(dto::LocalEntry {
                 name,
-                is_symlink: md.as_ref().is_some_and(|m| m.is_symlink()),
+                is_symlink: md.is_symlink(),
+                mode: local_mode(&md),
                 is_dir,
                 size,
                 mtime,
@@ -1697,10 +2023,12 @@ pub async fn local_lstat(path: String) -> ApiResult<Option<dto::LocalEntry>> {
             name: std::path::Path::new(&path)
                 .file_name()
                 .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
+                .to_str()
+                .ok_or_else(|| ApiError::other("Filename is not valid UTF-8"))?
+                .to_owned(),
             is_dir: md.is_dir(),
             is_symlink: md.is_symlink(),
+            mode: local_mode(&md),
             size: md.len(),
             mtime: md
                 .modified()
@@ -1877,10 +2205,16 @@ fn is_browsable_volume(path: &str, removable: bool) -> bool {
 pub async fn sftp_stat(
     id: String,
     path: String,
+    cancel_id: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<dto::SftpFileStat> {
     let s = get_sftp(&state, &id)?;
-    let st = blocking(move || s.stat(path)).await?;
+    let cancel = transfer_cancel(&state, cancel_id)?;
+    let st = blocking(move || match cancel {
+        Some(token) => s.stat_cancel(path, true, token),
+        None => s.stat(path),
+    })
+    .await?;
     Ok(st.into())
 }
 
@@ -1888,20 +2222,33 @@ pub async fn sftp_stat(
 pub async fn sftp_lstat(
     id: String,
     path: String,
+    cancel_id: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<dto::SftpFileStat> {
     let s = get_sftp(&state, &id)?;
-    Ok(blocking(move || s.lstat(path)).await?.into())
+    let cancel = transfer_cancel(&state, cancel_id)?;
+    Ok(blocking(move || match cancel {
+        Some(token) => s.stat_cancel(path, false, token),
+        None => s.lstat(path),
+    })
+    .await?
+    .into())
 }
 
 #[tauri::command]
 pub async fn sftp_readlink(
     id: String,
     path: String,
+    cancel_id: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let s = get_sftp(&state, &id)?;
-    blocking(move || s.readlink(path)).await
+    let cancel = transfer_cancel(&state, cancel_id)?;
+    blocking(move || match cancel {
+        Some(token) => s.readlink_cancel(path, token),
+        None => s.readlink(path),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1909,10 +2256,16 @@ pub async fn sftp_symlink(
     id: String,
     target: String,
     path: String,
+    cancel_id: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
     let s = get_sftp(&state, &id)?;
-    blocking(move || s.symlink(target, path)).await
+    let cancel = transfer_cancel(&state, cancel_id)?;
+    blocking(move || match cancel {
+        Some(token) => s.symlink_cancel(target, path, token),
+        None => s.symlink(target, path),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1935,17 +2288,28 @@ pub async fn sftp_reopen(id: String, state: State<'_, AppState>) -> ApiResult<()
 #[tauri::command]
 pub async fn sftp_mkdir(id: String, path: String, state: State<'_, AppState>) -> ApiResult<()> {
     let s = get_sftp(&state, &id)?;
-    blocking(move || s.mkdir(path)).await
+    let cancel = transfer_cancel(&state, cancel_id)?;
+    blocking(move || match cancel {
+        Some(token) => s.mkdir_cancel(path, token),
+        None => s.mkdir(path),
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn sftp_create_new_file(
     id: String,
     path: String,
+    cancel_id: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
     let s = get_sftp(&state, &id)?;
-    blocking(move || s.create_new_file(path)).await
+    let cancel = transfer_cancel(&state, cancel_id)?;
+    blocking(move || match cancel {
+        Some(token) => s.create_new_cancel(path, token),
+        None => s.create_new_file(path),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2000,7 +2364,7 @@ pub async fn sftp_read_file(
     state: State<'_, AppState>,
 ) -> ApiResult<tauri::ipc::Response> {
     let s = get_sftp(&state, &id)?;
-    let bytes = blocking(move || s.read_file(path)).await?;
+    let bytes = blocking(move || s.read_file_bounded(path, 2 * 1024 * 1024)).await?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -2028,9 +2392,9 @@ pub async fn sftp_download(
     state: State<'_, AppState>,
 ) -> ApiResult<bool> {
     let s = get_sftp(&state, &id)?;
-    let cancel = cancel_id.and_then(|cid| state.cancels.get(&cid).map(|c| c.clone()));
+    let cancel = transfer_cancel(&state, cancel_id)?;
     let progress: Option<Arc<dyn SftpProgressObserver>> =
-        Some(Arc::new(ChannelSftpProgress { chan: on_progress }));
+        Some(Arc::new(ChannelSftpProgress::new(on_progress)));
     blocking(move || {
         s.sftp_download(
             remote_path,
@@ -2056,9 +2420,9 @@ pub async fn sftp_upload(
     state: State<'_, AppState>,
 ) -> ApiResult<bool> {
     let s = get_sftp(&state, &id)?;
-    let cancel = cancel_id.and_then(|cid| state.cancels.get(&cid).map(|c| c.clone()));
+    let cancel = transfer_cancel(&state, cancel_id)?;
     let progress: Option<Arc<dyn SftpProgressObserver>> =
-        Some(Arc::new(ChannelSftpProgress { chan: on_progress }));
+        Some(Arc::new(ChannelSftpProgress::new(on_progress)));
     blocking(move || s.sftp_upload(local_path, remote_path, offset, progress, cancel)).await
 }
 

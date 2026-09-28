@@ -1,3 +1,4 @@
+import { mapWorkers } from "@/sftp/transfer-engine";
 // SFTP — drag-first, multi-location file manager. Desktop: two pane slots, each
 // with its own location tabs; drag between them (or onto a tab) to transfer.
 // Narrow/mobile: a single slot whose tab strip holds every location. This file
@@ -95,7 +96,7 @@ export function ViewSftp() {
   const sessions = useApp((s) => s.sftpSessions);
   const externalEditDefault = useApp((s) => s.sftpExternalEditDefault);
   const hosts = useApp((s) => s.hosts);
-  const enqueueTransfer = useApp((s) => s.enqueueTransfer);
+  const enqueueTransfers = useApp((s) => s.enqueueTransfers);
   const closeSftpSession = useApp((s) => s.closeSftpSession);
   const pendingSftpFocus = useApp((s) => s.pendingSftpFocus);
   const setPendingSftpFocus = useApp((s) => s.setPendingSftpFocus);
@@ -250,7 +251,7 @@ export function ViewSftp() {
         offset: 0,
       });
     }
-    built.forEach(enqueueTransfer);
+    enqueueTransfers(built);
 
     // Run the batch's transfers concurrently, all sharing ONE semaphore sized to
     // the parallel-transfers setting: many loose files move at once, and a folder's
@@ -262,8 +263,7 @@ export function ViewSftp() {
     const sem = makeTransferSemaphore();
     const serialized = serializeResolver(resolver);
     const { patchTransfer } = useApp.getState();
-    await Promise.all(
-      built.map(async (tr) => {
+    await mapWorkers(built, 8, async (tr) => {
         // A vault switch / lock bumps the teardown generation: don't start work.
         if (teardownGeneration() !== gen) {
           patchTransfer(tr.id, { state: "cancelled" });
@@ -272,14 +272,15 @@ export function ViewSftp() {
         // Skip items cancelled while still queued.
         if (useApp.getState().transfers.find((x) => x.id === tr.id)?.state === "cancelled") return;
         await startTransfer(tr, fromSource, toSource, serialized, sem);
-      }),
-    );
+      });
     refreshShowing(toLoc);
   }
 
-  const sendTo = (entries: Entry[], fromSlot: SlotCtl, toLoc: LocationRef) => {
+  const sendTo = (entries: Entry[], fromSlot: SlotCtl, toLoc: LocationRef, toCwd?: string) => {
+    const other = fromSlot === left ? right : left;
+    toCwd ??= keyOf(other.location) === keyOf(toLoc) ? other.cwd : cwdOf(toLoc);
     if (!entries.length || toLoc.kind === "none") return;
-    runTransfers(entries, fromSlot.location, fromSlot.cwd, toLoc, cwdOf(toLoc));
+    runTransfers(entries, fromSlot.location, fromSlot.cwd, toLoc, toCwd);
   };
 
   const handleDrop = async (toLoc: LocationRef, toCwd: string) => {
@@ -501,7 +502,7 @@ export function ViewSftp() {
     onActivateTab: (id: string) => setLoc(refOf(id)),
     onCloseTab: (id: string) => closeSftpSession(id),
     onPickHost: (h: ConnectionProfile) => pickHost(setLoc, h),
-    onSend: (entries: Entry[]) => sendTo(entries, slot, counterpart.location),
+    onSend: (entries: Entry[]) => sendTo(entries, slot, counterpart.location, counterpart.cwd),
     onRowContext: (entry: Entry, x: number, y: number) => rowMenu(entry, slot, x, y),
     onEmptyContext: (x: number, y: number) => emptyMenu(slot, x, y),
     onNewFolder: () => setDialog({ kind: "newfolder", slot }),

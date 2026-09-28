@@ -9,7 +9,7 @@ vi.mock("@/bridge/api", () => api);
 vi.mock("@tauri-apps/plugin-fs", () => fs);
 import { sourceFor } from "./sources";
 
-const remote = () => sourceFor({ kind: "remote", sessionId: "s" }, [{ id: "s", label: "server" } as SftpSession]);
+const remote = () => sourceFor({ kind: "remote", sessionId: "s" }, [{ id: "s", label: "server", host: "server", user: "user", port: 22 } as SftpSession]);
 beforeEach(() => { vi.resetAllMocks(); });
 
 describe("conflict metadata failures", () => {

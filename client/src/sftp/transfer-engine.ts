@@ -63,7 +63,7 @@ export function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise
  *  (more would just block on the core's pool anyway). Pure and self-contained. */
 export class Semaphore {
   private avail: number;
-  private readonly waiters: Array<() => void> = [];
+  private readonly waiters = new Set<() => void>();
 
   constructor(capacity: number) {
     this.avail = Math.max(1, Math.floor(capacity));
@@ -91,20 +91,40 @@ export class Semaphore {
         resolve();
       };
       const abort = () => {
-        const index = this.waiters.indexOf(ready);
-        if (index >= 0) this.waiters.splice(index, 1);
+        this.waiters.delete(ready);
         reject(signal?.reason);
       };
-      this.waiters.push(ready);
+      this.waiters.add(ready);
       signal?.addEventListener("abort", abort, { once: true });
     });
   }
 
   private release(): void {
-    const next = this.waiters.shift();
-    if (next) next();
+    const next = this.waiters.values().next().value;
+    if (next) { this.waiters.delete(next); next(); }
     else this.avail += 1;
   }
+}
+
+/** Fixed workers keep promises and abort listeners proportional to concurrency.
+ * Wait for every worker on failure so no writer survives into a retry. */
+export async function mapWorkers<T, R>(items: readonly T[], concurrency: number, fn: (item: T, index: number) => Promise<R>, signal?: AbortSignal): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  let failed = false;
+  let failure: unknown;
+  await Promise.all(Array.from({ length: Math.min(items.length, concurrency) }, async () => {
+    try {
+      while (!failed) {
+        signal?.throwIfAborted();
+        const index = cursor++;
+        if (index >= items.length) return;
+        results[index] = await fn(items[index], index);
+      }
+    } catch (error) { if (!failed) { failed = true; failure = error; } }
+  }));
+  if (failed) throw failure;
+  return results;
 }
 
 export interface WalkItem {
@@ -120,6 +140,7 @@ export interface WalkItem {
 export interface TreeScan {
   dirs: string[];
   files: WalkItem[];
+  directoryMetadata: Map<string, Entry>;
 }
 
 /** Recursively enumerate `root` on `src`, listing sibling sub-directories
@@ -137,29 +158,30 @@ export async function collectTree(
 ): Promise<TreeScan> {
   const dirs: string[] = [];
   const files: WalkItem[] = [];
-  const visit = async (absDir: string, rel: string): Promise<void> => {
-    const entries = await sem.run(() => abortable(src.list(absDir), signal), signal);
-    entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
-    const sub: Array<Promise<void>> = [];
-    for (const e of entries) {
-      signal?.throwIfAborted();
-      if (!isSafeName(e.name)) continue;
-      const childRel = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDir && !e.isSymlink) {
-        // File entries already have their relative path and size. Only a
-        // directory needs an absolute path for its next listing; local join()
-        // is a native IPC, so doing it for every file serializes large scans.
-        const childAbs = await src.join(absDir, e.name);
-        dirs.push(childRel);
-        sub.push(visit(childAbs, childRel));
-      } else {
-        files.push({ relPath: childRel, isDir: false, size: e.isSymlink ? 0 : e.size, ...(e.isSymlink ? { isSymlink: true } : {}) });
+  const directoryMetadata = new Map<string, Entry>();
+  let pending = [{ abs: root, rel: "" }];
+  while (pending.length) {
+    const next: typeof pending = [];
+    await mapWorkers(pending, 8, async ({ abs, rel }) => {
+      const entries = await sem.run(() => signal ? src.list(abs, signal) : src.list(abs), signal);
+      for (const e of entries) {
+        signal?.throwIfAborted();
+        if (e.name === "." || e.name === "..") continue;
+        if (!isSafeName(e.name)) throw new Error(`Invalid filename: ${e.name}`);
+        const childRel = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDir && !e.isSymlink) {
+          dirs.push(childRel);
+          directoryMetadata.set(childRel, e);
+          next.push({ abs: await src.join(abs, e.name), rel: childRel });
+        } else {
+          if (!e.isSymlink && e.mode && (e.mode & 0o170000) !== 0o100000) throw new Error(`Unsupported file type: ${childRel}`);
+          files.push({ relPath: childRel, isDir: false, size: e.isSymlink ? 0 : e.size, ...(e.isSymlink ? { isSymlink: true } : {}) });
+        }
       }
-    }
-    await Promise.all(sub);
-  };
-  await visit(root, "");
-  return { dirs, files };
+    }, signal);
+    pending = next;
+  }
+  return { dirs, files, directoryMetadata };
 }
 
 /** Recursively enumerate `root` on `src`, yielding each directory BEFORE its

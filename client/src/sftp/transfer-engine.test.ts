@@ -25,7 +25,7 @@ describe("directory scanning", () => {
       "C:\\root": [
         { name: "a", isDir: true, size: 0 },
         { name: "root.txt", isDir: false, size: 10 },
-        ...[".", "..", "bad/name", "bad\\name"].map((name) => ({ name, isDir: true, size: 0 })),
+        ...[".", ".."].map((name) => ({ name, isDir: true, size: 0 })),
       ],
       "C:\\root\\a": [{ name: "b", isDir: true, size: 0 }],
       "C:\\root\\a\\b": [{ name: "nested.txt", isDir: false, size: 20 }],
@@ -122,5 +122,20 @@ describe("symlink scanning", () => {
     expect(files.every((it) => it.isSymlink && !it.isDir && it.size === 0)).toBe(true);
     expect(list).toHaveBeenCalledExactlyOnceWith("/venv");
     expect(join).not.toHaveBeenCalled();
+  });
+});
+
+describe("scanner integrity", () => {
+  it("keeps valid POSIX backslashes", async () => {
+    const src = { list: async () => [{ name: "a\\b", size: 1, isDir: false, mode: 0o100600 }] } as unknown as FileSource;
+    expect((await collectTree(src, "/", new Semaphore(1))).files[0].relPath).toBe("a\\b");
+  });
+  it.each([0o010600, 0o140600, 0o020600])("rejects special type %s before opening it", async (mode) => {
+    const src = { list: async () => [{ name: "special", size: 0, isDir: false, mode }] } as unknown as FileSource;
+    await expect(collectTree(src, "/", new Semaphore(1))).rejects.toThrow("Unsupported file type");
+  });
+  it("reports invalid names instead of silently dropping entries", async () => {
+    const src = { list: async () => [{ name: "escape/path", size: 1, isDir: false }] } as unknown as FileSource;
+    await expect(collectTree(src, "/", new Semaphore(1))).rejects.toThrow("Invalid filename");
   });
 });
