@@ -24,7 +24,7 @@ pub trait SftpProgress: Send + Sync {
     fn on_progress(&self, transferred: u64, total: u64);
 }
 
-/// Cooperative transfer cancellation (checked between chunks).
+/// Cooperative transfer cancellation (also checked while waiting for network I/O).
 pub trait SftpCancel: Send + Sync {
     /// Whether cancellation has been requested.
     fn is_cancelled(&self) -> bool;
@@ -148,6 +148,7 @@ pub struct Sftp<S> {
     /// server sent FXP_STATUS, the stream is on a packet boundary) does NOT poison
     /// the channel — it stays usable.
     poisoned: bool,
+    cancel: Option<Arc<dyn SftpCancel>>,
 }
 
 impl<S> Sftp<S>
@@ -160,6 +161,7 @@ where
             stream,
             next_id: 0,
             poisoned: false,
+            cancel: None,
         };
         let mut init = Vec::with_capacity(5);
         init.push(FXP_INIT);
@@ -239,6 +241,40 @@ where
         progress: Option<Arc<dyn SftpProgress>>,
         cancel: Option<Arc<dyn SftpCancel>>,
     ) -> Result<TransferOutcome, TransportError> {
+        if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
+            return Ok(TransferOutcome::Cancelled);
+        }
+        self.cancel = cancel.clone();
+        let result = self
+            .download_to_inner(
+                remote,
+                local_path,
+                start_offset,
+                known_size,
+                progress,
+                cancel,
+            )
+            .await;
+        let cancelled = self.cancel.take().is_some_and(|c| c.is_cancelled());
+        if cancelled {
+            // An interrupted frame or pipeline leaves unread replies. Discard
+            // this channel; never wait for a silent peer to drain them.
+            self.poisoned = true;
+            Ok(TransferOutcome::Cancelled)
+        } else {
+            result
+        }
+    }
+
+    async fn download_to_inner(
+        &mut self,
+        remote: &str,
+        local_path: &str,
+        start_offset: u64,
+        known_size: Option<u64>,
+        progress: Option<Arc<dyn SftpProgress>>,
+        cancel: Option<Arc<dyn SftpCancel>>,
+    ) -> Result<TransferOutcome, TransportError> {
         // The size is needed only to know how far to send READs. A recursive folder
         // walk already did a listing with sizes — then `known_size` provides it, and we
         // save a separate `stat` round-trip for EVERY file (the dominant
@@ -265,90 +301,101 @@ where
             .truncate(false)
             .open(local_path)
             .await?;
-        f.seek(SeekFrom::Start(start_offset)).await?;
-        // Pipelined: keep WINDOW reads in flight; buffer out-of-order replies in
-        // `reorder` and write to the local file only in contiguous order.
-        let mut in_flight: HashMap<u32, (u64, u32)> = HashMap::new();
-        let mut reorder: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
-        let mut write_offset = start_offset; // next contiguous byte to write
-        let mut next_req = start_offset; // next byte to request
-        let mut eof = false; // server signalled EOF (file shorter than stat)
-        let mut outcome = TransferOutcome::Completed;
-        loop {
-            if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
-                outcome = TransferOutcome::Cancelled;
-                break;
-            }
-            while in_flight.len() < WINDOW && !eof && next_req < total {
-                let len = std::cmp::min(CHUNK as u64, total - next_req) as u32;
-                let id = self.send_read(&handle, next_req, len).await?;
-                in_flight.insert(id, (next_req, len));
-                next_req += len as u64;
-            }
-            if in_flight.is_empty() {
-                break; // nothing pending and nothing left to request
-            }
-            let (typ, id, body) = self.recv_any().await?;
-            // The errors below arrive with a NON-empty in_flight (unretrieved
-            // replies remain) → the stream is desynchronized, the channel must not be reused.
-            let Some((off, len)) = in_flight.remove(&id) else {
-                return Err(self.poison(sftp_err("SFTP response id mismatch")));
-            };
-            match typ {
-                FXP_DATA => {
-                    let mut r = Reader::new(&body);
-                    r.u32()?; // id
-                    let data = r.string()?;
-                    if data.is_empty() {
-                        return Err(self.poison(sftp_err("empty DATA chunk")));
-                    }
-                    let got = data.len() as u64;
-                    // Short read (legal): re-request the remaining sub-range.
-                    if got < len as u64 && off + got < total {
-                        let rlen = std::cmp::min(len as u64 - got, total - (off + got)) as u32;
-                        let id2 = self.send_read(&handle, off + got, rlen).await?;
-                        in_flight.insert(id2, (off + got, rlen));
-                    }
-                    reorder.insert(off, data);
-                    while let Some(buf) = reorder.remove(&write_offset) {
-                        f.write_all(&buf).await?;
-                        write_offset += buf.len() as u64;
-                    }
-                    if let Some(p) = &progress {
-                        p.on_progress(write_offset, total);
-                    }
+        // Every exit after opening the local file must wait for its buffered
+        // writes. In particular, cancelling a network wait returns through `?`
+        // inside this block; dropping tokio::fs::File alone does not join writes.
+        let result = async {
+            f.seek(SeekFrom::Start(start_offset)).await?;
+            // Pipelined: keep WINDOW reads in flight; buffer out-of-order replies in
+            // `reorder` and write to the local file only in contiguous order.
+            let mut in_flight: HashMap<u32, (u64, u32)> = HashMap::new();
+            let mut reorder: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
+            let mut write_offset = start_offset; // next contiguous byte to write
+            let mut next_req = start_offset; // next byte to request
+            let mut eof = false; // server signalled EOF (file shorter than stat)
+            let mut outcome = TransferOutcome::Completed;
+            loop {
+                if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
+                    outcome = TransferOutcome::Cancelled;
+                    break;
                 }
-                FXP_STATUS => {
-                    let mut r = Reader::new(&body);
-                    r.u32()?; // id
-                    let code = r.u32()?;
-                    if code == FX_EOF {
-                        eof = true; // shorter than stat said; stop requesting, drain rest
-                    } else {
-                        let e = status_to_err(code, &mut r);
-                        return Err(self.poison(e));
+                while in_flight.len() < WINDOW && !eof && next_req < total {
+                    let len = std::cmp::min(CHUNK as u64, total - next_req) as u32;
+                    let id = self.send_read(&handle, next_req, len).await?;
+                    in_flight.insert(id, (next_req, len));
+                    next_req += len as u64;
+                }
+                if in_flight.is_empty() {
+                    break; // nothing pending and nothing left to request
+                }
+                let (typ, id, body) = self.recv_any().await?;
+                // The errors below arrive with a NON-empty in_flight (unretrieved
+                // replies remain) → the stream is desynchronized, the channel must not be reused.
+                let Some((off, len)) = in_flight.remove(&id) else {
+                    return Err(self.poison(sftp_err("SFTP response id mismatch")));
+                };
+                match typ {
+                    FXP_DATA => {
+                        let mut r = Reader::new(&body);
+                        r.u32()?; // id
+                        let data = r.string()?;
+                        if data.is_empty() {
+                            return Err(self.poison(sftp_err("empty DATA chunk")));
+                        }
+                        let got = data.len() as u64;
+                        // Short read (legal): re-request the remaining sub-range.
+                        if got < len as u64 && off + got < total {
+                            let rlen = std::cmp::min(len as u64 - got, total - (off + got)) as u32;
+                            let id2 = self.send_read(&handle, off + got, rlen).await?;
+                            in_flight.insert(id2, (off + got, rlen));
+                        }
+                        reorder.insert(off, data);
+                        while let Some(buf) = reorder.remove(&write_offset) {
+                            f.write_all(&buf).await?;
+                            write_offset += buf.len() as u64;
+                        }
+                        if let Some(p) = &progress {
+                            p.on_progress(write_offset, total);
+                        }
                     }
+                    FXP_STATUS => {
+                        let mut r = Reader::new(&body);
+                        r.u32()?; // id
+                        let code = r.u32()?;
+                        if code == FX_EOF {
+                            eof = true; // shorter than stat said; stop requesting, drain rest
+                        } else {
+                            let e = status_to_err(code, &mut r);
+                            return Err(self.poison(e));
+                        }
+                    }
+                    _ => return Err(self.poison(sftp_err("unexpected reply to READ"))),
                 }
-                _ => return Err(self.poison(sftp_err("unexpected reply to READ"))),
             }
-        }
-        // Drain replies still in flight (cancel/short) so the channel is left
-        // clean for the next operation; bounded by the per-read IO timeout.
-        while !in_flight.is_empty() {
-            match self.recv_any().await {
-                Ok((_, id, _)) => {
-                    in_flight.remove(&id);
+            if outcome == TransferOutcome::Cancelled {
+                self.poisoned = true;
+                return Ok(outcome);
+            }
+            // Drain replies still in flight (short) so the channel is left
+            // clean for the next operation; bounded by the per-read IO timeout.
+            while !in_flight.is_empty() {
+                match self.recv_any().await {
+                    Ok((_, id, _)) => {
+                        in_flight.remove(&id);
+                    }
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
+            let _ = self.close(&handle).await;
+            if outcome == TransferOutcome::Completed {
+                // Truncate any old tail beyond the actual end.
+                f.set_len(write_offset).await?;
+            }
+            Ok(outcome)
         }
-        let _ = self.close(&handle).await;
-        if outcome == TransferOutcome::Completed {
-            // Truncate any old tail beyond the actual end.
-            f.set_len(write_offset).await?;
-        }
+        .await;
         f.flush().await?;
-        Ok(outcome)
+        result
     }
 
     /// Resumable upload of the local `local_path` → `remote`, starting from
@@ -356,6 +403,32 @@ where
     /// not to wipe the already-uploaded prefix when resuming). Progress/cancellation as in
     /// [`Sftp::download_to`].
     pub async fn upload_from(
+        &mut self,
+        local_path: &str,
+        remote: &str,
+        start_offset: u64,
+        progress: Option<Arc<dyn SftpProgress>>,
+        cancel: Option<Arc<dyn SftpCancel>>,
+    ) -> Result<TransferOutcome, TransportError> {
+        if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
+            return Ok(TransferOutcome::Cancelled);
+        }
+        self.cancel = cancel.clone();
+        let result = self
+            .upload_from_inner(local_path, remote, start_offset, progress, cancel)
+            .await;
+        let cancelled = self.cancel.take().is_some_and(|c| c.is_cancelled());
+        if cancelled {
+            // An interrupted frame or pipeline leaves unread replies. Discard
+            // this channel; never wait for a silent peer to drain them.
+            self.poisoned = true;
+            Ok(TransferOutcome::Cancelled)
+        } else {
+            result
+        }
+    }
+
+    async fn upload_from_inner(
         &mut self,
         local_path: &str,
         remote: &str,
@@ -419,6 +492,10 @@ where
             if let Some(p) = &progress {
                 p.on_progress(acked, total);
             }
+        }
+        if outcome == TransferOutcome::Cancelled {
+            self.poisoned = true;
+            return Ok(outcome);
         }
         while !in_flight.is_empty() {
             match self.recv_any().await {
@@ -807,7 +884,12 @@ where
     }
 
     async fn send(&mut self, body: &[u8]) -> Result<(), TransportError> {
-        let r = self.send_raw(body).await;
+        let cancel = self.cancel.clone();
+        let r = tokio::select! {
+            biased;
+            _ = wait_cancelled(cancel) => Err(sftp_err("transfer cancelled")),
+            result = self.send_raw(body) => result,
+        };
         if r.is_err() {
             // A write/flush error = a partial write, the stream is in an unknown state.
             self.poisoned = true;
@@ -831,7 +913,12 @@ where
     }
 
     async fn read_packet(&mut self) -> Result<(u8, Vec<u8>), TransportError> {
-        let r = self.read_packet_raw().await;
+        let cancel = self.cancel.clone();
+        let r = tokio::select! {
+            biased;
+            _ = wait_cancelled(cancel) => Err(sftp_err("transfer cancelled")),
+            result = self.read_packet_raw() => result,
+        };
         if r.is_err() {
             // A break/timeout/corrupt length = the position in the stream is unknown.
             self.poisoned = true;
@@ -854,6 +941,20 @@ where
             .map_err(|_| sftp_err("read timeout"))??;
         let typ = buf[0];
         Ok((typ, buf.split_off(1)))
+    }
+}
+
+// The public cancellation contract is a synchronous flag (also used by FFI).
+// Poll it only during a pending network wait; no timer on ordinary metadata I/O.
+async fn wait_cancelled(cancel: Option<Arc<dyn SftpCancel>>) {
+    let Some(cancel) = cancel else {
+        return std::future::pending().await;
+    };
+    loop {
+        if cancel.is_cancelled() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -980,6 +1081,151 @@ impl<'a> Reader<'a> {
 mod tests {
     use super::*;
 
+    struct TestCancel(std::sync::atomic::AtomicBool);
+    impl SftpCancel for TestCancel {
+        fn is_cancelled(&self) -> bool {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+    impl SftpProgress for TestCancel {
+        fn on_progress(&self, _: u64, _: u64) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn test_session(stream: tokio::io::DuplexStream) -> Sftp<tokio::io::DuplexStream> {
+        Sftp {
+            stream,
+            next_id: 1,
+            poisoned: false,
+            cancel: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_silent_metadata_reply() {
+        let (client, server) = tokio::io::duplex(1024);
+        let mut client = test_session(client);
+        let mut peer = test_session(server);
+        let flag = Arc::new(TestCancel(std::sync::atomic::AtomicBool::new(false)));
+        let cancel = flag.clone();
+        let server = async move {
+            let (typ, _) = peer.read_packet().await.unwrap();
+            assert_eq!(typ, FXP_STAT);
+            cancel.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            // Keep the connection open without ever replying.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        };
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let transfer = async {
+            let outcome = timeout(
+                Duration::from_secs(1),
+                client.download_to(
+                    "/file",
+                    file.path().to_str().unwrap(),
+                    0,
+                    None,
+                    None,
+                    Some(flag),
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(outcome, TransferOutcome::Cancelled);
+            assert!(client.is_poisoned());
+        };
+        tokio::select! {
+            _ = server => panic!("transfer waited for the silent server"),
+            _ = transfer => {},
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_blocked_upload_write() {
+        let (client, server) = tokio::io::duplex(1024);
+        let mut client = test_session(client);
+        let mut peer = test_session(server);
+        let flag = Arc::new(TestCancel(std::sync::atomic::AtomicBool::new(false)));
+        let cancel = flag.clone();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), vec![42; CHUNK * 2]).unwrap();
+        let server = async move {
+            let (typ, body) = peer.read_packet().await.unwrap();
+            assert_eq!(typ, FXP_OPEN);
+            let mut reply = vec![FXP_HANDLE];
+            reply.extend_from_slice(&body[..4]);
+            put_string(&mut reply, b"handle");
+            peer.send(&reply).await.unwrap();
+            // The upload fills the duplex buffer with a partial WRITE frame.
+            let mut length = [0; 4];
+            peer.stream.read_exact(&mut length).await.unwrap();
+            cancel.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        };
+        let transfer = async {
+            let outcome = timeout(
+                Duration::from_secs(1),
+                client.upload_from(file.path().to_str().unwrap(), "/file", 0, None, Some(flag)),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(outcome, TransferOutcome::Cancelled);
+            assert!(client.is_poisoned());
+        };
+        tokio::select! {
+            _ = server => panic!("transfer waited for the blocked writer"),
+            _ = transfer => {},
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_download_preserves_prefix_without_draining_pipeline() {
+        let (client, server) = tokio::io::duplex(CHUNK * 2);
+        let mut client = test_session(client);
+        let mut peer = test_session(server);
+        let flag = Arc::new(TestCancel(std::sync::atomic::AtomicBool::new(false)));
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let server = async move {
+            let (_, body) = peer.read_packet().await.unwrap();
+            let mut reply = vec![FXP_HANDLE];
+            reply.extend_from_slice(&body[..4]);
+            put_string(&mut reply, b"handle");
+            peer.send(&reply).await.unwrap();
+            let (typ, body) = peer.read_packet().await.unwrap();
+            assert_eq!(typ, FXP_READ);
+            let mut reply = vec![FXP_DATA];
+            reply.extend_from_slice(&body[..4]);
+            put_string(&mut reply, &vec![42; CHUNK]);
+            peer.send(&reply).await.unwrap();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        };
+        let transfer = async {
+            let outcome = timeout(
+                Duration::from_secs(1),
+                client.download_to(
+                    "/file",
+                    file.path().to_str().unwrap(),
+                    0,
+                    Some((CHUNK * 2) as u64),
+                    Some(flag.clone()),
+                    Some(flag),
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(outcome, TransferOutcome::Cancelled);
+            assert!(client.is_poisoned());
+            assert_eq!(std::fs::read(file.path()).unwrap(), vec![42; CHUNK]);
+        };
+        tokio::select! {
+            _ = server => panic!("cancel tried to drain the pipeline"),
+            _ = transfer => {},
+        }
+    }
+
     #[test]
     fn parse_attrs_extracts_size_perms_mtime() {
         let mut buf = Vec::new();
@@ -1007,5 +1253,109 @@ mod tests {
         assert_eq!(size, Some(42));
         assert_eq!(perms, None);
         assert_eq!(mtime, None);
+    }
+}
+
+#[cfg(test)]
+mod download_flush_tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
+    struct Flag(AtomicBool);
+    impl SftpCancel for Flag {
+        fn is_cancelled(&self) -> bool {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+    struct Progress(Mutex<Option<tokio::sync::oneshot::Sender<()>>>);
+    impl SftpProgress for Progress {
+        fn on_progress(&self, _: u64, _: u64) {
+            if let Some(tx) = self.0.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    #[test]
+    fn cancellation_waits_for_buffered_local_write() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (client, server) = tokio::io::duplex(CHUNK * 2);
+            let mut client = Sftp {
+                stream: client,
+                next_id: 1,
+                poisoned: false,
+                cancel: None,
+            };
+            let mut peer = Sftp {
+                stream: server,
+                next_id: 1,
+                poisoned: false,
+                cancel: None,
+            };
+            let flag = Arc::new(Flag(AtomicBool::new(false)));
+            let cancel = flag.clone();
+            let file = tempfile::NamedTempFile::new().unwrap();
+            let (progress_tx, progress_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+            let server = async move {
+                let (_, body) = peer.read_packet().await.unwrap();
+                let mut reply = vec![FXP_HANDLE];
+                reply.extend_from_slice(&body[..4]);
+                put_string(&mut reply, b"handle");
+                peer.send(&reply).await.unwrap();
+                let (typ, body) = peer.read_packet().await.unwrap();
+                assert_eq!(typ, FXP_READ);
+                // Local open/seek have finished. Occupy the only blocking worker
+                // before DATA queues its local file write.
+                let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.recv();
+                });
+                started_rx.await.unwrap();
+                let mut reply = vec![FXP_DATA];
+                reply.extend_from_slice(&body[..4]);
+                put_string(&mut reply, &vec![42; CHUNK]);
+                peer.send(&reply).await.unwrap();
+                progress_rx.await.unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                cancel.0.store(true, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let _ = release_tx.send(());
+                let _ = done_rx.await;
+                blocker.await.unwrap();
+            };
+            let transfer = async {
+                let result = timeout(
+                    Duration::from_secs(1),
+                    client.download_to(
+                        "/file",
+                        file.path().to_str().unwrap(),
+                        0,
+                        Some((CHUNK * 2) as u64),
+                        Some(Arc::new(Progress(Mutex::new(Some(progress_tx))))),
+                        Some(flag),
+                    ),
+                )
+                .await;
+                let size_when_returned = std::fs::metadata(file.path()).unwrap().len();
+                let _ = done_tx.send(());
+                assert_eq!(result.unwrap().unwrap(), TransferOutcome::Cancelled);
+                assert_eq!(
+                    size_when_returned, CHUNK as u64,
+                    "cancellation must finish the queued local write before returning"
+                );
+                assert_eq!(std::fs::read(file.path()).unwrap(), vec![42; CHUNK]);
+            };
+            tokio::join!(server, transfer);
+        });
     }
 }

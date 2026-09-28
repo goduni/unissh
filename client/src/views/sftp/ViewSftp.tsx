@@ -205,16 +205,23 @@ export function ViewSftp() {
     // A dir can yield many interior conflicts, so apply-to-all is offered for any
     // multi-item or directory transfer (not just >1 top-level entries).
     const batchable = entries.length > 1 || entries.some((e) => e.isDir);
-    const resolver: ConflictResolver = (info) =>
+    const resolver: ConflictResolver = (info, signal) =>
       new Promise<ConflictResolution>((resolve) => {
         if (batch) return resolve(batch);
         if (!mounted.current) return resolve({ choice: "skip", applyAll: true });
+        let settled = false;
+        const aborted = () => settle({ choice: "skip", applyAll: false });
         const settle = (r: ConflictResolution) => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener("abort", aborted);
           pendingResolve.current = null;
           if (r.applyAll) batch = r;
           setConflict(null);
           resolve(r);
         };
+        if (signal?.aborted) return resolve({ choice: "skip", applyAll: false });
+        signal?.addEventListener("abort", aborted, { once: true });
         pendingResolve.current = settle;
         setConflict({ ...info, batchable, resolve: settle });
       });

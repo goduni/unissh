@@ -78,6 +78,9 @@ starts with `0.`:
 - MCP access status reports no time-based output expiry, matching retained command
   history; `limits.output_retention_seconds` is now nullable.
 
+- SFTP transfers: stabilize live speed and ETA, exclude skipped/resumed bytes from throughput, interrupt stalled network I/O on cancel, and prevent retries from racing unfinished writes. Replace transfer cards with a collapsible activity list, explicit stop states, and individual history removal.
+- SFTP cancellation now waits for buffered local writes and interrupts channel-pool waits and channel opening; folder status stays waiting until all file conflicts are resolved.
+
 - Existing self-hosted identities can sign in directly from a fresh device's
   onboarding screen. Escrow and Emergency-Kit recovery remember the installed
   identity's Secret Key in the OS keychain when available.

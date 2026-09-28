@@ -18,37 +18,43 @@ export function canResume(target: Entry | null, sourceSize: number): boolean {
   return target != null && !target.isDir && target.size > 0 && target.size < sourceSize;
 }
 
-/** Exponential-moving-average speedometer. `sample(bytesSoFar, nowMs)` is called
- *  on every progress tick; `speed()` is bytes/sec, `eta(remaining)` is seconds. */
+/** Rolling throughput over a real time window, independent of callback frequency.
+ * Only newly transferred bytes belong here, never skipped/resumed prefixes. */
 export class Speedometer {
-  private lastBytes = 0;
-  private lastT = 0;
-  private bps = 0;
-  private started = false;
+  private samples: Array<{ bytes: number; time: number }> = [];
 
   sample(bytes: number, nowMs: number): void {
-    if (!this.started) {
-      this.started = true;
-      this.lastBytes = bytes;
-      this.lastT = nowMs;
-      return;
-    }
-    const dt = (nowMs - this.lastT) / 1000;
-    if (dt <= 0) return;
-    const inst = (bytes - this.lastBytes) / dt;
-    this.bps = this.bps === 0 ? inst : this.bps * 0.7 + inst * 0.3;
-    this.lastBytes = bytes;
-    this.lastT = nowMs;
+    const last = this.samples[this.samples.length - 1];
+    if (last && nowMs < last.time) return;
+    if (last && nowMs === last.time) last.bytes = bytes;
+    else this.samples.push({ bytes, time: nowMs });
+    // Keep one sample at/before the window boundary.
+    while (this.samples.length > 2 && this.samples[1].time <= nowMs - 3000) this.samples.shift();
   }
 
   speed(): number {
-    return Math.max(0, this.bps);
+    const first = this.samples[0];
+    const last = this.samples[this.samples.length - 1];
+    if (!first || !last || last.time - first.time < 250) return 0;
+    return Math.max(0, (last.bytes - first.bytes) * 1000 / (last.time - first.time));
   }
 
   eta(remaining: number): number {
-    if (this.bps <= 0 || remaining <= 0) return remaining <= 0 ? 0 : Infinity;
-    return remaining / this.bps;
+    const bps = this.speed();
+    return remaining <= 0 ? 0 : bps > 0 ? remaining / bps : Infinity;
   }
+}
+
+/** Interrupt a read-only wait. The underlying call may finish later; its result
+ * is ignored. Never use this to detach a write that a retry could race. */
+export function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 /** Bounded-concurrency gate. `run(fn)` waits for a free slot, runs `fn`, and
@@ -64,21 +70,35 @@ export class Semaphore {
     this.avail = Math.max(1, Math.floor(capacity));
   }
 
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    await this.acquire();
+  async run<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    await this.acquire(signal);
     try {
+      signal?.throwIfAborted();
       return await fn();
     } finally {
       this.release();
     }
   }
 
-  private acquire(): Promise<void> {
+  private acquire(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (this.avail > 0) {
       this.avail -= 1;
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => this.waiters.push(resolve));
+    return new Promise<void>((resolve, reject) => {
+      const ready = () => {
+        signal?.removeEventListener("abort", abort);
+        resolve();
+      };
+      const abort = () => {
+        const index = this.waiters.indexOf(ready);
+        if (index >= 0) this.waiters.splice(index, 1);
+        reject(signal?.reason);
+      };
+      this.waiters.push(ready);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
   }
 
   private release(): void {
@@ -113,14 +133,16 @@ export async function collectTree(
   src: FileSource,
   root: string,
   sem: Semaphore,
+  signal?: AbortSignal,
 ): Promise<TreeScan> {
   const dirs: string[] = [];
   const files: WalkItem[] = [];
   const visit = async (absDir: string, rel: string): Promise<void> => {
-    const entries = await sem.run(() => src.list(absDir));
+    const entries = await sem.run(() => abortable(src.list(absDir), signal), signal);
     entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
     const sub: Array<Promise<void>> = [];
     for (const e of entries) {
+      signal?.throwIfAborted();
       if (!isSafeName(e.name)) continue;
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       const childAbs = await src.join(absDir, e.name);

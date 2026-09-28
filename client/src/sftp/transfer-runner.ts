@@ -8,7 +8,7 @@ import { apiErrorMessage } from "@/bridge/types";
 import { useApp } from "@/store/app";
 import type { Entry, Transfer } from "@/store/sftp-types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
-import { canResume, collectTree, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
+import { abortable, canResume, collectTree, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
 import { dedupeName } from "@/sftp/paths";
 import { join, tempDir } from "@tauri-apps/api/path";
 import { copyFile, remove, stat } from "@tauri-apps/plugin-fs";
@@ -23,9 +23,14 @@ export type ConflictResolver = (info: {
   sourceSize: number;
   resumable: boolean;
   sameSize: boolean;
-}) => Promise<ConflictResolution>;
+}, signal?: AbortSignal) => Promise<ConflictResolution>;
 
 interface Control {
+  abort: AbortController;
+  moved: number;
+  pendingConflicts: number;
+  lastProgressAt: number;
+  patch: (patch: Partial<Transfer>) => void;
   paused: boolean;
   cancelled: boolean;
   /** Cancel tokens of every file leg currently in flight for this transfer. A
@@ -37,6 +42,7 @@ const controls = new Map<string, Control>();
 
 /** Trigger every in-flight cancel token for a control (pause or cancel). */
 function triggerAll(ctrl: Control): void {
+  ctrl.abort.abort();
   for (const cid of ctrl.cancelIds) api.cancelTrigger(cid).catch(() => {});
 }
 
@@ -46,11 +52,37 @@ function triggerAll(ctrl: Control): void {
  *  this adds no latency to the common case. */
 export function serializeResolver(r: ConflictResolver): ConflictResolver {
   let tail: Promise<unknown> = Promise.resolve();
-  return (info) => {
-    const result = tail.then(() => r(info));
+  return (info, signal) => {
+    const result = tail.then(() => {
+      signal?.throwIfAborted();
+      return abortable(r(info, signal), signal);
+    });
     tail = result.catch(() => undefined);
     return result;
   };
+}
+
+/** Folder legs may wait on multiple serialized prompts at once. Keep the
+ * transfer waiting until all decisions are settled, including queued prompts. */
+async function resolveConflict(
+  resolver: ConflictResolver,
+  info: Parameters<ConflictResolver>[0],
+  ctrl: Control,
+): Promise<ConflictResolution> {
+  ctrl.pendingConflicts += 1;
+  ctrl.patch({ state: "waiting", stalled: false });
+  try {
+    const resolution = await abortable(resolver(info, ctrl.abort.signal), ctrl.abort.signal);
+    ctrl.abort.signal.throwIfAborted();
+    return resolution;
+  } finally {
+    ctrl.pendingConflicts -= 1;
+    if (ctrl.pendingConflicts === 0) {
+      // Time spent answering a prompt is not a network stall.
+      ctrl.lastProgressAt = now();
+      ctrl.patch({ state: "active", stalled: false });
+    }
+  }
 }
 
 const now = (): number => performance.now();
@@ -91,10 +123,11 @@ async function fileLeg(
   onProgress: (transferred: number, total: number) => void,
   ctrl: Control,
 ): Promise<boolean> {
-  if (ctrl.cancelled || ctrl.paused) return false;
+  if (ctrl.abort.signal.aborted) return false;
   const cancelId = await api.cancelNew();
   ctrl.cancelIds.add(cancelId);
   try {
+    if (ctrl.abort.signal.aborted) return false;
     if (from.kind === "local" && to.kind === "remote") {
       return await api.sftpUpload(
         to.id,
@@ -129,10 +162,11 @@ async function fileLeg(
           (p) => onProgress(p.transferred, p.total * 2),
           cancelId,
         );
-        if (!down) return false;
+        if (!down || ctrl.abort.signal.aborted) return false;
         const cancelId2 = await api.cancelNew();
         ctrl.cancelIds.add(cancelId2);
         try {
+          if (ctrl.abort.signal.aborted) return false;
           return await api.sftpUpload(
             to.id,
             tmp,
@@ -180,38 +214,37 @@ async function runFile(
   to: FileSource,
   resolver: ConflictResolver,
   ctrl: Control,
-  spd: Speedometer,
   sem: Semaphore,
 ): Promise<void> {
-  const { patchTransfer } = useApp.getState();
   // Hold ONE semaphore permit for the whole stat→resolve→transfer sequence: this
   // caps concurrent single-file transfers in a batch to the pool size, and the
   // rest wait cheaply in the semaphore's JS queue rather than as blocked FFI
   // calls. The permit is the same shared limiter a folder transfer's legs use, so
   // a mixed batch never exceeds the pool globally.
   await sem.run(async () => {
+    ctrl.patch({ state: "active" });
     let name = t.label;
     let toPath = await to.join(t.toDir, name);
-    const target = await to.stat(toPath);
+    const target = await abortable(to.stat(toPath), ctrl.abort.signal);
     let offset = 0;
 
     if (target?.isDir) throw new Error(`"${name}" already exists as a folder`);
     if (target) {
       const resumable = canResume(target, t.bytesTotal) && legResumable(from, to);
-      const res = await resolver({
+      const res = await resolveConflict(resolver, {
         name,
         targetSize: target.size,
         sourceSize: t.bytesTotal,
         resumable,
         sameSize: target.size === t.bytesTotal,
-      });
+      }, ctrl);
       if (res.choice === "skip") {
-        patchTransfer(t.id, { filesDone: 1, bytesDone: t.bytesTotal });
+        ctrl.patch({ filesDone: 1, bytesDone: t.bytesTotal, bytesTotal: t.bytesTotal });
         return;
       }
       if (res.choice === "resume") offset = resumable ? target.size : 0;
       if (res.choice === "keepboth") {
-        const listing = await to.list(t.toDir);
+        const listing = await abortable(to.list(t.toDir), ctrl.abort.signal);
         name = dedupeName(
           name,
           listing.map((e) => e.name),
@@ -222,8 +255,11 @@ async function runFile(
       // overwrite → offset stays 0
     }
 
-    patchTransfer(t.id, { state: "active", offset, label: name });
-    let finalTotal = t.bytesTotal;
+    ctrl.patch({ state: "active", offset, label: name });
+    ctrl.abort.signal.throwIfAborted();
+    let previous = offset;
+    let finalTotal = from.kind === "remote" && to.kind === "remote" ? t.bytesTotal * 2 : t.bytesTotal;
+    ctrl.patch({ bytesDone: offset, bytesTotal: finalTotal });
     let lastPatch = 0;
     // Source size is known from the listing (remote → skip a per-file stat in core).
     const knownSize = from.kind === "remote" ? t.bytesTotal : null;
@@ -237,21 +273,23 @@ async function runFile(
       (transferred, total) => {
         finalTotal = total > 0 ? total : finalTotal;
         const done = transferred; // core reports the absolute position (incl. offset)
-        spd.sample(done, now());
+        if (ctrl.abort.signal.aborted) return;
+        ctrl.moved += Math.max(0, done - previous);
+        if (done > previous) ctrl.lastProgressAt = now();
+        previous = done;
         const ts = now();
         if (ts - lastPatch < PATCH_MS) return;
         lastPatch = ts;
-        patchTransfer(t.id, {
+        ctrl.patch({
           bytesDone: done,
           bytesTotal: finalTotal,
-          speedBps: spd.speed(),
-          etaSec: spd.eta(Math.max(0, finalTotal - done)),
         });
       },
       ctrl,
     );
-    if (ok) patchTransfer(t.id, { filesDone: 1, bytesDone: finalTotal });
-  });
+    if (!ok && !ctrl.abort.signal.aborted) throw new Error("Transfer interrupted");
+    if (ok) ctrl.patch({ filesDone: 1, bytesDone: finalTotal });
+  }, ctrl.abort.signal);
 }
 
 async function runDir(
@@ -260,23 +298,23 @@ async function runDir(
   to: FileSource,
   resolver: ConflictResolver,
   ctrl: Control,
-  spd: Speedometer,
   sem: Semaphore,
 ): Promise<void> {
-  const { patchTransfer } = useApp.getState();
 
   // 1. Scan for honest totals. Sibling listings run concurrently (bounded by the
   //    shared semaphore) so a wide/deep tree doesn't stall on a serial prologue.
   if (ctrl.cancelled || ctrl.paused) return;
-  const { dirs, files } = await collectTree(from, t.fromPath, sem);
+  const { dirs, files } = await collectTree(from, t.fromPath, sem, ctrl.abort.signal);
   if (ctrl.cancelled || ctrl.paused) return;
-  const bytesTotal = files.reduce((a, f) => a + f.size, 0);
-  patchTransfer(t.id, { state: "active", filesTotal: files.length, bytesTotal });
+  const legs = from.kind === "remote" && to.kind === "remote" ? 2 : 1;
+  const bytesTotal = files.reduce((a, f) => a + f.size * legs, 0);
+  ctrl.patch({ state: "active", filesTotal: files.length, bytesTotal });
 
   // 2. Mirror the directory tree, parents before children. Each mkdir waits only
   //    on its parent's, so independent branches are created concurrently (bounded
   //    by the semaphore) instead of one round-trip at a time.
   const targetRoot = await to.join(t.toDir, t.label);
+  ctrl.abort.signal.throwIfAborted();
   await ensureDir(to, targetRoot);
   const dirDone = new Map<string, Promise<void>>();
   dirDone.set("", Promise.resolve());
@@ -287,11 +325,15 @@ async function runDir(
       rel,
       parent.then(async () => {
         if (ctrl.cancelled || ctrl.paused) return;
-        await sem.run(async () => ensureDir(to, await joinRel(to, targetRoot, rel)));
+        await sem.run(async () => {
+          const path = await joinRel(to, targetRoot, rel);
+          ctrl.abort.signal.throwIfAborted();
+          await ensureDir(to, path);
+        }, ctrl.abort.signal);
       }),
     );
   }
-  await Promise.all(dirDone.values());
+  await settleWrites([...dirDone.values()], ctrl);
   if (ctrl.cancelled || ctrl.paused) return;
 
   // 3. Transfer files concurrently. Progress is aggregated across all in-flight
@@ -302,48 +344,49 @@ async function runDir(
   let bytesDone = 0;
   let filesDone = 0;
   let lastPatch = 0;
-  const bump = (delta: number): void => {
-    if (delta <= 0) return;
+  const bump = (delta: number, transferred = true): void => {
+    if (delta <= 0 || ctrl.abort.signal.aborted) return;
     bytesDone += delta;
-    spd.sample(bytesDone, now());
+    if (transferred) {
+      ctrl.moved += delta;
+      ctrl.lastProgressAt = now();
+    }
     const ts = now();
     if (ts - lastPatch < PATCH_MS) return;
     lastPatch = ts;
-    patchTransfer(t.id, {
+    ctrl.patch({
       bytesDone,
-      speedBps: spd.speed(),
-      etaSec: spd.eta(Math.max(0, bytesTotal - bytesDone)),
     });
   };
 
   const transferOne = async (it: WalkItem): Promise<boolean> => {
-    if (ctrl.cancelled || ctrl.paused) return false;
+    if (ctrl.abort.signal.aborted) return false;
     let absTo = await joinRel(to, targetRoot, it.relPath);
     const absFrom = await joinRel(from, t.fromPath, it.relPath);
-    const existing: Entry | null = await to.stat(absTo);
+    const existing: Entry | null = await abortable(to.stat(absTo), ctrl.abort.signal);
     let offset = 0;
     if (existing && !existing.isDir) {
       // A collision: let the resolver decide (same-size files auto-skip under the
       // resume/retry resolver; the interactive one honours a standing apply-all).
       const resumable = canResume(existing, it.size) && legResumable(from, to);
-      const res = await resolver({
+      const res = await resolveConflict(resolver, {
         name: it.relPath,
         targetSize: existing.size,
         sourceSize: it.size,
         resumable,
         sameSize: existing.size === it.size,
-      });
+      }, ctrl);
       if (res.choice === "skip") {
         filesDone += 1;
-        bump(it.size);
-        patchTransfer(t.id, { filesDone, bytesDone });
+        bump(it.size * legs, false);
+        ctrl.patch({ filesDone, bytesDone });
         return true;
       }
       if (res.choice === "keepboth") {
         const segs = it.relPath.split("/").filter(Boolean);
         const base = segs.pop() ?? it.relPath;
         const parentDir = segs.length ? await joinRel(to, targetRoot, segs.join("/")) : targetRoot;
-        const listing = await to.list(parentDir);
+        const listing = await abortable(to.list(parentDir), ctrl.abort.signal);
         absTo = await to.join(
           parentDir,
           dedupeName(
@@ -357,7 +400,7 @@ async function runDir(
       }
     }
     // A resumed prefix already exists on the target — count it as done up front.
-    if (offset > 0) bump(offset);
+    if (offset > 0) bump(offset, false);
     let prev = offset; // last absolute position reported for THIS file
     const knownSize = from.kind === "remote" ? it.size : null;
     const ok = await fileLeg(
@@ -373,16 +416,28 @@ async function runDir(
       },
       ctrl,
     );
+    if (!ok && !ctrl.abort.signal.aborted) throw new Error("Transfer interrupted");
     if (!ok) return false; // paused or cancelled mid-file
-    if (it.size > prev) bump(it.size - prev); // true up if the last tick was short
+    if (it.size * legs > prev) bump(it.size * legs - prev, false); // true up if the last tick was short
     filesDone += 1;
-    patchTransfer(t.id, { filesDone, bytesDone });
+    ctrl.patch({ filesDone, bytesDone });
     return true;
   };
 
   // Launch every file; the semaphore caps how many legs actually run at once. One
   // permit spans each file's stat→resolve→transfer so total in-flight ≤ pool size.
-  await Promise.all(files.map((it) => sem.run(() => transferOne(it))));
+  await settleWrites(files.map((it) => sem.run(() => transferOne(it), ctrl.abort.signal)), ctrl);
+}
+
+/** Stop sibling legs on the first failure, but wait for writes to settle before
+ * enabling retry. Otherwise an old leg can overwrite a new attempt. */
+async function settleWrites(jobs: Promise<unknown>[], ctrl: Control): Promise<void> {
+  let failure: unknown;
+  let failed = false;
+  await Promise.allSettled(jobs.map((job) => job.catch((error: unknown) => {
+    if (!failed) { failed = true; failure = error; triggerAll(ctrl); }
+  })));
+  if (failed) throw failure;
 }
 
 /** How many files this transfer may move at once. A folder transfer draws its
@@ -403,27 +458,58 @@ export async function startTransfer(
   resolver: ConflictResolver,
   sem: Semaphore = makeTransferSemaphore(),
 ): Promise<void> {
+  if (controls.has(t.id)) return;
   const { patchTransfer } = useApp.getState();
-  const ctrl: Control = { paused: false, cancelled: false, cancelIds: new Set() };
+  const ctrl: Control = {
+    paused: false, cancelled: false, cancelIds: new Set(), abort: new AbortController(),
+    moved: 0, pendingConflicts: 0, lastProgressAt: now(),
+    patch: (patch) => {
+      if (controls.get(t.id) === ctrl && !ctrl.abort.signal.aborted) patchTransfer(t.id, patch);
+    },
+  };
   controls.set(t.id, ctrl);
-  patchTransfer(t.id, { state: t.kind === "dir" ? "scanning" : "active", error: undefined });
-  const spd = new Speedometer();
+  // A remote relay counts two network legs; preserve the original source size
+  // so retry never mistakes that work total for the file size.
+  t = { ...t, bytesTotal: t.sourceSize ?? t.bytesTotal };
+  ctrl.patch({ state: t.kind === "dir" ? "scanning" : "queued", error: undefined,
+    sourceSize: t.bytesTotal, bytesDone: 0, filesDone: 0, speedBps: 0, etaSec: Infinity, stalled: false });
+  let spd = new Speedometer();
+  spd.sample(0, now());
+  const timer = setInterval(() => {
+    const current = useApp.getState().transfers.find((x) => x.id === t.id);
+    if (!current || ctrl.abort.signal.aborted) return;
+    if (current.state !== "active" && current.state !== "waiting") {
+      spd = new Speedometer();
+      spd.sample(ctrl.moved, now());
+      return;
+    }
+    spd.sample(ctrl.moved, now());
+    ctrl.patch({
+      speedBps: spd.speed(), etaSec: spd.eta(current.bytesTotal - current.bytesDone),
+      stalled: current.state === "active" && now() - ctrl.lastProgressAt >= 5000,
+    });
+  }, 250);
+  let failure: string | undefined;
   try {
-    if (t.kind === "file") await runFile(t, from, to, resolver, ctrl, spd, sem);
-    else await runDir(t, from, to, resolver, ctrl, spd, sem);
-    if (ctrl.cancelled) patchTransfer(t.id, { state: "cancelled", speedBps: 0, etaSec: 0 });
-    else if (ctrl.paused) patchTransfer(t.id, { state: "paused", speedBps: 0, etaSec: 0 });
-    else patchTransfer(t.id, { state: "done", speedBps: 0, etaSec: 0 });
+    if (t.kind === "file") await runFile(t, from, to, resolver, ctrl, sem);
+    else await runDir(t, from, to, resolver, ctrl, sem);
   } catch (e) {
-    patchTransfer(t.id, { state: "error", error: apiErrorMessage(e), speedBps: 0, etaSec: 0 });
+    if (!ctrl.cancelled && !ctrl.paused) failure = apiErrorMessage(e);
+    triggerAll(ctrl);
   } finally {
-    controls.delete(t.id);
+    clearInterval(timer);
+    if (controls.get(t.id) === ctrl) {
+      controls.delete(t.id);
+      patchTransfer(t.id, { state: ctrl.cancelled ? "cancelled" : ctrl.paused ? "paused" : failure ? "error" : "done",
+        error: failure, speedBps: 0, etaSec: 0, stalled: false });
+    }
   }
 }
 
 export function pauseTransfer(id: string): void {
   const c = controls.get(id);
-  if (!c) return;
+  if (!c || c.cancelled) return;
+  useApp.getState().patchTransfer(id, { state: "pausing", speedBps: 0, etaSec: 0, stalled: false });
   c.paused = true;
   triggerAll(c);
 }
@@ -431,6 +517,7 @@ export function pauseTransfer(id: string): void {
 export function cancelTransfer(id: string): void {
   const c = controls.get(id);
   if (c) {
+    useApp.getState().patchTransfer(id, { state: "cancelling", speedBps: 0, etaSec: 0, stalled: false });
     c.cancelled = true;
     triggerAll(c);
   } else {
@@ -454,7 +541,7 @@ export function cancelAll(): void {
 export async function resumeTransfer(id: string): Promise<void> {
   const st = useApp.getState();
   const t = st.transfers.find((x) => x.id === id);
-  if (!t) return;
+  if (!t || controls.has(id) || (t.state !== "paused" && t.state !== "error")) return;
   try {
     const from = sourceFor(t.from, st.sftpSessions);
     const to = sourceFor(t.to, st.sftpSessions);

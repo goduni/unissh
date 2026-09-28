@@ -48,6 +48,9 @@ export type TransferState =
   | "queued"
   | "scanning"
   | "active"
+  | "waiting"
+  | "pausing"
+  | "cancelling"
   | "paused"
   | "done"
   | "error"
@@ -69,9 +72,11 @@ export interface Transfer {
   kind: "file" | "dir";
   bytesDone: number;
   bytesTotal: number;
+  sourceSize?: number; // original file size, before accounting for relay legs
   filesDone: number;
   filesTotal: number;
   speedBps: number;
+  stalled?: boolean;
   etaSec: number;
   state: TransferState;
   error?: string;

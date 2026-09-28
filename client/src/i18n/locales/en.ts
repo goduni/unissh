@@ -1524,6 +1524,18 @@ export const en = {
       "loadFailed": "Couldn’t open this file."
     },
     "queue": {
+      "speed": "{{speed}}/s",
+      "resumeAll": "Resume all",
+      "files": "Files: {{done}} / {{total}}",
+      "progress": "{{done}} / {{total}}",
+      "stalled": "No progress — waiting for response",
+      "finished": "Finished: {{count}}",
+      "paused": "Paused: {{count}}",
+      "failed": "Failed: {{count}}",
+      "running": "In progress: {{count}}",
+      "collapse": "Hide transfers",
+      "expand": "Show transfers",
+      "dismiss": "Remove from list",
       "title": "Transfers",
       "overall": "{{count}} · {{done}} / {{total}}",
       "pauseAll": "Pause all",
@@ -1535,6 +1547,9 @@ export const en = {
       "retry": "Retry",
       "eta": "ETA {{eta}}",
       "state": {
+        "cancelling": "cancelling…",
+        "pausing": "pausing…",
+        "waiting": "waiting for a decision",
         "queued": "queued",
         "scanning": "scanning…",
         "active": "transferring",

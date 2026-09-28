@@ -1,327 +1,160 @@
-// TransferQueue — the live transfer panel. Reads transfers from the store and
-// drives them through the runner's controls. Desktop: a bottom footer panel.
-// Mobile: a slim summary bar that opens a bottom sheet with the full list.
-
-import { useEffect, useMemo, useState } from "react";
+// A compact transfer summary with a bounded, expandable activity list.
+import { useEffect, useId, useState, type CSSProperties } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import { BottomSheet } from "@/components/Modal";
+import { useDialogFocus, useDialogKeys } from "@/components/a11y";
 import { useApp } from "@/store/app";
 import type { Transfer, TransferState } from "@/store/sftp-types";
-import { cancelTransfer, pauseTransfer, resumeTransfer, retryTransfer } from "@/sftp/transfer-runner";
+import { cancelTransfer, pauseTransfer, resumeTransfer } from "@/sftp/transfer-runner";
+import "./TransferQueue.css";
 
-const ACTIVE_STATES: TransferState[] = ["queued", "scanning", "active", "paused"];
+const RUNNING: TransferState[] = ["queued", "scanning", "active", "waiting"];
+const FINISHED: TransferState[] = ["done", "error", "cancelled"];
+const canCancel = (t: Transfer) => RUNNING.includes(t.state) || t.state === "paused" || t.state === "pausing";
 
-function dirIcon(t: Transfer): IconName {
-  const a = t.from.kind;
-  const b = t.to.kind;
-  if (a === "local" && b === "remote") return "upload";
-  if (a === "remote" && b === "local") return "download";
-  if (a === "remote" && b === "remote") return "arrows";
-  return "copy";
+function direction(t: Transfer): IconName {
+  if (t.from.kind === "local" && t.to.kind === "remote") return "upload";
+  if (t.from.kind === "remote" && t.to.kind === "local") return "download";
+  return t.from.kind === "remote" ? "arrows" : "copy";
 }
 
-function fmtEta(sec: number): string {
-  if (!isFinite(sec) || sec <= 0) return "";
-  const s = Math.round(sec);
+function eta(seconds: number): string {
+  const s = Math.ceil(seconds);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-function QueueRow({ t }: { t: Transfer }) {
-  const p = usePalette();
-  const isMobile = useIsMobile();
-  const { t: tr } = useTranslation();
-  const { fmtSize } = useFmt();
-  const sessions = useApp((s) => s.sftpSessions);
-  // Where each leg is rooted, for the muted route line. A remote leg resolves to
-  // its live session label; a closed session falls back to the generic word.
-  const legLabel = (loc: Transfer["from"]): string =>
-    loc.kind === "local"
-      ? tr("sftp.paneLocal")
-      : loc.kind === "remote"
-        ? (sessions.find((s) => s.id === loc.sessionId)?.label ?? tr("sftp.paneRemote"))
-        : "";
-  const ratio = t.bytesTotal > 0 ? Math.min(1, t.bytesDone / t.bytesTotal) : t.state === "done" ? 1 : 0;
-  const pct = Math.round(ratio * 100);
-  const terminal = t.state === "done" || t.state === "cancelled" || t.state === "error";
-  const barColor = t.state === "error" ? p.red : t.state === "done" ? p.green : p.accent;
-
-  const controls: { icon: IconName; title: string; onClick: () => void; danger?: boolean }[] = [];
-  if (t.state === "active" || t.state === "scanning")
-    controls.push({ icon: "stop", title: tr("sftp.queue.pause"), onClick: () => pauseTransfer(t.id) });
-  if (t.state === "paused")
-    controls.push({ icon: "play", title: tr("sftp.queue.resume"), onClick: () => void resumeTransfer(t.id) });
-  if (t.state === "error")
-    controls.push({ icon: "refresh", title: tr("sftp.queue.retry"), onClick: () => void retryTransfer(t.id) });
-  if (!terminal)
-    controls.push({ icon: "x", title: tr("sftp.queue.cancel"), onClick: () => cancelTransfer(t.id), danger: true });
-
-  const status =
-    t.state === "active"
-      ? `${pct}%${t.speedBps > 0 ? ` · ${fmtSize(t.speedBps)}/s` : ""}${fmtEta(t.etaSec) ? ` · ${tr("sftp.queue.eta", { eta: fmtEta(t.etaSec) })}` : ""}`
-      : tr(`sftp.queue.state.${t.state}`);
-
-  return (
-    <div
-      style={{
-        padding: `${rem(9)} ${rem(12)}`,
-        borderRadius: 10,
-        background: p.bg2,
-        border: `1px solid ${p.line}`,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: rem(7), marginBottom: rem(7) }}>
-        <Icon name={dirIcon(t)} size={13} color={t.state === "done" ? p.green : t.state === "error" ? p.red : p.accentText} />
-        <span style={{ fontFamily: MONO, fontSize: TEXT.small, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {t.label}
-          {t.kind === "dir" && t.filesTotal > 0 ? ` (${t.filesDone}/${t.filesTotal})` : ""}
-        </span>
-        <span
-          style={{
-            fontFamily: MONO,
-            fontSize: TEXT.micro,
-            color: t.state === "done" ? p.green : p.txt3,
-            // ellipsis so a long RU active status ("42% · 1,2 МБ/с · осталось 0:12") can't wrap
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {status}
-        </span>
-        {controls.map((c) => (
-          <button
-            key={c.icon}
-            onClick={c.onClick}
-            title={c.title}
-            aria-label={c.title}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "transparent",
-              border: "none",
-              borderRadius: 8,
-              padding: 0,
-              width: isMobile ? rem(38) : rem(22),
-              height: isMobile ? rem(38) : rem(22),
-              flexShrink: 0,
-              marginLeft: c.danger ? rem(2) : 0,
-              cursor: "pointer",
-              color: c.danger ? p.red : p.txt2,
-            }}
-          >
-            <Icon name={c.icon} size={isMobile ? 17 : 13} />
-          </button>
-        ))}
-      </div>
-      <div
-        title={t.toDir}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: rem(5),
-          fontFamily: UI,
-          fontSize: TEXT.micro,
-          color: p.txt3,
-          marginBottom: rem(7),
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-      >
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{legLabel(t.from)}</span>
-        <span aria-hidden style={{ flexShrink: 0, color: p.txt3 }}>→</span>
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{legLabel(t.to)}</span>
-      </div>
-      <div style={{ height: rem(5), borderRadius: 6, background: p.bg4, overflow: "hidden" }}>
-        {/* scaleX, not width: transform animates off the layout path */}
-        <div
-          style={{
-            height: "100%",
-            width: "100%",
-            borderRadius: 6,
-            background: barColor,
-            transform: `scaleX(${pct / 100})`,
-            transformOrigin: "left",
-            transition: "transform .2s",
-          }}
-        />
-      </div>
-      {t.state === "error" && t.error && (
-        <div
-          role="alert"
-          title={t.error}
-          style={{
-            fontFamily: MONO,
-            fontSize: TEXT.micro,
-            lineHeight: 1.35,
-            color: p.red,
-            marginTop: rem(6),
-            wordBreak: "break-word",
-          }}
-        >
-          {t.error}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function QueueBody({ transfers }: { transfers: Transfer[] }) {
-  const p = usePalette();
+function QueueRow({ transfer: item }: { transfer: Transfer }) {
   const { t } = useTranslation();
-  const { fmtSize } = useFmt();
-  const clear = useApp((s) => s.clearFinishedTransfers);
-
-  const agg = useMemo(() => {
-    let done = 0;
-    let total = 0;
-    let active = 0;
-    for (const t of transfers) {
-      done += t.bytesDone;
-      total += t.bytesTotal;
-      if (ACTIVE_STATES.includes(t.state)) active += 1;
-    }
-    return { done, total, active, ratio: total > 0 ? done / total : 0 };
-  }, [transfers]);
-
-  const pauseAll = () => transfers.filter((t) => t.state === "active").forEach((t) => pauseTransfer(t.id));
-  const cancelAll = () => transfers.filter((t) => ACTIVE_STATES.includes(t.state)).forEach((t) => cancelTransfer(t.id));
+  const { fmtSize, fmtPercent } = useFmt();
+  const sessions = useApp((s) => s.sftpSessions);
+  const dismiss = useApp((s) => s.dismissTransfer);
+  const leg = (loc: Transfer["from"]) => loc.kind === "local" ? t("sftp.paneLocal")
+    : loc.kind === "remote" ? sessions.find((s) => s.id === loc.sessionId)?.label ?? t("sftp.paneRemote") : "";
+  const ratio = item.state === "done" ? 1 : item.bytesTotal > 0 ? Math.max(0, Math.min(1, item.bytesDone / item.bytesTotal)) : 0;
+  const finished = FINISHED.includes(item.state);
+  const actions: { icon: IconName; label: string; run: () => void }[] = [];
+  if (RUNNING.includes(item.state)) actions.push({ icon: "pause", label: t("sftp.queue.pause"), run: () => pauseTransfer(item.id) });
+  if (item.state === "paused" || item.state === "error") actions.push({
+    icon: item.state === "paused" ? "play" : "refresh",
+    label: t(item.state === "paused" ? "sftp.queue.resume" : "sftp.queue.retry"),
+    run: () => void resumeTransfer(item.id),
+  });
+  if (canCancel(item)) actions.push({ icon: "stop", label: t("sftp.queue.cancel"), run: () => cancelTransfer(item.id) });
+  if (finished || item.state === "cancelling") actions.push({ icon: "x", label: t("sftp.queue.dismiss"), run: () => dismiss(item.id) });
 
   return (
-    <div>
-      {/* flexWrap so the pauseAll/cancelAll/clear labels wrap instead of overflowing a narrow panel */}
-      <div style={{ display: "flex", alignItems: "center", gap: rem(8), rowGap: rem(6), flexWrap: "wrap", marginBottom: rem(10) }}>
-        <Icon name="arrows" size={15} color={p.txt2} />
-        <span style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("sftp.queue.title")}</span>
-        <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
-          {t("sftp.queue.overall", {
-            count: transfers.length,
-            done: fmtSize(agg.done),
-            total: fmtSize(agg.total),
-          })}
-        </span>
-        <div style={{ flex: 1 }} />
-        {agg.active > 0 && (
-          <>
-            <button onClick={pauseAll} style={qbtn(p)} title={t("sftp.queue.pauseAll")}>
-              {t("sftp.queue.pauseAll")}
-            </button>
-            <button onClick={cancelAll} style={qbtn(p)} title={t("sftp.queue.cancelAll")}>
-              {t("sftp.queue.cancelAll")}
-            </button>
-          </>
-        )}
-        <button onClick={clear} style={qbtn(p)}>
-          {t("sftp.queue.clear")}
-        </button>
+    <li className="transfer-row" data-state={item.state}>
+      <div className="transfer-name">
+        <Icon name={item.state === "error" || item.stalled ? "alert" : item.state === "done" ? "check" : direction(item)} size={16} />
+        <span className="transfer-filename" title={item.fromPath}>{item.label}</span>
       </div>
-      {agg.active > 0 && agg.total > 0 && (
-        <div style={{ height: rem(4), borderRadius: 2, background: p.bg4, overflow: "hidden", marginBottom: rem(10) }}>
-          {/* scaleX, not width: transform animates off the layout path */}
-          <div
-            style={{
-              height: "100%",
-              width: "100%",
-              background: p.accent,
-              transform: `scaleX(${agg.ratio})`,
-              transformOrigin: "left",
-              transition: "transform .2s",
-            }}
-          />
-        </div>
-      )}
-      <div style={{ display: "flex", gap: rem(10), flexWrap: "wrap" }}>
-        {transfers.map((t) => (
-          <div key={t.id} style={{ flex: "1 1 240px", maxWidth: rem(380) }}>
-            <QueueRow t={t} />
-          </div>
-        ))}
+      <div className="transfer-actions">
+        {actions.map((action) => <button key={action.label} type="button" title={action.label} aria-label={`${action.label}: ${item.label}`} onClick={action.run}>
+          <Icon name={action.icon} size={15} />
+        </button>)}
       </div>
+      <div className="transfer-route" title={`${leg(item.from)}: ${item.fromPath} → ${leg(item.to)}: ${item.toDir}`}>
+        {leg(item.from)} <span aria-hidden="true">→</span> {leg(item.to)} · {item.toDir}
+      </div>
+      <div className="transfer-metrics">
+        <span className="transfer-state">{item.stalled ? t("sftp.queue.stalled") : t(`sftp.queue.state.${item.state}`)}</span>
+        {item.bytesTotal > 0 && <span>{t("sftp.queue.progress", { done: fmtSize(item.bytesDone), total: fmtSize(item.bytesTotal) })}</span>}
+        {item.kind === "dir" && item.filesTotal > 0 && <span>{t("sftp.queue.files", { done: item.filesDone, total: item.filesTotal })}</span>}
+        {(item.state === "active" || (item.state === "waiting" && item.speedBps > 0)) && <>
+          <span className="transfer-speed">{t("sftp.queue.speed", { speed: fmtSize(item.speedBps) })}</span>
+          {!item.stalled && item.speedBps > 0 && Number.isFinite(item.etaSec) && item.etaSec > 0 && <span>{t("sftp.queue.eta", { eta: eta(item.etaSec) })}</span>}
+        </>}
+        {item.bytesTotal > 0 && <span className="transfer-percent">{fmtPercent(ratio)}</span>}
+      </div>
+      {!finished && item.bytesTotal > 0 && <div className="transfer-progress" role="progressbar" aria-label={item.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(ratio * 100)}>
+        <div style={{ transform: `scaleX(${ratio})` }} />
+      </div>}
+      {item.state === "error" && item.error && <div className="transfer-error" role="alert">{item.error}</div>}
+    </li>
+  );
+}
+
+function QueueBody({ transfers, id }: { transfers: Transfer[]; id: string }) {
+  const { t } = useTranslation();
+  const clear = useApp((s) => s.clearFinishedTransfers);
+  // Keep unfinished work above history without shuffling active rows on every tick.
+  const rows = [...transfers.filter((item) => !FINISHED.includes(item.state)), ...transfers.filter((item) => FINISHED.includes(item.state))];
+  return (
+    <div id={id}>
+      <div className="transfer-toolbar">
+        {transfers.some((item) => RUNNING.includes(item.state)) && <button type="button" onClick={() => transfers.filter((item) => RUNNING.includes(item.state)).forEach((item) => pauseTransfer(item.id))}>{t("sftp.queue.pauseAll")}</button>}
+        {transfers.some((item) => item.state === "paused") && <button type="button" onClick={() => transfers.filter((item) => item.state === "paused").forEach((item) => void resumeTransfer(item.id))}>{t("sftp.queue.resumeAll")}</button>}
+        {transfers.some(canCancel) && <button type="button" onClick={() => transfers.filter(canCancel).forEach((item) => cancelTransfer(item.id))}>{t("sftp.queue.cancelAll")}</button>}
+        {transfers.some((item) => FINISHED.includes(item.state)) && <button type="button" className="transfer-clear" onClick={clear}>{t("sftp.queue.clear")}</button>}
+      </div>
+      <ul className="transfer-list" aria-label={t("sftp.queue.title")}>
+        {rows.map((item) => <QueueRow key={item.id} transfer={item} />)}
+      </ul>
     </div>
   );
 }
 
-function qbtn(p: ReturnType<typeof usePalette>): React.CSSProperties {
-  return {
-    background: p.bg2,
-    border: `1px solid ${p.line}`,
-    borderRadius: 8,
-    padding: `${rem(4)} ${rem(9)}`,
-    cursor: "pointer",
-    fontSize: TEXT.small,
-    color: p.txt2,
-    fontFamily: UI,
-  };
+function QueueSheet({ transfers, id, style, onClose }: {
+  transfers: Transfer[]; id: string; style: CSSProperties; onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  useDialogKeys(onClose);
+  const ref = useDialogFocus<HTMLDivElement>();
+  return <BottomSheet onClose={onClose}>
+    <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} tabIndex={-1} className="transfer-queue transfer-sheet" style={style}>
+      <div className="transfer-sheet-heading">
+        <h2 id={`${id}-title`}>{t("sftp.queue.title")}</h2>
+        <button type="button" onClick={onClose} aria-label={t("common.close")}><Icon name="x" size={18} /></button>
+      </div>
+      <QueueBody transfers={transfers} id={id} />
+    </div>
+  </BottomSheet>;
 }
 
 export function TransferQueue() {
   const p = usePalette();
   const { t } = useTranslation();
+  const { fmtSize } = useFmt();
   const isMobile = useIsMobile();
   const transfers = useApp((s) => s.transfers);
-  const [open, setOpen] = useState(false);
-
-  // Don't let a stale open sheet survive the queue emptying (e.g. "Clear").
-  useEffect(() => {
-    if (transfers.length === 0) setOpen(false);
-  }, [transfers.length]);
-
-  const agg = useMemo(() => {
-    let done = 0;
-    let total = 0;
-    let active = 0;
-    for (const tr of transfers) {
-      done += tr.bytesDone;
-      total += tr.bytesTotal;
-      if (ACTIVE_STATES.includes(tr.state)) active += 1;
-    }
-    return { active, ratio: total > 0 ? done / total : 0 };
-  }, [transfers]);
-
-  if (transfers.length === 0) return null;
-
-  if (isMobile) {
-    return (
-      <>
-        <button
-          onClick={() => setOpen(true)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: rem(9),
-            width: "100%",
-            borderTop: `1px solid ${p.line}`,
-            background: p.bg1,
-            padding: "10px 16px calc(10px + env(safe-area-inset-bottom))",
-            cursor: "pointer",
-          }}
-        >
-          <Icon name="arrows" size={15} color={p.accentText} />
-          <span style={{ fontSize: TEXT.base, fontWeight: 700, color: p.txt }}>{t("sftp.queue.title")}</span>
-          <div style={{ flex: 1, height: rem(5), borderRadius: 6, background: p.bg4, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${Math.round(agg.ratio * 100)}%`, background: p.accent }} />
-          </div>
-          <Icon name="cd" size={13} color={p.txt3} />
-        </button>
-        {open && (
-          <BottomSheet onClose={() => setOpen(false)}>
-            <QueueBody transfers={transfers} />
-          </BottomSheet>
-        )}
-      </>
-    );
-  }
-
+  const [expanded, setExpanded] = useState(true);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const bodyId = useId();
+  useEffect(() => { if (transfers.length === 0) setSheetOpen(false); }, [transfers.length]);
+  if (!transfers.length) return null;
+  const running = transfers.filter((item) => RUNNING.includes(item.state) || item.state === "pausing" || item.state === "cancelling").length;
+  const failed = transfers.filter((item) => item.state === "error").length;
+  const paused = transfers.filter((item) => item.state === "paused").length;
+  const finished = transfers.filter((item) => item.state === "done" || item.state === "cancelled").length;
+  const active = transfers.filter((item) => item.state === "active" || item.state === "waiting");
+  const speed = active.reduce((sum, item) => sum + item.speedBps, 0);
+  const open = isMobile ? sheetOpen : expanded;
+  const style = {
+    "--transfer-bg": p.bg1, "--transfer-hover": p.bg3, "--transfer-line": p.line,
+    "--transfer-track": p.bg4, "--transfer-ink": p.txt, "--transfer-muted": p.txt2,
+    "--transfer-accent": p.accent, "--transfer-error": p.red, "--transfer-success": p.green,
+  } as CSSProperties;
   return (
-    <div style={{ borderTop: `1px solid ${p.line}`, background: p.bg1, padding: `${rem(12)} ${rem(22)} ${rem(16)}` }}>
-      <QueueBody transfers={transfers} />
-    </div>
+    <section className="transfer-queue" style={style} aria-label={t("sftp.queue.title")}>
+      <button type="button" className="transfer-summary" aria-expanded={open} aria-controls={open ? bodyId : undefined}
+        onClick={() => isMobile ? setSheetOpen(!sheetOpen) : setExpanded(!expanded)} title={t(open ? "sftp.queue.collapse" : "sftp.queue.expand")}>
+        <Icon name="arrows" size={16} />
+        <strong>{t("sftp.queue.title")}</strong>
+        <span className="transfer-counts">
+          {running > 0 && <span>{t("sftp.queue.running", { count: running })}</span>}
+          {paused > 0 && <span>{t("sftp.queue.paused", { count: paused })}</span>}
+          {failed > 0 && <span className="transfer-error-count">{t("sftp.queue.failed", { count: failed })}</span>}
+          {finished > 0 && <span>{t("sftp.queue.finished", { count: finished })}</span>}
+        </span>
+        {active.length > 0 && <span className="transfer-summary-speed">{t("sftp.queue.speed", { speed: fmtSize(speed) })}</span>}
+        <span style={{ display: "flex", transform: open ? "none" : "rotate(180deg)" }}><Icon name="cd" size={14} /></span>
+      </button>
+      {!isMobile && expanded && <QueueBody transfers={transfers} id={bodyId} />}
+      {isMobile && sheetOpen && <QueueSheet transfers={transfers} id={bodyId} style={style} onClose={() => setSheetOpen(false)} />}
+    </section>
   );
 }

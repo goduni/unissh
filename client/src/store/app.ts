@@ -541,6 +541,7 @@ interface AppStore {
   enqueueTransfer: (t: Transfer) => void;
   patchTransfer: (id: string, patch: Partial<Transfer>) => void;
   clearFinishedTransfers: () => void;
+  dismissTransfer: (id: string) => void;
 
   setPendingMismatch: (m: PendingMismatch | null) => void;
   setPendingSftpFocus: (id: string | null) => void;
@@ -1807,6 +1808,9 @@ export const useApp = create<AppStore>((set, get) => ({
   enqueueTransfer: (t) => set((s) => ({ transfers: [...s.transfers, t] })),
   patchTransfer: (id, patch) =>
     set((s) => ({ transfers: s.transfers.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
+  dismissTransfer: (id) => set((s) => ({
+    transfers: s.transfers.filter((t) => t.id !== id || !["done", "error", "cancelled", "cancelling"].includes(t.state)),
+  })),
   clearFinishedTransfers: () =>
     set((s) => ({
       transfers: s.transfers.filter(
