@@ -264,7 +264,7 @@ export function ViewSftp() {
     const sem = makeTransferSemaphore();
     const serialized = serializeResolver(resolver);
     const { patchTransfer } = useApp.getState();
-    await mapWorkers(built, 8, async (tr) => {
+    await mapWorkers(built, sem.capacity, async (tr) => {
         // A vault switch / lock bumps the teardown generation: don't start work.
         if (teardownGeneration() !== gen) {
           patchTransfer(tr.id, { state: "cancelled" });

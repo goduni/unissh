@@ -140,7 +140,7 @@ function unchanged(a: Entry | null, b: Entry | null): boolean {
 async function validateTarget(t: Transfer, from: FileSource, to: FileSource): Promise<void> {
   if (from.kind !== to.kind || (from.identity ?? from.id) !== (to.identity ?? to.id)) return;
   const windows = from.kind === "local" && /^[a-z]:|\\/i.test(t.fromPath);
-  const name = t.fromPath.split(windows ? /[\\/]/ : /\//).at(-1)!;
+  const name = t.fromPath.split(windows ? /[\\/]/ : /\//).pop()!;
   const source = t.isSymlink
     ? await from.join(await from.realpath(await from.parent(t.fromPath)), name)
     : await from.realpath(t.fromPath);
@@ -392,7 +392,7 @@ async function runDir(
     group.push(rel); byDepth.set(depth, group);
   }
   for (const group of byDepth.values()) {
-    await mapWorkers(group, 8, (rel) => sem.run(async () => {
+    await mapWorkers(group, sem.capacity, (rel) => sem.run(async () => {
       const path = await targetPath(rel);
       ctrl.abort.signal.throwIfAborted();
       await ensureDir(to, path);
@@ -439,7 +439,7 @@ async function runDir(
     }
     return pending;
   };
-  const prepared = await mapWorkers(files, 8, (it) => sem.run(async () => {
+  const prepared = await mapWorkers(files, sem.capacity, (it) => sem.run(async () => {
     const cut = it.relPath.lastIndexOf("/");
     const name = it.relPath.slice(cut + 1);
     const parent = await targetPath(cut < 0 ? "" : it.relPath.slice(0, cut));
@@ -549,12 +549,12 @@ async function runDir(
 
   // Each file holds a shared semaphore permit until its write settles, so
   // concurrent file legs across this batch never exceed the pool size.
-  await mapWorkers(plan, 8, (file) => sem.run(() => transferOne(file).catch((error: unknown) => {
+  await mapWorkers(plan, sem.capacity, (file) => sem.run(() => transferOne(file).catch((error: unknown) => {
     triggerAll(ctrl);
     throw new Error(`${file.it.relPath}: ${apiErrorMessage(error)}`);
   }), ctrl.abort.signal), ctrl.abort.signal);
   for (const group of [...byDepth.values()].reverse()) {
-    await mapWorkers(group, 8, (rel) => sem.run(async () => {
+    await mapWorkers(group, sem.capacity, (rel) => sem.run(async () => {
       const metadata = directoryMetadata.get(rel)!;
       await to.setMetadata(await targetPath(rel), metadata.mode, metadata.mtime);
     }, ctrl.abort.signal), ctrl.abort.signal);

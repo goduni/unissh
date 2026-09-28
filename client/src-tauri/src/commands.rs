@@ -2585,6 +2585,14 @@ mod local_symlink_tests {
                     .is_err()
             );
             assert_eq!(std::fs::read(path("original")).unwrap(), b"original");
+            std::fs::hard_link(path("original"), path("alias")).unwrap();
+            assert!(super::local_same_file(path("original"), path("alias"))
+                .await
+                .unwrap());
+            assert!(super::local_copy_prepared(path("original"), path("alias"))
+                .await
+                .is_err());
+            assert_eq!(std::fs::read(path("original")).unwrap(), b"original");
             super::local_commit(path("stage"), path("original"), true)
                 .await
                 .unwrap();
@@ -2637,12 +2645,15 @@ mod local_symlink_tests {
         let cpath = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
         assert!(super::open_regular(fifo.to_str().unwrap()).is_err());
-        std::fs::write(
+        match std::fs::write(
             dir.path().join(std::ffi::OsStr::from_bytes(&[255])),
             b"data",
-        )
-        .unwrap();
-        assert!(list_local_entries(dir.path().to_str().unwrap(), None).is_err());
+        ) {
+            Ok(()) => assert!(list_local_entries(dir.path().to_str().unwrap(), None).is_err()),
+            // APFS rejects invalid UTF-8 before an entry can reach our scanner.
+            Err(error) if error.raw_os_error() == Some(libc::EILSEQ) => {}
+            Err(error) => panic!("creating a non-UTF-8 fixture: {error}"),
+        }
     }
 
     #[test]

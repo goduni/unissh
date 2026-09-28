@@ -62,11 +62,13 @@ export function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise
  *  directory listings, and mkdirs across a whole batch never exceed K in flight
  *  (more would just block on the core's pool anyway). Pure and self-contained. */
 export class Semaphore {
+  readonly capacity: number;
   private avail: number;
   private readonly waiters = new Set<() => void>();
 
   constructor(capacity: number) {
-    this.avail = Math.max(1, Math.floor(capacity));
+    this.capacity = Number.isFinite(capacity) ? Math.min(16, Math.max(1, Math.floor(capacity))) : 1;
+    this.avail = this.capacity;
   }
 
   async run<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -162,7 +164,7 @@ export async function collectTree(
   let pending = [{ abs: root, rel: "" }];
   while (pending.length) {
     const next: typeof pending = [];
-    await mapWorkers(pending, 8, async ({ abs, rel }) => {
+    await mapWorkers(pending, sem.capacity, async ({ abs, rel }) => {
       const entries = await sem.run(() => signal ? src.list(abs, signal) : src.list(abs), signal);
       for (const e of entries) {
         signal?.throwIfAborted();

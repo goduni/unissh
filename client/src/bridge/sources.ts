@@ -217,7 +217,7 @@ class RemoteSource implements FileSource {
     try {
       const data = Array.from(new TextEncoder().encode(text));
       await api.sftpWriteFile(this.id, stage, data);
-      await this.setMetadata(stage, metadata?.mode, metadata?.mtime);
+      await this.setMetadata(stage, metadata?.mode);
       if (await this.readText(path) !== original) throw new Error("File changed on the server. Reopen it before saving.");
       await this.commit(stage, path, metadata !== null);
     } finally { await this.remove(stage).catch(() => {}); }
@@ -307,7 +307,7 @@ class LocalSource implements FileSource {
     await this.createNew(stage);
     try {
       await writeTextFile(stage, text);
-      await this.setMetadata(stage, metadata?.mode, metadata?.mtime);
+      await this.setMetadata(stage, metadata?.mode);
       if (await this.readText(path) !== original) throw new Error("File changed on disk. Reopen it before saving.");
       await this.commit(stage, path, metadata !== null);
     } finally { await this.remove(stage).catch(() => {}); }
