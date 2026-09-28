@@ -674,4 +674,4 @@ Dual-licensed at your option:
 
 ---
 
-<sub>Built with Claude Code</sub>
+<sub>Built with Claude Code and Codex</sub>
