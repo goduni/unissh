@@ -114,6 +114,7 @@ pub struct DirEntry {
     pub is_dir: bool,
     /// Size in bytes (if the server reported it).
     pub size: u64,
+    /// Whether the server supplied SIZE; zero without this flag is not an empty file.
     pub size_known: bool,
     /// Unix mode bits (full st_mode), 0 if the server did not report it.
     pub mode: u32,
@@ -130,6 +131,7 @@ pub struct DirEntry {
 pub struct FileStat {
     /// Size in bytes.
     pub size: u64,
+    /// Whether the server supplied SIZE; zero without this flag is not an empty file.
     pub size_known: bool,
     /// Whether it is a directory.
     pub is_dir: bool,

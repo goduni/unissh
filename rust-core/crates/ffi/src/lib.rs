@@ -268,6 +268,7 @@ pub struct SftpEntry {
     pub is_dir: bool,
     /// Size in bytes.
     pub size: u64,
+    /// Whether the server supplied SIZE; zero without this flag is not an empty file.
     pub size_known: bool,
     /// Unix mode bits (full st_mode), 0 if unknown.
     pub mode: u32,
@@ -284,6 +285,7 @@ pub struct SftpEntry {
 pub struct SftpFileStat {
     /// Size in bytes.
     pub size: u64,
+    /// Whether the server supplied SIZE; zero without this flag is not an empty file.
     pub size_known: bool,
     /// Whether this is a directory.
     pub is_dir: bool,
@@ -8293,8 +8295,6 @@ impl ReconnectingSession {
     }
 
     fn teardown(&self) {
-        self.shutdown
-            .store(true, std::sync::atomic::Ordering::SeqCst);
         let _enter = self.rt.enter();
         let mut guard = lock_recover(&self.current);
         if let Some((client, shell)) = guard.take() {
@@ -9126,12 +9126,14 @@ impl SftpFfi {
         Ok(uploaded == Some(unissh_ssh_transport::TransferOutcome::Completed))
     }
 
+    /// Create a directory with cancellation during pool and network waits.
     pub fn mkdir_cancel(&self, path: String, cancel: Arc<CancelToken>) -> Result<(), FfiError> {
         self.with_sftp_cancel(Some(&cancel), |rt, s| {
             rt.block_on(s.mkdir(&path)).map_err(map_transport_err)
         })?
         .ok_or_else(|| FfiError::other("transfer cancelled"))
     }
+    /// Exclusively create a file with cancellation during pool and network waits.
     pub fn create_new_cancel(
         &self,
         path: String,
@@ -9142,6 +9144,7 @@ impl SftpFfi {
         })?
         .ok_or_else(|| FfiError::other("transfer cancelled"))
     }
+    /// Create a symbolic link with cancellation during pool and network waits.
     pub fn symlink_cancel(
         &self,
         target: String,
@@ -9154,6 +9157,7 @@ impl SftpFfi {
         })?
         .ok_or_else(|| FfiError::other("transfer cancelled"))
     }
+    /// Commit a prepared sibling with cancellation during pool and network waits.
     pub fn commit_cancel(
         &self,
         from: String,
@@ -9167,6 +9171,7 @@ impl SftpFfi {
         })?
         .ok_or_else(|| FfiError::other("transfer cancelled"))
     }
+    /// Apply transfer metadata with cancellation during pool and network waits.
     pub fn set_metadata_cancel(
         &self,
         path: String,
@@ -9180,6 +9185,7 @@ impl SftpFfi {
         })?
         .ok_or_else(|| FfiError::other("transfer cancelled"))
     }
+    /// Read a literal link target with cancellation during pool and network waits.
     pub fn readlink_cancel(
         &self,
         path: String,
@@ -9190,6 +9196,7 @@ impl SftpFfi {
         })?
         .ok_or_else(|| FfiError::other("transfer cancelled"))
     }
+    /// Read source or destination metadata with cancellation during pool and network waits.
     pub fn stat_cancel(
         &self,
         path: String,
@@ -9249,10 +9256,12 @@ impl SftpFfi {
         })
     }
 
+    /// Compute a bounded, streaming SHA-256 fingerprint for editor conflict detection.
     pub fn fingerprint(&self, path: String) -> Result<Vec<u8>, FfiError> {
         self.with_sftp(|rt, s| rt.block_on(s.fingerprint(&path)).map_err(map_transport_err))
     }
 
+    /// Atomically publish a prepared sibling, optionally replacing an existing leaf.
     pub fn commit(&self, from: String, to: String, replace: bool) -> Result<(), FfiError> {
         self.with_sftp(|rt, s| {
             rt.block_on(s.commit(&from, &to, replace))
@@ -9260,6 +9269,7 @@ impl SftpFfi {
         })
     }
 
+    /// Preserve ordinary permission bits and modification time without ownership or privilege bits.
     pub fn set_metadata(
         &self,
         path: String,
@@ -9272,6 +9282,7 @@ impl SftpFfi {
         })
     }
 
+    /// Read actual bytes with a caller-specified allocation limit.
     pub fn read_file_bounded(&self, path: String, limit: u32) -> Result<Vec<u8>, FfiError> {
         self.with_sftp(|rt, s| {
             rt.block_on(s.read_file_bounded(&path, limit as usize))
@@ -9374,6 +9385,7 @@ impl SftpFfi {
             let st = rt.block_on(s.stat(&path)).map_err(map_transport_err)?;
             Ok(SftpFileStat {
                 size: st.size,
+                size_known: st.size_known,
                 is_dir: st.is_dir,
                 mode: st.mode,
                 mtime: st.mtime,
@@ -9387,6 +9399,7 @@ impl SftpFfi {
             let st = rt.block_on(s.lstat(&path)).map_err(map_transport_err)?;
             Ok(SftpFileStat {
                 size: st.size,
+                size_known: st.size_known,
                 is_dir: st.is_dir,
                 mode: st.mode,
                 mtime: st.mtime,

@@ -1893,20 +1893,56 @@ pub async fn local_set_metadata(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            if let Some(mtime) = mtime {
+                let path_c = std::ffi::CString::new(path.as_bytes()).map_err(ApiError::other)?;
+                let seconds = libc::time_t::try_from(mtime).map_err(ApiError::other)?;
+                let times = [
+                    libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: libc::UTIME_OMIT,
+                    },
+                    libc::timespec {
+                        tv_sec: seconds,
+                        tv_nsec: 0,
+                    },
+                ];
+                if unsafe {
+                    libc::utimensat(
+                        libc::AT_FDCWD,
+                        path_c.as_ptr(),
+                        times.as_ptr(),
+                        libc::AT_SYMLINK_NOFOLLOW,
+                    )
+                } != 0
+                {
+                    return Err(ApiError::other(std::io::Error::last_os_error()));
+                }
+            }
             if let Some(mode) = mode {
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o777))
                     .map_err(ApiError::other)?;
             }
         }
-        #[cfg(not(unix))]
-        let _ = mode;
-        if let Some(mtime) = mtime {
-            let file = std::fs::File::open(path).map_err(ApiError::other)?;
-            file.set_times(
-                std::fs::FileTimes::new()
-                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime)),
-            )
-            .map_err(ApiError::other)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_FLAG_BACKUP_SEMANTICS, FILE_WRITE_ATTRIBUTES,
+            };
+            let _ = mode;
+            if let Some(mtime) = mtime {
+                let file = std::fs::OpenOptions::new()
+                    .access_mode(FILE_WRITE_ATTRIBUTES)
+                    .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                    .open(path)
+                    .map_err(ApiError::other)?;
+                file.set_times(
+                    std::fs::FileTimes::new().set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime),
+                    ),
+                )
+                .map_err(ApiError::other)?;
+            }
         }
         Ok(())
     })
@@ -1978,36 +2014,53 @@ pub async fn sftp_relay(
 /// List a LOCAL directory in one shot (name + is_dir + size + mtime), avoiding
 /// the readDir + per-file stat IPC fan-out the client would otherwise do.
 #[tauri::command]
-pub async fn local_list_dir(path: String) -> ApiResult<Vec<dto::LocalEntry>> {
-    tauri::async_runtime::spawn_blocking(move || -> ApiResult<Vec<dto::LocalEntry>> {
-        let mut out = Vec::new();
-        for entry in std::fs::read_dir(&path).map_err(ApiError::other)? {
-            let entry = entry.map_err(ApiError::other)?;
-            let name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| ApiError::other("Filename is not valid UTF-8"))?;
-            let md = entry.metadata().map_err(ApiError::other)?;
-            let is_dir = md.is_dir();
-            let size = md.len();
-            let mtime = md
-                .modified()
-                .map_err(ApiError::other)?
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            out.push(dto::LocalEntry {
-                name,
-                is_symlink: md.is_symlink(),
-                mode: local_mode(&md),
-                is_dir,
-                size,
-                mtime,
-            });
+pub async fn local_list_dir(
+    path: String,
+    cancel_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::LocalEntry>> {
+    let cancel = transfer_cancel(&state, cancel_id)?;
+    tauri::async_runtime::spawn_blocking(move || list_local_entries(&path, cancel.as_deref()))
+        .await?
+}
+
+fn list_local_entries(
+    path: &str,
+    cancel: Option<&unissh_ffi::CancelToken>,
+) -> ApiResult<Vec<dto::LocalEntry>> {
+    let mut out = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    for entry in std::fs::read_dir(path).map_err(ApiError::other)? {
+        if cancel.is_some_and(|token| token.is_cancelled()) {
+            return Err(ApiError::other("transfer cancelled"));
         }
-        Ok(out)
-    })
-    .await?
+        if std::time::Instant::now() >= deadline {
+            return Err(ApiError::other("directory listing deadline exceeded"));
+        }
+        let entry = entry.map_err(ApiError::other)?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| ApiError::other("Filename is not valid UTF-8"))?;
+        let md = entry.metadata().map_err(ApiError::other)?;
+        let is_dir = md.is_dir();
+        let size = md.len();
+        let mtime = md
+            .modified()
+            .map_err(ApiError::other)?
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        out.push(dto::LocalEntry {
+            name,
+            is_symlink: md.is_symlink(),
+            mode: local_mode(&md),
+            is_dir,
+            size,
+            mtime,
+        });
+    }
+    Ok(out)
 }
 
 /// Local transfer metadata must not follow links (including dangling links).
@@ -2488,7 +2541,97 @@ pub async fn set_mcp_recording_preferences(
 
 #[cfg(test)]
 mod local_symlink_tests {
-    use super::{local_list_dir, local_lstat, local_readlink, local_symlink, local_unlink};
+    use super::{list_local_entries, local_lstat, local_readlink, local_symlink, local_unlink};
+
+    #[test]
+    fn prepared_copy_and_commit_preserve_existing_files() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
+            std::fs::write(path("original"), b"original").unwrap();
+            super::local_create_private(path("stage")).await.unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(path("stage"))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+            }
+            std::fs::write(path("stage"), b"replacement").unwrap();
+            assert!(super::local_commit(path("stage"), path("original"), false)
+                .await
+                .is_err());
+            assert_eq!(std::fs::read(path("original")).unwrap(), b"original");
+            assert!(
+                super::local_copy_prepared(path("original"), path("original"))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(std::fs::read(path("original")).unwrap(), b"original");
+            super::local_commit(path("stage"), path("original"), true)
+                .await
+                .unwrap();
+            assert_eq!(std::fs::read(path("original")).unwrap(), b"replacement");
+            assert!(!dir.path().join("stage").exists());
+        });
+    }
+
+    #[test]
+    fn metadata_and_editor_limits_apply_to_actual_files() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("file").to_str().unwrap().to_owned();
+            std::fs::write(&path, vec![42; 33]).unwrap();
+            assert!(super::local_read_text(path.clone(), 32).await.is_err());
+            let timestamp = 1_700_000_000;
+            super::local_set_metadata(path.clone(), Some(0o4555), Some(timestamp))
+                .await
+                .unwrap();
+            let md = std::fs::metadata(&path).unwrap();
+            assert_eq!(
+                md.modified()
+                    .unwrap()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                timestamp
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(md.permissions().mode() & 0o7777, 0o555);
+            }
+            super::local_set_metadata(
+                dir.path().to_str().unwrap().to_owned(),
+                None,
+                Some(timestamp),
+            )
+            .await
+            .unwrap();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn special_files_and_non_utf8_names_fail_explicitly() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("fifo");
+        let cpath = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+        assert!(super::open_regular(fifo.to_str().unwrap()).is_err());
+        std::fs::write(
+            dir.path().join(std::ffi::OsStr::from_bytes(&[255])),
+            b"data",
+        )
+        .unwrap();
+        assert!(list_local_entries(dir.path().to_str().unwrap(), None).is_err());
+    }
 
     #[test]
     fn preserves_links_and_unlinks_without_touching_referents() {
@@ -2510,7 +2653,7 @@ mod local_symlink_tests {
                 assert_eq!(local_readlink(path(name)).await.unwrap(), target);
                 let md = local_lstat(path(name)).await.unwrap().unwrap();
                 assert!(md.is_symlink);
-                let entries = local_list_dir(path("")).await.unwrap();
+                let entries = list_local_entries(&path(""), None).unwrap();
                 assert!(entries.iter().find(|e| e.name == name).unwrap().is_symlink);
                 assert!(local_symlink("other".into(), path(name), false)
                     .await

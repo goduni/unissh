@@ -654,7 +654,7 @@ export const sftpOpen = (a: ConnectArgs, parallelism: number) =>
   invoke<string>("sftp_open", { ...a, parallelism });
 export const sftpListDir = (id: string, path: string) =>
   invoke<SftpEntry[]>("sftp_list_dir", { id, path });
-export const localListDir = (path: string) => invoke<LocalEntry[]>("local_list_dir", { path });
+export const localListDir = (path: string, cancelId?: string) => invoke<LocalEntry[]>("local_list_dir", { path, cancelId });
 export const localLstat = (path: string) => invoke<LocalEntry | null>("local_lstat", { path });
 export const localReadlink = (path: string) => invoke<string>("local_readlink", { path });
 export const localSymlink = (target: string, path: string, targetIsDir: boolean) =>

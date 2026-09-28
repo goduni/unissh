@@ -237,12 +237,13 @@ class LocalSource implements FileSource {
   readonly kind = "local" as const;
   readonly id = "local";
   readonly label: string;
-  constructor(label: string) {
+  constructor(label: string, private readonly cancelId?: string) {
     this.label = label;
   }
+  withCancelToken(id: string): FileSource { return new LocalSource(this.label, id); }
   async list(path: string): Promise<Entry[]> {
     // One IPC (name+isDir+size+mtime) instead of readDir + a stat per file.
-    const list = await api.localListDir(path);
+    const list = await api.localListDir(path, this.cancelId);
     return list
       .filter((e) => isSafeName(e.name))
       .map((e) => ({ name: e.name, isDir: e.isDir && !e.isSymlink, isSymlink: e.isSymlink, size: e.size, fileKind: fileKind(e.mode), mode: e.mode, mtime: e.mtime || undefined }));
