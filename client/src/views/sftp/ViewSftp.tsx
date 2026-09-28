@@ -506,7 +506,7 @@ export function ViewSftp() {
     onNewFolder: () => setDialog({ kind: "newfolder", slot }),
     onNewFile: () => setDialog({ kind: "newfile", slot }),
     onImport: slot.location.kind === "local" ? () => void importFromFiles(slot) : undefined,
-    onDropHere: (cwd: string) => void handleDrop(slot.location, cwd),
+    onDropHere: () => void handleDrop(slot.location, slot.cwd),
     onTabDrop: (id: string) => handleTabDrop(slotKey, id),
     dropTargetTab: dropTab?.slot === slotKey ? dropTab.id : null,
     onTabDragEnter: (id: string) => setDropTab({ slot: slotKey, id }),

@@ -1,7 +1,7 @@
 // One file/dir row. Presentational: selection highlight, optional metadata
 // columns (size / modified / permissions), a hover/touch "send" action, and the
-// drag source + drop-onto-folder hooks. All behaviour is delegated via props so
-// FileList owns selection/drag/context logic.
+// drag source hooks. FileList owns selection/drag/context logic; drops bubble
+// to the pane and always target its currently open directory.
 
 import { useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
@@ -23,7 +23,6 @@ export function FileRow({
   entry,
   isUp,
   selected,
-  dropActive,
   focused,
   showModified,
   showPerms,
@@ -33,14 +32,10 @@ export function FileRow({
   onContextAt,
   onActivate,
   onDragStart,
-  onDragEnterDir,
-  onDragLeaveDir,
-  onDropOnDir,
 }: {
   entry: Entry;
   isUp?: boolean;
   selected?: boolean;
-  dropActive?: boolean;
   focused?: boolean;
   showModified?: boolean;
   showPerms?: boolean;
@@ -50,9 +45,6 @@ export function FileRow({
   onContextAt?: (x: number, y: number) => void;
   onActivate?: () => void;
   onDragStart?: (e: React.DragEvent) => void;
-  onDragEnterDir?: (e: React.DragEvent) => void;
-  onDragLeaveDir?: (e: React.DragEvent) => void;
-  onDropOnDir?: (e: React.DragEvent) => void;
 }) {
   const p = usePalette();
   const isMobile = useIsMobile();
@@ -73,7 +65,6 @@ export function FileRow({
   };
   const isDir = entry.isDir;
   const isFile = !isDir && !isUp;
-  const isDropDir = isDir && !isUp;
   // desktop: hover send arrow on files; mobile: a visible ⋯ actions button.
   const showSend = !isMobile && hover && isFile && !!actionIcon && !!onActivate;
   const showRowMenu = isMobile && !isUp && !!onContextAt;
@@ -93,18 +84,6 @@ export function FileRow({
       }}
       draggable={!isUp}
       onDragStart={onDragStart}
-      onDragEnter={isDropDir ? onDragEnterDir : undefined}
-      onDragOver={isDropDir ? (e) => e.preventDefault() : undefined}
-      onDragLeave={
-        isDropDir
-          ? (e) => {
-              // Ignore enter/leave churn between the row's own children.
-              if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-              onDragLeaveDir?.(e);
-            }
-          : undefined
-      }
-      onDrop={isDropDir ? onDropOnDir : undefined}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onTouchStart={(e) => {
@@ -144,20 +123,16 @@ export function FileRow({
         userSelect: "none",
         background: pressing
           ? p.bg3
-          : dropActive
+          : selected
             ? p.accentSoft
-            : selected
-              ? p.accentSoft
-              : hover
-                ? p.bg2
-                : "transparent",
+            : hover
+              ? p.bg2
+              : "transparent",
         boxShadow: focused
           ? `inset 0 0 0 2px ${p.accent}`
-          : dropActive
-            ? `inset 0 0 0 1.5px ${p.accentLine}`
-            : selected
-              ? `inset 2px 0 0 ${p.accent}`
-              : "none",
+          : selected
+            ? `inset 2px 0 0 ${p.accent}`
+            : "none",
         fontSize: TEXT.base,
       }}
     >
