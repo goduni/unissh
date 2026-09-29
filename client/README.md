@@ -109,6 +109,21 @@ npm run tauri ios init   && npm run tauri ios dev
 npm run tauri android init && npm run tauri android dev
 ```
 
+## Keyboard shortcuts
+
+Settings → Keyboard shortcuts lists application, section, terminal and SFTP editor
+commands. Search by action or keys, click a binding to edit it, record a replacement, remove bindings
+with × or add alternatives, then save. Disable and Reset are in the action editor. Conflicting assignments require an
+explicit reassignment. Commands can be disabled or reset individually; Reset all
+restores the platform defaults.
+
+Changes apply immediately and are saved locally per platform, without vault sync.
+Bindings use physical key positions across keyboard layouts. The shortcut help
+and title-bar hints reflect current assignments. Standard text editing, dialog
+keys and list navigation keep their usual behavior. The OS may intercept some
+combinations before they reach the app. Bare Ctrl bindings can override shell
+commands; the defaults keep the application's Ctrl+Shift convention off macOS.
+
 ## Verified status
 
 - `cargo check` (lib + bin) — **passes** against the real `unissh-ffi` + full Tauri v2 stack.

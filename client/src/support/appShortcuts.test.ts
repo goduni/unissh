@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAppShortcut } from "./appShortcuts";
-import { isAppChord } from "./hotkeys";
 
 const { state, platform } = vi.hoisted(() => ({
   platform: { mac: false },
@@ -31,7 +30,6 @@ for (const os of ["windows", "linux", "macos"]) {
       handleAppShortcut(e, ctx);
       expect(e.preventDefault).not.toHaveBeenCalled();
       expect(ctx.onLock).not.toHaveBeenCalled();
-      expect(isAppChord(e)).toBe(false);
     });
 
     it("locks only with the platform application modifier", () => {
@@ -39,7 +37,6 @@ for (const os of ["windows", "linux", "macos"]) {
       handleAppShortcut(e, ctx);
       expect(ctx.onLock).toHaveBeenCalledOnce();
       expect(e.preventDefault).toHaveBeenCalledOnce();
-      expect(isAppChord(e)).toBe(true);
     });
 
     it("leaves Alt/AltGr combinations alone", () => {
@@ -65,7 +62,6 @@ for (const os of ["windows", "linux", "macos"]) {
         state.route = "hosts";
         handleAppShortcut(e, ctx);
         expect(e.preventDefault, code).toHaveBeenCalled();
-        expect(isAppChord(e), code).toBe(true);
       }
       expect(state.setShortcuts).toHaveBeenCalled();
       expect(state.resetTermZoom).toHaveBeenCalled();

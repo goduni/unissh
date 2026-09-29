@@ -10,6 +10,7 @@ import { useApp, type ConfirmData } from "@/store/app";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation, tDyn } from "@/i18n";
 import { isMac } from "@/bridge/platform";
+import { useShortcuts } from "@/store/shortcuts";
 import { shortcutGroups } from "@/support/shortcuts";
 import type { ToastDetail, ToastKind } from "@/store/toast";
 
@@ -320,18 +321,19 @@ function ConfirmCard({ data, close }: { data: ConfirmData; close: () => void }) 
   );
 }
 
-// "⌘" was printed on every platform, including the ones without a ⌘ key. The
-// modifier also differs inside the terminal, and deliberately: a bare Ctrl+K/L/T
-// belongs to readline there, so the app takes Ctrl+Shift instead (see
-// support/hotkeys.ts). The table itself lives in support/shortcuts.ts, where it
-// can be tested without mounting React.
-
+// Render the live catalog, including disabled and reassigned actions.
 export function ShortcutsHelp() {
+  const shortcuts = useApp((s) => s.shortcuts);
+  return shortcuts ? <ShortcutsHelpDialog /> : null;
+}
+
+function ShortcutsHelpDialog() {
   const p = usePalette();
   const { t } = useTranslation();
-  const shortcuts = useApp((s) => s.shortcuts);
+  const overrides = useShortcuts((s) => s.overrides);
   const setShortcuts = useApp((s) => s.setShortcuts);
-  if (!shortcuts) return null;
+  useDialogKeys(() => setShortcuts(false));
+  const cardRef = useDialogFocus<HTMLDivElement>("button");
   return (
     <div
       onClick={() => setShortcuts(false)}
@@ -346,12 +348,18 @@ export function ShortcutsHelp() {
       }}
     >
       <div
+        ref={cardRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("feedback.shortcutsTitle")}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className="uh-view"
         style={{
           // Wider than the eight-row sheet this grew out of: "Ctrl+Shift+←→↑↓"
           // and a wrapped RU description do not both fit in 420.
-          width: "min(480px, calc(100vw - 32px))",
+          width: "min(560px, calc(100vw - 32px))",
+          boxSizing: "border-box",
           background: p.bg1,
           border: `1px solid ${p.line2}`,
           borderRadius: 16,
@@ -364,11 +372,12 @@ export function ShortcutsHelp() {
           flexDirection: "column",
         }}
       >
-        <div style={{ fontSize: TEXT.lead, fontWeight: 700, marginBottom: rem(16), flexShrink: 0 }}>
+        <div style={{ fontSize: TEXT.lead, fontWeight: 700, marginBottom: rem(16), flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", gap: rem(12) }}>
           {t("feedback.shortcutsTitle")}
+          <Btn variant="ghost" size="sm" icon="x" onClick={() => setShortcuts(false)}>{t("common.close")}</Btn>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: rem(18), overflowY: "auto", minHeight: 0 }}>
-          {shortcutGroups(isMac()).map((group) => (
+          {shortcutGroups(isMac(), overrides).map((group) => (
             <div key={group.titleKey} style={{ display: "flex", flexDirection: "column", gap: rem(10) }}>
               <div
                 style={{
@@ -384,7 +393,7 @@ export function ShortcutsHelp() {
               {group.rows.map((row) => (
                 <div
                   key={row.labelKey}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: rem(12) }}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: rem(12), flexWrap: "wrap" }}
                 >
                   {/* minWidth:0 lets a long RU shortcut description wrap instead of shoving the keycap */}
                   <span style={{ fontSize: TEXT.base, color: p.txt2, minWidth: 0 }}>{tDyn(row.labelKey)}</span>
@@ -398,7 +407,9 @@ export function ShortcutsHelp() {
                       border: `1px solid ${p.line2}`,
                       color: p.txt,
                       flexShrink: 0, // keycap must never shrink/wrap
-                      whiteSpace: "nowrap",
+                      whiteSpace: "normal",
+                      maxWidth: "100%",
+                      overflowWrap: "anywhere",
                     }}
                   >
                     {row.keys ?? tDyn(row.keysKey!, row.keysVars)}

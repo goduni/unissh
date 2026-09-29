@@ -33,7 +33,7 @@ import * as api from "@/bridge/api";
 import { apiErrorMessage, isApiError, type ConnectionProfile } from "@/bridge/types";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { isMac } from "@/bridge/platform";
-import { isAppChord } from "@/support/hotkeys";
+import { matchesShortcut, useShortcuts } from "@/store/shortcuts";
 import { ContextMenu } from "@/components/ContextMenu";
 import { TermTabStrip } from "@/views/TermTabStrip";
 import { useTerminalShortcuts } from "@/shell/useTerminalShortcuts";
@@ -537,14 +537,9 @@ async function runStartupSnippets(
     // only while THIS terminal has focus, so other panes/tabs are unaffected.
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
-      // Hand the app's own chords back before xterm can look at them. Returning
-      // false makes xterm return from _keyDown untouched; anything it *does*
-      // recognise it cancels with stopPropagation, and the window listener that
-      // implements these shortcuts then never runs. That is why ⌘K opened the
-      // palette everywhere except the terminal — the one place it is for.
-      if (isAppChord(ev)) return false;
-      const isF = ev.key === "f" || ev.key === "F";
-      if (isF && ((ev.metaKey && !ev.ctrlKey) || (ev.ctrlKey && ev.shiftKey))) {
+      if (ev.defaultPrevented || useShortcuts.getState().recording) return false;
+      if (matchesShortcut(ev, "find")) {
+        ev.preventDefault();
         setSearchOpen(true);
         setTimeout(() => searchInputRef.current?.select(), 0);
         return false;
@@ -557,47 +552,43 @@ async function runStartupSnippets(
       // otherwise these keys keep whatever meaning the shell gives them, rather
       // than being swallowed for a feature that would do nothing.
       if (
-        (ev.key === "ArrowUp" || ev.key === "ArrowDown") &&
-        (ev.metaKey || ev.ctrlKey) &&
-        ev.shiftKey &&
+        (matchesShortcut(ev, "promptPrev") || matchesShortcut(ev, "promptNext")) &&
         shellMarks.length > 0
       ) {
+        ev.preventDefault();
         const viewportTop = term.buffer.active.viewportY;
         const lines = shellMarks.map((m) => m.marker.line).filter((l) => l >= 0);
         const target =
-          ev.key === "ArrowUp"
+          matchesShortcut(ev, "promptPrev")
             ? [...lines].reverse().find((l) => l < viewportTop)
             : lines.find((l) => l > viewportTop);
         if (target !== undefined) term.scrollToLine(target);
         return false;
       }
-      // Keyboard copy. macOS keeps ⌘C (the browser's native copy event handles it)
-      // and leaves Ctrl+C as interrupt. On Linux/Windows, Ctrl+Shift+C always copies
-      // the selection, and a bare Ctrl+C copies *only when something is selected* —
-      // with no selection it falls through below as the SIGINT ^C, then clears the
-      // selection so a second Ctrl+C interrupts.
-      if (!isMac() && (ev.key === "c" || ev.key === "C") && ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+      if (matchesShortcut(ev, "copy")) {
+        ev.preventDefault();
         const sel = term.getSelection();
-        if (ev.shiftKey) {
-          if (sel) void writeText(sel);
-          return false;
-        }
-        if (sel) {
-          void writeText(sel);
-          term.clearSelection();
-          return false;
-        }
-      }
-      // Keyboard paste. macOS keeps ⌘V (the webview's native paste event feeds
-      // xterm) and is left alone — a second handler there would double-paste.
-      // On Linux/Windows both Ctrl+V and Ctrl+Shift+V paste: WebView2 never
-      // delivers a native paste to the xterm textarea, so Windows had no
-      // keyboard paste at all (#29), and returning false stops the platforms
-      // that DO have a native path from pasting twice. This spends readline's
-      // quoted-insert (^V) — deliberate, the Termius trade.
-      if (!isMac() && (ev.key === "v" || ev.key === "V") && ev.ctrlKey && !ev.altKey && !ev.metaKey) {
-        if (ev.type === "keydown") void pasteClipboard();
+        if (sel) void writeText(sel);
         return false;
+      }
+      // With no selection this optional action leaves Ctrl+C to the shell.
+      if (matchesShortcut(ev, "copySelection") && term.hasSelection()) {
+        ev.preventDefault();
+        void writeText(term.getSelection());
+        term.clearSelection();
+        return false;
+      }
+      if (matchesShortcut(ev, "paste")) {
+        ev.preventDefault(); // suppress native paste, including on macOS
+        void pasteClipboard();
+        return false;
+      }
+      // Suppress native clipboard accelerators after a remap/disable. Let
+      // xterm process bare Ctrl+V as quoted-insert again, without native paste.
+      if ((ev.metaKey && !ev.ctrlKey && !ev.altKey && ["KeyC", "KeyV"].includes(ev.code))
+        || (!isMac() && ev.ctrlKey && !ev.altKey && !ev.metaKey && ev.code === "KeyV")) {
+        ev.preventDefault();
+        if (ev.metaKey) return false;
       }
       return true;
     });

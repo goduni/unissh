@@ -34,6 +34,10 @@ starts with `0.`:
 
 ### Added
 
+- Configurable client keyboard shortcuts in Settings: search, multiple bindings,
+  disabling, conflict reassignment, per-action and full reset, and live shortcut hints.
+  Preferences are stored on the device; terminal and SFTP editor commands are included.
+
 - MCP activity search across full commands, hosts and directories; retained output
   now lasts until application exit or grant cleanup instead of expiring after 10 minutes.
 

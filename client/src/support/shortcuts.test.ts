@@ -50,13 +50,11 @@ describe("shortcut cheat-sheet", () => {
       }
     });
 
-    // A cap printed twice with two meanings is worse than an undocumented
-    // shortcut: the reader trusts it. ⌘T is the live example — it goes to the
-    // terminal from outside and opens a tab from within, so it is ONE row whose
-    // label says both, not two rows that contradict each other.
-    it(`prints no keycap twice (${label})`, () => {
-      const caps = groups.flatMap((g) => g.rows.map((r) => r.keys).filter(Boolean));
-      expect(new Set(caps).size).toBe(caps.length);
+    it(`keeps duplicate bindings scoped to different contexts (${label})`, () => {
+      for (const group of groups) {
+        const caps = group.rows.map((r) => r.keys).filter(Boolean);
+        expect(new Set(caps).size, group.titleKey).toBe(caps.length);
+      }
     });
   }
 

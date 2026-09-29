@@ -555,9 +555,7 @@ export function App() {
     // seen. xterm is the reason: it cancels the keys it recognises with
     // stopPropagation, and a bubble-phase listener on window never runs for
     // those — which is how ⌘K opened the palette everywhere except the terminal.
-    // The terminal ALSO hands these back untouched (support/hotkeys.ts), so the
-    // key does not reach the shell as well; this half only guarantees the app
-    // sees it at all.
+    // Handled events are prevented and stopped here, before xterm can send input.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [ctx]);

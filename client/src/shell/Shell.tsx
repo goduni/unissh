@@ -2,6 +2,7 @@
 // switcher, nav. Faithful port of app-shell.jsx + app-main.jsx title slots,
 // fed by real store data.
 
+import { useShortcutAria, useShortcutLabel } from "@/store/shortcuts";
 import React, { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
@@ -84,6 +85,8 @@ function TitleIconBtn({
 }
 
 export function SearchBar({ onClick }: { onClick: () => void }) {
+  const paletteKeys = useShortcutLabel("palette");
+  const paletteAria = useShortcutAria("palette");
   const p = usePalette();
   const { t } = useTranslation();
   // On a narrow window the full search box would be crushed to an unreadable sliver
@@ -94,7 +97,7 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
       <button
         onClick={onClick}
         aria-label={t("shell.searchPlaceholder")}
-        aria-keyshortcuts="Meta+K"
+      aria-keyshortcuts={paletteAria}
         style={{
           ...BTN_RESET,
           display: "flex",
@@ -117,7 +120,7 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
     <button
       onClick={onClick}
       aria-label={t("shell.searchPlaceholder")}
-      aria-keyshortcuts="Meta+K"
+      aria-keyshortcuts={paletteAria}
       style={{
         ...BTN_RESET,
         display: "flex",
@@ -141,7 +144,7 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
       >
         {t("shell.searchPlaceholder")}
       </span>
-      <span
+      {paletteKeys && <span
         style={{
           fontFamily: MONO,
           fontSize: TEXT.micro,
@@ -151,8 +154,8 @@ export function SearchBar({ onClick }: { onClick: () => void }) {
           border: `1px solid ${p.line}`,
         }}
       >
-        ⌘K
-      </span>
+        {paletteKeys}
+      </span>}
     </button>
   );
 }
@@ -253,6 +256,7 @@ export function WindowControls() {
 }
 
 export function TitleBar() {
+  const settingsKeys = useShortcutLabel("settings");
   const { t } = useTranslation();
   const { toggleTwin } = useTheme();
   const route = useApp((s) => s.route);
@@ -311,7 +315,7 @@ export function TitleBar() {
             else ctx.go("settings");
           }}
           active={route === "settings" || settingsOpen}
-          title={`${t("nav.settings")} · ${isMac() ? "⌘," : "Ctrl+,"}`}
+          title={[t("nav.settings"), settingsKeys].filter(Boolean).join(" · ")}
         />
         <TitleIconBtn icon="lock" onClick={ctx.onLock} title={t("shell.lock")} />
         {/* Account avatar — only for a linked cloud account with a handle. A

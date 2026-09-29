@@ -3,6 +3,7 @@
 // oversized files rather than corrupting them, and confirms before discarding
 // unsaved edits.
 
+import { hasOpenDialog } from "@/components/a11y";
 import { useEffect, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT } from "@/theme/tokens";
@@ -10,6 +11,8 @@ import { Icon, Btn, Spinner } from "@/components/primitives";
 import { useKeyboardInset } from "@/store/responsive";
 import { useChromeInset } from "@/shell/WindowChrome";
 import { useTranslation } from "@/i18n";
+import { matchesShortcut, useShortcuts } from "@/store/shortcuts";
+import { useApp } from "@/store/app";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import { apiErrorMessage } from "@/bridge/types";
@@ -95,17 +98,18 @@ export function TextEditor({
     }
   };
 
-  // Escape closes (guarded for unsaved edits); ⌘/Ctrl+S saves. Re-bound each
+  // Escape closes (guarded for unsaved edits); the configured save shortcut saves. Re-bound each
   // render so it sees the current dirty/editable/saving state.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const state = useApp.getState();
+      if (e.defaultPrevented || e.isComposing || useShortcuts.getState().recording
+        || hasOpenDialog() || state.importing || state.groupsModal || !state.unlocked || state.route !== "sftp" || state.settingsOpen || state.palette
+        || state.shortcuts || state.modal || state.confirm) return;
       if (e.key === "Escape") {
         e.preventDefault();
         requestClose();
-      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "s") {
-        // Not with Shift: ⌘⇧S / Ctrl+Shift+S opens a local terminal (see
-        // shell/useTerminalShortcuts.ts). Save is the bare chord, precisely,
-        // rather than everything that happens to contain an S.
+      } else if (matchesShortcut(e, "editorSave")) {
         e.preventDefault();
         if (editable && dirty && !saving) void save();
       }

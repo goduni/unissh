@@ -80,6 +80,7 @@ import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useUpdate } from "@/store/update";
 import { updatesSupported } from "@/bridge/updater";
 import { osPlatform } from "@/bridge/platform";
+import { SettingsShortcuts } from "./SettingsShortcuts";
 import { SettingsSupport } from "./SettingsSupport";
 import { TerminalPreview } from "./TerminalPreview";
 
@@ -4633,9 +4634,10 @@ function SettingsCloud() {
 }
 
 // ── shell ──────────────────────────────────────────────────────
-type TabId = "appearance" | "general" | "vaults" | "cloud" | "security" | "about" | "support";
+type TabId = "shortcuts" | "appearance" | "general" | "vaults" | "cloud" | "security" | "about" | "support";
 const SETTINGS_TABS: { id: TabId; icon: IconName; labelKey: string }[] = [
   { id: "appearance", icon: "sliders", labelKey: "settings.tabAppearance" },
+  { id: "shortcuts", icon: "command", labelKey: "keybindings.title" },
   { id: "general", icon: "refresh", labelKey: "settings.tabGeneral" },
   { id: "vaults", icon: "layers", labelKey: "vault.manage" },
   { id: "cloud", icon: "cloud", labelKey: "serverCloud.tab" },
@@ -4737,6 +4739,7 @@ export function ViewSettings() {
           </h2>
           <div style={{ height: rem(8) }} />
           {tab === "appearance" && <SettingsAppearance />}
+          {tab === "shortcuts" && <SettingsShortcuts />}
           {tab === "general" && <SettingsGeneral />}
           {tab === "vaults" && <SettingsVaults />}
           {tab === "cloud" && <SettingsCloud />}
