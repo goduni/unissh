@@ -1563,6 +1563,18 @@ export const ru = {
       "loadFailed": "Не удалось открыть файл."
     },
     "queue": {
+      "speed": "{{speed}}/с",
+      "resumeAll": "Продолжить все",
+      "files": "Файлы: {{done}} / {{total}}",
+      "progress": "{{done}} / {{total}}",
+      "stalled": "Нет прогресса — ждём ответа",
+      "finished": "Завершено: {{count}}",
+      "paused": "На паузе: {{count}}",
+      "failed": "Ошибок: {{count}}",
+      "running": "В работе: {{count}}",
+      "collapse": "Свернуть передачи",
+      "expand": "Показать передачи",
+      "dismiss": "Убрать из списка",
       "title": "Передачи",
       "overall": "{{count}} · {{done}} / {{total}}",
       "pauseAll": "Пауза всем",
@@ -1574,6 +1586,9 @@ export const ru = {
       "retry": "Повторить",
       "eta": "Осталось {{eta}}",
       "state": {
+        "cancelling": "отмена…",
+        "pausing": "приостановка…",
+        "waiting": "ожидает решения",
         "queued": "в очереди",
         "scanning": "сканирование…",
         "active": "передача",

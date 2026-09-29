@@ -46,8 +46,9 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-[dev-dependencies]
 tempfile = "3"
+
+[dev-dependencies]
 # The local-terminal tests assert on the OS user the recording is stamped with,
 # and that name has exactly one definition.
 unissh-local-pty = { path = "../local-pty" }

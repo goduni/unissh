@@ -23,8 +23,16 @@ export function remoteParent(path: string): string {
  *  is returned by most servers (infinite walk) and ".."/embedded slashes enable
  *  a path-traversal write outside the chosen destination. */
 export function isSafeName(name: string): boolean {
-  return name !== "" && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\\");
+  return name !== "" && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\0");
 }
+
+/** Windows components have additional aliases and stream/device syntax. */
+export function isPortableWindowsName(name: string): boolean {
+  return isSafeName(name) && !/[\\<>:"|?*\x00-\x1f]/.test(name) && !/[. ]$/.test(name)
+    && !/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(name);
+}
+
+export const foldName = (name: string): string => name.normalize("NFC").toLowerCase();
 
 export interface Crumb {
   label: string;
@@ -49,8 +57,8 @@ export function breadcrumbSegments(path: string): Crumb[] {
  *  extensionless names get the suffix appended at the end. Used by the
  *  "keep both" conflict choice. */
 export function dedupeName(name: string, existing: Iterable<string>): string {
-  const taken = new Set(existing);
-  if (!taken.has(name)) return name;
+  const taken = new Set(Array.from(existing, foldName));
+  if (!taken.has(foldName(name))) return name;
 
   // Split off a real extension only (leading dot => treat whole name as stem).
   const dot = name.lastIndexOf(".");
@@ -64,7 +72,7 @@ export function dedupeName(name: string, existing: Iterable<string>): string {
   let n = m ? parseInt(m[2], 10) + 1 : 2;
 
   let candidate = `${baseStem} (${n})${ext}`;
-  while (taken.has(candidate)) {
+  while (taken.has(foldName(candidate))) {
     n += 1;
     candidate = `${baseStem} (${n})${ext}`;
   }

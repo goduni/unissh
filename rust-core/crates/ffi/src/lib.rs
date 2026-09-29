@@ -268,6 +268,8 @@ pub struct SftpEntry {
     pub is_dir: bool,
     /// Size in bytes.
     pub size: u64,
+    /// Whether the server supplied SIZE; zero without this flag is not an empty file.
+    pub size_known: bool,
     /// Unix mode bits (full st_mode), 0 if unknown.
     pub mode: u32,
     /// Modification time, seconds since the epoch; 0 if unknown.
@@ -283,6 +285,8 @@ pub struct SftpEntry {
 pub struct SftpFileStat {
     /// Size in bytes.
     pub size: u64,
+    /// Whether the server supplied SIZE; zero without this flag is not an empty file.
+    pub size_known: bool,
     /// Whether this is a directory.
     pub is_dir: bool,
     /// Unix mode bits (full st_mode), 0 if unknown.
@@ -1333,6 +1337,8 @@ impl std::fmt::Debug for McpRecordingMeta {
 /// Root core object for the UI. Manages a single local instance.
 #[derive(uniffi::Object)]
 pub struct Core {
+    sftp_epoch: std::sync::atomic::AtomicU64,
+    sftp_sessions: Mutex<Vec<std::sync::Weak<SftpFfi>>>,
     db_path: PathBuf,
     keyset_path: PathBuf,
     // Arc — to share the unwrapped state with ReconnectingSession
@@ -1374,6 +1380,8 @@ impl Core {
     #[uniffi::constructor]
     pub fn new(db_path: String, keyset_path: String) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Core {
+            sftp_epoch: std::sync::atomic::AtomicU64::new(0),
+            sftp_sessions: Mutex::new(Vec::new()),
             db_path: PathBuf::from(db_path),
             keyset_path: PathBuf::from(keyset_path),
             state: Arc::new(Mutex::new(None)),
@@ -1576,7 +1584,16 @@ impl Core {
     /// Locks the instance (in-memory secrets are zeroized on Drop).
     pub fn lock(&self) {
         log::info!("instance locked");
-        *self.locked_state() = None;
+        let sessions = {
+            let mut state = self.locked_state();
+            self.sftp_epoch
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *state = None;
+            std::mem::take(&mut *lock_recover(&self.sftp_sessions))
+        };
+        for session in sessions.into_iter().filter_map(|session| session.upgrade()) {
+            session.close();
+        }
     }
 
     /// Creates a local vault.
@@ -4497,6 +4514,7 @@ impl Core {
         proxy: Option<ProxyConfig>,
         parallelism: u32,
     ) -> Result<Arc<SftpFfi>, FfiError> {
+        let epoch = self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst);
         let client = self.connect_session(
             &auth,
             &jumps,
@@ -4510,7 +4528,16 @@ impl Core {
             .block_on(client.open_sftp())
             .map_err(map_transport_err)?;
         let max = (parallelism.clamp(1, 16)) as usize;
-        Ok(Arc::new(SftpFfi {
+        let authority = self.locked_state();
+        if authority.is_none() || epoch != self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            let _enter = self.rt.enter();
+            drop(sftp);
+            drop(client);
+            return Err(FfiError::other("SFTP connection expired during lock"));
+        }
+        let session = Arc::new(SftpFfi {
+            shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             prompter: self.prompter.clone(),
             approver: self.approver.clone(),
             // SFTP runs no program on the far side that would look for an agent.
@@ -4533,7 +4560,11 @@ impl Core {
             jumps,
             proxy,
             reconnect_lock: Mutex::new(()),
-        }))
+        });
+        let mut sessions = lock_recover(&self.sftp_sessions);
+        sessions.retain(|session| session.strong_count() > 0);
+        sessions.push(Arc::downgrade(&session));
+        Ok(session)
     }
 
     // --- connection profiles ("hosts") ---
@@ -8461,7 +8492,7 @@ impl CancelToken {
         })
     }
 
-    /// Requests cancellation (the transfer will stop between chunks).
+    /// Requests cancellation, including while waiting for a free SFTP channel.
     pub fn cancel(&self) {
         self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
     }
@@ -8469,6 +8500,17 @@ impl CancelToken {
     /// Whether cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+struct RelayProgress {
+    observer: Arc<dyn SftpProgressObserver>,
+    base: u64,
+}
+impl unissh_ssh_transport::SftpProgress for RelayProgress {
+    fn on_progress(&self, transferred: u64, total: u64) {
+        self.observer
+            .on_progress(self.base + transferred, total.saturating_mul(2));
     }
 }
 
@@ -8636,6 +8678,7 @@ struct SftpPool {
 /// context — otherwise a panic on a drop outside the runtime.
 #[derive(uniffi::Object)]
 pub struct SftpFfi {
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
     client: Mutex<Option<SshClient>>,
     /// A channel pool + a condition variable for a blocking lease: the lease is called
     /// from Tauri's blocking threads (`spawn_blocking`), so we wait via a `Condvar`,
@@ -8684,6 +8727,31 @@ const OPEN_RETRY_MAX: u32 = 6;
 /// OPEN_RETRY_MAX=6 the wait is ~0.15+0.3+…+0.9 ≈ 3.1 s before giving up.
 const OPEN_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(150);
 
+async fn wait_sftp_cancelled(cancel: Option<&CancelToken>) {
+    let Some(cancel) = cancel else {
+        return std::future::pending().await;
+    };
+    while !cancel.is_cancelled() {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+async fn await_sftp_open(
+    cancel: Option<&CancelToken>,
+    open: impl std::future::Future<Output = Result<SftpSession, unissh_ssh_transport::TransportError>>,
+) -> Result<Option<SftpSession>, FfiError> {
+    tokio::select! {
+        biased;
+        _ = wait_sftp_cancelled(cancel) => Ok(None),
+        result = tokio::time::timeout(REOPEN_CHANNEL_TIMEOUT, open) => {
+            result
+                .map_err(|_| FfiError::other("sftp channel open timed out"))?
+                .map(Some)
+                .map_err(map_transport_err)
+        }
+    }
+}
+
 impl SftpFfi {
     /// Leases a channel from the pool, runs `f`, returns the channel. Up to `SftpPool::max`
     /// operations run in parallel; when saturated it blocks the calling blocking thread
@@ -8695,14 +8763,42 @@ impl SftpFfi {
     where
         F: FnOnce(&Arc<tokio::runtime::Runtime>, &mut SftpSession) -> Result<T, FfiError>,
     {
-        let (mut ch, gen) = self.lease()?;
-        let r = f(&self.rt, &mut ch);
+        Ok(self
+            .with_sftp_cancel(None, f)?
+            .expect("a non-cancellable lease always returns a channel"))
+    }
+
+    /// None means the caller cancelled before starting channel I/O. Metadata
+    /// calls use `with_sftp`; only transfers supply a cancellation token.
+    fn with_sftp_cancel<T, F>(
+        &self,
+        cancel: Option<&CancelToken>,
+        f: F,
+    ) -> Result<Option<T>, FfiError>
+    where
+        F: FnOnce(&Arc<tokio::runtime::Runtime>, &mut SftpSession) -> Result<T, FfiError>,
+    {
+        let Some((mut ch, gen)) = self.lease(cancel)? else {
+            return Ok(None);
+        };
+        ch.set_lifetime_cancel(Arc::new(CancelBridge(self.shutdown.clone())));
+        ch.set_operation_cancel(cancel.map(|c| {
+            Arc::new(CancelBridge(c.flag.clone())) as Arc<dyn unissh_ssh_transport::SftpCancel>
+        }));
+        // Cancellation may have arrived while opening/acquiring the channel.
+        // Return that healthy lease without running the transfer closure.
+        let r = if cancel.is_some_and(CancelToken::is_cancelled) {
+            Ok(None)
+        } else {
+            f(&self.rt, &mut ch).map(Some)
+        };
         // Return the channel to the pool while its thread is NOT desynchronized — even on
         // an operation error. A clean file error (no permission/file, directory already
         // exists) does not spoil the channel, and there's no reason to discard it: it was precisely
         // discarding good channels (with reopening) that created channel churn
         // hitting the server's `MaxSessions`. A spoiled one (drop/timeout/
         // interrupted pipeline) channel is discarded — it cannot be reused.
+        ch.set_operation_cancel(None);
         let healthy = !ch.is_poisoned();
         self.giveback(ch, gen, healthy);
         r
@@ -8710,15 +8806,21 @@ impl SftpFfi {
 
     /// Blocking channel lease. Returns the channel and its generation (to check
     /// currency on return).
-    fn lease(&self) -> Result<(SftpSession, u64), FfiError> {
+    fn lease(&self, cancel: Option<&CancelToken>) -> Result<Option<(SftpSession, u64)>, FfiError> {
         let mut open_retries: u32 = 0;
         let mut p = lock_recover(&self.pool);
         loop {
+            if cancel.is_some_and(CancelToken::is_cancelled) {
+                // Hand on a wake-up we may have consumed so other waiters can
+                // acquire an idle channel even when this waiter cancels.
+                self.pool_cv.notify_one();
+                return Ok(None);
+            }
             if p.closed {
                 return Err(FfiError::other("sftp session closed"));
             }
             if let Some(ch) = p.idle.pop() {
-                return Ok((ch, p.generation));
+                return Ok(Some((ch, p.generation)));
             }
             if p.created < p.max {
                 // We reserve a slot and open the channel OUTSIDE the pool lock: opening does a
@@ -8727,12 +8829,34 @@ impl SftpFfi {
                 p.created += 1;
                 let gen = p.generation;
                 drop(p);
-                match self.open_channel() {
-                    Ok(ch) => return Ok((ch, gen)),
+                match self.open_channel_cancel(cancel, gen) {
+                    Ok(Some(ch)) => {
+                        p = lock_recover(&self.pool);
+                        if !p.closed && p.generation == gen {
+                            return Ok(Some((ch, gen)));
+                        }
+                        drop(p);
+                        let _enter = self.rt.enter();
+                        drop(ch);
+                        p = lock_recover(&self.pool);
+                    }
+                    Ok(None) => {
+                        p = lock_recover(&self.pool);
+                        if p.generation == gen {
+                            p.created -= 1;
+                        }
+                        drop(p);
+                        self.pool_cv.notify_one();
+                        return Ok(None);
+                    }
                     Err(e) => {
                         p = lock_recover(&self.pool);
-                        p.created -= 1;
-                        if p.created > 0 {
+                        if p.generation != gen {
+                            continue;
+                        }
+                        p.created = p.created.saturating_sub(1);
+                        if p.created > 0 && format!("{e:?}").contains("AdministrativelyProhibited")
+                        {
                             // There is a live channel to fall back to. The server refused a NEW one
                             // (typically `MaxSessions` → `AdministrativelyProhibited`):
                             // we shrink the cap to the permitted value and reuse
@@ -8757,13 +8881,28 @@ impl SftpFfi {
                             return Err(e);
                         }
                         drop(p);
-                        std::thread::sleep(OPEN_RETRY_BACKOFF * open_retries);
+                        self.rt.block_on(async {
+                            tokio::select! {
+                                biased;
+                                _ = wait_sftp_cancelled(cancel) => {},
+                                _ = tokio::time::sleep(OPEN_RETRY_BACKOFF * open_retries) => {},
+                            }
+                        });
                         p = lock_recover(&self.pool);
                     }
                 }
             } else {
                 // All channels are created and busy — we wait until someone returns theirs.
-                p = self.pool_cv.wait(p).unwrap_or_else(|e| e.into_inner());
+                p = if cancel.is_some() {
+                    // Tokens may be shared atomic flags set by automation, so
+                    // cancellation cannot rely on a pool notification.
+                    self.pool_cv
+                        .wait_timeout(p, std::time::Duration::from_millis(50))
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0
+                } else {
+                    self.pool_cv.wait(p).unwrap_or_else(|e| e.into_inner())
+                };
             }
         }
     }
@@ -8778,7 +8917,9 @@ impl SftpFfi {
             drop(p);
             self.pool_cv.notify_one();
         } else {
-            p.created = p.created.saturating_sub(1);
+            if gen == p.generation {
+                p.created = p.created.saturating_sub(1);
+            }
             drop(p);
             self.pool_cv.notify_one();
             // A dead/stale channel is dropped under rt.enter() — the channel teardown
@@ -8792,17 +8933,49 @@ impl SftpFfi {
     /// within a runtime context (panic) — here we are on a blocking thread, there is no context.
     /// Bounded by a timeout: a silently-dead connection (keepalive off, no RST) would otherwise
     /// wait for OPEN-CONFIRM forever.
-    fn open_channel(&self) -> Result<SftpSession, FfiError> {
-        let client_guard = lock_recover(&self.client);
+    fn open_channel_cancel(
+        &self,
+        cancel: Option<&CancelToken>,
+        generation: u64,
+    ) -> Result<Option<SftpSession>, FfiError> {
+        // Another opener/reconnect may hold this lock while waiting on the
+        // network. A cancelled transfer must not queue behind its timeout.
+        let client_guard = if let Some(cancel) = cancel {
+            loop {
+                if cancel.is_cancelled() {
+                    return Ok(None);
+                }
+                match self.client.try_lock() {
+                    Ok(guard) => break guard,
+                    Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                }
+            }
+        } else {
+            lock_recover(&self.client)
+        };
+        {
+            let p = lock_recover(&self.pool);
+            if p.closed || p.generation != generation {
+                return Err(FfiError::other("sftp generation changed"));
+            }
+        }
         let client = client_guard
             .as_ref()
             .ok_or_else(|| FfiError::other("sftp client closed"))?;
-        self.rt
-            .block_on(async {
-                tokio::time::timeout(REOPEN_CHANNEL_TIMEOUT, client.open_sftp()).await
-            })
-            .map_err(|_| FfiError::other("sftp channel open timed out"))?
-            .map_err(map_transport_err)
+        self.rt.block_on(async {
+            tokio::select! {
+                biased;
+                _ = async {
+                    while !self.shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                } => Err(FfiError::other("sftp session closed")),
+                result = await_sftp_open(cancel, client.open_sftp()) => result,
+            }
+        })
     }
 
     /// Full reconnect: rebuilds the SSH connection from the saved parameters
@@ -8825,15 +8998,23 @@ impl SftpFfi {
             self.user.clone(),
             self.agent_forward,
         )?;
-        let old_idle = {
-            let mut p = lock_recover(&self.pool);
-            let old_idle = std::mem::take(&mut p.idle);
-            p.created = p.created.saturating_sub(old_idle.len());
-            p.generation = p.generation.wrapping_add(1);
-            p.closed = false;
-            old_idle
-        };
-        let old_client = lock_recover(&self.client).replace(client);
+        // Publish the client and its generation together. Openers take the same
+        // lock order (client then pool); old reservations never debit a new epoch.
+        let mut client_guard = lock_recover(&self.client);
+        let mut p = lock_recover(&self.pool);
+        if p.closed {
+            drop(p);
+            drop(client_guard);
+            let _enter = self.rt.enter();
+            drop(client);
+            return Err(FfiError::other("sftp session closed"));
+        }
+        let old_idle = std::mem::take(&mut p.idle);
+        p.created = 0;
+        p.generation = p.generation.wrapping_add(1);
+        let old_client = client_guard.replace(client);
+        drop(p);
+        drop(client_guard);
         // Wake all lease waiters: slots have freed up (created was decremented).
         self.pool_cv.notify_all();
         // The old idle channels and the client are dropped under rt.enter() (teardown → spawn).
@@ -8847,12 +9028,15 @@ impl SftpFfi {
     /// (leased ones will close on return, seeing `closed`) and the client — all under
     /// `rt.enter()`. Shared implementation for [`Self::close`] and `Drop`.
     fn teardown(&self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let _enter = self.rt.enter();
         let old_idle = {
             let mut p = lock_recover(&self.pool);
             p.closed = true;
+            p.generation = p.generation.wrapping_add(1);
             let old_idle = std::mem::take(&mut p.idle);
-            p.created = p.created.saturating_sub(old_idle.len());
+            p.created = 0;
             old_idle
         };
         self.pool_cv.notify_all();
@@ -8863,6 +9047,182 @@ impl SftpFfi {
 
 #[uniffi::export]
 impl SftpFfi {
+    /// Metadata calls used by a transfer share its cancellation token.
+    pub fn list_dir_cancel(
+        &self,
+        path: String,
+        cancel: Arc<CancelToken>,
+    ) -> Result<Vec<SftpEntry>, FfiError> {
+        self.with_sftp_cancel(Some(&cancel), |rt, s| {
+            Ok(rt
+                .block_on(s.list_dir(&path))
+                .map_err(map_transport_err)?
+                .into_iter()
+                .map(|e| SftpEntry {
+                    filename: e.filename,
+                    is_dir: e.is_dir,
+                    size: e.size,
+                    size_known: e.size_known,
+                    mode: e.mode,
+                    mtime: e.mtime,
+                    uid: e.uid,
+                    gid: e.gid,
+                })
+                .collect())
+        })?
+        .ok_or_else(|| FfiError::other("transfer cancelled"))
+    }
+
+    /// A relay scratch file is private and owned by this call on every exit.
+    pub fn relay_to(
+        &self,
+        target: Arc<SftpFfi>,
+        remote: String,
+        destination: String,
+        progress: Option<Arc<dyn SftpProgressObserver>>,
+        cancel: Option<Arc<CancelToken>>,
+    ) -> Result<bool, FfiError> {
+        // Anonymous on Unix, delete-on-close on Windows. No crash residue or
+        // predictable file in a shared temporary directory, even after SIGKILL.
+        let scratch = tempfile::tempfile().map_err(FfiError::other)?;
+        let reader = scratch.try_clone().map_err(FfiError::other)?;
+        let cancellation = cancel.as_ref().map(|c| {
+            Arc::new(CancelBridge(c.flag.clone())) as Arc<dyn unissh_ssh_transport::SftpCancel>
+        });
+        let download_progress = progress.clone().map(|p| {
+            Arc::new(RelayProgress {
+                observer: p,
+                base: 0,
+            }) as Arc<dyn unissh_ssh_transport::SftpProgress>
+        });
+        let downloaded = self.with_sftp_cancel(cancel.as_deref(), |rt, s| {
+            rt.block_on(s.download_to_file(
+                &remote,
+                tokio::fs::File::from_std(scratch),
+                download_progress,
+                cancellation.clone(),
+            ))
+            .map_err(map_transport_err)
+        })?;
+        if downloaded != Some(unissh_ssh_transport::TransferOutcome::Completed) {
+            return Ok(false);
+        }
+        let length = reader.metadata().map_err(FfiError::other)?.len();
+        let upload_progress = progress.map(|p| {
+            Arc::new(RelayProgress {
+                observer: p,
+                base: length,
+            }) as Arc<dyn unissh_ssh_transport::SftpProgress>
+        });
+        let uploaded = target.with_sftp_cancel(cancel.as_deref(), |rt, s| {
+            rt.block_on(s.upload_file(
+                tokio::fs::File::from_std(reader),
+                &destination,
+                upload_progress,
+                cancellation,
+            ))
+            .map_err(map_transport_err)
+        })?;
+        Ok(uploaded == Some(unissh_ssh_transport::TransferOutcome::Completed))
+    }
+
+    /// Create a directory with cancellation during pool and network waits.
+    pub fn mkdir_cancel(&self, path: String, cancel: Arc<CancelToken>) -> Result<(), FfiError> {
+        self.with_sftp_cancel(Some(&cancel), |rt, s| {
+            rt.block_on(s.mkdir(&path)).map_err(map_transport_err)
+        })?
+        .ok_or_else(|| FfiError::other("transfer cancelled"))
+    }
+    /// Exclusively create a file with cancellation during pool and network waits.
+    pub fn create_new_cancel(
+        &self,
+        path: String,
+        cancel: Arc<CancelToken>,
+    ) -> Result<(), FfiError> {
+        self.with_sftp_cancel(Some(&cancel), |rt, s| {
+            rt.block_on(s.create_new(&path)).map_err(map_transport_err)
+        })?
+        .ok_or_else(|| FfiError::other("transfer cancelled"))
+    }
+    /// Create a symbolic link with cancellation during pool and network waits.
+    pub fn symlink_cancel(
+        &self,
+        target: String,
+        path: String,
+        cancel: Arc<CancelToken>,
+    ) -> Result<(), FfiError> {
+        self.with_sftp_cancel(Some(&cancel), |rt, s| {
+            rt.block_on(s.symlink(&target, &path))
+                .map_err(map_transport_err)
+        })?
+        .ok_or_else(|| FfiError::other("transfer cancelled"))
+    }
+    /// Commit a prepared sibling with cancellation during pool and network waits.
+    pub fn commit_cancel(
+        &self,
+        from: String,
+        to: String,
+        replace: bool,
+        cancel: Arc<CancelToken>,
+    ) -> Result<(), FfiError> {
+        self.with_sftp_cancel(Some(&cancel), |rt, s| {
+            rt.block_on(s.commit(&from, &to, replace))
+                .map_err(map_transport_err)
+        })?
+        .ok_or_else(|| FfiError::other("transfer cancelled"))
+    }
+    /// Apply transfer metadata with cancellation during pool and network waits.
+    pub fn set_metadata_cancel(
+        &self,
+        path: String,
+        mode: Option<u32>,
+        mtime: Option<u32>,
+        cancel: Arc<CancelToken>,
+    ) -> Result<(), FfiError> {
+        self.with_sftp_cancel(Some(&cancel), |rt, s| {
+            rt.block_on(s.set_metadata(&path, mode, mtime))
+                .map_err(map_transport_err)
+        })?
+        .ok_or_else(|| FfiError::other("transfer cancelled"))
+    }
+    /// Read a literal link target with cancellation during pool and network waits.
+    pub fn readlink_cancel(
+        &self,
+        path: String,
+        cancel: Arc<CancelToken>,
+    ) -> Result<String, FfiError> {
+        self.with_sftp_cancel(Some(&cancel), |rt, s| {
+            rt.block_on(s.readlink(&path)).map_err(map_transport_err)
+        })?
+        .ok_or_else(|| FfiError::other("transfer cancelled"))
+    }
+    /// Read source or destination metadata with cancellation during pool and network waits.
+    pub fn stat_cancel(
+        &self,
+        path: String,
+        follow: bool,
+        cancel: Arc<CancelToken>,
+    ) -> Result<SftpFileStat, FfiError> {
+        self.with_sftp_cancel(Some(&cancel), |rt, s| {
+            let stat = rt
+                .block_on(async {
+                    if follow {
+                        s.stat(&path).await
+                    } else {
+                        s.lstat(&path).await
+                    }
+                })
+                .map_err(map_transport_err)?;
+            Ok(SftpFileStat {
+                size: stat.size,
+                size_known: stat.size_known,
+                mode: stat.mode,
+                is_dir: stat.is_dir,
+                mtime: stat.mtime,
+            })
+        })?
+        .ok_or_else(|| FfiError::other("transfer cancelled"))
+    }
     /// Directory listing.
     pub fn list_dir(&self, path: String) -> Result<Vec<SftpEntry>, FfiError> {
         self.with_sftp(|rt, s| {
@@ -8873,6 +9233,7 @@ impl SftpFfi {
                     filename: e.filename,
                     is_dir: e.is_dir,
                     size: e.size,
+                    size_known: e.size_known,
                     mode: e.mode,
                     mtime: e.mtime,
                     uid: e.uid,
@@ -8891,6 +9252,40 @@ impl SftpFfi {
     pub fn write_file(&self, path: String, data: Vec<u8>) -> Result<(), FfiError> {
         self.with_sftp(|rt, s| {
             rt.block_on(s.write_file(&path, &data))
+                .map_err(map_transport_err)
+        })
+    }
+
+    /// Compute a bounded, streaming SHA-256 fingerprint for editor conflict detection.
+    pub fn fingerprint(&self, path: String) -> Result<Vec<u8>, FfiError> {
+        self.with_sftp(|rt, s| rt.block_on(s.fingerprint(&path)).map_err(map_transport_err))
+    }
+
+    /// Atomically publish a prepared sibling, optionally replacing an existing leaf.
+    pub fn commit(&self, from: String, to: String, replace: bool) -> Result<(), FfiError> {
+        self.with_sftp(|rt, s| {
+            rt.block_on(s.commit(&from, &to, replace))
+                .map_err(map_transport_err)
+        })
+    }
+
+    /// Preserve ordinary permission bits and modification time without ownership or privilege bits.
+    pub fn set_metadata(
+        &self,
+        path: String,
+        mode: Option<u32>,
+        mtime: Option<u32>,
+    ) -> Result<(), FfiError> {
+        self.with_sftp(|rt, s| {
+            rt.block_on(s.set_metadata(&path, mode, mtime))
+                .map_err(map_transport_err)
+        })
+    }
+
+    /// Read actual bytes with a caller-specified allocation limit.
+    pub fn read_file_bounded(&self, path: String, limit: u32) -> Result<Vec<u8>, FfiError> {
+        self.with_sftp(|rt, s| {
+            rt.block_on(s.read_file_bounded(&path, limit as usize))
                 .map_err(map_transport_err)
         })
     }
@@ -8928,15 +9323,16 @@ impl SftpFfi {
     ) -> Result<bool, FfiError> {
         let prog = progress
             .map(|p| Arc::new(ProgressBridge(p)) as Arc<dyn unissh_ssh_transport::SftpProgress>);
-        let canc = cancel.map(|c| {
+        let canc = cancel.as_ref().map(|c| {
             Arc::new(CancelBridge(c.flag.clone())) as Arc<dyn unissh_ssh_transport::SftpCancel>
         });
-        self.with_sftp(move |rt, s| {
+        self.with_sftp_cancel(cancel.as_deref(), move |rt, s| {
             let outcome = rt
                 .block_on(s.download_to(&remote_path, &local_path, offset, known_size, prog, canc))
                 .map_err(map_transport_err)?;
             Ok(outcome == unissh_ssh_transport::TransferOutcome::Completed)
         })
+        .map(|result| result.unwrap_or(false))
     }
 
     /// Resumable upload of local `local_path` → `remote_path` from `offset`,
@@ -8951,15 +9347,16 @@ impl SftpFfi {
     ) -> Result<bool, FfiError> {
         let prog = progress
             .map(|p| Arc::new(ProgressBridge(p)) as Arc<dyn unissh_ssh_transport::SftpProgress>);
-        let canc = cancel.map(|c| {
+        let canc = cancel.as_ref().map(|c| {
             Arc::new(CancelBridge(c.flag.clone())) as Arc<dyn unissh_ssh_transport::SftpCancel>
         });
-        self.with_sftp(move |rt, s| {
+        self.with_sftp_cancel(cancel.as_deref(), move |rt, s| {
             let outcome = rt
                 .block_on(s.upload_from(&local_path, &remote_path, offset, prog, canc))
                 .map_err(map_transport_err)?;
             Ok(outcome == unissh_ssh_transport::TransferOutcome::Completed)
         })
+        .map(|result| result.unwrap_or(false))
     }
 
     /// Deletes a directory.
@@ -8988,10 +9385,36 @@ impl SftpFfi {
             let st = rt.block_on(s.stat(&path)).map_err(map_transport_err)?;
             Ok(SftpFileStat {
                 size: st.size,
+                size_known: st.size_known,
                 is_dir: st.is_dir,
                 mode: st.mode,
                 mtime: st.mtime,
             })
+        })
+    }
+
+    /// Metadata without following the final symbolic link.
+    pub fn lstat(&self, path: String) -> Result<SftpFileStat, FfiError> {
+        self.with_sftp(|rt, s| {
+            let st = rt.block_on(s.lstat(&path)).map_err(map_transport_err)?;
+            Ok(SftpFileStat {
+                size: st.size,
+                size_known: st.size_known,
+                is_dir: st.is_dir,
+                mode: st.mode,
+                mtime: st.mtime,
+            })
+        })
+    }
+
+    pub fn readlink(&self, path: String) -> Result<String, FfiError> {
+        self.with_sftp(|rt, s| rt.block_on(s.readlink(&path)).map_err(map_transport_err))
+    }
+
+    pub fn symlink(&self, target: String, path: String) -> Result<(), FfiError> {
+        self.with_sftp(|rt, s| {
+            rt.block_on(s.symlink(&target, &path))
+                .map_err(map_transport_err)
         })
     }
 
@@ -9007,30 +9430,26 @@ impl SftpFfi {
     /// scratch and opens a new channel. `HostKeyMismatch` is NOT cured by reconnecting
     /// (a possible MITM → stop), it is propagated as-is.
     pub fn reopen(&self) -> Result<(), FfiError> {
-        // Serialize concurrent reopens so two racing callers can't each rebuild the
-        // connection (one would be orphaned). Held across the whole escalation.
+        let generation = lock_recover(&self.pool).generation;
         let _g = lock_recover(&self.reconnect_lock);
-        // Fast path: open a fresh channel on the current connection — this is both a check
-        // of transport liveness and a "warm-up" of the pool. On success we put it into the pool as idle.
-        match self.open_channel() {
-            Ok(ch) => {
-                let mut p = lock_recover(&self.pool);
-                if p.closed {
-                    drop(p);
-                    let _enter = self.rt.enter();
-                    drop(ch);
-                    return Ok(());
-                }
-                p.created += 1;
-                p.idle.push(ch);
-                drop(p);
-                self.pool_cv.notify_one();
-                Ok(())
+        {
+            let p = lock_recover(&self.pool);
+            if p.closed {
+                return Err(FfiError::other("sftp session closed"));
             }
-            // The channel didn't open — the connection itself is probably dead: a full reconnect
-            // (which also propagates HostKeyMismatch on the rebuild).
-            Err(_) => self.reconnect(),
+            if p.generation != generation {
+                return Ok(());
+            }
         }
+        // Lease through the ordinary reservation path: warming up must obey max.
+        // A round trip checks idle channels too, rather than reusing a dead one.
+        if self
+            .with_sftp(|rt, s| rt.block_on(s.realpath(".")).map_err(map_transport_err))
+            .is_ok()
+        {
+            return Ok(());
+        }
+        self.reconnect()
     }
 
     /// Closes the channel pool and the connection.
@@ -9117,6 +9536,191 @@ fn derive_db_key(keyset: &unissh_keychain::UnlockedKeyset) -> Zeroizing<[u8; 32]
     hk.expand(b"unissh-db-key-v1", key.as_mut())
         .expect("32 is a valid HKDF length");
     key
+}
+
+#[cfg(test)]
+mod sftp_pool_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn cancellation_interrupts_pending_channel_open() {
+        let token = CancelToken::new();
+        let flag = token.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel::<()>();
+        let open = async move {
+            // Keep this sender alive until cancellation drops the open future.
+            let _drop_guard = dropped_tx;
+            let _ = started_tx.send(());
+            std::future::pending().await
+        };
+        let cancel = async move {
+            started_rx.await.unwrap();
+            flag.cancel();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(await_sftp_open(Some(&token), open), cancel)
+        })
+        .await
+        .expect("cancel must interrupt a silent channel open before its 15-second timeout");
+        assert!(result.unwrap().is_none());
+        assert!(dropped_rx.await.is_err());
+    }
+
+    #[test]
+    fn cancellation_while_waiting_for_client_lock_releases_pool_slot() {
+        let session = busy_session();
+        lock_recover(&session.pool).created = 0;
+        let token = CancelToken::new();
+        std::thread::scope(|scope| {
+            let guard = lock_recover(&session.client);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let session_ref = &session;
+            let token_ref = &token;
+            let worker = scope.spawn(move || {
+                tx.send(session_ref.lease(Some(token_ref)).map(|ch| ch.is_none()))
+                    .unwrap();
+            });
+            // Wait until the opener has reserved the slot and is blocked on
+            // the client lock, rather than cancelling before the lease starts.
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            while lock_recover(&session.pool).created == 0 && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let reserved = lock_recover(&session.pool).created;
+            token.cancel();
+            let result = rx.recv_timeout(Duration::from_secs(1));
+            // Release even on failure so a broken implementation cannot hang.
+            drop(guard);
+            worker.join().unwrap();
+            assert_eq!(reserved, 1);
+            assert!(result
+                .expect("cancel must interrupt the client lock wait")
+                .unwrap());
+        });
+        assert_eq!(lock_recover(&session.pool).created, 0);
+        assert_eq!(lock_recover(&session.pool).max, 1);
+    }
+
+    // A single channel is held by another operation for the entire test. No
+    // server is needed: cancelling the waiter must never reach channel I/O.
+    fn busy_session() -> SftpFfi {
+        SftpFfi {
+            shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            client: Mutex::new(None),
+            pool: Mutex::new(SftpPool {
+                idle: Vec::new(),
+                created: 1,
+                max: 1,
+                generation: 0,
+                closed: false,
+            }),
+            pool_cv: Condvar::new(),
+            rt: Arc::new(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap(),
+            ),
+            state: Arc::new(Mutex::new(None)),
+            prompter: Arc::new(Mutex::new(None)),
+            approver: Arc::new(Mutex::new(None)),
+            agent_forward: false,
+            host: String::new(),
+            port: 22,
+            user: String::new(),
+            auth: AuthMethod::Password {
+                password: String::new(),
+            },
+            jumps: Vec::new(),
+            proxy: None,
+            reconnect_lock: Mutex::new(()),
+        }
+    }
+
+    #[test]
+    fn transfers_cancel_while_waiting_for_a_busy_pool() {
+        for download in [true, false] {
+            // Automation can set the shared flag directly, without calling
+            // CancelToken::cancel or notifying the pool's condition variable.
+            for shared in [true, false] {
+                let session = busy_session();
+                let flag = Arc::new(AtomicBool::new(false));
+                let token = if shared {
+                    CancelToken::from_shared(flag.clone())
+                } else {
+                    CancelToken::new()
+                };
+                std::thread::scope(|scope| {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let session_ref = &session;
+                    let token_for_worker = token.clone();
+                    let worker = scope.spawn(move || {
+                        let result = if download {
+                            session_ref.sftp_download(
+                                "/remote".into(),
+                                "/unused".into(),
+                                0,
+                                Some(1),
+                                None,
+                                Some(token_for_worker),
+                            )
+                        } else {
+                            session_ref.sftp_upload(
+                                "/unused".into(),
+                                "/remote".into(),
+                                0,
+                                None,
+                                Some(token_for_worker),
+                            )
+                        };
+                        let _ = tx.send(result);
+                    });
+                    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+                    if shared {
+                        flag.store(true, Ordering::SeqCst);
+                    } else {
+                        token.cancel();
+                    }
+                    let result = rx.recv_timeout(Duration::from_secs(1));
+                    // Always release a broken implementation before asserting,
+                    // so a regression fails instead of hanging the test runner.
+                    let created = lock_recover(&session.pool).created;
+                    lock_recover(&session.pool).closed = true;
+                    session.pool_cv.notify_all();
+                    worker.join().unwrap();
+                    assert!(!result
+                        .expect("cancel must not wait for the occupied channel")
+                        .unwrap());
+                    assert_eq!(
+                        created, 1,
+                        "cancel must not release another operation's channel"
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn pre_cancelled_transfer_never_opens_a_channel() {
+        let session = busy_session();
+        lock_recover(&session.pool).created = 0;
+        let token = CancelToken::new();
+        token.cancel();
+        assert!(!session
+            .sftp_download(
+                "/remote".into(),
+                "/unused".into(),
+                0,
+                Some(1),
+                None,
+                Some(token)
+            )
+            .unwrap());
+        assert_eq!(lock_recover(&session.pool).created, 0);
+    }
 }
 
 #[cfg(test)]

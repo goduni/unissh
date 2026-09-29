@@ -26,7 +26,7 @@ import { apiErrorMessage } from "@/bridge/types";
 import { logWarn, logError, logDebug } from "@/bridge/log";
 import type { TermTheme } from "@/theme/tokens";
 import type { SftpSession, Transfer } from "@/store/sftp-types";
-import { cancelAll as cancelAllTransfers } from "@/sftp/transfer-runner";
+import { cancelAll as cancelAllTransfers, forgetTransfer } from "@/sftp/transfer-runner";
 import { suspendExternalEdits } from "@/sftp/external-edit";
 import { planGroupMove } from "@/store/groupMove";
 import type { LockGrace } from "@/support/systemLock";
@@ -539,8 +539,11 @@ interface AppStore {
   closeSftpSession: (id: string) => void;
   patchSftpSession: (id: string, patch: Partial<SftpSession>) => void;
   enqueueTransfer: (t: Transfer) => void;
+  enqueueTransfers: (t: Transfer[]) => void;
+  patchTransfers: (patches: Map<string, Partial<Transfer>>) => void;
   patchTransfer: (id: string, patch: Partial<Transfer>) => void;
   clearFinishedTransfers: () => void;
+  dismissTransfer: (id: string) => void;
 
   setPendingMismatch: (m: PendingMismatch | null) => void;
   setPendingSftpFocus: (id: string | null) => void;
@@ -1113,6 +1116,7 @@ export const useApp = create<AppStore>((set, get) => ({
       const { terminals, tunnels, broadcasts, sftpSessions } = get();
       cancelAllTransfers();
       await Promise.allSettled([
+        api.sftpInvalidate(),
         ...terminals
           .flatMap((t) => t.panes)
           .filter((p) => p.sessionId)
@@ -1180,6 +1184,7 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   lockInstance: async (reason = "manual") => {
+    cancelAllTransfers();
     try {
       await api.lock();
     } catch (e) {
@@ -1805,14 +1810,20 @@ export const useApp = create<AppStore>((set, get) => ({
       sftpSessions: s.sftpSessions.map((x) => (x.id === id ? { ...x, ...patch } : x)),
     })),
   enqueueTransfer: (t) => set((s) => ({ transfers: [...s.transfers, t] })),
+  enqueueTransfers: (transfers) => set((s) => ({ transfers: [...s.transfers, ...transfers] })),
+  patchTransfers: (patches) => set((s) => ({ transfers: s.transfers.map((t) => patches.has(t.id) ? { ...t, ...patches.get(t.id) } : t) })),
   patchTransfer: (id, patch) =>
     set((s) => ({ transfers: s.transfers.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
-  clearFinishedTransfers: () =>
-    set((s) => ({
-      transfers: s.transfers.filter(
-        (t) => t.state !== "done" && t.state !== "cancelled" && t.state !== "error",
-      ),
-    })),
+  dismissTransfer: (id) => {
+    if (["done", "error", "cancelled"].includes(get().transfers.find((t) => t.id === id)?.state ?? "")) forgetTransfer(id);
+    set((s) => ({ transfers: s.transfers.filter((t) => t.id !== id || !["done", "error", "cancelled", "cancelling"].includes(t.state)) }));
+  },
+  clearFinishedTransfers: () => {
+    const finished = get().transfers.filter((t) => ["done", "cancelled", "error"].includes(t.state));
+    for (const t of finished) forgetTransfer(t.id);
+    const ids = new Set(finished.map((t) => t.id));
+    set((s) => ({ transfers: s.transfers.filter((t) => !ids.has(t.id)) }));
+  },
 
   setPendingMismatch: (m) => set({ pendingMismatch: m }),
   setPendingSftpFocus: (id) => set({ pendingSftpFocus: id }),

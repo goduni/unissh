@@ -29,10 +29,6 @@ export function FileList({
   onContext,
   onRetry,
   onRowDragStart,
-  onDropOnDir,
-  dropDir,
-  onDragEnterDir,
-  onDragLeaveDir,
 }: {
   entries: Entry[];
   loading: boolean;
@@ -50,10 +46,6 @@ export function FileList({
   onContext: (entry: Entry | null, x: number, y: number) => void;
   onRetry: () => void;
   onRowDragStart: (entry: Entry, e: React.DragEvent) => void;
-  onDropOnDir: (dirName: string, e: React.DragEvent) => void;
-  dropDir: string | null;
-  onDragEnterDir: (name: string) => void;
-  onDragLeaveDir: (name: string) => void;
 }) {
   const p = usePalette();
   const isMobile = useIsMobile();
@@ -270,7 +262,6 @@ export function FileList({
                 key={e.name}
                 entry={e}
                 selected={selection.has(e.name)}
-                dropActive={dropDir === e.name}
                 focused={focusIdx === base + idx}
                 showModified={showModified}
                 showPerms={showPerms}
@@ -280,9 +271,6 @@ export function FileList({
                 onContextAt={(x, y) => onContext(e, x, y)}
                 onActivate={() => onActivate(e)}
                 onDragStart={(ev) => onRowDragStart(e, ev)}
-                onDragEnterDir={() => onDragEnterDir(e.name)}
-                onDragLeaveDir={() => onDragLeaveDir(e.name)}
-                onDropOnDir={(ev) => onDropOnDir(e.name, ev)}
               />
             ))}
 

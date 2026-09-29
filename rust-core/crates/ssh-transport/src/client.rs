@@ -829,9 +829,34 @@ impl SshClient {
     /// Opens an SFTP session (the `sftp` subsystem) over the connection. The connection
     /// must stay alive while the session is open (keep `SshClient` alive).
     pub async fn open_sftp(&self) -> Result<SftpSession, TransportError> {
-        let channel = self.handle.channel_open_session().await?;
-        channel.request_subsystem(false, "sftp").await?;
-        crate::sftp::Sftp::start(channel.into_stream()).await
+        let handle = self.handle.clone();
+        let (mut tx, rx) = tokio::sync::oneshot::channel();
+        // russh's channel-open future is not cancellation-safe: dropping it
+        // before OPEN_CONFIRMATION loses the channel ID needed to close it.
+        // Finish that handshake even if the caller cancels/times out, then drop
+        // the stream to close a late channel. This task never transfers files.
+        tokio::spawn(async move {
+            let result = match handle.channel_open_session().await {
+                Ok(channel) => {
+                    let subsystem = tokio::select! {
+                        biased;
+                        _ = tx.closed() => None,
+                        result = channel.request_subsystem(false, "sftp") => Some(result),
+                    };
+                    // ChannelStream closes its channel on drop, including on
+                    // cancellation during the subsystem request or delivery.
+                    let stream = channel.into_stream();
+                    let Some(subsystem) = subsystem else { return };
+                    subsystem.map(|()| stream)
+                }
+                Err(error) => Err(error),
+            };
+            let _ = tx.send(result);
+        });
+        let stream = rx
+            .await
+            .map_err(|_| TransportError::Sftp("channel opener stopped".into()))??;
+        crate::sftp::Sftp::start(stream).await
     }
 }
 

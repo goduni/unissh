@@ -1,6 +1,7 @@
 // Opening a remote SFTP session: turn a saved host profile into a live
 // SftpSession in the store. Shared by the tab strip's "+" and the empty state.
 
+import { teardownGeneration } from "@/sftp/transfer-runner";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, isApiError } from "@/bridge/types";
 import type { ConnectionProfile } from "@/bridge/types";
@@ -13,6 +14,8 @@ import type { SftpSession } from "@/store/sftp-types";
  *  new session id (or null on failure — a toast is shown). */
 export async function openSession(profile: ConnectionProfile): Promise<string | null> {
   const st = useApp.getState();
+  const generation = teardownGeneration();
+  const current = () => teardownGeneration() === generation && useApp.getState().vaultId === st.vaultId && useApp.getState().unlocked;
   if (!st.vaultId) {
     toast(i18n.t("sftp.toast.noVault"), "err");
     return null;
@@ -20,6 +23,7 @@ export async function openSession(profile: ConnectionProfile): Promise<string | 
   try {
     // Personal profiles resolve in-core (binding + anti-redirect) first.
     const { user, auth } = await api.resolveConnectAuth(profile, st.vaultId);
+    if (!current()) return null;
     const id = await api.sftpOpen(
       {
         host: profile.host,
@@ -31,6 +35,7 @@ export async function openSession(profile: ConnectionProfile): Promise<string | 
       },
       st.sftpParallelism,
     );
+    if (!current()) { await api.sftpClose(id); return null; }
     let home = "/";
     try {
       home = await api.sftpRealpath(id, ".");
@@ -46,6 +51,7 @@ export async function openSession(profile: ConnectionProfile): Promise<string | 
       label: profile.label, // the host's friendly name (the tab shows this)
       home,
     };
+    if (!current()) { await api.sftpClose(id); return null; }
     st.addSftpSession(session);
     return id;
   } catch (e) {

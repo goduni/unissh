@@ -58,7 +58,7 @@ export function PaneSlot({
   onNewFolder: () => void;
   onNewFile: () => void;
   onImport?: () => void;
-  onDropHere: (targetCwd: string) => void;
+  onDropHere: () => void;
   onTabDrop: (tabId: string) => void;
   dropTargetTab: string | null;
   onTabDragEnter: (id: string) => void;
@@ -69,7 +69,6 @@ export function PaneSlot({
   const isMobile = useIsMobile();
   const [bodyDrop, setBodyDrop] = useState(false);
   const [sortMenu, setSortMenu] = useState(false);
-  const [dropDir, setDropDir] = useState<string | null>(null);
   const src = slot.source;
   const crumbs = src ? src.crumbs(slot.cwd) : [];
   const selCount = slot.selection.size;
@@ -107,14 +106,7 @@ export function PaneSlot({
   const dropOnBody = (e: React.DragEvent) => {
     e.preventDefault();
     setBodyDrop(false);
-    onDropHere(slot.cwd);
-  };
-  const dropOnDir = async (name: string, e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDropDir(null);
-    setBodyDrop(false);
-    if (src) onDropHere(await src.join(slot.cwd, name));
+    onDropHere();
   };
 
   return (
@@ -293,7 +285,7 @@ export function PaneSlot({
           minHeight: isMobile ? "52vh" : 0,
           display: "flex",
           flexDirection: "column",
-          boxShadow: bodyDrop && !dropDir ? `inset 0 0 0 2px ${p.accentLine}` : "none",
+          boxShadow: bodyDrop ? `inset 0 0 0 2px ${p.accentLine}` : "none",
           transition: "box-shadow .12s",
         }}
       >
@@ -314,10 +306,6 @@ export function PaneSlot({
           onContext={(entry, x, y) => entry && onRowContext(entry, x, y)}
           onRetry={slot.refresh}
           onRowDragStart={(entry, e) => beginDrag(entry, e)}
-          onDropOnDir={(name, e) => dropOnDir(name, e)}
-          dropDir={dropDir}
-          onDragEnterDir={(name) => setDropDir(name)}
-          onDragLeaveDir={(name) => setDropDir((d) => (d === name ? null : d))}
         />
       </div>
         </>

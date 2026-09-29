@@ -86,6 +86,7 @@ const MAX_EDIT_BYTES = 256 * 1024 * 1024;
 
 /** A (size, mtime) pair — the whole of what we compare. */
 interface Stamp {
+  fingerprint?: string;
   size: number;
   mtime: number;
 }
@@ -292,10 +293,12 @@ async function localStamp(path: string, retries = 0): Promise<Stamp | null> {
 
 async function remoteStamp(source: FileSource, path: string): Promise<Stamp | null> {
   const e = await source.stat(path);
-  return e ? { size: e.size, mtime: (e.mtime ?? 0) * 1000 } : null;
+  if (!e) return null;
+  const fingerprint = (await api.sftpFingerprint(source.id, path)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return { size: e.size, mtime: (e.mtime ?? 0) * 1000, fingerprint };
 }
 
-const same = (a: Stamp, b: Stamp): boolean => a.size === b.size && a.mtime === b.mtime;
+const same = (a: Stamp, b: Stamp): boolean => a.size === b.size && a.mtime === b.mtime && a.fingerprint === b.fingerprint;
 
 /**
  * Does `path` really not exist, or did we merely fail to look?
@@ -843,7 +846,18 @@ async function push(id: string, source: FileSource, force: boolean): Promise<voi
     // whatever the file looks like when the upload finishes. Reading it after
     // would adopt a save made mid-upload as already-sent and silently drop it.
     const sent = (await localStamp(edit.localPath)) ?? edit.local;
-    await api.sftpUpload(edit.sessionId, edit.localPath, edit.remotePath, 0, () => {});
+    const target = await source.lstat(edit.remotePath);
+    if (target?.isSymlink) throw new Error("Open the symbolic link target to edit it");
+    const before = await remoteStamp(source, edit.remotePath);
+    const stage = await source.join(await source.parent(edit.remotePath), `.unissh-${crypto.randomUUID()}.part`);
+    await source.createNew(stage);
+    try {
+      if (!await api.sftpUpload(edit.sessionId, edit.localPath, stage, 0, () => {})) throw new Error("Upload interrupted");
+      await source.setMetadata(stage, target?.mode);
+      const latest = await remoteStamp(source, edit.remotePath);
+      if (before === null ? latest !== null : latest === null || !same(before, latest)) throw new Error("Remote file changed during save");
+      await source.commit(stage, edit.remotePath, target !== null);
+    } finally { await source.remove(stage).catch(() => {}); }
     const current = find(id);
     if (!current) {
       // Stopped mid-upload. The upload has returned, so the directory is safe

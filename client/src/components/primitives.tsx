@@ -84,6 +84,7 @@ export const ICONS = {
   pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   play: '<polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/>',
   record: '<circle cx="12" cy="12" r="7" fill="currentColor" stroke="none"/>',
+  pause: '<path d="M9 5v14M15 5v14" stroke-width="3"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   upload: '<path d="M12 20.5v-11"/><polyline points="7.5 13.5 12 9 16.5 13.5"/><path d="M5 3.5h14"/>',

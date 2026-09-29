@@ -1365,3 +1365,62 @@ async fn proxy_then_jump_chain() {
         "proxy-then-jump"
     );
 }
+
+#[tokio::test]
+async fn sftp_preserves_relative_absolute_dangling_and_cyclic_links() {
+    let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
+    let sshd = TestSshd::start(&pub_ssh);
+    let agent = agent_with_key(&priv_pem);
+    let storage = Storage::open_in_memory(&[21u8; 32]).unwrap();
+
+    let opts = ConnectOptions::new(
+        "127.0.0.1",
+        sshd.port,
+        "root",
+        Auth::Agent {
+            key_id: b"k".to_vec(),
+        },
+    );
+    let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
+    let mut sftp = client.open_sftp().await.unwrap();
+
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().to_str().unwrap();
+    sftp.mkdir(&format!("{base}/lib")).await.unwrap();
+    sftp.write_file(
+        &format!("{base}/lib/data"),
+        b"payload larger than link name",
+    )
+    .await
+    .unwrap();
+    for (name, target) in [
+        ("lib64", "lib".to_string()),
+        ("python", "lib/data".to_string()),
+        ("absolute", format!("{base}/lib/data")),
+        ("broken", "../missing-target".to_string()),
+        ("loop", "loop".to_string()),
+    ] {
+        let path = format!("{base}/{name}");
+        sftp.symlink(&target, &path).await.unwrap();
+        assert_eq!(sftp.readlink(&path).await.unwrap(), target);
+        let md = sftp.lstat(&path).await.unwrap();
+        assert_eq!(md.mode & 0o170000, 0o120000);
+        assert!(!md.is_dir);
+        assert_eq!(md.size, target.len() as u64);
+        let entries = sftp.list_dir(base).await.unwrap();
+        let entry = entries.iter().find(|e| e.filename == name).unwrap();
+        assert_eq!(entry.mode & 0o170000, 0o120000);
+        // Creating a link never replaces an occupied path.
+        assert!(sftp.symlink("different", &path).await.is_err());
+        assert_eq!(sftp.readlink(&path).await.unwrap(), target);
+    }
+    assert!(sftp.stat(&format!("{base}/lib64")).await.unwrap().is_dir);
+    assert!(sftp.stat(&format!("{base}/broken")).await.is_err());
+    assert_eq!(sftp.stat(&format!("{base}/python")).await.unwrap().size, 29);
+    sftp.remove(&format!("{base}/lib64")).await.unwrap();
+    sftp.remove(&format!("{base}/python")).await.unwrap();
+    assert_eq!(
+        sftp.read_file(&format!("{base}/lib/data")).await.unwrap(),
+        b"payload larger than link name"
+    );
+}

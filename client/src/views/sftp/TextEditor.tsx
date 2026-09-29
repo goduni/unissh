@@ -85,7 +85,7 @@ export function TextEditor({
     setSaving(true);
     try {
       await guard(async () => {
-        await source.writeText(path, text);
+        await source.writeText(path, text, original);
         setOriginal(text);
         toast(t("sftp.editor.saved"), "ok");
         onSaved?.();

@@ -7,8 +7,11 @@
  *  listing only carries them once the core surfaces them (redesign Phase 3),
  *  and the local adapter fills what the OS gives. */
 export interface Entry {
+  fileKind?: "file" | "directory" | "symlink" | "unsupported" | "unknown";
+  sizeKnown?: boolean;
   name: string;
   isDir: boolean;
+  isSymlink?: boolean;
   size: number;
   mtime?: number;
   mode?: number;
@@ -48,6 +51,9 @@ export type TransferState =
   | "queued"
   | "scanning"
   | "active"
+  | "waiting"
+  | "pausing"
+  | "cancelling"
   | "paused"
   | "done"
   | "error"
@@ -67,11 +73,14 @@ export interface Transfer {
   toDir: string; // destination directory on the target source
   fromPath: string; // absolute source path
   kind: "file" | "dir";
+  isSymlink?: boolean;
   bytesDone: number;
   bytesTotal: number;
+  sourceSize?: number; // original file size, before accounting for relay legs
   filesDone: number;
   filesTotal: number;
   speedBps: number;
+  stalled?: boolean;
   etaSec: number;
   state: TransferState;
   error?: string;

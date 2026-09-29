@@ -16,6 +16,8 @@ russh = "0.63"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync", "fs"] }
 thiserror = "2"
 subtle = "2.6"
+sha2 = "0.10"
+libc = "0.2"
 zeroize = "1.8"
 # Logging facade — connect/auth diagnostics. Metadata only, never key material.
 log = "0.4"
