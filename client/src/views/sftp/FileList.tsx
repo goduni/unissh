@@ -2,7 +2,7 @@
 // row, and the filtered/sorted entries. Owns sort/selection-click interpretation
 // and the empty/loading/error states; delegates the actual actions to the pane.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { designPx, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
@@ -11,6 +11,7 @@ import { useTranslation } from "@/i18n";
 import type { Entry, SortKey, SortState } from "@/store/sftp-types";
 import { FileRow } from "./FileRow";
 import { displayEntries } from "./sortfilter";
+import { useVirtualRows } from "./useVirtualRows";
 
 export function FileList({
   entries,
@@ -66,7 +67,7 @@ export function FileList({
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [error]);
 
   const hasMtime = useMemo(() => entries.some((e) => e.mtime != null), [entries]);
   const hasPerms = useMemo(() => entries.some((e) => e.mode != null), [entries]);
@@ -87,21 +88,50 @@ export function FileList({
   const [focusIdx, setFocusIdx] = useState(0);
   const base = showUp ? 1 : 0;
   const navCount = base + display.length;
-  useEffect(() => setFocusIdx(0), [entries]);
+  const [dragged, setDragged] = useState<Entry | null>(null);
+  useEffect(() => {
+    const clear = () => setDragged(null);
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear);
+    return () => {
+      window.removeEventListener("dragend", clear);
+      window.removeEventListener("drop", clear);
+    };
+  }, []);
+  const listId = useId();
+  const rowHeight = (isMobile ? 44 : 30) * uiScale / 100;
+  const rows = useVirtualRows(display.length, rowHeight, display, error);
+  useEffect(() => setFocusIdx(0), [display]);
+  const focusRow = (index: number) => {
+    const next = Math.max(0, Math.min(navCount - 1, index));
+    setFocusIdx(next);
+    rows.reveal(next - base);
+  };
+  // Keep a drag source mounted if autoscrolling takes it outside the window.
+  // Removing that DOM node ends a native HTML drag in some WebViews.
+  const visibleIndices = Array.from({ length: rows.end - rows.start }, (_, i) => rows.start + i);
+  const dragIndex = dragged ? display.indexOf(dragged) : -1;
+  if (dragIndex >= 0 && (dragIndex < rows.start || dragIndex >= rows.end)) {
+    visibleIndices.push(dragIndex);
+    visibleIndices.sort((a, b) => a - b);
+  }
+  const activeVisible = (showUp && focusIdx === 0) ||
+    (focusIdx - base >= rows.start && focusIdx - base < rows.end);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.target !== e.currentTarget) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setFocusIdx((i) => Math.min(navCount - 1, i + 1));
+      focusRow(focusIdx + 1);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setFocusIdx((i) => Math.max(0, i - 1));
+      focusRow(focusIdx - 1);
     } else if (e.key === "Home") {
       e.preventDefault();
-      setFocusIdx(0);
+      focusRow(0);
     } else if (e.key === "End") {
       e.preventDefault();
-      setFocusIdx(navCount - 1);
+      focusRow(navCount - 1);
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (showUp && focusIdx === 0) return onOpenUp();
@@ -126,6 +156,7 @@ export function FileList({
   };
 
   const rowClick = (entry: Entry, e: React.MouseEvent) => {
+    setFocusIdx(base + display.indexOf(entry));
     const additive = e.metaKey || e.ctrlKey;
     const range = e.shiftKey;
     if (entry.isDir && !additive && !range) {
@@ -201,9 +232,13 @@ export function FileList({
   return (
     <div ref={rootRef} style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
       <div
+        ref={rows.scrollRef}
+        onScroll={rows.measure}
         tabIndex={0}
         role="listbox"
         aria-label={t("nav.sftp")}
+        aria-multiselectable
+        aria-activedescendant={activeVisible ? `${listId}-${focusIdx}` : undefined}
         onKeyDown={onKeyDown}
         style={{ flex: 1, overflow: "auto", padding: rem(6), outline: "none" }}
       >
@@ -212,6 +247,7 @@ export function FileList({
             row's icon(14)+gap(9)+pad(10); right pad 10 == a row's right pad. */}
         {!isMobile && (
           <div
+            ref={rows.headerRef}
             style={{
               position: "sticky",
               top: 0,
@@ -234,45 +270,63 @@ export function FileList({
           <FileRow
             entry={{ name: "..", isDir: true, size: 0 }}
             isUp
+            id={`${listId}-0`}
+            position={1}
+            total={navCount}
             focused={focusIdx === 0}
             onClick={onOpenUp}
           />
         )}
 
-        {loading && entries.length === 0
-          ? Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                style={{
-                  height: isMobile ? rem(44) : rem(30),
-                  margin: `0 ${rem(4)}`,
-                  borderRadius: 8,
-                  display: "flex",
-                  alignItems: "center",
-                  padding: `0 ${rem(10)}`,
-                  gap: rem(9),
-                }}
-              >
-                <div style={{ width: rem(14), height: rem(14), borderRadius: 6, background: p.bg2 }} />
-                <div style={{ flex: 1, height: rem(9), borderRadius: 6, background: p.bg2, maxWidth: rem(120) + i * 18 }} />
-              </div>
-            ))
-          : display.map((e, idx) => (
-              <FileRow
-                key={e.name}
-                entry={e}
-                selected={selection.has(e.name)}
-                focused={focusIdx === base + idx}
-                showModified={showModified}
-                showPerms={showPerms}
-                actionIcon={actionIcon}
-                onClick={(ev) => rowClick(e, ev)}
-                onDoubleClick={() => (e.isDir ? onOpenDir(e.name) : onActivate(e))}
-                onContextAt={(x, y) => onContext(e, x, y)}
-                onActivate={() => onActivate(e)}
-                onDragStart={(ev) => onRowDragStart(e, ev)}
-              />
-            ))}
+        <div
+          ref={rows.rowsRef}
+          style={loading && entries.length === 0 ? undefined : { position: "relative", height: display.length * rowHeight }}
+        >
+          {loading && entries.length === 0
+            ? Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    height: isMobile ? rem(44) : rem(30),
+                    margin: `0 ${rem(4)}`,
+                    borderRadius: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    padding: `0 ${rem(10)}`,
+                    gap: rem(9),
+                  }}
+                >
+                  <div style={{ width: rem(14), height: rem(14), borderRadius: 6, background: p.bg2 }} />
+                  <div style={{ flex: 1, height: rem(9), borderRadius: 6, background: p.bg2, maxWidth: rem(120) + i * 18 }} />
+                </div>
+              ))
+            : visibleIndices.map((idx) => {
+                const entry = display[idx];
+                return (
+                  <div key={entry.name} style={{ position: "absolute", top: idx * rowHeight, width: "100%" }}>
+                    <FileRow
+                      id={`${listId}-${base + idx}`}
+                      position={base + idx + 1}
+                      total={navCount}
+                      entry={entry}
+                      selected={selection.has(entry.name)}
+                      focused={focusIdx === base + idx}
+                      showModified={showModified}
+                      showPerms={showPerms}
+                      actionIcon={actionIcon}
+                      onClick={(ev) => rowClick(entry, ev)}
+                      onDoubleClick={() => (entry.isDir ? onOpenDir(entry.name) : onActivate(entry))}
+                      onContextAt={(x, y) => onContext(entry, x, y)}
+                      onActivate={() => onActivate(entry)}
+                      onDragStart={(ev) => {
+                        setDragged(entry);
+                        onRowDragStart(entry, ev);
+                      }}
+                    />
+                  </div>
+                );
+              })}
+        </div>
 
         {!loading && display.length === 0 && (
           <div

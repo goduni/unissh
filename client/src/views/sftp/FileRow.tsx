@@ -3,7 +3,7 @@
 // drag source hooks. FileList owns selection/drag/context logic; drops bubble
 // to the pane and always target its currently open directory.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
@@ -21,6 +21,9 @@ export function modeString(mode?: number): string {
 
 export function FileRow({
   entry,
+  id,
+  position,
+  total,
   isUp,
   selected,
   focused,
@@ -34,6 +37,9 @@ export function FileRow({
   onDragStart,
 }: {
   entry: Entry;
+  id?: string;
+  position?: number;
+  total?: number;
   isUp?: boolean;
   selected?: boolean;
   focused?: boolean;
@@ -54,6 +60,7 @@ export function FileRow({
   const [pressing, setPressing] = useState(false);
   // touch long-press → context menu (no right-click on mobile)
   const lpTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (lpTimer.current != null) window.clearTimeout(lpTimer.current); }, []);
   const lpFired = useRef(false);
   const lpStart = useRef<{ x: number; y: number } | null>(null);
   const clearLp = () => {
@@ -74,6 +81,11 @@ export function FileRow({
 
   return (
     <div
+      id={id}
+      role="option"
+      aria-selected={!!selected}
+      aria-posinset={position}
+      aria-setsize={total}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => {
@@ -108,6 +120,7 @@ export function FileRow({
         // tolerate small jitter; only cancel on a real drag/scroll
         if (Math.hypot(tt.clientX - s.x, tt.clientY - s.y) > 10) clearLp();
       }}
+      onTouchCancel={clearLp}
       onTouchEnd={(e) => {
         clearLp();
         if (lpFired.current) e.preventDefault();
