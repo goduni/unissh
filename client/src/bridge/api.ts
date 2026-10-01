@@ -72,6 +72,10 @@ function afterMut<T>(vaultId: string, p: Promise<T>): Promise<T> {
 
 // ── account / instance ─────────────────────────────────────────
 export const instanceStatus = () => invoke<InstanceStatus>("instance_status");
+/** Device-local layout metadata, stored in SQLCipher and available only unlocked. */
+export const terminalWorkspaceLoad = () => invoke<[number, string | null]>("terminal_workspace_load");
+export const terminalWorkspaceSave = (epoch: number, document: string) =>
+  invoke<void>("terminal_workspace_save", { epoch, document });
 /** Clear a half-written (partial) instance so onboarding can start clean.
  *  Backend hard-guards this to never touch a complete or unlocked instance. */
 export const resetPartialInstance = () => invoke<void>("reset_partial_instance");

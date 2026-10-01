@@ -10,6 +10,7 @@ import { BTN_RESET, Icon, NO_AUTOCORRECT } from "@/components/primitives";
 import { pressActivate } from "@/components/a11y";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { HostMenu } from "@/views/sftp/hostpicker";
+import { WorkspaceButton } from "@/components/WorkspaceButton";
 import { useTranslation, tDyn } from "@/i18n";
 import type { ConnectionProfile } from "@/bridge/types";
 import { useApp, type TerminalTab } from "@/store/app";
@@ -18,12 +19,13 @@ import { useApp, type TerminalTab } from "@/store/app";
  *  else error if any errored, else muted (connecting/closed). Colour AND shape
  *  of the dot plus the tab's title/aria-label all derive from this, so the
  *  connection state is never carried by colour alone. */
-type TabState = "online" | "error" | "connecting" | "closed";
+type TabState = "online" | "error" | "connecting" | "closed" | "restored";
 function tabState(tab: TerminalTab): TabState {
   const st = tab.panes.map((p) => p.status);
   if (st.includes("online")) return "online";
   if (st.includes("error")) return "error";
   if (st.includes("connecting")) return "connecting";
+  if (st.includes("restored")) return "restored";
   return "closed";
 }
 /** A tab is local when every pane in it is — a mixed split keeps the plain look
@@ -37,6 +39,7 @@ const TAB_STATE_KEY: Record<TabState, string> = {
   error: "terminal.status.error",
   connecting: "terminal.status.connecting",
   closed: "terminal.status.closed",
+  restored: "terminal.status.restored",
 };
 
 export function TermTabStrip({
@@ -354,6 +357,9 @@ export function TermTabStrip({
         )}
       </div>
 
+      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", flexShrink: 0, padding: `0 ${rem(6)}` }}>
+        <WorkspaceButton />
+      </div>
       {menu && (
         <ContextMenu
           x={menu.x}

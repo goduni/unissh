@@ -699,6 +699,7 @@ async function runStartupSnippets(
   // open the session (once we have auth). Re-runs on a reconnect (pane.gen bumped),
   // re-opening in the SAME pane so the xterm scrollback is preserved.
   useEffect(() => {
+    if (pane.status === "restored") return;
     const target = pane.target;
     if (target.kind === "ssh" && target.profile.auth.type === "promptPassword" && pw == null)
       return;
@@ -1256,7 +1257,7 @@ async function runStartupSnippets(
       )}
       {/* Desktop reconnect bar for a dropped/failed session. The mobile shell renders
           the same banner (strip variant) in MTerminal, so this is desktop-only. */}
-      {!isMobile && (pane.status === "closed" || pane.status === "error") && !pane.mismatch && (
+      {!isMobile && (pane.status === "restored" || pane.status === "closed" || pane.status === "error") && !pane.mismatch && (
         <ReconnectBanner pane={pane} onReconnect={manualReconnect} variant="float" />
       )}
       {menu && (
@@ -1598,6 +1599,8 @@ export function ViewTerminal() {
         ? t("terminal.status.connecting")
         : focusedPane?.status === "error"
           ? t("terminal.status.error")
+          : focusedPane?.status === "restored"
+            ? t("terminal.status.restored")
           : focusedPane?.status === "closed"
             ? t("terminal.status.closed")
             : null;

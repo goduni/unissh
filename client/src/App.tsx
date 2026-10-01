@@ -14,7 +14,7 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { designPx, rem, ROOT_FONT_PX, rootFontPx, TEXT } from "@/theme/tokens";
 import * as api from "@/bridge/api";
-import { useApp } from "@/store/app";
+import { useApp, flushTerminalWorkspace } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useTranslation } from "@/i18n";
 import { Icon } from "@/components/primitives";
@@ -409,7 +409,7 @@ export function App() {
           const cleanup = async () => {
             try {
               await Promise.race([
-                stopAllExternalEdits(),
+                Promise.allSettled([stopAllExternalEdits(), flushTerminalWorkspace()]),
                 new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
               ]);
             } catch {
@@ -426,7 +426,7 @@ export function App() {
           try {
             const s = useApp.getState();
             live =
-              s.terminals.length +
+              s.terminals.filter((tab) => tab.panes.some((pane) => pane.status !== "restored")).length +
               s.tunnels.length +
               s.broadcasts.length +
               s.sftpSessions.length +

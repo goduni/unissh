@@ -124,6 +124,31 @@ grants and per-command approvals, and owns SSH connections independently of the
 terminal registry. No sidecar binary or server-control-plane change is needed.
 Mobile does not compile or expose the listener.
 
+## Restoring terminal layouts
+
+Terminal tabs, their order and custom names, the active pane and split sizes are
+saved automatically for each vault on this device. After restart, unlock or a
+vault switch, saved panes return with a **Connect** or **Start shell** button.
+Restoration opens no SSH connection or local process; starting a pane follows
+the usual authentication, host-key checks and startup-snippet behavior.
+
+Layouts live in version-2 local SQLCipher metadata; version-1 automatic layouts
+are migrated on the next save. They are not synced or
+included in portable vault backups. SSH panes store a profile reference and
+resolve the current host settings; deleted hosts are skipped and their splits
+collapse. Local panes retain their configured shell, arguments and initial
+directory, and are omitted on mobile OSes. Terminal output, shell-supplied
+titles, session ids and connection credentials are not saved in the layout.
+Closing a tab removes it from the saved layout.
+
+**Workspaces** in the terminal toolbar saves named snapshots of the current tabs
+and splits for the selected vault. Open a snapshot to replace the current terminal
+tabs (with confirmation); SFTP, tunnels and other connections stay open. Each
+restored pane still requires an explicit start. Saved snapshots change only when
+you choose **Update from current tabs**; automatic layout saving does not overwrite
+them. You can rename or delete a snapshot without changing open tabs or host
+profiles. If none of its targets are available, opening it keeps the current tabs.
+
 ## Keyboard shortcuts
 
 Settings → Keyboard shortcuts lists application, section, terminal and SFTP editor

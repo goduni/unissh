@@ -54,6 +54,24 @@ fn conv_proxy(p: Option<dto::ProxyConfig>) -> Option<unissh_ffi::ProxyConfig> {
 
 // ---------- account / instance ----------
 
+#[tauri::command]
+pub async fn terminal_workspace_load(
+    state: State<'_, AppState>,
+) -> ApiResult<(u64, Option<String>)> {
+    let core = state.core.clone();
+    blocking(move || core.terminal_workspace_load()).await
+}
+
+#[tauri::command]
+pub async fn terminal_workspace_save(
+    epoch: u64,
+    document: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking(move || core.terminal_workspace_save(epoch, document)).await
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstanceStatus {

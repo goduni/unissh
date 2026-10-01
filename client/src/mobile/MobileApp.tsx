@@ -27,6 +27,7 @@ import * as api from "@/bridge/api";
 
 import { ViewTerminal } from "@/views/ViewTerminal";
 import { ReconnectBanner } from "@/components/ReconnectBanner";
+import { WorkspaceButton } from "@/components/WorkspaceButton";
 import { ViewHosts } from "@/views/ViewHosts";
 import { ViewRun } from "@/views/ViewRun";
 import { ViewSftp } from "@/views/sftp/ViewSftp";
@@ -341,6 +342,7 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
       >
         <Icon name="terminal" size={40} color={p.txt3} />
         <div style={{ fontSize: 16 }}>{t("terminal.noSessions")}</div>
+        <WorkspaceButton />
         <button
           onClick={onNeedHosts}
           style={{
@@ -369,12 +371,15 @@ function MTerminal({ onNeedHosts }: { onNeedHosts: () => void }) {
   // shared TerminalPane) — no reconnect strip: a mismatch must not offer Reconnect.
   const dead =
     activePane &&
-    (activePane.status === "closed" || activePane.status === "error") &&
+    (activePane.status === "restored" || activePane.status === "closed" || activePane.status === "error") &&
     !activePane.mismatch;
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       {/* session switcher — desktop tab strip is hidden on mobile */}
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 12px", borderBottom: `1px solid ${p.line}` }}>
+        <WorkspaceButton />
+      </div>
       {terminals.length > 1 && (
         <div style={{ flexShrink: 0, display: "flex", gap: 6, padding: "8px 12px", overflowX: "auto", borderBottom: `1px solid ${p.line}`, background: p.bg1 }}>
           {terminals.map((trm) => {

@@ -34,6 +34,7 @@ import {
 } from "@/components/primitives";
 import { useDialogFocus, useDialogKeys, useMenu } from "@/components/a11y";
 import { Modal } from "@/components/Modal";
+import { TerminalWorkspaces } from "./TerminalWorkspaces";
 import { drawQr } from "@/support/qr";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
@@ -3613,8 +3614,10 @@ function QrModal({
 
 export function Modals() {
   const modal = useApp((s) => s.modal);
+  const vaultId = useApp((s) => s.vaultId);
   const closeModal = useApp((s) => s.closeModal);
   if (!modal) return null;
+  if (modal.kind === "workspaces") return <TerminalWorkspaces key={vaultId} onClose={closeModal} />;
   if (modal.kind === "host") return <NewHostModal edit={modal.edit} onClose={closeModal} />;
   if (modal.kind === "bindHost")
     return <BindHostModal host={modal.host} vaultId={modal.vaultId} onClose={closeModal} />;

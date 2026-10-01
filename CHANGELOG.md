@@ -34,6 +34,15 @@ starts with `0.`:
 
 ### Added
 
+- Terminal layouts persist on this device per vault: tab order, custom names,
+  active panes and split sizes return after restart, unlock or a vault switch.
+  Restored SSH and local shell panes wait for an explicit start. Layouts use
+  version-2 local SQLCipher metadata, with migration from version 1; vault and
+  sync formats are unchanged.
+- Named terminal workspaces per vault: save, open, rename, explicitly update and
+  delete tab/split layouts on this device. Opening asks before replacing tabs and
+  leaves restored sessions stopped until explicitly started.
+
 - Configurable client keyboard shortcuts in Settings: search, multiple bindings,
   disabling, conflict reassignment, per-action and full reset, and live shortcut hints.
   Preferences are stored on the device; terminal and SFTP editor commands are included.
