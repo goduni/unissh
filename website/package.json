@@ -14,10 +14,10 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.41.10",
+    "@astrojs/starlight": "^0.42.4",
     "@fontsource/hanken-grotesk": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "astro": "^7.2.9",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.5"
   }
 }
