@@ -1,12 +1,5 @@
-// What the cheat-sheet (⌘/ · Ctrl+Shift+/) prints, as data.
-//
-// A *description* of bindings implemented elsewhere — App.tsx (global chords),
-// shell/useTerminalShortcuts.ts (tabs and panes), ViewTerminal's xterm key
-// handler (copy/paste/find/prompt jump) and its mouse handlers. Nothing here
-// binds anything; changing a binding means changing both places.
-//
-// Kept out of the overlay component so it can be read without mounting React —
-// support/shortcuts.test.ts asserts every key below exists in both catalogs.
+// The sheet and Settings share the same live binding catalog.
+import { SHORTCUTS, bindingsFor, formatBinding, type ShortcutOverrides, type ShortcutScope } from "./keybindings";
 
 /** One printed line: a keycap and what it does.
  *
@@ -26,58 +19,19 @@ export interface ShortcutGroup {
   rows: ShortcutRow[];
 }
 
-/**
- * The sheet for one platform. `mac` decides the modifier: ⌘ on macOS, Ctrl+Shift
- * elsewhere — not a bare Ctrl, which belongs to readline (see support/hotkeys).
- */
-export function shortcutGroups(mac: boolean): ShortcutGroup[] {
-  const mod = mac ? "⌘" : "Ctrl+Shift+";
+export function shortcutGroups(mac: boolean, overrides: ShortcutOverrides = {}): ShortcutGroup[] {
+  const scopes: ShortcutScope[] = ["global", "navigation", "terminal", "editor"];
   return [
-    {
-      titleKey: "feedback.shortcutGroup.global",
-      rows: [
-        { keys: `${mod}K`, labelKey: "feedback.shortcut.commandPalette" },
-        { keys: `${mod}N`, labelKey: "feedback.shortcut.newHost" },
-        // One row, not two: outside the terminal this routes there, inside it
-        // useTerminalShortcuts takes the same chord for a new tab. The label
-        // says both — printing ⌘T twice with two meanings would read as a bug.
-        { keys: `${mod}T`, labelKey: "feedback.shortcut.goToTerminal" },
-        // Carries its own Shift on macOS too: a bare ⌘S saves in the SFTP editor.
-        { keys: mac ? "⌘⇧S" : "Ctrl+Shift+S", labelKey: "feedback.shortcut.localTerminal" },
-        { keys: `${mod}L`, labelKey: "feedback.shortcut.lockInstance" },
-        // Bare Ctrl off macOS: with Shift held `,` is `<` on the usual layouts,
-        // and this is every desktop's own preferences chord anyway. Toggles —
-        // the panel opens over the current view, so the same keys put it away.
-        { keys: mac ? "⌘," : "Ctrl+,", labelKey: "feedback.shortcut.openSettings" },
-        { keys: `${mod}1–9`, labelKey: "feedback.shortcut.switchSections" },
-        { keys: `${mod}/`, labelKey: "feedback.shortcut.thisHelp" },
-      ],
-    },
-    {
-      titleKey: "feedback.shortcutGroup.terminal",
-      rows: [
-        // macOS leaves ⌘C/⌘V to the webview's native clipboard path. Elsewhere
-        // Ctrl+Shift+C always copies (a bare Ctrl+C stays SIGINT unless there is
-        // a selection), and paste is bound on both Ctrl+V and Ctrl+Shift+V — the
-        // shorter one is printed.
-        { keys: mac ? "⌘C" : "Ctrl+Shift+C", labelKey: "feedback.shortcut.copy" },
-        { keys: mac ? "⌘V" : "Ctrl+V", labelKey: "feedback.shortcut.paste" },
-        { keys: `${mod}F`, labelKey: "feedback.shortcut.find" },
-        { keys: `${mod}D`, labelKey: "feedback.shortcut.splitRight" },
-        { keys: `${mod}E`, labelKey: "feedback.shortcut.splitDown" },
-        { keys: `${mod}W`, labelKey: "feedback.shortcut.closePane" },
-        // Horizontal only, and that is the whole rule: ← → move between panes,
-        // ↑ ↓ move between prompts. They used to be four aliases for two
-        // directions, which left the prompt jump below unreachable in any split
-        // tab — see paneFocusStep in shell/useTerminalShortcuts.
-        { keys: `${mod}←→`, labelKey: "feedback.shortcut.focusPane" },
-        { keys: "Ctrl+Tab", labelKey: "feedback.shortcut.cycleTabs" },
-        { keys: mac ? "⌘ +/−/0" : "Ctrl+Shift +/−/0", labelKey: "feedback.shortcut.termZoom" },
-        // Only bound when the shell emits OSC 133 marks, hence the caveat in the
-        // label — otherwise these keys keep whatever meaning the shell gives them.
-        { keys: mac ? "⌘⇧↑↓" : "Ctrl+Shift+↑↓", labelKey: "feedback.shortcut.promptJump" },
-      ],
-    },
+    ...scopes.map((scope) => ({
+      titleKey: `keybindings.scopes.${scope}`,
+      rows: SHORTCUTS.filter((s) => s.scope === scope).map((s) => {
+        const bindings = bindingsFor(s.id, overrides, mac);
+        return {
+          labelKey: s.labelKey,
+          ...(bindings.length ? { keys: bindings.map((b) => formatBinding(b, mac)).join(" / ") } : { keysKey: "keybindings.disabled" }),
+        };
+      }),
+    })),
     {
       // The half of issue #40 that was already implemented and undiscoverable:
       // a selection copies itself, and inside an app that has taken the mouse

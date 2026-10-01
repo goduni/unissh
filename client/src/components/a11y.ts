@@ -21,6 +21,11 @@ export function pressActivate(fn: () => void) {
 // confirm raised from inside a modal doesn't take the modal down with it.
 const dialogStack: (() => void)[] = [];
 
+/** Capture-phase command handlers must not act on views behind a dialog. */
+export function hasOpenDialog(): boolean {
+  return dialogStack.length > 0;
+}
+
 /** Escape closes the dialog. Register once per mounted dialog — the component
  *  must only be mounted while the dialog is actually open. */
 export function useDialogKeys(onClose: () => void) {
