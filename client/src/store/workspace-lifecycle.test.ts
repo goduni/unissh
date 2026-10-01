@@ -135,6 +135,48 @@ describe("workspace in the app lifecycle", () => {
     expect(useApp.getState().workspaceReady).toBe(true);
   });
 
+  it("does not block vault loading after a lock interrupts a starting vault switch", async () => {
+    await useApp.getState().reloadVaults();
+    let unlockCore!: () => void;
+    io.lock.mockImplementationOnce(() => new Promise<void>((resolve) => { unlockCore = resolve; }));
+    let finish!: () => void;
+    io.invalidate.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const locking = useApp.getState().lockInstance();
+    await vi.waitFor(() => expect(io.lock).toHaveBeenCalled());
+    // The switch starts after lock has bumped the epoch but before it clears `unlocked`.
+    const switching = useApp.getState().setVault("one");
+    unlockCore();
+    await locking;
+    finish();
+    await switching;
+    useApp.setState({ unlocked: true });
+    io.vaults.mockClear();
+    await useApp.getState().reloadVaults();
+    expect(io.vaults).toHaveBeenCalled();
+    expect(useApp.getState().workspaceReady).toBe(true);
+  });
+
+  it("refreshes hosts while a named workspace closes its sessions", async () => {
+    await useApp.getState().reloadVaults();
+    useApp.getState().saveNamedWorkspace("Production");
+    const id = useApp.getState().namedWorkspaces[0].id;
+    const tab = useApp.getState().terminals[0];
+    useApp.getState().updatePane(tab.id, tab.activePaneId, { status: "online", sessionId: "live" });
+    let closed!: () => void;
+    io.close.mockImplementationOnce(() => new Promise<void>((resolve) => { closed = resolve; }));
+    await useApp.getState().openNamedWorkspace(id);
+    useApp.getState().confirm?.onConfirm();
+    await vi.waitFor(() => expect(io.close).toHaveBeenCalled());
+    const edited = { ...host, label: "Edited" };
+    io.connections.mockResolvedValue([edited]);
+    await useApp.getState().reloadVault();
+    closed();
+    await vi.waitFor(() => expect(useApp.getState().terminals[0].panes[0].status).toBe("restored"));
+    expect(useApp.getState().hosts).toEqual([edited]);
+    expect(useApp.getState().loading).toBe(false);
+    expect(useApp.getState().terminals).toHaveLength(1);
+  });
+
   it("restores the selected vault on boot, lock/unlock and vault switching without connecting", async () => {
     await useApp.getState().reloadVaults();
     expect(useApp.getState().vaultId).toBe("two");

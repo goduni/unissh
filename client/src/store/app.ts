@@ -43,7 +43,11 @@ const workspace = new WorkspaceStorage({
   },
 });
 let workspaceEpoch = 0;
-let switchingVault = false;
+// Epoch owned by an in-flight vault teardown. Any newer epoch (lock, another
+// switch) supersedes it, so an abandoned teardown can never block reloads.
+let switchingEpoch = -1;
+// Latest named-workspace open; a newer open or epoch cancels an older one.
+let openToken = 0;
 export const flushTerminalWorkspace = () => workspace.flush();
 
 /** What closed the vault. `manual` is the lock action or the ⌘L shortcut;
@@ -1110,7 +1114,7 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   reloadVaults: async () => {
-    if (switchingVault) return;
+    if (switchingEpoch === workspaceEpoch) return;
     const epoch = workspaceEpoch;
     await workspace.load();
     if (!get().unlocked || epoch !== workspaceEpoch) return;
@@ -1146,22 +1150,26 @@ export const useApp = create<AppStore>((set, get) => ({
     // PTY — clearing the arrays alone would orphan them — so close first, then clear.
     const teardownAndSwitch = async () => {
       const epoch = ++workspaceEpoch;
-      switchingVault = true;
+      switchingEpoch = epoch;
       set({ workspaceReady: false });
       const { terminals, tunnels, broadcasts, sftpSessions } = get();
       cancelAllTransfers();
-      await Promise.allSettled([
-        api.sftpInvalidate(),
-        ...terminals
-          .flatMap((t) => t.panes)
-          .filter((p) => p.sessionId)
-          .map((p) => api.sessionClose(p.sessionId as string)),
-        ...tunnels.map((t) => api.tunnelClose(t.id)),
-        ...broadcasts.map((bid) => api.broadcastClose(bid)),
-        ...sftpSessions.map((s) => api.sftpClose(s.id)),
-      ]);
+      try {
+        await Promise.allSettled([
+          api.sftpInvalidate(),
+          ...terminals
+            .flatMap((t) => t.panes)
+            .filter((p) => p.sessionId)
+            .map((p) => api.sessionClose(p.sessionId as string)),
+          ...tunnels.map((t) => api.tunnelClose(t.id)),
+          ...broadcasts.map((bid) => api.broadcastClose(bid)),
+          ...sftpSessions.map((s) => api.sftpClose(s.id)),
+        ]);
+      } finally {
+        // A teardown abandoned by a lock must not leave reloads blocked after unlock.
+        if (switchingEpoch === epoch) switchingEpoch = -1;
+      }
       if (!get().unlocked || epoch !== workspaceEpoch) return;
-      switchingVault = false;
       set({
         vaultId: id,
         namedWorkspaces: [],
@@ -1207,7 +1215,7 @@ export const useApp = create<AppStore>((set, get) => ({
   reloadVault: async () => {
     // The outgoing vault remains selected until its sessions close. A refresh
     // here would restore its tabs and enable saves before the new vault loads.
-    if (switchingVault) return;
+    if (switchingEpoch === workspaceEpoch) return;
     const epoch = workspaceEpoch;
     const vaultId = get().vaultId;
     if (!vaultId) return;
@@ -1246,7 +1254,6 @@ export const useApp = create<AppStore>((set, get) => ({
 
   lockInstance: async (reason = "manual") => {
     workspaceEpoch++;
-    switchingVault = false;
     set({ workspaceReady: false, workspaceAvailable: false, namedWorkspaces: [], modal: null });
     // Flush the latest layout while SQLCipher is open. A stalled bridge must
     // never delay a security lock indefinitely.
@@ -1335,19 +1342,19 @@ export const useApp = create<AppStore>((set, get) => ({
         toast(i18n.t("terminal.workspaces.noTargets"), "warn");
         return;
       }
-      const epoch = ++workspaceEpoch;
-      switchingVault = true;
-      set({ workspaceReady: false, modal: null });
+      // The vault stays selected, so host reloads keep running while sessions close;
+      // only a lock or vault switch (a new epoch) or a newer open cancels this one.
+      const token = ++openToken;
+      set({ modal: null });
       const closed = await Promise.allSettled(current.terminals.flatMap((tab) => tab.panes)
         .filter((pane) => pane.sessionId).map((pane) => api.sessionClose(pane.sessionId!)));
-      if (!get().unlocked || epoch !== workspaceEpoch || get().vaultId !== vaultId) return;
-      switchingVault = false;
+      if (!get().unlocked || requestedEpoch !== workspaceEpoch || token !== openToken ||
+          get().vaultId !== vaultId) return;
       if (closed.some((result) => result.status === "rejected")) {
-        set({ workspaceReady: true });
         toast(i18n.t("terminal.workspaces.closeFailed"), "warn");
         return;
       }
-      set({ terminals: restored.terminals, activeTermId: restored.activeTermId, workspaceReady: true });
+      set({ terminals: restored.terminals, activeTermId: restored.activeTermId });
     };
     if (initial.terminals.length) {
       set({ modal: null });
