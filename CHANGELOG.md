@@ -68,6 +68,10 @@ starts with `0.`:
 
 ### Changed
 
+- Large SFTP directories render only visible rows and a small buffer. Keyboard
+  navigation scrolls the focused row into view; filtering, sorting and range
+  selection still operate on the complete listing.
+
 - Compact SFTP transfer cards share a bounded grid and header controls.
 - Directory transfers reuse cancellation tokens and parent paths. Remote target
   checks reuse one listing per directory, with individual checks for ambiguous

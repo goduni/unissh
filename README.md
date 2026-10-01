@@ -42,6 +42,7 @@ _Your keys, your hosts, your machine. The client is complete on its own — no a
 - [Configuration](#configuration)
 - [Security & Privacy](#security--privacy)
 - [Changelog](CHANGELOG.md) — what changed, and whether it breaks your vault
+- [Upgrading](docs/upgrading.md) — backups, server/client order and recovery
 - [Build from source](#build-from-source)
 - [Contributing](#contributing)
 - [Community](#community) — [supporting the project](#supporting-the-project)
@@ -260,7 +261,14 @@ Everything below is implemented in the shared Rust core and exposed to the clien
 - Per-application access, command activity, cancellation and optional encrypted recordings reuse the Rust core. Lock and suspend stop active work; no command is replayed on unlock or restart. See [setup, tools and security limits](docs/desktop-mcp.md).
 
 **SFTP & tunnels**
-- Full SFTP, including **resumable** upload/download with live progress and cancel, and **parallel multi-file transfers** over a pooled set of channels.
+- **Parallel file and folder transfers** with live progress, cancellation and retry.
+  Completed files are retained while retrying a queued folder; an unfinished file
+  restarts from zero. Retry plans last until the queue is cleared or the vault changes.
+- Transfers preserve symbolic links, ordinary Unix permissions and modification
+  times. Files are staged beside their destination before commit; remote overwrites
+  require `posix-rename@openssh.com`. See [transfer integrity and limitations](client/README.md#transfer-integrity).
+- Large directory lists render visible rows while keeping filtering, sorting and
+  selection available across the complete listing.
 - **Tunnels**: local, remote, and dynamic (**SOCKS5**); **ProxyJump** chains.
 
 **Interop & portability**

@@ -1,12 +1,12 @@
 # UniSSH — cross-platform client (Tauri v2)
 
 A cross-platform SSH client (macOS / iOS / Linux / Windows / Android) built on **Tauri v2** with a
-**React 18 + TypeScript** frontend and a **Rust backend** that wraps the existing UniSSH core
+**React 19 + TypeScript** frontend and a **Rust backend** that wraps the existing UniSSH core
 (`../rust-core`, crate `unissh-ffi`) directly as a path dependency.
 
-The UI is a pixel-faithful implementation of a bespoke design system:
-dark-first, premium-technological, Hanken Grotesk + JetBrains Mono, 5 accent colors, dark/light/auto
-app theme, 7 terminal themes, desktop three-panel shell + a native mobile shell.
+The UI uses shared design tokens, Hanken Grotesk and JetBrains Mono, light/dark/auto
+appearance, optional theme families, and separate interface and terminal scaling.
+Desktop panes and the mobile shell share the same core and file operations.
 
 ## Architecture
 
@@ -25,7 +25,7 @@ src/                      React + TS frontend
   App.tsx, main.tsx
 
 src-tauri/                Rust backend
-  src/lib.rs              Tauri builder, plugins, ~75 command handlers, AppState
+  src/lib.rs              Tauri builder, plugins, command registration
   src/commands.rs         every command wraps the blocking core call in spawn_blocking
   src/dto.rs              serde DTOs <-> unissh-ffi records/enums
   src/observers.rs        SessionObserver/Exec/Broadcast/SftpProgress -> tauri::ipc::Channel
@@ -41,8 +41,8 @@ src-tauri/                Rust backend
   the bytes; the frontend feeds them straight into xterm.js).
 - The core hands out `Arc<SshSession|SshTunnel|SftpFfi|…>` and forgets them, so `AppState` owns the
   lifecycle, keyed by a generated id.
-- **Security boundary respected:** the UI never receives plaintext private keys (only public keys +
-  fingerprints + session data). Password/note reveal is the only type-gated exception.
+- **Security boundary:** authentication keeps private keys inside the core signer.
+  Password/note reveal and explicit user-initiated key export are separate operations.
 
 The filesystem plugin sets `requireLiteralLeadingDot: false` so recursive SFTP
 copies can include hidden directories such as `.git` and `.claude` on Unix.
@@ -63,6 +63,9 @@ is unknown. Absolute link targets remain absolute and may not exist on another h
 - Files and links are prepared beside the destination. New names use a no-replace
   commit; overwrites require `posix-rename@openssh.com` on an SFTP server. An
   unsupported replacement fails with the original intact. There is no unlink fallback.
+- Large directory listings render only visible rows and a small buffer. Filtering,
+  sorting and range selection still apply to the entire listing. Keyboard navigation
+  scrolls the focused row into view at every interface scale.
 - Pause/retry retains chosen destination names and completed items in memory.
   An unfinished file restarts from zero; equal sizes never prove that a preexisting
   file is a valid partial copy. Plans expire when the queue is cleared or the vault changes.
@@ -83,10 +86,11 @@ is unknown. Absolute link targets remain absolute and may not exist on another h
 ## Honesty to the core
 
 The prototype showed some indicators the core cannot back; these were intentionally dropped or made
-real (not faked): host "online"/ping/cipher labels are **removed** (a host shows as active only when it
-has a live terminal session in-app); clipboard auto-clear and biometric unlock are wired to real
-platform features (biometric is mobile-only); the per-host "agent forwarding" toggle is omitted (the
-core keeps forwarding off by default and prefers ProxyJump).
+real: a host shows as active only when it has a live terminal session in the app.
+Clipboard auto-clear uses the platform clipboard. Biometric unlock depends on
+platform support; Android Secret Key storage still needs a Keystore backend.
+Agent forwarding is available per host, off by default, and asks for confirmation
+for each signing request. ProxyJump does not require forwarding an agent.
 
 ## Prerequisites
 
@@ -109,12 +113,14 @@ npm run tauri ios init   && npm run tauri ios dev
 npm run tauri android init && npm run tauri android dev
 ```
 
-## Verified status
+## Validation
 
-- `cargo check` (lib + bin) — **passes** against the real `unissh-ffi` + full Tauri v2 stack.
-- `tsc --noEmit` — **0 errors**; `vite build` — **passes**.
-- A full `cargo build`/`tauri build` (codegen + link) and on-device runs require a machine with a
-  display and adequate disk — not performed in the headless build environment.
+Run `npm run typecheck`, `npm run lint`, `npm test` and `npm run build` for the
+frontend. Native build prerequisites and platform checks are defined in
+[`client.yml`](../.github/workflows/client.yml); a frontend build alone does not
+verify the Tauri binary or OS integration.
+
+For existing installations, see [upgrading UniSSH](../docs/upgrading.md).
 
 ## Desktop MCP
 
