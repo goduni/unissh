@@ -61,6 +61,7 @@ use unissh_vault::{
 pub mod automation;
 pub mod automation_recording;
 mod ssh_include;
+mod terminal_workspace;
 
 uniffi::setup_scaffolding!();
 

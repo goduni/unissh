@@ -31,6 +31,24 @@ import { suspendExternalEdits } from "@/sftp/external-edit";
 import { planGroupMove } from "@/store/groupMove";
 import type { LockGrace } from "@/support/systemLock";
 import type { ControlsSide } from "@/shell/windowControls";
+import { restoreWorkspace, WorkspaceStorage, type NamedWorkspace, type WorkspaceEditError } from "./workspace";
+import { toast } from "./toast";
+
+const workspace = new WorkspaceStorage({
+  load: () => api.terminalWorkspaceLoad(),
+  save: (epoch, document) => api.terminalWorkspaceSave(epoch, document),
+  error: () => {
+    logWarn("Terminal workspace could not be loaded or saved");
+    toast(i18n.t("terminal.workspaceFailed"), "warn");
+  },
+});
+let workspaceEpoch = 0;
+// Epoch owned by an in-flight vault teardown. Any newer epoch (lock, another
+// switch) supersedes it, so an abandoned teardown can never block reloads.
+let switchingEpoch = -1;
+// Latest named-workspace open; a newer open or epoch cancels an older one.
+let openToken = 0;
+export const flushTerminalWorkspace = () => workspace.flush();
 
 /** What closed the vault. `manual` is the lock action or the ⌘L shortcut;
  *  `idle` is the inactivity timer; the other two come from the OS telling us
@@ -80,13 +98,14 @@ export type ModalKind =
    *  the global active vault; reports the created vault id back via onCreated. */
   | { kind: "identityVault"; onCreated?: (vaultId: string) => void }
   | { kind: "termtheme"; edit?: TermTheme }
+  | { kind: "workspaces" }
   /** A donation address rendered as a QR, generated offline (see support/qr.ts). */
   | { kind: "qr"; label: string; address: string }
   | { kind: "copyKeyToServer"; openssh: string; keyItemId: string };
 
 export type Device = "desktop" | "mobile";
 
-export type TermStatus = "connecting" | "online" | "closed" | "error";
+export type TermStatus = "restored" | "connecting" | "online" | "closed" | "error";
 
 /** What a pane's PTY is: a saved host across SSH, or a shell on this machine.
  *
@@ -322,6 +341,14 @@ interface AppStore {
   // terminals
   terminals: TerminalTab[];
   activeTermId: string | null;
+  /** Suppresses persistence while loading, switching vaults or locking. */
+  workspaceReady: boolean;
+  workspaceAvailable: boolean;
+  namedWorkspaces: NamedWorkspace[];
+  saveNamedWorkspace: (name: string, id?: string) => WorkspaceEditError | null;
+  renameNamedWorkspace: (id: string, name: string) => WorkspaceEditError | null;
+  deleteNamedWorkspace: (id: string) => void;
+  openNamedWorkspace: (id: string) => Promise<void>;
   /** Bumped by the "new tab" keyboard shortcut so the tab strip opens its inline
    *  host picker (the strip owns the picker's open state, this just pokes it). */
   newTabNonce: number;
@@ -836,6 +863,9 @@ export const useApp = create<AppStore>((set, get) => ({
   fleetSelection: [],
   terminals: [],
   activeTermId: null,
+  workspaceReady: false,
+  workspaceAvailable: false,
+  namedWorkspaces: [],
   newTabNonce: 0,
   draggingTabId: null,
   termZoom: lsTermZoom(),
@@ -1084,6 +1114,10 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   reloadVaults: async () => {
+    if (switchingEpoch === workspaceEpoch) return;
+    const epoch = workspaceEpoch;
+    await workspace.load();
+    if (!get().unlocked || epoch !== workspaceEpoch) return;
     let vaults = await api.listVaults();
     // A freshly created instance has no vaults yet — make one so the user can
     // immediately add hosts/keys/passwords/notes (all live inside a vault).
@@ -1095,9 +1129,11 @@ export const useApp = create<AppStore>((set, get) => ({
         logWarn(`reloadVaults: default vault creation failed: ${apiErrorMessage(e)}`);
       }
     }
+    if (!get().unlocked || epoch !== workspaceEpoch) return;
     set({ vaults });
     const cur = get().vaultId;
-    const next = cur && vaults.some((v) => v.vaultId === cur) ? cur : vaults[0]?.vaultId ?? null;
+    const preferred = cur ?? workspace.activeVaultId;
+    const next = preferred && vaults.some((v) => v.vaultId === preferred) ? preferred : vaults[0]?.vaultId ?? null;
     if (next && next !== cur) {
       await get().setVault(next);
     } else if (next) {
@@ -1113,20 +1149,30 @@ export const useApp = create<AppStore>((set, get) => ({
     // the backend session/tunnel/broadcast is the only thing that actually frees the
     // PTY — clearing the arrays alone would orphan them — so close first, then clear.
     const teardownAndSwitch = async () => {
+      const epoch = ++workspaceEpoch;
+      switchingEpoch = epoch;
+      set({ workspaceReady: false });
       const { terminals, tunnels, broadcasts, sftpSessions } = get();
       cancelAllTransfers();
-      await Promise.allSettled([
-        api.sftpInvalidate(),
-        ...terminals
-          .flatMap((t) => t.panes)
-          .filter((p) => p.sessionId)
-          .map((p) => api.sessionClose(p.sessionId as string)),
-        ...tunnels.map((t) => api.tunnelClose(t.id)),
-        ...broadcasts.map((bid) => api.broadcastClose(bid)),
-        ...sftpSessions.map((s) => api.sftpClose(s.id)),
-      ]);
+      try {
+        await Promise.allSettled([
+          api.sftpInvalidate(),
+          ...terminals
+            .flatMap((t) => t.panes)
+            .filter((p) => p.sessionId)
+            .map((p) => api.sessionClose(p.sessionId as string)),
+          ...tunnels.map((t) => api.tunnelClose(t.id)),
+          ...broadcasts.map((bid) => api.broadcastClose(bid)),
+          ...sftpSessions.map((s) => api.sftpClose(s.id)),
+        ]);
+      } finally {
+        // A teardown abandoned by a lock must not leave reloads blocked after unlock.
+        if (switchingEpoch === epoch) switchingEpoch = -1;
+      }
+      if (!get().unlocked || epoch !== workspaceEpoch) return;
       set({
         vaultId: id,
+        namedWorkspaces: [],
         hostFilter: HOST_FILTER_ALL,
         fleetSelection: [], // profile ids belong to the outgoing vault
         terminals: [],
@@ -1141,7 +1187,8 @@ export const useApp = create<AppStore>((set, get) => ({
 
     const s = get();
     const openCount =
-      s.terminals.length + s.tunnels.length + s.broadcasts.length + s.sftpSessions.length;
+      s.terminals.filter((tab) => tab.panes.some((pane) => pane.status !== "restored")).length +
+      s.tunnels.length + s.broadcasts.length + s.sftpSessions.length;
     // Only prompt for a genuine user switch away from a still-valid vault. When the
     // current vault is gone (deleted) or unset (boot) the switch is forced/programmatic
     // (reloadVaults only calls setVault when next!==cur, i.e. cur was removed), so we
@@ -1166,24 +1213,52 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   reloadVault: async () => {
+    // The outgoing vault remains selected until its sessions close. A refresh
+    // here would restore its tabs and enable saves before the new vault loads.
+    if (switchingEpoch === workspaceEpoch) return;
+    const epoch = workspaceEpoch;
     const vaultId = get().vaultId;
     if (!vaultId) return;
     set({ loading: true });
     try {
+      if (!get().workspaceReady) await workspace.load();
+      if (!get().unlocked || epoch !== workspaceEpoch || get().vaultId !== vaultId) return;
       const [hosts, groups, items, knownHosts] = await Promise.all([
         api.listConnections(vaultId),
         api.listGroups(vaultId),
         api.listItems(vaultId),
         api.listKnownHosts(),
       ]);
+      if (!get().unlocked || epoch !== workspaceEpoch || get().vaultId !== vaultId) return;
       set({ hosts, groups, items, knownHosts, loading: false });
+      if (!get().workspaceReady) {
+        const restored = restoreWorkspace(workspace.forVault(vaultId), hosts,
+          osPlatform() !== "ios" && osPlatform() !== "android");
+        // A user may open a fresh tab while vault data loads. Keep that action.
+        const current = get();
+        set({
+          terminals: [...restored.terminals, ...current.terminals],
+          activeTermId: current.activeTermId ?? restored.activeTermId,
+          workspaceReady: true,
+          workspaceAvailable: workspace.available,
+          namedWorkspaces: workspace.namedForVault(vaultId),
+        });
+        if (restored.removed) toast(i18n.t("terminal.workspaceRemoved", { count: restored.removed }), "info");
+      }
     } catch (e) {
+      if (epoch !== workspaceEpoch || get().vaultId !== vaultId) return;
       logWarn(`reloadVault: failed to load vault data: ${apiErrorMessage(e)}`);
       set({ loading: false });
     }
   },
 
   lockInstance: async (reason = "manual") => {
+    workspaceEpoch++;
+    set({ workspaceReady: false, workspaceAvailable: false, namedWorkspaces: [], modal: null });
+    // Flush the latest layout while SQLCipher is open. A stalled bridge must
+    // never delay a security lock indefinitely.
+    await Promise.race([workspace.flush(), new Promise<void>((resolve) => setTimeout(resolve, 500))]);
+    workspace.clear();
     cancelAllTransfers();
     try {
       await api.lock();
@@ -1221,6 +1296,79 @@ export const useApp = create<AppStore>((set, get) => ({
       serverStatus: null,
       syncStatus: { syncing: false, lastReport: null, lastError: null, lastSyncAt: null },
     });
+  },
+
+  saveNamedWorkspace: (name, id) => {
+    const s = get();
+    if (!s.unlocked || !s.workspaceReady || !s.vaultId) return "unavailable";
+    const error = workspace.saveNamed(s.vaultId, name, s.terminals, s.activeTermId, id);
+    if (!error) set({ namedWorkspaces: workspace.namedForVault(s.vaultId) });
+    return error;
+  },
+
+  renameNamedWorkspace: (id, name) => {
+    const s = get();
+    if (!s.unlocked || !s.workspaceReady || !s.vaultId) return "unavailable";
+    const error = workspace.renameNamed(s.vaultId, id, name);
+    if (!error) set({ namedWorkspaces: workspace.namedForVault(s.vaultId) });
+    return error;
+  },
+
+  deleteNamedWorkspace: (id) => {
+    const s = get();
+    if (!s.unlocked || !s.workspaceReady || !s.vaultId) return;
+    workspace.deleteNamed(s.vaultId, id);
+    set({ namedWorkspaces: workspace.namedForVault(s.vaultId) });
+  },
+
+  openNamedWorkspace: async (id) => {
+    const initial = get();
+    const vaultId = initial.vaultId;
+    const requestedEpoch = workspaceEpoch;
+    if (!initial.unlocked || !initial.workspaceReady || !vaultId) return;
+    const saved = workspace.namedForVault(vaultId).find((entry) => entry.id === id);
+    if (!saved) return;
+    const apply = async () => {
+      const current = get();
+      if (!current.unlocked || !current.workspaceReady || current.vaultId !== vaultId ||
+          requestedEpoch !== workspaceEpoch) return;
+      const entry = workspace.namedForVault(vaultId).find((item) => item.id === id);
+      if (!entry) return;
+      const restored = restoreWorkspace(entry.layout, current.hosts,
+        osPlatform() !== "ios" && osPlatform() !== "android");
+      if (restored.removed) toast(i18n.t("terminal.workspaceRemoved", { count: restored.removed }), "info");
+      // A deleted host must not turn an Open action into closing every current tab.
+      if (!restored.terminals.length) {
+        toast(i18n.t("terminal.workspaces.noTargets"), "warn");
+        return;
+      }
+      // The vault stays selected, so host reloads keep running while sessions close;
+      // only a lock or vault switch (a new epoch) or a newer open cancels this one.
+      const token = ++openToken;
+      set({ modal: null });
+      const closed = await Promise.allSettled(current.terminals.flatMap((tab) => tab.panes)
+        .filter((pane) => pane.sessionId).map((pane) => api.sessionClose(pane.sessionId!)));
+      if (!get().unlocked || requestedEpoch !== workspaceEpoch || token !== openToken ||
+          get().vaultId !== vaultId) return;
+      if (closed.some((result) => result.status === "rejected")) {
+        toast(i18n.t("terminal.workspaces.closeFailed"), "warn");
+        return;
+      }
+      set({ terminals: restored.terminals, activeTermId: restored.activeTermId });
+    };
+    if (initial.terminals.length) {
+      set({ modal: null });
+      get().setConfirm({
+        title: i18n.t("terminal.workspaces.openTitle", { name: saved.name }),
+        body: i18n.t("terminal.workspaces.openBody"),
+        confirmLabel: i18n.t("terminal.workspaces.open"),
+        icon: "terminal",
+        danger: true,
+        onConfirm: () => { void apply(); },
+      });
+    } else {
+      await apply();
+    }
   },
 
   reloadServerStatus: async () => {
@@ -1763,6 +1911,16 @@ export const useApp = create<AppStore>((set, get) => ({
     set((s) => {
       // Look the pane up by its unique id (a merge can move it to another tab).
       const pane = s.terminals.flatMap((t) => t.panes).find((p) => p.id === paneId);
+      let target = pane?.target;
+      if (pane?.status === "restored" && target?.kind === "ssh") {
+        const profileId = target.profile.profileId;
+        const profile = s.hosts.find((host) => host.profileId === profileId);
+        if (!profile) {
+          toast(i18n.t("terminal.workspaceRemoved", { count: 1 }), "warn");
+          return {};
+        }
+        target = { kind: "ssh", profile };
+      }
       // Evict any still-registered backend session so a reconnect never orphans a
       // LiveSession in the core's session map (idempotent if already closed).
       if (pane?.sessionId) void api.sessionClose(pane.sessionId).catch(() => {});
@@ -1776,6 +1934,7 @@ export const useApp = create<AppStore>((set, get) => ({
                     ? p
                     : {
                         ...p,
+                        target: target ?? p.target,
                         status: "connecting" as const,
                         sessionId: null,
                         error: undefined,
@@ -1879,4 +2038,11 @@ onVaultMutated((vaultId) => {
   const v = st.vaults.find((x) => x.vaultId === vaultId);
   if (v && v.syncTarget !== "cloud") return;
   runAutoSync();
+});
+
+useApp.subscribe((state, previous) => {
+  if (!state.unlocked || !state.workspaceReady || !state.vaultId) return;
+  if (state.terminals === previous.terminals && state.activeTermId === previous.activeTermId &&
+      state.workspaceReady === previous.workspaceReady && state.vaults === previous.vaults) return;
+  workspace.save(state.vaultId, state.terminals, state.activeTermId, state.vaults.map((v) => v.vaultId));
 });

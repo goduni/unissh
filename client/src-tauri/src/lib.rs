@@ -252,6 +252,8 @@ pub fn run() {
             #[cfg(desktop)] mcp::mcp_search_commands,
             // account / instance
             commands::instance_status,
+            commands::terminal_workspace_load,
+            commands::terminal_workspace_save,
             commands::reset_partial_instance,
             commands::reset_instance,
             commands::log_dir,

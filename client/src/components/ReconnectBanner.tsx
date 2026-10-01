@@ -21,7 +21,9 @@ export function ReconnectBanner({
   const p = usePalette();
   const { t } = useTranslation();
   const isError = pane.status === "error";
-  const message = isError ? pane.error || t("terminal.status.closed") : t("terminal.status.closed");
+  const restored = pane.status === "restored";
+  const message = restored ? t("terminal.workspaceRestored")
+    : isError ? pane.error || t("terminal.status.closed") : t("terminal.status.closed");
   const float = variant === "float";
   // A local shell did not lose a connection — it exited, or never started. The
   // action is the same one (re-open in this pane, keeping the scrollback); the
@@ -42,8 +44,8 @@ export function ReconnectBanner({
   };
   const stripStyle: CSSProperties = {
     flexShrink: 0,
-    background: rgba(p.red, 0.12),
-    borderTop: `1px solid ${rgba(p.red, 0.3)}`,
+    background: restored ? p.bg2 : rgba(p.red, 0.12),
+    borderTop: `1px solid ${restored ? p.line : rgba(p.red, 0.3)}`,
   };
 
   return (
@@ -56,7 +58,7 @@ export function ReconnectBanner({
         ...(float ? floatStyle : stripStyle),
       }}
     >
-      <Icon name="alert" size={16} color={isError || !float ? p.red : p.txt3} />
+      <Icon name={restored ? "terminal" : "alert"} size={16} color={isError || (!float && !restored) ? p.red : p.txt2} />
       <span
         style={{
           flex: 1,
@@ -65,7 +67,7 @@ export function ReconnectBanner({
           color: p.txt2,
           overflow: "hidden",
           textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
+          whiteSpace: restored ? "normal" : "nowrap",
         }}
       >
         {message}
@@ -78,8 +80,8 @@ export function ReconnectBanner({
           {t("nav.settings")}
         </Btn>
       )}
-      <Btn size="sm" icon="refresh" onClick={onReconnect}>
-        {t(local ? "terminal.restart" : "terminal.reconnect")}
+      <Btn size="sm" icon={restored ? "play" : "refresh"} onClick={onReconnect}>
+        {t(restored ? (local ? "terminal.startShell" : "terminal.connect") : (local ? "terminal.restart" : "terminal.reconnect"))}
       </Btn>
     </div>
   );
