@@ -100,9 +100,9 @@ describe("workspace persistence lifecycle", () => {
     const save = vi.fn().mockImplementationOnce(() => first.promise).mockResolvedValue(undefined);
     const storage = new WorkspaceStorage({ load: async () => [7, null], save, error: vi.fn() });
     await storage.load();
-    storage.save("v", tabs(), "tab1", ["v"]);
-    storage.save("v", tabs(), null, ["v"]);
-    storage.save("v", [], null, ["v"]);
+    storage.save("v", tabs(), "tab1");
+    storage.save("v", tabs(), null);
+    storage.save("v", [], null);
     expect(save).toHaveBeenCalledTimes(1);
     first.resolve();
     await storage.flush();
@@ -115,13 +115,15 @@ describe("workspace persistence lifecycle", () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const storage = new WorkspaceStorage({ load: async () => [7, null], save, error: vi.fn() });
     await storage.load();
-    storage.save("first", tabs(), "tab1", ["first", "second"]);
-    storage.save("second", [], null, ["first", "second"]);
+    storage.save("first", tabs(), "tab1");
+    storage.save("second", [], null);
     await storage.flush();
     expect(storage.activeVaultId).toBe("second");
     expect(restoreWorkspace(storage.forVault("first"), [host], true).terminals).toHaveLength(1);
-    storage.save("second", [], null, ["second"]);
+    // A vault missing from the list may be restored; only a purge forgets it.
+    storage.forgetVault("first");
     expect(storage.forVault("first")).toBeUndefined();
+    expect(storage.forVault("second")).toBeDefined();
   });
 
   it("ignores a late load after lock and does not overwrite unreadable or future data", async () => {
@@ -132,16 +134,29 @@ describe("workspace persistence lifecycle", () => {
     storage.clear();
     read.resolve([7, JSON.stringify({ version: 1, activeVaultId: "old", vaults: {} })]);
     await loading;
-    storage.save("new", [], null, ["new"]);
+    storage.save("new", [], null);
     expect(storage.activeVaultId).toBeNull();
     expect(io.save).not.toHaveBeenCalled();
-    for (const text of ["invalid", '{"version":3,"vaults":{}}']) {
-      const other = new WorkspaceStorage({ ...io, load: async () => [7, text] });
-      await other.load();
-      other.save("v", [], null, ["v"]);
-    }
-    expect(io.error).toHaveBeenCalledTimes(2);
+    const future = new WorkspaceStorage({ ...io, load: async () => [7, '{"version":3,"vaults":{}}'] });
+    await future.load();
+    future.save("v", [], null);
+    expect(io.error).toHaveBeenCalledExactlyOnceWith("failed");
     expect(io.save).not.toHaveBeenCalled();
+  });
+
+  it("resets an unreadable layout instead of disabling persistence", async () => {
+    for (const text of ["invalid", '{"version":2,"vaults":[]}']) {
+      const io = { load: async (): Promise<[number, string | null]> => [7, text],
+        save: vi.fn().mockResolvedValue(undefined), error: vi.fn() };
+      const storage = new WorkspaceStorage(io);
+      await storage.load();
+      expect(io.error).toHaveBeenCalledExactlyOnceWith("reset");
+      expect(storage.available).toBe(true);
+      storage.save("v", tabs(), "tab1");
+      await storage.flush();
+      expect(io.save).toHaveBeenCalledOnce();
+      expect(JSON.parse(io.save.mock.calls[0][1]).version).toBe(2);
+    }
   });
 
   it("reports failed writes and retries on the next layout change", async () => {
@@ -149,10 +164,10 @@ describe("workspace persistence lifecycle", () => {
     const error = vi.fn();
     const storage = new WorkspaceStorage({ load: async () => [7, null], save, error });
     await storage.load();
-    storage.save("v", [], null, ["v"]);
+    storage.save("v", [], null);
     await storage.flush();
     expect(error).toHaveBeenCalledOnce();
-    storage.save("v", [], null, ["v"]);
+    storage.save("v", [], null);
     await storage.flush();
     expect(save).toHaveBeenCalledTimes(2);
   });
@@ -167,7 +182,7 @@ describe("named workspaces", () => {
     await storage.load();
     expect(restoreWorkspace(storage.forVault("v"), [host], true).terminals).toHaveLength(1);
     expect(storage.saveNamed("v", " Production ", tabs(), "tab1")).toBeNull();
-    storage.save("v", [], null, ["v"]);
+    storage.save("v", [], null);
     await storage.flush();
     expect(JSON.parse(document).version).toBe(2);
     const reloaded = new WorkspaceStorage(io);
@@ -200,7 +215,9 @@ describe("named workspaces", () => {
     storage.deleteNamed("one", id);
     expect(storage.namedForVault("one")).toEqual([]);
     expect(storage.namedForVault("two")).toHaveLength(1);
-    storage.save("one", tabs(), "tab1", ["one"]);
+    storage.save("one", tabs(), "tab1");
+    expect(storage.namedForVault("two")).toHaveLength(1);
+    storage.forgetVault("two");
     expect(storage.namedForVault("two")).toEqual([]);
   });
 

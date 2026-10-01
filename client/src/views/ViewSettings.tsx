@@ -41,7 +41,7 @@ import { exportPath } from "@/support/paths";
 import { ServerVaultsSection } from "./ServerVaultsSection";
 import { Modal } from "@/components/Modal";
 import type { IconName } from "@/components/primitives";
-import { useApp } from "@/store/app";
+import { forgetTerminalWorkspace, useApp } from "@/store/app";
 import { localShellSettings, setLocalShellSetting, useLocalMachine } from "@/store/localShell";
 import { useCtx } from "@/store/ctx";
 import { toast } from "@/store/toast";
@@ -1863,6 +1863,8 @@ function SettingsVaults() {
         await guard(async () => {
           await api.purgeVault(v.vaultId);
           await useApp.getState().reloadVaults();
+          // After the switch away, so a late layout save cannot re-add it.
+          forgetTerminalWorkspace(v.vaultId);
           toast(t("vault.purged"), "ok");
         });
       },
