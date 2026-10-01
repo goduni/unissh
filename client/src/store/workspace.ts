@@ -125,8 +125,23 @@ export function restoreWorkspace(value: unknown, hosts: ConnectionProfile[], all
   return { terminals, activeTermId, removed };
 }
 
+type Parsed = { version: 1 | 2; activeVaultId: string | null; vaults: Record<string, unknown>; named?: unknown };
+
+/** `future` is a newer format this build must not overwrite; `null` is unreadable. */
+function parseDocument(text: string | null): Parsed | "future" | null {
+  if (text === null) return { version: 1, activeVaultId: null, vaults: {} };
+  let doc: unknown;
+  try { doc = JSON.parse(text); } catch { return null; }
+  if (object(doc) && typeof doc.version === "number" && doc.version > 2) return "future";
+  if (!object(doc) || (doc.version !== 1 && doc.version !== 2) || !object(doc.vaults) ||
+      (doc.version === 2 && !object(doc.named)) ||
+      (doc.activeVaultId !== null && typeof doc.activeVaultId !== "string")) return null;
+  return doc as Parsed;
+}
+
 /** Coalesce changes while a write is in flight and serialize writes so an older
- * layout cannot win. Loading failure leaves persistence disabled for this unlock. */
+ * layout cannot win. A failed read or a newer format leaves persistence disabled
+ * for this unlock; an unreadable layout is replaced on the next save. */
 export class WorkspaceStorage {
   private document: WorkspaceDocument | null = null;
   private loading: Promise<void> | null = null;
@@ -140,11 +155,11 @@ export class WorkspaceStorage {
   constructor(private io: {
     load: () => Promise<[number, string | null]>;
     save: (epoch: number, document: string) => Promise<void>;
-    error: () => void;
+    error: (kind: "failed" | "reset") => void;
   }) {}
 
   private reportError(): void {
-    if (!this.warned) { this.warned = true; this.io.error(); }
+    if (!this.warned) { this.warned = true; this.io.error("failed"); }
   }
 
   async load(): Promise<void> {
@@ -152,22 +167,27 @@ export class WorkspaceStorage {
     if (this.loading) return this.loading;
     const epoch = this.epoch;
     this.loading = (async () => {
-      try {
-        const [nativeEpoch, text] = await this.io.load();
-        const doc: unknown = text === null ? { version: 1, activeVaultId: null, vaults: {} } : JSON.parse(text);
-        if (!object(doc) || (doc.version !== 1 && doc.version !== 2) || !object(doc.vaults) ||
-            (doc.version === 2 && !object(doc.named)) ||
-            (doc.activeVaultId !== null && typeof doc.activeVaultId !== "string")) throw new Error("Invalid workspace");
-        if (epoch !== this.epoch) return;
-        this.nativeEpoch = nativeEpoch;
-        // Version 1 held only the automatic per-vault layout. Upgrade in memory;
-        // the next successful write persists version 2 without losing those tabs.
-        this.document = { version: 2, activeVaultId: doc.activeVaultId, vaults: doc.vaults,
-          named: doc.version === 2 && object(doc.named) ? doc.named : {} };
-        this.last = text;
-      } catch {
+      let loaded: [number, string | null];
+      try { loaded = await this.io.load(); } catch {
         if (epoch === this.epoch) this.reportError();
+        return;
       }
+      if (epoch !== this.epoch) return;
+      const [nativeEpoch, text] = loaded;
+      const doc = parseDocument(text);
+      if (doc === "future") { this.reportError(); return; }
+      this.nativeEpoch = nativeEpoch;
+      if (!doc) {
+        // A corrupt layout must not disable persistence on every unlock.
+        this.document = { version: 2, activeVaultId: null, vaults: {}, named: {} };
+        this.io.error("reset");
+        return;
+      }
+      // Version 1 held only the automatic per-vault layout. Upgrade in memory;
+      // the next successful write persists version 2 without losing those tabs.
+      this.document = { version: 2, activeVaultId: doc.activeVaultId, vaults: doc.vaults,
+        named: doc.version === 2 && object(doc.named) ? doc.named : {} };
+      this.last = text;
     })();
     return this.loading;
   }
@@ -228,13 +248,21 @@ export class WorkspaceStorage {
     this.queueWrite();
   }
 
-  save(vaultId: string, tabs: TerminalTab[], activeId: string | null, vaultIds: string[]): void {
+  save(vaultId: string, tabs: TerminalTab[], activeId: string | null): void {
     if (!this.document) return;
-    // Prune deleted vaults, including their labels and local shell paths.
-    const vaults = Object.fromEntries(Object.entries(this.document.vaults).filter(([id]) => vaultIds.includes(id)));
-    const named = Object.fromEntries(Object.entries(this.document.named).filter(([id]) => vaultIds.includes(id)));
-    this.document = { version: 2, activeVaultId: vaultId, named,
-      vaults: { ...vaults, [vaultId]: snapshotWorkspace(tabs, activeId) } };
+    // Vaults missing from the list are kept: a deleted vault can be restored.
+    this.document = { ...this.document, activeVaultId: vaultId,
+      vaults: { ...this.document.vaults, [vaultId]: snapshotWorkspace(tabs, activeId) } };
+    this.queueWrite();
+  }
+
+  /** Drop a purged vault's layouts, including their labels and local shell paths. */
+  forgetVault(vaultId: string): void {
+    if (!this.document || !(vaultId in this.document.vaults || vaultId in this.document.named)) return;
+    const { [vaultId]: _layout, ...vaults } = this.document.vaults;
+    const { [vaultId]: _named, ...named } = this.document.named;
+    this.document = { ...this.document, vaults, named,
+      activeVaultId: this.document.activeVaultId === vaultId ? null : this.document.activeVaultId };
     this.queueWrite();
   }
 

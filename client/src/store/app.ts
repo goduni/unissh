@@ -37,9 +37,10 @@ import { toast } from "./toast";
 const workspace = new WorkspaceStorage({
   load: () => api.terminalWorkspaceLoad(),
   save: (epoch, document) => api.terminalWorkspaceSave(epoch, document),
-  error: () => {
-    logWarn("Terminal workspace could not be loaded or saved");
-    toast(i18n.t("terminal.workspaceFailed"), "warn");
+  error: (kind) => {
+    logWarn(kind === "reset" ? "Terminal workspace was unreadable and has been reset"
+      : "Terminal workspace could not be loaded or saved");
+    toast(i18n.t(kind === "reset" ? "terminal.workspaceReset" : "terminal.workspaceFailed"), "warn");
   },
 });
 let workspaceEpoch = 0;
@@ -49,6 +50,7 @@ let switchingEpoch = -1;
 // Latest named-workspace open; a newer open or epoch cancels an older one.
 let openToken = 0;
 export const flushTerminalWorkspace = () => workspace.flush();
+export const forgetTerminalWorkspace = (vaultId: string) => workspace.forgetVault(vaultId);
 
 /** What closed the vault. `manual` is the lock action or the ⌘L shortcut;
  *  `idle` is the inactivity timer; the other two come from the OS telling us
@@ -2043,6 +2045,6 @@ onVaultMutated((vaultId) => {
 useApp.subscribe((state, previous) => {
   if (!state.unlocked || !state.workspaceReady || !state.vaultId) return;
   if (state.terminals === previous.terminals && state.activeTermId === previous.activeTermId &&
-      state.workspaceReady === previous.workspaceReady && state.vaults === previous.vaults) return;
-  workspace.save(state.vaultId, state.terminals, state.activeTermId, state.vaults.map((v) => v.vaultId));
+      state.workspaceReady === previous.workspaceReady) return;
+  workspace.save(state.vaultId, state.terminals, state.activeTermId);
 });

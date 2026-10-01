@@ -1748,6 +1748,7 @@ export const en = {
     "startShell": "Start shell",
     "workspaceRestored": "Layout restored. Start this session when ready.",
     "workspaceFailed": "Could not load or save the terminal layout. Changes may not survive a restart.",
+    "workspaceReset": "The saved terminal layout was unreadable and has been reset.",
     "workspaceRemoved": "Skipped unavailable hosts or shells in the saved layout: {{count}}.",
     "workspaces": {
       "title": "Workspaces",
