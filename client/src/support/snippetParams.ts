@@ -24,6 +24,10 @@ export const BUILTIN_PARAMS = ["host", "user", "port"] as const;
 export type BuiltinParam = (typeof BUILTIN_PARAMS)[number];
 export type BuiltinValues = Partial<Record<BuiltinParam, string>>;
 
+export function isBuiltinParam(name: string): name is BuiltinParam {
+  return (BUILTIN_PARAMS as readonly string[]).includes(name);
+}
+
 /** The built-ins a host answers. None for a local shell (null), and no `user`
  *  when the profile leaves it empty (an identity-bound login) — those are
  *  then asked like any other parameter. */
@@ -80,17 +84,16 @@ export function parseParams(command: string): SnippetParam[] {
 /** Split a parameter list into what the form asks and what the target already
  *  answers. A built-in with a value shadows a user parameter of the same name;
  *  one without a value (a local terminal) is asked like any other. */
-export function splitBuiltins(
+function splitBuiltins(
   params: SnippetParam[],
   builtins: BuiltinValues,
 ): { ask: SnippetParam[]; fromHost: { name: BuiltinParam; value: string }[] } {
   const ask: SnippetParam[] = [];
   const fromHost: { name: BuiltinParam; value: string }[] = [];
   for (const prm of params) {
-    const value = (BUILTIN_PARAMS as readonly string[]).includes(prm.name)
-      ? builtins[prm.name as BuiltinParam]
-      : undefined;
-    if (value !== undefined) fromHost.push({ name: prm.name as BuiltinParam, value });
+    const name = prm.name;
+    const value = isBuiltinParam(name) ? builtins[name] : undefined;
+    if (isBuiltinParam(name) && value !== undefined) fromHost.push({ name, value });
     else ask.push(prm);
   }
   return { ask, fromHost };
@@ -117,6 +120,17 @@ export function resolveCommand(
   return substituteParams(command, { ...userValues, ...builtins });
 }
 
+/** What running a snippet on one target needs: the form's fields, the
+ *  built-ins shown as answered, and — when nothing is left to ask — the command
+ *  ready to type, so the caller skips the form. */
+export function planSnippet(
+  command: string,
+  builtins: BuiltinValues,
+): { ask: SnippetParam[]; fromHost: { name: BuiltinParam; value: string }[]; ready: string | null } {
+  const { ask, fromHost } = splitBuiltins(parseParams(command), builtins);
+  return { ask, fromHost, ready: ask.length === 0 ? resolveCommand(command, {}, builtins) : null };
+}
+
 /** A Fleet target as the resolver sees it: the key its result is filed under
  *  and the built-ins its profile answers (`builtinsFromProfile`). */
 export interface FleetTarget {
@@ -132,8 +146,8 @@ export function splitFleetParams(
   command: string,
   targets: FleetTarget[],
 ): { ask: SnippetParam[]; fromHost: { name: BuiltinParam }[] } {
-  const everyHost = (BUILTIN_PARAMS as readonly string[]).filter(
-    (b) => targets.length > 0 && targets.every((tg) => tg.builtins[b as BuiltinParam] !== undefined),
+  const everyHost: string[] = BUILTIN_PARAMS.filter(
+    (b) => targets.length > 0 && targets.every((tg) => tg.builtins[b] !== undefined),
   );
   const params = parseParams(command);
   return {

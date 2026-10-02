@@ -15,7 +15,7 @@ import { Modal } from "@/components/Modal";
 import { toast } from "@/store/toast";
 import { useApp } from "@/store/app";
 import { useNarrow } from "@/store/responsive";
-import { BUILTIN_PARAMS, parseParams } from "@/support/snippetParams";
+import { isBuiltinParam, parseParams } from "@/support/snippetParams";
 
 /** A stable id from the label, so a hand-picked name stays readable in the vault
  *  while still being unique enough not to collide with an existing snippet. */
@@ -133,7 +133,7 @@ function Editor({
                 <span key={prm.name} style={{ fontFamily: MONO, color: p.txt, overflowWrap: "anywhere" }}>
                   {prm.name}
                   {prm.default !== null && <span style={{ color: p.txt3 }}> = {prm.default || '""'}</span>}
-                  {(BUILTIN_PARAMS as readonly string[]).includes(prm.name) && (
+                  {isBuiltinParam(prm.name) && (
                     <span style={{ fontFamily: UI, color: p.txt3 }}> · {t("snippets.paramBuiltin")}</span>
                   )}
                 </span>

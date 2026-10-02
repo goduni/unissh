@@ -14,8 +14,8 @@ import { useTranslation, tDyn } from "@/i18n";
 import {
   builtinsFromProfile,
   parseParams,
+  planSnippet,
   resolveCommand,
-  splitBuiltins,
   type BuiltinValues,
 } from "@/support/snippetParams";
 import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
@@ -208,7 +208,7 @@ export function CommandPalette() {
 
   let form: React.ReactNode = null;
   if (pending) {
-    const { ask, fromHost } = splitBuiltins(parseParams(pending.command), pending.builtins);
+    const { ask, fromHost } = planSnippet(pending.command, pending.builtins);
     form = (
       <SnippetParamsForm
         label={pending.label}
@@ -245,9 +245,9 @@ export function CommandPalette() {
       // is no form: the command (escapes resolved, built-ins filled in) goes
       // straight into the pane — for a plain command, byte for byte.
       const builtins = builtinsFromProfile(paneProfile(pane));
-      const { ask } = splitBuiltins(parseParams(it.command), builtins);
-      if (ask.length === 0) {
-        typeIntoPane(pane.sessionId, resolveCommand(it.command, {}, builtins));
+      const { ready } = planSnippet(it.command, builtins);
+      if (ready !== null) {
+        typeIntoPane(pane.sessionId, ready);
         return;
       }
       setPending({ label: it.label, command: it.command, sessionId: pane.sessionId, builtins });

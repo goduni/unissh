@@ -39,9 +39,8 @@ import { TermTabStrip } from "@/views/TermTabStrip";
 import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
 import {
   builtinsFromProfile,
-  parseParams,
+  planSnippet,
   resolveCommand,
-  splitBuiltins,
   type BuiltinParam,
   type SnippetParam,
 } from "@/support/snippetParams";
@@ -327,13 +326,28 @@ function TerminalPane({
   // Hover state so a split pane can offer an obvious close (✕) affordance.
   const [paneHover, setPaneHover] = useState(false);
   // The parameter form for the startup snippet being asked about, if any. The
-  // startup loop awaits `resolve`: the answers, or null when cancelled.
+  // startup loop awaits the promise whose resolver sits in the ref: the
+  // answers, or null when cancelled — or when the session it was for closed or
+  // was replaced, so a form for a dead session can never write anything.
   const [startupAsk, setStartupAsk] = useState<{
     label: string;
     ask: SnippetParam[];
     fromHost: { name: BuiltinParam; value: string }[];
-    resolve: (values: Record<string, string> | null) => void;
   } | null>(null);
+  const startupResolveRef = useRef<((values: Record<string, string> | null) => void) | null>(null);
+  const settleStartupAsk = (values: Record<string, string> | null) => {
+    const resolve = startupResolveRef.current;
+    startupResolveRef.current = null;
+    setStartupAsk(null);
+    resolve?.(values);
+  };
+  const askStartup = (form: NonNullable<typeof startupAsk>) => {
+    settleStartupAsk(null);
+    return new Promise<Record<string, string> | null>((resolve) => {
+      startupResolveRef.current = resolve;
+      setStartupAsk(form);
+    });
+  };
 
   /** Types a host's startup snippets into a freshly opened session.
  *
@@ -345,7 +359,8 @@ function TerminalPane({
  * A snippet with `{{parameters}}` the host cannot answer asks for them in the
  * shared form before it is typed; cancelling skips that snippet and the rest
  * still run. Every command goes through `resolveCommand`, which leaves
- * brace-free text unchanged, so parameterless snippets never ask.
+ * brace-free text unchanged, so parameterless snippets never ask. Once the
+ * session is no longer this pane's (`alive` false), nothing more is typed.
  *
  * Failures are swallowed on purpose: a missing snippet (deleted on another
  * device, not yet synced) must not turn a working connection into an error.
@@ -354,6 +369,7 @@ async function runStartupSnippets(
   sessionId: string,
   profile: ConnectionProfile | null,
   vaultId: string,
+  alive: () => boolean,
 ) {
   const ids = profile?.startupSnippetIds ?? [];
   if (!ids.length || !vaultId) return;
@@ -365,15 +381,16 @@ async function runStartupSnippets(
     for (const id of ids) {
       const snippet = byId.get(id);
       if (!snippet) continue;
-      const { ask, fromHost } = splitBuiltins(parseParams(snippet.command), builtins);
-      const values =
-        ask.length === 0
-          ? {}
-          : await new Promise<Record<string, string> | null>((resolve) =>
-              setStartupAsk({ label: snippet.label, ask, fromHost, resolve }),
-            );
-      if (!values) continue;
-      const command = resolveCommand(snippet.command, values, builtins);
+      const { ask, fromHost, ready } = planSnippet(snippet.command, builtins);
+      let command = ready;
+      if (command === null) {
+        // The host is named too: several panes may be connecting at once.
+        const label = [profile?.label, snippet.label].filter(Boolean).join(" · ");
+        const values = await askStartup({ label, ask, fromHost });
+        if (values) command = resolveCommand(snippet.command, values, builtins);
+      }
+      if (!alive()) return;
+      if (command === null) continue;
       await api.sessionWrite(sessionId, Array.from(enc.encode(command + "\n")));
     }
   } catch {
@@ -879,7 +896,7 @@ async function runStartupSnippets(
         if (target.kind === "local") return;
         // Refresh the host's "recently connected" timestamp on every (re)connect.
         useApp.getState().markConnected(target.profile.profileId);
-        void runStartupSnippets(id, target.profile, vaultId);
+        void runStartupSnippets(id, target.profile, vaultId, () => !cancelled && sessionIdRef.current === id);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -935,6 +952,8 @@ async function runStartupSnippets(
       });
     return () => {
       cancelled = true;
+      // A startup form left open belongs to the session going away: cancel it.
+      settleStartupAsk(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pw, pane.gen]);
@@ -1269,20 +1288,16 @@ async function runStartupSnippets(
         </div>
       )}
       {needsPassword && pw == null && <PasswordGate onSubmit={(v) => setPw(v)} />}
-      {startupAsk && (
+      {/* Only while its tab is shown, so a background pane's form never sits on
+          the dialog stack catching an Escape meant for a visible dialog. */}
+      {startupAsk && visible && (
         <SnippetParamsForm
           label={startupAsk.label}
           ask={startupAsk.ask}
           fromHost={startupAsk.fromHost}
           submitLabel={t("snippetParams.run")}
-          onCancel={() => {
-            setStartupAsk(null);
-            startupAsk.resolve(null);
-          }}
-          onSubmit={(values) => {
-            setStartupAsk(null);
-            startupAsk.resolve(values);
-          }}
+          onCancel={() => settleStartupAsk(null)}
+          onSubmit={(values) => settleStartupAsk(values)}
         />
       )}
       {/* Host-key mismatch: the security card replaces the reconnect affordance on

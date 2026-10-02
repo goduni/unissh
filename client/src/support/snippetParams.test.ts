@@ -4,8 +4,8 @@ import {
   builtinsFromProfile,
   fleetCommands,
   parseParams,
+  planSnippet,
   resolveCommand,
-  splitBuiltins,
   splitFleetParams,
   substituteParams,
 } from "./snippetParams";
@@ -58,17 +58,19 @@ describe("snippet parameters", () => {
     expect(substituteParams(cmd, { a: "A", b: "B" })).toBe("{{aB}}");
   });
 
-  it("lets a built-in with a value shadow a user parameter, and asks it when there is none", () => {
-    const params = parseParams("ssh {{user:root}}@{{host}} -p {{port}} {{cmd}}");
-    expect(splitBuiltins(params, { host: "web1", user: "deploy", port: "22" })).toEqual({
+  it("lets a built-in with a value shadow a user parameter, asks it when there is none, and is ready when nothing is left", () => {
+    const cmd = "ssh {{user:root}}@{{host}} -p {{port}} {{cmd}}";
+    expect(planSnippet(cmd, { host: "web1", user: "deploy", port: "22" })).toEqual({
       ask: [{ name: "cmd", default: null, position: 39 }],
       fromHost: [
         { name: "user", value: "deploy" },
         { name: "host", value: "web1" },
         { name: "port", value: "22" },
       ],
+      ready: null,
     });
-    expect(splitBuiltins(params, {}).ask.map((p) => p.name)).toEqual(["user", "host", "port", "cmd"]);
+    expect(planSnippet(cmd, {}).ask.map((p) => p.name)).toEqual(["user", "host", "port", "cmd"]);
+    expect(planSnippet("{{user}}@{{host}}", { user: "deploy", host: "web1" }).ready).toBe("deploy@web1");
     expect(resolveCommand("{{user}}@{{host}}", { user: "typed", host: "typed" }, { host: "web1" })).toBe("typed@web1");
   });
 
