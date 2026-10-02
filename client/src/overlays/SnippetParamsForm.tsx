@@ -18,14 +18,18 @@ export function SnippetParamsForm({
   label,
   ask,
   fromHost,
+  submitLabel,
   onSubmit,
   onCancel,
 }: {
   /** The snippet's name, shown as the dialog's subtitle. */
   label: string;
   ask: SnippetParam[];
-  /** Built-ins answered by the target; shown, never asked. */
-  fromHost: { name: BuiltinParam; value: string }[];
+  /** Built-ins answered by the target; shown, never asked. Without a value
+   *  (Fleet) each target answers its own, so the row says "from each host". */
+  fromHost: { name: BuiltinParam; value?: string }[];
+  /** The submit button's label; "Insert" (into a pane) when omitted. */
+  submitLabel?: string;
   onSubmit: (values: Record<string, string>) => void;
   onCancel: () => void;
 }) {
@@ -54,7 +58,7 @@ export function SnippetParamsForm({
           <Btn variant="ghost" onClick={onCancel}>
             {t("common.cancel")}
           </Btn>
-          <Btn onClick={submit}>{t("snippetParams.submit")}</Btn>
+          <Btn onClick={submit}>{submitLabel ?? t("snippetParams.submit")}</Btn>
         </div>
       }
     >
@@ -72,8 +76,12 @@ export function SnippetParamsForm({
       {fromHost.map((b) => (
         <div key={b.name} style={{ display: "flex", alignItems: "baseline", gap: rem(10), fontSize: TEXT.small }}>
           <span style={{ fontWeight: 600, color: p.txt2 }}>{b.name}</span>
-          <span style={{ fontFamily: MONO, color: p.txt, minWidth: 0, overflowWrap: "anywhere" }}>{b.value}</span>
-          <span style={{ color: p.txt3, marginLeft: "auto", whiteSpace: "nowrap" }}>{t("snippetParams.fromHost")}</span>
+          {b.value !== undefined && (
+            <span style={{ fontFamily: MONO, color: p.txt, minWidth: 0, overflowWrap: "anywhere" }}>{b.value}</span>
+          )}
+          <span style={{ color: p.txt3, marginLeft: "auto", whiteSpace: "nowrap" }}>
+            {t(b.value !== undefined ? "snippetParams.fromHost" : "snippetParams.fromEachHost")}
+          </span>
         </div>
       ))}
     </Modal>

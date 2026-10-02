@@ -116,3 +116,38 @@ export function resolveCommand(
 ): string {
   return substituteParams(command, { ...userValues, ...builtins });
 }
+
+/** A Fleet target as the resolver sees it: the key its result is filed under
+ *  and the built-ins its profile answers (`builtinsFromProfile`). */
+export interface FleetTarget {
+  id: string;
+  builtins: BuiltinValues;
+}
+
+/** What a Fleet run asks once, for every target. A built-in that every target
+ *  answers shadows a user parameter of the same name and comes from each host;
+ *  one that some target lacks (a profile with no user) is asked, and the answer
+ *  fills only the targets that lack it — built-ins still win where present. */
+export function splitFleetParams(
+  command: string,
+  targets: FleetTarget[],
+): { ask: SnippetParam[]; fromHost: { name: BuiltinParam }[] } {
+  const everyHost = (BUILTIN_PARAMS as readonly string[]).filter(
+    (b) => targets.length > 0 && targets.every((tg) => tg.builtins[b as BuiltinParam] !== undefined),
+  );
+  const params = parseParams(command);
+  return {
+    ask: params.filter((prm) => !everyHost.includes(prm.name)),
+    fromHost: params.filter((prm) => everyHost.includes(prm.name)).map((prm) => ({ name: prm.name as BuiltinParam })),
+  };
+}
+
+/** The command each target runs, keyed by target id: the user's answers once,
+ *  the built-ins from that target. */
+export function fleetCommands(
+  command: string,
+  userValues: Record<string, string>,
+  targets: FleetTarget[],
+): Record<string, string> {
+  return Object.fromEntries(targets.map((tg) => [tg.id, resolveCommand(command, userValues, tg.builtins)]));
+}
