@@ -407,6 +407,7 @@ export type ApiErrorKind =
   | "notFound"
   | "alreadyExists"
   | "hostKeyMismatch"
+  | "rotationInProgress"
   | "ssh"
   | "server"
   | "other";
@@ -417,6 +418,8 @@ export interface ApiError {
   host?: string;
   port?: number;
   fingerprint?: string;
+  /** `rotationInProgress` variant: the live candidate's item id. */
+  candidateId?: string;
   /** `server` variant: the server's snake_case code + message. */
   code?: string;
   message?: string;
@@ -503,6 +506,8 @@ export function apiErrorMessage(e: unknown): string {
         return i18n.t("error.alreadyExists");
       case "hostKeyMismatch":
         return i18n.t("error.hostKeyMismatch", { host: e.host ?? "", port: e.port ?? 0 });
+      case "rotationInProgress":
+        return i18n.t("error.rotationInProgress", { item: e.candidateId ?? "" });
       case "ssh":
         return e.msg || i18n.t("error.sshGeneric");
       case "server":
@@ -515,6 +520,12 @@ export function apiErrorMessage(e: unknown): string {
 }
 
 // ── cloud server ───────────────────────────────────────────────
+
+/** A staged key rotation in progress on this device (ids only). */
+export interface KeyRotationLink {
+  keyId: string;
+  candidateId: string;
+}
 
 export interface ServerStatus {
   /** Local, stable id of this server link (null when nothing is linked). */

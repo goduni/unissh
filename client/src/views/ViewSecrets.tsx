@@ -17,7 +17,7 @@ import { useCtx } from "@/store/ctx";
 import { useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
-import type { ConnectionProfile, ItemInfo, Identity, ServerStatus, VaultInfo } from "@/bridge/types";
+import type { ConnectionProfile, ItemInfo, Identity, KeyRotationLink, ServerStatus, VaultInfo } from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
 import { isKeyOld, keyUsage, keyUsageCount } from "@/support/keyHygiene";
@@ -204,7 +204,21 @@ function RevealField({
 }
 
 // ── Keys ───────────────────────────────────────────────────────
-function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; first?: boolean }) {
+/** The row's part in a staged rotation (device-local link from the core):
+ *  `original` — this key has a live candidate; `candidate` — this key IS one. */
+type RotationRole = { role: "original" | "candidate"; link: KeyRotationLink };
+
+function KeyRow({
+  item,
+  isMobile,
+  first,
+  rotation,
+}: {
+  item: ItemInfo;
+  isMobile: boolean;
+  first?: boolean;
+  rotation?: RotationRole;
+}) {
   const p = usePalette();
   const { t, i18n } = useTranslation();
   const ctx = useCtx();
@@ -238,7 +252,7 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
     return () => {
       alive = false;
     };
-  }, [vault, item.itemId]);
+  }, [vault, item.itemId, item.version]);
 
   const doCopy = () => {
     if (!openssh) return;
@@ -272,9 +286,64 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
     });
   };
 
+  // Staged rotation, step 1: a candidate key beside this one. Nothing changes
+  // for the hosts until Finish; the user installs the candidate's public key first.
+  const onStartRotation = async () => {
+    if (!vault) return;
+    try {
+      const candidate = await api.beginKeyRotation(vault, item.itemId);
+      await useApp.getState().reloadVault();
+      ctx.toast(t("secrets.rotationStarted", { item: candidate }), "ok");
+    } catch (e) {
+      ctx.toast(apiErrorMessage(e), "err");
+    }
+  };
+
+  const onFinishRotation = () => {
+    if (!vault || !rotation) return;
+    const { keyId, candidateId } = rotation.link;
+    ctx.confirm({
+      title: t("secrets.finishRotationTitle"),
+      body: t("secrets.finishRotationBody", { item: keyId, candidate: candidateId }),
+      danger: true,
+      confirmLabel: t("secrets.finishRotationConfirm"),
+      icon: "refresh",
+      onConfirm: async () => {
+        try {
+          await api.finishKeyRotation(vault, keyId, candidateId);
+          await useApp.getState().reloadVault();
+          ctx.toast(t("secrets.rotationFinished"), "ok");
+        } catch (e) {
+          ctx.toast(apiErrorMessage(e), "err");
+        }
+      },
+    });
+  };
+
+  const onAbandonRotation = () => {
+    if (!vault || !rotation) return;
+    const { keyId, candidateId } = rotation.link;
+    ctx.confirm({
+      title: t("secrets.abandonRotationTitle"),
+      body: t("secrets.abandonRotationBody", { item: keyId, candidate: candidateId }),
+      danger: true,
+      confirmLabel: t("secrets.abandonRotationConfirm"),
+      icon: "trash",
+      onConfirm: async () => {
+        try {
+          await api.abandonKeyRotation(vault, candidateId);
+          await useApp.getState().reloadVault();
+          ctx.toast(t("secrets.rotationAbandoned"), "ok");
+        } catch (e) {
+          ctx.toast(apiErrorMessage(e), "err");
+        }
+      },
+    });
+  };
+
   // Rotate in place: new keypair under the same item id, so every host
-  // referencing it follows automatically. Only the servers' authorized_keys
-  // must be updated with the new public key (shown/copyable after rotation).
+  // referencing it follows automatically — but the old private key is replaced
+  // at once, so hosts lacking the new public key refuse logins until updated.
   const onRotate = () => {
     if (!vault) return;
     ctx.confirm({
@@ -388,6 +457,13 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
             <MetaChip icon="clock">{t("secrets.keyOld")}</MetaChip>
           </span>
         )}
+        {rotation && (
+          <MetaChip icon="refresh" tone="warn">
+            {rotation.role === "original"
+              ? t("secrets.rotationPending", { item: rotation.link.candidateId })
+              : t("secrets.rotationCandidateOf", { item: rotation.link.keyId })}
+          </MetaChip>
+        )}
         <div
           style={{
             display: "flex",
@@ -440,7 +516,15 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
                     ctx.openModal({ kind: "copyKeyToServer", openssh, keyItemId: item.itemId });
                 },
               },
-              { label: t("secrets.rotateKey"), icon: "refresh", onClick: onRotate },
+              ...(rotation
+                ? [
+                    { label: t("secrets.finishRotation"), icon: "check" as const, onClick: onFinishRotation },
+                    { label: t("secrets.abandonRotation"), icon: "x" as const, onClick: onAbandonRotation },
+                  ]
+                : [
+                    { label: t("secrets.startRotation"), icon: "refresh" as const, onClick: onStartRotation },
+                    { label: t("secrets.rotateKey"), icon: "refresh" as const, onClick: onRotate },
+                  ]),
               { label: t("secrets.exportPrivateKey"), icon: "download", onClick: onExport },
             ]}
           />
@@ -534,11 +618,46 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
+  const vault = useApp((s) => s.vaultId);
+  const [links, setLinks] = useState<KeyRotationLink[]>([]);
+
+  // Staged rotations live in device-local core metadata; re-read whenever the
+  // key set changes (begin/finish/abandon all reload the vault). Keyed on a
+  // signature, not the array, which the parent rebuilds on every render.
+  const keySig = keys.map((k) => `${k.itemId}:${k.version}`).join("\n");
+  useEffect(() => {
+    let alive = true;
+    if (!vault) return;
+    api
+      .listKeyRotations(vault)
+      .then((l) => alive && setLinks(l))
+      .catch(() => alive && setLinks([]));
+    return () => {
+      alive = false;
+    };
+  }, [vault, keySig]);
+
+  const rotationOf = (itemId: string): RotationRole | undefined => {
+    const asOriginal = links.find((l) => l.keyId === itemId);
+    if (asOriginal) return { role: "original", link: asOriginal };
+    const asCandidate = links.find((l) => l.candidateId === itemId);
+    return asCandidate ? { role: "candidate", link: asCandidate } : undefined;
+  };
+
+  // A candidate sits right under its original, so the pair reads as one.
+  const candidates = new Set(links.map((l) => l.candidateId));
+  const ordered = keys.flatMap((k) => {
+    if (candidates.has(k.itemId)) return [];
+    const link = links.find((l) => l.keyId === k.itemId);
+    const cand = link && keys.find((c) => c.itemId === link.candidateId);
+    return cand ? [k, cand] : [k];
+  });
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
       <div>
-        {keys.map((k, i) => (
-          <KeyRow key={k.itemId} item={k} isMobile={isMobile} first={i === 0} />
+        {ordered.map((k, i) => (
+          <KeyRow key={k.itemId} item={k} isMobile={isMobile} first={i === 0} rotation={rotationOf(k.itemId)} />
         ))}
       </div>
       <button
