@@ -30,6 +30,7 @@ import { cancelAll as cancelAllTransfers, forgetTransfer } from "@/sftp/transfer
 import { suspendExternalEdits } from "@/sftp/external-edit";
 import { planGroupMove } from "@/store/groupMove";
 import type { LockGrace } from "@/support/systemLock";
+import { parseKeyAgeDays } from "@/support/keyHygiene";
 import type { ControlsSide } from "@/shell/windowControls";
 import { restoreWorkspace, WorkspaceStorage, type NamedWorkspace, type WorkspaceEditError } from "./workspace";
 import { toast } from "./toast";
@@ -478,6 +479,9 @@ interface AppStore {
   setModernAlgorithms: (on: boolean) => void;
   gpuRendering: boolean;
   setGpuRendering: (on: boolean) => void;
+  /** Days after which a vault key carries the "old" chip in Secrets; 0 = never. */
+  keyAgeDays: number;
+  setKeyAgeDays: (days: number) => void;
   /** Draw our own title bar (and leave the window undecorated), rather than
    *  handing the frame to the window manager. Resolved at boot: an explicit
    *  choice if the user made one, otherwise off under a tiling WM and on
@@ -690,6 +694,9 @@ const lsGpuRendering = (): boolean => {
   }
 };
 
+/** Key-age threshold (days) for the "old" chip. Device-local: a nudge, not policy. */
+const lsKeyAgeDays = (): number => parseKeyAgeDays(lsRead("unissh.keyAgeDays"));
+
 /** The user's EXPLICIT choice about the custom title bar, or `null` for "never
  *  said" — which is the whole point of the tri-state. A plain boolean default
  *  cannot express it: we need to tell "wants the bar" apart from "has not
@@ -875,6 +882,7 @@ export const useApp = create<AppStore>((set, get) => ({
   keepaliveSecs: lsKeepaliveSecs(),
   modernAlgorithms: lsModernAlgorithms(),
   gpuRendering: lsGpuRendering(),
+  keyAgeDays: lsKeyAgeDays(),
   // Provisional: the current look, so a browser preview and the first paint on
   // every non-tiling desktop are right without waiting on IPC. `boot` replaces
   // it with the detected answer when the user has never chosen.
@@ -1553,6 +1561,15 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ gpuRendering: on });
     try {
       localStorage.setItem("unissh.gpuRendering", on ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  },
+  setKeyAgeDays: (days) => {
+    const v = parseKeyAgeDays(String(Math.round(days)));
+    set({ keyAgeDays: v });
+    try {
+      localStorage.setItem("unissh.keyAgeDays", String(v));
     } catch {
       /* ignore */
     }

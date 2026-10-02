@@ -17,9 +17,11 @@ import { useCtx } from "@/store/ctx";
 import { useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
-import type { ItemInfo, Identity, ServerStatus, VaultInfo } from "@/bridge/types";
+import type { ConnectionProfile, ItemInfo, Identity, ServerStatus, VaultInfo } from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
+import { isKeyOld, keyUsage, keyUsageCount } from "@/support/keyHygiene";
+import { useFmt } from "@/i18n/format";
 
 type SecretTab = "keys" | "passwords" | "notes" | "identities";
 
@@ -42,20 +44,6 @@ function useCopied(resetMs = 1200) {
     setTimeout(() => setCopied(false), resetMs);
   };
   return { copied, flash };
-}
-
-/** How many hosts in the active vault still depend on a given SSH key — as their
- *  own login or via a jump hop. Drives the "in use" caution before deleting it. */
-function countKeyRefs(keyItemId: string): number {
-  let n = 0;
-  for (const h of useApp.getState().hosts) {
-    if (
-      (h.auth.type === "key" && h.auth.keyItemId === keyItemId) ||
-      h.jumps.some((j) => j.auth.type === "agent" && j.auth.keyItemId === keyItemId)
-    )
-      n++;
-  }
-  return n;
 }
 
 function TabBar({
@@ -220,7 +208,14 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
   const p = usePalette();
   const { t, i18n } = useTranslation();
   const ctx = useCtx();
-  const uses = countKeyRefs(item.itemId);
+  const { fmtDate } = useFmt();
+  const hosts = useApp((s) => s.hosts);
+  const keyAgeDays = useApp((s) => s.keyAgeDays);
+  const usage = keyUsage(hosts, item.itemId);
+  const uses = keyUsageCount(usage);
+  const old = isKeyOld(item.createdAt, keyAgeDays, Date.now());
+  const [open, setOpen] = useState(false);
+  const detailsId = `key-details-${item.itemId}`;
   const vault = useApp((s) => s.vaultId);
   const [fp, setFp] = useState<string | null>(null);
   const [openssh, setOpenssh] = useState<string | null>(null);
@@ -336,113 +331,202 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
     justifyContent: "center",
   } as const;
   return (
-    <HairlineRow
-      first={first}
-      style={{
-        alignItems: isMobile ? "stretch" : "center",
-        flexDirection: isMobile ? "column" : "row",
-        gap: isMobile ? rem(10) : rem(14),
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: isMobile ? rem(12) : rem(14), minWidth: 0 }}>
-        <span
-          style={{
-            width: rem(40),
-            height: rem(40),
-            borderRadius: 12,
-            background: p.bg3,
-            border: `1px solid ${p.line}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-          }}
-        >
-          <Icon name="key" size={18} color={p.txt2} />
-        </span>
-        <div style={{ width: isMobile ? "auto" : rem(150), flexShrink: 0, minWidth: 0 }}>
-          <div style={{ fontSize: TEXT.body, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {item.itemId}
-          </div>
-          <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
-            {t("secrets.updatedAgo", { ago: fmtRelativeUnix(item.updatedAt, i18n.language) })}
-            {item.hasCertificate ? " · cert" : ""}
+    <>
+      <HairlineRow
+        first={first}
+        style={{
+          alignItems: isMobile ? "stretch" : "center",
+          flexDirection: isMobile ? "column" : "row",
+          gap: isMobile ? rem(10) : rem(14),
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? rem(12) : rem(14), minWidth: 0 }}>
+          <span
+            style={{
+              width: rem(40),
+              height: rem(40),
+              borderRadius: 12,
+              background: p.bg3,
+              border: `1px solid ${p.line}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Icon name="key" size={18} color={p.txt2} />
+          </span>
+          <div style={{ width: isMobile ? "auto" : rem(150), flexShrink: 0, minWidth: 0 }}>
+            <div style={{ fontSize: TEXT.body, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {item.itemId}
+            </div>
+            <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
+              {t("secrets.updatedAgo", { ago: fmtRelativeUnix(item.updatedAt, i18n.language) })}
+              {item.hasCertificate ? " · cert" : ""}
+            </div>
           </div>
         </div>
-      </div>
-      <span
-        style={{
-          flex: 1,
-          width: isMobile ? "100%" : undefined,
-          fontFamily: MONO,
-          fontSize: TEXT.small,
-          color: p.txt2,
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-      >
-        {fp ?? "…"}
-      </span>
-      <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
-        {uses === 0 ? t("secrets.unused") : t("secrets.usedByHosts", { count: uses })}
-      </MetaChip>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: isMobile ? rem(10) : rem(14),
-          flexWrap: isMobile ? "wrap" : "nowrap",
-          justifyContent: isMobile ? "flex-end" : "flex-start",
-        }}
-      >
-        <button
-          onClick={doCopy}
-          title={t("secrets.copyPublicKey")}
-          aria-label={t("secrets.copyPublicKey")}
-          disabled={!openssh}
+        <span
           style={{
-            ...actBtn,
-            border: `1px solid ${p.line}`,
-            background: copied ? p.accentSoft : p.bg2,
-            color: copied ? p.accentText : p.txt3,
-            cursor: openssh ? "pointer" : "default",
-            opacity: openssh ? 1 : 0.5,
+            flex: 1,
+            width: isMobile ? "100%" : undefined,
+            fontFamily: MONO,
+            fontSize: TEXT.small,
+            color: p.txt2,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}
         >
-          <Icon name={copied ? "check" : "copy"} size={14} />
-        </button>
-        <RowOverflowMenu
-          ariaLabel={t("secrets.keyActions")}
-          items={[
-            {
-              label: t("secrets.copyToServer"),
-              icon: "upload",
-              onClick: () => {
-                if (openssh)
-                  ctx.openModal({ kind: "copyKeyToServer", openssh, keyItemId: item.itemId });
+          {fp ?? "…"}
+        </span>
+        <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
+          {uses === 0 ? t("secrets.unused") : t("secrets.usedByHosts", { count: uses })}
+        </MetaChip>
+        {old && (
+          <span title={t("secrets.keyOldTitle", { days: keyAgeDays })}>
+            <MetaChip icon="clock">{t("secrets.keyOld")}</MetaChip>
+          </span>
+        )}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: isMobile ? rem(10) : rem(14),
+            flexWrap: isMobile ? "wrap" : "nowrap",
+            justifyContent: isMobile ? "flex-end" : "flex-start",
+          }}
+        >
+          <button
+            onClick={() => setOpen((v) => !v)}
+            title={t("secrets.keyDetails")}
+            aria-label={t("secrets.keyDetails")}
+            aria-expanded={open}
+            aria-controls={detailsId}
+            style={{
+              ...actBtn,
+              border: `1px solid ${p.line}`,
+              background: open ? p.bg3 : p.bg2,
+              color: p.txt3,
+              cursor: "pointer",
+            }}
+          >
+            <Icon name={open ? "cd" : "cr"} size={14} />
+          </button>
+          <button
+            onClick={doCopy}
+            title={t("secrets.copyPublicKey")}
+            aria-label={t("secrets.copyPublicKey")}
+            disabled={!openssh}
+            style={{
+              ...actBtn,
+              border: `1px solid ${p.line}`,
+              background: copied ? p.accentSoft : p.bg2,
+              color: copied ? p.accentText : p.txt3,
+              cursor: openssh ? "pointer" : "default",
+              opacity: openssh ? 1 : 0.5,
+            }}
+          >
+            <Icon name={copied ? "check" : "copy"} size={14} />
+          </button>
+          <RowOverflowMenu
+            ariaLabel={t("secrets.keyActions")}
+            items={[
+              {
+                label: t("secrets.copyToServer"),
+                icon: "upload",
+                onClick: () => {
+                  if (openssh)
+                    ctx.openModal({ kind: "copyKeyToServer", openssh, keyItemId: item.itemId });
+                },
               },
-            },
-            { label: t("secrets.rotateKey"), icon: "refresh", onClick: onRotate },
-            { label: t("secrets.exportPrivateKey"), icon: "download", onClick: onExport },
-          ]}
-        />
-        <button
-          onClick={onDelete}
-          title={t("common.delete")}
-          aria-label={t("common.delete")}
+              { label: t("secrets.rotateKey"), icon: "refresh", onClick: onRotate },
+              { label: t("secrets.exportPrivateKey"), icon: "download", onClick: onExport },
+            ]}
+          />
+          <button
+            onClick={onDelete}
+            title={t("common.delete")}
+            aria-label={t("common.delete")}
+            style={{
+              ...actBtn,
+              border: `1px solid ${p.line}`,
+              background: p.bg2,
+              color: p.red,
+              cursor: "pointer",
+            }}
+          >
+            <Icon name="trash" size={14} />
+          </button>
+        </div>
+      </HairlineRow>
+      {open && (
+        <div
+          id={detailsId}
           style={{
-            ...actBtn,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.red,
-            cursor: "pointer",
+            display: "flex",
+            flexDirection: "column",
+            gap: rem(10),
+            padding: `0 ${rem(6)} ${rem(14)} ${isMobile ? rem(6) : rem(60)}`,
+            fontSize: TEXT.small,
+            color: p.txt2,
           }}
         >
-          <Icon name="trash" size={14} />
-        </button>
+          <div style={{ fontFamily: MONO, color: p.txt3 }}>
+            {t("secrets.keyCreated", { date: fmtDate(item.createdAt) || "—" })}
+          </div>
+          {uses === 0 ? (
+            <div>{t("secrets.keyNoHosts")}</div>
+          ) : (
+            <>
+              <KeyHostList label={t("secrets.keyUsedDirect")} hosts={usage.direct} />
+              <KeyHostList label={t("secrets.keyUsedJump")} hosts={usage.jump} />
+            </>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** One "where used" list in a key's details: each host is a button that opens
+ *  its profile. Renders nothing when empty, so a key that only hops shows one. */
+function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile[] }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const ctx = useCtx();
+  if (hosts.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: rem(4) }}>
+      <div style={{ fontSize: TEXT.micro, fontWeight: 700, color: p.txt3, textTransform: "uppercase" }}>
+        {label}
       </div>
-    </HairlineRow>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: rem(6) }}>
+        {hosts.map((h) => (
+          <li key={h.profileId}>
+            <button
+              onClick={() => ctx.openModal({ kind: "host", edit: h })}
+              aria-label={t("secrets.keyOpenHost", { host: h.label })}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: rem(6),
+                padding: `${rem(4)} ${rem(10)}`,
+                borderRadius: 8,
+                border: `1px solid ${p.line}`,
+                background: p.bg2,
+                color: p.txt,
+                cursor: "pointer",
+                fontSize: TEXT.small,
+              }}
+            >
+              <Icon name="server" size={12} color={p.txt3} />
+              {h.label}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

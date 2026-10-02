@@ -1254,6 +1254,8 @@ function SettingsSecurity() {
     setClip(v);
     lsSet("unissh.clipclear", v ? "1" : "0");
   };
+  const keyAgeDays = useApp((s) => s.keyAgeDays);
+  const setKeyAgeDays = useApp((s) => s.setKeyAgeDays);
 
   const checkDbConsistency = async () => {
     await guard(async () => {
@@ -1292,6 +1294,18 @@ function SettingsSecurity() {
       {changing && <ChangePasswordForm onClose={() => setChanging(false)} />}
       <SettingRow title={t("settings.clipClearTitle")} desc={t("settings.clipClearDesc")}>
         <Toggle checked={clip} onChange={onClip} />
+      </SettingRow>
+      <SettingRow title={t("settings.keyAgeTitle")} desc={t("settings.keyAgeDesc")}>
+        <Segmented<string>
+          value={String(keyAgeDays)}
+          onChange={(v) => setKeyAgeDays(parseInt(v, 10))}
+          options={[
+            { value: "0", label: t("settings.keyAgeOff") },
+            { value: "180", label: t("settings.keyAge180") },
+            { value: "365", label: t("settings.keyAge365") },
+            { value: "730", label: t("settings.keyAge730") },
+          ]}
+        />
       </SettingRow>
 
       <SectionLabel>{t("settings.sectionRecovery")}</SectionLabel>
