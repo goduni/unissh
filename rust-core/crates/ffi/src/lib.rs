@@ -60,8 +60,11 @@ use unissh_vault::{
 
 pub mod automation;
 pub mod automation_recording;
+mod key_rotation;
 mod ssh_include;
 mod terminal_workspace;
+
+pub use key_rotation::KeyRotationLink;
 
 uniffi::setup_scaffolding!();
 
@@ -158,6 +161,13 @@ pub enum FfiError {
         port: u16,
         /// SHA256 fingerprint of the key the server ACTUALLY presented.
         fingerprint: String,
+    },
+    /// A staged key rotation is already in progress for this key: its live
+    /// candidate must be finished or abandoned before another begins.
+    #[error("key rotation already in progress (candidate {candidate_id})")]
+    RotationInProgress {
+        /// Item id of the live candidate.
+        candidate_id: String,
     },
     /// SSH error.
     #[error("ssh error: {msg}")]

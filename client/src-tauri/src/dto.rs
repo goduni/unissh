@@ -986,6 +986,22 @@ impl From<ffi::PublicKeyInfo> for PublicKeyInfo {
     }
 }
 
+/// A staged key rotation in progress on this device (ids only, no key material).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyRotationLink {
+    pub key_id: String,
+    pub candidate_id: String,
+}
+impl From<ffi::KeyRotationLink> for KeyRotationLink {
+    fn from(l: ffi::KeyRotationLink) -> Self {
+        KeyRotationLink {
+            key_id: l.key_id,
+            candidate_id: l.candidate_id,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownHostInfo {
