@@ -28,30 +28,50 @@ const ids = (hs: ConnectionProfile[]) => hs.map((h) => h.profileId);
 
 describe("keyUsage", () => {
   it("lists a host that logs in with the key as direct", () => {
-    const u = keyUsage([host("web", { type: "key", keyItemId: "k" })], "k");
+    const u = keyUsage([host("web", { type: "key", keyItemId: "k" })], "v", "k");
     expect([ids(u.direct), ids(u.jump)]).toEqual([["web"], []]);
   });
 
   it("lists a host that only hops with the key as jump", () => {
-    const u = keyUsage([host("db", { type: "promptPassword" }, [hop("k")])], "k");
+    const u = keyUsage([host("db", { type: "promptPassword" }, [hop("k")])], "v", "k");
     expect([ids(u.direct), ids(u.jump)]).toEqual([[], ["db"]]);
   });
 
   it("splits direct and jump users across hosts", () => {
     const u = keyUsage(
       [host("web", { type: "key", keyItemId: "k" }), host("db", { type: "personal" }, [hop("k")])],
+      "v",
       "k",
     );
     expect([ids(u.direct), ids(u.jump), keyUsageCount(u)]).toEqual([["web"], ["db"], 2]);
   });
 
+  it("lists a host whose saved-profile hop logs in with the key under jump", () => {
+    const ref = (profileUid: string, vaultId = "v"): JumpHost => ({
+      ...hop(""),
+      hopRef: { vaultId, profileUid },
+    });
+    const u = keyUsage(
+      [
+        host("bastion", { type: "key", keyItemId: "k" }),
+        host("other", { type: "promptPassword" }),
+        host("db", { type: "promptPassword" }, [ref("bastion"), ref("bastion")]),
+        host("cache", { type: "promptPassword" }, [ref("other")]),
+        host("far", { type: "promptPassword" }, [ref("bastion", "elsewhere")]),
+      ],
+      "v",
+      "k",
+    );
+    expect([ids(u.direct), ids(u.jump)]).toEqual([["bastion"], ["db"]]);
+  });
+
   it("finds nothing when no host references the key", () => {
-    const u = keyUsage([host("web", { type: "key", keyItemId: "other" }, [hop("other")])], "k");
+    const u = keyUsage([host("web", { type: "key", keyItemId: "other" }, [hop("other")])], "v", "k");
     expect([ids(u.direct), ids(u.jump), keyUsageCount(u)]).toEqual([[], [], 0]);
   });
 
   it("lists a host using the key twice once per category and counts it once", () => {
-    const u = keyUsage([host("api", { type: "key", keyItemId: "k" }, [hop("k"), hop("k")])], "k");
+    const u = keyUsage([host("api", { type: "key", keyItemId: "k" }, [hop("k"), hop("k")])], "v", "k");
     expect([ids(u.direct), ids(u.jump), keyUsageCount(u)]).toEqual([["api"], ["api"], 1]);
   });
 });
