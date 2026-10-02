@@ -1,8 +1,8 @@
 # Upgrading UniSSH
 
 Read the **Compatibility** and any **Breaking changes** entries in the
-[changelog](../CHANGELOG.md#unreleased) before upgrading. The changes currently
-listed after 0.4.0 preserve the vault format, AAD encodings and encrypted-sync
+[changelog](../CHANGELOG.md#050--2026-10-02) before upgrading. The changes in
+0.5.0 preserve the vault format, AAD encodings and encrypted-sync
 protocol; no vault conversion is required.
 
 ## Before installing
@@ -39,7 +39,7 @@ After opening the updated client:
 - To check a backup, restore it under a **new** vault name and verify representative
   items. Restore creates a local vault and never overwrites an existing vault.
 
-## Changes to expect after 0.4.0
+## Changes to expect in 0.5.0
 
 ### SFTP
 

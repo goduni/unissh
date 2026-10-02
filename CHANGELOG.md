@@ -32,6 +32,8 @@ starts with `0.`:
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-02
+
 ### Added
 
 - Terminal layouts persist on this device per vault: tab order, custom names,
@@ -139,6 +141,15 @@ starts with `0.`:
   approvals wait for authentication dialogs. Failed MCP connections dismiss their
   pending authentication prompts, and active HTTP requests survive connection reuse.
 
+- Desktop builds move to Tauri 2.12 and `tauri-plugin-updater` 2.13.1. The
+  AppImage still ships without `libwayland-*` (CI now asserts it), and its
+  `GDK_BACKEND=x11` default moved from the launcher hook into the app itself;
+  an exported `GDK_BACKEND` is still honoured.
+- Android certificate verification uses `rustls-platform-verifier` 0.7.1, which
+  also fixes an infinite loop when a system trust anchor has been disabled in
+  Android settings. Its component is fetched from upstream's Maven archive at a
+  pinned commit and checked against SHA-256 pins.
+
 ### Security
 
 - Update rustls to 0.23.45 in the server/core and native client lockfiles to
@@ -147,10 +158,27 @@ starts with `0.`:
 
 ### Compatibility
 
-- Vault format, AAD encodings and encrypted-sync protocol are unchanged. MCP
-  registration uses a separate version-1 local digest configuration; mobile has
-  no MCP listener. Desktop builds require Rust 1.95 or newer (the pinned project
-  toolchain satisfies this).
+**Vault format and server protocol are unchanged** — local storage schema
+version 9, AAD encodings, encrypted sync and the server HTTP surface `/v1` are
+the same as in 0.4.0. Nothing here migrates a vault or changes what a server
+must speak; upgrading the server first remains the rule, but this release asks
+nothing new of it. Argon2 0.6 derives the same keys as 0.5.3, pinned by frozen
+vectors, so existing passwords unlock existing vaults without conversion.
+
+**Two visible changes land without asking.** On Windows and Linux, global
+shortcuts move from bare `Ctrl` to `Ctrl+Shift`, so `Ctrl` letters reach the
+terminal; **Settings → Keyboard shortcuts** rebinds any of them. SFTP overwrites
+now stage the new file beside its destination and commit with
+`posix-rename@openssh.com`: a server without that extension refuses the
+overwrite and leaves the old file intact, where before it was replaced in place.
+
+Everything else added here is local and per-device, and none of it syncs:
+terminal layouts and named workspaces (version-2 local metadata, migrated from
+version 1), shortcut bindings, and MCP registrations, grants and recordings
+(version-1 local metadata). Mobile has no MCP listener.
+
+**Building from source** needs Rust 1.95 or newer; the pinned project toolchain
+satisfies this. See [Upgrading](docs/upgrading.md) for the step-by-step checks.
 
 ## [0.4.0] — 2026-08-25
 
