@@ -11,7 +11,13 @@ import { apiErrorMessage, type ConnectionProfile } from "@/bridge/types";
 import * as api from "@/bridge/api";
 import { toast } from "@/store/toast";
 import { useTranslation, tDyn } from "@/i18n";
-import { parseParams, splitBuiltins, substituteParams, type BuiltinValues } from "@/support/snippetParams";
+import {
+  builtinsFromProfile,
+  parseParams,
+  resolveCommand,
+  splitBuiltins,
+  type BuiltinValues,
+} from "@/support/snippetParams";
 import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
 
 import { isDesktopOs } from "@/bridge/platform";
@@ -211,7 +217,7 @@ export function CommandPalette() {
         onCancel={() => setPending(null)}
         onSubmit={(values) => {
           setPending(null);
-          typeIntoPane(pending.sessionId, substituteParams(pending.command, { ...values, ...pending.builtins }));
+          typeIntoPane(pending.sessionId, resolveCommand(pending.command, values, pending.builtins));
         }}
       />
     );
@@ -234,21 +240,14 @@ export function CommandPalette() {
         toast(t("command.snippetNoPane"), "warn");
         return;
       }
-      // A parameterless snippet is typed verbatim, exactly as before parameters
-      // existed — no form, no rewriting.
-      if (!it.hasParams) {
-        typeIntoPane(pane.sessionId, it.command);
-        return;
-      }
       // Built-ins come from the pane's host; a local shell has none, so there
-      // they are asked like any other parameter.
-      const profile = paneProfile(pane);
-      const builtins: BuiltinValues = profile
-        ? { host: profile.host, port: String(profile.port), ...(profile.user ? { user: profile.user } : null) }
-        : {};
+      // they are asked like any other parameter. With nothing left to ask there
+      // is no form: the command (escapes resolved, built-ins filled in) goes
+      // straight into the pane — for a plain command, byte for byte.
+      const builtins = builtinsFromProfile(paneProfile(pane));
       const { ask } = splitBuiltins(parseParams(it.command), builtins);
       if (ask.length === 0) {
-        typeIntoPane(pane.sessionId, substituteParams(it.command, builtins));
+        typeIntoPane(pane.sessionId, resolveCommand(it.command, {}, builtins));
         return;
       }
       setPending({ label: it.label, command: it.command, sessionId: pane.sessionId, builtins });

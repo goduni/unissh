@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseParams, splitBuiltins, substituteParams } from "./snippetParams";
+import type { ConnectionProfile } from "@/bridge/types";
+import { builtinsFromProfile, parseParams, resolveCommand, splitBuiltins, substituteParams } from "./snippetParams";
 
 describe("snippet parameters", () => {
   it("finds nothing in a plain command", () => {
@@ -32,6 +33,9 @@ describe("snippet parameters", () => {
     const cmd = "echo \\{{x}} {{y}}";
     expect(parseParams(cmd).map((p) => p.name)).toEqual(["y"]);
     expect(substituteParams(cmd, { x: "no", y: "yes" })).toBe("echo {{x}} yes");
+    // Also when the escaped one is the only placeholder, i.e. a snippet with no parameters.
+    expect(parseParams("echo \\{{x}}")).toEqual([]);
+    expect(substituteParams("echo \\{{x}}", {})).toBe("echo {{x}}");
   });
 
   it("leaves spaced braces as literal text", () => {
@@ -57,6 +61,13 @@ describe("snippet parameters", () => {
       ],
     });
     expect(splitBuiltins(params, {}).ask.map((p) => p.name)).toEqual(["user", "host", "port", "cmd"]);
+    expect(resolveCommand("{{user}}@{{host}}", { user: "typed", host: "typed" }, { host: "web1" })).toBe("typed@web1");
+  });
+
+  it("takes host and a stringified port from a profile, omits an empty user, and none for a local shell", () => {
+    const profile = { host: "web1", port: 2222, user: "" } as ConnectionProfile;
+    expect(builtinsFromProfile(profile)).toEqual({ host: "web1", port: "2222" });
+    expect(builtinsFromProfile(null)).toEqual({});
   });
 
   it("lists parameters in order of first appearance, not by name", () => {

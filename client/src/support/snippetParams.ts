@@ -7,6 +7,8 @@
 // stray brace, an unterminated placeholder — is literal text, so there is no
 // error case: a shell command full of braces still goes through untouched.
 
+import type { ConnectionProfile } from "@/bridge/types";
+
 /** A parameter in order of first appearance. `default` is null for `{{name}}`
  *  and a (possibly empty) string for `{{name:...}}`; a repeated name keeps the
  *  default and position of its first occurrence. */
@@ -21,6 +23,14 @@ export interface SnippetParam {
 export const BUILTIN_PARAMS = ["host", "user", "port"] as const;
 export type BuiltinParam = (typeof BUILTIN_PARAMS)[number];
 export type BuiltinValues = Partial<Record<BuiltinParam, string>>;
+
+/** The built-ins a host answers. None for a local shell (null), and no `user`
+ *  when the profile leaves it empty (an identity-bound login) — those are
+ *  then asked like any other parameter. */
+export function builtinsFromProfile(profile: ConnectionProfile | null): BuiltinValues {
+  if (!profile) return {};
+  return { host: profile.host, port: String(profile.port), ...(profile.user ? { user: profile.user } : null) };
+}
 
 type Token =
   | { kind: "text"; text: string }
@@ -95,4 +105,14 @@ export function substituteParams(command: string, values: Record<string, string>
       tk.kind === "text" ? tk.text : Object.prototype.hasOwnProperty.call(values, tk.name) ? values[tk.name] : tk.raw,
     )
     .join("");
+}
+
+/** The command as it should run: the user's answers, with built-ins winning
+ *  over a user parameter of the same name. */
+export function resolveCommand(
+  command: string,
+  userValues: Record<string, string>,
+  builtins: BuiltinValues,
+): string {
+  return substituteParams(command, { ...userValues, ...builtins });
 }
