@@ -679,10 +679,28 @@ jobs:
       # request dies — which is bug #34, where the failure surfaced as reqwest's
       # "event loop thread panicked" with the real cause thrown away.
       #
-      # The crate bundles a local Maven repository; `cargo metadata` is the only
-      # supported way to locate it on disk (the path contains the registry hash
-      # and the crate version). Resolving it HERE rather than in Gradle is what
-      # keeps the injected snippet to two literals — the upstream Kotlin recipe
+      # Since rustls-platform-verifier-android 0.2.0 the crate no longer bundles
+      # that component: upstream publishes it ONLY to a Maven repository kept on
+      # the `maven-archive` branch of its GitHub repo. We do not point Gradle at
+      # that branch. A branch is mutable, and the artifact used to arrive inside a
+      # crate whose checksum Cargo.lock pins — so instead this step fetches the
+      # .aar/.pom from one fixed COMMIT of that branch, checks both against the
+      # SHA-256 pins below, and lays them out as a local Maven repository. Gradle
+      # then resolves from disk exactly as before, and a version with no pin fails
+      # here instead of building with an unreviewed artifact. Bumping the crate
+      # therefore means: move MAVEN_ARCHIVE_COMMIT to a commit carrying the new
+      # version, add its two hashes (cross-check them against the .sha1 files
+      # published next to the artifacts), and re-read the aar's AndroidManifest.
+      #
+      # That manifest is merged into ours. 0.2.0's sets the application's
+      # networkSecurityConfig: cleartext off by default — the same as Tauri's
+      # release `usesCleartextTraffic=false`, which an NSC supersedes — and on
+      # only for CA revocation-list hosts, so the verifier can fetch CRLs. Our own
+      # traffic is native Rust sockets, which the NSC does not govern.
+      #
+      # The version comes from `cargo metadata`, so the Java half always matches
+      # the Rust half that Cargo.lock selected. Resolving it HERE rather than in
+      # Gradle keeps the injected snippet to literals — the upstream Kotlin recipe
       # parses the JSON inside build.gradle.kts, which needs kotlinx-serialization
       # on the buildscript classpath and a version catalog entry, neither of which
       # Tauri's generated project has.
@@ -692,7 +710,15 @@ jobs:
       - name: Wire the rustls-platform-verifier Android component into gradle
         run: |
           python3 - <<'PYEOF'
-          import json, pathlib, subprocess, sys
+          import hashlib, json, os, pathlib, subprocess, sys, urllib.request
+
+          MAVEN_ARCHIVE_COMMIT = "1aa691352a5e0c215210dfc9a3c2f2078639dc91"
+          PINS = {
+              "0.2.0": {
+                  "aar": "aa021794230fbc2f0be355999e2cf67398dd563de066a2e17001ffbd0b69101b",
+                  "pom": "78dcb69a1a20e91e72017de9a67104bba1874a7ecc8e6dcdfb2fe1a85de6b362",
+              },
+          }
 
           meta = json.loads(subprocess.run(
               ["cargo", "metadata", "--format-version", "1",
@@ -706,10 +732,26 @@ jobs:
               sys.exit("rustls-platform-verifier-android is not in the dependency graph — "
                        "did the reqwest `rustls` feature or the android-only dependency change?")
 
-          maven = pathlib.Path(pkg["manifest_path"]).parent / "maven"
-          if not maven.is_dir():
-              sys.exit(f"expected a bundled maven repo at {maven}, found none")
           version = pkg["version"]
+          if version not in PINS:
+              sys.exit(f"rustls-platform-verifier-android {version} has no pinned artifact "
+                       "hashes — see the comment above this step for how to add them")
+
+          maven = pathlib.Path(os.environ["RUNNER_TEMP"]) / "rustls-platform-verifier-maven"
+          artifact_dir = maven / "org/rustls/rustls-platform-verifier" / version
+          artifact_dir.mkdir(parents=True, exist_ok=True)
+          base = ("https://raw.githubusercontent.com/rustls/rustls-platform-verifier/"
+                  f"{MAVEN_ARCHIVE_COMMIT}/android-release-support/maven/"
+                  f"org/rustls/rustls-platform-verifier/{version}")
+          for ext, expected in PINS[version].items():
+              name = f"rustls-platform-verifier-{version}.{ext}"
+              with urllib.request.urlopen(f"{base}/{name}", timeout=60) as r:
+                  data = r.read()
+              actual = hashlib.sha256(data).hexdigest()
+              if actual != expected:
+                  sys.exit(f"{name}: sha256 {actual} does not match the pinned {expected}")
+              (artifact_dir / name).write_bytes(data)
+              print(f"{name} verified ({actual})")
 
           # Where repositories may be declared depends on the generated template:
           # AGP's dependencyResolutionManagement (settings.gradle.kts) takes
@@ -773,12 +815,12 @@ jobs:
 
           app = pathlib.Path("gen/android/app/build.gradle.kts")
           s = app.read_text()
-          dep = f'\n    implementation("rustls:rustls-platform-verifier:{version}")'
+          dep = f'\n    implementation("org.rustls:rustls-platform-verifier:{version}")'
           out = s.replace("dependencies {", "dependencies {" + dep, 1)
           if out == s:
               sys.exit("anchor `dependencies {` not found in app/build.gradle.kts")
           app.write_text(out)
-          print(f"rustls:rustls-platform-verifier:{version} added to app/build.gradle.kts")
+          print(f"org.rustls:rustls-platform-verifier:{version} added to app/build.gradle.kts")
 
           # R8 keep rule, and it is NOT optional. The release build minifies and
           # obfuscates, the aar ships no consumer proguard rules of its own, and the
