@@ -36,6 +36,15 @@ import { isMac } from "@/bridge/platform";
 import { matchesShortcut, useShortcuts } from "@/store/shortcuts";
 import { ContextMenu } from "@/components/ContextMenu";
 import { TermTabStrip } from "@/views/TermTabStrip";
+import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
+import {
+  builtinsFromProfile,
+  parseParams,
+  resolveCommand,
+  splitBuiltins,
+  type BuiltinParam,
+  type SnippetParam,
+} from "@/support/snippetParams";
 import { useTerminalShortcuts } from "@/shell/useTerminalShortcuts";
 
 // True only when the terminal host has a real layout box. A hidden ancestor
@@ -317,6 +326,14 @@ function TerminalPane({
   const [pw, setPw] = useState<string | null>(null);
   // Hover state so a split pane can offer an obvious close (✕) affordance.
   const [paneHover, setPaneHover] = useState(false);
+  // The parameter form for the startup snippet being asked about, if any. The
+  // startup loop awaits `resolve`: the answers, or null when cancelled.
+  const [startupAsk, setStartupAsk] = useState<{
+    label: string;
+    ask: SnippetParam[];
+    fromHost: { name: BuiltinParam; value: string }[];
+    resolve: (values: Record<string, string> | null) => void;
+  } | null>(null);
 
   /** Types a host's startup snippets into a freshly opened session.
  *
@@ -324,6 +341,11 @@ function TerminalPane({
  * startup command that never runs is useless — unlike the palette, where the
  * user is choosing one interactively and Enter must stay theirs. The list is
  * ordered, so they are sent in sequence.
+ *
+ * A snippet with `{{parameters}}` the host cannot answer asks for them in the
+ * shared form before it is typed; cancelling skips that snippet and the rest
+ * still run. Every command goes through `resolveCommand`, which leaves
+ * brace-free text unchanged, so parameterless snippets never ask.
  *
  * Failures are swallowed on purpose: a missing snippet (deleted on another
  * device, not yet synced) must not turn a working connection into an error.
@@ -339,10 +361,20 @@ async function runStartupSnippets(
     const library = await api.listSnippets(vaultId);
     const byId = new Map(library.map((s) => [s.snippetId, s]));
     const enc = new TextEncoder();
+    const builtins = builtinsFromProfile(profile);
     for (const id of ids) {
       const snippet = byId.get(id);
       if (!snippet) continue;
-      await api.sessionWrite(sessionId, Array.from(enc.encode(snippet.command + "\n")));
+      const { ask, fromHost } = splitBuiltins(parseParams(snippet.command), builtins);
+      const values =
+        ask.length === 0
+          ? {}
+          : await new Promise<Record<string, string> | null>((resolve) =>
+              setStartupAsk({ label: snippet.label, ask, fromHost, resolve }),
+            );
+      if (!values) continue;
+      const command = resolveCommand(snippet.command, values, builtins);
+      await api.sessionWrite(sessionId, Array.from(enc.encode(command + "\n")));
     }
   } catch {
     /* a startup snippet must never break the session it was meant to set up */
@@ -1237,6 +1269,22 @@ async function runStartupSnippets(
         </div>
       )}
       {needsPassword && pw == null && <PasswordGate onSubmit={(v) => setPw(v)} />}
+      {startupAsk && (
+        <SnippetParamsForm
+          label={startupAsk.label}
+          ask={startupAsk.ask}
+          fromHost={startupAsk.fromHost}
+          submitLabel={t("snippetParams.run")}
+          onCancel={() => {
+            setStartupAsk(null);
+            startupAsk.resolve(null);
+          }}
+          onSubmit={(values) => {
+            setStartupAsk(null);
+            startupAsk.resolve(values);
+          }}
+        />
+      )}
       {/* Host-key mismatch: the security card replaces the reconnect affordance on
           BOTH shells (it renders inside the shared pane) — a mismatch must never
           offer a plain Reconnect. */}

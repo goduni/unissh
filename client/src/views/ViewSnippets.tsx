@@ -4,17 +4,18 @@
 // everything else. The list shows the command itself rather than hiding it
 // behind the label: a snippet is chosen by recognising what it runs.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "@/bridge/api";
 import { apiErrorMessage } from "@/bridge/types";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
-import { MONO, rem, rgba, TEXT } from "@/theme/tokens";
+import { MONO, rem, rgba, TEXT, UI } from "@/theme/tokens";
 import { Btn, Field, Icon, Input, NO_AUTOCORRECT, Spinner, Tag } from "@/components/primitives";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/store/toast";
 import { useApp } from "@/store/app";
 import { useNarrow } from "@/store/responsive";
+import { BUILTIN_PARAMS, parseParams } from "@/support/snippetParams";
 
 /** A stable id from the label, so a hand-picked name stays readable in the vault
  *  while still being unique enough not to collide with an existing snippet. */
@@ -46,6 +47,9 @@ function Editor({
   const [tagDraft, setTagDraft] = useState("");
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   const [busy, setBusy] = useState(false);
+  // Read live from the raw text, so a typo like {{servcie}} shows before saving.
+  // Nothing parsed is stored: the command is saved exactly as typed.
+  const params = useMemo(() => parseParams(command), [command]);
 
   const save = async () => {
     if (!command.trim()) {
@@ -113,6 +117,29 @@ function Editor({
               boxSizing: "border-box",
             }}
           />
+          {params.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "baseline",
+                gap: `${rem(4)} ${rem(12)}`,
+                marginTop: rem(6),
+                fontSize: TEXT.small,
+              }}
+            >
+              <span style={{ color: p.txt3 }}>{t("snippets.params")}</span>
+              {params.map((prm) => (
+                <span key={prm.name} style={{ fontFamily: MONO, color: p.txt, overflowWrap: "anywhere" }}>
+                  {prm.name}
+                  {prm.default !== null && <span style={{ color: p.txt3 }}> = {prm.default || '""'}</span>}
+                  {(BUILTIN_PARAMS as readonly string[]).includes(prm.name) && (
+                    <span style={{ fontFamily: UI, color: p.txt3 }}> · {t("snippets.paramBuiltin")}</span>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
         </Field>
         <Field label={t("snippets.tags")} group>
           <div style={{ display: "flex", alignItems: "center", gap: rem(6), flexWrap: "wrap" }}>

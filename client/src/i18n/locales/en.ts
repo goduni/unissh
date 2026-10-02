@@ -285,6 +285,8 @@ export const en = {
     needCommand: "A snippet needs a command",
     tags: "Tags",
     tagHint: "Add a tag and press Enter",
+    params: "Parameters",
+    paramBuiltin: "built-in",
   },
 
   snippetParams: {
@@ -292,6 +294,7 @@ export const en = {
     submit: "Insert",
     fromHost: "from the host",
     fromEachHost: "from each host",
+    run: "Run",
   },
 
   agentApproval: {

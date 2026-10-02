@@ -314,6 +314,8 @@ export const ru = {
     needCommand: "Сниппету нужна команда",
     tags: "Теги",
     tagHint: "Введите тег и нажмите Enter",
+    params: "Параметры",
+    paramBuiltin: "встроенный",
   },
 
   snippetParams: {
@@ -321,6 +323,7 @@ export const ru = {
     submit: "Вставить",
     fromHost: "из хоста",
     fromEachHost: "из каждого хоста",
+    run: "Выполнить",
   },
 
   agentApproval: {
