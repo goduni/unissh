@@ -243,61 +243,20 @@ jobs:
       # them, and libwayland-server arrives with Mesa's libgbm, i.e. with hardware
       # GL. A host missing these cannot run this app bundled or not.
       #
-      # The hook: tauri-bundler downloads this plugin to ~/.cache/tauri and skips
-      # the download when the file already exists (bundle/linux/appimage/linuxdeploy.rs),
-      # so seeding our own copy is the supported-by-construction way in. We append
-      # rather than vendor the 326-line script, so upstream keeps flowing and the
-      # diff stays this one deletion. Both edits are ASSERTED below rather than
-      # assumed: a `sed` that matches nothing exits 0, so without the assertions an
-      # upstream reword would turn either edit into a silent no-op — which is the
-      # exact failure mode that shipped the broken AppImage in the first place.
-      - name: Seed the AppImage GTK plugin (drop bundled libwayland)
-        if: matrix.os == 'linux'
-        run: |
-          PLUGIN=~/.cache/tauri/linuxdeploy-plugin-gtk.sh
-          mkdir -p ~/.cache/tauri
-          curl -fsSL --retry 3 \
-            https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh \
-            -o "$PLUGIN"
-
-          # Let a user override the backend. The plugin writes a bare
-          # `export GDK_BACKEND=x11` into the AppRun hook, which does not just pick
-          # a default — it overwrites whatever the user exported, so the usual first
-          # thing anyone tries on a Wayland desktop silently does nothing. Upstream
-          # tauri's own copy of this template already uses the `:-` form; the fork
-          # that actually gets downloaded has not caught up. The DEFAULT is
-          # unchanged (still x11, still the safe answer for GTK on Wayland) — this
-          # only stops us from welding it shut. `.*` because that line carries a
-          # trailing comment: anchoring on `x11$` matches nothing at all.
-          sed -i 's|^export GDK_BACKEND=x11.*|export GDK_BACKEND="${GDK_BACKEND:-x11}" # default unchanged, override allowed (UniSSH)|' "$PLUGIN"
-
-          cat >> "$PLUGIN" <<'PLUGIN_EOF'
-
-          # --- appended by UniSSH CI: see "KEEP libwayland OUT OF THE APPIMAGE" ---
-          # Runs last in the plugin, after linuxdeploy has resolved and copied the
-          # GTK dependency tree, and before the appimage output plugin packs the
-          # AppDir. The host's libwayland matches the host's Mesa; ours cannot.
-          # The guard is not redundant with the plugin's own `[ "$APPDIR" == "" ]`
-          # check far above: this is an `rm -f` with a variable in the path, and an
-          # empty APPDIR would aim it at the build machine's own /usr/lib.
-          if [ -n "$APPDIR" ]; then
-            echo "unissh: removing bundled libwayland-* (breaks EGL on modern Wayland hosts)"
-            rm -fv "$APPDIR"/usr/lib/libwayland-*.so* || true
-          else
-            echo "unissh: APPDIR unset — refusing to run the libwayland cleanup" >&2
-            exit 1
-          fi
-          PLUGIN_EOF
-          chmod +x "$PLUGIN"
-
-          # Assert both edits landed. Neither `sed` nor `cat >>` fails when it
-          # achieves nothing, so this is the only thing standing between an
-          # upstream reword and a silently unpatched bundle.
-          grep -q 'GDK_BACKEND:-x11' "$PLUGIN" \
-            || { echo "::error::GDK_BACKEND patch did not apply — upstream reworded that line."; exit 1; }
-          grep -q 'removing bundled libwayland' "$PLUGIN" \
-            || { echo "::error::libwayland cleanup was not appended to the GTK plugin."; exit 1; }
-          echo "GTK plugin seeded and both edits verified"
+      # The hook: linuxdeploy's own LINUXDEPLOY_EXCLUDED_LIBRARIES, set on the
+      # bundling step below. It is matched (fnmatch) against every library
+      # linuxdeploy resolves as a DEPENDENCY — which is exactly how libwayland gets
+      # in: as a DT_NEEDED of libgdk-3 and libwebkit2gtk, never as one of the GTK
+      # plugin's explicit `--library=` arguments (those would bypass the list).
+      # The variable reaches the GTK plugin's nested linuxdeploy run through the
+      # environment. This replaces seeding a patched linuxdeploy-plugin-gtk.sh into
+      # ~/.cache/tauri: tauri-bundler 2.12 embeds that script and overwrites any
+      # cached copy that differs, so the seed was silently discarded. The
+      # GDK_BACKEND=x11 default that patch also restored now lives in the binary
+      # (client/src-tauri/src/main.rs), because the embedded plugin no longer sets
+      # GDK_BACKEND at all. The cleanup is ASSERTED after the build ("Verify no
+      # libwayland got bundled") rather than assumed, since an exclude pattern
+      # that matches nothing fails silently too.
 
       # A universal bundle is two real compilations `lipo`'d together, so BOTH
       # targets must exist before the bundler runs — the runner's default only
@@ -410,6 +369,9 @@ jobs:
           # checksums and provenance cannot do (both require a human to check them).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Linux only in effect (only linuxdeploy reads it); see "KEEP libwayland
+          # OUT OF THE APPIMAGE" above. Same glob as the verification step below.
+          LINUXDEPLOY_EXCLUDED_LIBRARIES: "libwayland-*.so*"
         with:
           projectPath: client
           # `bundle.createUpdaterArtifacts: true` makes the bundler REQUIRE the
@@ -465,12 +427,13 @@ jobs:
           # desktop jobs race to write the same field.
           generateReleaseNotes: true
 
-      # The tripwire for the seeding step above. That step works by a mechanism
-      # tauri-bundler never promised — it skips the download when ~/.cache/tauri
-      # already holds the plugin — so the day it moves that cache, the seeding
-      # stops silently and the AppImage goes back to being unlaunchable on Wayland
-      # with nothing in the log to say so. This turns that silence into a failed
-      # job. `|| true` on the extract because a `set -e` shell would otherwise
+      # The tripwire for LINUXDEPLOY_EXCLUDED_LIBRARIES (see "KEEP libwayland OUT
+      # OF THE APPIMAGE"). It already caught the previous mechanism — a seeded GTK
+      # plugin — dying silently when tauri-bundler 2.12 started embedding that
+      # script; a bundler that stops passing the environment through, or a
+      # linuxdeploy that stops reading it, would fail the same quiet way and leave
+      # the AppImage unlaunchable on Wayland. This turns that silence into a
+      # failed job. `|| true` on the extract because a `set -e` shell would otherwise
       # abort before the check that produces the useful message.
       #
       # Runs after tauri-action rather than before, because tauri-action builds and
@@ -504,7 +467,7 @@ jobs:
           # looser pattern failed every ARM build and passed every other one,
           # for a difference that has nothing to do with what is being checked.
           if find "$WORK/squashfs-root" -name 'libwayland-*.so*' -print -quit | grep -q .; then
-            echo "::error::libwayland-*.so is back in the AppImage — the GTK-plugin seeding stopped working."
+            echo "::error::libwayland-*.so is back in the AppImage — LINUXDEPLOY_EXCLUDED_LIBRARIES stopped taking effect."
             echo "This AppImage will fail to start on Wayland with EGL_BAD_PARAMETER."
             find "$WORK/squashfs-root" -name 'libwayland-*.so*'
             exit 1
