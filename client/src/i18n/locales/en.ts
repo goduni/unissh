@@ -287,6 +287,12 @@ export const en = {
     tagHint: "Add a tag and press Enter",
   },
 
+  snippetParams: {
+    title: "Fill in parameters",
+    submit: "Insert",
+    fromHost: "from the host",
+  },
+
   agentApproval: {
     title: "Sign with your key?",
     body: "A program on {{host}} is asking your agent to sign with the key this session is using.",
@@ -625,6 +631,7 @@ export const en = {
       "lock": "Lock instance",
       "lockSub": "zero out secrets"
     },
+    "snippetParamsHint": "parameters",
     "snippetNoPane": "Open a terminal first — a snippet is typed into the active pane.",
     "group": {
       "snippets": "Snippets",
