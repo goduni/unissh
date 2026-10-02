@@ -14,11 +14,11 @@
 //!
 //! So on Android every cloud request to a server behind a mainstream public CA
 //! died with `invalid peer certificate: Revoked`, and the certificate was not
-//! revoked at all — nobody had been asked. Upstream knows (its own comment
-//! points at its PR #179) and ships an escape hatch gated on `BuildConfig.TEST`,
-//! which a shipped app can never reach. 0.7.0 is current, there is no feature
-//! flag and no API knob, and the behaviour dates to 2023, so there is nothing to
-//! downgrade to either.
+//! revoked at all — nobody had been asked. Upstream knows (its PR #179) but has
+//! not changed the mapping: up to 0.7.0 it carried an escape hatch gated on
+//! `BuildConfig.TEST`, which a shipped app can never reach, and 0.7.1 removed
+//! even that. There is no feature flag and no API knob, and the behaviour dates
+//! to 2023, so there is nothing to downgrade to either.
 //!
 //! What this module does is narrow on purpose. It wraps the platform verifier
 //! and second-guesses it in exactly one situation: the platform said *revoked*,
@@ -90,6 +90,17 @@
 //!   refuse every Let's Encrypt certificate and undo the fix, so the scan stays
 //!   on OCSP — but if a future Android starts consulting CRL DPs, this override
 //!   begins masking real revocations and must go that day.
+//!
+//!   **0.7.1 makes that question live.** Its Android component (0.2.0) merges a
+//!   network security config into the app that permits cleartext HTTP to the
+//!   CAs' CRL hosts — upstream's stated purpose being that revocation via CRLs
+//!   "works again as expected". The Kotlin did not change: still no
+//!   `NO_FALLBACK`, still no `enableCRLDP`, still every
+//!   `CertPathValidatorException` mapped to `Revoked`. Whether Android now
+//!   actually falls back to the distribution point is a device question, and
+//!   the `warn!` below answers it: if a release APK on 0.7.1 connects to a
+//!   Let's Encrypt server *without* logging it, the platform is consulting CRLs
+//!   and this file should be removed.
 //!
 //! ## Removing this
 //!
