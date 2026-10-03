@@ -192,10 +192,13 @@ export interface BiometricStatus {
   /** The sealed password is stored but its secret is gone (fingerprints
    *  changed): biometric unlock must be enabled again. */
   invalidated: boolean;
+  /** The Secret Key is remembered in the OS keychain. Biometric unlock stores
+   *  only the password, so without it there is nothing to offer. */
+  secretKeyRemembered: boolean;
 }
 
 /** How `biometric_unlock` ended. Anything but "unlocked" shows the password. */
-export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated";
+export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated" | "noSecretKey";
 
 export type DbConsistencyKind =
   | "orphanItem"

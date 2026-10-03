@@ -1244,7 +1244,9 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
  *  keyset before storing anything, so enabling proves the password is held.
  *  Turning it off erases the stored password and its Keychain key at once. An
  *  invalidated one (fingerprints changed) stays visible, to say so and to be
- *  turned on again. */
+ *  turned on again. Biometric unlock stores only the password, so it depends on
+ *  the Secret Key being remembered on this device; without it the row says so
+ *  and cannot be switched on. */
 function BiometricRow() {
   const p = usePalette();
   const { t } = useTranslation();
@@ -1295,10 +1297,18 @@ function BiometricRow() {
     <>
       <SettingRow
         title={t("settings.biometricTitle")}
-        desc={status.invalidated ? t("settings.biometricInvalidated") : t("settings.biometricDesc")}
+        desc={
+          !status.secretKeyRemembered && !status.enabled
+            ? t("settings.biometricNeedsSecretKey")
+            : status.invalidated
+              ? t("settings.biometricInvalidated")
+              : t("settings.biometricDesc")
+        }
       >
         <Toggle
           checked={status.enabled || confirming}
+          // Turning it on needs the remembered Secret Key; turning it off never does.
+          disabled={!status.secretKeyRemembered && !status.enabled}
           onChange={(v) => {
             if (busy) return;
             if (v) setConfirming(true);

@@ -10,6 +10,8 @@
 //   checking ──enabled──▶ prompting ──unlocked──▶ done
 //      │                     │ cancelled / failed ──▶ password (biometric offered again)
 //      │                     │ invalidated ─────────▶ password (biometric gone, say so)
+//      │                     │ noSecretKey ─────────▶ password (biometric unusable, say why)
+//      ├──enabled, Secret Key not remembered──▶ password (biometric unusable, say why)
 //      └──not enabled──▶ password (no biometric)
 //
 // Kept free of React and of the bridge so that the transitions are tested as
@@ -20,7 +22,7 @@ import type { BiometricUnlockOutcome } from "@/bridge/types";
 export type BiometricPhase = "checking" | "prompting" | "password" | "done";
 
 /** What the password view says about the biometric path, if anything. */
-export type BiometricNotice = "invalidated" | "failed" | null;
+export type BiometricNotice = "invalidated" | "failed" | "noSecretKey" | null;
 
 export interface BiometricUnlockState {
   phase: BiometricPhase;
@@ -31,7 +33,7 @@ export interface BiometricUnlockState {
 
 export type BiometricUnlockEvent =
   /** The answer to "is biometric unlock enabled on this device". */
-  | { type: "status"; enabled: boolean }
+  | { type: "status"; enabled: boolean; secretKeyRemembered: boolean }
   /** How the prompt ended, as reported by `biometric_unlock`. */
   | { type: "outcome"; outcome: BiometricUnlockOutcome }
   /** The prompt could not run at all (a platform or unlock error). */
@@ -50,6 +52,7 @@ const AFTER_PROMPT: Record<BiometricUnlockOutcome, BiometricUnlockState> = {
   unlocked: { phase: "done", available: true, notice: null },
   cancelled: { phase: "password", available: true, notice: null },
   invalidated: { phase: "password", available: false, notice: "invalidated" },
+  noSecretKey: { phase: "password", available: false, notice: "noSecretKey" },
 };
 
 export function biometricUnlockReducer(
@@ -59,9 +62,12 @@ export function biometricUnlockReducer(
   switch (state.phase) {
     case "checking":
       if (event.type !== "status") return state;
-      return event.enabled
+      if (!event.enabled) return { phase: "password", available: false, notice: null };
+      // Biometric unlock stores only the password; without the remembered
+      // Secret Key it cannot open anything, so it is not even prompted for.
+      return event.secretKeyRemembered
         ? { phase: "prompting", available: true, notice: null }
-        : { phase: "password", available: false, notice: null };
+        : AFTER_PROMPT.noSecretKey;
     case "prompting":
       if (event.type === "error") return { phase: "password", available: true, notice: "failed" };
       if (event.type !== "outcome") return state;

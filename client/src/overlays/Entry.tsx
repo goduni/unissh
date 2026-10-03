@@ -740,14 +740,15 @@ function Unlock() {
   // Is biometric unlock enabled here? Only a password vault has anything stored
   // behind it; anywhere without an adapter the answer is simply "no".
   useEffect(() => {
+    const none = { type: "status", enabled: false, secretKeyRemembered: false } as const;
     if (requiresPassword === false) {
-      dispatchBio({ type: "status", enabled: false });
+      dispatchBio(none);
       return;
     }
     api
       .biometricStatus()
-      .then((s) => dispatchBio({ type: "status", enabled: s.enabled }))
-      .catch(() => dispatchBio({ type: "status", enabled: false }));
+      .then((s) => dispatchBio({ type: "status", enabled: s.enabled, secretKeyRemembered: s.secretKeyRemembered }))
+      .catch(() => dispatchBio(none));
   }, [requiresPassword]);
 
   // Prompt as soon as the screen enters "prompting" — but not while the window
@@ -766,7 +767,12 @@ function Unlock() {
         .biometricUnlock(t("onboarding.biometricReason"))
         .then((outcome) => {
           dispatchBio({ type: "outcome", outcome });
-          if (outcome === "unlocked") void afterUnlock();
+          if (outcome === "unlocked") {
+            afterUnlock().catch((e) => {
+              logWarn(`post-unlock steps failed: ${apiErrorMessage(e)}`);
+              toast(apiErrorMessage(e), "err");
+            });
+          }
         })
         .catch((e) => {
           logWarn(`biometric unlock failed: ${apiErrorMessage(e)}`);
@@ -869,7 +875,7 @@ function Unlock() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (bio.phase !== "prompting") void unlock();
+          if (bio.phase === "password") void unlock();
         }}
         style={{ display: "flex", flexDirection: "column", gap: rem(13) }}
       >
@@ -892,10 +898,18 @@ function Unlock() {
         )}
         {bio.notice && (
           <div role="status" style={{ fontSize: TEXT.small, color: p.txt2, lineHeight: 1.45 }}>
-            {t(bio.notice === "invalidated" ? "onboarding.biometricInvalidated" : "onboarding.biometricFailed")}
+            {t(
+              bio.notice === "invalidated"
+                ? "onboarding.biometricInvalidated"
+                : bio.notice === "noSecretKey"
+                  ? "onboarding.biometricNoSecretKey"
+                  : "onboarding.biometricFailed",
+            )}
           </div>
         )}
-        {requiresPassword !== false && bio.phase !== "prompting" && (
+        {/* Hidden while the biometric status is pending as well, so an enabled
+            Touch ID does not flash the password field before the prompt. */}
+        {requiresPassword !== false && bio.phase !== "prompting" && bio.phase !== "checking" && (
           <Field label={t("onboarding.masterPassword")} labelGap={7}>
             <Input
               icon="lock"
@@ -939,7 +953,7 @@ function Unlock() {
             icon={busy ? undefined : "unlock"}
             full
             onClick={unlock}
-            disabled={busy || bio.phase === "prompting"}
+            disabled={busy || bio.phase === "prompting" || bio.phase === "checking"}
             style={isMobile ? { minHeight: rem(48) } : undefined}
           >
             {busy ? <Spinner size={16} color={p.accentInk} /> : t("onboarding.unlock")}

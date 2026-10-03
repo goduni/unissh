@@ -1094,6 +1094,7 @@ export const en = {
     "biometricWaiting": "Confirm with Touch ID…",
     "biometricRetry": "Unlock with Touch ID",
     "biometricFailed": "Touch ID didn't work this time. Use your master password.",
+    "biometricNoSecretKey": "Touch ID unlock needs the Secret Key remembered on this Mac, and it is not. Unlock with your master password and Secret Key.",
     "biometricInvalidated": "Touch ID unlock was turned off because your fingerprints or your master password changed. Unlock with your master password, then turn it on again in Settings → Security.",
     "toast": {
       "secretKeyCopied": "Secret Key copied",
@@ -1458,7 +1459,8 @@ export const en = {
     "masterPwDesc": "Encrypts all vaults of the instance",
     "change": "Change",
     "biometricTitle": "Unlock with Touch ID",
-    "biometricDesc": "Your master password is kept on this Mac, encrypted with a key in the Keychain that only your current Touch ID fingerprints can release; typing the password always works too.",
+    "biometricDesc": "Your master password is kept on this Mac, encrypted with a key in the Keychain that only your current Touch ID fingerprints can release; typing the password always works too. Offered only where macOS lets this build use that protected Keychain.",
+    "biometricNeedsSecretKey": "Touch ID unlock stores only your master password, so it needs the Secret Key remembered on this Mac. Unlock once with the Secret Key to remember it, then turn this on.",
     "biometricInvalidated": "Your Touch ID fingerprints changed, so the stored password was erased. Turn this on again to keep using Touch ID.",
     "biometricConfirm": "Enter your master password to turn on Touch ID unlock",
     "biometricPwPlaceholder": "Master password",
