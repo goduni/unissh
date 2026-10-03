@@ -49,19 +49,38 @@ describe("biometric unlock screen", () => {
     expect(gone).toEqual({ phase: "password", available: false, notice: "invalidated", gate: false });
   });
 
-  it("with the presence gate on, prompts before the remembered-key unlock, and not without one to guard", () => {
-    const gate = run([{ type: "gate", on: true, secretKeyRemembered: true }]);
+  it("leaves a prompt that does not answer for the password, and still finishes a late unlock", () => {
+    const skipped = run([{ type: "skip" }], prompting);
+    expect(skipped).toEqual({ phase: "password", available: true, notice: null, gate: false });
+    expect(run([{ type: "outcome", outcome: "unlocked" }], skipped).phase).toBe("done");
+  });
+
+  it("with the presence gate on, prompts before the remembered-key unlock, and not without one to guard or a prompt to show", () => {
+    const gate = run([{ type: "gate", on: true, secretKeyRemembered: true, presenceSupported: true }]);
     expect(gate).toEqual({ phase: "prompting", available: true, notice: null, gate: true });
     expect(run([{ type: "outcome", outcome: "unlocked" }], gate).phase).toBe("done");
     const manual = { phase: "password", available: false, notice: null, gate: false };
-    expect(run([{ type: "gate", on: false, secretKeyRemembered: true }])).toEqual(manual);
-    expect(run([{ type: "gate", on: true, secretKeyRemembered: false }])).toEqual(manual);
+    expect(run([{ type: "gate", on: false, secretKeyRemembered: true, presenceSupported: true }])).toEqual(manual);
+    expect(run([{ type: "gate", on: true, secretKeyRemembered: false, presenceSupported: true }])).toEqual(manual);
+    expect(run([{ type: "gate", on: true, secretKeyRemembered: true, presenceSupported: false }])).toEqual({
+      phase: "password",
+      available: false,
+      notice: "gateUnavailable",
+      gate: true,
+    });
+    expect(run([{ type: "outcome", outcome: "noSecretKey" }], gate)).toEqual({
+      phase: "password",
+      available: false,
+      notice: "noSecretKey",
+      gate: true,
+    });
   });
 
-  it("keeps the vault locked when the presence gate is dismissed, with the manual unlock and a retry", () => {
-    const gate = run([{ type: "gate", on: true, secretKeyRemembered: true }]);
+  it("keeps the vault locked when the presence gate is dismissed or fails, with the manual unlock and a retry", () => {
+    const gate = run([{ type: "gate", on: true, secretKeyRemembered: true, presenceSupported: true }]);
     const dismissed = run([{ type: "outcome", outcome: "cancelled" }], gate);
     expect(dismissed).toEqual({ phase: "password", available: true, notice: "gated", gate: true });
     expect(run([{ type: "retry" }], dismissed)).toEqual(gate);
+    expect(run([{ type: "error" }], gate)).toEqual({ phase: "password", available: true, notice: "failed", gate: true });
   });
 });

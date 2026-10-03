@@ -6,7 +6,7 @@ import { create } from "zustand";
 import * as api from "@/bridge/api";
 import { onVaultMutated } from "@/bridge/sync-hook";
 import { clearSecretKey } from "@/bridge/secretKey";
-import { osPlatform } from "@/bridge/platform";
+import { osPlatform, presenceGateApplies } from "@/bridge/platform";
 import { i18n, refineLangFromSystem } from "@/i18n";
 
 /** Sentinel for the "all hosts" filter — decoupled from its display label so the
@@ -990,7 +990,7 @@ export const useApp = create<AppStore>((set, get) => ({
         !status.unlocked &&
         status.requiresPassword === false &&
         lsRead("unissh.startup") !== "locked" &&
-        !get().presenceGate
+        !presenceGateApplies(status.requiresPassword, get().presenceGate)
       ) {
         try {
           // Unlock inside Rust — the Secret Key never crosses into the JS heap

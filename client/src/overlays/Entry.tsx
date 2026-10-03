@@ -11,7 +11,7 @@ import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggl
 import { useApp } from "@/store/app";
 import { recoverInstance } from "@/store/recovery";
 import { biometricUnlockReducer, initialBiometricUnlock } from "@/store/biometricUnlock";
-import { biometricMethod, isDesktopOs, isMac, isWindows } from "@/bridge/platform";
+import { biometricMethod, isDesktopOs, isWindows, presenceGateApplies } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
 import { useWindowControls } from "@/shell/WindowChrome";
 import { useIsMobile, useNarrow } from "@/store/responsive";
@@ -721,13 +721,20 @@ function Unlock() {
   // after Touch ID / Windows Hello, so it is not put in the field either —
   // otherwise dismissing the prompt would leave a one-click unlock behind it.
   const presenceGate = useApp((s) => s.presenceGate);
-  const gateMode = requiresPassword === false && presenceGate && (isMac() || isWindows());
+  const gateMode = presenceGateApplies(requiresPassword, presenceGate);
   // Biometric path (Touch ID / Windows Hello): see store/biometricUnlock.ts for the transitions.
   // The password and the Secret Key never come back to JS on this path — Rust
   // reads, unseals and unlocks.
   const [bio, dispatchBio] = useReducer(biometricUnlockReducer, initialBiometricUnlock);
   // One prompt per entry into "prompting", even under StrictMode's double effects.
   const prompted = useRef(false);
+  // Locked by the OS (screen lock, sleep): the window can still report focus
+  // under the lock screen, so the first prompt waits for a sign the user is
+  // back at it rather than appearing where nobody can answer it.
+  const waitForReturn = useRef(lockReason === "screen-lock" || lockReason === "suspend");
+  // A prompt skipped from the view may still unlock later, beside a manual
+  // unlock: the steps after unlocking run once.
+  const finished = useRef(false);
 
   // prefill the Secret Key from the OS keychain if it was saved on this device
   // (cached read — at most one keychain access per process)
@@ -749,24 +756,36 @@ function Unlock() {
     const none = { type: "status", enabled: false, secretKeyRemembered: false } as const;
     if (gateMode) {
       api
-        .biometricStatus()
-        .then((s) => dispatchBio({ type: "gate", on: true, secretKeyRemembered: s.secretKeyRemembered }))
-        .catch(() => dispatchBio({ type: "gate", on: false, secretKeyRemembered: false }));
+        .biometricStatus(true)
+        .then((s) =>
+          dispatchBio({
+            type: "gate",
+            on: true,
+            secretKeyRemembered: s.secretKeyRemembered,
+            presenceSupported: s.presenceSupported,
+          }),
+        )
+        .catch(() => dispatchBio({ type: "gate", on: false, secretKeyRemembered: false, presenceSupported: false }));
       return;
     }
     if (requiresPassword === false) {
       dispatchBio(none);
       return;
     }
+    // Without stored material Rust does not touch the keychain for this, so a
+    // device without biometric unlock shows the password field at once.
     api
-      .biometricStatus()
+      .biometricStatus(false)
       .then((s) => dispatchBio({ type: "status", enabled: s.enabled, secretKeyRemembered: s.secretKeyRemembered }))
       .catch(() => dispatchBio(none));
   }, [requiresPassword, gateMode]);
 
   // Prompt as soon as the screen enters "prompting" — but not while the window
-  // is in the background (a lock on screen-lock or sleep lands here while the
-  // user is away): then on the first focus, so the sheet meets the user.
+  // is in the background: then on the first focus, so the sheet meets the
+  // user. After an OS lock, not before a sign of the user (focus, the pointer
+  // or a key reaching the window, the window becoming visible): under the lock
+  // screen the window may still claim focus. A retry is the user, so it is
+  // immediate.
   useEffect(() => {
     if (bio.phase !== "prompting") {
       prompted.current = false;
@@ -776,6 +795,7 @@ function Unlock() {
     const go = () => {
       if (prompted.current) return;
       prompted.current = true;
+      waitForReturn.current = false;
       // The presence gate's Windows prompt shows the reason on its own, as a
       // sentence; Touch ID puts it after "UniSSH is trying to".
       const prompt = bio.gate
@@ -798,17 +818,31 @@ function Unlock() {
           dispatchBio({ type: "error" });
         });
     };
-    if (document.hasFocus()) {
+    const osLock = waitForReturn.current;
+    if (document.hasFocus() && !osLock) {
       go();
       return;
     }
-    window.addEventListener("focus", go, { once: true });
-    return () => window.removeEventListener("focus", go);
+    const signs = osLock ? (["focus", "pointermove", "pointerdown", "keydown"] as const) : (["focus"] as const);
+    function detach() {
+      for (const name of signs) window.removeEventListener(name, onSign);
+      document.removeEventListener("visibilitychange", onSign);
+    }
+    function onSign() {
+      if (document.visibilityState !== "visible") return;
+      detach();
+      go();
+    }
+    for (const name of signs) window.addEventListener(name, onSign);
+    if (osLock) document.addEventListener("visibilitychange", onSign);
+    return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one prompt per phase entry
   }, [bio.phase]);
 
   // Everything after the core said yes, whichever way it was asked.
   const afterUnlock = async () => {
+    if (finished.current) return;
+    finished.current = true;
     useApp.setState({ unlocked: true, overlay: null, lockReason: null });
     await useApp.getState().reloadVaults();
     await useApp.getState().reloadServerStatus();
@@ -827,8 +861,12 @@ function Unlock() {
     try {
       await api.unlock(password ? password : null, cleanKey);
       // store the key only if it wasn't already in the keychain — avoids a
-      // write (and its prompt) on every unlock.
-      if (!fromKeychain) rememberSecretKey(cleanKey);
+      // write (and its prompt) on every unlock. Under the presence gate the
+      // field is never prefilled, yet the key is already remembered (that is
+      // what the gate guards): no rewrite there either — unless the remembered
+      // one is gone or no longer opens this vault.
+      const remembered = bio.gate && bio.notice !== "noSecretKey";
+      if (!fromKeychain && !remembered) rememberSecretKey(cleanKey);
       await afterUnlock();
     } catch (e) {
       logWarn(`unlock failed: ${apiErrorMessage(e)}`);
@@ -915,6 +953,13 @@ function Unlock() {
             {t("onboarding.biometricWaiting", { method: biometricMethod() })}
           </div>
         )}
+        {bio.phase === "prompting" && (
+          // The way out of a prompt that never answers (a dialog behind the
+          // window, a hung check): the manual unlock, at once.
+          <Btn type="button" variant="ghost" full onClick={() => dispatchBio({ type: "skip" })}>
+            {t(bio.gate ? "onboarding.presenceSkip" : "onboarding.biometricSkip")}
+          </Btn>
+        )}
         {bio.notice && (
           <div role="status" style={{ fontSize: TEXT.small, color: p.txt2, lineHeight: 1.45 }}>
             {t(
@@ -923,7 +968,11 @@ function Unlock() {
                   ? "onboarding.biometricInvalidatedWindows"
                   : "onboarding.biometricInvalidated"
                 : bio.notice === "noSecretKey"
-                  ? "onboarding.biometricNoSecretKey"
+                  ? bio.gate
+                    ? "onboarding.presenceNoSecretKey"
+                    : "onboarding.biometricNoSecretKey"
+                  : bio.notice === "gateUnavailable"
+                    ? "onboarding.presenceUnavailable"
                   : bio.notice === "gated"
                     ? "onboarding.presenceGated"
                     : bio.gate

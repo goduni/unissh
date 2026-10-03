@@ -9,6 +9,8 @@ import type {
   AuthMethod,
   BiometricStatus,
   BiometricUnlockOutcome,
+  KeysetWipe,
+  PresenceCheck,
   BroadcastEvent,
   ConnectionProfile,
   Identity,
@@ -109,7 +111,7 @@ export const changePassword = (
   oldPassword: string | null,
   newPassword: string | null,
   secretKeyHex: string,
-) => invoke<boolean>("change_password", { oldPassword, newPassword, secretKeyHex });
+) => invoke<KeysetWipe>("change_password", { oldPassword, newPassword, secretKeyHex });
 export const accountId = () => invoke<string>("account_id");
 
 // ── vaults ─────────────────────────────────────────────────────
@@ -754,7 +756,11 @@ export const keychainDeleteSecretKey = () => invoke<void>("keychain_delete_secre
 // The password goes IN once, when enabling (from the form that already holds
 // it). It never comes back out: the biometric unlock reads, unseals and uses it
 // entirely in Rust.
-export const biometricStatus = () => invoke<BiometricStatus>("biometric_status");
+/** `withSecretKey`: also say whether the Secret Key is remembered when nothing
+ *  is stored (Settings, the presence gate). Without it the password unlock
+ *  screen never waits on a keychain read it does not need. */
+export const biometricStatus = (withSecretKey: boolean) =>
+  invoke<BiometricStatus>("biometric_status", { withSecretKey });
 export const biometricEnable = (password: string) => invoke<void>("biometric_enable", { password });
 export const biometricDisable = () => invoke<void>("biometric_disable");
 /** `reason` is the localised line the system prompt shows under the app name. */
@@ -764,6 +770,10 @@ export const biometricUnlock = (reason: string) =>
  *  key unlock, both in Rust. Nothing is stored behind the prompt. */
 export const biometricPresenceUnlock = (reason: string) =>
   invoke<BiometricUnlockOutcome>("biometric_presence_unlock", { reason });
+/** Show the presence prompt once, before the startup gate is turned on.
+ *  Unlocks and stores nothing. */
+export const biometricConfirmPresence = (reason: string) =>
+  invoke<PresenceCheck>("biometric_confirm_presence", { reason });
 
 // ── cloud server: identity / session ───────────────────────────
 // The cloud integration is additive: a local-only instance never touches it.

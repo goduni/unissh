@@ -1176,7 +1176,7 @@ function ChangePasswordForm({
     if (busy) return;
     setBusy(true);
     try {
-      const biometricWiped = await api.changePassword(
+      const wipe = await api.changePassword(
         oldPw ? oldPw : null,
         newPw ? newPw : null,
         secretKey.replace(/[\s-]/g, ""),
@@ -1185,7 +1185,10 @@ function ChangePasswordForm({
       // whether "start unlocked" can ever apply.
       useApp.setState({ requiresPassword: !!newPw });
       toast(t("settings.masterPwChanged"), "ok");
-      onChanged(biometricWiped);
+      // Never "erased" when it was not: what is left opens nothing any more
+      // (the core refuses the old password) and goes at the next attempt.
+      if (wipe === "failed") toast(t("settings.biometricWipeFailed", { method: biometricMethod() }), "warn");
+      onChanged(wipe === "erased");
       onClose();
     } catch (e) {
       toast(apiErrorMessage(e), "err");
@@ -1274,14 +1277,15 @@ function BiometricRow({ reenable }: { reenable: boolean }) {
 
   const refresh = () =>
     api
-      .biometricStatus()
+      .biometricStatus(true)
       .then(setStatus)
       .catch(() => setStatus(null));
   const offered = isMac() || isWindows();
+  // Only a password vault has this row; a keychain read for any other is waste.
   useEffect(() => {
-    if (offered) void refresh();
+    if (offered && requiresPassword === true) void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the platform does not change
-  }, []);
+  }, [requiresPassword]);
 
   if (!offered || requiresPassword !== true || !status) return null;
   const win = isWindows();
@@ -1408,27 +1412,53 @@ function BiometricRow({ reenable }: { reenable: boolean }) {
  *  check at all. On, the remembered key is used only after the platform's
  *  presence prompt; dismissed, the vault stays locked and the Secret Key can
  *  still be typed from the Emergency Kit. Nothing is stored behind the prompt,
- *  so turning it on or off needs no password. Shown where the prompt can be
- *  shown, and wherever it is on (so it can always be turned off). */
+ *  so turning it on or off needs no password. Turning it on shows the prompt
+ *  once and saves the setting only if it confirmed — a prompt that never works
+ *  on this machine must not be what stands between the user and the vault.
+ *  Turning it off is free. Shown where the prompt can be shown, and wherever it
+ *  is on (so it can always be turned off). */
 function PresenceGateRow() {
   const { t } = useTranslation();
   const requiresPassword = useApp((s) => s.requiresPassword);
   const on = useApp((s) => s.presenceGate);
   const setOn = useApp((s) => s.setPresenceGate);
   const [status, setStatus] = useState<BiometricStatus | null>(null);
+  const [busy, setBusy] = useState(false);
   const offered = isMac() || isWindows();
+  // Only a Secret-Key-only vault has this row; a keychain read for any other is waste.
   useEffect(() => {
-    if (offered)
+    if (offered && requiresPassword === false)
       void api
-        .biometricStatus()
+        .biometricStatus(true)
         .then(setStatus)
         .catch(() => setStatus(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the platform does not change
-  }, []);
+  }, [requiresPassword]);
 
   if (!offered || requiresPassword !== false || !status) return null;
   if (!status.presenceSupported && !on) return null;
   const method = biometricMethod();
+
+  const turnOn = async () => {
+    setBusy(true);
+    try {
+      const check = await api.biometricConfirmPresence(
+        t(isWindows() ? "settings.presenceGateReasonWindows" : "settings.presenceGateReason"),
+      );
+      if (check === "confirmed") setOn(true);
+      else
+        toast(
+          t(check === "cancelled" ? "settings.presenceGateNotConfirmed" : "settings.presenceGateCannotPrompt", {
+            method,
+          }),
+          "warn",
+        );
+    } catch (e) {
+      toast(t("settings.presenceGateFailed", { method, error: apiErrorMessage(e) }), "err");
+    }
+    setBusy(false);
+  };
+
   return (
     <SettingRow
       title={t("settings.presenceGateTitle", { method })}
@@ -1436,15 +1466,19 @@ function PresenceGateRow() {
         !status.presenceSupported
           ? t("settings.presenceGateUnavailable", { method })
           : !status.secretKeyRemembered
-            ? t("settings.presenceGateNeedsSecretKey")
+            ? t(on ? "settings.presenceGateNeedsSecretKeyOn" : "settings.presenceGateNeedsSecretKey")
             : t("settings.presenceGateDesc", { method })
       }
     >
       <Toggle
         checked={on}
-        // Turning it off is always allowed.
-        disabled={!on && (!status.presenceSupported || !status.secretKeyRemembered)}
-        onChange={setOn}
+        // Turning it off is always allowed; on only where it can be proven.
+        disabled={busy || (!on && (!status.presenceSupported || !status.secretKeyRemembered))}
+        onChange={(v) => {
+          if (busy) return;
+          if (v) void turnOn();
+          else setOn(false);
+        }}
       />
     </SettingRow>
   );
