@@ -265,7 +265,9 @@ boundary, so what crosses it is spelled out here.
   and the session hash, not the destination host (OpenSSH's `session-bind`
   extension is refused along with every other extension). A payload that is
   not an SSH login (for example a git commit signature) is shown as such. A
-  signature asked for a certificate is approved and made as its key. The
+  signature asked for a certificate is approved and made as its key. The agent
+  does not check a certificate's validity (expiry, principals); like OpenSSH's
+  agent, it leaves that to the server. The
   private key stays in the core's embedded agent; only the signature leaves.
 - **What it cannot do at all:** add, remove, lock or unlock keys, or call any
   extension (all refused outright); get a signature with a key that was not

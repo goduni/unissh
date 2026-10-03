@@ -61,5 +61,5 @@ Using the *operating system's* agent is a separate per-host opt-in in
 `ssh-transport` (`Auth::SystemAgent`) — the route to hardware tokens and smart
 cards, whose keys never enter this agent. FIDO/U2F (`sk-*`) credentials are
 refused at import, since signing them needs the token.
-In Milestone 1 — Ed25519 only. A single `unsafe` module (`mlock`/`munlock`),
-`#![deny(unsafe_op_in_unsafe_fn)]`.
+Key types: Ed25519, ECDSA (P-256/P-384/P-521) and RSA. A single `unsafe` module
+(`mlock`/`munlock`), `#![deny(unsafe_op_in_unsafe_fn)]`.
