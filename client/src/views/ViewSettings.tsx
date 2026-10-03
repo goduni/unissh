@@ -1156,7 +1156,15 @@ function SettingsLocalTerminal() {
 }
 
 // ── Security ───────────────────────────────────────────────────
-function ChangePasswordForm({ onClose }: { onClose: () => void }) {
+function ChangePasswordForm({
+  onClose,
+  onChanged,
+}: {
+  onClose: () => void;
+  /** After a successful change; `biometricWiped` when biometric unlock was on
+   *  and has been turned off (its stored password belonged to the old one). */
+  onChanged: (biometricWiped: boolean) => void;
+}) {
   const p = usePalette();
   const { t } = useTranslation();
   const [oldPw, setOldPw] = useState("");
@@ -1168,7 +1176,7 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
     if (busy) return;
     setBusy(true);
     try {
-      await api.changePassword(
+      const biometricWiped = await api.changePassword(
         oldPw ? oldPw : null,
         newPw ? newPw : null,
         secretKey.replace(/[\s-]/g, ""),
@@ -1177,6 +1185,7 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
       // whether "start unlocked" can ever apply.
       useApp.setState({ requiresPassword: !!newPw });
       toast(t("settings.masterPwChanged"), "ok");
+      onChanged(biometricWiped);
       onClose();
     } catch (e) {
       toast(apiErrorMessage(e), "err");
@@ -1239,18 +1248,22 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
 }
 
 /** "Unlock with Touch ID" / "Unlock with Windows Hello". Only for a password
- *  vault (a Secret-Key-only vault has no password to remember). On a Mac it is
- *  offered only where Touch ID can be used (an unsigned build may never get
- *  there, so it is hidden rather than promised); on Windows it is always shown,
- *  and without Windows Hello set up it is disabled with that reason.
+ *  vault (a Secret-Key-only vault has no password to remember; it gets
+ *  `PresenceGateRow` instead). On a Mac it is offered only where Touch ID can
+ *  be used (an unsigned build may never get there, so it is hidden rather than
+ *  promised); on Windows it is always shown, and without Windows Hello set up
+ *  it is disabled with that reason.
  *  Turning it on asks for the master password once — Rust checks it against the
  *  keyset before storing anything, so enabling proves the password is held.
- *  Turning it off erases the stored password and its Keychain key at once. An
- *  invalidated one (fingerprints changed) stays visible, to say so and to be
- *  turned on again. Biometric unlock stores only the password, so it depends on
- *  the Secret Key being remembered on this device; without it the row says so
- *  and cannot be switched on. */
-function BiometricRow() {
+ *  Turning it off erases the stored password and its device secret at once.
+ *  An invalidated one (fingerprints changed, Hello reset) stays visible, to say
+ *  so and to be turned on again; so does one turned off by a password change
+ *  (`reenable`). A stranded one (stored, but the platform cannot use it now)
+ *  shows as off with the reason and a button to forget what is stored.
+ *  Biometric unlock stores only the password, so it depends on the Secret Key
+ *  being remembered on this device; without it the row says so and cannot be
+ *  switched on. */
+function BiometricRow({ reenable }: { reenable: boolean }) {
   const p = usePalette();
   const { t } = useTranslation();
   const requiresPassword = useApp((s) => s.requiresPassword);
@@ -1273,7 +1286,7 @@ function BiometricRow() {
   if (!offered || requiresPassword !== true || !status) return null;
   const win = isWindows();
   const method = biometricMethod();
-  const unusable = !status.supported && !status.enabled && !status.invalidated;
+  const unusable = !status.supported && !status.enabled && !status.invalidated && !status.stranded;
   if (unusable && !win) return null;
 
   const turnOff = async () => {
@@ -1306,8 +1319,12 @@ function BiometricRow() {
       <SettingRow
         title={t("settings.biometricTitle", { method })}
         desc={
-          unusable
+          status.stranded
+            ? t(win ? "settings.biometricStrandedWindows" : "settings.biometricStranded")
+            : unusable
             ? t("settings.biometricUnsupportedWindows")
+            : reenable && !status.enabled
+              ? t("settings.biometricReenable", { method })
             : !status.secretKeyRemembered
               ? t(status.enabled ? "settings.biometricNeedsSecretKeyOn" : "settings.biometricNeedsSecretKey", {
                   method,
@@ -1317,17 +1334,24 @@ function BiometricRow() {
                 : t(win ? "settings.biometricDescWindows" : "settings.biometricDesc")
         }
       >
-        <Toggle
-          checked={status.enabled || confirming}
-          // Turning it on needs the remembered Secret Key; turning it off never does.
-          disabled={!status.secretKeyRemembered && !status.enabled}
-          onChange={(v) => {
-            if (busy) return;
-            if (v) setConfirming(true);
-            else if (confirming && !status.enabled) setConfirming(false);
-            else void turnOff();
-          }}
-        />
+        {status.stranded ? (
+          // Off, and cannot be turned on here now; what is stored can go.
+          <Btn variant="ghost" size="sm" icon="trash" onClick={turnOff} disabled={busy}>
+            {t("settings.biometricForget")}
+          </Btn>
+        ) : (
+          <Toggle
+            checked={status.enabled || confirming}
+            // Turning it on needs the remembered Secret Key; turning it off never does.
+            disabled={!status.secretKeyRemembered && !status.enabled}
+            onChange={(v) => {
+              if (busy) return;
+              if (v) setConfirming(true);
+              else if (confirming && !status.enabled) setConfirming(false);
+              else void turnOff();
+            }}
+          />
+        )}
       </SettingRow>
       {confirming && !status.enabled && (
         <form
@@ -1379,12 +1403,63 @@ function BiometricRow() {
   );
 }
 
+/** "Require Touch ID / Windows Hello at startup", for a Secret-Key-only vault
+ *  on a device that remembers its Secret Key — which otherwise opens with no
+ *  check at all. On, the remembered key is used only after the platform's
+ *  presence prompt; dismissed, the vault stays locked and the Secret Key can
+ *  still be typed from the Emergency Kit. Nothing is stored behind the prompt,
+ *  so turning it on or off needs no password. Shown where the prompt can be
+ *  shown, and wherever it is on (so it can always be turned off). */
+function PresenceGateRow() {
+  const { t } = useTranslation();
+  const requiresPassword = useApp((s) => s.requiresPassword);
+  const on = useApp((s) => s.presenceGate);
+  const setOn = useApp((s) => s.setPresenceGate);
+  const [status, setStatus] = useState<BiometricStatus | null>(null);
+  const offered = isMac() || isWindows();
+  useEffect(() => {
+    if (offered)
+      void api
+        .biometricStatus()
+        .then(setStatus)
+        .catch(() => setStatus(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the platform does not change
+  }, []);
+
+  if (!offered || requiresPassword !== false || !status) return null;
+  if (!status.presenceSupported && !on) return null;
+  const method = biometricMethod();
+  return (
+    <SettingRow
+      title={t("settings.presenceGateTitle", { method })}
+      desc={
+        !status.presenceSupported
+          ? t("settings.presenceGateUnavailable", { method })
+          : !status.secretKeyRemembered
+            ? t("settings.presenceGateNeedsSecretKey")
+            : t("settings.presenceGateDesc", { method })
+      }
+    >
+      <Toggle
+        checked={on}
+        // Turning it off is always allowed.
+        disabled={!on && (!status.presenceSupported || !status.secretKeyRemembered)}
+        onChange={setOn}
+      />
+    </SettingRow>
+  );
+}
+
 function SettingsSecurity() {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
   const knownHosts = useApp((s) => s.knownHosts);
   const [changing, setChanging] = useState(false);
+  // Biometric unlock is wiped by a password change; the row then asks for it
+  // again (and is remounted, so it reads the new status).
+  const [pwChanges, setPwChanges] = useState(0);
+  const [biometricWiped, setBiometricWiped] = useState(false);
   // Same slot-and-dialog shape as the per-vault integrity check. This was left on
   // a toast when that one moved off it, which meant the answer to "is my database
   // sound" still vanished in under three seconds and still named a count instead
@@ -1431,8 +1506,17 @@ function SettingsSecurity() {
           {t("settings.change")}
         </Btn>
       </SettingRow>
-      {changing && <ChangePasswordForm onClose={() => setChanging(false)} />}
-      <BiometricRow />
+      {changing && (
+        <ChangePasswordForm
+          onClose={() => setChanging(false)}
+          onChanged={(wiped) => {
+            setBiometricWiped((was) => was || wiped);
+            setPwChanges((n) => n + 1);
+          }}
+        />
+      )}
+      <BiometricRow key={`bio-${pwChanges}`} reenable={biometricWiped} />
+      <PresenceGateRow key={`gate-${pwChanges}`} />
       <SettingRow title={t("settings.clipClearTitle")} desc={t("settings.clipClearDesc")}>
         <Toggle checked={clip} onChange={onClip} />
       </SettingRow>

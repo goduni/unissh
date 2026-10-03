@@ -192,8 +192,16 @@ export interface BiometricStatus {
   /** The sealed password is stored but its secret is gone (fingerprints
    *  changed): biometric unlock must be enabled again. */
   invalidated: boolean;
+  /** The sealed password is stored but the platform cannot use biometrics
+   *  here now (Windows Hello turned off or its PIN removed, Touch ID gone or
+   *  its lid closed): shown as off, with the reason and a way to forget it. */
+  stranded: boolean;
+  /** The platform's presence prompt can be shown — the Secret-Key-only
+   *  startup gate, which stores nothing. */
+  presenceSupported: boolean;
   /** The Secret Key is remembered in the OS keychain. Biometric unlock stores
-   *  only the password, so without it there is nothing to offer. */
+   *  only the password, and the presence gate guards that remembered key, so
+   *  without it neither has anything to offer. */
   secretKeyRemembered: boolean;
 }
 

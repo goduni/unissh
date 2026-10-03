@@ -109,7 +109,7 @@ export const changePassword = (
   oldPassword: string | null,
   newPassword: string | null,
   secretKeyHex: string,
-) => invoke<void>("change_password", { oldPassword, newPassword, secretKeyHex });
+) => invoke<boolean>("change_password", { oldPassword, newPassword, secretKeyHex });
 export const accountId = () => invoke<string>("account_id");
 
 // ── vaults ─────────────────────────────────────────────────────
@@ -750,7 +750,7 @@ export const keychainUnlock = (password: string | null) =>
   invoke<void>("keychain_unlock", { password });
 export const keychainDeleteSecretKey = () => invoke<void>("keychain_delete_secret_key");
 
-// ── biometric unlock (Touch ID on macOS) ───────────────────────
+// ── biometric unlock (Touch ID on macOS, Windows Hello on Windows) ──
 // The password goes IN once, when enabling (from the form that already holds
 // it). It never comes back out: the biometric unlock reads, unseals and uses it
 // entirely in Rust.
@@ -760,6 +760,10 @@ export const biometricDisable = () => invoke<void>("biometric_disable");
 /** `reason` is the localised line the system prompt shows under the app name. */
 export const biometricUnlock = (reason: string) =>
   invoke<BiometricUnlockOutcome>("biometric_unlock", { reason });
+/** The Secret-Key-only startup gate: the presence prompt, then the remembered-
+ *  key unlock, both in Rust. Nothing is stored behind the prompt. */
+export const biometricPresenceUnlock = (reason: string) =>
+  invoke<BiometricUnlockOutcome>("biometric_presence_unlock", { reason });
 
 // ── cloud server: identity / session ───────────────────────────
 // The cloud integration is additive: a local-only instance never touches it.

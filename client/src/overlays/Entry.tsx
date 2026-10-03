@@ -11,7 +11,7 @@ import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggl
 import { useApp } from "@/store/app";
 import { recoverInstance } from "@/store/recovery";
 import { biometricUnlockReducer, initialBiometricUnlock } from "@/store/biometricUnlock";
-import { biometricMethod, isDesktopOs, isWindows } from "@/bridge/platform";
+import { biometricMethod, isDesktopOs, isMac, isWindows } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
 import { useWindowControls } from "@/shell/WindowChrome";
 import { useIsMobile, useNarrow } from "@/store/responsive";
@@ -717,6 +717,11 @@ function Unlock() {
   // header at boot, so it's known before unlocking. null/true → keep the field.
   const requiresPassword = useApp((s) => s.requiresPassword);
   const lockReason = useApp((s) => s.lockReason);
+  // The Secret-Key-only presence gate: the remembered Secret Key is used only
+  // after Touch ID / Windows Hello, so it is not put in the field either —
+  // otherwise dismissing the prompt would leave a one-click unlock behind it.
+  const presenceGate = useApp((s) => s.presenceGate);
+  const gateMode = requiresPassword === false && presenceGate && (isMac() || isWindows());
   // Biometric path (Touch ID / Windows Hello): see store/biometricUnlock.ts for the transitions.
   // The password and the Secret Key never come back to JS on this path — Rust
   // reads, unseals and unlocks.
@@ -727,6 +732,7 @@ function Unlock() {
   // prefill the Secret Key from the OS keychain if it was saved on this device
   // (cached read — at most one keychain access per process)
   useEffect(() => {
+    if (gateMode) return;
     readSecretKeyOnce()
       .then((k) => {
         if (k) {
@@ -735,12 +741,19 @@ function Unlock() {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [gateMode]);
 
   // Is biometric unlock enabled here? Only a password vault has anything stored
   // behind it; anywhere without an adapter the answer is simply "no".
   useEffect(() => {
     const none = { type: "status", enabled: false, secretKeyRemembered: false } as const;
+    if (gateMode) {
+      api
+        .biometricStatus()
+        .then((s) => dispatchBio({ type: "gate", on: true, secretKeyRemembered: s.secretKeyRemembered }))
+        .catch(() => dispatchBio({ type: "gate", on: false, secretKeyRemembered: false }));
+      return;
+    }
     if (requiresPassword === false) {
       dispatchBio(none);
       return;
@@ -749,7 +762,7 @@ function Unlock() {
       .biometricStatus()
       .then((s) => dispatchBio({ type: "status", enabled: s.enabled, secretKeyRemembered: s.secretKeyRemembered }))
       .catch(() => dispatchBio(none));
-  }, [requiresPassword]);
+  }, [requiresPassword, gateMode]);
 
   // Prompt as soon as the screen enters "prompting" — but not while the window
   // is in the background (a lock on screen-lock or sleep lands here while the
@@ -763,8 +776,14 @@ function Unlock() {
     const go = () => {
       if (prompted.current) return;
       prompted.current = true;
-      api
-        .biometricUnlock(t("onboarding.biometricReason"))
+      // The presence gate's Windows prompt shows the reason on its own, as a
+      // sentence; Touch ID puts it after "UniSSH is trying to".
+      const prompt = bio.gate
+        ? api.biometricPresenceUnlock(
+            t(isWindows() ? "onboarding.presenceReasonWindows" : "onboarding.biometricReason"),
+          )
+        : api.biometricUnlock(t("onboarding.biometricReason"));
+      prompt
         .then((outcome) => {
           dispatchBio({ type: "outcome", outcome });
           if (outcome === "unlocked") {
@@ -905,7 +924,11 @@ function Unlock() {
                   : "onboarding.biometricInvalidated"
                 : bio.notice === "noSecretKey"
                   ? "onboarding.biometricNoSecretKey"
-                  : "onboarding.biometricFailed",
+                  : bio.notice === "gated"
+                    ? "onboarding.presenceGated"
+                    : bio.gate
+                      ? "onboarding.presenceFailed"
+                      : "onboarding.biometricFailed",
               { method: biometricMethod() },
             )}
           </div>

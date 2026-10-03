@@ -478,6 +478,11 @@ interface AppStore {
   setModernAlgorithms: (on: boolean) => void;
   gpuRendering: boolean;
   setGpuRendering: (on: boolean) => void;
+  /** Secret-Key-only vaults: ask Touch ID / Windows Hello before the
+   *  remembered Secret Key is used (at startup and on the unlock screen).
+   *  Device-local; stores nothing behind the prompt. */
+  presenceGate: boolean;
+  setPresenceGate: (on: boolean) => void;
   /** Draw our own title bar (and leave the window undecorated), rather than
    *  handing the frame to the window manager. Resolved at boot: an explicit
    *  choice if the user made one, otherwise off under a tiling WM and on
@@ -690,6 +695,17 @@ const lsGpuRendering = (): boolean => {
   }
 };
 
+/** The Secret-Key-only presence gate. Off by default. Device-local, beside
+ *  `unissh.startup`: both decide what boot() does with the remembered Secret
+ *  Key before anything is unlocked, and both are read from here. */
+const lsPresenceGate = (): boolean => {
+  try {
+    return localStorage.getItem("unissh.presenceGate") === "1";
+  } catch {
+    return false;
+  }
+};
+
 /** The user's EXPLICIT choice about the custom title bar, or `null` for "never
  *  said" — which is the whole point of the tri-state. A plain boolean default
  *  cannot express it: we need to tell "wants the bar" apart from "has not
@@ -875,6 +891,7 @@ export const useApp = create<AppStore>((set, get) => ({
   keepaliveSecs: lsKeepaliveSecs(),
   modernAlgorithms: lsModernAlgorithms(),
   gpuRendering: lsGpuRendering(),
+  presenceGate: lsPresenceGate(),
   // Provisional: the current look, so a browser preview and the first paint on
   // every non-tiling desktop are right without waiting on IPC. `boot` replaces
   // it with the detected answer when the user has never chosen.
@@ -964,13 +981,16 @@ export const useApp = create<AppStore>((set, get) => ({
       // behaviour; the "start locked" setting is the explicit opt-out. A master-
       // password instance can't auto-unlock (the password is stored nowhere) → it
       // falls to the unlock screen. The keychain read is cached and shared with that
-      // screen, so a miss here doesn't cause a second OS prompt.
+      // screen, so a miss here doesn't cause a second OS prompt. With the presence
+      // gate on, it falls there too: that screen asks Touch ID / Windows Hello
+      // first and only then unlocks with the remembered key.
       if (
         status.exists &&
         !status.partial &&
         !status.unlocked &&
         status.requiresPassword === false &&
-        lsRead("unissh.startup") !== "locked"
+        lsRead("unissh.startup") !== "locked" &&
+        !get().presenceGate
       ) {
         try {
           // Unlock inside Rust — the Secret Key never crosses into the JS heap
@@ -1553,6 +1573,14 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ gpuRendering: on });
     try {
       localStorage.setItem("unissh.gpuRendering", on ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  },
+  setPresenceGate: (on) => {
+    set({ presenceGate: on });
+    try {
+      localStorage.setItem("unissh.presenceGate", on ? "1" : "0");
     } catch {
       /* ignore */
     }
