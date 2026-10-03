@@ -204,6 +204,7 @@ impl Core {
             &self.rt,
             &Arc::new(Mutex::new(prompter)),
             &self.approver,
+            &self.own_system_agent,
             &auth,
             &target.jumps,
             target.proxy.as_ref(),

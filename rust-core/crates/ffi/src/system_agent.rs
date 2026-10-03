@@ -22,6 +22,12 @@
 //! The set is resolved from the unlocked core on every request, so a toggle
 //! takes effect on the next `ssh-add -l` and a locked core offers nothing.
 //!
+//! A shared key with an attached certificate (`<key>.cert`) is offered twice:
+//! the key, then the certificate, so certificate logins work from the shell.
+//! Both identities carry the key's id; a signature asked for the certificate
+//! is approved as the key and made with it. A certificate that does not
+//! certify this key is not offered.
+//!
 //! Every signature is approved first ([`LocalAgent`]): the registered
 //! [`AgentApprover`] is asked with the key and its vault, the user the payload
 //! would log in as and the calling process (as the OS reported it; advisory).
@@ -32,16 +38,19 @@
 //! so a key unshared, replaced or locked away while the prompt was open is not
 //! used.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use unissh_ssh_transport::{AgentCaller, AgentKeys, LocalAgent, LocalApproval, OfferedKey};
+use unissh_ssh_transport::{
+    AgentCaller, AgentKeys, LocalAgent, LocalApproval, OfferedKey, RsaHash,
+};
 
 use super::{
-    agent_key_id, load_key_into_agent, lock_recover, next_agent_sign_id, resolve_vid,
+    agent_key_id, cert_item_id, load_key_into_agent, lock_recover, next_agent_sign_id, resolve_vid,
     userauth_login, AgentApprover, AgentSignOrigin, AgentSignRequest, Core, CoreState, FfiError,
-    InMemoryAgent, Vault, ITEM_TYPE_SSH_KEY,
+    InMemoryAgent, Vault, ITEM_TYPE_SSH_CERT, ITEM_TYPE_SSH_KEY,
 };
 
 // Keep the storage slot stable; a format change gets a new key.
@@ -117,6 +126,35 @@ fn current_public(state: &mut CoreState, vault_id: &str, item_id: &str) -> Optio
     Some(public)
 }
 
+/// `<type> <base64>` of the certificate attached to the key `item_id`, if
+/// there is one and it certifies `public` (that key's `<type> <base64>`).
+fn current_certificate(
+    state: &CoreState,
+    vault_id: &str,
+    item_id: &str,
+    public: &str,
+) -> Option<String> {
+    use unissh_ssh_agent::ssh_key::{Certificate, PublicKey};
+
+    let item = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .ok()?
+    .get_item(cert_item_id(item_id).as_bytes())
+    .ok()??;
+    if item.item_type != ITEM_TYPE_SSH_CERT {
+        return None;
+    }
+    let line = std::str::from_utf8(item.content.as_slice()).ok()?.trim();
+    let cert = Certificate::from_openssh(line).ok()?;
+    let key = PublicKey::from_openssh(public).ok()?;
+    (cert.public_key() == key.key_data())
+        .then(|| type_and_key(line))
+        .flatten()
+}
+
 /// `<type> <base64>` of an OpenSSH public key line: its first two fields, the
 /// comment dropped.
 fn type_and_key(line: &str) -> Option<String> {
@@ -164,28 +202,44 @@ impl AgentKeys for SharedKeys {
         let Some(state) = guard.as_mut() else {
             return Vec::new();
         };
-        resolve(state)
-            .into_iter()
-            .map(|(entry, public)| OfferedKey {
-                key_id: agent_key_id(&entry.vault_id, &entry.item_id),
+        let shared = resolve(state);
+        let mut offered = Vec::with_capacity(shared.len());
+        for (entry, public) in shared {
+            let key_id = agent_key_id(&entry.vault_id, &entry.item_id);
+            let cert = current_certificate(state, &entry.vault_id, &entry.item_id, &public);
+            offered.push(OfferedKey {
+                key_id: key_id.clone(),
                 public_openssh: public,
-                comment: entry.item_id,
-            })
-            .collect()
+                comment: entry.item_id.clone(),
+            });
+            if let Some(cert) = cert {
+                offered.push(OfferedKey {
+                    key_id,
+                    public_openssh: cert,
+                    comment: entry.item_id,
+                });
+            }
+        }
+        offered
     }
 
-    /// Signs with a key that is still shared, still the same key, and the core
-    /// still unlocked — checked again here, after the approval wait. Only ever
-    /// reached through [`LocalAgent`], which asks first.
-    fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
+    /// Signs with a key that is still shared, still the same key (or still
+    /// certified by the same certificate), and the core still unlocked —
+    /// checked again here, after the approval wait. Only ever reached through
+    /// [`LocalAgent`], which asks first. A certificate identity signs with its
+    /// key.
+    fn sign(&self, key: &OfferedKey, data: &[u8], rsa: RsaHash) -> Option<(String, Vec<u8>)> {
         let mut guard = lock_recover(&self.state);
         let Some(state) = guard.as_mut() else {
             log::info!("system agent: signature refused (vault locked)");
             return None;
         };
-        let Some((entry, _)) = resolve(state).into_iter().find(|(entry, public)| {
+        let shared = resolve(state);
+        let Some((entry, _)) = shared.into_iter().find(|(entry, public)| {
             agent_key_id(&entry.vault_id, &entry.item_id) == key.key_id
-                && *public == key.public_openssh
+                && (*public == key.public_openssh
+                    || current_certificate(state, &entry.vault_id, &entry.item_id, public)
+                        .is_some_and(|cert| cert == key.public_openssh))
         }) else {
             log::info!("system agent: signature refused (key no longer shared)");
             return None;
@@ -194,7 +248,7 @@ impl AgentKeys for SharedKeys {
             log::warn!("system agent: could not load the key: {e}");
             return None;
         }
-        match state.agent.sign(&key.key_id, data) {
+        match state.agent.sign_with(&key.key_id, data, rsa) {
             Ok(signature) => Some((signature.algorithm, signature.signature)),
             Err(e) => {
                 log::warn!("system agent: signing failed: {e}");
@@ -363,6 +417,14 @@ impl Core {
             approver: self.approver.clone(),
             in_flight: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// Tells the core where this process's own system agent listens (or
+    /// `None`). A host using "system agent" auth whose `SSH_AUTH_SOCK` is this
+    /// endpoint then fails with a typed error instead of asking UniSSH itself
+    /// for a vault key; the OS-agent key picker refuses it the same way.
+    pub fn set_system_agent_endpoint(&self, endpoint: Option<PathBuf>) {
+        *lock_recover(&self.own_system_agent) = endpoint;
     }
 
     /// The keys this device currently offers to the system agent.

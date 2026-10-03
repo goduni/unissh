@@ -1359,7 +1359,14 @@ pub struct Core {
     /// like the prompter; without one, forwarding refuses every signature rather
     /// than granting them unseen.
     approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    /// Where this process's own system agent listens, if the host runs one.
+    /// "System agent" auth refuses it rather than ask itself for a vault key.
+    own_system_agent: OwnSystemAgent,
 }
+
+/// See [`Core::set_system_agent_endpoint`]. Shared by Arc like the approver, so
+/// reconnecting sessions see it too.
+type OwnSystemAgent = Arc<Mutex<Option<PathBuf>>>;
 
 /// Escrow enrollment/fetch credentials derived on the device (spec 5.1 / server-tz
 /// escrow). `k_auth` is the retrieval credential the server pins as `sha256(K_auth)`;
@@ -1398,6 +1405,7 @@ impl Core {
             ),
             prompter: Arc::new(Mutex::new(None)),
             approver: Arc::new(Mutex::new(None)),
+            own_system_agent: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -3603,6 +3611,7 @@ impl Core {
             rt: self.rt.clone(),
             prompter: self.prompter.clone(),
             approver: self.approver.clone(),
+            own_system_agent: self.own_system_agent.clone(),
             agent_forward,
             host,
             port,
@@ -4066,9 +4075,10 @@ impl Core {
     ///
     /// Needs no unlock: this reads the OS agent, not the vault.
     pub fn system_agent_keys(&self) -> Result<Vec<SystemAgentKeyFfi>, FfiError> {
+        let own = lock_recover(&self.own_system_agent).clone();
         let keys = self
             .rt
-            .block_on(unissh_ssh_transport::system_agent_keys())
+            .block_on(unissh_ssh_transport::system_agent_keys(own.as_deref()))
             .map_err(map_transport_err)?;
         Ok(keys
             .into_iter()
@@ -4547,6 +4557,7 @@ impl Core {
             shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             prompter: self.prompter.clone(),
             approver: self.approver.clone(),
+            own_system_agent: self.own_system_agent.clone(),
             // SFTP runs no program on the far side that would look for an agent.
             agent_forward: false,
             client: Mutex::new(Some(client)),
@@ -5803,6 +5814,7 @@ impl Core {
             &self.rt,
             &self.prompter,
             &self.approver,
+            &self.own_system_agent,
             auth,
             jumps,
             proxy,
@@ -6034,13 +6046,14 @@ impl unissh_ssh_transport::KeySource for StateKeySource {
         &self,
         key_id: &[u8],
         data: &[u8],
+        rsa: unissh_ssh_transport::RsaHash,
     ) -> Result<(String, Vec<u8>), unissh_ssh_transport::TransportError> {
         let guard = lock_recover(&self.state);
         let st = guard.as_ref().ok_or_else(locked_mid_connect)?;
         if let Some(policy) = &self.policy {
             policy.check(st).map_err(|_| locked_mid_connect())?;
         }
-        let sig = st.agent.sign(key_id, data)?;
+        let sig = st.agent.sign_with(key_id, data, rsa)?;
         Ok((sig.algorithm, sig.signature))
     }
 }
@@ -6067,6 +6080,7 @@ fn connect_with_state(
     rt: &tokio::runtime::Runtime,
     prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    own_system_agent: &OwnSystemAgent,
     auth: &AuthMethod,
     jumps: &[JumpHost],
     proxy: Option<&ProxyConfig>,
@@ -6080,6 +6094,7 @@ fn connect_with_state(
         rt,
         prompter,
         approver,
+        own_system_agent,
         auth,
         jumps,
         proxy,
@@ -6097,6 +6112,7 @@ fn connect_with_policy(
     rt: &tokio::runtime::Runtime,
     prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    own_system_agent: &OwnSystemAgent,
     auth: &AuthMethod,
     jumps: &[JumpHost],
     proxy: Option<&ProxyConfig>,
@@ -6110,6 +6126,7 @@ fn connect_with_policy(
     // is held (see the note above), so reaching back for another lock here would
     // be one more chance to deadlock for no benefit.
     let prompter = lock_recover(prompter).clone();
+    let own_system_agent = lock_recover(own_system_agent).clone();
     let mut guard = lock_recover(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;
     if let Some(policy) = policy {
@@ -6155,13 +6172,15 @@ fn connect_with_policy(
         };
         let a = resolve_auth(st, &auth)?;
         chain.push(with_prompter(
-            ConnectOptions::new(host, port, user, a),
+            ConnectOptions::new(host, port, user, a)
+                .with_own_system_agent(own_system_agent.clone()),
             prompter.as_ref(),
         ));
     }
     let target_auth = resolve_auth(st, auth)?;
     let mut target = with_prompter(
-        ConnectOptions::new(host.clone(), port, user, target_auth),
+        ConnectOptions::new(host.clone(), port, user, target_auth)
+            .with_own_system_agent(own_system_agent),
         prompter.as_ref(),
     );
 
@@ -8279,6 +8298,7 @@ pub struct ReconnectingSession {
     // code, the old one is spent and a fresh one must be asked for.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    own_system_agent: OwnSystemAgent,
     /// Carried across reconnects: the host's setting does not change because the
     /// link dropped.
     agent_forward: bool,
@@ -8307,6 +8327,7 @@ impl ReconnectingSession {
             &self.rt,
             &self.prompter,
             &self.approver,
+            &self.own_system_agent,
             &self.auth,
             &self.jumps,
             self.proxy.as_ref(),
@@ -8756,6 +8777,7 @@ pub struct SftpFfi {
     // and a spent one-time code cannot be replayed.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    own_system_agent: OwnSystemAgent,
     /// Carried across reconnects: the host's setting does not change because the
     /// link dropped.
     agent_forward: bool,
@@ -9049,6 +9071,7 @@ impl SftpFfi {
             &self.rt,
             &self.prompter,
             &self.approver,
+            &self.own_system_agent,
             &self.auth,
             &self.jumps,
             self.proxy.as_ref(),
@@ -9686,6 +9709,7 @@ mod sftp_pool_tests {
             state: Arc::new(Mutex::new(None)),
             prompter: Arc::new(Mutex::new(None)),
             approver: Arc::new(Mutex::new(None)),
+            own_system_agent: Arc::new(Mutex::new(None)),
             agent_forward: false,
             host: String::new(),
             port: 22,
