@@ -25,6 +25,8 @@ const ERROR_KEY = {
   unsupported: "systemAgent.errorUnsupported",
   in_use: "systemAgent.errorInUse",
   bind_failed: "systemAgent.errorBindFailed",
+  path_too_long: "systemAgent.errorPathTooLong",
+  save_failed: "systemAgent.errorSaveFailed",
   listener_failed: "systemAgent.errorListenerFailed",
 } as const;
 
@@ -88,14 +90,25 @@ export function SettingsSystemAgent() {
     };
   }, []);
 
+  // A failed toggle is worded from the typed code the controller records, not
+  // from the command's message; the status is re-read either way.
   const onToggle = (enabled: boolean) => {
     if (busy) return;
     setBusy(true);
-    void guard(() => systemAgentSetEnabled(enabled)).finally(() => {
-      void guard(refresh).finally(() => {
-        if (alive.current) setBusy(false);
-      });
-    });
+    void (async () => {
+      let failed = false;
+      try {
+        await systemAgentSetEnabled(enabled);
+      } catch {
+        failed = true;
+      }
+      const next = await systemAgentStatus().catch(() => null);
+      if (alive.current) {
+        if (next) setStatus(next);
+        setBusy(false);
+      }
+      if (failed) toast(t(next?.error ? ERROR_KEY[next.error] : "systemAgent.errorUnknown"), "err");
+    })();
   };
 
   if (!status) return null;

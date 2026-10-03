@@ -1,12 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export type SystemAgentError =
+  | "unsupported"
+  | "in_use"
+  | "bind_failed"
+  | "path_too_long"
+  | "save_failed"
+  | "listener_failed";
+
 /** Desktop-only. `supported` is false where the platform has no listener yet. */
 export interface SystemAgentStatus {
   supported: boolean;
   enabled: boolean;
   running: boolean;
   endpoint: string | null;
-  error: "unsupported" | "in_use" | "bind_failed" | "listener_failed" | null;
+  error: SystemAgentError | null;
 }
 
 export interface SharedAgentKey {

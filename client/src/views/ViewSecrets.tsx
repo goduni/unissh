@@ -21,7 +21,7 @@ import type { ItemInfo, Identity, ServerStatus, VaultInfo } from "@/bridge/types
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
 import { isDesktopOs } from "@/bridge/platform";
-import { systemAgentSetShared, systemAgentSharedKeys } from "@/bridge/systemAgent";
+import { systemAgentSetShared, systemAgentSharedKeys, systemAgentStatus } from "@/bridge/systemAgent";
 import { guard } from "@/store/action";
 
 type SecretTab = "keys" | "passwords" | "notes" | "identities";
@@ -485,7 +485,20 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   // Desktop only: the keys this device offers to the system agent (device-local,
   // never synced). Reloaded with the key list, since a rotated key stops being
   // offered until it is shared again.
-  const agent = isDesktopOs();
+  // …and only where a listener exists (Windows has none yet).
+  const [agent, setAgent] = useState(false);
+  useEffect(() => {
+    if (!isDesktopOs()) return;
+    let live = true;
+    systemAgentStatus()
+      .then((st) => {
+        if (live) setAgent(st.supported);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   const [shared, setShared] = useState<Set<string> | null>(null);
   const loadShared = async () => {
     const list = await systemAgentSharedKeys();
