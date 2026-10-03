@@ -13,13 +13,16 @@
 //! `crate::mcp::resume_access`, so the user never re-enables it by hand. A
 //! connection open at a revoke is cut with the listener.
 //!
-//! Unix sockets today; the Windows named pipe is not implemented yet, so there
-//! the listener reports itself unavailable.
+//! The endpoint is a Unix socket on macOS and Linux (`endpoint`, `peer`) and
+//! the named pipe `\\.\pipe\unissh-agent` on Windows (`pipe`). Both are
+//! served by the same `SystemAgent::serve`.
 
 #[cfg(unix)]
 mod endpoint;
 #[cfg(unix)]
 mod peer;
+#[cfg(windows)]
+mod pipe;
 
 use crate::error::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
@@ -69,7 +72,8 @@ struct Live {
 pub struct Controller {
     core: Arc<Core>,
     settings_path: PathBuf,
-    /// Where the socket goes; `None` where the platform has no listener yet.
+    /// The socket path, or on Windows the pipe name; `None` only where the
+    /// app data directory could not be resolved.
     endpoint: Option<PathBuf>,
     running: tokio::sync::Mutex<Option<Running>>,
     live: Mutex<Live>,
@@ -84,10 +88,13 @@ impl Controller {
             .app_local_data_dir()
             .ok()
             .map(|data| endpoint::socket_path(app.path().runtime_dir().ok().as_deref(), &data));
-        #[cfg(not(unix))]
+        // The self-loop guard this feeds is a no-op on Windows by construction:
+        // the transport always dials OpenSSH's own pipe, never this one. The
+        // name is still handed over, so the core knows it either way.
+        #[cfg(windows)]
         let endpoint = {
             let _ = app;
-            None
+            Some(PathBuf::from(pipe::NAME))
         };
         // Whether or not the listener is on: a host using "system agent" auth
         // with SSH_AUTH_SOCK pointed here is misconfigured either way, and gets
@@ -235,6 +242,7 @@ impl Controller {
             {
                 task.abort();
                 let _ = task.await;
+                #[cfg(unix)]
                 let _ = std::fs::remove_file(&path);
             }
             return Err(self.fail("save_failed"));
@@ -320,12 +328,74 @@ impl Controller {
         Ok((stop, task))
     }
 
-    #[cfg(not(unix))]
+    /// Creates the pipe's first instance (current-user DACL, first-instance
+    /// flag) and spawns the accept loop. The next instance is created before
+    /// the connected one is handed off, so a client arriving meanwhile finds
+    /// the pipe rather than "not found". The pipe disappears when the last
+    /// instance closes, so there is nothing to clean up on stop.
+    #[cfg(windows)]
     fn listen(
         &self,
-        _path: &Path,
+        path: &Path,
     ) -> Result<(CancellationToken, tauri::async_runtime::JoinHandle<()>), &'static str> {
-        Err("unsupported")
+        let security = pipe::Security::current_user().map_err(|e| {
+            log::warn!("system agent: pipe security descriptor failed: {e}");
+            "bind_failed"
+        })?;
+        // tokio registers each instance with the runtime's reactor on creation.
+        let runtime = tauri::async_runtime::handle();
+        let _entered = runtime.inner().enter();
+        let first = pipe::create(path.as_os_str(), &security, true).map_err(|e| {
+            if pipe::in_use(&e) {
+                "in_use"
+            } else {
+                log::warn!("system agent: pipe creation failed: {e}");
+                "bind_failed"
+            }
+        })?;
+
+        let agent = self.core.system_agent();
+        let stop = CancellationToken::new();
+        let token = stop.clone();
+        let error = self.error.clone();
+        let name = path.as_os_str().to_owned();
+        let task = tauri::async_runtime::spawn(async move {
+            log::info!("system agent: listening");
+            let mut server = first;
+            loop {
+                let connected = tokio::select! {
+                    _ = token.cancelled() => break,
+                    connected = server.connect() => connected,
+                };
+                let next = match pipe::create(&name, &security, false) {
+                    Ok(next) => next,
+                    Err(e) => {
+                        log::warn!("system agent: pipe creation failed: {e}");
+                        *error.lock().unwrap() = Some("listener_failed");
+                        break;
+                    }
+                };
+                let stream = std::mem::replace(&mut server, next);
+                // A client that gave up between connecting and being accepted
+                // costs this instance only, not the listener.
+                if let Err(e) = connected {
+                    log::debug!("system agent: pipe connect failed: {e}");
+                    continue;
+                }
+                let agent = agent.clone();
+                let token = token.clone();
+                tauri::async_runtime::spawn(async move {
+                    let caller = pipe::caller(&stream);
+                    tokio::select! {
+                        _ = token.cancelled() => {}
+                        _ = agent.serve(stream, caller) => {}
+                    }
+                });
+            }
+            drop(server);
+            log::info!("system agent: stopped");
+        });
+        Ok((stop, task))
     }
 
     async fn status(&self) -> Value {
