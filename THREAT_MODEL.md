@@ -30,7 +30,8 @@ but never holds anything in the clear.
   reach that agent socket can ask it to sign. That is the same trust the tool
   providing the key already asks for, and it is opt-in per host — the default
   remains a key inside the vault. What UniSSH stores is the public key, which is
-  a handle, not a secret.
+  a handle, not a secret. UniSSH's own system agent (below) is refused as that
+  agent, so such a host never ends up asking UniSSH itself.
 - **The keyset never crosses the FFI / UI boundary.** The private keyset never
   leaves the device; the server holds only the **public** halves. No operation
   hands the UI a private SSH key as a side effect either — authentication signs
@@ -234,6 +235,83 @@ code-execution surface, so it is stated plainly rather than left implicit.
 
 Not protected, and not claimed to be: the local terminal does not sandbox,
 restrict or audit what you type into your own shell. It is your machine.
+
+## The system agent: vault keys for local programs, one approval at a time
+
+The desktop client can act as an ssh-agent for other programs on the same
+machine (`ssh`, `git`, `ssh-add -l`, an IDE's remote window). It is a new local
+boundary, so what crosses it is spelled out here.
+
+- **Off by default, and per key.** Nothing listens until the user turns the
+  system agent on in Settings, and it offers only the keys the user shared with
+  it one by one. That choice is device-local metadata inside the SQLCipher
+  database. It is never synced or exported, and it is pinned to the public key
+  it was made for, so a key rotated, re-imported or replaced by sync under the
+  same id is not offered until it is shared again. macOS and Linux today; on
+  Windows the listener is not available yet.
+- **The socket's permissions are the access control.** It is a Unix socket in a
+  `0700` directory, itself `0600`, so only processes running as the same OS
+  user can connect. Nothing else authenticates a caller.
+- **What a connected process can do without asking:** list the shared keys'
+  public halves (and, for a key with an attached certificate, that certificate
+  as a second identity), with the key's item id as the comment. That is
+  metadata (which keys this user shares and what they are called), the same
+  disclosure any ssh-agent makes to whoever can reach it.
+- **What needs an approval: every signature, one by one.** The request is shown
+  in UniSSH with the key and its vault, the user name the SSH login payload
+  would log in as, and the calling process as the OS reported it. It is denied
+  by default and on a 60-second timeout, and every exit but *Approve* refuses.
+  The prompt cannot name the server: an agent sign request carries the user
+  and the session hash, not the destination host (OpenSSH's `session-bind`
+  extension is refused along with every other extension). A payload that is
+  not an SSH login (for example a git commit signature) is shown as such. A
+  signature asked for a certificate is approved and made as its key. The
+  private key stays in the core's embedded agent; only the signature leaves.
+- **What it cannot do at all:** add, remove, lock or unlock keys, or call any
+  extension (all refused outright); get a signature with a key that was not
+  shared; get a SHA-1 `ssh-rsa` signature (an RSA request must ask for
+  `rsa-sha2-256` or `rsa-sha2-512`; one asking for neither is refused before
+  any prompt); or read private key material.
+- **The caller's identity is advisory.** The pid comes from the kernel when the
+  connection is accepted (`SO_PEERCRED` on Linux, `LOCAL_PEEREPID` on macOS)
+  and the executable path is looked up from it. Neither is verified, and the
+  prompt says so. A pid can be reused after its process exits. A process can
+  exec something else after connecting, or hand the connected socket to
+  another process, in which case the prompt names whoever connected, not
+  whoever is asking. For an interpreter the executable is the interpreter
+  (`python3`), not the script. The identity helps a person judge a request;
+  it is not what grants access.
+- **Prompts are bounded.** At most four signature prompts are open at once,
+  across every connection. Beyond that a request is refused immediately rather
+  than stacking dialogs. A client that disconnects withdraws its open prompt.
+  A client that only half-closes its side (`shutdown(SHUT_WR)` after sending)
+  counts as gone too, so its prompt is withdrawn. OpenSSH's own clients keep
+  the stream open and are unaffected.
+- **No unlocked vault, no agent.** A locked vault lists no identities and signs
+  nothing. The listener stops on vault lock, screen lock, sleep and exit,
+  cutting open connections and withdrawing open prompts. It comes back after
+  the next unlock (or wake, if the vault is still unlocked) when the setting is
+  on. A prompt answered in the instant before it is withdrawn still yields
+  nothing. After the approval the core re-checks that it is unlocked and that
+  the key is still shared and unchanged, and an answer for a connection that
+  was cut is discarded.
+- **It does not loop into itself.** A host profile using *System agent* auth is
+  meant to reach the operating system's agent. If `SSH_AUTH_SOCK` points at
+  UniSSH's own socket instead (compared as canonical paths), the connection
+  fails with an error saying so, rather than UniSSH prompting itself for a
+  vault key. The OS-agent key picker refuses it the same way.
+- **Nothing sensitive is logged.** Neither the data to be signed, the key, nor
+  the caller's identity is written to the log.
+
+Not protected, and not claimed to be: a process running as the same user can
+connect, list the shared public keys and raise approval prompts (up to the cap)
+as often as it likes. Any signature the user approves is that process's to use,
+including a login signature for a server other than the one the user had in
+mind, since the prompt can name only the user, not the host. A process running
+as the same user can also attack the app directly (debugging it, reading its
+memory, driving its UI) without going through the agent at all. Root or an
+administrator is outside this boundary entirely. The system agent assumes a
+trusted desktop session, as the MCP listener does.
 
 ## Metadata visible by design
 

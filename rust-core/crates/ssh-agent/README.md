@@ -50,9 +50,13 @@ used and **zeroized**, but not locked. Zeroization is always performed.
 
 ## Out of scope
 
-The SSH transport/connect itself is the `ssh-transport` crate. The system agent and
-**agent forwarding** is not implemented (spec 10.2, ProxyJump instead of forwarding).
-This crate is not the system agent: keys added here live only in this process.
+The SSH transport/connect itself is the `ssh-transport` crate. This crate does not
+speak the agent protocol to anyone; `ssh-transport`'s `forward` module does, for
+**agent forwarding** (opt-in per host, one key, every signature confirmed, never to a
+ProxyJump hop) and for the desktop **system agent** (opt-in, the keys this device
+shares, every signature confirmed). Both sign through this agent, so keys added here
+live only in this process. RSA signs with `rsa-sha2-512`, or `rsa-sha2-256` on request
+(`RsaHash`); SHA-1 `ssh-rsa` signatures are never produced.
 Using the *operating system's* agent is a separate per-host opt-in in
 `ssh-transport` (`Auth::SystemAgent`) — the route to hardware tokens and smart
 cards, whose keys never enter this agent. FIDO/U2F (`sk-*`) credentials are
