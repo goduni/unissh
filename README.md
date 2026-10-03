@@ -503,7 +503,7 @@ There's a thorough, honest **backup & restore** guide (crash vs. disk-loss, the 
 ### Clients
 
 - **Secret Key (Emergency Kit)** is stored only in the OS keychain / Secure Enclave — never in plain files or logs.
-- **Unlock with Touch ID** (macOS, opt-in): the master password is stored on the Mac sealed under a key that sits in a Keychain item only the current Touch ID fingerprints can read; re-enrolling a finger or turning it off erases it, and the password always works. Windows Hello is planned; Linux is not offered (its fingerprint stack protects no secret), and mobile biometric unlock is not implemented yet.
+- Biometric unlock is not available yet on any platform; the master password (and the Secret Key remembered in the OS keychain) is how a vault opens.
 - The desktop window, a unified **Theme** picker (dark/light/auto; the **Nebula** base with 5 accent presets, plus the pink **Barbie** theme; 17 linked terminal palettes), and clipboard auto-clear are real app settings. See [`client/README.md`](client/README.md).
 
 ---
