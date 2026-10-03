@@ -169,6 +169,14 @@ pub enum FfiError {
         /// Item id of the live candidate.
         candidate_id: String,
     },
+    /// The original key already holds the candidate's material (a finish was
+    /// interrupted after its first write): the rotation must be finished, not
+    /// abandoned.
+    #[error("rotation of {key_id} is partly committed; finish it")]
+    RotationPartlyFinished {
+        /// Item id of the original key.
+        key_id: String,
+    },
     /// SSH error.
     #[error("ssh error: {msg}")]
     Ssh {
@@ -3025,26 +3033,13 @@ impl Core {
     /// the vault and returns the **public** key (OpenSSH). The private key is not handed out.
     pub fn generate_ssh_key(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
         self.with_state_mut(|state| {
-            let (private_pem, public) = generate_ed25519_openssh().map_err(FfiError::ssh)?;
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                item_id.as_bytes(),
-                ITEM_TYPE_SSH_KEY,
-            )?;
             let vault = Vault::open(
                 &state.storage,
                 &state.keyset,
                 &resolve_vid(&state.storage, &vault_id),
             )
             .map_err(FfiError::other)?;
-            vault
-                .put_item(
-                    item_id.as_bytes(),
-                    ITEM_TYPE_SSH_KEY,
-                    private_pem.as_bytes(),
-                )
-                .map_err(FfiError::other)?;
+            let public = store_new_ssh_key(&state.storage, &vault, &vault_id, &item_id)?;
             // The key material was replaced under the same id → unload the previous private key from
             // the agent (namespaced), otherwise connects in this session will keep signing
             // with the OLD key (load_key_into_agent short-circuits on agent.contains).
@@ -3228,34 +3223,12 @@ impl Core {
             )
             .map_err(FfiError::other)?;
             // The key must exist and be an SSH key — you can't "rotate" nothing.
-            let existing = vault
-                .get_item(item_id.as_bytes())
-                .map_err(FfiError::other)?
-                .ok_or(FfiError::NotFound)?;
-            if existing.item_type != ITEM_TYPE_SSH_KEY {
-                return Err(FfiError::other("item is not an SSH key"));
-            }
-            let (private_pem, public) = generate_ed25519_openssh().map_err(FfiError::ssh)?;
-            vault
-                .put_item(
-                    item_id.as_bytes(),
-                    ITEM_TYPE_SSH_KEY,
-                    private_pem.as_bytes(),
-                )
-                .map_err(FfiError::other)?;
+            require_ssh_key(&vault, &item_id)?;
+            let public = store_new_ssh_key(&state.storage, &vault, &vault_id, &item_id)?;
             // The attached certificate no longer matches the new pair — remove it,
             // otherwise `load_key_into_agent` would re-attach the mismatched cert on the
             // next connect and cert authentication would silently break.
-            let cert = cert_item_id(&item_id);
-            if vault
-                .get_item(cert.as_bytes())
-                .map_err(FfiError::other)?
-                .is_some()
-            {
-                vault
-                    .delete_item(cert.as_bytes())
-                    .map_err(FfiError::other)?;
-            }
+            drop_certificate(&vault, &item_id)?;
             // Unload the old key from the in-memory agent (like delete_item/rename_item),
             // otherwise connects in this session would keep using the previous pair, since
             // `load_key_into_agent` short-circuits on `agent.contains()`.
@@ -6610,6 +6583,57 @@ fn ensure_item_type(
         if !rec.tombstone && rec.item_type != expected_type {
             return Err(FfiError::AlreadyExists);
         }
+    }
+    Ok(())
+}
+
+/// The live item `item_id`, which must be an SSH key: `NotFound` when absent or
+/// tombstoned, an "is not an SSH key" error for any other type.
+fn require_ssh_key(vault: &Vault, item_id: &str) -> Result<unissh_vault::DecryptedItem, FfiError> {
+    let item = vault
+        .get_item(item_id.as_bytes())
+        .map_err(FfiError::other)?
+        .ok_or(FfiError::NotFound)?;
+    if item.item_type != ITEM_TYPE_SSH_KEY {
+        return Err(FfiError::other("item is not an SSH key"));
+    }
+    Ok(item)
+}
+
+/// Generates an Ed25519 pair **in the core** and stores its private half as the
+/// SSH key `item_id` (a new item, or a new version of an existing key; another
+/// live item type there is `AlreadyExists`). Returns the OpenSSH public key.
+/// The caller unloads `item_id` from the agent.
+fn store_new_ssh_key(
+    storage: &Storage,
+    vault: &Vault,
+    vault_id: &str,
+    item_id: &str,
+) -> Result<String, FfiError> {
+    let (private_pem, public) = generate_ed25519_openssh().map_err(FfiError::ssh)?;
+    ensure_item_type(storage, vault_id, item_id.as_bytes(), ITEM_TYPE_SSH_KEY)?;
+    vault
+        .put_item(
+            item_id.as_bytes(),
+            ITEM_TYPE_SSH_KEY,
+            private_pem.as_bytes(),
+        )
+        .map_err(FfiError::other)?;
+    Ok(public)
+}
+
+/// Removes the certificate attached to `key_id`, if any (after the key's material
+/// changed, it certifies a public key the item no longer holds).
+fn drop_certificate(vault: &Vault, key_id: &str) -> Result<(), FfiError> {
+    let cert = cert_item_id(key_id);
+    if vault
+        .get_item(cert.as_bytes())
+        .map_err(FfiError::other)?
+        .is_some()
+    {
+        vault
+            .delete_item(cert.as_bytes())
+            .map_err(FfiError::other)?;
     }
     Ok(())
 }

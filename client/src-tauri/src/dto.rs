@@ -992,12 +992,15 @@ impl From<ffi::PublicKeyInfo> for PublicKeyInfo {
 pub struct KeyRotationLink {
     pub key_id: String,
     pub candidate_id: String,
+    /// Started on another device: abandonable here, not finishable.
+    pub started_elsewhere: bool,
 }
 impl From<ffi::KeyRotationLink> for KeyRotationLink {
     fn from(l: ffi::KeyRotationLink) -> Self {
         KeyRotationLink {
             key_id: l.key_id,
             candidate_id: l.candidate_id,
+            started_elsewhere: l.started_elsewhere,
         }
     }
 }

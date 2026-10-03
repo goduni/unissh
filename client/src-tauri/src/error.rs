@@ -25,6 +25,9 @@ pub enum ApiError {
     /// A staged key rotation is already in progress; `candidate_id` is its candidate.
     #[serde(rename_all = "camelCase")]
     RotationInProgress { candidate_id: String },
+    /// An interrupted finish already wrote the candidate into `key_id`: finish it.
+    #[serde(rename_all = "camelCase")]
+    RotationPartlyFinished { key_id: String },
     /// Generic SSH / transport error (string bucket from the core).
     Ssh { msg: String },
     /// Cloud server error. `code` is the server's snake_case code
@@ -70,6 +73,9 @@ impl From<FfiError> for ApiError {
             },
             FfiError::RotationInProgress { candidate_id } => {
                 ApiError::RotationInProgress { candidate_id }
+            }
+            FfiError::RotationPartlyFinished { key_id } => {
+                ApiError::RotationPartlyFinished { key_id }
             }
             FfiError::Ssh { msg } => ApiError::Ssh { msg },
             FfiError::Other { msg } => ApiError::Other { msg },

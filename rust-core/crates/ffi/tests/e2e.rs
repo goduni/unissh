@@ -1235,6 +1235,7 @@ fn key_rotation_begin_creates_distinct_candidate() {
         vec![unissh_ffi::KeyRotationLink {
             key_id: "key".to_string(),
             candidate_id: candidate,
+            started_elsewhere: false,
         }]
     );
 }
@@ -1333,6 +1334,41 @@ fn key_rotation_second_begin_refused_while_candidate_live() {
         second,
         Err(unissh_ffi::FfiError::RotationInProgress { candidate_id }) if candidate_id == candidate
     ));
+}
+
+#[test]
+fn key_rotation_unlinked_candidate_listed_elsewhere_abandonable_not_finishable() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = rotation_fixture(dir.path());
+    let before = public_key(&core, "key").unwrap();
+    // As a candidate synced from another device arrives: a plain key at the
+    // derived id, with no link on this device.
+    core.generate_ssh_key("v".to_string(), "key (rotation)".to_string())
+        .unwrap();
+
+    assert_eq!(
+        core.list_key_rotations("v".to_string()).unwrap(),
+        vec![unissh_ffi::KeyRotationLink {
+            key_id: "key".to_string(),
+            candidate_id: "key (rotation)".to_string(),
+            started_elsewhere: true,
+        }]
+    );
+    assert!(matches!(
+        core.finish_key_rotation(
+            "v".to_string(),
+            "key".to_string(),
+            "key (rotation)".to_string()
+        ),
+        Err(unissh_ffi::FfiError::NotFound)
+    ));
+    core.abandon_key_rotation("v".to_string(), "key (rotation)".to_string())
+        .unwrap();
+    assert!(matches!(
+        public_key(&core, "key (rotation)"),
+        Err(unissh_ffi::FfiError::NotFound)
+    ));
+    assert_eq!(public_key(&core, "key").unwrap(), before);
 }
 
 #[test]

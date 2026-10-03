@@ -191,6 +191,13 @@ The client log file rotates at ~5 MB and keeps one rotated copy (≈10 MB on dis
 Verbosity is `info` by default; set `UNISSH_LOG` (or `RUST_LOG`) to raise it without
 a rebuild — e.g. `UNISSH_LOG=debug` or `UNISSH_LOG=info,unissh_sync=debug,russh=info`.
 
+## SSH key rotation
+
+A staged key rotation (start → finish) keeps the previous private key, encrypted
+like any item version, in the key item's local version history, which is never
+synced, until the key is deleted (at most the 20 newest versions are kept).
+"Replace key now" (in-place rotation) does not keep it.
+
 ## On-disk format changes (migration discipline)
 
 Persisted crypto artifacts (the personal `EncryptedKeyset` sidecar, wrapped vault
