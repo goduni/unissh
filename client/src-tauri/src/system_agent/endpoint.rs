@@ -25,6 +25,19 @@ pub fn socket_path(runtime_dir: Option<&Path>, local_data_dir: &Path) -> PathBuf
     .join(SOCKET)
 }
 
+/// `sun_path`'s size, including the terminating NUL.
+#[cfg(target_os = "linux")]
+const SUN_PATH: usize = 108;
+#[cfg(not(target_os = "linux"))]
+const SUN_PATH: usize = 104;
+
+/// Whether the path fits a Unix socket address. A deep home directory can push
+/// the app data directory past it, and `bind` would fail without saying why.
+pub fn fits_sun_path(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().len() < SUN_PATH
+}
+
 /// Creates the socket's directory if needed and makes it `0700`, so only this
 /// user can reach anything inside it, whatever mode the socket itself ends up
 /// with between `bind` and `chmod`.
@@ -61,13 +74,21 @@ pub fn clear_stale_socket(path: &Path) -> io::Result<()> {
             "the agent socket path is taken by something that is not a socket",
         ));
     }
-    if UnixStream::connect(path).is_ok() {
-        return Err(io::Error::new(
+    // Only "refused" proves nobody is listening. Anything else (a permission
+    // problem, a busy backlog) leaves the file alone and is reported.
+    //
+    // A narrow window remains between this probe and the caller's `bind`: an
+    // instance that starts in between loses its socket to ours. Both would be
+    // this user's own processes inside a 0700 directory, and the loser's next
+    // enable reports the socket as in use.
+    match UnixStream::connect(path) {
+        Ok(_) => Err(io::Error::new(
             io::ErrorKind::AddrInUse,
             "another agent is listening on this socket",
-        ));
+        )),
+        Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => fs::remove_file(path),
+        Err(e) => Err(e),
     }
-    fs::remove_file(path)
 }
 
 #[cfg(test)]
@@ -94,5 +115,26 @@ mod tests {
 
         clear_stale_socket(&path).unwrap();
         std::os::unix::net::UnixListener::bind(&path).expect("bind after cleanup");
+    }
+
+    #[test]
+    fn a_live_socket_is_reported_in_use_and_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SOCKET);
+        let _live = std::os::unix::net::UnixListener::bind(&path).unwrap();
+
+        let err = clear_stale_socket(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AddrInUse);
+        assert!(path.exists(), "a live socket must not be deleted");
+    }
+
+    #[test]
+    fn a_path_that_is_not_a_socket_is_never_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SOCKET);
+        fs::write(&path, b"not a socket").unwrap();
+
+        assert!(clear_stale_socket(&path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"not a socket");
     }
 }

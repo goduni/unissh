@@ -103,33 +103,44 @@ impl Controller {
                 let _ = old.task.await;
             }
         }
+        // Every failure leaves a typed code in `error`; the UI words it from
+        // the code (status), not from the message returned here.
         if !enabled {
-            save_settings(&self.settings_path, &Settings { enabled: false })
-                .map_err(|_| ApiError::other("Cannot save system agent settings."))?;
+            if save_settings(&self.settings_path, &Settings { enabled: false }).is_err() {
+                return Err(self.fail("save_failed"));
+            }
             self.set_error(None);
             return Ok(());
         }
         let Some(path) = self.endpoint.clone() else {
-            self.set_error(Some("unsupported"));
-            return Err(ApiError::other(
-                "The system agent is not available on this platform yet.",
-            ));
+            return Err(self.fail("unsupported"));
         };
-        let (stop, task) = match self.listen(&path) {
+        let (stop, mut task) = match self.listen(&path) {
             Ok(started) => started,
-            Err(code) => {
-                self.set_error(Some(code));
-                return Err(ApiError::other(match code {
-                    "in_use" => "Another agent is already listening on the UniSSH socket.",
-                    _ => "The system agent socket could not be opened.",
-                }));
-            }
+            Err(code) => return Err(self.fail(code)),
         };
-        save_settings(&self.settings_path, &Settings { enabled: true })
-            .map_err(|_| ApiError::other("Cannot save system agent settings."))?;
+        if save_settings(&self.settings_path, &Settings { enabled: true }).is_err() {
+            // Not left serving behind a setting that says off: stop the listener
+            // we just started before reporting.
+            stop.cancel();
+            if tokio::time::timeout(std::time::Duration::from_secs(2), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+                let _ = std::fs::remove_file(&path);
+            }
+            return Err(self.fail("save_failed"));
+        }
         *running = Some(Running { stop, task });
         self.set_error(None);
         Ok(())
+    }
+
+    fn fail(&self, code: &'static str) -> ApiError {
+        self.set_error(Some(code));
+        ApiError::other(format!("system agent: {code}"))
     }
 
     /// Binds the socket and spawns the accept loop.
@@ -139,6 +150,9 @@ impl Controller {
         path: &Path,
     ) -> Result<(CancellationToken, tauri::async_runtime::JoinHandle<()>), &'static str> {
         use std::os::unix::fs::PermissionsExt;
+        if !endpoint::fits_sun_path(path) {
+            return Err("path_too_long");
+        }
         let dir = path.parent().ok_or("bind_failed")?;
         endpoint::prepare_dir(dir).map_err(|_| "bind_failed")?;
         endpoint::clear_stale_socket(path).map_err(|e| {
@@ -223,9 +237,14 @@ impl Controller {
 
     /// Stops the listener on exit so the socket does not outlive the app.
     fn shutdown(&self) {
+        // `try_lock`: this runs on the event-loop thread, outside the async
+        // runtime, and must not wait. If an enable/disable holds the lock at
+        // that instant the file may stay behind; the next start clears it as
+        // stale.
         if let Ok(mut running) = self.running.try_lock() {
             if let Some(r) = running.take() {
                 r.stop.cancel();
+                #[cfg(unix)]
                 if let Some(path) = &self.endpoint {
                     let _ = std::fs::remove_file(path);
                 }
