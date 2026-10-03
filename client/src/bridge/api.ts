@@ -21,6 +21,7 @@ import type {
   InstanceInfo,
   InstanceStatus,
   InviteInfo,
+  KeyRotationLink,
   JoinPreview,
   SpaceInfo,
   DirectoryEntry,
@@ -54,6 +55,7 @@ import type {
   SshExecResult,
   ServerVault,
   SyncReport,
+  MovedVault,
   TermEvent,
   VaultInfo,
   VaultIntegrityReport,
@@ -168,6 +170,18 @@ export const exportSshKey = (vaultId: string, itemId: string) =>
 /** Rotate an SSH key in place (same item id). Returns the new public key to install. */
 export const rotateSshKey = (vaultId: string, itemId: string) =>
   afterMut(vaultId, invoke<string>("rotate_ssh_key", { vaultId, itemId }));
+/** Staged rotation: generate a candidate key beside `keyId`. Returns its item id. */
+export const beginKeyRotation = (vaultId: string, keyId: string) =>
+  afterMut(vaultId, invoke<string>("begin_key_rotation", { vaultId, keyId }));
+/** Commit a staged rotation into `keyId` (old material stays in its history). */
+export const finishKeyRotation = (vaultId: string, keyId: string, candidateId: string) =>
+  afterMut(vaultId, invoke<void>("finish_key_rotation", { vaultId, keyId, candidateId }));
+/** Abandon a staged rotation: the candidate is deleted, the original untouched. */
+export const abandonKeyRotation = (vaultId: string, candidateId: string) =>
+  afterMut(vaultId, invoke<void>("abandon_key_rotation", { vaultId, candidateId }));
+/** Rotations in progress on this device (device-local links, live candidates only). */
+export const listKeyRotations = (vaultId: string) =>
+  invoke<KeyRotationLink[]>("list_key_rotations", { vaultId });
 export const renameItem = (vaultId: string, itemId: string, newItemId: string) =>
   afterMut(vaultId, invoke<void>("rename_item", { vaultId, itemId, newItemId }));
 export const deleteItem = (vaultId: string, itemId: string) =>
@@ -868,9 +882,20 @@ export const serverListVaults = (serverId?: string) =>
 /** Pull ONE vault (hex id) from a server onto this device (targeted; no cursor bump). */
 export const serverPullVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_pull_vault", { vaultId, serverId: serverId ?? null });
-/** Adopt a LOCAL vault (hex id) onto a server = bind + sync (Push). */
-export const serverAdoptVault = (vaultId: string, serverId?: string) =>
-  invoke<SyncReport>("server_adopt_vault", { vaultId, serverId: serverId ?? null });
+/** Bind an already-cloud vault (hex id) to a server, then sync it up (Push). */
+export const serverBindAndPushVault = (vaultId: string, serverId?: string) =>
+  invoke<SyncReport>("server_bind_and_push_vault", { vaultId, serverId: serverId ?? null });
+
+/** Move a LOCAL vault to a server (default active) into `spaceId` (omit for the
+ *  link's primary space): the core re-keys it into a new cloud vault in one
+ *  transaction, then the first push runs. Resolves with the new vault id; a failed
+ *  push comes back in `pushError` and does not undo the move. */
+export const serverMoveVaultToServer = (vaultId: string, serverId?: string, spaceId?: string) =>
+  invoke<MovedVault>("server_move_vault_to_server", {
+    vaultId,
+    serverId: serverId ?? null,
+    spaceId: spaceId ?? null,
+  });
 
 // ── cloud membership / sharing ─────────────────────────────────
 export const serverListAccounts = (serverId?: string) =>

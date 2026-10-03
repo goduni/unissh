@@ -5437,6 +5437,7 @@ name = "unissh-storage"
 version = "0.5.0"
 dependencies = [
  "hex",
+ "log",
  "rusqlite",
  "sha2 0.10.9",
  "tempfile",

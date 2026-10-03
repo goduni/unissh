@@ -1,0 +1,121 @@
+import { describe, expect, it } from "vitest";
+import type { ConnectionProfile } from "@/bridge/types";
+import {
+  builtinsFromProfile,
+  fleetCommands,
+  parseParams,
+  planSnippet,
+  resolveCommand,
+  splitFleetParams,
+  substituteParams,
+} from "./snippetParams";
+
+describe("snippet parameters", () => {
+  it("finds nothing in a plain command", () => {
+    expect(parseParams("systemctl restart nginx")).toEqual([]);
+  });
+
+  it("finds one parameter and substitutes it", () => {
+    const cmd = "systemctl restart {{service}}";
+    expect(parseParams(cmd)).toEqual([{ name: "service", default: null, position: 18 }]);
+    expect(substituteParams(cmd, { service: "nginx" })).toBe("systemctl restart nginx");
+  });
+
+  it("asks a repeated name once, at its first position, and fills every occurrence", () => {
+    const cmd = "echo {{x}} && echo {{x:late}}";
+    expect(parseParams(cmd)).toEqual([{ name: "x", default: null, position: 5 }]);
+    expect(substituteParams(cmd, { x: "1" })).toBe("echo 1 && echo 1");
+  });
+
+  it("reads a default", () => {
+    expect(parseParams("journalctl -u {{unit:nginx.service}} -n 200")).toEqual([
+      { name: "unit", default: "nginx.service", position: 14 },
+    ]);
+  });
+
+  it("tells an empty default apart from no default", () => {
+    expect(parseParams("ls {{flags:}}")).toEqual([{ name: "flags", default: "", position: 3 }]);
+  });
+
+  it("types an escaped \\{{ as a literal {{", () => {
+    const cmd = "echo \\{{x}} {{y}}";
+    expect(parseParams(cmd).map((p) => p.name)).toEqual(["y"]);
+    expect(substituteParams(cmd, { x: "no", y: "yes" })).toBe("echo {{x}} yes");
+    // Also when the escaped one is the only placeholder, i.e. a snippet with no parameters.
+    expect(parseParams("echo \\{{x}}")).toEqual([]);
+    expect(substituteParams("echo \\{{x}}", {})).toBe("echo {{x}}");
+  });
+
+  it("leaves spaced braces as literal text", () => {
+    const cmd = "echo '{{ .Status }}'";
+    expect(parseParams(cmd)).toEqual([]);
+    expect(substituteParams(cmd, {})).toBe(cmd);
+  });
+
+  it("pins nested-looking braces: only the inner well-formed placeholder counts", () => {
+    const cmd = "{{a{{b}}}}";
+    expect(parseParams(cmd)).toEqual([{ name: "b", default: null, position: 3 }]);
+    expect(substituteParams(cmd, { a: "A", b: "B" })).toBe("{{aB}}");
+  });
+
+  it("lets a built-in with a value shadow a user parameter, asks it when there is none, and is ready when nothing is left", () => {
+    const cmd = "ssh {{user:root}}@{{host}} -p {{port}} {{cmd}}";
+    expect(planSnippet(cmd, { host: "web1", user: "deploy", port: "22" })).toEqual({
+      ask: [{ name: "cmd", default: null, position: 39 }],
+      fromHost: [
+        { name: "user", value: "deploy" },
+        { name: "host", value: "web1" },
+        { name: "port", value: "22" },
+      ],
+      ready: null,
+    });
+    expect(planSnippet(cmd, {}).ask.map((p) => p.name)).toEqual(["user", "host", "port", "cmd"]);
+    expect(planSnippet("{{user}}@{{host}}", { user: "deploy", host: "web1" }).ready).toBe("deploy@web1");
+    expect(resolveCommand("{{user}}@{{host}}", { user: "typed", host: "typed" }, { host: "web1" })).toBe("typed@web1");
+  });
+
+  it("takes host and a stringified port from a profile, omits an empty user, and none for a local shell", () => {
+    const profile = { host: "web1", port: 2222, user: "" } as ConnectionProfile;
+    expect(builtinsFromProfile(profile)).toEqual({ host: "web1", port: "2222" });
+    expect(builtinsFromProfile(null)).toEqual({});
+  });
+
+  it("lists parameters in order of first appearance, not by name", () => {
+    expect(parseParams("{{zeta}} {{alpha}} {{mid}} {{alpha}}").map((p) => p.name)).toEqual([
+      "zeta",
+      "alpha",
+      "mid",
+    ]);
+  });
+
+  it("leaves a placeholder with no value visible", () => {
+    expect(substituteParams("kill {{pid:1}} {{sig}}", { sig: "-9" })).toBe("kill {{pid:1}} -9");
+  });
+});
+
+describe("fleet resolution", () => {
+  const web1 = { id: "a", builtins: { host: "web1", user: "deploy", port: "22" } };
+  const web2 = { id: "b", builtins: { host: "web2", user: "ops", port: "2222" } };
+
+  it("resolves user parameters once and built-ins per host", () => {
+    const cmd = "systemctl restart {{service}} # {{user}}@{{host}}:{{port}}";
+    expect(splitFleetParams(cmd, [web1, web2]).ask.map((p) => p.name)).toEqual(["service"]);
+    expect(fleetCommands(cmd, { service: "nginx" }, [web1, web2])).toEqual({
+      a: "systemctl restart nginx # deploy@web1:22",
+      b: "systemctl restart nginx # ops@web2:2222",
+    });
+  });
+
+  it("shows a built-in every target answers as from the host instead of asking a parameter of that name", () => {
+    expect(splitFleetParams("ping {{host:localhost}} {{count:3}}", [web1, web2])).toEqual({
+      ask: [{ name: "count", default: "3", position: 24 }],
+      fromHost: [{ name: "host" }],
+    });
+  });
+
+  it("asks a built-in some target lacks, and fills only that target with the answer", () => {
+    const noUser = { id: "c", builtins: { host: "web3", port: "22" } };
+    expect(splitFleetParams("id {{user}}", [web1, noUser]).ask.map((p) => p.name)).toEqual(["user"]);
+    expect(fleetCommands("id {{user}}", { user: "root" }, [web1, noUser])).toEqual({ a: "id deploy", c: "id root" });
+  });
+});

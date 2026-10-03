@@ -74,7 +74,7 @@ export function ServerVaultsSection({
   const push = async (v: ServerVault) => {
     setBusy(v.vaultId);
     try {
-      const r = await api.serverAdoptVault(v.vaultId, serverId ?? undefined);
+      const r = await api.serverBindAndPushVault(v.vaultId, serverId ?? undefined);
       toast(t("serverVaults.pushed", { count: r.pushed }), "ok");
       await load();
     } catch (e) {

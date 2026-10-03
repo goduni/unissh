@@ -32,6 +32,42 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Added
+
+- Inline images in the terminal: sixel and iTerm2 inline-image output renders in
+  SSH and local panes and scrolls and clears with the text. A terminal setting
+  (on by default on desktop, off on phones, applied to new panes) controls it; the
+  pixel budget is 16 MP on desktop and 4 MP on phones, and recordings replay
+  their images.
+- Snippet parameters: a snippet command may contain `{{name}}` or
+  `{{name:default}}`; picking it in the command palette asks for the values in a
+  small form (Enter submits, Escape cancels) before typing it. `{{host}}`,
+  `{{user}}` and `{{port}}` come from the host. Fleet can pick a snippet into its
+  command field and resolves built-ins per target; parameterised startup snippets
+  ask once at connect; the snippet editor lists the parameters it finds. Stored
+  snippets are unchanged.
+- Key hygiene: a key's detail panel in Secrets lists the hosts that log in with
+  it and the hosts that reach a bastion with it; keys older than a device-local
+  threshold (Settings → Security, default one year) carry a quiet chip. Staged
+  rotation: Start creates a candidate key, a guided flow deploys it to every
+  host that uses the key, verifies the login with the candidate only, then
+  removes the exact old line; Finish writes the new material into the key (old
+  material stays in local history), Abandon drops the candidate. The in-place
+  Replace key now says the old material is discarded immediately.
+- **Move to server…** for local vaults (Settings → Vaults): converts a local
+  vault into a Cloud vault on a signed-in server and space, keeping its name,
+  groups, items and host identities, then pushes it. The conversion is a
+  re-keyed copy under a new vault id in one transaction; host jumps and
+  Personal-identity bindings that referred to the vault follow it, and the
+  account's Personal vault stays the Personal vault. The confirmation shows what
+  moves and offers **Export backup first**. Item version history starts fresh on
+  the server. See [upgrading](docs/upgrading.md#moving-a-local-vault-to-a-server).
+
+### Compatibility
+
+**Vault format and server protocol are unchanged** — the conversion writes an
+ordinary Cloud vault, and the server receives it like any new Cloud vault.
+
 ## [0.5.0] — 2026-10-02
 
 ### Added

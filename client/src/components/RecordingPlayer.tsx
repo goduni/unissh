@@ -8,6 +8,7 @@ import { MONO, rem, termOptions, TEXT } from "@/theme/tokens";
 import { Modal } from "./Modal";
 import { mcpRecordingDetails } from "@/support/recordings";
 import { visibleCommand } from "@/bridge/mcp";
+import { newImageAddon } from "@/views/terminal/imageAddon";
 
 /** One asciicast event: [seconds since start, stream, payload]. */
 type CastEvent = [number, string, string];
@@ -64,6 +65,13 @@ export function RecordingPlayer({ cast, onClose, title }: { cast: string; onClos
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(hostRef.current);
+    // Always on, with the phone budget: playback is bounded and a faithful replay
+    // is the point, so a recording that held pictures shows them.
+    try {
+      term.loadAddon(newImageAddon("mobile"));
+    } catch {
+      /* replay without images */
+    }
     try {
       fit.fit();
     } catch {

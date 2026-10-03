@@ -256,6 +256,20 @@ export class WorkspaceStorage {
     this.queueWrite();
   }
 
+  /** Carry a vault's layouts (current and named) over to its new id — the vault was
+   *  moved to a server and re-keyed, its hosts keep their ids. Anything already
+   *  saved under `to` is replaced. */
+  moveVault(from: string, to: string): void {
+    if (!this.document || !(from in this.document.vaults || from in this.document.named)) return;
+    const { [from]: layout, ...vaults } = this.document.vaults;
+    const { [from]: saved, ...named } = this.document.named;
+    this.document = { ...this.document,
+      vaults: layout ? { ...vaults, [to]: layout } : vaults,
+      named: saved ? { ...named, [to]: saved } : named,
+      activeVaultId: this.document.activeVaultId === from ? to : this.document.activeVaultId };
+    this.queueWrite();
+  }
+
   /** Drop a purged vault's layouts, including their labels and local shell paths. */
   forgetVault(vaultId: string): void {
     if (!this.document || !(vaultId in this.document.vaults || vaultId in this.document.named)) return;
