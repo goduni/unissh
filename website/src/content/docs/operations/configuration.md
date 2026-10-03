@@ -156,6 +156,9 @@ timeout_secs = 10                            # a timeout fails the batch
 The webhook POSTs batches of entries as JSON, each entry shaped like a line of the [JSON Lines export](../../components/server-audit/#export-json-lines), with `X-UniSSH-Signature: sha256=<hex HMAC-SHA256 of the body>` and `X-UniSSH-Delivery: <first seq>-<last seq>`. A `2xx` acknowledges the batch; anything else, a redirect or a timeout retries the **same** batch with exponential backoff (1 s up to 5 min, with jitter).
 
 - **The secret never goes in the TOML.** `secret_env` names an environment variable that holds it; `secret_file` is a path to a file that holds it (a trailing newline is ignored). Set exactly one. A webhook without a readable secret is a **startup error**.
+- **The HMAC key is the secret's literal bytes**, exactly as written. A hex- or base64-looking secret is not decoded, so receivers must not decode it either.
+- **Use `https://`.** Batches carry audit entries and metadata; a plain `http://` URL to a non-loopback host is accepted but warned about at boot.
+- A section whose `url`, `secret_env` and `secret_file` are all empty counts as absent (so a deployment can pass empty variables through); a partly set one fails startup.
 - **At-least-once.** The server records the last acknowledged `seq` and resumes after it on restart. A batch can arrive twice (for example, a crash right after the receiver answered), so **receivers dedupe on `seq`**.
 - Every key also works from the environment: `UNISSH__AUDIT__WEBHOOK__URL`, `UNISSH__AUDIT__WEBHOOK__SECRET_ENV`, and so on.
 

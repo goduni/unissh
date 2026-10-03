@@ -294,21 +294,21 @@ nothing secret is baked into images. Config uses figment env keys
 
 ## Audit webhook (optional)
 
-To stream the audit log to a SIEM, put the secret in `.env`
-(`UNISSH_AUDIT_WEBHOOK_SECRET=<openssl rand -hex 32>`) and add to the `server`
-service's `environment:` (for example in a `compose.override.yml`):
+To stream the audit log to a SIEM, set in `.env` (`compose.yml` already passes
+these three through; left empty, there is no sink):
 
-```yaml
-UNISSH__AUDIT__WEBHOOK__URL: "https://siem.example.com/unissh"
-UNISSH__AUDIT__WEBHOOK__SECRET_ENV: "UNISSH_AUDIT_WEBHOOK_SECRET"
-UNISSH_AUDIT_WEBHOOK_SECRET: "${UNISSH_AUDIT_WEBHOOK_SECRET}"
+```bash
+UNISSH__AUDIT__WEBHOOK__URL=https://siem.example.com/unissh
+UNISSH__AUDIT__WEBHOOK__SECRET_ENV=UNISSH_AUDIT_WEBHOOK_SECRET
+UNISSH_AUDIT_WEBHOOK_SECRET=<openssl rand -hex 32>
 ```
 
-Any `UNISSH__AUDIT__WEBHOOK__*` variable, even an empty one, turns the sink on,
-so leave them out entirely when you do not want it. Batches are signed with
-`X-UniSSH-Signature: sha256=<HMAC-SHA256 of the body>` using that secret; the
-server refuses to start if the secret is missing. Delivery is at-least-once
-from a persisted cursor: receivers dedupe on `seq`. See
+Batches are signed with `X-UniSSH-Signature: sha256=<HMAC-SHA256 of the body>`.
+The HMAC key is the secret string's own bytes exactly as written (a hex-looking
+secret is **not** hex-decoded), so receivers must use it as-is. A partly set
+webhook (a URL without a secret, or the reverse) refuses to start the server.
+Use an `https://` URL: the batches carry audit metadata. Delivery is
+at-least-once from a persisted cursor: receivers dedupe on `seq`. See
 `server/config.example.toml` (`[audit.webhook]`) for every key.
 
 ## Maintenance

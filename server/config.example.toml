@@ -95,6 +95,7 @@ token = ""
 # `X-UniSSH-Signature: sha256=<hex HMAC-SHA256 of the body>`. A 2xx acknowledges;
 # anything else (or a timeout) retries the same batch with backoff (1 s .. 5 min).
 # The secret is never written here: name an environment variable OR a file.
+# The HMAC key is the secret's literal bytes (never hex/base64-decoded). Use https.
 # A webhook without a readable secret refuses to start the server.
 # Env: UNISSH__AUDIT__WEBHOOK__URL, UNISSH__AUDIT__WEBHOOK__SECRET_ENV, ...
 # [audit.webhook]

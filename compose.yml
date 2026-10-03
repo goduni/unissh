@@ -117,6 +117,11 @@ services:
       # container — without this line a pinned code in .env never reaches the server.
       UNISSH__SETUP__CODE: "${UNISSH__SETUP__CODE:-}"
       UNISSH__OPS__TOKEN: "${UNISSH__OPS__TOKEN:-}"
+      # --- Audit webhook (optional; from .env, see deploy/README.md) ---
+      # All empty → no sink. Set URL + SECRET_ENV=UNISSH_AUDIT_WEBHOOK_SECRET + the secret.
+      UNISSH__AUDIT__WEBHOOK__URL: "${UNISSH__AUDIT__WEBHOOK__URL:-}"
+      UNISSH__AUDIT__WEBHOOK__SECRET_ENV: "${UNISSH__AUDIT__WEBHOOK__SECRET_ENV:-}"
+      UNISSH_AUDIT_WEBHOOK_SECRET: "${UNISSH_AUDIT_WEBHOOK_SECRET:-}"
     volumes:
       - unissh-data:/app/data        # SQLite db; owned by uid 65532 (distroless nonroot).
     read_only: true                  # immutable rootfs; only the named volume + tmpfs are writable.
