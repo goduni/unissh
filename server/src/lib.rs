@@ -4,6 +4,7 @@
 //! revocation + audit. SSH traffic does NOT pass through the server. The server sees only
 //! encrypted blobs and open metadata (spec §1, ARCH §2).
 
+pub mod audit_sinks;
 pub mod codec;
 pub mod config;
 pub mod crypto;

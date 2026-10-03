@@ -18,6 +18,7 @@ pub struct Config {
     pub ops: OpsConfig,
     pub setup: SetupConfig,
     pub oidc: OidcConfig,
+    pub audit: AuditConfig,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -181,6 +182,117 @@ impl OidcConfig {
     }
 }
 
+/// `[audit]`: where the audit log is exported. Every sink is optional and
+/// configured here only, never through the API, so a compromised admin session
+/// cannot redirect the log.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuditConfig {
+    /// `[audit.webhook]`. Absent → no webhook sink.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook: Option<WebhookConfig>,
+}
+
+/// `[audit.webhook]`: POST batches of entries, HMAC-SHA256 signed.
+///
+/// The shared secret is never a config value: it is read at boot from the
+/// environment variable named by `secret_env` or from the file at
+/// `secret_file`, so it stays out of the TOML that sits next to the URL. This
+/// struct holds only the name/path, so its `Debug` and any config dump carry
+/// no secret.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebhookConfig {
+    pub url: String,
+    /// Name of the environment variable holding the HMAC secret.
+    pub secret_env: String,
+    /// Path of a file holding the HMAC secret (trailing newline ignored).
+    pub secret_file: String,
+    /// Entries per POST.
+    pub batch_size: u32,
+    /// Per-request timeout; a timeout fails the batch.
+    pub timeout_secs: u64,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            secret_env: String::new(),
+            secret_file: String::new(),
+            batch_size: 100,
+            timeout_secs: 10,
+        }
+    }
+}
+
+impl WebhookConfig {
+    /// Read the HMAC secret from `secret_env` or `secret_file` (exactly one).
+    /// Errors name the setting, never the value.
+    pub fn resolve_secret(&self) -> Result<Vec<u8>, String> {
+        match (self.secret_env.is_empty(), self.secret_file.is_empty()) {
+            (true, true) => Err(
+                "audit.webhook needs a secret: set secret_env (the name of an \
+                 environment variable) or secret_file (a path)"
+                    .into(),
+            ),
+            (false, false) => Err("audit.webhook: set secret_env or secret_file, not both".into()),
+            (false, true) => match std::env::var(&self.secret_env) {
+                Ok(v) if !v.is_empty() => Ok(v.into_bytes()),
+                _ => Err(format!(
+                    "audit.webhook.secret_env: environment variable {} is unset or empty",
+                    self.secret_env
+                )),
+            },
+            (true, false) => {
+                let raw = std::fs::read(&self.secret_file).map_err(|e| {
+                    format!(
+                        "audit.webhook.secret_file: cannot read {}: {}",
+                        self.secret_file,
+                        e.kind()
+                    )
+                })?;
+                let mut v = raw;
+                while v.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                    v.pop();
+                }
+                if v.is_empty() {
+                    return Err(format!(
+                        "audit.webhook.secret_file: {} is empty",
+                        self.secret_file
+                    ));
+                }
+                Ok(v)
+            }
+        }
+    }
+
+    /// Boot-time validation: a malformed sink is a startup error, not a warning.
+    pub fn validate(&self) -> Result<(), String> {
+        let url = reqwest::Url::parse(&self.url)
+            .map_err(|_| "audit.webhook.url is not a valid URL".to_string())?;
+        if url.scheme() != "https" && url.scheme() != "http" {
+            return Err("audit.webhook.url must be http:// or https://".into());
+        }
+        if self.batch_size == 0 {
+            return Err("audit.webhook.batch_size must be at least 1".into());
+        }
+        if self.timeout_secs == 0 {
+            return Err("audit.webhook.timeout_secs must be at least 1".into());
+        }
+        self.resolve_secret().map(|_| ())
+    }
+}
+
+impl AuditConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        match &self.webhook {
+            Some(w) => w.validate(),
+            None => Ok(()),
+        }
+    }
+}
+
 impl Default for OidcConfig {
     fn default() -> Self {
         Self {
@@ -324,6 +436,12 @@ impl Config {
             .oidc
             .validate()
             .map_err(|msg| Box::new(figment::Error::from(msg)))?;
+        // A configured sink that cannot run (no secret, bad URL) must stop the
+        // boot: a silently idle sink is a log that quietly stops leaving.
+        config
+            .audit
+            .validate()
+            .map_err(|msg| Box::new(figment::Error::from(msg)))?;
         Ok(config)
     }
 
@@ -392,5 +510,26 @@ mod oidc_validate_tests {
             ..Default::default()
         };
         assert!(c.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod audit_validate_tests {
+    use super::Config;
+
+    #[test]
+    fn webhook_without_a_secret_fails_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[audit.webhook]\nurl = \"https://siem.example.com/hook\"\n",
+        )
+        .unwrap();
+        let err = Config::load(Some(&path)).unwrap_err();
+        assert!(
+            err.to_string().contains("audit.webhook needs a secret"),
+            "{err}"
+        );
     }
 }

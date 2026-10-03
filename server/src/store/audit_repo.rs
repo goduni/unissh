@@ -210,6 +210,34 @@ impl Store {
         .await
     }
 
+    /// Last audit seq acknowledged by `sink` (0 when it has never delivered).
+    pub async fn audit_sink_cursor(&self, sink: &str) -> AppResult<i64> {
+        Ok(self
+            .fetch_scalar_i64(
+                "SELECT last_seq FROM audit_sink_cursor WHERE sink = ?",
+                vec![Val::t(sink)],
+            )
+            .await?
+            .unwrap_or(0))
+    }
+
+    /// Record that `sink` acknowledged everything up to `last_seq`.
+    pub async fn set_audit_sink_cursor(
+        &self,
+        sink: &str,
+        last_seq: i64,
+        now: i64,
+    ) -> AppResult<()> {
+        self.exec(
+            "INSERT INTO audit_sink_cursor (sink, last_seq, updated_at) VALUES (?, ?, ?) \
+             ON CONFLICT (sink) DO UPDATE SET last_seq = excluded.last_seq, \
+             updated_at = excluded.updated_at",
+            vec![Val::t(sink), Val::I(last_seq), Val::I(now)],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Verify the audit hash-chain (§11.2). Returns
     /// `(ok, count, broken_at_seq, head_hash)`.
     pub async fn verify_audit_chain(&self) -> AppResult<(bool, i64, Option<i64>, Option<Vec<u8>>)> {

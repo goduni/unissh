@@ -142,9 +142,10 @@ struct ExportQuery {
 }
 
 /// One exported line: every chained column (so the file verifies offline with
-/// the `unissh-audit-chain-v2` recipe) plus a readable `entry`.
+/// the `unissh-audit-chain-v2` recipe) plus a readable `entry`. Also the entry
+/// object of a webhook batch (`crate::audit_sinks::webhook`).
 #[derive(Serialize)]
-struct ExportLine {
+pub(crate) struct ExportLine {
     seq: i64,
     server_seq: Option<i64>,
     source: String,

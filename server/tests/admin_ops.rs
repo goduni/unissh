@@ -673,3 +673,130 @@ async fn instance_generation_tracks_writes() {
     let ov1 = get_json(&app, "/v1/admin/overview", &a.bearer).await;
     assert_eq!(ov1["instance_generation"], 2);
 }
+
+// ---- audit webhook sink, against an in-test receiver ----
+
+#[derive(Clone)]
+struct HookReceiver {
+    status: std::sync::Arc<std::sync::atomic::AtomicU16>,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<(axum::http::HeaderMap, axum::body::Bytes)>>>,
+}
+
+/// An axum receiver at `/hook` that records each request and answers `status`.
+async fn spawn_hook_receiver(status: u16) -> (HookReceiver, String) {
+    use axum::extract::State;
+    let rx = HookReceiver {
+        status: std::sync::Arc::new(std::sync::atomic::AtomicU16::new(status)),
+        seen: Default::default(),
+    };
+    let router = axum::Router::new()
+        .route(
+            "/hook",
+            axum::routing::post(
+                |State(rx): State<HookReceiver>,
+                 headers: axum::http::HeaderMap,
+                 body: axum::body::Bytes| async move {
+                    rx.seen.lock().unwrap().push((headers, body));
+                    let code = rx.status.load(std::sync::atomic::Ordering::SeqCst);
+                    axum::http::StatusCode::from_u16(code).unwrap()
+                },
+            ),
+        )
+        .with_state(rx.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    (rx, format!("http://{addr}/hook"))
+}
+
+#[tokio::test]
+async fn audit_webhook_posts_signed_batches_and_advances_only_on_2xx() {
+    use hmac::{Hmac, KeyInit, Mac};
+    use std::sync::Arc;
+    use unissh_server::audit_sinks::webhook::WebhookSink;
+    use unissh_server::audit_sinks::{Delivery, Step};
+
+    let app = spawn().await;
+    let store = &app.state.store;
+    let base = store.max_audit_seq().await.unwrap();
+    for ev in ["login", "logout"] {
+        store
+            .append_audit_server_observed(&json!({ "ev": ev }), None, app.now())
+            .await
+            .unwrap();
+    }
+    let (rx, url) = spawn_hook_receiver(500).await;
+    let secret = b"shared-hook-secret".to_vec();
+    let sink = WebhookSink::new(
+        &url,
+        secret.clone(),
+        std::time::Duration::from_secs(5),
+        app.instance_id.clone(),
+    )
+    .unwrap();
+    let mut delivery = Delivery::new(
+        Arc::new(sink),
+        store.clone(),
+        Arc::new(store.clone()),
+        app.state.clock.clone(),
+        100,
+    );
+
+    // 500: the batch fails and the cursor stays put.
+    assert!(matches!(delivery.step().await, Step::Failed { .. }));
+    assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), base);
+
+    // 200: acknowledged, the cursor moves to the last seq of the batch.
+    rx.status.store(200, std::sync::atomic::Ordering::SeqCst);
+    let (first, last) = (base + 1, base + 2);
+    assert_eq!(delivery.step().await, Step::Delivered { first, last });
+    assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), last);
+
+    let seen = rx.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    let (headers, body) = &seen[1];
+    // The signature verifies with the shared secret over the exact body bytes.
+    let mut mac = <Hmac<sha2::Sha256>>::new_from_slice(&secret).unwrap();
+    mac.update(body);
+    let expected = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    assert_eq!(headers["x-unissh-signature"], expected.as_str());
+    assert_eq!(
+        headers["x-unissh-delivery"],
+        format!("{first}-{last}").as_str()
+    );
+    assert_eq!(headers["content-type"], "application/json");
+
+    let v: Value = serde_json::from_slice(body).unwrap();
+    assert_eq!(v["instance"], app.instance_id.as_str());
+    let entries = v["entries"].as_array().unwrap();
+    let seqs: Vec<i64> = entries.iter().map(|e| e["seq"].as_i64().unwrap()).collect();
+    assert_eq!(seqs, vec![first, last]);
+    let mut keys: Vec<&str> = entries[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "author_pubkey",
+            "entry",
+            "entry_blob",
+            "prev_hash",
+            "recorded_at",
+            "seq",
+            "server_seq",
+            "signature",
+            "source",
+            "space_id",
+            "vault_id",
+        ]
+    );
+    assert_eq!(entries[0]["entry"]["ev"], "login");
+    assert_eq!(
+        unb64(entries[0]["entry_blob"].as_str().unwrap()).unwrap(),
+        serde_json::to_vec(&json!({ "ev": "login" })).unwrap()
+    );
+}
