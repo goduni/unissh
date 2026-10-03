@@ -143,13 +143,14 @@ export function planRotation(
  *              (a failed remove is an atomic rewrite that did not happen);
  *   switched — the old key is removed, the candidate is the only one;
  *   keptOld  — the run was cancelled before this target switched; the old key
- *              is still authorized (and the candidate too if it got that far). */
+ *              is still authorized (and the candidate too if it got that far).
+ *              `after` is the last step that passed, null for none. */
 export type TargetState =
   | { kind: "pending"; step: RotationStep }
   | { kind: "running"; step: RotationStep }
   | { kind: "failed"; step: RotationStep; error: string }
   | { kind: "switched" }
-  | { kind: "keptOld" };
+  | { kind: "keptOld"; after: RotationStep | null };
 
 export interface RotationRun {
   states: Readonly<Record<string, TargetState>>;
@@ -160,6 +161,9 @@ export interface RotationRun {
 }
 
 export type StepResult = { ok: true } | { ok: false; error: string };
+
+/** The step before `step`, null before the first. */
+const prevStep = (step: RotationStep): RotationStep | null => ROTATION_STEPS[ROTATION_STEPS.indexOf(step) - 1] ?? null;
 
 export function startRun(plan: RotationPlan): RotationRun {
   const states: Record<string, TargetState> = {};
@@ -205,7 +209,13 @@ export function recordStep(run: RotationRun, id: string, step: RotationStep, res
   const s = run.states[id];
   if (s?.kind !== "running" || s.step !== step) return run;
   if (run.cancelled)
-    return withState(run, id, result.ok && step === "remove" ? { kind: "switched" } : { kind: "keptOld" });
+    return withState(
+      run,
+      id,
+      result.ok && step === "remove"
+        ? { kind: "switched" }
+        : { kind: "keptOld", after: result.ok ? step : prevStep(step) },
+    );
   if (!result.ok) return withState(run, id, { kind: "failed", step, error: result.error });
   if (step === "deploy") return withState(run, id, { kind: "pending", step: "verify" });
   if (step === "verify")
@@ -225,7 +235,7 @@ export function retryTarget(run: RotationRun, id: string): RotationRun {
  *  steps land through `recordStep`. The key item itself is not touched here. */
 export function cancelRun(run: RotationRun): RotationRun {
   const states: Record<string, TargetState> = {};
-  for (const [id, s] of Object.entries(run.states)) states[id] = s.kind === "pending" ? { kind: "keptOld" } : s;
+  for (const [id, s] of Object.entries(run.states)) states[id] = s.kind === "pending" ? { kind: "keptOld", after: prevStep(s.step) } : s;
   return { ...run, states, cancelled: true };
 }
 
@@ -243,7 +253,10 @@ export function runSettled(run: RotationRun): boolean {
  *  target has verified — it may already have dropped the old key — and with the
  *  old key before. A `hopRef` hop switched that way is written out inline (the
  *  core would resolve it to the old key), carrying the bastion's proxy where
- *  the core would have applied it. */
+ *  the core would have applied it. That inline copy mirrors the core's hop_ref
+ *  resolution (rust-core/crates/ffi/src/lib.rs, `connect_with_options`: a ref
+ *  hop takes the referenced profile's host/port/user/auth, and its proxy only
+ *  as hop #1 when the connection names none) — keep the two in step. */
 export function stepConnect(
   plan: RotationPlan,
   run: RotationRun,
@@ -267,5 +280,8 @@ export function stepConnect(
   });
   const auth =
     step === "deploy" ? { type: "agent" as const, vaultId: plan.vaultId, keyItemId: plan.keyItemId } : candidate;
-  return { host: t.host, port: t.port, user: t.user, auth, jumps, proxy };
+  // Verify and remove must log in with the candidate key and nothing else: a
+  // keyboard-interactive fallback would let a typed password pass for the key.
+  // Deploy logs in with the old key the user already uses, prompts and all.
+  return { host: t.host, port: t.port, user: t.user, auth, jumps, proxy, publickeyOnly: step !== "deploy" };
 }

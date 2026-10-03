@@ -263,6 +263,9 @@ export interface MultiExecTarget {
   auth: AuthMethod;
   jumps: JumpHost[];
   proxy?: ProxyConfig | null;
+  /** Log in to the target with its key only: no keyboard-interactive, so no
+   *  password prompt can stand in for the key (proving a key works). */
+  publickeyOnly?: boolean;
 }
 
 export interface MultiExecResult {

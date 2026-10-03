@@ -21,6 +21,7 @@ import { useTranslation } from "@/i18n";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useFmt } from "@/i18n/format";
 import * as api from "@/bridge/api";
+import { EXEC_CONCURRENCY, EXEC_TIMEOUT_SECS } from "@/support/execLimits";
 import { apiErrorMessage, mismatchFromError } from "@/bridge/types";
 import type { PendingMismatch } from "@/store/app";
 import type { ConnectionProfile, MultiExecResult, MultiExecTarget } from "@/bridge/types";
@@ -29,12 +30,6 @@ type Phase = "idle" | "running" | "done";
 
 // Per-host run status derived from phase + launch/result/cancel maps.
 type HostStatus = "queued" | "running" | "ok" | "fail" | "cancelled";
-
-// How many hosts run at once. Bounded (instead of the core's "all in parallel")
-// so Stop / stop-on-error have a real queue of not-yet-started hosts to cut.
-const FLEET_CONCURRENCY = 8;
-// Per-host command deadline (matches the previous batched behaviour).
-const EXEC_TIMEOUT_SECS = 30;
 
 function statusColor(
   p: ReturnType<typeof usePalette>,
@@ -509,7 +504,7 @@ export function ViewFleet() {
       }
     };
     await Promise.all(
-      Array.from({ length: Math.min(FLEET_CONCURRENCY, queue.length) }, () => worker()),
+      Array.from({ length: Math.min(EXEC_CONCURRENCY, queue.length) }, () => worker()),
     );
     // Whatever is still queued was never launched — mark it honestly.
     if (queue.length) {

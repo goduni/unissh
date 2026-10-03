@@ -15,7 +15,14 @@ import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, type MultiExecTarget } from "@/bridge/types";
-import { authorizedKeysAppendCmd, authorizedKeysRemoveCmd } from "@/support/authorizedKeys";
+import {
+  authorizedKeysAppendCmd,
+  authorizedKeysRemoveCmd,
+  REMOVE_EXIT_NO_FILE,
+  REMOVE_EXIT_STILL_PRESENT,
+} from "@/support/authorizedKeys";
+import { EXEC_CONCURRENCY, EXEC_TIMEOUT_SECS } from "@/support/execLimits";
+import { confirmFinishRotation } from "./finishRotation";
 import {
   beginStep,
   cancelRun,
@@ -35,10 +42,6 @@ import {
   type TargetState,
 } from "@/support/keyRotation";
 
-// Machines worked on at once, and the per-step command deadline (as Fleet).
-const CONCURRENCY = 4;
-const STEP_TIMEOUT_SECS = 30;
-
 const STEP_KEY = { deploy: "keyRotation.stepDeploy", verify: "keyRotation.stepVerify", remove: "keyRotation.stepRemove" } as const;
 const SKIP_KEY: Record<RotationSkipReason, "keyRotation.skipPersonal" | "keyRotation.skipSystemAgent" | "keyRotation.skipPassword"> = {
   personal: "keyRotation.skipPersonal",
@@ -49,10 +52,10 @@ const SKIP_KEY: Record<RotationSkipReason, "keyRotation.skipPersonal" | "keyRota
 type StepView = "waiting" | "running" | "done" | "failed";
 
 /** How one step of a target reads, from the target's state. */
-function stepView(s: TargetState, step: RotationStep, verified: boolean): StepView {
+function stepView(s: TargetState, step: RotationStep): StepView {
   const i = ROTATION_STEPS.indexOf(step);
   if (s.kind === "switched") return "done";
-  if (s.kind === "keptOld") return verified && i < 2 ? "done" : "waiting";
+  if (s.kind === "keptOld") return s.after !== null && i <= ROTATION_STEPS.indexOf(s.after) ? "done" : "waiting";
   const at = ROTATION_STEPS.indexOf(s.step);
   if (i < at) return "done";
   if (i > at) return "waiting";
@@ -88,7 +91,6 @@ export function KeyRotationModal({
   const keysRef = useRef<{ old: string; cand: string } | null>(null);
   const [starting, setStarting] = useState(false);
   const [driving, setDriving] = useState(false);
-  const [finishing, setFinishing] = useState(false);
 
   const apply = (f: (r: RotationRun) => RotationRun) => {
     if (!runRef.current) return;
@@ -96,12 +98,16 @@ export function KeyRotationModal({
     setRun(runRef.current);
   };
 
-  const exec = async (args: MultiExecTarget, cmd: string): Promise<StepResult> => {
+  const exec = async (args: MultiExecTarget, cmd: string, step: RotationStep): Promise<StepResult> => {
     try {
-      const r = (await api.sshExecMulti([args], cmd, 0, STEP_TIMEOUT_SECS))[0];
+      const r = (await api.sshExecMulti([args], cmd, 0, EXEC_TIMEOUT_SECS))[0];
       if (!r) return { ok: false, error: t("error.generic") };
       if (r.timedOut) return { ok: false, error: t("keyRotation.timedOut") };
       if (r.error) return { ok: false, error: r.error };
+      if (step === "remove" && r.exitStatus === REMOVE_EXIT_STILL_PRESENT)
+        return { ok: false, error: t("keyRotation.oldKeyStillPresent") };
+      if (step === "remove" && r.exitStatus === REMOVE_EXIT_NO_FILE)
+        return { ok: false, error: t("keyRotation.noAuthorizedKeys") };
       if (r.exitStatus !== 0) return { ok: false, error: r.stderr.trim() || `exit ${r.exitStatus}` };
       return { ok: true };
     } catch (e) {
@@ -113,15 +119,15 @@ export function KeyRotationModal({
     const r = runRef.current;
     const keys = keysRef.current;
     if (!r || !keys) return { ok: false, error: t("error.generic") };
-    if (step === "verify") return exec(stepConnect(plan, r, id, "verify", cid), "true");
+    if (step === "verify") return exec(stepConnect(plan, r, id, "verify", cid), "true", step);
     if (step === "remove")
-      return exec(stepConnect(plan, r, id, "remove", cid), authorizedKeysRemoveCmd(keys.old, keys.cand));
+      return exec(stepConnect(plan, r, id, "remove", cid), authorizedKeysRemoveCmd(keys.old, keys.cand), step);
     const append = authorizedKeysAppendCmd(keys.cand);
-    const res = await exec(stepConnect(plan, r, id, "deploy", cid), append);
+    const res = await exec(stepConnect(plan, r, id, "deploy", cid), append, step);
     // Continuing a rotation: a machine switched by an earlier run no longer takes
     // the old key, but the candidate already there logs in just as well.
     if (res.ok || !resumeCandidate) return res;
-    const again = await exec(stepConnect(plan, r, id, "verify", cid), append);
+    const again = await exec(stepConnect(plan, r, id, "verify", cid), append, step);
     return again.ok ? again : res;
   };
 
@@ -141,7 +147,7 @@ export function KeyRotationModal({
           apply((r) => recordStep(r, id, step, res));
         }
       };
-      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+      await Promise.all(Array.from({ length: Math.min(EXEC_CONCURRENCY, queue.length) }, worker));
     }
     setDriving(false);
   };
@@ -173,26 +179,31 @@ export function KeyRotationModal({
     void drive(candidateId);
   };
 
-  const finish = async () => {
-    if (!candidateId) return;
-    setFinishing(true);
-    try {
-      await api.finishKeyRotation(vault, keyItemId, candidateId);
-      await useApp.getState().reloadVault();
-      ctx.toast(t("secrets.rotationFinished"), "ok");
-      onClose();
-    } catch (e) {
-      ctx.toast(apiErrorMessage(e), "err");
-    } finally {
-      setFinishing(false);
-    }
-  };
-
-  const busy = starting || driving || finishing;
+  const busy = starting || driving;
   const settled = run !== null && runSettled(run);
   // Machines the new key has not been proven on: after finish they refuse the
-  // key until they get it. Verified ones accept it whether or not removal ran.
+  // key until they get it. Separately, machines where it was proven but the old
+  // line was not removed: they keep working and still accept the old key.
   const notSwitched = run ? plan.targets.filter((tg) => !run.verified[tg.id]) : [];
+  const stillOld = run
+    ? plan.targets.filter((tg) => run.verified[tg.id] && run.states[tg.id]?.kind !== "switched")
+    : [];
+  const finish = () => {
+    if (!candidateId) return;
+    confirmFinishRotation(ctx, {
+      vault,
+      keyId: keyItemId,
+      candidateId,
+      danger: notSwitched.length > 0,
+      onDone: onClose,
+    });
+  };
+  const outcome = (tg: RotationTarget) => {
+    const s = run?.states[tg.id];
+    return s?.kind === "failed"
+      ? t("keyRotation.failedAt", { step: t(STEP_KEY[s.step]), error: s.error })
+      : t("keyRotation.keptOld");
+  };
   const labelOf = (id: string) => {
     const tg = plan.targets.find((x) => x.id === id);
     return tg ? targetLabel(tg) : id;
@@ -237,10 +248,10 @@ export function KeyRotationModal({
           )}
           {run && settled && !driving && (
             <>
-              <Btn variant="ghost" onClick={onClose} disabled={finishing} style={mobileBtn}>
+              <Btn variant="ghost" onClick={onClose} style={mobileBtn}>
                 {t("common.close")}
               </Btn>
-              <Btn icon="check" onClick={finish} disabled={finishing} style={mobileBtn}>
+              <Btn icon="check" onClick={finish} style={mobileBtn}>
                 {t("keyRotation.finish")}
               </Btn>
             </>
@@ -264,7 +275,6 @@ export function KeyRotationModal({
         <ul aria-live="polite" style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {plan.targets.map((tg, i) => {
             const s: TargetState = run?.states[tg.id] ?? { kind: "pending", step: "deploy" };
-            const verified = run?.verified[tg.id] === true;
             return (
               <li
                 key={tg.id}
@@ -308,7 +318,7 @@ export function KeyRotationModal({
                 </div>
                 <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", gap: rem(14), flexWrap: "wrap" }}>
                   {ROTATION_STEPS.map((step) => {
-                    const v = run ? stepView(s, step, verified) : "waiting";
+                    const v = run ? stepView(s, step) : "waiting";
                     const color = v === "done" ? p.green : v === "failed" ? p.red : v === "running" ? p.txt : p.txt3;
                     const stateLabel = t(
                       v === "done"
@@ -384,17 +394,23 @@ export function KeyRotationModal({
             <div style={{ ...note, color: p.amber }}>
               {t("keyRotation.notSwitchedLabel")}
               <ul style={{ margin: `${rem(4)} 0 0`, paddingLeft: rem(18) }}>
-                {notSwitched.map((tg) => {
-                  const s = run.states[tg.id];
-                  return (
-                    <li key={tg.id}>
-                      {targetLabel(tg)}
-                      {s?.kind === "failed"
-                        ? ` — ${t("keyRotation.failedAt", { step: t(STEP_KEY[s.step]), error: s.error })}`
-                        : ` — ${t("keyRotation.keptOld")}`}
-                    </li>
-                  );
-                })}
+                {notSwitched.map((tg) => (
+                  <li key={tg.id}>
+                    {targetLabel(tg)} — {outcome(tg)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {stillOld.length > 0 && (
+            <div style={note}>
+              {t("keyRotation.stillOldLabel")}
+              <ul style={{ margin: `${rem(4)} 0 0`, paddingLeft: rem(18) }}>
+                {stillOld.map((tg) => (
+                  <li key={tg.id}>
+                    {targetLabel(tg)} — {outcome(tg)}
+                  </li>
+                ))}
               </ul>
             </div>
           )}

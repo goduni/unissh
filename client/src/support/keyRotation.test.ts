@@ -212,7 +212,7 @@ describe("rotation run", () => {
 });
 
 describe("stepConnect", () => {
-  it("reaches a target through hops that already verified with the candidate, and the rest with the old key", () => {
+  it("reaches a target through hops that already verified with the candidate, and proves the candidate key-only", () => {
     const bastion = { ...host("bastion", KEY), proxy: { kind: "socks5" as const, host: "px", port: 1080 } };
     const plan = planRotation(
       [bastion, host("db", KEY, [refHop("bastion"), inlineHop("mid", "k")])],
@@ -225,14 +225,21 @@ describe("stepConnect", () => {
     const old = { type: "agent", vaultId: "v", keyItemId: "k" };
     const cand = { type: "agent", vaultId: "v", keyItemId: "cand" };
     const deploy = stepConnect(plan, run, DB, "deploy", "cand");
-    expect([deploy.auth, deploy.proxy, deploy.jumps.map((j) => [j.host, j.auth, j.hopRef ?? null])]).toEqual([
+    expect([
+      deploy.auth,
+      deploy.publickeyOnly,
+      deploy.proxy,
+      deploy.jumps.map((j) => [j.host, j.auth, j.hopRef ?? null]),
+    ]).toEqual([
       old,
+      false,
       bastion.proxy,
       [
         ["bastion.example", cand, null],
         ["mid.example", old, null],
       ],
     ]);
-    expect(stepConnect(plan, run, DB, "verify", "cand").auth).toEqual(cand);
+    const verify = stepConnect(plan, run, DB, "verify", "cand");
+    expect([verify.auth, verify.publickeyOnly]).toEqual([cand, true]);
   });
 });

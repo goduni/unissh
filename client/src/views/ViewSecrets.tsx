@@ -21,6 +21,7 @@ import type { ConnectionProfile, ItemInfo, Identity, KeyRotationLink, ServerStat
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
 import { isKeyOld, keyUsage, keyUsageCount } from "@/support/keyHygiene";
+import { confirmFinishRotation } from "@/overlays/finishRotation";
 import { useFmt } from "@/i18n/format";
 
 type SecretTab = "keys" | "passwords" | "notes" | "identities";
@@ -306,22 +307,7 @@ function KeyRow({
   const onFinishRotation = () => {
     if (!vault || !rotation) return;
     const { keyId, candidateId } = rotation.link;
-    ctx.confirm({
-      title: t("secrets.finishRotationTitle"),
-      body: t("secrets.finishRotationBody", { item: keyId, candidate: candidateId }),
-      danger: false,
-      confirmLabel: t("secrets.finishRotationConfirm"),
-      icon: "refresh",
-      onConfirm: async () => {
-        try {
-          await api.finishKeyRotation(vault, keyId, candidateId);
-          await useApp.getState().reloadVault();
-          ctx.toast(t("secrets.rotationFinished"), "ok");
-        } catch (e) {
-          ctx.toast(apiErrorMessage(e), "err");
-        }
-      },
-    });
+    confirmFinishRotation(ctx, { vault, keyId, candidateId });
   };
 
   const onAbandonRotation = () => {
