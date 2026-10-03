@@ -2525,18 +2525,15 @@ impl Core {
     /// `tenant_b64` is the base64 `tenant_id` of the server being synced (as in
     /// `ServerConfig.tenant_id`). **1:1 binding:** the push emits ONLY the cloud vaults
     /// bound to this tenant (see `sync_push`); local vaults and those bound to
-    /// other servers are not sent. An empty `tenant_b64` → [`FfiError::NoServer`].
+    /// other servers are not sent. An empty `tenant_b64` pushes nothing (the push
+    /// selects cloud vaults only; local vaults also carry an empty label) but still
+    /// pulls — a link whose stored space id is empty keeps syncing down.
     pub fn sync_now(
         &self,
         transport: Arc<dyn FfiSyncTransport>,
         tenant_b64: String,
     ) -> Result<FfiSyncReport, FfiError> {
         self.with_state_mut(|state| {
-            // An empty tenant names no server: refuse rather than sync against a label
-            // that local vaults (stored with an empty tenant) also carry.
-            if tenant_b64.is_empty() {
-                return Err(FfiError::NoServer);
-            }
             let genesis_owner = state.keyset.signing.verifying.to_bytes().to_vec();
             let ctx = SyncContext {
                 genesis_owner,
