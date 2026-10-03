@@ -121,7 +121,7 @@ Independent of `entry_blob` content, the whole log is a hash chain
 
 - `from_seq` and `to_seq` are optional, inclusive, and must be positive integers with `to_seq >= from_seq` (otherwise `400`). Omitted, the export starts at `1` and ends at the newest entry.
 - The upper bound is pinned to the newest entry at request time, so a download is a consistent slice even while the server keeps appending.
-- The body is streamed in pages; an error part-way through ends the download early (a truncated last line or a missing tail), which the chain check below exposes.
+- The body is streamed in pages; an error part-way through ends the download early. The chain cannot detect a missing tail, so compare the last line's `seq` with the pinned upper bound in the `Content-Disposition` file name (`unissh-audit-<from>-<to>.jsonl`): they must be equal. A cut-off final line fails to parse.
 
 Each line:
 

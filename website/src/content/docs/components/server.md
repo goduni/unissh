@@ -68,7 +68,7 @@ All crypto blobs are base64 (STANDARD). **One server = one instance — there is
 
 ### Audit
 
-`POST /v1/audit`, `GET /v1/audit` (admin). The log is a server-side hash chain; `GET /v1/admin/audit/verify` recomputes it. Entry formats: [Audit log & entry format](../server-audit/).
+`POST /v1/audit`, `GET /v1/audit` (admin), `GET /v1/audit/export` (owner; JSON Lines, optional `from_seq`/`to_seq`). The log is a server-side hash chain; `GET /v1/admin/audit/verify` recomputes it. Entry formats: [Audit log & entry format](../server-audit/).
 
 ### Admin / ops (for the admin panel)
 
