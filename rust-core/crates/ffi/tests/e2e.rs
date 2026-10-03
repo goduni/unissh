@@ -10,7 +10,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use unissh_ffi::{
-    AuthMethod, Core, JumpHost, MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword,
+    AgentApprover, AgentCaller, AgentSignOrigin, AgentSignRequest, AuthMethod, Core, JumpHost,
+    MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword,
 };
 
 fn agent_auth(vault_id: &str, key_item_id: &str) -> AuthMethod {
@@ -5087,37 +5088,50 @@ fn automation_managed_connection_reuse_stdin_and_revision_invalidation() {
     assert!(matches!(core.automation_revision(), Err(FfiError::Locked)));
 }
 
-/// Asks the system agent for its identities over a stream, the way `ssh-add -l`
-/// does, and returns `(key blob, comment)` per identity.
-fn system_agent_identities(core: &Core) -> Vec<(Vec<u8>, String)> {
+/// Sends one request to the system agent over a stream, as a client on the
+/// socket would, on behalf of `caller`; returns the reply's body.
+fn system_agent_request(core: &Core, request: &[u8], caller: AgentCaller) -> Vec<u8> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let agent = core.system_agent();
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
-    let reply = rt.block_on(async {
+    let mut frame = (request.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(request);
+    rt.block_on(async {
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let ask = async move {
-            client.write_all(&[0, 0, 0, 1, 11]).await.unwrap(); // REQUEST_IDENTITIES
+            client.write_all(&frame).await.unwrap();
             let mut len = [0u8; 4];
             client.read_exact(&mut len).await.unwrap();
             let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
             client.read_exact(&mut body).await.unwrap();
             body // dropping `client` ends the server loop
         };
-        tokio::join!(agent.serve(server), ask).1
-    });
+        tokio::join!(agent.serve(server, caller), ask).1
+    })
+}
+
+/// Reads one SSH string off the front of `input`.
+fn take_ssh_string(input: &mut &[u8]) -> Vec<u8> {
+    let n = u32::from_be_bytes(input[..4].try_into().unwrap()) as usize;
+    let s = input[4..4 + n].to_vec();
+    *input = &input[4 + n..];
+    s
+}
+
+/// Asks the system agent for its identities, the way `ssh-add -l` does, and
+/// returns `(key blob, comment)` per identity.
+fn system_agent_identities(core: &Core) -> Vec<(Vec<u8>, String)> {
+    let reply = system_agent_request(core, &[11], AgentCaller::default()); // REQUEST_IDENTITIES
     assert_eq!(reply[0], 12, "IDENTITIES_ANSWER");
-    let mut rest = &reply[5..];
-    let mut take = || {
-        let n = u32::from_be_bytes(rest[..4].try_into().unwrap()) as usize;
-        let s = rest[4..4 + n].to_vec();
-        rest = &rest[4 + n..];
-        s
-    };
     let count = u32::from_be_bytes(reply[1..5].try_into().unwrap());
+    let mut rest = &reply[5..];
     (0..count)
-        .map(|_| (take(), String::from_utf8(take()).unwrap()))
+        .map(|_| {
+            let blob = take_ssh_string(&mut rest);
+            (blob, String::from_utf8(take_ssh_string(&mut rest)).unwrap())
+        })
         .collect()
 }
 
@@ -5162,4 +5176,72 @@ fn system_agent_offers_the_shared_keys_follows_a_toggle_and_empties_when_locked(
     // A locked core offers nothing — an empty list, not an error.
     core.lock();
     assert_eq!(system_agent_identities(&core), vec![]);
+}
+
+/// Approves every signature and keeps what each prompt was shown.
+struct RecordingApprover(std::sync::Mutex<Vec<AgentSignRequest>>);
+
+impl AgentApprover for RecordingApprover {
+    fn approve(&self, request: AgentSignRequest) -> bool {
+        self.0.lock().unwrap().push(request);
+        true
+    }
+}
+
+/// A freshly generated key is not cached in the embedded agent, so this also
+/// covers loading it on approval. The prompt names the key and the caller, and
+/// the signature verifies against the shared public key.
+#[test]
+fn system_agent_signs_with_a_shared_key_once_approved() {
+    use russh::keys::signature::Verifier;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let work = core
+        .generate_ssh_key("v".to_string(), "work".to_string())
+        .unwrap();
+    core.set_system_agent_shared("v".to_string(), "work".to_string(), true)
+        .unwrap();
+    let approver = std::sync::Arc::new(RecordingApprover(Default::default()));
+    core.set_agent_approver(Some(approver.clone()));
+
+    let caller = AgentCaller {
+        pid: Some(4242),
+        executable: Some("/usr/bin/git".to_string()),
+    };
+    let mut request = vec![13]; // SIGN_REQUEST
+    for field in [openssh_blob(&work).as_slice(), b"to-sign".as_slice()] {
+        request.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        request.extend_from_slice(field);
+    }
+    request.extend_from_slice(&0u32.to_be_bytes()); // flags
+    let reply = system_agent_request(&core, &request, caller.clone());
+
+    assert_eq!(reply[0], 14, "SIGN_RESPONSE");
+    let mut body = &reply[1..];
+    let inner = take_ssh_string(&mut body);
+    let mut inner = inner.as_slice();
+    let algorithm = String::from_utf8(take_ssh_string(&mut inner)).unwrap();
+    let signature = russh::keys::ssh_key::Signature::new(
+        russh::keys::Algorithm::new(&algorithm).unwrap(),
+        take_ssh_string(&mut inner),
+    )
+    .unwrap();
+    let public = russh::keys::PublicKey::from_openssh(&work).unwrap();
+    // Through the trait: `PublicKey` also has an inherent SSHSIG `verify`.
+    Verifier::verify(&public, b"to-sign", &signature)
+        .expect("the signature verifies against the shared key");
+
+    let asked = approver.0.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(
+        asked[0].origin,
+        AgentSignOrigin::SystemAgent {
+            pid: caller.pid,
+            executable: caller.executable,
+        }
+    );
+    assert_eq!(asked[0].key, "work");
 }

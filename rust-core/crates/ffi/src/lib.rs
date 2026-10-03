@@ -65,6 +65,7 @@ mod system_agent;
 mod terminal_workspace;
 
 pub use system_agent::{SharedAgentKey, SystemAgent};
+pub use unissh_ssh_transport::AgentCaller;
 
 uniffi::setup_scaffolding!();
 
@@ -1400,8 +1401,8 @@ impl Core {
         })
     }
 
-    /// Registers who approves each signature a forwarded agent is asked to
-    /// produce. Without one, a forwarded agent refuses everything — the safe
+    /// Registers who approves each signature a forwarded agent or the system
+    /// agent is asked to produce. Without one, both refuse everything — the safe
     /// direction, since the alternative is signing on someone's behalf with
     /// nobody watching.
     pub fn set_agent_approver(&self, approver: Option<Arc<dyn AgentApprover>>) {
@@ -7621,18 +7622,41 @@ pub struct AuthPromptRequest {
     pub prompts: Vec<AuthPromptField>,
 }
 
-/// A signature a forwarded agent has been asked to produce.
+/// Where a signature request came from.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum AgentSignOrigin {
+    /// A program on the remote host of a session with agent forwarding on.
+    Forwarded,
+    /// A program on this machine, through the system agent's socket. `pid` and
+    /// `executable` are what the OS reported about the caller; `None` is an
+    /// unknown process.
+    SystemAgent {
+        /// The caller's process id.
+        pid: Option<u32>,
+        /// The caller's executable path.
+        executable: Option<String>,
+    },
+}
+
+/// A signature an agent UniSSH serves has been asked to produce.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct AgentSignRequest {
-    /// The host whose session the request arrived through.
+    /// Where the request came from.
+    pub origin: AgentSignOrigin,
+    /// The host whose session the request arrived through. Empty for the system
+    /// agent.
     pub host: String,
+    /// The key asked for (its vault item id). Empty for a forwarded agent, which
+    /// only ever offers the key its session is using.
+    pub key: String,
     /// When the payload is an SSH authentication request, the identity it would
     /// log in as — parsed out so the prompt can say where the signature goes
     /// rather than only that one was asked for. Empty when it is something else.
     pub target: String,
 }
 
-/// Approves, or refuses, each signature a forwarded agent is asked for.
+/// Approves, or refuses, each signature a forwarded agent or the system agent
+/// is asked for.
 ///
 /// This is what makes agent forwarding defensible rather than a footgun. While a
 /// forwarded session lives, anything that can reach the socket on the remote
@@ -7654,7 +7678,9 @@ struct ApprovalBridge {
 impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
     fn approve(&self, host: &str, blob: &[u8]) -> bool {
         self.inner.approve(AgentSignRequest {
+            origin: AgentSignOrigin::Forwarded,
             host: host.to_string(),
+            key: String::new(),
             target: userauth_target(blob).unwrap_or_default(),
         })
     }
