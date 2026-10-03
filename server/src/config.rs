@@ -191,6 +191,9 @@ pub struct AuditConfig {
     /// `[audit.webhook]`. Absent → no webhook sink.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub webhook: Option<WebhookConfig>,
+    /// `[audit.syslog]`. Absent → no syslog sink.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub syslog: Option<SyslogConfig>,
 }
 
 /// `[audit.webhook]`: POST batches of entries, HMAC-SHA256 signed.
@@ -291,20 +294,134 @@ impl WebhookConfig {
     }
 }
 
+/// `[audit.syslog]`: one RFC 5424 message per entry, over UDP or TCP (RFC 6587
+/// octet counting). No TLS: point it at a local forwarder for that.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyslogConfig {
+    /// Collector as `host:port` (a name is resolved at connect time).
+    pub address: String,
+    /// `"udp"` (send and forget) or `"tcp"` (acknowledged by a completed write).
+    pub protocol: String,
+    /// Facility keyword: `kern`, `user`, ..., `auth`, `authpriv`, ..., `local0`..`local7`.
+    pub facility: String,
+    /// RFC 5424 APP-NAME: 1-48 printable ASCII characters, no spaces.
+    pub app_name: String,
+}
+
+impl Default for SyslogConfig {
+    fn default() -> Self {
+        Self {
+            address: String::new(),
+            protocol: "tcp".into(),
+            facility: "auth".into(),
+            app_name: "unissh".into(),
+        }
+    }
+}
+
+/// RFC 5424 §6.2.1 facility keywords, in code order (0..=23).
+const SYSLOG_FACILITIES: [&str; 24] = [
+    "kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news", "uucp", "cron", "authpriv",
+    "ftp", "ntp", "audit", "alert", "clock", "local0", "local1", "local2", "local3", "local4",
+    "local5", "local6", "local7",
+];
+
+impl SyslogConfig {
+    /// No destination, and every other field empty or at its default: the
+    /// section exists only because a deployment passes empty env vars through.
+    fn is_unset(&self) -> bool {
+        let d = Self::default();
+        self.address.is_empty()
+            && (self.protocol.is_empty() || self.protocol == d.protocol)
+            && (self.facility.is_empty() || self.facility == d.facility)
+            && (self.app_name.is_empty() || self.app_name == d.app_name)
+    }
+
+    /// An empty optional field (an empty env var passed through) means its default.
+    fn fill_defaults(&mut self) {
+        let d = Self::default();
+        for (v, def) in [
+            (&mut self.protocol, d.protocol),
+            (&mut self.facility, d.facility),
+            (&mut self.app_name, d.app_name),
+        ] {
+            if v.is_empty() {
+                *v = def;
+            }
+        }
+    }
+
+    /// The numeric facility (0..=23), or `None` for an unknown keyword.
+    pub fn facility_code(&self) -> Option<u8> {
+        SYSLOG_FACILITIES
+            .iter()
+            .position(|f| f.eq_ignore_ascii_case(&self.facility))
+            .map(|i| i as u8)
+    }
+
+    /// Boot-time validation. The address is checked for shape only (`host:port`
+    /// with a non-zero port): a collector name need not resolve at boot.
+    pub fn validate(&self) -> Result<(), String> {
+        let port = self
+            .address
+            .rsplit_once(':')
+            .filter(|(host, _)| {
+                !host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .is_empty()
+            })
+            .and_then(|(_, port)| port.parse::<u16>().ok())
+            .filter(|p| *p != 0);
+        if port.is_none() {
+            return Err("audit.syslog.address must be host:port".into());
+        }
+        if self.protocol != "udp" && self.protocol != "tcp" {
+            return Err("audit.syslog.protocol must be \"udp\" or \"tcp\"".into());
+        }
+        if self.facility_code().is_none() {
+            return Err(format!(
+                "audit.syslog.facility must be one of {}",
+                SYSLOG_FACILITIES.join(", ")
+            ));
+        }
+        let name_ok = (1..=48).contains(&self.app_name.len())
+            && self.app_name.bytes().all(|b| (33..=126).contains(&b));
+        if !name_ok {
+            return Err(
+                "audit.syslog.app_name must be 1-48 printable ASCII characters without spaces"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl AuditConfig {
     /// Drop sinks whose section is present but entirely empty (see
-    /// `WebhookConfig::is_unset`). A partly set section stays and fails validation.
+    /// `WebhookConfig::is_unset`, `SyslogConfig::is_unset`). A partly set
+    /// section stays and fails validation.
     pub fn normalize(&mut self) {
         if self.webhook.as_ref().is_some_and(WebhookConfig::is_unset) {
             self.webhook = None;
         }
+        if self.syslog.as_ref().is_some_and(SyslogConfig::is_unset) {
+            self.syslog = None;
+        }
+        if let Some(s) = &mut self.syslog {
+            s.fill_defaults();
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        match &self.webhook {
-            Some(w) => w.validate(),
-            None => Ok(()),
+        if let Some(w) = &self.webhook {
+            w.validate()?;
         }
+        if let Some(s) = &self.syslog {
+            s.validate()?;
+        }
+        Ok(())
     }
 }
 
@@ -561,5 +678,25 @@ mod audit_validate_tests {
         // An all-empty section (compose passing `${X:-}` through) means no sink.
         std::fs::write(&path, "[audit.webhook]\nurl = \"\"\n").unwrap();
         assert!(Config::load(Some(&path)).unwrap().audit.webhook.is_none());
+    }
+
+    #[test]
+    fn syslog_with_a_bad_setting_fails_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[audit.syslog]\naddress = \"127.0.0.1:514\"\nprotocol = \"tls\"\n",
+        )
+        .unwrap();
+        let err = Config::load(Some(&path)).unwrap_err();
+        assert!(err.to_string().contains("audit.syslog.protocol"), "{err}");
+        // An all-empty section (compose passing `${X:-}` through) means no sink.
+        std::fs::write(
+            &path,
+            "[audit.syslog]\naddress = \"\"\nprotocol = \"\"\nfacility = \"\"\n",
+        )
+        .unwrap();
+        assert!(Config::load(Some(&path)).unwrap().audit.syslog.is_none());
     }
 }

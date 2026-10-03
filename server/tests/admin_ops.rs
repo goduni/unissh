@@ -800,3 +800,89 @@ async fn audit_webhook_posts_signed_batches_and_advances_only_on_2xx() {
         serde_json::to_vec(&json!({ "ev": "login" })).unwrap()
     );
 }
+
+/// Read one RFC 6587 octet-counted frame (`<len> <msg>`) from `conn`.
+async fn read_frame(conn: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut len = Vec::new();
+    loop {
+        let b = conn.read_u8().await.unwrap();
+        if b == b' ' {
+            break;
+        }
+        assert!(b.is_ascii_digit(), "frame length must be decimal digits");
+        len.push(b);
+    }
+    let n: usize = std::str::from_utf8(&len).unwrap().parse().unwrap();
+    let mut msg = vec![0u8; n];
+    conn.read_exact(&mut msg).await.unwrap();
+    String::from_utf8(msg).unwrap()
+}
+
+#[tokio::test]
+async fn audit_syslog_tcp_sends_octet_counted_rfc5424_and_advances_the_cursor() {
+    use std::sync::Arc;
+    use unissh_server::audit_sinks::syslog::{Header, SyslogSink};
+    use unissh_server::audit_sinks::{Delivery, Step};
+
+    let app = spawn().await;
+    let store = &app.state.store;
+    let base = store.max_audit_seq().await.unwrap();
+    let vault = [7u8; 16];
+    store
+        .append_audit_server_observed(&json!({ "event": "login" }), None, app.now())
+        .await
+        .unwrap();
+    store
+        .append_audit_server_observed(
+            &json!({ "event": "access_grant" }),
+            Some(&vault[..]),
+            app.now(),
+        )
+        .await
+        .unwrap();
+    // The sink connects into the listen backlog; the test accepts after delivery.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let sink = SyslogSink::new(
+        listener.local_addr().unwrap().to_string(),
+        true,
+        Header {
+            facility: 16, // local0
+            hostname: "-".into(),
+            app_name: "unissh".into(),
+        },
+    );
+    let mut delivery = Delivery::new(
+        Arc::new(sink),
+        store.clone(),
+        Arc::new(store.clone()),
+        app.state.clock.clone(),
+        100,
+    );
+
+    let (first, last) = (base + 1, base + 2);
+    assert_eq!(delivery.step().await, Step::Delivered { first, last });
+    assert_eq!(store.audit_sink_cursor("syslog").await.unwrap(), last);
+
+    let (mut conn, _) = listener.accept().await.unwrap();
+    for (seq, event, vault_id) in [
+        (first, "login", String::new()),
+        (last, "access_grant", b64(&vault)),
+    ] {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), read_frame(&mut conn))
+            .await
+            .unwrap();
+        // <local0.notice>1 TIMESTAMP HOST APP PROCID MSGID [SD] BODY
+        let (head, body) = msg.split_once("] ").unwrap();
+        assert!(head.starts_with("<133>1 "), "{head}");
+        assert!(
+            head.ends_with(&format!(
+                " - unissh - {event} [unissh@32473 seq=\"{seq}\" event=\"{event}\" \
+                 space_id=\"\" vault_id=\"{vault_id}\""
+            )),
+            "{head}"
+        );
+        let entry: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(entry, json!({ "event": event }));
+    }
+}

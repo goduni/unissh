@@ -15,6 +15,7 @@
 //! - Failures are logged with the sink name, seq range and an error code only,
 //!   never entry contents (the server log must not duplicate the audit log).
 
+pub mod syslog;
 pub mod webhook;
 
 use crate::error::AppResult;
@@ -299,6 +300,22 @@ pub fn spawn_configured(
 ) -> Result<Vec<JoinHandle<()>>, String> {
     let mut tasks = Vec::new();
     let mut statuses = Vec::new();
+    // Each sink has its own task, cursor row (keyed by `Sink::name`) and status.
+    let mut start = |sink: Arc<dyn Sink>, batch_size: u32| {
+        let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
+            sink: sink.name().to_string(),
+            ..Default::default()
+        }));
+        statuses.push(status.clone());
+        let delivery = Delivery::new(
+            sink,
+            state.store.clone(),
+            Arc::new(state.store.clone()),
+            state.clock.clone(),
+            batch_size,
+        );
+        tasks.push(tokio::spawn(delivery.run(status, shutdown.clone())));
+    };
     if let Some(cfg) = &state.config.audit.webhook {
         let sink = webhook::WebhookSink::from_config(cfg, crate::ids::b64(&state.instance_id))?;
         if sink.is_plaintext_remote() {
@@ -309,19 +326,18 @@ pub fn spawn_configured(
                  metadata travel unencrypted; use https"
             );
         }
-        let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
-            sink: sink.name().to_string(),
-            ..Default::default()
-        }));
-        statuses.push(status.clone());
-        let delivery = Delivery::new(
-            Arc::new(sink),
-            state.store.clone(),
-            Arc::new(state.store.clone()),
-            state.clock.clone(),
-            cfg.batch_size,
-        );
-        tasks.push(tokio::spawn(delivery.run(status, shutdown.clone())));
+        start(Arc::new(sink), cfg.batch_size);
+    }
+    if let Some(cfg) = &state.config.audit.syslog {
+        let sink = syslog::SyslogSink::from_config(cfg, &state.config.server.public_url)?;
+        if !sink.is_loopback() {
+            tracing::warn!(
+                sink = sink.name(),
+                "audit syslog goes to a non-loopback collector without TLS: entries and \
+                 metadata travel unencrypted; prefer a local forwarder"
+            );
+        }
+        start(Arc::new(sink), syslog::BATCH_SIZE);
     }
     let _ = state.audit_sinks.set(statuses);
     Ok(tasks)
@@ -335,13 +351,27 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Records the seqs of every attempted batch; acks unless `fail` is set.
-    #[derive(Default)]
     struct FakeSink {
+        name: &'static str,
         fail: AtomicBool,
         attempts: Mutex<Vec<Vec<i64>>>,
     }
 
+    impl Default for FakeSink {
+        fn default() -> Self {
+            Self::named("fake")
+        }
+    }
+
     impl FakeSink {
+        fn named(name: &'static str) -> Self {
+            Self {
+                name,
+                fail: AtomicBool::new(false),
+                attempts: Mutex::default(),
+            }
+        }
+
         fn attempts(&self) -> Vec<Vec<i64>> {
             self.attempts.lock().unwrap().clone()
         }
@@ -349,7 +379,7 @@ mod tests {
 
     impl Sink for FakeSink {
         fn name(&self) -> &str {
-            "fake"
+            self.name
         }
         fn deliver<'a>(&'a self, batch: &'a Batch) -> BoxFuture<'a, Result<(), SinkError>> {
             let seqs = batch.rows().iter().map(|r| r.seq).collect();
@@ -502,5 +532,27 @@ mod tests {
             waits,
             vec![1, 2, 4, 8, 16, 32, 64, 128, 256, 300, 300, 0, 1]
         );
+    }
+
+    #[tokio::test]
+    async fn two_sinks_deliver_independently_with_separate_cursors() {
+        let store = store_with(3).await;
+        let (down, up) = (
+            Arc::new(FakeSink::named("webhook")),
+            Arc::new(FakeSink::named("syslog")),
+        );
+        let mut d_down = delivery(&down, &store, Arc::new(store.clone()));
+        let mut d_up = delivery(&up, &store, Arc::new(store.clone()));
+        down.fail.store(true, Ordering::SeqCst);
+        d_down.step().await;
+        // One sink's outage neither holds back nor moves the other's cursor.
+        assert_eq!(d_up.step().await, Step::Delivered { first: 1, last: 2 });
+        assert_eq!(d_up.step().await, Step::Delivered { first: 3, last: 3 });
+        assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), 0);
+        assert_eq!(store.audit_sink_cursor("syslog").await.unwrap(), 3);
+        down.fail.store(false, Ordering::SeqCst);
+        assert_eq!(d_down.step().await, Step::Delivered { first: 1, last: 2 });
+        assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), 2);
+        assert_eq!(store.audit_sink_cursor("syslog").await.unwrap(), 3);
     }
 }

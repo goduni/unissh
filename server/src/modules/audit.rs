@@ -163,14 +163,21 @@ pub(crate) struct ExportLine {
     entry_blob: String,
 }
 
+/// The readable form of an entry: decoded JSON for a server-observed entry;
+/// base64 (a JSON string) for a client-signed one, or for a server-observed
+/// blob that is not JSON. Shared by the export, the webhook and syslog.
+pub(crate) fn entry_value(r: &AuditExportRow) -> serde_json::Value {
+    if r.source == "server-observed" {
+        serde_json::from_slice(&r.entry_blob).ok()
+    } else {
+        None
+    }
+    .unwrap_or_else(|| serde_json::Value::String(ids::b64(&r.entry_blob)))
+}
+
 impl From<&AuditExportRow> for ExportLine {
     fn from(r: &AuditExportRow) -> Self {
-        let entry = if r.source == "server-observed" {
-            serde_json::from_slice(&r.entry_blob).ok()
-        } else {
-            None
-        }
-        .unwrap_or_else(|| serde_json::Value::String(ids::b64(&r.entry_blob)));
+        let entry = entry_value(r);
         ExportLine {
             seq: r.seq,
             server_seq: r.server_seq,
