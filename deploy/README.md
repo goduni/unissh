@@ -325,7 +325,8 @@ UNISSH__AUDIT__SYSLOG__APP_NAME=unissh     # optional; default unissh
 ```
 
 **TCP** (octet counting) advances the cursor only after the write succeeds;
-**UDP** sends and forgets, so a datagram lost on the way is lost. There is no
+**UDP** sends and forgets, so a datagram lost on the way is lost, and an entry
+too large for one datagram (~64 KB) is skipped with a warning. There is no
 TLS: point it at a forwarder on the same host or network. It can run next to
 the webhook; each sink keeps its own cursor. See `server/config.example.toml`
 (`[audit.syslog]`).

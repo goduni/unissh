@@ -164,7 +164,7 @@ The webhook POSTs batches of entries as JSON, each entry shaped like a line of t
 
 ```toml
 [audit.syslog]
-address = "127.0.0.1:514"   # host:port of the collector
+address = "127.0.0.1:514"   # host:port of the collector; IPv6 in brackets: "[::1]:514"
 protocol = "tcp"            # "tcp" (default) or "udp"
 facility = "auth"           # kern, user, ..., auth, authpriv, ..., local0..local7
 app_name = "unissh"         # RFC 5424 APP-NAME
@@ -177,9 +177,9 @@ The syslog sink sends one [RFC 5424](https://www.rfc-editor.org/rfc/rfc5424) mes
 ```
 
 - **Header.** The timestamp is the entry's `recorded_at` (UTC). The hostname is the host of `server.public_url`, or `-` when it is unset. MSGID is the event kind, or `-` when there is none.
-- **Structured data.** `unissh@32473` carries `seq`, `event`, `space_id` and `vault_id` (base64; empty when the entry has none, and `event` is empty for a client-signed entry). UniSSH has no IANA Private Enterprise Number of its own; 32473 is the number [RFC 5612](https://www.rfc-editor.org/rfc/rfc5612) reserves for documentation.
-- **Body.** The entry exactly as in the JSON Lines export's `entry`: compact JSON for a server event, the base64 of the blob for a client-signed entry. For chain verification use the export or the webhook, which carry `entry_blob` and the hash fields.
-- **UDP vs TCP.** **UDP sends and forgets:** the cursor advances once every datagram of a batch is sent, so a datagram lost on the way is lost. **TCP** uses octet counting ([RFC 6587](https://www.rfc-editor.org/rfc/rfc6587)) on one persistent connection, re-opened after an error, and advances the cursor only after the write succeeds; otherwise the same batch is retried with backoff.
+- **Structured data.** `unissh@32473` carries `seq`, `event`, `space_id` and `vault_id` (base64; empty when the entry has none, and `event` is empty for a client-signed entry). UniSSH has no IANA Private Enterprise Number of its own, by design; 32473 is the number [RFC 5612](https://www.rfc-editor.org/rfc/rfc5612) reserves for documentation. `unissh@32473` is a frozen wire identifier: collector parsers key on it, so changing it would be a breaking change.
+- **Body.** The entry exactly as in the JSON Lines export's `entry`: compact JSON for a server event, the base64 of the blob for a client-signed entry. It is UTF-8 sent as RFC 5424 MSG-ANY **without a BOM**, so collectors should not expect one. For chain verification use the export or the webhook, which carry `entry_blob` and the hash fields.
+- **UDP vs TCP.** **UDP sends and forgets:** the cursor advances once every datagram of a batch is sent, so a datagram lost on the way is lost. An entry too large for one datagram (65,507 bytes over IPv4, 65,527 over IPv6) is skipped with a `udp_oversize` warning naming its `seq`, so it never holds back later entries; use TCP if entries can be that large. **TCP** uses octet counting ([RFC 6587](https://www.rfc-editor.org/rfc/rfc6587)) on one persistent connection, re-opened after an error, and advances the cursor only after the write succeeds; otherwise the same batch is retried with backoff.
 - **No TLS.** Syslog goes out in plaintext; a non-loopback collector is warned about at boot. Use a forwarder on the same host (rsyslog, syslog-ng, Vector) to carry it further over TLS.
 - Both sinks can be configured at once; each keeps its own cursor, so one sink's outage does not hold back the other.
 - An empty `address` with every other key empty or default counts as absent; an empty `protocol`, `facility` or `app_name` takes its default. A bad address, protocol, facility or app name is a **startup error**. From the environment: `UNISSH__AUDIT__SYSLOG__ADDRESS`, `UNISSH__AUDIT__SYSLOG__PROTOCOL`, and so on.
