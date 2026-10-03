@@ -261,61 +261,116 @@ pub struct AgentApprovalEvent {
     pub origin: &'static str,
     /// Forwarded: the session's host. Empty for the system agent.
     pub host: String,
-    /// System agent: the key asked for. Empty for a forwarded agent.
+    /// System agent: the key asked for and its vault. Empty for a forwarded
+    /// agent.
     pub key: String,
-    /// System agent: the calling process, where the OS reported it.
+    pub vault: String,
+    /// System agent: the calling process, as the OS reported it. Advisory.
     pub pid: Option<u32>,
     pub executable: Option<String>,
+    /// The user an SSH login payload would log in as; empty otherwise. The
+    /// payload never names the server.
+    pub user: String,
     /// `user@service` when the payload is an SSH login; empty otherwise. This is
     /// what turns the prompt from "something wants a signature" into "this would
     /// log in as X".
     pub target: String,
 }
 
+/// One prompt waiting for a person.
+struct PendingApproval {
+    answer: SyncSender<bool>,
+    /// From the system agent, so withdrawn when its listener stops.
+    system: bool,
+}
+
 /// Bridges the core's blocking approval call to a dialog.
 ///
 /// Same shape as [`AppPrompter`], and for the same reason: the core is blocked
-/// on a worker thread waiting for an answer that only a person can give.
+/// on a worker thread waiting for an answer that only a person can give. Every
+/// way a prompt ends without an answer — timeout, a client that hung up, the
+/// system agent stopping — refuses and tells the window to drop it
+/// (`agent-approval-cancelled`, carrying the id, like `auth-prompt-cancelled`).
 pub struct AppApprover {
     app: AppHandle,
-    next_id: AtomicU64,
-    pending: Mutex<HashMap<u64, SyncSender<bool>>>,
+    pending: Mutex<HashMap<u64, PendingApproval>>,
+    /// Cancellations that arrived before their `approve` registered the id.
+    cancelled_early: Mutex<std::collections::HashSet<u64>>,
 }
 
 impl AppApprover {
     pub fn new(app: AppHandle) -> Self {
         Self {
             app,
-            next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
+            cancelled_early: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
     pub fn answer(&self, id: u64, approved: bool) {
-        let tx = self.pending.lock().expect("approval map").remove(&id);
-        if let Some(tx) = tx {
-            let _ = tx.send(approved);
+        let pending = self.pending.lock().expect("approval map").remove(&id);
+        if let Some(pending) = pending {
+            let _ = pending.answer.send(approved);
+        }
+    }
+
+    /// Refuses `id` if it is still waiting, and tells the window to drop it.
+    /// Returns whether it was waiting.
+    fn withdraw(&self, id: u64) -> bool {
+        let pending = self.pending.lock().expect("approval map").remove(&id);
+        let Some(pending) = pending else {
+            return false;
+        };
+        let _ = pending.answer.send(false);
+        let _ = self.app.emit("agent-approval-cancelled", id);
+        true
+    }
+
+    /// Withdraws every system-agent prompt: its listener stopped (vault or
+    /// screen lock, sleep, exit), so no answer could reach the caller anyway.
+    pub fn cancel_system(&self) {
+        let ids: Vec<u64> = self
+            .pending
+            .lock()
+            .expect("approval map")
+            .iter()
+            .filter(|(_, p)| p.system)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.withdraw(id);
         }
     }
 }
 
 impl AgentApprover for AppApprover {
     fn approve(&self, request: AgentSignRequest) -> bool {
-        let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
-        let (tx, rx) = sync_channel(1);
-        self.pending.lock().expect("approval map").insert(id, tx);
-
+        let id = request.id;
+        if self.cancelled_early.lock().expect("cancel set").remove(&id) {
+            return false;
+        }
         let (origin, pid, executable) = match request.origin {
             AgentSignOrigin::Forwarded => ("forwarded", None, None),
             AgentSignOrigin::SystemAgent { pid, executable } => ("system", pid, executable),
         };
+        let (tx, rx) = sync_channel(1);
+        self.pending.lock().expect("approval map").insert(
+            id,
+            PendingApproval {
+                answer: tx,
+                system: origin == "system",
+            },
+        );
+
         let event = AgentApprovalEvent {
             id,
             origin,
             host: request.host,
             key: request.key,
+            vault: request.vault,
             pid,
             executable,
+            user: request.user,
             target: request.target,
         };
         if self.app.emit("agent-approval", event).is_err() {
@@ -325,8 +380,26 @@ impl AgentApprover for AppApprover {
 
         // Refusing on timeout, not granting. An unanswered prompt means nobody
         // was watching, and that is exactly when a signature should not happen.
-        let approved = rx.recv_timeout(Duration::from_secs(60)).unwrap_or(false);
-        self.pending.lock().expect("approval map").remove(&id);
-        approved
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(approved) => approved,
+            Err(_) => {
+                self.withdraw(id);
+                false
+            }
+        }
+    }
+
+    fn cancel(&self, id: u64) {
+        if !self.withdraw(id) {
+            // Not registered yet (or already over). Remember it so a late
+            // `approve` refuses without showing anything; an id that is over
+            // never comes back, so this only holds the rare early ones.
+            let mut early = self.cancelled_early.lock().expect("cancel set");
+            if early.len() >= 64 {
+                // Only ever ids that lost a race; never let them pile up.
+                early.clear();
+            }
+            early.insert(id);
+        }
     }
 }

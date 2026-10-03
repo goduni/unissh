@@ -138,7 +138,18 @@ impl Controller {
         };
         match self.listen(&path) {
             Ok((stop, task)) => {
-                self.arm(epoch, &stop);
+                // Checked again now that it is bound: a lock that landed while
+                // binding must not leave it serving. (A lock revokes before it
+                // locks the core, so either the epoch or this check sees it.)
+                let core = self.core.clone();
+                let unlocked = tauri::async_runtime::spawn_blocking(move || core.is_unlocked())
+                    .await
+                    .unwrap_or(false);
+                if unlocked {
+                    self.arm(epoch, &stop);
+                } else {
+                    stop.cancel();
+                }
                 *running = Some(Running { stop, task });
                 self.set_error(None);
             }
@@ -355,6 +366,15 @@ pub fn revoke(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         controller.revoke();
     }
+    withdraw_prompts(app);
+}
+
+/// Refuses and closes every system-agent approval still on screen: with the
+/// listener gone its answer could reach no one.
+fn withdraw_prompts(app: &tauri::AppHandle) {
+    if let Some(approver) = app.try_state::<Arc<crate::observers::AppApprover>>() {
+        approver.cancel_system();
+    }
 }
 
 /// Restarts the listener after an unlock or a wake, if it is enabled and the
@@ -370,6 +390,7 @@ pub fn shutdown(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         controller.shutdown();
     }
+    withdraw_prompts(app);
 }
 
 #[tauri::command]
