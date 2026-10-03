@@ -1035,6 +1035,9 @@ function SettingsLocalTerminal() {
   const [argsOk, setArgsOk] = useState(true);
   const [personalVault, setPersonalVault] = useState<string | null>(null);
 
+  // Re-read whenever the vault list changes: moving the Personal vault to a
+  // server gives it a new id (the core re-points the pointer), and the move
+  // ends with a vault-list refresh.
   useEffect(() => {
     let alive = true;
     api
@@ -1048,7 +1051,7 @@ function SettingsLocalTerminal() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [vaults]);
 
   useEffect(() => {
     let alive = true;
@@ -2363,7 +2366,8 @@ function MoveToServerModal({
   );
   const [serverId, setServerId] = useState<string | null>(null);
   const [spaceId, setSpaceId] = useState("");
-  // Live space list of the target server (null = loading / failed → primary space).
+  // Live space list of the target server: null while loading; a failed fetch
+  // yields [] (→ primary space).
   const [spaces, setSpaces] = useState<SpaceInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
   // The backup export replaces this dialog while it is open; this component stays
