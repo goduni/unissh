@@ -9,7 +9,7 @@ import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT, UI } from "@/theme/tokens";
-import { Btn, Icon, NO_AUTOCORRECT, Spinner, Tag, VaultBadge } from "@/components/primitives";
+import { Btn, Icon, NO_AUTOCORRECT, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
 import { Modal } from "@/components/Modal";
 import { UnderlineTabs, fmtRelativeUnix, FlatAvatar, MetaChip, RowOverflowMenu, Card, HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
@@ -21,6 +21,9 @@ import { logWarn } from "@/bridge/log";
 import type { ConnectionProfile, ItemInfo, Identity, KeyRotationLink, ServerStatus, VaultInfo } from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
+import { isDesktopOs } from "@/bridge/platform";
+import { systemAgentSetShared, systemAgentSharedKeys, systemAgentStatus } from "@/bridge/systemAgent";
+import { guard } from "@/store/action";
 import { isKeyOld, keyUsage, keyUsageCount } from "@/support/keyHygiene";
 import { confirmFinishRotation } from "@/overlays/finishRotation";
 import { useFmt } from "@/i18n/format";
@@ -216,11 +219,16 @@ function KeyRow({
   item,
   isMobile,
   first,
+  agentShared,
+  onAgentShared,
   rotation,
 }: {
   item: ItemInfo;
   isMobile: boolean;
   first?: boolean;
+  /** Desktop only: whether this key is offered to the system agent. Absent → no switch. */
+  agentShared?: boolean;
+  onAgentShared?: (shared: boolean) => void;
   rotation?: RotationRole;
 }) {
   const p = usePalette();
@@ -465,6 +473,21 @@ function KeyRow({
                 )}
           </MetaChip>
         )}
+        {agentShared !== undefined && onAgentShared && (
+          <span
+            title={t("systemAgent.offerKeyDesc")}
+            style={{ display: "inline-flex", alignItems: "center", gap: rem(8), flexShrink: 0 }}
+          >
+            <span aria-hidden style={{ fontSize: TEXT.small, color: agentShared ? p.txt : p.txt3 }}>
+              {t("systemAgent.offerKeyShort")}
+            </span>
+            <Toggle
+              checked={agentShared}
+              onChange={onAgentShared}
+              aria-label={t("systemAgent.offerKey", { item: item.itemId })}
+            />
+          </span>
+        )}
         <div
           style={{
             display: "flex",
@@ -675,11 +698,55 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
     return cand ? [k, cand] : [k];
   });
 
+  // Desktop only: the keys this device offers to the system agent (device-local,
+  // never synced). Reloaded with the key list, since a rotated key stops being
+  // offered until it is shared again.
+  const [agent, setAgent] = useState(false);
+  useEffect(() => {
+    if (!isDesktopOs()) return;
+    let live = true;
+    systemAgentStatus()
+      .then((st) => {
+        if (live) setAgent(st.supported);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  const [shared, setShared] = useState<Set<string> | null>(null);
+  const loadShared = async () => {
+    const list = await systemAgentSharedKeys();
+    // A late reply for a vault switched away from must not mark same-named
+    // keys of the current one as shared.
+    if (useApp.getState().vaultId !== vault) return;
+    setShared(new Set(list.filter((k) => k.vaultId === vault).map((k) => k.itemId)));
+  };
+  useEffect(() => {
+    if (!agent || !vault) return;
+    void guard(loadShared);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent, vault, keySig]);
+  const setAgentShared = (itemId: string, on: boolean) => {
+    if (!vault) return;
+    void guard(async () => {
+      await systemAgentSetShared(vault, itemId, on);
+      await loadShared();
+    });
+  };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
       <div>
         {ordered.map((k, i) => (
-          <KeyRow key={k.itemId} item={k} isMobile={isMobile} first={i === 0} rotation={rotationOf(k.itemId)} />
+          <KeyRow
+            key={k.itemId}
+            item={k}
+            isMobile={isMobile}
+            first={i === 0}
+            rotation={rotationOf(k.itemId)}
+            agentShared={agent && shared ? shared.has(k.itemId) : undefined}
+            onAgentShared={agent ? (on) => setAgentShared(k.itemId, on) : undefined}
+          />
         ))}
       </div>
       <button

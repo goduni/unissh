@@ -1256,6 +1256,8 @@ pub async fn server_keyset_pull_and_unlock(
     .await?;
     #[cfg(desktop)]
     crate::mcp::resume_access(&app);
+    #[cfg(desktop)]
+    crate::system_agent::resume_access(&app);
     #[cfg(mobile)]
     let _ = app;
     Ok(())
@@ -1420,6 +1422,8 @@ pub async fn server_escrow_fetch_and_unlock(
     // Keep escrow's fetched account id as the link identity and its handle on the link.
     #[cfg(desktop)]
     crate::mcp::resume_access(&app);
+    #[cfg(desktop)]
+    crate::system_agent::resume_access(&app);
     #[cfg(mobile)]
     let _ = app;
     self_enroll_login_and_persist(&state, base_url, Some(account_id), Some(handle)).await
@@ -1463,6 +1467,8 @@ pub async fn server_import_keyset_and_unlock(
     // Offline import carries no handle (escrow keys off one); the account's handle syncs later.
     #[cfg(desktop)]
     crate::mcp::resume_access(&app);
+    #[cfg(desktop)]
+    crate::system_agent::resume_access(&app);
     #[cfg(mobile)]
     let _ = app;
     self_enroll_login_and_persist(&state, base_url, None, None).await

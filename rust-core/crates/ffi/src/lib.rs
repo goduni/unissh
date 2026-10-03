@@ -62,9 +62,12 @@ pub mod automation;
 pub mod automation_recording;
 mod key_rotation;
 mod ssh_include;
+mod system_agent;
 mod terminal_workspace;
 
 pub use key_rotation::KeyRotationLink;
+pub use system_agent::{SharedAgentKey, SystemAgent};
+pub use unissh_ssh_transport::AgentCaller;
 
 uniffi::setup_scaffolding!();
 
@@ -101,6 +104,35 @@ const GROUP_MAX_DEPTH: u32 = 32;
 /// Id of the certificate item for a given key.
 fn cert_item_id(key_item_id: &str) -> String {
     format!("{key_item_id}.cert")
+}
+
+/// The certificate attached to the key `key_item_id`, as its OpenSSH line: the
+/// `<key>.cert` item, of the certificate type, holding an OpenSSH certificate
+/// that certifies `public` (the key's own public half). Anything else (no
+/// item, another type, a line that does not parse, a certificate for another
+/// key) is no certificate at all. The one rule for connects and the system
+/// agent alike.
+///
+/// Validity (expiry, principals) is not checked: that is the server's call,
+/// as with OpenSSH's agent.
+fn attached_certificate(
+    vault: &Vault,
+    key_item_id: &str,
+    public: &unissh_ssh_agent::ssh_key::public::KeyData,
+) -> Option<String> {
+    let item = vault
+        .get_item(cert_item_id(key_item_id).as_bytes())
+        .ok()??;
+    if item.item_type != ITEM_TYPE_SSH_CERT {
+        return None;
+    }
+    let line = std::str::from_utf8(item.content.as_slice()).ok()?.trim();
+    let cert = unissh_ssh_agent::ssh_key::Certificate::from_openssh(line).ok()?;
+    if cert.public_key() != public {
+        log::warn!("ssh key: the attached certificate certifies another key; ignored");
+        return None;
+    }
+    Some(line.to_string())
 }
 
 /// Locks a `Mutex`, recovering from poisoning (the data under these locks is ordinary,
@@ -1400,7 +1432,14 @@ pub struct Core {
     /// like the prompter; without one, forwarding refuses every signature rather
     /// than granting them unseen.
     approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    /// Where this process's own system agent listens, if the host runs one.
+    /// "System agent" auth refuses it rather than ask itself for a vault key.
+    own_system_agent: OwnSystemAgent,
 }
+
+/// See [`Core::set_system_agent_endpoint`]. Shared by Arc like the approver, so
+/// reconnecting sessions see it too.
+type OwnSystemAgent = Arc<Mutex<Option<PathBuf>>>;
 
 /// Escrow enrollment/fetch credentials derived on the device (spec 5.1 / server-tz
 /// escrow). `k_auth` is the retrieval credential the server pins as `sha256(K_auth)`;
@@ -1439,11 +1478,12 @@ impl Core {
             ),
             prompter: Arc::new(Mutex::new(None)),
             approver: Arc::new(Mutex::new(None)),
+            own_system_agent: Arc::new(Mutex::new(None)),
         })
     }
 
-    /// Registers who approves each signature a forwarded agent is asked to
-    /// produce. Without one, a forwarded agent refuses everything — the safe
+    /// Registers who approves each signature a forwarded agent or the system
+    /// agent is asked to produce. Without one, both refuse everything — the safe
     /// direction, since the alternative is signing on someone's behalf with
     /// nobody watching.
     pub fn set_agent_approver(&self, approver: Option<Arc<dyn AgentApprover>>) {
@@ -2704,6 +2744,7 @@ impl Core {
                 Vault::open(&state.storage, &state.keyset, &vid).map_err(FfiError::other)?;
             vault.delete().map_err(FfiError::other)?;
             state.vault_names.remove(vid.as_slice());
+            system_agent::forget(state, &vault_id, None);
             unload_vault_keys(&mut state.agent, &vault_id);
             Ok(())
         })
@@ -2725,6 +2766,7 @@ impl Core {
             // under the bare item_id — it must be unloaded with the same key, otherwise remove is a no-op and
             // a revoked/rotated private key stays alive in the agent until the end of the session.
             state.agent.remove(&agent_key_id(&vault_id, &item_id));
+            system_agent::forget(state, &vault_id, Some(&item_id));
             Ok(())
         })
     }
@@ -3607,6 +3649,7 @@ impl Core {
             rt: self.rt.clone(),
             prompter: self.prompter.clone(),
             approver: self.approver.clone(),
+            own_system_agent: self.own_system_agent.clone(),
             agent_forward,
             host,
             port,
@@ -3656,6 +3699,7 @@ impl Core {
                 &self.rt,
                 &self.prompter,
                 &self.approver,
+                &self.own_system_agent,
                 &t.auth,
                 &t.jumps,
                 t.proxy.as_ref(),
@@ -4078,9 +4122,10 @@ impl Core {
     ///
     /// Needs no unlock: this reads the OS agent, not the vault.
     pub fn system_agent_keys(&self) -> Result<Vec<SystemAgentKeyFfi>, FfiError> {
+        let own = lock_recover(&self.own_system_agent).clone();
         let keys = self
             .rt
-            .block_on(unissh_ssh_transport::system_agent_keys())
+            .block_on(unissh_ssh_transport::system_agent_keys(own.as_deref()))
             .map_err(map_transport_err)?;
         Ok(keys
             .into_iter()
@@ -4559,6 +4604,7 @@ impl Core {
             shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             prompter: self.prompter.clone(),
             approver: self.approver.clone(),
+            own_system_agent: self.own_system_agent.clone(),
             // SFTP runs no program on the far side that would look for an agent.
             agent_forward: false,
             client: Mutex::new(Some(client)),
@@ -6226,6 +6272,7 @@ impl Core {
             &self.rt,
             &self.prompter,
             &self.approver,
+            &self.own_system_agent,
             auth,
             jumps,
             proxy,
@@ -6458,13 +6505,14 @@ impl unissh_ssh_transport::KeySource for StateKeySource {
         &self,
         key_id: &[u8],
         data: &[u8],
+        rsa: unissh_ssh_transport::RsaHash,
     ) -> Result<(String, Vec<u8>), unissh_ssh_transport::TransportError> {
         let guard = lock_recover(&self.state);
         let st = guard.as_ref().ok_or_else(locked_mid_connect)?;
         if let Some(policy) = &self.policy {
             policy.check(st).map_err(|_| locked_mid_connect())?;
         }
-        let sig = st.agent.sign(key_id, data)?;
+        let sig = st.agent.sign_with(key_id, data, rsa)?;
         Ok((sig.algorithm, sig.signature))
     }
 }
@@ -6491,6 +6539,7 @@ fn connect_with_state(
     rt: &tokio::runtime::Runtime,
     prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    own_system_agent: &OwnSystemAgent,
     auth: &AuthMethod,
     jumps: &[JumpHost],
     proxy: Option<&ProxyConfig>,
@@ -6504,6 +6553,7 @@ fn connect_with_state(
         rt,
         prompter,
         approver,
+        own_system_agent,
         auth,
         jumps,
         proxy,
@@ -6521,6 +6571,7 @@ fn connect_with_policy(
     rt: &tokio::runtime::Runtime,
     prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    own_system_agent: &OwnSystemAgent,
     auth: &AuthMethod,
     jumps: &[JumpHost],
     proxy: Option<&ProxyConfig>,
@@ -6535,6 +6586,7 @@ fn connect_with_policy(
         rt,
         prompter,
         approver,
+        own_system_agent,
         auth,
         jumps,
         proxy,
@@ -6555,6 +6607,7 @@ fn connect_with_options(
     rt: &tokio::runtime::Runtime,
     prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    own_system_agent: &OwnSystemAgent,
     auth: &AuthMethod,
     jumps: &[JumpHost],
     proxy: Option<&ProxyConfig>,
@@ -6565,9 +6618,6 @@ fn connect_with_options(
     policy: Option<&automation::ConnectionPolicy>,
     publickey_only: bool,
 ) -> Result<SshClient, FfiError> {
-    // Cloned out before the state lock is taken: the prompt fires while that lock
-    // is held (see the note above), so reaching back for another lock here would
-    // be one more chance to deadlock for no benefit.
     // `publickey_only` only stops escalation; with a password as the first
     // method the password itself would still be sent and prove nothing.
     if publickey_only
@@ -6578,7 +6628,11 @@ fn connect_with_options(
     {
         return Err(FfiError::PublickeyOnlyNeedsKey);
     }
+    // Cloned out before the state lock is taken: the prompt fires while that lock
+    // is held (see the note above), so reaching back for another lock here would
+    // be one more chance to deadlock for no benefit.
     let prompter = lock_recover(prompter).clone();
+    let own_system_agent = lock_recover(own_system_agent).clone();
     let mut guard = lock_recover(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;
     if let Some(policy) = policy {
@@ -6624,13 +6678,15 @@ fn connect_with_options(
         };
         let a = resolve_auth(st, &auth)?;
         chain.push(with_prompter(
-            ConnectOptions::new(host, port, user, a),
+            ConnectOptions::new(host, port, user, a)
+                .with_own_system_agent(own_system_agent.clone()),
             prompter.as_ref(),
         ));
     }
     let target_auth = resolve_auth(st, auth)?;
     let mut target = with_prompter(
-        ConnectOptions::new(host.clone(), port, user, target_auth),
+        ConnectOptions::new(host.clone(), port, user, target_auth)
+            .with_own_system_agent(own_system_agent),
         prompter.as_ref(),
     );
     target.publickey_only = publickey_only;
@@ -8144,18 +8200,49 @@ pub struct AuthPromptRequest {
     pub prompts: Vec<AuthPromptField>,
 }
 
-/// A signature a forwarded agent has been asked to produce.
+/// Where a signature request came from.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum AgentSignOrigin {
+    /// A program on the remote host of a session with agent forwarding on.
+    Forwarded,
+    /// A program on this machine, through the system agent's socket. `pid` and
+    /// `executable` are what the OS reported about the caller; `None` is an
+    /// unknown process.
+    SystemAgent {
+        /// The caller's process id.
+        pid: Option<u32>,
+        /// The caller's executable path.
+        executable: Option<String>,
+    },
+}
+
+/// A signature an agent UniSSH serves has been asked to produce.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct AgentSignRequest {
-    /// The host whose session the request arrived through.
+    /// Names this request for [`AgentApprover::cancel`]. Unique per process.
+    pub id: u64,
+    /// Where the request came from.
+    pub origin: AgentSignOrigin,
+    /// The host whose session the request arrived through. Empty for the system
+    /// agent.
     pub host: String,
+    /// The key asked for (its vault item id). Empty for a forwarded agent, which
+    /// only ever offers the key its session is using.
+    pub key: String,
+    /// The name of the vault holding `key`, so keys with the same id in two
+    /// vaults can be told apart. Empty for a forwarded agent.
+    pub vault: String,
+    /// When the payload is an SSH authentication request, the user it would log
+    /// in as. The payload does not name the server. Empty otherwise.
+    pub user: String,
     /// When the payload is an SSH authentication request, the identity it would
     /// log in as — parsed out so the prompt can say where the signature goes
     /// rather than only that one was asked for. Empty when it is something else.
     pub target: String,
 }
 
-/// Approves, or refuses, each signature a forwarded agent is asked for.
+/// Approves, or refuses, each signature a forwarded agent or the system agent
+/// is asked for.
 ///
 /// This is what makes agent forwarding defensible rather than a footgun. While a
 /// forwarded session lives, anything that can reach the socket on the remote
@@ -8166,6 +8253,16 @@ pub trait AgentApprover: Send + Sync {
     /// Return `true` to sign. Called on a blocking thread, so it may wait for a
     /// person.
     fn approve(&self, request: AgentSignRequest) -> bool;
+    /// The request `id` is no longer wanted (its client hung up): withdraw the
+    /// prompt and let `approve` return `false`. May arrive before `approve`
+    /// has registered `id`, or after it returned.
+    fn cancel(&self, id: u64);
+}
+
+/// A fresh [`AgentSignRequest::id`].
+fn next_agent_sign_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Adapts the UI approver to the transport's, and pulls the target out of an SSH
@@ -8176,21 +8273,32 @@ struct ApprovalBridge {
 
 impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
     fn approve(&self, host: &str, blob: &[u8]) -> bool {
+        let login = userauth_login(blob);
         self.inner.approve(AgentSignRequest {
+            id: next_agent_sign_id(),
+            origin: AgentSignOrigin::Forwarded,
             host: host.to_string(),
-            target: userauth_target(blob).unwrap_or_default(),
+            key: String::new(),
+            vault: String::new(),
+            user: login
+                .as_ref()
+                .map(|(user, _)| user.clone())
+                .unwrap_or_default(),
+            target: login
+                .map(|(user, service)| format!("{user}@{service}"))
+                .unwrap_or_default(),
         })
     }
 }
 
-/// Extracts `user@service` from an SSH userauth signing blob.
+/// Extracts `(user, service)` from an SSH userauth signing blob.
 ///
 /// The payload of a publickey authentication is
 /// `string(session_id) byte(50) string(user) string(service) string("publickey") …`.
 /// Reading the user and service turns "something wants a signature" into "this
 /// would log in as X" — without it the prompt is a button people learn to press.
 /// Anything that does not parse returns `None` rather than a guess.
-fn userauth_target(blob: &[u8]) -> Option<String> {
+fn userauth_login(blob: &[u8]) -> Option<(String, String)> {
     fn take<'a>(input: &mut &'a [u8]) -> Option<&'a [u8]> {
         if input.len() < 4 {
             return None;
@@ -8212,7 +8320,7 @@ fn userauth_target(blob: &[u8]) -> Option<String> {
     b = &b[1..];
     let user = std::str::from_utf8(take(&mut b)?).ok()?;
     let service = std::str::from_utf8(take(&mut b)?).ok()?;
-    Some(format!("{user}@{service}"))
+    Some((user.to_string(), service.to_string()))
 }
 
 /// Asked when the server wants something no stored credential can answer — a
@@ -8749,6 +8857,7 @@ pub struct ReconnectingSession {
     // code, the old one is spent and a fresh one must be asked for.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    own_system_agent: OwnSystemAgent,
     /// Carried across reconnects: the host's setting does not change because the
     /// link dropped.
     agent_forward: bool,
@@ -8777,6 +8886,7 @@ impl ReconnectingSession {
             &self.rt,
             &self.prompter,
             &self.approver,
+            &self.own_system_agent,
             &self.auth,
             &self.jumps,
             self.proxy.as_ref(),
@@ -9226,6 +9336,7 @@ pub struct SftpFfi {
     // and a spent one-time code cannot be replayed.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
     approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    own_system_agent: OwnSystemAgent,
     /// Carried across reconnects: the host's setting does not change because the
     /// link dropped.
     agent_forward: bool,
@@ -9519,6 +9630,7 @@ impl SftpFfi {
             &self.rt,
             &self.prompter,
             &self.approver,
+            &self.own_system_agent,
             &self.auth,
             &self.jumps,
             self.proxy.as_ref(),
@@ -10029,31 +10141,26 @@ fn load_key_into_agent(
     if state.agent.contains(&akid) {
         return Ok(());
     }
-    // We fetch the key and (if any) the certificate within a single vault scope,
-    // so that the borrow of storage/keyset ends before the &mut agent below.
-    let (key_item, cert_str) = {
-        let vault = Vault::open(
-            &state.storage,
-            &state.keyset,
-            &resolve_vid(&state.storage, vault_id),
-        )
-        .map_err(FfiError::other)?;
-        let key_item = vault
-            .get_item(key_item_id.as_bytes())
-            .map_err(FfiError::other)?
-            .ok_or(FfiError::NotFound)?;
-        let cert_str = vault
-            .get_item(cert_item_id(key_item_id).as_bytes())
-            .map_err(FfiError::other)?
-            .map(|c| String::from_utf8_lossy(c.content.as_slice()).to_string());
-        (key_item, cert_str)
-    };
-
+    // The vault borrows storage/keyset only; the agent is a separate field.
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let key_item = vault
+        .get_item(key_item_id.as_bytes())
+        .map_err(FfiError::other)?
+        .ok_or(FfiError::NotFound)?;
     state
         .agent
         .add_from_item(akid.clone(), &key_item)
         .map_err(FfiError::ssh)?;
-    if let Some(cert) = cert_str {
+    let cert = state
+        .agent
+        .public_key(&akid)
+        .and_then(|public| attached_certificate(&vault, key_item_id, public.key_data()));
+    if let Some(cert) = cert {
         state
             .agent
             .attach_certificate(&akid, &cert)
@@ -10168,6 +10275,7 @@ mod sftp_pool_tests {
             state: Arc::new(Mutex::new(None)),
             prompter: Arc::new(Mutex::new(None)),
             approver: Arc::new(Mutex::new(None)),
+            own_system_agent: Arc::new(Mutex::new(None)),
             agent_forward: false,
             host: String::new(),
             port: 22,

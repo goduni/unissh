@@ -371,7 +371,13 @@ plaintext private keys across the FFI/UI boundary (which must never happen). The
 onboarding / sign-in surface counts here too — the escrow endpoints'
 enumeration-resistance and constant-time behavior, the OIDC `id_token`
 verification (JWKS, asymmetric-only algorithms, `iss`/`aud`/`exp`) and nonce
-key-binding, and the single-winner claim CAS.
+key-binding, and the single-winner claim CAS. So does the desktop **system
+agent** (`rust-core/crates/ssh-transport/src/forward.rs`,
+`rust-core/crates/ffi/src/system_agent.rs`): a local process obtaining a
+signature without an in-app approval, a signature with a key the user did not
+share, or any key material at all is a bug. What it does *not* defend against
+(a same-user process the user approves) is set out in
+[`THREAT_MODEL.md`](THREAT_MODEL.md#the-system-agent-vault-keys-for-local-programs-one-approval-at-a-time).
 
 Out of scope: the unsigned-build OS warnings above, and the documented
 **server-trusted** (not cryptographic) limitations — revocation/live-grant expiry,

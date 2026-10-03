@@ -93,6 +93,14 @@ pub enum TransportError {
     )]
     SystemAgentKeyMissing,
 
+    /// A host set to use the system ssh-agent is pointed (by `SSH_AUTH_SOCK`)
+    /// at UniSSH's own system agent. That would be UniSSH asking itself for a
+    /// vault key, so it is refused instead of looping.
+    #[error(
+        "SSH_AUTH_SOCK points at UniSSH's own system agent, not the OS ssh-agent — use a vault key for this host, or point SSH_AUTH_SOCK at the OS agent"
+    )]
+    SystemAgentIsUniSsh,
+
     /// The server asked something only the user can answer — a one-time code, a
     /// push confirmation — and no prompter was attached to the connection.
     /// Distinct from [`AuthFailed`](Self::AuthFailed) on purpose: the credentials

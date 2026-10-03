@@ -70,6 +70,14 @@ starts with `0.`:
   entries continuously; the admin screen shows each sink's lag and last error, and
   the Prometheus exporter gains per-sink metrics. The server now shuts down
   gracefully on SIGTERM. The audit entry format and chain are unchanged.
+- System agent (desktop): Settings → Security can expose vault SSH keys to the
+  system through a UniSSH ssh-agent — a Unix socket on macOS/Linux, a
+  current-user named pipe on Windows — so `ssh`, `git` and other tools list the
+  keys you share and every signature opens UniSSH's approval prompt naming the
+  key, vault, user and the calling process. The agent follows the vault's lock
+  state and stops on screen lock, sleep and exit. Certificates are offered with
+  their keys; RSA signatures honour the SHA-2 flags; a host profile that would
+  loop through UniSSH's own agent is refused with a clear error.
 
 ### Compatibility
 

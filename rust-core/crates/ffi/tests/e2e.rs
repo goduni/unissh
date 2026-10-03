@@ -10,7 +10,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use unissh_ffi::{
-    AuthMethod, Core, JumpHost, MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword,
+    AgentApprover, AgentCaller, AgentSignOrigin, AgentSignRequest, AuthMethod, Core, JumpHost,
+    MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword, SystemAgent,
 };
 
 fn agent_auth(vault_id: &str, key_item_id: &str) -> AuthMethod {
@@ -4874,6 +4875,53 @@ fn system_agent_missing_key_is_named() {
     );
 }
 
+/// The endpoint handed to the core (`set_system_agent_endpoint`) reaches the
+/// connect: a host using system-agent auth with `SSH_AUTH_SOCK` at UniSSH's own
+/// socket fails with the typed refusal instead of asking UniSSH itself.
+#[test]
+fn system_agent_auth_refuses_the_endpoint_set_on_the_core() {
+    let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let public = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    let own = dir.path().join("agent.sock"); // the listener is off: no file
+    core.set_system_agent_endpoint(Some(own.clone()));
+    // SAFETY: single-threaded test setup, serialized by AGENT_ENV.
+    unsafe { std::env::set_var("SSH_AUTH_SOCK", &own) };
+
+    let sshd = TestSshd::start(&public);
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let outcome = core.open_session(
+        "127.0.0.1".to_string(),
+        sshd.port,
+        "root".to_string(),
+        unissh_ffi::AuthMethod::SystemAgent { public_key: public },
+        vec![],
+        None,
+        "xterm".to_string(),
+        80,
+        24,
+        observer,
+        None,
+        false,
+    );
+    let msg = match outcome {
+        Ok(_) => panic!("UniSSH's own socket must be refused"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        msg.contains("UniSSH's own system agent"),
+        "the error must name the self-loop, got: {msg}"
+    );
+}
+
 // ── local terminal ─────────────────────────────────────────────
 //
 // The point of these is the wiring, not the pty (that is `unissh-local-pty`'s
@@ -5290,4 +5338,418 @@ fn automation_managed_connection_reuse_stdin_and_revision_invalidation() {
     connection.close();
     core.lock();
     assert!(matches!(core.automation_revision(), Err(FfiError::Locked)));
+}
+
+/// Sends one request to the system agent over a stream, as a client on the
+/// socket would, on behalf of `caller`; returns the reply's body.
+fn system_agent_request(agent: &SystemAgent, request: &[u8], caller: AgentCaller) -> Vec<u8> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let mut frame = (request.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(request);
+    rt.block_on(async {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let ask = async move {
+            client.write_all(&frame).await.unwrap();
+            let mut len = [0u8; 4];
+            client.read_exact(&mut len).await.unwrap();
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            client.read_exact(&mut body).await.unwrap();
+            body // dropping `client` ends the server loop
+        };
+        tokio::join!(agent.serve(server, caller), ask).1
+    })
+}
+
+/// Reads one SSH string off the front of `input`.
+fn take_ssh_string(input: &mut &[u8]) -> Vec<u8> {
+    let n = u32::from_be_bytes(input[..4].try_into().unwrap()) as usize;
+    let s = input[4..4 + n].to_vec();
+    *input = &input[4 + n..];
+    s
+}
+
+/// Asks the system agent for its identities, the way `ssh-add -l` does, and
+/// returns `(key blob, comment)` per identity.
+fn system_agent_identities(core: &Core) -> Vec<(Vec<u8>, String)> {
+    let reply = system_agent_request(&core.system_agent(), &[11], AgentCaller::default()); // REQUEST_IDENTITIES
+    assert_eq!(reply[0], 12, "IDENTITIES_ANSWER");
+    let count = u32::from_be_bytes(reply[1..5].try_into().unwrap());
+    let mut rest = &reply[5..];
+    (0..count)
+        .map(|_| {
+            let blob = take_ssh_string(&mut rest);
+            (blob, String::from_utf8(take_ssh_string(&mut rest)).unwrap())
+        })
+        .collect()
+}
+
+fn openssh_blob(public: &str) -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(public.split_whitespace().nth(1).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn system_agent_offers_the_shared_keys_follows_a_toggle_and_empties_when_locked() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let work = core
+        .generate_ssh_key("v".to_string(), "work".to_string())
+        .unwrap();
+    let deploy = core
+        .generate_ssh_key("v".to_string(), "deploy".to_string())
+        .unwrap();
+
+    core.set_system_agent_shared("v".to_string(), "work".to_string(), true)
+        .unwrap();
+    assert_eq!(
+        system_agent_identities(&core),
+        vec![(openssh_blob(&work), "work".to_string())],
+        "only the shared key is offered"
+    );
+
+    // No restart: the next request sees the new set.
+    core.set_system_agent_shared("v".to_string(), "deploy".to_string(), true)
+        .unwrap();
+    core.set_system_agent_shared("v".to_string(), "work".to_string(), false)
+        .unwrap();
+    assert_eq!(
+        system_agent_identities(&core),
+        vec![(openssh_blob(&deploy), "deploy".to_string())]
+    );
+
+    // A locked core offers nothing — an empty list, not an error.
+    core.lock();
+    assert_eq!(system_agent_identities(&core), vec![]);
+}
+
+/// Approves every signature and keeps what each prompt was shown, and the ids
+/// of the prompts withdrawn. `meanwhile` runs while the prompt is open, before
+/// the answer.
+struct RecordingApprover {
+    asked: std::sync::Mutex<Vec<AgentSignRequest>>,
+    cancelled: std::sync::Mutex<Vec<u64>>,
+    meanwhile: Box<dyn Fn() + Send + Sync>,
+}
+
+impl RecordingApprover {
+    fn new(meanwhile: impl Fn() + Send + Sync + 'static) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            asked: Default::default(),
+            cancelled: Default::default(),
+            meanwhile: Box::new(meanwhile),
+        })
+    }
+}
+
+impl AgentApprover for RecordingApprover {
+    fn approve(&self, request: AgentSignRequest) -> bool {
+        self.asked.lock().unwrap().push(request);
+        (self.meanwhile)();
+        true
+    }
+    fn cancel(&self, id: u64) {
+        self.cancelled.lock().unwrap().push(id);
+    }
+}
+
+/// A core with one key, `work` in vault "V", shared with the system agent.
+/// Returns the core, its dir guard and the key's public line.
+fn core_sharing_work() -> (std::sync::Arc<Core>, tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let work = core
+        .generate_ssh_key("v".to_string(), "work".to_string())
+        .unwrap();
+    core.set_system_agent_shared("v".to_string(), "work".to_string(), true)
+        .unwrap();
+    (core, dir, work)
+}
+
+/// A SIGN_REQUEST for `public` over `data`.
+fn sign_request(public: &str, data: &[u8]) -> Vec<u8> {
+    let mut request = vec![13]; // SIGN_REQUEST
+    for field in [openssh_blob(public).as_slice(), data] {
+        request.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        request.extend_from_slice(field);
+    }
+    request.extend_from_slice(&0u32.to_be_bytes()); // flags
+    request
+}
+
+/// Checks a SIGN_RESPONSE body the way a server would: the signature over
+/// `data` verifies against `public` (an OpenSSH public key line).
+fn verify_sign_response(reply: &[u8], public: &str, data: &[u8]) {
+    use russh::keys::signature::Verifier;
+
+    assert_eq!(reply[0], 14, "SIGN_RESPONSE");
+    let mut body = &reply[1..];
+    let inner = take_ssh_string(&mut body);
+    let mut inner = inner.as_slice();
+    let algorithm = String::from_utf8(take_ssh_string(&mut inner)).unwrap();
+    let signature = russh::keys::ssh_key::Signature::new(
+        russh::keys::Algorithm::new(&algorithm).unwrap(),
+        take_ssh_string(&mut inner),
+    )
+    .unwrap();
+    let public = russh::keys::PublicKey::from_openssh(public).unwrap();
+    // Through the trait: `PublicKey` also has an inherent SSHSIG `verify`.
+    Verifier::verify(&public, data, &signature).expect("the signature verifies against the key");
+}
+
+/// A freshly generated key is not cached in the embedded agent, so this also
+/// covers loading it on approval. The prompt names the key, its vault and the
+/// caller, and the signature verifies against the shared public key.
+#[test]
+fn system_agent_signs_with_a_shared_key_once_approved() {
+    let (core, _dir, work) = core_sharing_work();
+    let approver = RecordingApprover::new(|| {});
+    core.set_agent_approver(Some(approver.clone()));
+
+    let caller = AgentCaller {
+        pid: Some(4242),
+        executable: Some("/usr/bin/git".to_string()),
+    };
+    let reply = system_agent_request(
+        &core.system_agent(),
+        &sign_request(&work, b"to-sign"),
+        caller.clone(),
+    );
+
+    verify_sign_response(&reply, &work, b"to-sign");
+
+    let asked = approver.asked.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(
+        asked[0].origin,
+        AgentSignOrigin::SystemAgent {
+            pid: caller.pid,
+            executable: caller.executable,
+        }
+    );
+    assert_eq!(
+        (asked[0].key.as_str(), asked[0].vault.as_str()),
+        ("work", "V")
+    );
+}
+
+/// A shared key with a certificate (`ssh-keygen -s`) is offered twice, key
+/// first, the certificate byte for byte as issued; a signature asked for the
+/// certificate is approved and made with the key. A certificate attached to a
+/// key it does not certify is not offered.
+#[test]
+fn system_agent_offers_an_attached_certificate_and_signs_it_with_the_key() {
+    let (core, _dir, work) = core_sharing_work();
+    let other = core
+        .generate_ssh_key("v".to_string(), "other".to_string())
+        .unwrap();
+    core.set_system_agent_shared("v".to_string(), "other".to_string(), true)
+        .unwrap();
+
+    let ca_dir = tempfile::tempdir().unwrap();
+    let ca = ca_dir.path().join("ca");
+    assert!(Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-N", ""])
+        .arg("-f")
+        .arg(&ca)
+        .status()
+        .unwrap()
+        .success());
+    let work_pub = ca_dir.path().join("work.pub");
+    std::fs::write(&work_pub, format!("{work}\n")).unwrap();
+    assert!(Command::new("ssh-keygen")
+        .arg("-s")
+        .arg(&ca)
+        .args(["-q", "-I", "unissh-test", "-n", "alice", "-V", "+1h"])
+        .arg(&work_pub)
+        .status()
+        .unwrap()
+        .success());
+    let cert = std::fs::read_to_string(ca_dir.path().join("work-cert.pub")).unwrap();
+    core.import_ssh_certificate("v".to_string(), "work".to_string(), cert.clone())
+        .unwrap();
+    // The same certificate attached to `other`, which it does not certify.
+    core.import_ssh_certificate("v".to_string(), "other".to_string(), cert.clone())
+        .unwrap();
+
+    assert_eq!(
+        system_agent_identities(&core),
+        vec![
+            (openssh_blob(&work), "work".to_string()),
+            (openssh_blob(&cert), "work".to_string()),
+            (openssh_blob(&other), "other".to_string()),
+        ]
+    );
+
+    let approver = RecordingApprover::new(|| {});
+    core.set_agent_approver(Some(approver.clone()));
+    let reply = system_agent_request(
+        &core.system_agent(),
+        &sign_request(&cert, b"to-sign"),
+        AgentCaller::default(),
+    );
+    verify_sign_response(&reply, &work, b"to-sign");
+    assert_eq!(approver.asked.lock().unwrap()[0].key, "work");
+}
+
+/// The share is checked again after the prompt: a key unshared while the
+/// person was deciding is not used, even when they approve.
+#[test]
+fn system_agent_refuses_a_key_unshared_while_its_prompt_was_open() {
+    let (core, _dir, work) = core_sharing_work();
+    let unshare = std::sync::Arc::downgrade(&core);
+    core.set_agent_approver(Some(RecordingApprover::new(move || {
+        if let Some(core) = unshare.upgrade() {
+            core.set_system_agent_shared("v".to_string(), "work".to_string(), false)
+                .unwrap();
+        }
+    })));
+
+    let reply = system_agent_request(
+        &core.system_agent(),
+        &sign_request(&work, b"to-sign"),
+        AgentCaller::default(),
+    );
+    assert_eq!(reply[0], 5, "FAILURE");
+}
+
+/// Any local program can open connections. Once the cap of open prompts is
+/// reached, a further request is refused at once rather than stacking a
+/// dialog, and the ones already open are unaffected.
+#[test]
+fn system_agent_refuses_a_sign_request_beyond_the_open_prompt_cap() {
+    const CAP: usize = 4;
+    let (core, _dir, work) = core_sharing_work();
+    let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let held = gate.clone();
+    let approver = RecordingApprover::new(move || {
+        let (open, wake) = &*held;
+        let open = open.lock().unwrap();
+        let _ = wake
+            .wait_timeout_while(open, Duration::from_secs(30), |open| !*open)
+            .unwrap();
+    });
+    core.set_agent_approver(Some(approver.clone()));
+    let agent = core.system_agent();
+    let request = sign_request(&work, b"to-sign");
+
+    let pending: Vec<_> = (0..CAP)
+        .map(|_| {
+            let (agent, request) = (agent.clone(), request.clone());
+            std::thread::spawn(move || {
+                system_agent_request(&agent, &request, AgentCaller::default())
+            })
+        })
+        .collect();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while approver.asked.lock().unwrap().len() < CAP {
+        assert!(Instant::now() < deadline, "the first prompts never opened");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let refused = system_agent_request(&agent, &request, AgentCaller::default());
+    assert_eq!(refused[0], 5, "FAILURE");
+    assert_eq!(approver.asked.lock().unwrap().len(), CAP, "no extra prompt");
+
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    for reply in pending {
+        assert_eq!(reply.join().unwrap()[0], 14, "SIGN_RESPONSE");
+    }
+}
+
+/// A key replaced under the same id (generated anew as `work`) is not offered:
+/// the share was made for the old key.
+#[test]
+fn system_agent_does_not_offer_a_key_replaced_under_the_same_id() {
+    let (core, _dir, _old) = core_sharing_work();
+    core.generate_ssh_key("v".to_string(), "work".to_string())
+        .unwrap();
+    assert_eq!(system_agent_identities(&core), vec![]);
+}
+
+/// Deleting a shared key drops its share: the very same key put back under the
+/// same id afterwards is not offered until it is shared again.
+#[test]
+fn system_agent_forgets_the_share_of_a_deleted_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("id");
+    assert!(Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-N", ""])
+        .arg("-f")
+        .arg(&key_path)
+        .status()
+        .unwrap()
+        .success());
+    let private = std::fs::read_to_string(&key_path).unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.import_ssh_key("v".to_string(), "work".to_string(), private.clone(), None)
+        .unwrap();
+    core.set_system_agent_shared("v".to_string(), "work".to_string(), true)
+        .unwrap();
+    assert_eq!(system_agent_identities(&core).len(), 1);
+
+    core.delete_item("v".to_string(), "work".to_string())
+        .unwrap();
+    core.import_ssh_key("v".to_string(), "work".to_string(), private, None)
+        .unwrap();
+    assert_eq!(system_agent_identities(&core), vec![]);
+}
+
+/// A client that hangs up while its prompt is open withdraws that very prompt
+/// from the approver, rather than leaving it up until it times out.
+#[test]
+fn system_agent_withdraws_the_prompt_of_a_client_that_hangs_up() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::AsyncWriteExt;
+
+    let (core, _dir, work) = core_sharing_work();
+    let released = std::sync::Arc::new(AtomicBool::new(false));
+    let held = released.clone();
+    let approver = RecordingApprover::new(move || {
+        // Bounded, so a regression fails the test instead of hanging it.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !held.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    core.set_agent_approver(Some(approver.clone()));
+    let agent = core.system_agent();
+    let request = sign_request(&work, b"to-sign");
+    let mut frame = (request.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(&request);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let hang_up = async {
+            client.write_all(&frame).await.unwrap();
+            while approver.asked.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            drop(client);
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(agent.serve(server, AgentCaller::default()), hang_up)
+        })
+        .await
+        .expect("serving ends as soon as the client is gone");
+    });
+    released.store(true, Ordering::SeqCst);
+
+    let asked = approver.asked.lock().unwrap()[0].id;
+    assert_eq!(*approver.cancelled.lock().unwrap(), vec![asked]);
 }

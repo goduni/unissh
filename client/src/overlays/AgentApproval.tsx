@@ -1,15 +1,16 @@
-// AgentApproval — a forwarded agent asking whether to sign.
+// AgentApproval — a forwarded agent, or the system agent, asking whether to sign.
 //
 // This dialog is the feature. Agent forwarding without it is what OpenSSH gives
 // you: while the session lives, anything running as your user on the remote host
 // can use your key and nothing anywhere shows it happened. With it, every
-// signature is a thing you saw.
+// signature is a thing you saw. The system agent asks the same way, naming the
+// key and the program on this computer that wants it.
 //
 // So every path out of here that is not an explicit approval must refuse —
 // closing, Escape, a timeout, a dead window. Defaulting the other way would make
 // the prompt decorative.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "@/i18n";
@@ -20,9 +21,17 @@ import { Btn } from "@/components/primitives";
 
 interface ApprovalRequest {
   id: number;
+  origin: "forwarded" | "system";
+  /** Forwarded: the session's host. */
   host: string;
-  /** `user@service` when the payload is an SSH login; empty otherwise. */
-  target: string;
+  /** System agent: the key asked for, and its vault. */
+  key: string;
+  vault: string;
+  /** System agent: the calling process, as the OS reported it (advisory). */
+  pid: number | null;
+  executable: string | null;
+  /** The user an SSH login would log in as; empty otherwise. Never the server. */
+  user: string;
 }
 
 async function answer(id: number, approved: boolean) {
@@ -35,38 +44,40 @@ async function answer(id: number, approved: boolean) {
 }
 
 export function AgentApproval() {
-  const [req, setReq] = useState<ApprovalRequest | null>(null);
   // Queued, not dropped: a single `git fetch` can ask more than once, and a
-  // request nobody sees is a request that quietly times out.
-  const queue = useRef<ApprovalRequest[]>([]);
+  // request nobody sees is a request that quietly times out. The first one is
+  // on screen. One the core withdraws (timed out, its client hung up, the
+  // agent stopped) is removed wherever it is — it can no longer be answered.
+  const [queue, setQueue] = useState<ApprovalRequest[]>([]);
 
   useEffect(() => {
-    let dispose: (() => void) | undefined;
+    const disposers: (() => void)[] = [];
     let alive = true;
-    (async () => {
-      const un = await listen<ApprovalRequest>("agent-approval", (e) => {
-        const next = e.payload;
-        setReq((cur) => {
-          if (cur) {
-            queue.current.push(next);
-            return cur;
-          }
-          return next;
-        });
-      });
-      if (alive) dispose = un;
+    const keep = (un: () => void) => {
+      if (alive) disposers.push(un);
       else un();
-    })();
+    };
+    void listen<ApprovalRequest>("agent-approval", (e) => {
+      setQueue((q) => [...q, e.payload]);
+    }).then(keep);
+    void listen<number>("agent-approval-cancelled", (e) => {
+      setQueue((q) => q.filter((r) => r.id !== e.payload));
+    }).then(keep);
     return () => {
       alive = false;
-      dispose?.();
+      disposers.forEach((un) => un());
     };
   }, []);
 
+  const req = queue[0];
   if (!req) return null;
 
   return (
-    <Dialog key={req.id} req={req} onDone={() => setReq(queue.current.shift() ?? null)} />
+    <Dialog
+      key={req.id}
+      req={req}
+      onDone={() => setQueue((q) => q.filter((r) => r.id !== req.id))}
+    />
   );
 }
 
@@ -74,6 +85,7 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
   const { t } = useTranslation();
   const p = usePalette();
   const [busy, setBusy] = useState(false);
+  const system = req.origin === "system";
 
   const finish = (approved: boolean) => {
     if (busy) return;
@@ -85,7 +97,7 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
     <Modal
       icon="shield"
       title={t("agentApproval.title")}
-      subtitle={req.host}
+      subtitle={system ? t("agentApproval.systemSubtitle") : req.host}
       // Closing is declining. The safe direction has to be the easy one.
       onClose={() => finish(false)}
       w={420}
@@ -102,8 +114,27 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
       }
     >
       <div style={{ display: "flex", flexDirection: "column", gap: rem(10), fontSize: TEXT.base }}>
-        <div>{t("agentApproval.body", { host: req.host })}</div>
-        {req.target ? (
+        <div>
+          {system
+            ? t(req.vault ? "agentApproval.systemBodyVault" : "agentApproval.systemBody", {
+                key: req.key,
+                vault: req.vault,
+              })
+            : t("agentApproval.body", { host: req.host })}
+        </div>
+        {system && (
+          <div style={{ fontSize: TEXT.small, color: p.txt2, overflowWrap: "anywhere" }}>
+            {req.pid == null
+              ? t("agentApproval.unknownProcess")
+              : req.executable
+                ? t("agentApproval.process", { executable: req.executable, pid: req.pid })
+                : t("agentApproval.processPidOnly", { pid: req.pid })}
+          </div>
+        )}
+        {req.user ? (
+          // The user only, for both origins: the payload's service is always
+          // `ssh-connection`, and it never names the server. A forwarded
+          // request's host is in the subtitle.
           <div
             style={{
               fontFamily: MONO,
@@ -114,7 +145,7 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
               border: `1px solid ${p.line}`,
             }}
           >
-            {t("agentApproval.wouldLogIn", { target: req.target })}
+            {t("agentApproval.wouldLogInUser", { user: req.user })}
           </div>
         ) : (
           // Not an SSH login — a git signature, say. Saying so is better than

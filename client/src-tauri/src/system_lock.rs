@@ -6,7 +6,8 @@
 //! tick while asleep. This module is the missing half: a small native listener
 //! per desktop, each of which emits one application event.
 //!
-//! MCP grants are revoked in Rust before emitting, independently of the webview.
+//! MCP grants are revoked, and the system agent's listener stopped, in Rust
+//! before emitting, independently of the webview; both come back on unlock.
 //! Vault locking still uses the frontend's common `lockInstance()` path and its
 //! grace/deduplication policy (`support/systemLock.ts`). MCP revocation does not
 //! inherit that grace period or the optional frontend auto-lock setting.
@@ -76,6 +77,7 @@ pub fn is_screen_locked() -> bool {
 fn wake(app: &AppHandle) {
     if !is_screen_locked() {
         crate::mcp::resume_access(app);
+        crate::system_agent::resume_access(app);
     }
 }
 
@@ -94,9 +96,11 @@ fn emit_with_token(app: &AppHandle, signal: SystemLockSignal, token: Option<u64>
         SystemLockSignal::ScreenLock | SystemLockSignal::Suspend
     ) {
         crate::mcp::revoke(app);
+        crate::system_agent::revoke(app);
     }
     if matches!(signal, SystemLockSignal::ScreenUnlock) {
         crate::mcp::resume_access(app);
+        crate::system_agent::resume_access(app);
     }
     log::info!("system-lock: {signal:?}");
     let _ = app.emit("system-lock", SystemLockEvent { signal, token });

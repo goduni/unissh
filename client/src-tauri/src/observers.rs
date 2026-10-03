@@ -17,9 +17,11 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
+#[cfg(desktop)]
+use tauri::{Manager, UserAttentionType};
 use unissh_ffi::{
-    AgentApprover, AgentSignRequest, AuthPromptRequest, AuthPrompter, BroadcastObserver,
-    ExecObserver, SessionObserver, SftpProgressObserver,
+    AgentApprover, AgentSignOrigin, AgentSignRequest, AuthPromptRequest, AuthPrompter,
+    BroadcastObserver, ExecObserver, SessionObserver, SftpProgressObserver,
 };
 
 #[derive(Clone, Serialize)]
@@ -252,65 +254,181 @@ impl AuthPrompter for AppPrompter {
     }
 }
 
-/// A forwarded agent asking whether to sign.
+/// A forwarded agent, or the system agent, asking whether to sign.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentApprovalEvent {
     pub id: u64,
+    /// `"forwarded"` or `"system"`.
+    pub origin: &'static str,
+    /// Forwarded: the session's host. Empty for the system agent.
     pub host: String,
+    /// System agent: the key asked for and its vault. Empty for a forwarded
+    /// agent.
+    pub key: String,
+    pub vault: String,
+    /// System agent: the calling process, as the OS reported it. Advisory.
+    pub pid: Option<u32>,
+    pub executable: Option<String>,
+    /// The user an SSH login payload would log in as; empty otherwise. The
+    /// payload never names the server.
+    pub user: String,
     /// `user@service` when the payload is an SSH login; empty otherwise. This is
     /// what turns the prompt from "something wants a signature" into "this would
     /// log in as X".
     pub target: String,
 }
 
+/// One prompt waiting for a person.
+struct PendingApproval {
+    answer: SyncSender<bool>,
+    /// From the system agent, so withdrawn when its listener stops.
+    system: bool,
+}
+
 /// Bridges the core's blocking approval call to a dialog.
 ///
 /// Same shape as [`AppPrompter`], and for the same reason: the core is blocked
-/// on a worker thread waiting for an answer that only a person can give.
+/// on a worker thread waiting for an answer that only a person can give. Every
+/// way a prompt ends without an answer — timeout, a client that hung up, the
+/// system agent stopping — refuses and tells the window to drop it
+/// (`agent-approval-cancelled`, carrying the id, like `auth-prompt-cancelled`).
 pub struct AppApprover {
     app: AppHandle,
-    next_id: AtomicU64,
-    pending: Mutex<HashMap<u64, SyncSender<bool>>>,
+    /// One lock for both, so a `cancel` never slips between the early-cancel
+    /// check and the registration of the same id.
+    state: Mutex<ApprovalState>,
+}
+
+#[derive(Default)]
+struct ApprovalState {
+    pending: HashMap<u64, PendingApproval>,
+    /// Cancellations that arrived before their `approve` registered the id.
+    cancelled_early: std::collections::HashSet<u64>,
 }
 
 impl AppApprover {
     pub fn new(app: AppHandle) -> Self {
         Self {
             app,
-            next_id: AtomicU64::new(1),
-            pending: Mutex::new(HashMap::new()),
+            state: Mutex::new(ApprovalState::default()),
         }
     }
 
     pub fn answer(&self, id: u64, approved: bool) {
-        let tx = self.pending.lock().expect("approval map").remove(&id);
-        if let Some(tx) = tx {
-            let _ = tx.send(approved);
+        let pending = self.state.lock().expect("approval map").pending.remove(&id);
+        if let Some(pending) = pending {
+            let _ = pending.answer.send(approved);
+        }
+    }
+
+    /// Refuses `id` if it is still waiting, and tells the window to drop it.
+    /// Returns whether it was waiting.
+    fn withdraw(&self, id: u64) -> bool {
+        let pending = self.state.lock().expect("approval map").pending.remove(&id);
+        self.refuse(id, pending)
+    }
+
+    /// Refuses a prompt already taken out of the map, if there was one.
+    fn refuse(&self, id: u64, pending: Option<PendingApproval>) -> bool {
+        let Some(pending) = pending else {
+            return false;
+        };
+        let _ = pending.answer.send(false);
+        let _ = self.app.emit("agent-approval-cancelled", id);
+        true
+    }
+
+    /// Withdraws every system-agent prompt: its listener stopped (vault or
+    /// screen lock, sleep, exit), so no answer could reach the caller anyway.
+    pub fn cancel_system(&self) {
+        let ids: Vec<u64> = self
+            .state
+            .lock()
+            .expect("approval map")
+            .pending
+            .iter()
+            .filter(|(_, p)| p.system)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.withdraw(id);
         }
     }
 }
 
 impl AgentApprover for AppApprover {
     fn approve(&self, request: AgentSignRequest) -> bool {
-        let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
+        let id = request.id;
+        let (origin, pid, executable) = match request.origin {
+            AgentSignOrigin::Forwarded => ("forwarded", None, None),
+            AgentSignOrigin::SystemAgent { pid, executable } => ("system", pid, executable),
+        };
+        let system = origin == "system";
         let (tx, rx) = sync_channel(1);
-        self.pending.lock().expect("approval map").insert(id, tx);
+        {
+            let mut state = self.state.lock().expect("approval map");
+            if state.cancelled_early.remove(&id) {
+                return false;
+            }
+            state
+                .pending
+                .insert(id, PendingApproval { answer: tx, system });
+        }
 
         let event = AgentApprovalEvent {
             id,
+            origin,
             host: request.host,
+            key: request.key,
+            vault: request.vault,
+            pid,
+            executable,
+            user: request.user,
             target: request.target,
         };
         if self.app.emit("agent-approval", event).is_err() {
-            self.pending.lock().expect("approval map").remove(&id);
+            self.state.lock().expect("approval map").pending.remove(&id);
             return false;
+        }
+        // The system agent's caller types in another terminal, so UniSSH may
+        // sit behind other windows. Flag the waiting prompt (dock bounce,
+        // taskbar flash) without taking focus: a keystroke meant for that
+        // terminal must never land on Approve.
+        #[cfg(desktop)]
+        if system {
+            if let Some(window) = self.app.get_webview_window("main") {
+                let _ = window.request_user_attention(Some(UserAttentionType::Informational));
+            }
         }
 
         // Refusing on timeout, not granting. An unanswered prompt means nobody
         // was watching, and that is exactly when a signature should not happen.
-        let approved = rx.recv_timeout(Duration::from_secs(60)).unwrap_or(false);
-        self.pending.lock().expect("approval map").remove(&id);
-        approved
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(approved) => approved,
+            Err(_) => {
+                self.withdraw(id);
+                false
+            }
+        }
+    }
+
+    fn cancel(&self, id: u64) {
+        let pending = {
+            let mut state = self.state.lock().expect("approval map");
+            let pending = state.pending.remove(&id);
+            if pending.is_none() {
+                // Not registered yet (or already over). Remember it so a late
+                // `approve` refuses without showing anything; an id that is
+                // over never comes back, so this only holds the rare early ones.
+                if state.cancelled_early.len() >= 64 {
+                    // Only ever ids that lost a race; never let them pile up.
+                    state.cancelled_early.clear();
+                }
+                state.cancelled_early.insert(id);
+            }
+            pending
+        };
+        self.refuse(id, pending);
     }
 }

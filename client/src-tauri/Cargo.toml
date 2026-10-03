@@ -105,7 +105,7 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 unissh-mcp = { path = "../../rust-core/crates/mcp" }
 unissh-automation = { path = "../../rust-core/crates/automation", features = ["core"] }
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "net", "macros"] }
 tauri-plugin-updater = "2"
 # Mounted volumes for the SFTP local pane's drive picker (Windows drive letters
 # with their labels, /Volumes on macOS, mount points on Linux). Desktop-only:
@@ -149,13 +149,22 @@ keyring = { version = "3", features = ["windows-native"] }
 # already in the tree via the toolchain's own dependencies. `Win32_Graphics_Gdi`
 # is not drawing anything — `WNDCLASSW` carries an `HBRUSH` field, so the struct
 # itself lives behind that feature.
+# The system agent's named pipe (src/system_agent/pipe.rs) adds the current
+# user's SID from the process token (`Win32_Security`, `Win32_System_Threading`),
+# the SDDL → security descriptor conversion for its DACL
+# (`Win32_Security_Authorization`), and the caller's pid and executable
+# (`Win32_System_Pipes`, `Win32_System_Threading`).
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
     "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
     "Win32_System_Power",
     "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
 [target.'cfg(target_os = "linux")'.dependencies]
