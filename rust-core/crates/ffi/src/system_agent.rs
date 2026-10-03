@@ -38,6 +38,7 @@
 //! so a key unshared, replaced or locked away while the prompt was open is not
 //! used.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -48,9 +49,9 @@ use unissh_ssh_transport::{
 };
 
 use super::{
-    agent_key_id, cert_item_id, load_key_into_agent, lock_recover, next_agent_sign_id, resolve_vid,
-    userauth_login, AgentApprover, AgentSignOrigin, AgentSignRequest, Core, CoreState, FfiError,
-    InMemoryAgent, Vault, ITEM_TYPE_SSH_CERT, ITEM_TYPE_SSH_KEY,
+    agent_key_id, attached_certificate, load_key_into_agent, lock_recover, next_agent_sign_id,
+    resolve_vid, userauth_login, AgentApprover, AgentSignOrigin, AgentSignRequest, Core, CoreState,
+    FfiError, InMemoryAgent, Vault, ITEM_TYPE_SSH_KEY,
 };
 
 // Keep the storage slot stable; a format change gets a new key.
@@ -98,15 +99,13 @@ fn write_entries(state: &CoreState, entries: &[Entry]) -> Result<(), FfiError> {
 /// once loaded, and a key replaced by a sync pull would still answer from that
 /// cache. A cached copy that no longer matches the item is evicted here, so
 /// nothing later signs with the old key either.
-fn current_public(state: &mut CoreState, vault_id: &str, item_id: &str) -> Option<String> {
-    let item = Vault::open(
-        &state.storage,
-        &state.keyset,
-        &resolve_vid(&state.storage, vault_id),
-    )
-    .ok()?
-    .get_item(item_id.as_bytes())
-    .ok()??;
+fn current_public(
+    vault: &Vault,
+    agent: &mut InMemoryAgent,
+    vault_id: &str,
+    item_id: &str,
+) -> Option<String> {
+    let item = vault.get_item(item_id.as_bytes()).ok()??;
     if item.item_type != ITEM_TYPE_SSH_KEY {
         return None;
     }
@@ -116,43 +115,19 @@ fn current_public(state: &mut CoreState, vault_id: &str, item_id: &str) -> Optio
     let public = type_and_key(&parser.public_key(b"x")?.to_openssh().ok()?)?;
 
     let akid = agent_key_id(vault_id, item_id);
-    let cached = state
-        .agent
-        .public_key(&akid)
-        .and_then(|k| k.to_openssh().ok());
+    let cached = agent.public_key(&akid).and_then(|k| k.to_openssh().ok());
     if cached.is_some_and(|c| type_and_key(&c).as_deref() != Some(public.as_str())) {
-        state.agent.remove(&akid);
+        agent.remove(&akid);
     }
     Some(public)
 }
 
-/// `<type> <base64>` of the certificate attached to the key `item_id`, if
-/// there is one and it certifies `public` (that key's `<type> <base64>`).
-fn current_certificate(
-    state: &CoreState,
-    vault_id: &str,
-    item_id: &str,
-    public: &str,
-) -> Option<String> {
-    use unissh_ssh_agent::ssh_key::{Certificate, PublicKey};
-
-    let item = Vault::open(
-        &state.storage,
-        &state.keyset,
-        &resolve_vid(&state.storage, vault_id),
-    )
-    .ok()?
-    .get_item(cert_item_id(item_id).as_bytes())
-    .ok()??;
-    if item.item_type != ITEM_TYPE_SSH_CERT {
-        return None;
-    }
-    let line = std::str::from_utf8(item.content.as_slice()).ok()?.trim();
-    let cert = Certificate::from_openssh(line).ok()?;
-    let key = PublicKey::from_openssh(public).ok()?;
-    (cert.public_key() == key.key_data())
-        .then(|| type_and_key(line))
-        .flatten()
+/// `<type> <base64>` of the certificate attached to the key `item_id` in
+/// `vault`, if it certifies `public` (that key's `<type> <base64>`). The rule
+/// is [`attached_certificate`], the one connects use.
+fn current_certificate(vault: &Vault, item_id: &str, public: &str) -> Option<String> {
+    let key = unissh_ssh_agent::ssh_key::PublicKey::from_openssh(public).ok()?;
+    type_and_key(&attached_certificate(vault, item_id, key.key_data())?)
 }
 
 /// `<type> <base64>` of an OpenSSH public key line: its first two fields, the
@@ -175,19 +150,55 @@ pub(crate) fn forget(state: &CoreState, vault_id: &str, item_id: Option<&str>) {
     }
 }
 
-/// The shared entries whose key is still the one they were shared for.
-fn resolve(state: &mut CoreState) -> Vec<(Entry, String)> {
+/// A shared entry whose key is still the one it was shared for.
+struct Resolved {
+    entry: Entry,
+    /// `<type> <base64>` of the key.
+    public: String,
+    /// `<type> <base64>` of its attached certificate, if one certifies it.
+    certificate: Option<String>,
+}
+
+/// The shared entries whose key is still the one they were shared for, with
+/// their certificates. Each vault is opened once per call.
+fn resolve(state: &mut CoreState) -> Vec<Resolved> {
     let Ok(entries) = read_entries(state) else {
         log::warn!("system agent: the shared-key list is unreadable; offering nothing");
         return Vec::new();
     };
-    entries
-        .into_iter()
-        .filter_map(|entry| {
-            let public = current_public(state, &entry.vault_id, &entry.item_id)?;
-            (public == entry.public).then_some((entry, public))
-        })
-        .collect()
+    let CoreState {
+        storage,
+        keyset,
+        agent,
+        ..
+    } = state;
+    let (storage, keyset) = (&*storage, &*keyset);
+    let mut vaults: HashMap<String, Option<Vault>> = HashMap::new();
+    let mut resolved = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some(vault) = vaults
+            .entry(entry.vault_id.clone())
+            .or_insert_with(|| {
+                Vault::open(storage, keyset, &resolve_vid(storage, &entry.vault_id)).ok()
+            })
+            .as_ref()
+        else {
+            continue;
+        };
+        let Some(public) = current_public(vault, agent, &entry.vault_id, &entry.item_id) else {
+            continue;
+        };
+        if public != entry.public {
+            continue;
+        }
+        let certificate = current_certificate(vault, &entry.item_id, &public);
+        resolved.push(Resolved {
+            entry,
+            public,
+            certificate,
+        });
+    }
+    resolved
 }
 
 /// The system agent's view of the core: the shared keys while unlocked,
@@ -202,20 +213,23 @@ impl AgentKeys for SharedKeys {
         let Some(state) = guard.as_mut() else {
             return Vec::new();
         };
-        let shared = resolve(state);
-        let mut offered = Vec::with_capacity(shared.len());
-        for (entry, public) in shared {
+        let mut offered = Vec::new();
+        for Resolved {
+            entry,
+            public,
+            certificate,
+        } in resolve(state)
+        {
             let key_id = agent_key_id(&entry.vault_id, &entry.item_id);
-            let cert = current_certificate(state, &entry.vault_id, &entry.item_id, &public);
             offered.push(OfferedKey {
                 key_id: key_id.clone(),
                 public_openssh: public,
                 comment: entry.item_id.clone(),
             });
-            if let Some(cert) = cert {
+            if let Some(certificate) = certificate {
                 offered.push(OfferedKey {
                     key_id,
-                    public_openssh: cert,
+                    public_openssh: certificate,
                     comment: entry.item_id,
                 });
             }
@@ -234,12 +248,10 @@ impl AgentKeys for SharedKeys {
             log::info!("system agent: signature refused (vault locked)");
             return None;
         };
-        let shared = resolve(state);
-        let Some((entry, _)) = shared.into_iter().find(|(entry, public)| {
-            agent_key_id(&entry.vault_id, &entry.item_id) == key.key_id
-                && (*public == key.public_openssh
-                    || current_certificate(state, &entry.vault_id, &entry.item_id, public)
-                        .is_some_and(|cert| cert == key.public_openssh))
+        let Some(Resolved { entry, .. }) = resolve(state).into_iter().find(|shared| {
+            agent_key_id(&shared.entry.vault_id, &shared.entry.item_id) == key.key_id
+                && (shared.public == key.public_openssh
+                    || shared.certificate.as_ref() == Some(&key.public_openssh))
         }) else {
             log::info!("system agent: signature refused (key no longer shared)");
             return None;
@@ -432,7 +444,7 @@ impl Core {
         self.with_state_mut(|state| {
             Ok(resolve(state)
                 .into_iter()
-                .map(|(entry, _)| SharedAgentKey {
+                .map(|Resolved { entry, .. }| SharedAgentKey {
                     vault_id: entry.vault_id,
                     item_id: entry.item_id,
                 })
@@ -451,7 +463,16 @@ impl Core {
             let mut entries = read_entries(state)?;
             entries.retain(|e| !(e.vault_id == vault_id && e.item_id == item_id));
             if shared {
-                let public = current_public(state, &vault_id, &item_id)
+                let CoreState {
+                    storage,
+                    keyset,
+                    agent,
+                    ..
+                } = &mut *state;
+                let storage = &*storage;
+                let public = Vault::open(storage, keyset, &resolve_vid(storage, &vault_id))
+                    .ok()
+                    .and_then(|vault| current_public(&vault, agent, &vault_id, &item_id))
                     .ok_or_else(|| FfiError::other("item is not a usable SSH key"))?;
                 entries.push(Entry {
                     vault_id,

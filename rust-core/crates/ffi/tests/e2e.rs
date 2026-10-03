@@ -5231,10 +5231,28 @@ fn sign_request(public: &str, data: &[u8]) -> Vec<u8> {
 /// A freshly generated key is not cached in the embedded agent, so this also
 /// covers loading it on approval. The prompt names the key, its vault and the
 /// caller, and the signature verifies against the shared public key.
-#[test]
-fn system_agent_signs_with_a_shared_key_once_approved() {
+/// Checks a SIGN_RESPONSE body the way a server would: the signature over
+/// `data` verifies against `public` (an OpenSSH public key line).
+fn verify_sign_response(reply: &[u8], public: &str, data: &[u8]) {
     use russh::keys::signature::Verifier;
 
+    assert_eq!(reply[0], 14, "SIGN_RESPONSE");
+    let mut body = &reply[1..];
+    let inner = take_ssh_string(&mut body);
+    let mut inner = inner.as_slice();
+    let algorithm = String::from_utf8(take_ssh_string(&mut inner)).unwrap();
+    let signature = russh::keys::ssh_key::Signature::new(
+        russh::keys::Algorithm::new(&algorithm).unwrap(),
+        take_ssh_string(&mut inner),
+    )
+    .unwrap();
+    let public = russh::keys::PublicKey::from_openssh(public).unwrap();
+    // Through the trait: `PublicKey` also has an inherent SSHSIG `verify`.
+    Verifier::verify(&public, data, &signature).expect("the signature verifies against the key");
+}
+
+#[test]
+fn system_agent_signs_with_a_shared_key_once_approved() {
     let (core, _dir, work) = core_sharing_work();
     let approver = RecordingApprover::new(|| {});
     core.set_agent_approver(Some(approver.clone()));
@@ -5249,20 +5267,7 @@ fn system_agent_signs_with_a_shared_key_once_approved() {
         caller.clone(),
     );
 
-    assert_eq!(reply[0], 14, "SIGN_RESPONSE");
-    let mut body = &reply[1..];
-    let inner = take_ssh_string(&mut body);
-    let mut inner = inner.as_slice();
-    let algorithm = String::from_utf8(take_ssh_string(&mut inner)).unwrap();
-    let signature = russh::keys::ssh_key::Signature::new(
-        russh::keys::Algorithm::new(&algorithm).unwrap(),
-        take_ssh_string(&mut inner),
-    )
-    .unwrap();
-    let public = russh::keys::PublicKey::from_openssh(&work).unwrap();
-    // Through the trait: `PublicKey` also has an inherent SSHSIG `verify`.
-    Verifier::verify(&public, b"to-sign", &signature)
-        .expect("the signature verifies against the shared key");
+    verify_sign_response(&reply, &work, b"to-sign");
 
     let asked = approver.asked.lock().unwrap();
     assert_eq!(asked.len(), 1);
@@ -5277,6 +5282,65 @@ fn system_agent_signs_with_a_shared_key_once_approved() {
         (asked[0].key.as_str(), asked[0].vault.as_str()),
         ("work", "V")
     );
+}
+
+/// A shared key with a certificate (`ssh-keygen -s`) is offered twice, key
+/// first, the certificate byte for byte as issued; a signature asked for the
+/// certificate is approved and made with the key. A certificate attached to a
+/// key it does not certify is not offered.
+#[test]
+fn system_agent_offers_an_attached_certificate_and_signs_it_with_the_key() {
+    let (core, _dir, work) = core_sharing_work();
+    let other = core
+        .generate_ssh_key("v".to_string(), "other".to_string())
+        .unwrap();
+    core.set_system_agent_shared("v".to_string(), "other".to_string(), true)
+        .unwrap();
+
+    let ca_dir = tempfile::tempdir().unwrap();
+    let ca = ca_dir.path().join("ca");
+    assert!(Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-N", ""])
+        .arg("-f")
+        .arg(&ca)
+        .status()
+        .unwrap()
+        .success());
+    let work_pub = ca_dir.path().join("work.pub");
+    std::fs::write(&work_pub, format!("{work}\n")).unwrap();
+    assert!(Command::new("ssh-keygen")
+        .arg("-s")
+        .arg(&ca)
+        .args(["-q", "-I", "unissh-test", "-n", "alice", "-V", "+1h"])
+        .arg(&work_pub)
+        .status()
+        .unwrap()
+        .success());
+    let cert = std::fs::read_to_string(ca_dir.path().join("work-cert.pub")).unwrap();
+    core.import_ssh_certificate("v".to_string(), "work".to_string(), cert.clone())
+        .unwrap();
+    // The same certificate attached to `other`, which it does not certify.
+    core.import_ssh_certificate("v".to_string(), "other".to_string(), cert.clone())
+        .unwrap();
+
+    assert_eq!(
+        system_agent_identities(&core),
+        vec![
+            (openssh_blob(&work), "work".to_string()),
+            (openssh_blob(&cert), "work".to_string()),
+            (openssh_blob(&other), "other".to_string()),
+        ]
+    );
+
+    let approver = RecordingApprover::new(|| {});
+    core.set_agent_approver(Some(approver.clone()));
+    let reply = system_agent_request(
+        &core.system_agent(),
+        &sign_request(&cert, b"to-sign"),
+        AgentCaller::default(),
+    );
+    verify_sign_response(&reply, &work, b"to-sign");
+    assert_eq!(approver.asked.lock().unwrap()[0].key, "work");
 }
 
 /// The share is checked again after the prompt: a key unshared while the

@@ -104,6 +104,35 @@ fn cert_item_id(key_item_id: &str) -> String {
     format!("{key_item_id}.cert")
 }
 
+/// The certificate attached to the key `key_item_id`, as its OpenSSH line: the
+/// `<key>.cert` item, of the certificate type, holding an OpenSSH certificate
+/// that certifies `public` (the key's own public half). Anything else (no
+/// item, another type, a line that does not parse, a certificate for another
+/// key) is no certificate at all. The one rule for connects and the system
+/// agent alike.
+///
+/// Validity (expiry, principals) is not checked: that is the server's call,
+/// as with OpenSSH's agent.
+fn attached_certificate(
+    vault: &Vault,
+    key_item_id: &str,
+    public: &unissh_ssh_agent::ssh_key::public::KeyData,
+) -> Option<String> {
+    let item = vault
+        .get_item(cert_item_id(key_item_id).as_bytes())
+        .ok()??;
+    if item.item_type != ITEM_TYPE_SSH_CERT {
+        return None;
+    }
+    let line = std::str::from_utf8(item.content.as_slice()).ok()?.trim();
+    let cert = unissh_ssh_agent::ssh_key::Certificate::from_openssh(line).ok()?;
+    if cert.public_key() != public {
+        log::warn!("ssh key: the attached certificate certifies another key; ignored");
+        return None;
+    }
+    Some(line.to_string())
+}
+
 /// Locks a `Mutex`, recovering from poisoning (the data under these locks is ordinary,
 /// not invariant-bearing, so a single panic must not permanently "jam" the FFI). Central
 /// helper for the `m.lock().unwrap_or_else(|e| e.into_inner())` idiom used across the
@@ -9570,31 +9599,26 @@ fn load_key_into_agent(
     if state.agent.contains(&akid) {
         return Ok(());
     }
-    // We fetch the key and (if any) the certificate within a single vault scope,
-    // so that the borrow of storage/keyset ends before the &mut agent below.
-    let (key_item, cert_str) = {
-        let vault = Vault::open(
-            &state.storage,
-            &state.keyset,
-            &resolve_vid(&state.storage, vault_id),
-        )
-        .map_err(FfiError::other)?;
-        let key_item = vault
-            .get_item(key_item_id.as_bytes())
-            .map_err(FfiError::other)?
-            .ok_or(FfiError::NotFound)?;
-        let cert_str = vault
-            .get_item(cert_item_id(key_item_id).as_bytes())
-            .map_err(FfiError::other)?
-            .map(|c| String::from_utf8_lossy(c.content.as_slice()).to_string());
-        (key_item, cert_str)
-    };
-
+    // The vault borrows storage/keyset only; the agent is a separate field.
+    let vault = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .map_err(FfiError::other)?;
+    let key_item = vault
+        .get_item(key_item_id.as_bytes())
+        .map_err(FfiError::other)?
+        .ok_or(FfiError::NotFound)?;
     state
         .agent
         .add_from_item(akid.clone(), &key_item)
         .map_err(FfiError::ssh)?;
-    if let Some(cert) = cert_str {
+    let cert = state
+        .agent
+        .public_key(&akid)
+        .and_then(|public| attached_certificate(&vault, key_item_id, public.key_data()));
+    if let Some(cert) = cert {
         state
             .agent
             .attach_certificate(&akid, &cert)
