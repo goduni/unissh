@@ -5086,3 +5086,76 @@ fn automation_managed_connection_reuse_stdin_and_revision_invalidation() {
     core.lock();
     assert!(matches!(core.automation_revision(), Err(FfiError::Locked)));
 }
+
+/// Asks the system agent for its identities over a stream, the way `ssh-add -l`
+/// does, and returns `(key blob, comment)` per identity.
+fn system_agent_identities(core: &Core) -> Vec<(Vec<u8>, String)> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let agent = core.system_agent();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let reply = rt.block_on(async {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let ask = async move {
+            client.write_all(&[0, 0, 0, 1, 11]).await.unwrap(); // REQUEST_IDENTITIES
+            let mut len = [0u8; 4];
+            client.read_exact(&mut len).await.unwrap();
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            client.read_exact(&mut body).await.unwrap();
+            body // dropping `client` ends the server loop
+        };
+        tokio::join!(agent.serve(server), ask).1
+    });
+    assert_eq!(reply[0], 12, "IDENTITIES_ANSWER");
+    let mut rest = &reply[5..];
+    let mut take = || {
+        let n = u32::from_be_bytes(rest[..4].try_into().unwrap()) as usize;
+        let s = rest[4..4 + n].to_vec();
+        rest = &rest[4 + n..];
+        s
+    };
+    let count = u32::from_be_bytes(reply[1..5].try_into().unwrap());
+    (0..count)
+        .map(|_| (take(), String::from_utf8(take()).unwrap()))
+        .collect()
+}
+
+fn openssh_blob(public: &str) -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(public.split_whitespace().nth(1).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn system_agent_offers_the_shared_keys_and_follows_a_toggle() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let work = core
+        .generate_ssh_key("v".to_string(), "work".to_string())
+        .unwrap();
+    let deploy = core
+        .generate_ssh_key("v".to_string(), "deploy".to_string())
+        .unwrap();
+
+    core.set_system_agent_shared("v".to_string(), "work".to_string(), true)
+        .unwrap();
+    assert_eq!(
+        system_agent_identities(&core),
+        vec![(openssh_blob(&work), "work".to_string())],
+        "only the shared key is offered"
+    );
+
+    // No restart: the next request sees the new set.
+    core.set_system_agent_shared("v".to_string(), "deploy".to_string(), true)
+        .unwrap();
+    core.set_system_agent_shared("v".to_string(), "work".to_string(), false)
+        .unwrap();
+    assert_eq!(
+        system_agent_identities(&core),
+        vec![(openssh_blob(&deploy), "deploy".to_string())]
+    );
+}

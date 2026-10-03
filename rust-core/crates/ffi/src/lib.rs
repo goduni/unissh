@@ -61,7 +61,10 @@ use unissh_vault::{
 pub mod automation;
 pub mod automation_recording;
 mod ssh_include;
+mod system_agent;
 mod terminal_workspace;
+
+pub use system_agent::{SharedAgentKey, SystemAgent};
 
 uniffi::setup_scaffolding!();
 
