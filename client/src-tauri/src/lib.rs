@@ -431,6 +431,7 @@ pub fn run() {
             biometric::biometric_enable,
             biometric::biometric_disable,
             biometric::biometric_unlock,
+            biometric::biometric_presence_unlock,
             // cloud server — identity / session / devices
             cloud::commands::server_status,
             cloud::commands::server_instance_info,

@@ -33,6 +33,11 @@
 //!    A read that fails authentication after a successful match cannot be a bad
 //!    finger: the item is dead.
 //!
+//! **The presence gate** (Secret-Key-only vaults) is `evaluatePolicy` alone, on
+//! a fresh context, with no Keychain item behind it. It therefore needs no
+//! entitlement and works on a build the protected Keychain refuses; it proves
+//! only that an enrolled finger was there when it was asked.
+//!
 //! Everything else — a closed lid, a lockout, `errSecMissingEntitlement`, an
 //! unmapped status — never wipes (see the module note in `biometric.rs`).
 //!
@@ -209,6 +214,18 @@ fn enrolment_changed(stored: Option<&[u8]>, current: Option<&[u8]>) -> bool {
     }
 }
 
+/// What a failed evaluation means. Unavailable (no password, no sensor or lid
+/// closed, nothing enrolled) is not a cancel: the setting says why instead.
+fn evaluation_error(code: isize) -> SecretError {
+    match code {
+        c if LA_ERROR_UNAVAILABLE.contains(&c) => SecretError::Unsupported,
+        // Failed match (-1), cancel (-2), fallback (-3), system/app cancel
+        // (-4, -9), lockout (-8): the password, this time; keep everything.
+        -1 | -2 | -3 | -4 | -8 | -9 => SecretError::Cancelled,
+        c => SecretError::Failed(format!("Touch ID evaluation failed: LAError {c}")),
+    }
+}
+
 /// Show the Touch ID prompt with `reason` on `ctx` and wait for the answer.
 /// Called on a blocking thread; the reply arrives on a LocalAuthentication queue.
 fn evaluate(ctx: &LAContext, reason: &str) -> Result<(), isize> {
@@ -327,20 +344,7 @@ impl DeviceSecretStore for TouchId {
             SecretState::Present | SecretState::Unknown => {}
         }
         let ctx = new_context();
-        match evaluate(&ctx, reason) {
-            Ok(()) => {}
-            Err(code) if LA_ERROR_UNAVAILABLE.contains(&code) => {
-                return Err(SecretError::Unsupported)
-            }
-            // Failed match (-1), cancel (-2), fallback (-3), system/app cancel
-            // (-4, -9), lockout (-8): the password, this time; keep everything.
-            Err(-1 | -2 | -3 | -4 | -8 | -9) => return Err(SecretError::Cancelled),
-            Err(code) => {
-                return Err(SecretError::Failed(format!(
-                    "Touch ID evaluation failed: LAError {code}"
-                )))
-            }
-        }
+        evaluate(&ctx, reason).map_err(evaluation_error)?;
         let current = domain_hash(&ctx);
         let mut query = with_context(item(), &ctx);
         // SAFETY: reading `extern` statics exported by Security.framework.
@@ -385,5 +389,14 @@ impl DeviceSecretStore for TouchId {
                 "deleting the Touch ID secret failed: OSStatus {other}"
             ))),
         }
+    }
+
+    fn presence_available(&self) -> bool {
+        biometry_available(&new_context())
+    }
+
+    /// The prompt and nothing else: no Keychain item is made or read.
+    fn confirm_presence(&self, reason: &str) -> Result<(), SecretError> {
+        evaluate(&new_context(), reason).map_err(evaluation_error)
     }
 }

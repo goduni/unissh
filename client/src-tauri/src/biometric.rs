@@ -23,11 +23,22 @@
 //! Everything else — the blob, the password check, the unlock, the wipe on
 //! invalidation — is platform-independent and lives in this file.
 //!
+//! **The presence gate.** A Secret-Key-only vault on a device that remembers its
+//! Secret Key opens with no typing at all. The user may ask for a Touch ID /
+//! Windows Hello check in front of that (`biometric_presence_unlock`). It stores
+//! nothing and seals nothing: the platform is asked "is the owner here" and, on
+//! yes, the existing remembered-key unlock runs. It is a presence check, not a
+//! protection of the key — see `THREAT_MODEL.md`.
+//!
 //! **Wiping is deliberately narrow.** Material is destroyed only on an explicit
 //! "this is dead" signal — the adapter says `Invalidated`/`Absent`, the blob does
 //! not open under the secret, or the core rejects the stored password. A closed
 //! lid, a lockout, a failed finger or an OS status code nobody mapped is never
-//! one of those: it falls back to the password and keeps the material.
+//! one of those: it falls back to the password and keeps the material. The
+//! exceptions are the explicit ones: the user turns it off or forgets the
+//! material from Settings, the instance is reset, or this device's keyset is
+//! changed or replaced (a password change, a recovery, a pairing) — a password
+//! sealed for the old keyset must not outlive it.
 //!
 //! Every call here may block (a Keychain query, a prompt the user is looking at,
 //! an Argon2id run), so each command does its work on the blocking pool, never on
@@ -106,6 +117,10 @@ pub(crate) enum SecretError {
 /// * `read` produces the same secret behind the prompt. `reason` is the localised
 ///   line for the prompt; a platform whose prompt takes no message ignores it.
 /// * `delete` is idempotent.
+/// * `presence_available` and `confirm_presence` are the presence gate: the
+///   platform's own "is the owner here" prompt with nothing stored behind it.
+///   Available never prompts; confirm prompts with `reason` (where the platform
+///   takes one) and creates or reads no secret.
 /// * The blob itself is stored by the shared code (a file beside the keyset),
 ///   on every platform: it is ciphertext only. Whatever else an adapter needs
 ///   to reproduce its secret (the Windows challenge) is the adapter's to keep.
@@ -114,6 +129,8 @@ pub(crate) trait DeviceSecretStore {
     fn create(&self) -> Result<Zeroizing<Vec<u8>>, SecretError>;
     fn read(&self, reason: &str) -> Result<Zeroizing<Vec<u8>>, SecretError>;
     fn delete(&self) -> Result<(), SecretError>;
+    fn presence_available(&self) -> bool;
+    fn confirm_presence(&self, reason: &str) -> Result<(), SecretError>;
 }
 
 /// This platform's adapter, or `None` where biometric unlock is not offered.
@@ -148,9 +165,21 @@ pub struct BiometricStatus {
     /// Material is stored but its device secret is explicitly gone (the
     /// biometric set changed): the user must re-enable.
     pub invalidated: bool,
+    /// Material is stored but the platform says biometric unlock cannot be
+    /// used here now (Windows Hello turned off by policy or its PIN removed,
+    /// Touch ID gone or its lid closed). Shown as off, with the reason, and the
+    /// leftover can be forgotten from Settings; nothing wipes it on its own,
+    /// because "not now" (a closed lid) looks the same as "not any more".
+    pub stranded: bool,
+    /// The platform's presence prompt can be shown (the Secret-Key-only
+    /// startup gate). Needs no stored material, so it can be there when
+    /// `supported` is not (macOS: a build barred from the protected Keychain).
+    pub presence_supported: bool,
     /// This device remembers the Secret Key in the OS keychain. Biometric unlock
     /// stores only the password, so without a remembered Secret Key it cannot
-    /// unlock and is neither offered nor attempted. Only asked where `supported`.
+    /// unlock and is neither offered nor attempted; the presence gate guards the
+    /// remembered key and so has nothing to guard without it. Only asked where
+    /// `supported` or `presence_supported`.
     pub secret_key_remembered: bool,
 }
 
@@ -216,8 +245,8 @@ fn write_blob(path: &Path, blob: &[u8]) -> std::io::Result<()> {
 /// Wipe both halves: the blob and the device secret. Each is attempted even if
 /// the other fails — "off" that leaves one half behind is the outcome to avoid.
 /// Missing halves are not errors. This is the one place material is forgotten:
-/// disabling, invalidation, a failed enable and resetting the instance come
-/// here; so should a password change (ticket 03).
+/// disabling, invalidation, a failed enable, resetting the instance and a
+/// changed keyset ([`forget_after_keyset_change`]) all come here.
 fn forget_with(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> ApiResult<()> {
     let file = match std::fs::remove_file(blob) {
         Ok(()) => Ok(()),
@@ -236,18 +265,54 @@ pub(crate) fn forget_now(blob: &Path) -> ApiResult<()> {
     forget_with(platform_store().as_deref(), blob)
 }
 
-fn status_now(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> BiometricStatus {
-    let secret = store.map_or(SecretState::Unsupported, |s| s.state());
+/// This device's keyset was just re-wrapped or replaced: the master password
+/// changed (or was added or removed), or a keyset came from a recovery or a
+/// pairing. A password sealed for the old keyset must not stay behind, so both
+/// halves are wiped and biometric unlock has to be turned on again, with the
+/// password of the keyset now on disk. Returns whether there was material to
+/// wipe (so the UI can say "turn it on again"). Best-effort and blocking: the
+/// keyset change has already happened and is not undone by a wipe that fails;
+/// a stale password left behind is still caught (and wiped) by the next
+/// biometric unlock, which the core then refuses.
+pub(crate) fn forget_after_keyset_change(blob: &Path) -> bool {
+    let had = blob.exists();
+    if let Err(e) = forget_now(blob) {
+        log::warn!("biometric: wipe after a keyset change failed: {e:?}");
+    }
+    had
+}
+
+/// The status from what the platform and the disk say. Pure.
+fn status_from(
+    secret: SecretState,
+    stored: bool,
+    presence_supported: bool,
+    secret_key_remembered: bool,
+) -> BiometricStatus {
     let supported = secret != SecretState::Unsupported;
-    let stored = blob.exists();
     BiometricStatus {
         supported,
         enabled: stored && matches!(secret, SecretState::Present | SecretState::Unknown),
         // Only on an explicit "dead": a closed lid (Unsupported) or an
         // unmapped answer (Unknown) is not a reason to call the material gone.
         invalidated: stored && secret == SecretState::Absent,
-        secret_key_remembered: supported && secret_key_remembered_now(),
+        stranded: stored && !supported,
+        presence_supported,
+        secret_key_remembered: (supported || presence_supported) && secret_key_remembered,
     }
+}
+
+fn status_now(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> BiometricStatus {
+    let secret = store.map_or(SecretState::Unsupported, |s| s.state());
+    let presence = store.is_some_and(|s| s.presence_available());
+    // The keychain is asked only where an answer matters.
+    let ask = secret != SecretState::Unsupported || presence;
+    status_from(
+        secret,
+        blob.exists(),
+        presence,
+        ask && secret_key_remembered_now(),
+    )
 }
 
 // ---------- commands ----------
@@ -295,7 +360,9 @@ pub async fn biometric_enable(password: String, state: State<'_, AppState>) -> A
     .await
 }
 
-/// Turn biometric unlock off: both the blob and the device secret, now.
+/// Turn biometric unlock off: both the blob and the device secret, now. Also
+/// what Settings calls to forget material stranded on a device that can no
+/// longer use it.
 #[tauri::command]
 pub async fn biometric_disable(state: State<'_, AppState>) -> ApiResult<()> {
     let blob = blob_path(&state);
@@ -361,4 +428,76 @@ pub async fn biometric_unlock(
         resume_after_unlock(&app);
     }
     Ok(outcome)
+}
+
+/// The Secret-Key-only startup gate: show the platform's presence prompt
+/// (`reason` where it takes one) and, only on a match, run the same
+/// remembered-key unlock `keychain_unlock` does. Nothing is stored or read
+/// behind the prompt; a dismissed or impossible prompt leaves the vault
+/// locked, and the unlock screen's manual path (the Secret Key from the
+/// Emergency Kit) still works.
+#[tauri::command]
+pub async fn biometric_presence_unlock(
+    app: tauri::AppHandle,
+    reason: String,
+    state: State<'_, AppState>,
+) -> ApiResult<BiometricUnlockOutcome> {
+    let core = state.core.clone();
+    let outcome = blocking_api(move || {
+        let store = platform_store().ok_or_else(unsupported)?;
+        // Before the prompt: one that cannot end in an unlock is not shown.
+        let Some(secret_key_hex) = stored_secret_key_hex_now()? else {
+            return Ok(BiometricUnlockOutcome::NoSecretKey);
+        };
+        match store.confirm_presence(&reason) {
+            Ok(()) => {}
+            Err(SecretError::Cancelled | SecretError::Unsupported) => {
+                return Ok(BiometricUnlockOutcome::Cancelled)
+            }
+            Err(e) => return Err(secret_error(e)),
+        }
+        core.unlock(None, secret_key_hex)?;
+        Ok(BiometricUnlockOutcome::Unlocked)
+    })
+    .await?;
+    if matches!(outcome, BiometricUnlockOutcome::Unlocked) {
+        resume_after_unlock(&app);
+    }
+    Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every row of the status table: what Settings and the unlock screen are
+    // told for each platform answer, with and without stored material.
+    #[test]
+    fn status_reports_each_platform_answer_honestly() {
+        use SecretState::*;
+        // (state, stored) -> (supported, enabled, invalidated, stranded)
+        let table = [
+            ((Present, true), (true, true, false, false)),
+            ((Unknown, true), (true, true, false, false)),
+            ((Absent, true), (true, false, true, false)),
+            ((Unsupported, true), (false, false, false, true)),
+            ((Present, false), (true, false, false, false)),
+            ((Absent, false), (true, false, false, false)),
+            ((Unsupported, false), (false, false, false, false)),
+        ];
+        for ((secret, stored), want) in table {
+            let s = status_from(secret, stored, false, true);
+            assert_eq!(
+                (s.supported, s.enabled, s.invalidated, s.stranded),
+                want,
+                "{secret:?}, stored={stored}"
+            );
+        }
+        // The presence gate needs no stored material and no protected store,
+        // but a Secret Key it can guard; with neither prompt possible the
+        // keychain answer is not reported.
+        let gate = status_from(Unsupported, false, true, true);
+        assert!(gate.presence_supported && gate.secret_key_remembered);
+        assert!(!status_from(Unsupported, false, false, true).secret_key_remembered);
+    }
 }

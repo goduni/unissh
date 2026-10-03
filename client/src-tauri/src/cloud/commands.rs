@@ -1203,11 +1203,15 @@ pub async fn server_keyset_pull_and_unlock(
     let cfg = require_config(&state, server_id.as_deref())?;
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
+    let bio_blob = crate::biometric::blob_path(&state);
     blocking_api(move || {
         let http = client::http();
         let (blob, _generation) = identity::keyset_get(http, &cfg.base_url, &access)?;
         core.unlock_from_server_blob(blob, password, secret_key_hex)
-            .map_err(ApiError::from)
+            .map_err(ApiError::from)?;
+        // The installed keyset may be wrapped under another password.
+        crate::biometric::forget_after_keyset_change(&bio_blob);
+        Ok(())
     })
     .await?;
     #[cfg(desktop)]
@@ -1342,6 +1346,7 @@ pub async fn server_escrow_fetch_and_unlock(
     let core = state.core.clone();
     let base = base_url.clone();
     let hd = handle.clone();
+    let bio_blob = crate::biometric::blob_path(&state);
 
     // Recover + unlock the keyset in one blocking pass, then hand off to the shared tail.
     let account_id = blocking_api(move || {
@@ -1369,6 +1374,7 @@ pub async fn server_escrow_fetch_and_unlock(
             secret_key_hex,
             crate::keychain::save_secret_key_now,
         )?;
+        crate::biometric::forget_after_keyset_change(&bio_blob);
         Ok(account_id)
     })
     .await?;
@@ -1403,6 +1409,7 @@ pub async fn server_import_keyset_and_unlock(
 ) -> ApiResult<ServerStatus> {
     client::validate_base_url(&base_url)?;
     let core = state.core.clone();
+    let bio_blob = crate::biometric::blob_path(&state);
     // Install + unlock the keyset from the file blob (blocking; the raw bytes + credentials enter
     // ONLY the core here). Unlike escrow there is no fetch to learn the account id from — the
     // follow-up self-enroll returns it (the same keyset resolves the same account).
@@ -1413,7 +1420,9 @@ pub async fn server_import_keyset_and_unlock(
             password,
             secret_key_hex,
             crate::keychain::save_secret_key_now,
-        )
+        )?;
+        crate::biometric::forget_after_keyset_change(&bio_blob);
+        Ok(())
     })
     .await?;
     // Offline import carries no handle (escrow keys off one); the account's handle syncs later.
@@ -1509,10 +1518,14 @@ pub async fn server_onboard_join(
     let core_pake = core.clone();
     let base = base_url.clone();
     let channel = channel_id.clone();
+    let bio_blob = crate::biometric::blob_path(&state);
     blocking_api(move || {
         let http = client::http();
         let code = client::unb64(&oob_code)?;
-        onboard::responder_join(&core_pake, http, &base, &channel, code, password)
+        onboard::responder_join(&core_pake, http, &base, &channel, code, password)?;
+        // A keyset from another device: nothing sealed here before may open it.
+        crate::biometric::forget_after_keyset_change(&bio_blob);
+        Ok(())
     })
     .await?;
 

@@ -182,8 +182,11 @@ keyring = { version = "3", features = ["windows-native"] }
 # no second `windows-*` tree is built. `Security_Cryptography` is for
 # `CryptographicBuffer` (bytes <-> `IBuffer`, and the random challenge),
 # `Storage_Streams` for `IBuffer` itself and the methods that take or return one.
+# `Security_Credentials_UI` is `UserConsentVerifier`, used only for the
+# Secret-Key-only startup presence gate, which guards no stored secret.
 windows = { version = "0.62", features = [
     "Security_Credentials",
+    "Security_Credentials_UI",
     "Security_Cryptography",
     "Storage_Streams",
 ] }

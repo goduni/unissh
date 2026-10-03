@@ -1,7 +1,8 @@
 //! Windows: the device secret is a Windows Hello signature.
 //!
 //! A consent prompt alone protects nothing — `UserConsentVerifier` answers
-//! yes/no and any process can skip asking — so it is not used. Instead:
+//! yes/no and any process can skip asking — so it does not guard the stored
+//! password. Instead:
 //!
 //! * `KeyCredentialManager` creates a Hello-protected key credential for this
 //!   app (`me.goduni.unissh.biometric-unlock`). Its private key never leaves
@@ -19,11 +20,22 @@
 //!   `biometric.rs`). Neither is useful without the Hello key; the signature
 //!   and the key derived from it are never stored anywhere.
 //!
-//! Removing the Hello PIN (or resetting Hello) destroys the credential, which
-//! `OpenAsync` then reports as `NotFound`: the stored material is invalidated.
-//! Unlike Touch ID's `biometryCurrentSet`, *adding* a fingerprint or a face does
-//! not — Hello keys are bound to the Hello container, not to one biometric set,
-//! and the PIN is always one of its ways in.
+//! Removing the Hello PIN (or resetting Hello) destroys the credential. What
+//! this code sees first, though, is that Hello is no longer set up at all:
+//! `IsSupportedAsync` answers false, so the state is `Unsupported` and the
+//! stored material is *stranded*, not invalidated — Settings shows the feature
+//! off with that reason and offers to forget the leftover (nothing wipes it on
+//! its own). Only once Hello is set up again does `OpenAsync` report the old
+//! credential as `NotFound`, and the material then reads as invalidated.
+//! Unlike Touch ID's `biometryCurrentSet`, *adding* a fingerprint or a face
+//! invalidates nothing — Hello keys are bound to the Hello container, not to
+//! one biometric set, and the PIN is always one of its ways in.
+//!
+//! **The presence gate** (Secret-Key-only vaults) is `UserConsentVerifier`,
+//! which is right *there* and only there: it answers yes/no and protects no
+//! secret, and the gate has no secret to protect — it asks whether the owner
+//! is present before the existing remembered-key unlock. No credential is made
+//! or used for it.
 //!
 //! The WinRT prompt takes no message, so `read`'s `reason` is ignored; Windows
 //! shows the app's own name. Every `IAsyncOperation` is waited on with `join()`,
@@ -35,6 +47,9 @@
 //! Windows.
 
 use windows::core::{Array, HSTRING};
+use windows::Security::Credentials::UI::{
+    UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
+};
 use windows::Security::Credentials::{
     KeyCredential, KeyCredentialCreationOption, KeyCredentialManager, KeyCredentialStatus,
 };
@@ -220,5 +235,34 @@ impl DeviceSecretStore for WindowsHello {
             Err(e) => Err(e),
         };
         credential.and(challenge)
+    }
+
+    /// Without a prompt. A busy device is still there.
+    fn presence_available(&self) -> bool {
+        UserConsentVerifier::CheckAvailabilityAsync()
+            .and_then(|op| op.join())
+            .is_ok_and(|a| {
+                a == UserConsentVerifierAvailability::Available
+                    || a == UserConsentVerifierAvailability::DeviceBusy
+            })
+    }
+
+    /// The Hello prompt with `reason` as its message; no key credential is
+    /// made or used.
+    fn confirm_presence(&self, reason: &str) -> Result<(), SecretError> {
+        let result = UserConsentVerifier::RequestVerificationAsync(&HSTRING::from(reason))
+            .and_then(|op| op.join())
+            .map_err(|e| failed("presence", e))?;
+        if result == UserConsentVerificationResult::Verified {
+            Ok(())
+        } else if result == UserConsentVerificationResult::Canceled
+            || result == UserConsentVerificationResult::RetriesExhausted
+            || result == UserConsentVerificationResult::DeviceBusy
+        {
+            Err(SecretError::Cancelled)
+        } else {
+            // Not present, not configured, or disabled by policy.
+            Err(SecretError::Unsupported)
+        }
     }
 }
