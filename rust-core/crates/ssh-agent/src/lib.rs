@@ -43,7 +43,7 @@
 //!
 //! FIDO/U2F credentials (`sk-*`) are rejected at import: they parse, because the
 //! file holds a key handle rather than a private scalar, but signing needs the
-//! token. Use them through the system agent.
+//! token. Use them through the OS ssh-agent (`Auth::SystemAgent`).
 //!
 //! `mlock` is best-effort (see [`locked`]).
 
