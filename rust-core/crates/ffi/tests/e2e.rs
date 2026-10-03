@@ -5129,7 +5129,7 @@ fn openssh_blob(public: &str) -> Vec<u8> {
 }
 
 #[test]
-fn system_agent_offers_the_shared_keys_and_follows_a_toggle() {
+fn system_agent_offers_the_shared_keys_follows_a_toggle_and_empties_when_locked() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
@@ -5158,4 +5158,8 @@ fn system_agent_offers_the_shared_keys_and_follows_a_toggle() {
         system_agent_identities(&core),
         vec![(openssh_blob(&deploy), "deploy".to_string())]
     );
+
+    // A locked core offers nothing — an empty list, not an error.
+    core.lock();
+    assert_eq!(system_agent_identities(&core), vec![]);
 }

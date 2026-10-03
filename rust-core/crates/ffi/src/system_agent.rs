@@ -4,8 +4,12 @@
 //! The choice is a property of this machine's exposure, not of the vault, so it
 //! lives in the device-local `meta` table (inside the SQLCipher database) and is
 //! never synced or exported. Each entry also pins the public key it was made
-//! for: a key replaced under the same id — rotated, re-imported, or deleted and
-//! re-created, here or by sync — is not offered until it is shared again.
+//! for, compared against the key the vault item holds *now* (not the embedded
+//! agent's cache, which a sync pull does not refresh): a key replaced under the
+//! same id — rotated or re-imported here, or by another device and pulled — is
+//! not offered until it is shared again. Deleting a key or its vault here drops
+//! its entry; a deletion that arrives by sync leaves an entry that offers
+//! nothing, and is re-offered only if the very same key comes back.
 //!
 //! The set is resolved from the unlocked core on every request, so a toggle
 //! takes effect on the next `ssh-add -l` and a locked core offers nothing.
@@ -15,10 +19,13 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use unissh_ssh_transport::{AgentKeys, OfferedKey};
 
-use super::{agent_key_id, load_key_into_agent, lock_recover, Core, CoreState, FfiError};
+use super::{
+    agent_key_id, lock_recover, resolve_vid, Core, CoreState, FfiError, InMemoryAgent, Vault,
+    ITEM_TYPE_SSH_KEY,
+};
 
 // Keep the storage slot stable; a format change gets a new key.
-const KEY: &str = "system-agent.shared.v1";
+const KEY: &str = "system_agent.shared.v1";
 
 /// One shared key, as stored.
 #[derive(Clone, Serialize, Deserialize)]
@@ -50,16 +57,53 @@ fn write_entries(state: &CoreState, entries: &[Entry]) -> Result<(), FfiError> {
     state.storage.set_meta(KEY, &bytes).map_err(FfiError::other)
 }
 
-/// Loads the key into the embedded agent and returns its `<type> <base64>`.
+/// The `<type> <base64>` of the key the vault item holds now.
+///
+/// Read from the item rather than the embedded agent: the agent caches a key
+/// once loaded, and a key replaced by a sync pull would still answer from that
+/// cache. A cached copy that no longer matches the item is evicted here, so
+/// nothing later signs with the old key either.
 fn current_public(state: &mut CoreState, vault_id: &str, item_id: &str) -> Option<String> {
-    load_key_into_agent(state, vault_id, item_id).ok()?;
-    let line = state
-        .agent
-        .public_key(&agent_key_id(vault_id, item_id))?
-        .to_openssh()
-        .ok()?;
+    let item = Vault::open(
+        &state.storage,
+        &state.keyset,
+        &resolve_vid(&state.storage, vault_id),
+    )
+    .ok()?
+    .get_item(item_id.as_bytes())
+    .ok()??;
+    if item.item_type != ITEM_TYPE_SSH_KEY {
+        return None;
+    }
+    // A throwaway agent parses the key; the private half is dropped with it.
+    let mut parser = InMemoryAgent::new();
+    parser.add_from_item(b"x".to_vec(), &item).ok()?;
+    let line = parser.public_key(b"x")?.to_openssh().ok()?;
     let mut fields = line.split_whitespace();
-    Some(format!("{} {}", fields.next()?, fields.next()?))
+    let public = format!("{} {}", fields.next()?, fields.next()?);
+
+    let akid = agent_key_id(vault_id, item_id);
+    let cached = state
+        .agent
+        .public_key(&akid)
+        .and_then(|k| k.to_openssh().ok());
+    if cached.is_some_and(|c| !c.starts_with(&public)) {
+        state.agent.remove(&akid);
+    }
+    Some(public)
+}
+
+/// Drops the entries for a deleted key (`item_id`) or a deleted vault (`None`).
+/// Best effort: the delete itself has already happened.
+pub(crate) fn forget(state: &CoreState, vault_id: &str, item_id: Option<&str>) {
+    let Ok(mut entries) = read_entries(state) else {
+        return;
+    };
+    let before = entries.len();
+    entries.retain(|e| !(e.vault_id == vault_id && item_id.is_none_or(|i| e.item_id == i)));
+    if entries.len() != before && write_entries(state, &entries).is_err() {
+        log::warn!("system agent: could not drop the entry of a deleted key");
+    }
 }
 
 /// The shared entries whose key is still the one they were shared for.

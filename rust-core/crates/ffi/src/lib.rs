@@ -2663,6 +2663,7 @@ impl Core {
                 Vault::open(&state.storage, &state.keyset, &vid).map_err(FfiError::other)?;
             vault.delete().map_err(FfiError::other)?;
             state.vault_names.remove(vid.as_slice());
+            system_agent::forget(state, &vault_id, None);
             Ok(())
         })
     }
@@ -2683,6 +2684,7 @@ impl Core {
             // under the bare item_id — it must be unloaded with the same key, otherwise remove is a no-op and
             // a revoked/rotated private key stays alive in the agent until the end of the session.
             state.agent.remove(&agent_key_id(&vault_id, &item_id));
+            system_agent::forget(state, &vault_id, Some(&item_id));
             Ok(())
         })
     }
