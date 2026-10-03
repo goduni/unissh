@@ -5577,16 +5577,17 @@ impl Core {
             state
                 .storage
                 .transaction(|| {
-                    let vault = Vault::create(
+                    create_vault_with_items(
                         &state.storage,
                         &state.keyset,
                         new_vault_id.as_bytes().to_vec(),
                         &name,
-                    )?;
-                    for (item_id, item_type, content) in &items {
-                        vault.put_item(item_id, *item_type, content)?;
-                    }
-                    Ok::<(), unissh_vault::VaultError>(())
+                        SyncTarget::Local,
+                        None,
+                        items.iter().map(|(item_id, item_type, content)| {
+                            (item_id.as_slice(), *item_type, content.as_slice())
+                        }),
+                    )
                 })
                 .map_err(map_vault_err)?;
             state.vault_names.insert(
@@ -5596,6 +5597,39 @@ impl Core {
             Ok(())
         })
     }
+}
+
+/// Creates vault `vault_id` named `name` with `sync_target`, binds it to `tenant`
+/// when one is given, and writes every `(item_id, item_type, content)` into it
+/// under its ORIGINAL item id: each item is re-encrypted under the new vault's VK
+/// and re-signed by the current keyset owner (the vault id is bound into every
+/// item AAD, wrap and signature, so a copy into a new vault is always a re-key).
+///
+/// Shared by the backup import (`SyncTarget::Local`, no tenant) and the
+/// local-to-cloud conversion (`SyncTarget::Cloud`, the target server's tenant).
+/// The binding goes through [`Storage::set_vault_tenant`], which marks the vault
+/// and its contents dirty so the next sync pushes all of it.
+///
+/// Does NOT open a transaction (storage transactions do not nest): the caller
+/// wraps this in `Storage::transaction` together with whatever else must be
+/// atomic with it, so a failure on any item leaves no half-written vault.
+fn create_vault_with_items<'i>(
+    storage: &Storage,
+    keyset: &unissh_keychain::UnlockedKeyset,
+    vault_id: Vec<u8>,
+    name: &[u8],
+    sync_target: SyncTarget,
+    tenant: Option<&[u8]>,
+    items: impl IntoIterator<Item = (&'i [u8], u32, &'i [u8])>,
+) -> Result<(), unissh_vault::VaultError> {
+    let vault = Vault::create_with_target(storage, keyset, vault_id, name, sync_target)?;
+    for (item_id, item_type, content) in items {
+        vault.put_item(item_id, item_type, content)?;
+    }
+    if let Some(tenant) = tenant {
+        storage.set_vault_tenant(vault.vault_id(), tenant)?;
+    }
+    Ok(())
 }
 
 impl Core {
