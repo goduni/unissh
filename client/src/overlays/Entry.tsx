@@ -11,7 +11,7 @@ import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggl
 import { useApp } from "@/store/app";
 import { recoverInstance } from "@/store/recovery";
 import { biometricUnlockReducer, initialBiometricUnlock } from "@/store/biometricUnlock";
-import { isDesktopOs } from "@/bridge/platform";
+import { biometricMethod, isDesktopOs, isWindows } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
 import { useWindowControls } from "@/shell/WindowChrome";
 import { useIsMobile, useNarrow } from "@/store/responsive";
@@ -717,7 +717,7 @@ function Unlock() {
   // header at boot, so it's known before unlocking. null/true → keep the field.
   const requiresPassword = useApp((s) => s.requiresPassword);
   const lockReason = useApp((s) => s.lockReason);
-  // Biometric path (Touch ID): see store/biometricUnlock.ts for the transitions.
+  // Biometric path (Touch ID / Windows Hello): see store/biometricUnlock.ts for the transitions.
   // The password and the Secret Key never come back to JS on this path — Rust
   // reads, unseals and unlocks.
   const [bio, dispatchBio] = useReducer(biometricUnlockReducer, initialBiometricUnlock);
@@ -893,17 +893,20 @@ function Unlock() {
             }}
           >
             <Spinner size={14} color={p.txt2} />
-            {t("onboarding.biometricWaiting")}
+            {t("onboarding.biometricWaiting", { method: biometricMethod() })}
           </div>
         )}
         {bio.notice && (
           <div role="status" style={{ fontSize: TEXT.small, color: p.txt2, lineHeight: 1.45 }}>
             {t(
               bio.notice === "invalidated"
-                ? "onboarding.biometricInvalidated"
+                ? isWindows()
+                  ? "onboarding.biometricInvalidatedWindows"
+                  : "onboarding.biometricInvalidated"
                 : bio.notice === "noSecretKey"
                   ? "onboarding.biometricNoSecretKey"
                   : "onboarding.biometricFailed",
+              { method: biometricMethod() },
             )}
           </div>
         )}
@@ -961,7 +964,7 @@ function Unlock() {
         </div>
         {bio.phase === "password" && bio.available && (
           <Btn type="button" variant="ghost" icon="fingerprint" full onClick={() => dispatchBio({ type: "retry" })} disabled={busy}>
-            {t("onboarding.biometricRetry")}
+            {t("onboarding.biometricRetry", { method: biometricMethod() })}
           </Btn>
         )}
       </form>

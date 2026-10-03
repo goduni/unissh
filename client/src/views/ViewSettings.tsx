@@ -80,7 +80,7 @@ import { useFmt } from "@/i18n/format";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useUpdate } from "@/store/update";
 import { updatesSupported } from "@/bridge/updater";
-import { isMac, osPlatform } from "@/bridge/platform";
+import { biometricMethod, isMac, isWindows, osPlatform } from "@/bridge/platform";
 import { SettingsShortcuts } from "./SettingsShortcuts";
 import { SettingsSupport } from "./SettingsSupport";
 import { TerminalPreview } from "./TerminalPreview";
@@ -1238,8 +1238,11 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** "Unlock with Touch ID". Offered only on a Mac that can do Touch ID, and only
- *  for a password vault (a Secret-Key-only vault has no password to remember).
+/** "Unlock with Touch ID" / "Unlock with Windows Hello". Only for a password
+ *  vault (a Secret-Key-only vault has no password to remember). On a Mac it is
+ *  offered only where Touch ID can be used (an unsigned build may never get
+ *  there, so it is hidden rather than promised); on Windows it is always shown,
+ *  and without Windows Hello set up it is disabled with that reason.
  *  Turning it on asks for the master password once — Rust checks it against the
  *  keyset before storing anything, so enabling proves the password is held.
  *  Turning it off erases the stored password and its Keychain key at once. An
@@ -1261,18 +1264,23 @@ function BiometricRow() {
       .biometricStatus()
       .then(setStatus)
       .catch(() => setStatus(null));
+  const offered = isMac() || isWindows();
   useEffect(() => {
-    if (isMac()) void refresh();
+    if (offered) void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the platform does not change
   }, []);
 
-  if (!isMac() || requiresPassword !== true || !status) return null;
-  if (!status.supported && !status.enabled && !status.invalidated) return null;
+  if (!offered || requiresPassword !== true || !status) return null;
+  const win = isWindows();
+  const method = biometricMethod();
+  const unusable = !status.supported && !status.enabled && !status.invalidated;
+  if (unusable && !win) return null;
 
   const turnOff = async () => {
     setBusy(true);
     await guard(async () => {
       await api.biometricDisable();
-      toast(t("settings.biometricOff"), "ok");
+      toast(t("settings.biometricOff", { method }), "ok");
     });
     await refresh();
     setBusy(false);
@@ -1285,7 +1293,7 @@ function BiometricRow() {
       await api.biometricEnable(pw);
       setPw("");
       setConfirming(false);
-      toast(t("settings.biometricOn"), "ok");
+      toast(t("settings.biometricOn", { method }), "ok");
     } catch (e) {
       toast(apiErrorMessage(e), "err");
     }
@@ -1296,13 +1304,17 @@ function BiometricRow() {
   return (
     <>
       <SettingRow
-        title={t("settings.biometricTitle")}
+        title={t("settings.biometricTitle", { method })}
         desc={
-          !status.secretKeyRemembered && !status.enabled
-            ? t("settings.biometricNeedsSecretKey")
-            : status.invalidated
-              ? t("settings.biometricInvalidated")
-              : t("settings.biometricDesc")
+          unusable
+            ? t("settings.biometricUnsupportedWindows")
+            : !status.secretKeyRemembered
+              ? t(status.enabled ? "settings.biometricNeedsSecretKeyOn" : "settings.biometricNeedsSecretKey", {
+                  method,
+                })
+              : status.invalidated
+                ? t(win ? "settings.biometricInvalidatedWindows" : "settings.biometricInvalidated")
+                : t(win ? "settings.biometricDescWindows" : "settings.biometricDesc")
         }
       >
         <Toggle
@@ -1334,7 +1346,7 @@ function BiometricRow() {
             gap: rem(11),
           }}
         >
-          <div style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("settings.biometricConfirm")}</div>
+          <div style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("settings.biometricConfirm", { method })}</div>
           <input
             {...NO_AUTOCORRECT}
             type="password"

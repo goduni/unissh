@@ -16,6 +16,12 @@ export function osPlatform(): string {
 /** macOS shows native traffic lights; other desktops need custom controls. */
 export const isMac = (): boolean => osPlatform() === "macos";
 
+export const isWindows = (): boolean => osPlatform() === "windows";
+
+/** The name of this desktop's biometric unlock, for copy that names it. A
+ *  product name, so it is not translated. */
+export const biometricMethod = (): string => (isWindows() ? "Windows Hello" : "Touch ID");
+
 /** False in a plain browser preview, where every window API would throw. */
 export const isTauri = (): boolean => osPlatform() !== "unknown";
 
