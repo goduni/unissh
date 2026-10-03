@@ -36,7 +36,9 @@
 //! * **Certificates sign with their key.** A certificate is offered as an
 //!   identity of its own, after its key; a request naming the certificate is
 //!   signed (and approved) as a request for that key, since the certificate is
-//!   only the public half a server checks against its CA.
+//!   only the public half a server checks against its CA. Its validity
+//!   (expiry, principals) is not checked here; that is the server's call, as
+//!   with OpenSSH's agent.
 //! * **RSA hashes as asked.** `SSH_AGENT_RSA_SHA2_256` gives `rsa-sha2-256`,
 //!   `SSH_AGENT_RSA_SHA2_512` gives `rsa-sha2-512` (the 256 flag wins if both
 //!   are set, as in OpenSSH). An RSA request with neither asks for a SHA-1
@@ -790,7 +792,7 @@ mod tests {
     /// `SSH_AGENT_RSA_SHA2_256` and `_512` choose the hash; an RSA request with
     /// neither (a SHA-1 `ssh-rsa` signature) is refused before any prompt.
     #[test]
-    fn rsa_flags_choose_the_signature_hash() {
+    fn rsa_flags_choose_the_hash_and_sha1_is_refused() {
         let mut signer = unissh_ssh_agent::InMemoryAgent::new();
         let pem = unissh_ssh_agent::normalize_private_key_to_openssh(RSA_PKCS1).unwrap();
         signer

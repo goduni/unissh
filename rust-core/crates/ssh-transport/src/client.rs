@@ -1664,20 +1664,34 @@ impl SystemAgent {
 /// Refuses an agent endpoint (`SSH_AUTH_SOCK`) that is UniSSH's own system
 /// agent socket. The two are compared as canonical paths, so a symlink, a
 /// `..` or a symlinked directory (macOS `/var` → `/private/var`) does not hide
-/// the match; a socket that does not exist (the listener is off) is compared
-/// through its canonical directory.
+/// the match. A socket that does not exist (the listener is off) is compared
+/// through its canonical directory, after following any symlinks that point
+/// at it, so a dangling `SSH_AUTH_SOCK` link to UniSSH's path still matches.
 #[cfg(unix)]
 fn refuse_own_agent(
     configured: Option<&std::ffi::OsStr>,
     own: Option<&std::path::Path>,
 ) -> Result<(), TransportError> {
     fn canonical(path: &std::path::Path) -> std::path::PathBuf {
-        path.canonicalize()
-            .or_else(|_| match (path.parent(), path.file_name()) {
-                (Some(dir), Some(name)) => dir.canonicalize().map(|dir| dir.join(name)),
-                _ => Err(std::io::ErrorKind::NotFound.into()),
-            })
-            .unwrap_or_else(|_| path.to_path_buf())
+        if let Ok(path) = path.canonicalize() {
+            return path;
+        }
+        // Dangling: follow the links by hand (bounded, like the kernel's
+        // ELOOP limit), then canonicalise the directory of the final target.
+        let mut path = path.to_path_buf();
+        for _ in 0..40 {
+            let Ok(target) = std::fs::read_link(&path) else {
+                break;
+            };
+            path = match path.parent() {
+                Some(dir) => dir.join(target), // an absolute target replaces `dir`
+                None => target,
+            };
+        }
+        match (path.parent(), path.file_name()) {
+            (Some(dir), Some(name)) => dir.canonicalize().map(|dir| dir.join(name)).unwrap_or(path),
+            _ => path,
+        }
     }
     match (configured, own) {
         (Some(configured), Some(own))
@@ -1952,7 +1966,8 @@ mod tests {
     }
 
     /// System-agent auth refuses `SSH_AUTH_SOCK` when it is UniSSH's own
-    /// socket, however the path is spelled, and accepts any other agent.
+    /// socket, however the path is spelled (including a dangling link), and
+    /// accepts any other agent.
     #[cfg(unix)]
     #[test]
     fn system_agent_auth_refuses_unissh_own_socket() {
@@ -1964,6 +1979,13 @@ mod tests {
 
         assert!(matches!(
             refuse_own_agent(Some(spelled_otherwise.as_os_str()), Some(&own)),
+            Err(TransportError::SystemAgentIsUniSsh)
+        ));
+        // A dangling link to it (the listener is off) still names it.
+        let link = dir.path().join("link.sock");
+        std::os::unix::fs::symlink(&own, &link).unwrap();
+        assert!(matches!(
+            refuse_own_agent(Some(link.as_os_str()), Some(&own)),
             Err(TransportError::SystemAgentIsUniSsh)
         ));
         let other = dir.path().join("ssh-agent.sock");
