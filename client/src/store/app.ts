@@ -51,6 +51,7 @@ let switchingEpoch = -1;
 let openToken = 0;
 export const flushTerminalWorkspace = () => workspace.flush();
 export const forgetTerminalWorkspace = (vaultId: string) => workspace.forgetVault(vaultId);
+export const moveTerminalWorkspace = (from: string, to: string) => workspace.moveVault(from, to);
 
 /** What closed the vault. `manual` is the lock action or the ⌘L shortcut;
  *  `idle` is the inactivity timer; the other two come from the OS telling us

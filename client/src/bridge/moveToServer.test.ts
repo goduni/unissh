@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { planMoveToServer } from "./moveToServer";
 import { ItemType, type ServerStatus, type SpaceInfo } from "./types";
 
-const server = (serverId: string, hasSession: boolean, spaces: SpaceInfo[] = []): ServerStatus => ({
+const server = (serverId: string, hasSession: boolean): ServerStatus => ({
   serverId,
   connected: true,
   active: false,
@@ -14,7 +14,7 @@ const server = (serverId: string, hasSession: boolean, spaces: SpaceInfo[] = [])
   handle: null,
   owned: false,
   spaceId: null,
-  spaces,
+  spaces: [],
 });
 const admin = (spaceId: string): SpaceInfo => ({ spaceId, name: spaceId, role: "admin" });
 const items = (...types: number[]) => types.map((itemType) => ({ itemType }));
@@ -35,8 +35,9 @@ describe("planMoveToServer", () => {
 
   it("asks for a space only when the server has more than one space you administer", () => {
     const member: SpaceInfo = { spaceId: "team", name: "Team", role: "member" };
-    expect(planMoveToServer([], [server("a", true, [admin("own"), member])]).needsSpacePicker).toBe(false);
-    const two = planMoveToServer([], [server("a", true, [admin("own"), admin("lab"), member])]);
+    const servers = [server("a", true)];
+    expect(planMoveToServer([], servers, { spaces: [admin("own"), member] }).needsSpacePicker).toBe(false);
+    const two = planMoveToServer([], servers, { spaces: [admin("own"), admin("lab"), member] });
     expect(two.needsSpacePicker).toBe(true);
     expect(two.spaces.map((sp) => sp.spaceId)).toEqual(["own", "lab"]);
   });

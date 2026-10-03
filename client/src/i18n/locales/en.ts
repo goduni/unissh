@@ -484,6 +484,9 @@ export const en = {
     toServerDone: "“{{name}}” moved to {{server}}",
     toServerPushFailed:
       "Vault moved, but the first upload failed ({{reason}}). It uploads on the next sync.",
+    toServerPushFailedSpace:
+      "Vault moved to “{{space}}”, but the first upload failed ({{reason}}). Automatic sync covers this server's primary space only, so this vault stays on this device until it is uploaded.",
+    toServerClosesSessions: "Moving the current vault closes {{count}} open connection(s).",
     toServerKind: {
       hosts: "Hosts",
       groups: "Groups",

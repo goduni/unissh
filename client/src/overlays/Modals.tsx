@@ -27,6 +27,7 @@ import {
   Icon,
   IconName,
   Input,
+  NHSelect,
   NO_AUTOCORRECT,
   Spinner,
   Tag,
@@ -338,58 +339,6 @@ function SwitchRow({
 
 // Inline picker — re-uses Input's chrome to render a clickable <select> for
 // choosing a stored key / password item.
-export function NHSelect({
-  value,
-  onChange,
-  options,
-  empty,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-  empty: string;
-}) {
-  const p = usePalette();
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        height: rem(40),
-        padding: `0 ${rem(12)}`,
-        borderRadius: 8,
-        background: p.bg2,
-        border: `1px solid ${p.line2}`,
-      }}
-    >
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          background: "none",
-          border: "none",
-          outline: "none",
-          fontFamily: MONO,
-          fontSize: TEXT.base,
-          color: options.length ? p.txt : p.txt3,
-          appearance: "none",
-          cursor: "pointer",
-        }}
-      >
-        {options.length === 0 && <option value="">{empty}</option>}
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      <Icon name="cd" size={15} color={p.txt3} />
-    </div>
-  );
-}
-
 const slug = (s: string) =>
   s
     .toLowerCase()

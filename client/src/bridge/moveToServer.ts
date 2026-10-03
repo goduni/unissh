@@ -31,7 +31,8 @@ export interface MovePlan {
   needsServerPicker: boolean;
   /** The target server: the chosen one, else the active one, else the first. */
   server: ServerStatus | null;
-  /** Spaces on that server the caller administers — where the vault may land.
+  /** Spaces on that server the caller administers — where the vault may land
+   *  (from the live `serverListSpaces` of that server, like cloud-vault creation).
    *  Empty = the link's primary space (the core binds to it by default). */
   spaces: SpaceInfo[];
   needsSpacePicker: boolean;
@@ -44,7 +45,12 @@ export interface MovePlan {
 export function planMoveToServer(
   items: Pick<ItemInfo, "itemType">[],
   servers: ServerStatus[],
-  pick: { serverId?: string | null; activeServerId?: string | null } = {},
+  pick: {
+    serverId?: string | null;
+    activeServerId?: string | null;
+    /** The target server's spaces as last fetched live (null/absent = not yet). */
+    spaces?: SpaceInfo[] | null;
+  } = {},
 ): MovePlan {
   const targets = servers.filter((s) => s.serverId != null && s.connected && s.hasSession);
   const server =
@@ -52,7 +58,7 @@ export function planMoveToServer(
     targets.find((s) => s.serverId === pick.activeServerId) ??
     targets[0] ??
     null;
-  const spaces = (server?.spaces ?? []).filter((sp) => sp.role === "admin");
+  const spaces = (pick.spaces ?? []).filter((sp) => sp.role === "admin");
   const tally = new Map<MoveKind, number>();
   for (const it of items) {
     const kind = KIND_OF[it.itemType] ?? "other";
