@@ -10,4 +10,10 @@ describe("system agent setup lines", () => {
     );
     expect(sshConfig).toBe(`IdentityAgent "${socket}"`);
   });
+
+  it("gives Windows a PowerShell line and a forward-slash pipe path for ssh_config", () => {
+    const { shell, sshConfig } = systemAgentSetup("\\\\.\\pipe\\unissh-agent", true);
+    expect(shell).toBe("$env:SSH_AUTH_SOCK = '\\\\.\\pipe\\unissh-agent'");
+    expect(sshConfig).toBe("IdentityAgent //./pipe/unissh-agent");
+  });
 });

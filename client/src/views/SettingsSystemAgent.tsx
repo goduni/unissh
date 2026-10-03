@@ -1,7 +1,7 @@
 // Settings → Security → System agent (desktop only).
 //
 // The switch, what state the listener is actually in, and the two lines a shell
-// or ssh_config needs to reach it. Which keys it offers is chosen per key in
+// (PowerShell on Windows) or ssh_config needs to reach its socket or pipe. Which keys it offers is chosen per key in
 // Secrets; nothing here lists or changes keys.
 
 import { useEffect, useRef, useState } from "react";
@@ -19,6 +19,7 @@ import {
   systemAgentStatus,
   type SystemAgentStatus,
 } from "@/bridge/systemAgent";
+import { isWindows } from "@/bridge/platform";
 import { SectionLabel, SettingRow } from "./ViewSettings";
 
 const ERROR_KEY = {
@@ -112,7 +113,8 @@ export function SettingsSystemAgent() {
   };
 
   if (!status) return null;
-  const setup = status.endpoint ? systemAgentSetup(status.endpoint) : null;
+  const windows = isWindows();
+  const setup = status.endpoint ? systemAgentSetup(status.endpoint, windows) : null;
   const state = status.running
     ? { tone: "good" as const, label: t("systemAgent.statusRunning") }
     : status.error
@@ -135,9 +137,12 @@ export function SettingsSystemAgent() {
         <div style={{ padding: `${rem(14)} 0`, borderBottom: `1px solid ${p.line}` }}>
           <div style={{ fontSize: TEXT.body, fontWeight: 700 }}>{t("systemAgent.setupTitle")}</div>
           <div style={{ fontSize: TEXT.base, color: p.txt3, marginTop: rem(2) }}>
-            {t("systemAgent.setupDesc")}
+            {t(windows ? "systemAgent.setupDescWindows" : "systemAgent.setupDesc")}
           </div>
-          <CopyLine label={t("systemAgent.shellLabel")} value={setup.shell} />
+          <CopyLine
+            label={t(windows ? "systemAgent.shellLabelWindows" : "systemAgent.shellLabel")}
+            value={setup.shell}
+          />
           <CopyLine label={t("systemAgent.sshConfigLabel")} value={setup.sshConfig} />
         </div>
       )}

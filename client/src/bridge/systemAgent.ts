@@ -34,12 +34,29 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** The copy-ready setup lines for a socket path. */
-export function systemAgentSetup(socket: string): { shell: string; sshConfig: string } {
+/**
+ * The copy-ready setup lines for the agent's endpoint: a Unix socket path, or
+ * on Windows (`windows`) the named pipe.
+ *
+ * Windows: the shell line is PowerShell (Win32-OpenSSH reads a pipe path from
+ * SSH_AUTH_SOCK), and the ssh_config line spells the pipe with forward slashes,
+ * because newer Win32-OpenSSH reads backslashes in ssh_config as escapes and
+ * `\\.\pipe\…` would no longer name the pipe.
+ */
+export function systemAgentSetup(
+  endpoint: string,
+  windows = false,
+): { shell: string; sshConfig: string } {
+  if (windows) {
+    return {
+      shell: `$env:SSH_AUTH_SOCK = '${endpoint.replace(/'/g, "''")}'`,
+      sshConfig: `IdentityAgent ${endpoint.replace(/\\/g, "/")}`,
+    };
+  }
   return {
-    shell: `export SSH_AUTH_SOCK=${shellQuote(socket)}`,
+    shell: `export SSH_AUTH_SOCK=${shellQuote(endpoint)}`,
     // ssh_config takes a double-quoted argument; a path with a quote in it
     // cannot be expressed there, and an app data directory never has one.
-    sshConfig: `IdentityAgent "${socket}"`,
+    sshConfig: `IdentityAgent "${endpoint}"`,
   };
 }

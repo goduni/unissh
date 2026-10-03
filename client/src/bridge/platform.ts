@@ -16,6 +16,9 @@ export function osPlatform(): string {
 /** macOS shows native traffic lights; other desktops need custom controls. */
 export const isMac = (): boolean => osPlatform() === "macos";
 
+/** Windows: the system agent is a named pipe there, not a Unix socket. */
+export const isWindows = (): boolean => osPlatform() === "windows";
+
 /** False in a plain browser preview, where every window API would throw. */
 export const isTauri = (): boolean => osPlatform() !== "unknown";
 
