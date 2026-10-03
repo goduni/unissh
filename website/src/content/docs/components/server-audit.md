@@ -159,4 +159,6 @@ if (entry.source === "server-observed") {
 }
 ```
 
+To have the server push the log to your own receiver as it grows, see [Audit webhook integration](../audit-webhook/) (the request format, signature recipe and dedupe rule) and [`[audit]` in the server configuration](../../operations/configuration/#audit) (webhook and syslog sinks).
+
 The admin panel that consumes this is described in [Admin panel](../server-ui/); the API around it is in [Server & API surface](../server/).

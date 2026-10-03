@@ -161,6 +161,7 @@ The webhook POSTs batches of entries as JSON, each entry shaped like a line of t
 - A section whose `url`, `secret_env` and `secret_file` are all empty counts as absent (so a deployment can pass empty variables through); a partly set one fails startup.
 - **At-least-once.** The server records the last acknowledged `seq` and resumes after it on restart. A batch can arrive twice (for example, a crash right after the receiver answered), so **receivers dedupe on `seq`**.
 - Every key also works from the environment: `UNISSH__AUDIT__WEBHOOK__URL`, `UNISSH__AUDIT__WEBHOOK__SECRET_ENV`, and so on.
+- Writing the receiver: the body, the signature recipe with a worked example, and the dedupe rule are in [Audit webhook integration](../../components/audit-webhook/).
 
 ```toml
 [audit.syslog]
@@ -182,6 +183,7 @@ The syslog sink sends one [RFC 5424](https://www.rfc-editor.org/rfc/rfc5424) mes
 - **UDP vs TCP.** **UDP sends and forgets:** the cursor advances once every datagram of a batch is sent, so a datagram lost on the way is lost. An entry too large for one datagram (65,507 bytes over IPv4, 65,527 over IPv6) is skipped with a `udp_oversize` warning naming its `seq`, so it never holds back later entries; use TCP if entries can be that large. **TCP** uses octet counting ([RFC 6587](https://www.rfc-editor.org/rfc/rfc6587)) on one persistent connection, re-opened after an error, and advances the cursor only after the write succeeds; otherwise the same batch is retried with backoff.
 - **No TLS.** Syslog goes out in plaintext; a non-loopback collector is warned about at boot. Use a forwarder on the same host (rsyslog, syslog-ng, Vector) to carry it further over TLS.
 - Both sinks can be configured at once; each keeps its own cursor, so one sink's outage does not hold back the other.
+- Each sink's last delivered `seq`, lag and last error show on the admin panel's audit screen and at `GET /v1/admin/audit/sinks`; Prometheus gets `unissh_audit_sink_delivered_seq{sink}` and `unissh_audit_sink_failures_total{sink}` (see [watching the sink](../../components/audit-webhook/#watching-the-sink)).
 - An empty `address` with every other key empty or default counts as absent; an empty `protocol`, `facility` or `app_name` takes its default. A bad address, protocol, facility or app name is a **startup error**. From the environment: `UNISSH__AUDIT__SYSLOG__ADDRESS`, `UNISSH__AUDIT__SYSLOG__PROTOCOL`, and so on.
 
 ## Environment overrides
