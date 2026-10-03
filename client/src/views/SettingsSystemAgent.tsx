@@ -1,8 +1,9 @@
 // Settings → Security → System agent (desktop only).
 //
 // The switch, what state the listener is actually in, and the two lines a shell
-// (PowerShell on Windows) or ssh_config needs to reach its socket or pipe. Which keys it offers is chosen per key in
-// Secrets; nothing here lists or changes keys.
+// (PowerShell on Windows) or ssh_config needs to reach its socket or pipe.
+// Which keys it offers is chosen per key in Secrets; nothing here lists or
+// changes keys.
 
 import { useEffect, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";

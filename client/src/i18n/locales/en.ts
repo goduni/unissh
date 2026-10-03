@@ -1322,7 +1322,7 @@ export const en = {
     "errorListenerFailed": "Stopped unexpectedly",
     "setupTitle": "Point your tools at it",
     "setupDesc": "Add the first line to your shell profile, or the second to a Host block in ~/.ssh/config.",
-    "setupDescWindows": "For Windows OpenSSH: add the first line to your PowerShell profile, or the second to a Host block in ~/.ssh/config. The forward slashes are intended: ssh_config reads backslashes as escapes.",
+    "setupDescWindows": "For Windows OpenSSH: the first line, in your PowerShell profile, reaches PowerShell sessions only; for every program of your account run [Environment]::SetEnvironmentVariable('SSH_AUTH_SOCK', '\\\\.\\pipe\\unissh-agent', 'User') once instead. Or add the second line to a Host block in ~/.ssh/config. The forward slashes are intended: ssh_config reads backslashes as escapes.",
     "shellLabel": "Shell",
     "shellLabelWindows": "PowerShell",
     "sshConfigLabel": "ssh_config",

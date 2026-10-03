@@ -1361,7 +1361,7 @@ export const ru = {
     "errorListenerFailed": "Неожиданно остановился",
     "setupTitle": "Как подключить инструменты",
     "setupDesc": "Добавьте первую строку в профиль оболочки или вторую — в блок Host в ~/.ssh/config.",
-    "setupDescWindows": "Для OpenSSH в Windows: добавьте первую строку в профиль PowerShell или вторую — в блок Host в ~/.ssh/config. Прямые слэши — не ошибка: ssh_config читает обратные как экранирование.",
+    "setupDescWindows": "Для OpenSSH в Windows: первая строка в профиле PowerShell действует только в сеансах PowerShell; чтобы её видели все программы вашей учётной записи, один раз выполните [Environment]::SetEnvironmentVariable('SSH_AUTH_SOCK', '\\\\.\\pipe\\unissh-agent', 'User'). Или добавьте вторую строку в блок Host в ~/.ssh/config. Прямые слэши — не ошибка: ssh_config читает обратные как экранирование.",
     "shellLabel": "Оболочка",
     "shellLabelWindows": "PowerShell",
     "sshConfigLabel": "ssh_config",
