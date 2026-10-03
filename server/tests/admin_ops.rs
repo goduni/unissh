@@ -885,4 +885,29 @@ async fn audit_syslog_tcp_sends_octet_counted_rfc5424_and_advances_the_cursor() 
         let entry: Value = serde_json::from_str(body).unwrap();
         assert_eq!(entry, json!({ "event": event }));
     }
+
+    // The collector drops the connection: the next batch goes out on a new one.
+    drop(conn);
+    store
+        .append_audit_server_observed(&json!({ "event": "logout" }), None, app.now())
+        .await
+        .unwrap();
+    // Let the FIN reach the sink's socket before its pre-batch liveness probe.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let next = last + 1;
+    assert_eq!(
+        delivery.step().await,
+        Step::Delivered {
+            first: next,
+            last: next
+        }
+    );
+    let (mut conn, _) = tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+        .await
+        .expect("the sink must open a new connection")
+        .unwrap();
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), read_frame(&mut conn))
+        .await
+        .unwrap();
+    assert!(msg.contains(&format!("seq=\"{next}\"")), "{msg}");
 }

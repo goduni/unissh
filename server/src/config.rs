@@ -327,6 +327,20 @@ const SYSLOG_FACILITIES: [&str; 24] = [
     "local5", "local6", "local7",
 ];
 
+/// `host:port` → (host without IPv6 brackets, non-zero port). An IPv6 host must
+/// be bracketed (`[::1]:514`): unbracketed, `::1:514` is ambiguous and would
+/// never resolve.
+pub fn split_host_port(address: &str) -> Option<(&str, u16)> {
+    let (host, port) = address.rsplit_once(':')?;
+    let port = port.parse::<u16>().ok().filter(|p| *p != 0)?;
+    let host = match host.strip_prefix('[') {
+        Some(inner) => inner.strip_suffix(']')?,
+        None if host.contains(':') || host.contains(']') => return None,
+        None => host,
+    };
+    (!host.is_empty()).then_some((host, port))
+}
+
 impl SyslogConfig {
     /// No destination, and every other field empty or at its default: the
     /// section exists only because a deployment passes empty env vars through.
@@ -350,6 +364,7 @@ impl SyslogConfig {
                 *v = def;
             }
         }
+        self.protocol.make_ascii_lowercase();
     }
 
     /// The numeric facility (0..=23), or `None` for an unknown keyword.
@@ -363,21 +378,14 @@ impl SyslogConfig {
     /// Boot-time validation. The address is checked for shape only (`host:port`
     /// with a non-zero port): a collector name need not resolve at boot.
     pub fn validate(&self) -> Result<(), String> {
-        let port = self
-            .address
-            .rsplit_once(':')
-            .filter(|(host, _)| {
-                !host
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .is_empty()
-            })
-            .and_then(|(_, port)| port.parse::<u16>().ok())
-            .filter(|p| *p != 0);
-        if port.is_none() {
-            return Err("audit.syslog.address must be host:port".into());
+        if split_host_port(&self.address).is_none() {
+            return Err(
+                "audit.syslog.address must be host:port (an IPv6 host in brackets: [::1]:514)"
+                    .into(),
+            );
         }
-        if self.protocol != "udp" && self.protocol != "tcp" {
+        if !self.protocol.eq_ignore_ascii_case("udp") && !self.protocol.eq_ignore_ascii_case("tcp")
+        {
             return Err("audit.syslog.protocol must be \"udp\" or \"tcp\"".into());
         }
         if self.facility_code().is_none() {
