@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { fmtRelative } from "../util/format";
@@ -101,6 +101,11 @@ export function Audit() {
   // 4.5s toast that vanishes. Hold it as a persistent, dismissible card.
   const [result, setResult] = useState<VerifyResult | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const exportToggle = useRef<HTMLButtonElement>(null);
+  const closeExport = () => {
+    setExportOpen(false);
+    exportToggle.current?.focus();
+  };
 
   const verify = async () => {
     try {
@@ -152,6 +157,7 @@ export function Audit() {
       actions={
         <>
           <Btn
+            ref={exportToggle}
             icon="download"
             size="sm"
             onClick={() => setExportOpen((o) => !o)}
@@ -166,7 +172,7 @@ export function Audit() {
         </>
       }
     >
-      {exportOpen ? <ExportCard onClose={() => setExportOpen(false)} /> : null}
+      {exportOpen ? <ExportCard onClose={closeExport} toggle={exportToggle} /> : null}
       {result ? <VerifyResultCard result={result} onDismiss={() => setResult(null)} /> : null}
       <SinksCard />
       <AuditBody />
@@ -195,9 +201,25 @@ async function fallbackName(blob: Blob, from: number): Promise<string> {
   return `unissh-audit-${from}.jsonl`;
 }
 
-/** Download the log (or a seq range) as JSON Lines, with the chain fields. */
-function ExportCard({ onClose }: { onClose: () => void }) {
+/** Download the log (or a seq range) as JSON Lines, with the chain fields.
+ *  Escape closes it while focus is in the card, on its toggle, or nowhere
+ *  (focus elsewhere, e.g. in a dialog, keeps its own Escape). */
+function ExportCard({ onClose, toggle }: { onClose: () => void; toggle: RefObject<HTMLButtonElement | null> }) {
   const { t } = useTranslation();
+  const form = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const at = document.activeElement;
+      const ours =
+        !at || at === document.body || at === toggle.current || (form.current?.contains(at) ?? false);
+      if (!ours) return;
+      e.preventDefault();
+      onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, toggle]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [busy, setBusy] = useState(false);
@@ -234,12 +256,7 @@ function ExportCard({ onClose }: { onClose: () => void }) {
     <Card style={{ marginBottom: 14 }}>
       <form
         id="audit-export"
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.stopPropagation();
-            onClose();
-          }
-        }}
+        ref={form}
         onSubmit={(e) => {
           e.preventDefault();
           void download();

@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { usePrefs } from "../store/prefs";
 import { Icon, type IconName } from "./icons";
@@ -31,6 +31,7 @@ export function Btn({
   style,
   ariaExpanded,
   ariaControls,
+  ref,
 }: {
   variant?: BtnVariant;
   size?: BtnSize;
@@ -46,6 +47,8 @@ export function Btn({
   style?: CSSProperties;
   ariaExpanded?: boolean;
   ariaControls?: string;
+  /** For returning focus to the button (e.g. a disclosure toggle on close). */
+  ref?: Ref<HTMLButtonElement>;
 }) {
   const variantStyle: CSSProperties =
     variant === "primary"
@@ -60,6 +63,7 @@ export function Btn({
 
   return (
     <button
+      ref={ref}
       type={type}
       title={title}
       aria-expanded={ariaExpanded}
