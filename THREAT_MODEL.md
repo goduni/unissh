@@ -247,11 +247,19 @@ boundary, so what crosses it is spelled out here.
   it one by one. That choice is device-local metadata inside the SQLCipher
   database. It is never synced or exported, and it is pinned to the public key
   it was made for, so a key rotated, re-imported or replaced by sync under the
-  same id is not offered until it is shared again. macOS and Linux today; on
-  Windows the listener is not available yet.
-- **The socket's permissions are the access control.** It is a Unix socket in a
-  `0700` directory, itself `0600`, so only processes running as the same OS
-  user can connect. Nothing else authenticates a caller.
+  same id is not offered until it is shared again. macOS, Linux and Windows.
+- **The endpoint's permissions are the access control.** On macOS and Linux it
+  is a Unix socket in a `0700` directory, itself `0600`. On Windows it is the
+  named pipe `\\.\pipe\unissh-agent` with a protected DACL holding a single
+  entry: the current user's own SID (read from the process token, not the
+  owner-rights alias, which under an elevated token would mean the
+  Administrators group). Remote pipe clients are rejected, and the default
+  integrity label keeps lower-integrity processes of the same user out. Either
+  way only processes running as the same OS user can connect; nothing else
+  authenticates a caller. On Windows the pipe is created as its first
+  instance, so if anything already holds the name the agent reports it in use
+  instead of starting. OpenSSH's own `openssh-ssh-agent` pipe is never taken
+  over.
 - **What a connected process can do without asking:** list the shared keys'
   public halves (and, for a key with an attached certificate, that certificate
   as a second identity), with the key's item id as the comment. That is
@@ -275,8 +283,9 @@ boundary, so what crosses it is spelled out here.
   `rsa-sha2-256` or `rsa-sha2-512`; one asking for neither is refused before
   any prompt); or read private key material.
 - **The caller's identity is advisory.** The pid comes from the kernel when the
-  connection is accepted (`SO_PEERCRED` on Linux, `LOCAL_PEEREPID` on macOS)
-  and the executable path is looked up from it. Neither is verified, and the
+  connection is accepted (`SO_PEERCRED` on Linux, `LOCAL_PEEREPID` on macOS,
+  `GetNamedPipeClientProcessId` on Windows) and the executable path is looked
+  up from it. Neither is verified, and the
   prompt says so. A pid can be reused after its process exits. A process can
   exec something else after connecting, or hand the connected socket to
   another process, in which case the prompt names whoever connected, not
@@ -301,7 +310,9 @@ boundary, so what crosses it is spelled out here.
   meant to reach the operating system's agent. If `SSH_AUTH_SOCK` points at
   UniSSH's own socket instead (compared as canonical paths), the connection
   fails with an error saying so, rather than UniSSH prompting itself for a
-  vault key. The OS-agent key picker refuses it the same way.
+  vault key. The OS-agent key picker refuses it the same way. On Windows the
+  loop cannot arise: *System agent* auth always dials OpenSSH's own pipe,
+  whose name differs from UniSSH's.
 - **Nothing sensitive is logged.** Neither the data to be signed, the key, nor
   the caller's identity is written to the log.
 
