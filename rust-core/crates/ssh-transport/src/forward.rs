@@ -22,6 +22,10 @@
 //!   refused. Silent use is the actual risk; a prompt is what turns it into
 //!   something you can see.
 //!
+//! The system agent ([`LocalAgent`]) offers a list of keys to programs on this
+//! machine, and confirms every signature the same way, naming the key and the
+//! process that asked.
+//!
 //! For every agent, whatever its policy:
 //!
 //! * **Read-only.** Adding, removing, locking and unlocking keys are refused
@@ -148,6 +152,51 @@ impl AgentKeys for ForwardedAgent {
                 None
             }
         }
+    }
+}
+
+/// The program on this machine that opened the agent connection, as far as the
+/// OS can tell. Both fields are best effort: `None` means "unknown process".
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentCaller {
+    /// Its process id.
+    pub pid: Option<u32>,
+    /// The path of its executable.
+    pub executable: Option<String>,
+}
+
+/// Asked before every signature a local program requests through the system
+/// agent. Returning `false` refuses it.
+pub trait LocalApproval: Send + Sync {
+    /// `key` is the identity asked for, `caller` the program asking, `blob` the
+    /// data to be signed (an SSH authentication request names the user it logs
+    /// in as). Called on a blocking thread; it may wait for a person.
+    fn approve(&self, key: &OfferedKey, caller: &AgentCaller, blob: &[u8]) -> bool;
+}
+
+/// The system agent's policy: the identities `keys` offers, and a signature
+/// only after `approval` says yes for this caller. `keys` produces the
+/// signature; it is never asked unless the request was approved.
+pub struct LocalAgent<K> {
+    /// What is offered, and the signer behind it.
+    pub keys: K,
+    /// Who approves each signature.
+    pub approval: std::sync::Arc<dyn LocalApproval>,
+    /// The program on the other end of this connection.
+    pub caller: AgentCaller,
+}
+
+impl<K: AgentKeys> AgentKeys for LocalAgent<K> {
+    fn offered(&self) -> Vec<OfferedKey> {
+        self.keys.offered()
+    }
+
+    fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
+        if !self.approval.approve(key, &self.caller, data) {
+            log::info!("system agent: signature declined by the user");
+            return None;
+        }
+        self.keys.sign(key, data)
     }
 }
 
@@ -392,17 +441,6 @@ mod tests {
         assert_eq!(keys.signed.lock().unwrap()[0], b"to-sign");
     }
 
-    #[test]
-    fn a_key_we_do_not_offer_is_refused() {
-        let (a, keys) = agent(true);
-        let reply = answer(&a, &sign_request(b"some other key blob", b"to-sign"));
-        assert_eq!(reply[4], msg::FAILURE);
-        assert!(
-            keys.signed.lock().unwrap().is_empty(),
-            "the key check must come before signing"
-        );
-    }
-
     /// Add, remove, lock and unlock arrive from the remote machine. Honouring
     /// them would let the far end reshape what the local agent holds.
     #[test]
@@ -431,34 +469,84 @@ mod tests {
         }
     }
 
-    /// An agent offering several keys, as the system agent does. It signs with
-    /// whichever key it is handed and records which one that was.
+    /// An agent offering several keys, as the system agent does. It signs for
+    /// real with whichever key it is handed and records which one that was.
     struct Listed {
         keys: Vec<OfferedKey>,
+        signer: std::sync::Mutex<unissh_ssh_agent::InMemoryAgent>,
         signed_with: std::sync::Mutex<Vec<Vec<u8>>>,
     }
     impl AgentKeys for Listed {
         fn offered(&self) -> Vec<OfferedKey> {
             self.keys.clone()
         }
-        fn sign(&self, key: &OfferedKey, _data: &[u8]) -> Option<(String, Vec<u8>)> {
+        fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
             self.signed_with.lock().unwrap().push(key.key_id.clone());
-            Some(("ssh-ed25519".to_string(), vec![0xAA; 64]))
+            let signature = self.signer.lock().unwrap().sign(&key.key_id, data).ok()?;
+            Some((signature.algorithm, signature.signature))
         }
     }
 
     fn listed(comments: &[&str]) -> Listed {
-        Listed {
-            keys: comments
-                .iter()
-                .map(|comment| OfferedKey {
+        let mut signer = unissh_ssh_agent::InMemoryAgent::new();
+        let keys = comments
+            .iter()
+            .map(|comment| {
+                let (private, public) =
+                    unissh_ssh_agent::generate_ed25519_openssh().expect("keygen");
+                signer
+                    .add_from_openssh(comment.as_bytes().to_vec(), private.as_bytes())
+                    .expect("load key");
+                OfferedKey {
                     key_id: comment.as_bytes().to_vec(),
-                    public_openssh: test_public_key(),
+                    public_openssh: format!("{public} {comment}"),
                     comment: comment.to_string(),
-                })
-                .collect(),
+                }
+            })
+            .collect();
+        Listed {
+            keys,
+            signer: std::sync::Mutex::new(signer),
             signed_with: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Answers like the person at the prompt, and records what each prompt
+    /// named: the key's comment and the calling program.
+    struct Prompt {
+        answer: bool,
+        asked: std::sync::Mutex<Vec<(String, AgentCaller)>>,
+    }
+    impl LocalApproval for Prompt {
+        fn approve(&self, key: &OfferedKey, caller: &AgentCaller, _blob: &[u8]) -> bool {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((key.comment.clone(), caller.clone()));
+            self.answer
+        }
+    }
+
+    fn caller() -> AgentCaller {
+        AgentCaller {
+            pid: Some(4242),
+            executable: Some("/usr/bin/ssh".to_string()),
+        }
+    }
+
+    /// The system agent's policy over two offered keys, `work` and `deploy`.
+    fn local(answer: bool) -> (LocalAgent<Arc<Listed>>, Arc<Listed>, Arc<Prompt>) {
+        let keys = Arc::new(listed(&["work", "deploy"]));
+        let prompt = Arc::new(Prompt {
+            answer,
+            asked: std::sync::Mutex::new(Vec::new()),
+        });
+        let agent = LocalAgent {
+            keys: keys.clone(),
+            approval: prompt.clone(),
+            caller: caller(),
+        };
+        (agent, keys, prompt)
     }
 
     /// Reads an IDENTITIES_ANSWER frame the way `ssh-add -l` does.
@@ -488,11 +576,55 @@ mod tests {
     }
 
     #[test]
-    fn a_sign_request_uses_the_key_it_names() {
-        let agent = listed(&["work", "deploy"]);
-        let second = agent.keys[1].blob().unwrap();
-        let reply = answer(&agent, &sign_request(&second, b"to-sign"));
+    fn a_declined_local_signature_is_refused() {
+        let (agent, keys, _) = local(false);
+        let blob = keys.keys[0].blob().unwrap();
+        let reply = answer(&agent, &sign_request(&blob, b"to-sign"));
+        assert_eq!(reply[4], msg::FAILURE);
+        assert!(
+            keys.signed_with.lock().unwrap().is_empty(),
+            "declining must happen before signing, not after"
+        );
+    }
+
+    /// The prompt names the key asked for and the program asking, and the
+    /// signature that comes back is one a server holding that public key accepts.
+    #[test]
+    fn an_approved_signature_verifies_against_the_key_it_names() {
+        use russh::keys::signature::Verifier;
+
+        let (agent, keys, prompt) = local(true);
+        let deploy = &keys.keys[1];
+        let reply = answer(&agent, &sign_request(&deploy.blob().unwrap(), b"to-sign"));
         assert_eq!(reply[4], msg::SIGN_RESPONSE);
-        assert_eq!(*agent.signed_with.lock().unwrap(), vec![b"deploy".to_vec()]);
+        assert_eq!(
+            *prompt.asked.lock().unwrap(),
+            vec![("deploy".to_string(), caller())]
+        );
+
+        let mut body = &reply[5..];
+        let mut inner = take_string(&mut body).unwrap();
+        let algorithm = std::str::from_utf8(take_string(&mut inner).unwrap()).unwrap();
+        let signature = russh::keys::ssh_key::Signature::new(
+            russh::keys::Algorithm::new(algorithm).unwrap(),
+            take_string(&mut inner).unwrap().to_vec(),
+        )
+        .unwrap();
+        let public = russh::keys::PublicKey::from_openssh(&deploy.public_openssh).unwrap();
+        // Through the trait: `PublicKey` also has an inherent SSHSIG `verify`.
+        Verifier::verify(&public, b"to-sign", &signature)
+            .expect("the signature verifies against the named key");
+    }
+
+    #[test]
+    fn a_key_we_do_not_offer_is_refused() {
+        let (agent, keys, prompt) = local(true);
+        let other = listed(&["elsewhere"]).keys[0].blob().unwrap();
+        let reply = answer(&agent, &sign_request(&other, b"to-sign"));
+        assert_eq!(reply[4], msg::FAILURE);
+        assert!(
+            prompt.asked.lock().unwrap().is_empty() && keys.signed_with.lock().unwrap().is_empty(),
+            "the key check must come before the prompt and the signature"
+        );
     }
 }
