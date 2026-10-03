@@ -481,6 +481,7 @@ export const en = {
       "“{{name}}” becomes a cloud vault on this server with the same name, items and hosts. The local copy is replaced: it won't stay on this device as a separate vault.",
     toServerHistory: "Item version history is not carried over — it starts fresh on the server.",
     toServerConfirm: "Move",
+    toServerBackupFirst: "Export backup first",
     toServerDone: "“{{name}}” moved to {{server}}",
     toServerPushFailed:
       "Vault moved, but the first upload failed ({{reason}}). It uploads on the next sync.",

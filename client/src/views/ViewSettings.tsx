@@ -2336,8 +2336,10 @@ function SettingsVaults() {
 /** "Move to server…" confirmation for a local vault: target server (picked when
  *  several are signed in) and space (picked when the server has more than one you
  *  administer, fetched live as cloud-vault creation does), item counts by kind,
- *  and what the move does. Confirm converts the vault in the core and runs the
- *  first push; a failed push leaves the move in place. */
+ *  and what the move does. "Export backup first" opens the regular backup export
+ *  for this vault and comes back here (picks kept) when it closes. Confirm
+ *  converts the vault in the core and runs the first push; a failed push leaves
+ *  the move in place. */
 function MoveToServerModal({
   vault,
   items,
@@ -2364,6 +2366,9 @@ function MoveToServerModal({
   // Live space list of the target server (null = loading / failed → primary space).
   const [spaces, setSpaces] = useState<SpaceInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
+  // The backup export replaces this dialog while it is open; this component stays
+  // mounted underneath, so the server/space picks survive the round trip.
+  const [exporting, setExporting] = useState(false);
 
   const plan = planMoveToServer(items, servers, { serverId, activeServerId, spaces });
   const target = plan.server;
@@ -2424,6 +2429,8 @@ function MoveToServerModal({
     }
   };
 
+  if (exporting) return <BackupExport vault={vault} onClose={() => setExporting(false)} />;
+
   return (
     <Modal
       icon="cloud"
@@ -2433,10 +2440,26 @@ function MoveToServerModal({
       w={480}
       footer={
         <>
+          <Btn
+            variant="ghost"
+            icon="download"
+            onClick={() => setExporting(true)}
+            disabled={busy}
+            style={{ marginRight: "auto" }}
+          >
+            {t("vault.toServerBackupFirst")}
+          </Btn>
           <Btn variant="ghost" onClick={close} disabled={busy}>
             {t("common.cancel")}
           </Btn>
-          <Btn variant="primary" icon="cloud" disabled={!target || busy} onClick={() => void confirm()}>
+          {/* Disabled while the space list loads: a quick click must not skip the
+              space picker that appears once the server lists several spaces. */}
+          <Btn
+            variant="primary"
+            icon="cloud"
+            disabled={!target || spaces === null || busy}
+            onClick={() => void confirm()}
+          >
             {t("vault.toServerConfirm")}
           </Btn>
         </>
