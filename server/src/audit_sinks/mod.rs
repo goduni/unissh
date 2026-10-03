@@ -223,7 +223,13 @@ impl Delivery {
     /// [`Delivery::step`], then record the outcome in `status` and the sink metrics.
     pub async fn step_recorded(&mut self, status: &SharedSinkStatus) -> Step {
         let step = self.step().await;
-        record(status, &step, self.clock.now_unix());
+        // After an ack the head is read so the lag gauge follows the log; a read
+        // error only leaves the gauge at its previous value.
+        let head = match step {
+            Step::Delivered { .. } => self.entries.max_audit_seq().await.ok(),
+            _ => None,
+        };
+        record(status, &step, head, self.clock.now_unix());
         step
     }
 
@@ -233,7 +239,8 @@ impl Delivery {
         let name = self.sink.name().to_string();
         tracing::info!(sink = %name, "audit sink started");
         let cursor = self.cursor.load(&name).await.ok();
-        seed_metrics(&name, cursor);
+        let head = self.entries.max_audit_seq().await.ok();
+        seed_metrics(&name, cursor, head);
         loop {
             if *shutdown.borrow() {
                 break;
@@ -257,6 +264,11 @@ impl Delivery {
 
 /// Gauge: the last seq a sink acknowledged (and recorded), labelled `sink`.
 pub const METRIC_DELIVERED_SEQ: &str = "unissh_audit_sink_delivered_seq";
+/// Gauge: entries in the log after the sink's last acknowledged seq
+/// (`max_audit_seq - delivered seq`), labelled `sink`. Updated at start, after
+/// each acknowledged batch and on each idle poll (0); a failing sink keeps its
+/// last value, so pair it with the failures counter.
+pub const METRIC_LAG: &str = "unissh_audit_sink_lag";
 /// Counter: failed delivery attempts (sink error, log read, cursor write), labelled `sink`.
 pub const METRIC_FAILURES_TOTAL: &str = "unissh_audit_sink_failures_total";
 
@@ -265,6 +277,10 @@ pub fn describe_metrics() {
     metrics::describe_gauge!(
         METRIC_DELIVERED_SEQ,
         "Last audit seq acknowledged by the sink and recorded in its cursor"
+    );
+    metrics::describe_gauge!(
+        METRIC_LAG,
+        "Audit entries after the last seq the sink acknowledged (log head minus delivered seq)"
     );
     metrics::describe_counter!(
         METRIC_FAILURES_TOTAL,
@@ -287,27 +303,42 @@ pub struct SinkStatus {
 
 pub type SharedSinkStatus = Arc<Mutex<SinkStatus>>;
 
-/// Create both series at sink start, so an alert has data before the first
+/// Create the series at sink start, so an alert has data before the first
 /// delivery or failure (after a restart, or for a sink failing from boot): the
-/// gauge from the persisted cursor (when it could be read), the counter at 0.
-fn seed_metrics(sink: &str, cursor: Option<i64>) {
+/// delivered gauge from the persisted cursor (when it could be read), the lag
+/// from the cursor and the log head (when both could be read), the counter at 0.
+fn seed_metrics(sink: &str, cursor: Option<i64>, head: Option<i64>) {
     if let Some(seq) = cursor {
         metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => sink.to_string()).set(seq as f64);
+        if let Some(head) = head {
+            set_lag(sink, head - seq);
+        }
     }
     metrics::counter!(METRIC_FAILURES_TOTAL, "sink" => sink.to_string()).increment(0);
 }
 
-fn record(status: &SharedSinkStatus, step: &Step, now: i64) {
+fn set_lag(sink: &str, lag: i64) {
+    metrics::gauge!(METRIC_LAG, "sink" => sink.to_string()).set(lag.max(0) as f64);
+}
+
+/// `head` is the log's max seq when the caller read it (after a delivery).
+fn record(status: &SharedSinkStatus, step: &Step, head: Option<i64>, now: i64) {
     let mut s = status.lock().unwrap_or_else(|p| p.into_inner());
     match step {
         Step::Delivered { last, .. } => {
             s.last_delivered_seq = Some(*last);
             s.last_success_at = Some(now);
             metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => s.sink.clone()).set(*last as f64);
+            if let Some(head) = head {
+                set_lag(&s.sink, head - last);
+            }
         }
         // Caught up: the log read worked and nothing is pending, so a sink that
         // recovered from a failure reads as healthy before its next delivery.
-        Step::Idle => s.last_success_at = Some(now),
+        Step::Idle => {
+            s.last_success_at = Some(now);
+            set_lag(&s.sink, 0);
+        }
         Step::Failed { error, .. } => {
             s.last_error = Some(error.0.clone());
             s.last_error_at = Some(now);
@@ -612,7 +643,7 @@ mod tests {
         metrics::with_local_recorder(&recorder, || {
             describe_metrics();
             // At sink start, before any step: both series exist.
-            seed_metrics("webhook", Some(3));
+            seed_metrics("webhook", Some(3), Some(5));
             let start = handle.render();
             has(
                 &start,
@@ -622,14 +653,18 @@ mod tests {
                 &start,
                 "unissh_audit_sink_failures_total{sink=\"webhook\"} 0",
             );
-            record(&status, &Step::Delivered { first: 4, last: 7 }, 10);
+            record(&status, &Step::Delivered { first: 4, last: 7 }, Some(9), 10);
+            has(
+                &handle.render(),
+                "unissh_audit_sink_lag{sink=\"webhook\"} 2",
+            );
             for _ in 0..2 {
                 let error = SinkError("http_500".into());
                 let delay = BACKOFF_MIN;
-                record(&status, &Step::Failed { delay, error }, 11);
+                record(&status, &Step::Failed { delay, error }, None, 11);
             }
             // An idle poll after the failures is a success: the sink caught up.
-            record(&status, &Step::Idle, 12);
+            record(&status, &Step::Idle, None, 12);
         });
         assert_eq!(status.lock().unwrap().last_success_at, Some(12));
         let text = handle.render();

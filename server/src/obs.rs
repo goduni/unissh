@@ -119,12 +119,21 @@ impl MetricsHistory {
 }
 
 /// Parse `unissh_*` metric values from Prometheus text, summing over
-/// label sets. Skips `# HELP`/`# TYPE` and foreign metrics. Assumption:
-/// our own metrics carry no label values containing spaces.
+/// label sets. Skips `# HELP`/`# TYPE`, foreign metrics and gauges (a per-sink
+/// seq or lag summed across sinks means nothing). Assumption: our own metrics
+/// carry no label values containing spaces, and the exporter emits `# TYPE`
+/// before a metric's samples.
 fn parse_unissh_metrics(text: &str) -> BTreeMap<String, f64> {
     let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    let mut gauges: BTreeSet<&str> = BTreeSet::new();
     for line in text.lines() {
         let line = line.trim();
+        if let Some(decl) = line.strip_prefix("# TYPE ") {
+            if let Some(name) = decl.strip_suffix(" gauge") {
+                gauges.insert(name.trim());
+            }
+            continue;
+        }
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -135,7 +144,7 @@ fn parse_unissh_metrics(text: &str) -> BTreeMap<String, f64> {
             continue;
         };
         let base = lhs.split('{').next().unwrap_or(lhs).trim();
-        if !base.starts_with("unissh_") {
+        if !base.starts_with("unissh_") || gauges.contains(base) {
             continue;
         }
         *out.entry(base.to_string()).or_insert(0.0) += v;
@@ -151,14 +160,17 @@ mod metrics_history_tests {
         # TYPE unissh_admin_requests_total counter\n\
         unissh_admin_requests_total 5\n\
         unissh_push_objects_total{space=\"x\"} 3\n\
+        # TYPE unissh_audit_sink_lag gauge\n\
+        unissh_audit_sink_lag{sink=\"webhook\"} 4\n\
         other_metric 99\n";
 
     #[test]
-    fn parses_only_unissh_and_sums_labels() {
+    fn parses_only_unissh_non_gauges_and_sums_labels() {
         let m = parse_unissh_metrics(SAMPLE);
         assert_eq!(m.get("unissh_admin_requests_total"), Some(&5.0));
         assert_eq!(m.get("unissh_push_objects_total"), Some(&3.0));
         assert!(!m.contains_key("other_metric"));
+        assert!(!m.contains_key("unissh_audit_sink_lag"));
     }
 
     #[test]
