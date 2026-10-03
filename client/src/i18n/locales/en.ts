@@ -285,6 +285,16 @@ export const en = {
     needCommand: "A snippet needs a command",
     tags: "Tags",
     tagHint: "Add a tag and press Enter",
+    params: "Parameters",
+    paramBuiltin: "built-in",
+  },
+
+  snippetParams: {
+    title: "Fill in parameters",
+    submit: "Insert",
+    fromHost: "from the host",
+    fromEachHost: "from each host",
+    run: "Run",
   },
 
   agentApproval: {
@@ -625,6 +635,7 @@ export const en = {
       "lock": "Lock instance",
       "lockSub": "zero out secrets"
     },
+    "snippetParamsHint": "parameters",
     "snippetNoPane": "Open a terminal first — a snippet is typed into the active pane.",
     "group": {
       "snippets": "Snippets",
@@ -708,7 +719,12 @@ export const en = {
     "emptyTitle": "No targets",
     "emptyDesc": "Add hosts to run commands in parallel",
     "newHost": "New host",
-    "allRequirePassword": "All hosts in this filter require a password on connect — batch execution is unavailable"
+    "allRequirePassword": "All hosts in this filter require a password on connect — batch execution is unavailable",
+    "snippetPick": "Snippet",
+    "snippetPickTitle": "Insert a snippet into the command field",
+    "snippetPickerTitle": "Snippets",
+    "snippetPickerSubtitle": "The command is put into the field; nothing runs until you press Run",
+    "snippetPickerEmpty": "No snippets yet. Add them in Snippets to pick them here."
   },
   groups: {
     "title": "Host groups",
