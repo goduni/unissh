@@ -78,6 +78,14 @@ starts with `0.`:
   state and stops on screen lock, sleep and exit. Certificates are offered with
   their keys; RSA signatures honour the SHA-2 flags; a host profile that would
   loop through UniSSH's own agent is refused with a clear error.
+- Biometric unlock (desktop, opt-in): Windows Hello on Windows, and Touch ID on
+  macOS for builds you sign yourself (the official unsigned macOS build reports
+  it unavailable). The master password is stored wrapped under a device secret
+  that only the biometric prompt releases; the password always works; changing
+  or replacing the password, reset and disabling wipe the stored material.
+  Secret-key-only vaults can require the biometric prompt before the remembered
+  Secret Key unlocks at startup. See THREAT_MODEL.md for what it does and does
+  not protect against.
 
 ### Compatibility
 

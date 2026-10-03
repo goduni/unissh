@@ -258,6 +258,17 @@ Two reference instances, with deliberately different strategies by risk profile:
   extension point, which has no opener and never stored data. Adding a raw-`vault_id`
   fallback there would re-introduce the weak binding round 8 removed.)
 
+One deliberate exception: **device-wrap v1** (`keychain/src/device_wrap.rs`, the
+sealed password behind desktop biometric unlock) is a *disposable* on-disk
+construction. It holds nothing the password does not, so a construction change
+does not migrate it: an unreadable or unknown-version blob is wiped and surfaces
+as "turn biometric unlock on again". It still carries a version byte (bound into
+its AAD) so that change is detected rather than misparsed; no golden vector.
+What biometric unlock protects against, and what it does not, is stated in
+`THREAT_MODEL.md` (*Biometric unlock*). On macOS it needs a build the user signs
+themselves with an Apple certificate and the keychain entitlement; the official
+unsigned release reports Touch ID unlock as unavailable.
+
 The frozen codecs (`aead_*_pre_agility`, `derive_unlock_key_legacy_v1`,
 `*_key_pre_agility`) are pinned by golden vectors; `pre_agility.rs::*_incompatible`
 are the canaries that catch a construction change masquerading as a no-op.

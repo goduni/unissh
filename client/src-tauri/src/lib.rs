@@ -1,5 +1,6 @@
 //! UniSSH Tauri backend — wires the `unissh_ffi::Core` into Tauri commands.
 
+mod biometric;
 mod cloud;
 mod commands;
 mod dto;
@@ -100,7 +101,9 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init());
 
-    // Biometric unlock is mobile-only (no desktop support in the official plugin).
+    // The mobile biometric plugin is registered but not yet called by anything
+    // (mobile biometric unlock is its own, unbuilt, feature). Desktop biometric
+    // unlock does not use it: see src/biometric.rs.
     #[cfg(mobile)]
     {
         builder = builder.plugin(tauri_plugin_biometric::init());
@@ -440,6 +443,14 @@ pub fn run() {
             keychain::keychain_get_secret_key,
             keychain::keychain_unlock,
             keychain::keychain_delete_secret_key,
+            // unlock with Touch ID (macOS) or Windows Hello (Windows); reports
+            // unsupported elsewhere
+            biometric::biometric_status,
+            biometric::biometric_enable,
+            biometric::biometric_disable,
+            biometric::biometric_unlock,
+            biometric::biometric_presence_unlock,
+            biometric::biometric_confirm_presence,
             // cloud server — identity / session / devices
             cloud::commands::server_status,
             cloud::commands::server_instance_info,

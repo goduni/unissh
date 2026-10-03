@@ -35,6 +35,43 @@ where
         .map_err(ApiError::from)
 }
 
+/// Run blocking wrapper-level work (keychain, biometric prompt, files) off the
+/// async runtime and the main thread. The one copy of this helper: keychain
+/// and biometric commands both need it, and a prompt served by the main loop
+/// must never be waited on from that loop.
+pub(crate) async fn blocking_api<T, F>(f: F) -> ApiResult<T>
+where
+    F: FnOnce() -> ApiResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f).await?
+}
+
+/// What every successful unlock does next, however it was asked for (typed
+/// password, trusted-device keychain, biometric, server restore) and on a
+/// screen unlock or wake: give paused MCP and system-agent access back.
+pub(crate) fn resume_after_unlock(app: &tauri::AppHandle) {
+    #[cfg(desktop)]
+    {
+        crate::mcp::resume_access(app);
+        crate::system_agent::resume_access(app);
+    }
+    #[cfg(mobile)]
+    let _ = app;
+}
+
+/// The counterpart for lock, reset, screen lock and sleep: pause MCP and
+/// system-agent access.
+pub(crate) fn revoke_agent_access(app: &tauri::AppHandle) {
+    #[cfg(desktop)]
+    {
+        crate::mcp::revoke(app);
+        crate::system_agent::revoke(app);
+    }
+    #[cfg(mobile)]
+    let _ = app;
+}
+
 /// Run a blocking, infallible core call off the async runtime.
 async fn blocking_ok<T, F>(f: F) -> ApiResult<T>
 where
@@ -111,12 +148,7 @@ pub async fn reset_partial_instance(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
-    #[cfg(desktop)]
-    crate::mcp::revoke(&app);
-    #[cfg(desktop)]
-    crate::system_agent::revoke(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    revoke_agent_access(&app);
     // Never touch a complete instance — that's real, recoverable data. Check this
     // FIRST and synchronously, so there is no `.await` window before the guard.
     if state.instance_exists() {
@@ -152,12 +184,7 @@ pub async fn reset_partial_instance(
 /// Idempotent: already-missing files are the desired end state.
 #[tauri::command]
 pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
-    #[cfg(desktop)]
-    crate::mcp::revoke(&app);
-    #[cfg(desktop)]
-    crate::system_agent::revoke(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    revoke_agent_access(&app);
     // Never wipe an instance the caller can actually open. Check synchronously
     // (no `.await` before it) so there is no unlocked->reset race window.
     let core = state.core.clone();
@@ -175,6 +202,10 @@ pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -
     // Forget cloud links + the stale keychain Secret Key so re-onboarding is clean.
     state.cloud.clear_all();
     let _ = crate::keychain::keychain_delete_secret_key().await;
+    // And biometric unlock: the sealed password beside the keyset and its
+    // device secret in the platform store. Idempotent, best-effort like the rest.
+    let blob = crate::biometric::blob_path(&state);
+    let _ = blocking_api(move || crate::biometric::forget_now(&blob)).await;
     Ok(())
 }
 
@@ -298,7 +329,12 @@ pub async fn create_account(
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
-    blocking(move || core.create_account(password)).await
+    // A new keyset: nothing left from an earlier instance may unlock it.
+    let (secret_key, _) = blocking_api(crate::biometric::installing_keyset(&state, move || {
+        Ok(core.create_account(password)?)
+    }))
+    .await?;
+    Ok(secret_key)
 }
 
 #[tauri::command]
@@ -310,23 +346,13 @@ pub async fn unlock(
 ) -> ApiResult<()> {
     let core = state.core.clone();
     blocking(move || core.unlock(password, secret_key_hex)).await?;
-    #[cfg(desktop)]
-    crate::mcp::resume_access(&app);
-    #[cfg(desktop)]
-    crate::system_agent::resume_access(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    resume_after_unlock(&app);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn lock(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
-    #[cfg(desktop)]
-    crate::mcp::revoke(&app);
-    #[cfg(desktop)]
-    crate::system_agent::revoke(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    revoke_agent_access(&app);
     // Drop every live object first (sessions/tunnels/sftp close on drop).
     state.sessions.clear();
     state.tunnels.clear();
@@ -448,15 +474,23 @@ pub async fn set_algorithm_policy(modern: bool, state: State<'_, AppState>) -> A
     Ok(())
 }
 
+/// Change, add or remove the master password. On success the biometric unlock
+/// material sealed for the old password is wiped; the answer says whether there
+/// was any and whether the wipe worked, so Settings can ask for it to be turned
+/// on again (with the new password, in this session) or say it failed.
 #[tauri::command]
 pub async fn change_password(
     old_password: Option<String>,
     new_password: Option<String>,
     secret_key_hex: String,
     state: State<'_, AppState>,
-) -> ApiResult<()> {
+) -> ApiResult<crate::biometric::KeysetWipe> {
     let core = state.core.clone();
-    blocking(move || core.change_password(old_password, new_password, secret_key_hex)).await
+    let ((), wipe) = blocking_api(crate::biometric::installing_keyset(&state, move || {
+        Ok(core.change_password(old_password, new_password, secret_key_hex)?)
+    }))
+    .await?;
+    Ok(wipe)
 }
 
 // ---------- vaults ----------

@@ -183,6 +183,45 @@ export interface VaultIntegrityReport {
   issues: IntegrityIssue[];
 }
 
+/** Biometric unlock on this device (Touch ID on macOS, Windows Hello on
+ *  Windows). `supported` is false on every platform without an adapter, on a
+ *  Mac that cannot do Touch ID or whose build may not use the protected
+ *  Keychain, and on Windows without Windows Hello set up. */
+export interface BiometricStatus {
+  supported: boolean;
+  /** The sealed password is stored and its biometric-gated device secret
+   *  still exists (as far as the platform says without a prompt). */
+  enabled: boolean;
+  /** The sealed password is stored but its device secret is gone
+   *  (fingerprints changed, Windows Hello reset): biometric unlock must be
+   *  enabled again. */
+  invalidated: boolean;
+  /** The sealed password is stored but the platform cannot use biometrics
+   *  here now (Windows Hello turned off or its PIN removed, Touch ID gone or
+   *  its lid closed): shown as off, with the reason and a way to forget it. */
+  stranded: boolean;
+  /** The platform's presence prompt can be shown — the Secret-Key-only
+   *  startup gate, which stores nothing. */
+  presenceSupported: boolean;
+  /** The Secret Key is remembered in the OS keychain. Biometric unlock stores
+   *  only the password, and the presence gate guards that remembered key, so
+   *  without it neither has anything to offer. Without `withSecretKey` it is
+   *  asked (and can be true) only when a sealed password is stored. */
+  secretKeyRemembered: boolean;
+}
+
+/** How the one-off presence prompt before turning the startup gate on ended.
+ *  The gate is stored only on "confirmed". */
+export type PresenceCheck = "confirmed" | "cancelled" | "unavailable";
+
+/** What a password change did to biometric unlock: nothing was stored, the
+ *  stored password was erased, or erasing it failed (it opens nothing any
+ *  more and goes at the next biometric attempt). */
+export type KeysetWipe = "nothing" | "erased" | "failed";
+
+/** How `biometric_unlock` ended. Anything but "unlocked" shows the password. */
+export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated" | "noSecretKey";
+
 export type DbConsistencyKind =
   | "orphanItem"
   | "badVersion"

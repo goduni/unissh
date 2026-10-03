@@ -7,6 +7,10 @@ import type {
   AccountInfo,
   AuditEntry,
   AuthMethod,
+  BiometricStatus,
+  BiometricUnlockOutcome,
+  KeysetWipe,
+  PresenceCheck,
   BroadcastEvent,
   ConnectionProfile,
   Identity,
@@ -109,7 +113,7 @@ export const changePassword = (
   oldPassword: string | null,
   newPassword: string | null,
   secretKeyHex: string,
-) => invoke<void>("change_password", { oldPassword, newPassword, secretKeyHex });
+) => invoke<KeysetWipe>("change_password", { oldPassword, newPassword, secretKeyHex });
 export const accountId = () => invoke<string>("account_id");
 
 // ── vaults ─────────────────────────────────────────────────────
@@ -761,6 +765,29 @@ export const keychainGetSecretKey = () => invoke<string | null>("keychain_get_se
 export const keychainUnlock = (password: string | null) =>
   invoke<void>("keychain_unlock", { password });
 export const keychainDeleteSecretKey = () => invoke<void>("keychain_delete_secret_key");
+
+// ── biometric unlock (Touch ID on macOS, Windows Hello on Windows) ──
+// The password goes IN once, when enabling (from the form that already holds
+// it). It never comes back out: the biometric unlock reads, unseals and uses it
+// entirely in Rust.
+/** `withSecretKey`: also say whether the Secret Key is remembered when nothing
+ *  is stored (Settings, the presence gate). Without it the password unlock
+ *  screen never waits on a keychain read it does not need. */
+export const biometricStatus = (withSecretKey: boolean) =>
+  invoke<BiometricStatus>("biometric_status", { withSecretKey });
+export const biometricEnable = (password: string) => invoke<void>("biometric_enable", { password });
+export const biometricDisable = () => invoke<void>("biometric_disable");
+/** `reason` is the localised line the system prompt shows under the app name. */
+export const biometricUnlock = (reason: string) =>
+  invoke<BiometricUnlockOutcome>("biometric_unlock", { reason });
+/** The Secret-Key-only startup gate: the presence prompt, then the remembered-
+ *  key unlock, both in Rust. Nothing is stored behind the prompt. */
+export const biometricPresenceUnlock = (reason: string) =>
+  invoke<BiometricUnlockOutcome>("biometric_presence_unlock", { reason });
+/** Show the presence prompt once, before the startup gate is turned on.
+ *  Unlocks and stores nothing. */
+export const biometricConfirmPresence = (reason: string) =>
+  invoke<PresenceCheck>("biometric_confirm_presence", { reason });
 
 // ── cloud server: identity / session ───────────────────────────
 // The cloud integration is additive: a local-only instance never touches it.
