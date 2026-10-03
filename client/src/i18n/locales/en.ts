@@ -488,6 +488,9 @@ export const en = {
     toServerPushFailedSpace:
       "Vault moved to “{{space}}”, but the first upload failed ({{reason}}). Automatic sync covers this server's primary space only, so this vault stays on this device until it is uploaded.",
     toServerClosesSessions: "Moving the current vault closes {{count}} open connection(s).",
+    toServerNotPrimary:
+      "“{{space}}” is not this server's primary space. Automatic sync covers the primary space only, so this vault's changes there will not sync automatically.",
+    toServerRefreshFailed: "Vault moved, but refreshing the vault list failed ({{reason}}).",
     toServerKind: {
       hosts: "Hosts",
       groups: "Groups",

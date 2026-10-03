@@ -2374,9 +2374,9 @@ function MoveToServerModal({
   // mounted underneath, so the server/space picks survive the round trip.
   const [exporting, setExporting] = useState(false);
 
-  const plan = planMoveToServer(items, servers, { serverId, activeServerId, spaces });
+  const plan = planMoveToServer(items, servers, { serverId, activeServerId, spaces, spaceId });
   const target = plan.server;
-  const space = plan.spaces.find((sp) => sp.spaceId === spaceId) ?? plan.spaces[0];
+  const space = plan.space;
 
   useEffect(() => {
     if (!target?.serverId) return;
@@ -2402,8 +2402,19 @@ function MoveToServerModal({
   const confirm = async () => {
     if (!target?.serverId || busy) return;
     setBusy(true);
+    const nonPrimary = plan.nonPrimarySpace;
+    const res = await api
+      .serverMoveVaultToServer(vault.vaultId, target.serverId, space?.spaceId)
+      .catch((e: unknown) => {
+        toast(apiErrorMessage(e), "err");
+        setBusy(false);
+        return null;
+      });
+    if (!res) return;
+    // The move is done: the local vault no longer exists, so a retry from this dialog
+    // could only fail. Close it whatever the follow-up steps below do.
+    onClose();
     try {
-      const res = await api.serverMoveVaultToServer(vault.vaultId, target.serverId, space?.spaceId);
       // Saved layouts follow the vault: its hosts keep their ids under the new vault id.
       moveTerminalWorkspace(vault.vaultId, res.vaultId);
       if (useApp.getState().vaultId === vault.vaultId) {
@@ -2414,22 +2425,19 @@ function MoveToServerModal({
         await useApp.getState().setVault(res.vaultId);
       }
       await useApp.getState().reloadVaults();
-      onClose();
-      if (res.pushError) {
-        const reason = apiErrorMessage(res.pushError);
-        const primary = !space || space.spaceId === target.spaceId;
-        toast(
-          primary
-            ? t("vault.toServerPushFailed", { reason })
-            : t("vault.toServerPushFailedSpace", { reason, space: space.name || space.spaceId }),
-          "warn",
-        );
-      } else {
-        toast(t("vault.toServerDone", { name: vault.name, server: serverShortLabel(target) }), "ok");
-      }
     } catch (e) {
-      toast(apiErrorMessage(e), "err");
-      setBusy(false);
+      toast(t("vault.toServerRefreshFailed", { reason: apiErrorMessage(e) }), "warn");
+    }
+    if (res.pushError) {
+      const reason = apiErrorMessage(res.pushError);
+      toast(
+        nonPrimary && space
+          ? t("vault.toServerPushFailedSpace", { reason, space: space.name || space.spaceId })
+          : t("vault.toServerPushFailed", { reason }),
+        "warn",
+      );
+    } else {
+      toast(t("vault.toServerDone", { name: vault.name, server: serverShortLabel(target) }), "ok");
     }
   };
 
@@ -2514,6 +2522,11 @@ function MoveToServerModal({
       <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5 }}>
         <p style={{ margin: `0 0 ${rem(6)}` }}>{t("vault.toServerReplaces", { name: vault.name })}</p>
         <p style={{ margin: 0 }}>{t("vault.toServerHistory")}</p>
+        {plan.nonPrimarySpace && space && (
+          <p style={{ margin: `${rem(6)} 0 0`, color: p.amber }}>
+            {t("vault.toServerNotPrimary", { space: space.name || space.spaceId })}
+          </p>
+        )}
         {isCurrent && openCount > 0 && (
           <p style={{ margin: `${rem(6)} 0 0`, color: p.amber }}>
             {t("vault.toServerClosesSessions", { count: openCount })}

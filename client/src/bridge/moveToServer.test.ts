@@ -33,13 +33,14 @@ describe("planMoveToServer", () => {
     ]);
   });
 
-  it("asks for a space only when the server has more than one space you administer", () => {
+  it("asks for a space only when the server has more than one space you administer, defaulting to the primary", () => {
     const member: SpaceInfo = { spaceId: "team", name: "Team", role: "member" };
-    const servers = [server("a", true)];
+    const servers = [{ ...server("a", true), spaceId: "lab" }];
     expect(planMoveToServer([], servers, { spaces: [admin("own"), member] }).needsSpacePicker).toBe(false);
     const two = planMoveToServer([], servers, { spaces: [admin("own"), admin("lab"), member] });
     expect(two.needsSpacePicker).toBe(true);
     expect(two.spaces.map((sp) => sp.spaceId)).toEqual(["own", "lab"]);
+    expect({ space: two.space?.spaceId, nonPrimary: two.nonPrimarySpace }).toEqual({ space: "lab", nonPrimary: false });
   });
 
   it("offers only signed-in servers, defaulting to the active one", () => {

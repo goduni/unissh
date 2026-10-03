@@ -36,6 +36,13 @@ export interface MovePlan {
    *  Empty = the link's primary space (the core binds to it by default). */
   spaces: SpaceInfo[];
   needsSpacePicker: boolean;
+  /** Where the vault lands: the chosen space, else the server link's primary space
+   *  when it is offered, else the first offered one. Null = no admin space listed
+   *  (the core binds to the link's primary space). */
+  space: SpaceInfo | null;
+  /** The vault lands outside the link's primary space, which is all automatic sync
+   *  covers — the confirmation must say so. */
+  nonPrimarySpace: boolean;
   /** Item counts by kind, non-zero only, in {@link MOVE_KINDS} order. */
   counts: { kind: MoveKind; count: number }[];
 }
@@ -50,6 +57,8 @@ export function planMoveToServer(
     activeServerId?: string | null;
     /** The target server's spaces as last fetched live (null/absent = not yet). */
     spaces?: SpaceInfo[] | null;
+    /** The space picked in the dialog, if any. */
+    spaceId?: string | null;
   } = {},
 ): MovePlan {
   const targets = servers.filter((s) => s.serverId != null && s.connected && s.hasSession);
@@ -59,6 +68,11 @@ export function planMoveToServer(
     targets[0] ??
     null;
   const spaces = (pick.spaces ?? []).filter((sp) => sp.role === "admin");
+  const space =
+    spaces.find((sp) => sp.spaceId === pick.spaceId) ??
+    spaces.find((sp) => sp.spaceId === server?.spaceId) ??
+    spaces[0] ??
+    null;
   const tally = new Map<MoveKind, number>();
   for (const it of items) {
     const kind = KIND_OF[it.itemType] ?? "other";
@@ -70,6 +84,8 @@ export function planMoveToServer(
     server,
     spaces,
     needsSpacePicker: spaces.length > 1,
+    space,
+    nonPrimarySpace: space != null && space.spaceId !== server?.spaceId,
     counts: MOVE_KINDS.filter((k) => tally.has(k)).map((kind) => ({
       kind,
       count: tally.get(kind) ?? 0,
