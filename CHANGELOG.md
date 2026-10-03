@@ -32,6 +32,14 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Added
+
+- Inline images in the terminal: sixel and iTerm2 inline-image output renders in
+  SSH and local panes and scrolls and clears with the text. A terminal setting
+  (on by default on desktop, off on phones, applied to new panes) controls it; the
+  pixel budget is 16 MP on desktop and 4 MP on phones, and recordings replay
+  their images.
+
 ## [0.5.0] — 2026-10-02
 
 ### Added
