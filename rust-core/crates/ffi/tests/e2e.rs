@@ -4670,6 +4670,53 @@ fn system_agent_missing_key_is_named() {
     );
 }
 
+/// The endpoint handed to the core (`set_system_agent_endpoint`) reaches the
+/// connect: a host using system-agent auth with `SSH_AUTH_SOCK` at UniSSH's own
+/// socket fails with the typed refusal instead of asking UniSSH itself.
+#[test]
+fn system_agent_auth_refuses_the_endpoint_set_on_the_core() {
+    let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let public = core
+        .generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    let own = dir.path().join("agent.sock"); // the listener is off: no file
+    core.set_system_agent_endpoint(Some(own.clone()));
+    // SAFETY: single-threaded test setup, serialized by AGENT_ENV.
+    unsafe { std::env::set_var("SSH_AUTH_SOCK", &own) };
+
+    let sshd = TestSshd::start(&public);
+    let observer = std::sync::Arc::new(CollectObserver {
+        buf: std::sync::Mutex::new(Vec::new()),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let outcome = core.open_session(
+        "127.0.0.1".to_string(),
+        sshd.port,
+        "root".to_string(),
+        unissh_ffi::AuthMethod::SystemAgent { public_key: public },
+        vec![],
+        None,
+        "xterm".to_string(),
+        80,
+        24,
+        observer,
+        None,
+        false,
+    );
+    let msg = match outcome {
+        Ok(_) => panic!("UniSSH's own socket must be refused"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        msg.contains("UniSSH's own system agent"),
+        "the error must name the self-loop, got: {msg}"
+    );
+}
+
 // ── local terminal ─────────────────────────────────────────────
 //
 // The point of these is the wiring, not the pty (that is `unissh-local-pty`'s
@@ -5177,10 +5224,12 @@ fn system_agent_offers_the_shared_keys_follows_a_toggle_and_empties_when_locked(
     assert_eq!(system_agent_identities(&core), vec![]);
 }
 
-/// Approves every signature and keeps what each prompt was shown. `meanwhile`
-/// runs while the prompt is open, before the answer.
+/// Approves every signature and keeps what each prompt was shown, and the ids
+/// of the prompts withdrawn. `meanwhile` runs while the prompt is open, before
+/// the answer.
 struct RecordingApprover {
     asked: std::sync::Mutex<Vec<AgentSignRequest>>,
+    cancelled: std::sync::Mutex<Vec<u64>>,
     meanwhile: Box<dyn Fn() + Send + Sync>,
 }
 
@@ -5188,6 +5237,7 @@ impl RecordingApprover {
     fn new(meanwhile: impl Fn() + Send + Sync + 'static) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Self {
             asked: Default::default(),
+            cancelled: Default::default(),
             meanwhile: Box::new(meanwhile),
         })
     }
@@ -5199,7 +5249,9 @@ impl AgentApprover for RecordingApprover {
         (self.meanwhile)();
         true
     }
-    fn cancel(&self, _id: u64) {}
+    fn cancel(&self, id: u64) {
+        self.cancelled.lock().unwrap().push(id);
+    }
 }
 
 /// A core with one key, `work` in vault "V", shared with the system agent.
@@ -5228,9 +5280,6 @@ fn sign_request(public: &str, data: &[u8]) -> Vec<u8> {
     request
 }
 
-/// A freshly generated key is not cached in the embedded agent, so this also
-/// covers loading it on approval. The prompt names the key, its vault and the
-/// caller, and the signature verifies against the shared public key.
 /// Checks a SIGN_RESPONSE body the way a server would: the signature over
 /// `data` verifies against `public` (an OpenSSH public key line).
 fn verify_sign_response(reply: &[u8], public: &str, data: &[u8]) {
@@ -5251,6 +5300,9 @@ fn verify_sign_response(reply: &[u8], public: &str, data: &[u8]) {
     Verifier::verify(&public, data, &signature).expect("the signature verifies against the key");
 }
 
+/// A freshly generated key is not cached in the embedded agent, so this also
+/// covers loading it on approval. The prompt names the key, its vault and the
+/// caller, and the signature verifies against the shared public key.
 #[test]
 fn system_agent_signs_with_a_shared_key_once_approved() {
     let (core, _dir, work) = core_sharing_work();
@@ -5407,4 +5459,92 @@ fn system_agent_refuses_a_sign_request_beyond_the_open_prompt_cap() {
     for reply in pending {
         assert_eq!(reply.join().unwrap()[0], 14, "SIGN_RESPONSE");
     }
+}
+
+/// A key replaced under the same id (generated anew as `work`) is not offered:
+/// the share was made for the old key.
+#[test]
+fn system_agent_does_not_offer_a_key_replaced_under_the_same_id() {
+    let (core, _dir, _old) = core_sharing_work();
+    core.generate_ssh_key("v".to_string(), "work".to_string())
+        .unwrap();
+    assert_eq!(system_agent_identities(&core), vec![]);
+}
+
+/// Deleting a shared key drops its share: the very same key put back under the
+/// same id afterwards is not offered until it is shared again.
+#[test]
+fn system_agent_forgets_the_share_of_a_deleted_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("id");
+    assert!(Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-N", ""])
+        .arg("-f")
+        .arg(&key_path)
+        .status()
+        .unwrap()
+        .success());
+    let private = std::fs::read_to_string(&key_path).unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.import_ssh_key("v".to_string(), "work".to_string(), private.clone(), None)
+        .unwrap();
+    core.set_system_agent_shared("v".to_string(), "work".to_string(), true)
+        .unwrap();
+    assert_eq!(system_agent_identities(&core).len(), 1);
+
+    core.delete_item("v".to_string(), "work".to_string())
+        .unwrap();
+    core.import_ssh_key("v".to_string(), "work".to_string(), private, None)
+        .unwrap();
+    assert_eq!(system_agent_identities(&core), vec![]);
+}
+
+/// A client that hangs up while its prompt is open withdraws that very prompt
+/// from the approver, rather than leaving it up until it times out.
+#[test]
+fn system_agent_withdraws_the_prompt_of_a_client_that_hangs_up() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::AsyncWriteExt;
+
+    let (core, _dir, work) = core_sharing_work();
+    let released = std::sync::Arc::new(AtomicBool::new(false));
+    let held = released.clone();
+    let approver = RecordingApprover::new(move || {
+        // Bounded, so a regression fails the test instead of hanging it.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !held.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    core.set_agent_approver(Some(approver.clone()));
+    let agent = core.system_agent();
+    let request = sign_request(&work, b"to-sign");
+    let mut frame = (request.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(&request);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let hang_up = async {
+            client.write_all(&frame).await.unwrap();
+            while approver.asked.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            drop(client);
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(agent.serve(server, AgentCaller::default()), hang_up)
+        })
+        .await
+        .expect("serving ends as soon as the client is gone");
+    });
+    released.store(true, Ordering::SeqCst);
+
+    let asked = approver.asked.lock().unwrap()[0].id;
+    assert_eq!(*approver.cancelled.lock().unwrap(), vec![asked]);
 }
