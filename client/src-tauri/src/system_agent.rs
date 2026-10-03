@@ -1,14 +1,25 @@
 //! The system agent: an ssh-agent endpoint local programs (`ssh-add -l`, `git`,
 //! `ssh`) can reach, offering the vault keys this device shares with it.
 //!
-//! Off by default; the setting persists and the listener resumes at boot. The
-//! protocol and key policy are the core's (`unissh_ffi::SystemAgent`); this
-//! module owns only the OS endpoint and its lifecycle, modelled on the MCP
-//! controller. Unix sockets today; the Windows named pipe is not implemented
-//! yet, so there the listener reports itself unavailable.
+//! Off by default; the setting persists. The protocol, key policy and the
+//! per-signature approval are the core's (`unissh_ffi::SystemAgent`); this
+//! module owns only the OS endpoint, the caller's identity and the lifecycle,
+//! modelled on the MCP controller.
+//!
+//! Lifecycle: the listener runs only while the vault is unlocked and the screen
+//! is not locked. [`revoke`] stops it at once (vault lock, screen lock, sleep,
+//! exit) and [`resume_access`] brings it back after an unlock or a wake, if the
+//! setting is on — the same call sites as `crate::mcp::revoke` /
+//! `crate::mcp::resume_access`, so the user never re-enables it by hand. A
+//! connection open at a revoke is cut with the listener.
+//!
+//! Unix sockets today; the Windows named pipe is not implemented yet, so there
+//! the listener reports itself unavailable.
 
 #[cfg(unix)]
 mod endpoint;
+#[cfg(unix)]
+mod peer;
 
 use crate::error::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
@@ -46,12 +57,22 @@ struct Running {
     task: tauri::async_runtime::JoinHandle<()>,
 }
 
+/// The live listener's stop token, and a counter bumped by every revoke. Under
+/// a plain lock rather than the async one: revoke fires from OS listener
+/// threads and the event loop, and must cut the listener off at once.
+#[derive(Default)]
+struct Live {
+    epoch: u64,
+    stop: Option<CancellationToken>,
+}
+
 pub struct Controller {
     core: Arc<Core>,
     settings_path: PathBuf,
     /// Where the socket goes; `None` where the platform has no listener yet.
     endpoint: Option<PathBuf>,
     running: tokio::sync::Mutex<Option<Running>>,
+    live: Mutex<Live>,
     error: Arc<Mutex<Option<&'static str>>>,
 }
 
@@ -73,26 +94,86 @@ impl Controller {
             settings_path,
             endpoint,
             running: tokio::sync::Mutex::new(None),
+            live: Mutex::new(Live::default()),
             error: Arc::new(Mutex::new(None)),
         })
     }
 
-    /// Starts the listener at boot if it was left on.
+    /// Starts the listener if the setting is on, the vault unlocked and the
+    /// screen not locked; otherwise does nothing. Called at boot (where the
+    /// vault is still locked, so the first unlock starts it) and from
+    /// [`resume_access`].
     pub fn resume(self: &Arc<Self>) {
-        if load_settings(&self.settings_path).enabled {
-            let this = self.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = this.enable(true).await;
-            });
+        let epoch = self.live.lock().unwrap().epoch;
+        let this = self.clone();
+        tauri::async_runtime::spawn(async move { this.restart(epoch).await });
+    }
+
+    async fn restart(self: &Arc<Self>, epoch: u64) {
+        if crate::system_lock::is_screen_locked() {
+            return;
+        }
+        let core = self.core.clone();
+        let unlocked = tauri::async_runtime::spawn_blocking(move || core.is_unlocked())
+            .await
+            .unwrap_or(false);
+        if !unlocked {
+            return;
+        }
+        let mut running = self.running.lock().await;
+        if !load_settings(&self.settings_path).enabled || self.live.lock().unwrap().epoch != epoch {
+            return;
+        }
+        let serving = self.live.lock().unwrap().stop.is_some()
+            && running
+                .as_ref()
+                .is_some_and(|r| !r.task.inner().is_finished());
+        if serving {
+            return;
+        }
+        self.stop(&mut running).await;
+        let Some(path) = self.endpoint.clone() else {
+            self.set_error(Some("unsupported"));
+            return;
+        };
+        match self.listen(&path) {
+            Ok((stop, task)) => {
+                self.arm(epoch, &stop);
+                *running = Some(Running { stop, task });
+                self.set_error(None);
+            }
+            Err(code) => self.set_error(Some(code)),
         }
     }
 
-    fn set_error(&self, error: Option<&'static str>) {
-        *self.error.lock().unwrap() = error;
+    /// Stops the listener now and cuts its connections, keeping the setting.
+    /// Any start already under way sees the new epoch and stands down.
+    fn revoke(&self) {
+        let stop = {
+            let mut live = self.live.lock().unwrap();
+            live.epoch += 1;
+            live.stop.take()
+        };
+        if let Some(stop) = stop {
+            stop.cancel();
+        }
     }
 
-    async fn enable(self: &Arc<Self>, enabled: bool) -> ApiResult<()> {
-        let mut running = self.running.lock().await;
+    /// Records a freshly started listener as the live one — unless a revoke
+    /// came in since `epoch` was read, in which case it is stopped right away.
+    fn arm(&self, epoch: u64, stop: &CancellationToken) {
+        let mut live = self.live.lock().unwrap();
+        if live.epoch == epoch {
+            live.stop = Some(stop.clone());
+        } else {
+            stop.cancel();
+        }
+    }
+
+    /// Stops the listener held in `running`, waiting up to 2 s for it to
+    /// remove its socket before aborting it.
+    async fn stop(&self, running: &mut Option<Running>) {
+        self.live.lock().unwrap().stop = None;
         if let Some(mut old) = running.take() {
             old.stop.cancel();
             if tokio::time::timeout(std::time::Duration::from_secs(2), &mut old.task)
@@ -103,6 +184,16 @@ impl Controller {
                 let _ = old.task.await;
             }
         }
+    }
+
+    fn set_error(&self, error: Option<&'static str>) {
+        *self.error.lock().unwrap() = error;
+    }
+
+    async fn enable(self: &Arc<Self>, enabled: bool) -> ApiResult<()> {
+        let epoch = self.live.lock().unwrap().epoch;
+        let mut running = self.running.lock().await;
+        self.stop(&mut running).await;
         // Every failure leaves a typed code in `error`; the UI words it from
         // the code (status), not from the message returned here.
         if !enabled {
@@ -133,6 +224,7 @@ impl Controller {
             }
             return Err(self.fail("save_failed"));
         }
+        self.arm(epoch, &stop);
         *running = Some(Running { stop, task });
         self.set_error(None);
         Ok(())
@@ -191,9 +283,10 @@ impl Controller {
                             let agent = agent.clone();
                             let token = token.clone();
                             tauri::async_runtime::spawn(async move {
+                                let caller = peer::caller(&stream);
                                 tokio::select! {
                                     _ = token.cancelled() => {}
-                                    _ = agent.serve(stream) => {}
+                                    _ = agent.serve(stream, caller) => {}
                                 }
                             });
                         }
@@ -235,24 +328,44 @@ impl Controller {
         })
     }
 
-    /// Stops the listener on exit so the socket does not outlive the app.
+    /// Stops the listener on exit so the socket does not outlive the app. Runs
+    /// on the event-loop thread and must not wait, so the socket is removed
+    /// here rather than left to the listener task. Only a listener this
+    /// instance owns has a stop token, so another instance's socket is never
+    /// touched; one revoked earlier removed its own.
     fn shutdown(&self) {
-        // `try_lock`: this runs on the event-loop thread, outside the async
-        // runtime, and must not wait. If an enable/disable holds the lock at
-        // that instant the file may stay behind; the next start clears it as
-        // stale.
-        if let Ok(mut running) = self.running.try_lock() {
-            if let Some(r) = running.take() {
-                r.stop.cancel();
-                #[cfg(unix)]
-                if let Some(path) = &self.endpoint {
-                    let _ = std::fs::remove_file(path);
-                }
+        let stop = {
+            let mut live = self.live.lock().unwrap();
+            live.epoch += 1;
+            live.stop.take()
+        };
+        if let Some(stop) = stop {
+            stop.cancel();
+            #[cfg(unix)]
+            if let Some(path) = &self.endpoint {
+                let _ = std::fs::remove_file(path);
             }
         }
     }
 }
 
+/// Stops the listener: vault lock, screen lock, sleep. Beside every
+/// `crate::mcp::revoke` call.
+pub fn revoke(app: &tauri::AppHandle) {
+    if let Some(controller) = app.try_state::<Arc<Controller>>() {
+        controller.revoke();
+    }
+}
+
+/// Restarts the listener after an unlock or a wake, if it is enabled and the
+/// vault is unlocked. Beside every `crate::mcp::resume_access` call.
+pub fn resume_access(app: &tauri::AppHandle) {
+    if let Some(controller) = app.try_state::<Arc<Controller>>() {
+        controller.resume();
+    }
+}
+
+/// Stops the listener and removes its socket at app exit.
 pub fn shutdown(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         controller.shutdown();

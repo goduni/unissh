@@ -18,8 +18,8 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 use unissh_ffi::{
-    AgentApprover, AgentSignRequest, AuthPromptRequest, AuthPrompter, BroadcastObserver,
-    ExecObserver, SessionObserver, SftpProgressObserver,
+    AgentApprover, AgentSignOrigin, AgentSignRequest, AuthPromptRequest, AuthPrompter,
+    BroadcastObserver, ExecObserver, SessionObserver, SftpProgressObserver,
 };
 
 #[derive(Clone, Serialize)]
@@ -252,12 +252,20 @@ impl AuthPrompter for AppPrompter {
     }
 }
 
-/// A forwarded agent asking whether to sign.
+/// A forwarded agent, or the system agent, asking whether to sign.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentApprovalEvent {
     pub id: u64,
+    /// `"forwarded"` or `"system"`.
+    pub origin: &'static str,
+    /// Forwarded: the session's host. Empty for the system agent.
     pub host: String,
+    /// System agent: the key asked for. Empty for a forwarded agent.
+    pub key: String,
+    /// System agent: the calling process, where the OS reported it.
+    pub pid: Option<u32>,
+    pub executable: Option<String>,
     /// `user@service` when the payload is an SSH login; empty otherwise. This is
     /// what turns the prompt from "something wants a signature" into "this would
     /// log in as X".
@@ -297,9 +305,17 @@ impl AgentApprover for AppApprover {
         let (tx, rx) = sync_channel(1);
         self.pending.lock().expect("approval map").insert(id, tx);
 
+        let (origin, pid, executable) = match request.origin {
+            AgentSignOrigin::Forwarded => ("forwarded", None, None),
+            AgentSignOrigin::SystemAgent { pid, executable } => ("system", pid, executable),
+        };
         let event = AgentApprovalEvent {
             id,
+            origin,
             host: request.host,
+            key: request.key,
+            pid,
+            executable,
             target: request.target,
         };
         if self.app.emit("agent-approval", event).is_err() {

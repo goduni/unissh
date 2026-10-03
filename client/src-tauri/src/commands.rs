@@ -113,6 +113,8 @@ pub async fn reset_partial_instance(
 ) -> ApiResult<()> {
     #[cfg(desktop)]
     crate::mcp::revoke(&app);
+    #[cfg(desktop)]
+    crate::system_agent::revoke(&app);
     #[cfg(mobile)]
     let _ = app;
     // Never touch a complete instance — that's real, recoverable data. Check this
@@ -152,6 +154,8 @@ pub async fn reset_partial_instance(
 pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
     #[cfg(desktop)]
     crate::mcp::revoke(&app);
+    #[cfg(desktop)]
+    crate::system_agent::revoke(&app);
     #[cfg(mobile)]
     let _ = app;
     // Never wipe an instance the caller can actually open. Check synchronously
@@ -308,6 +312,8 @@ pub async fn unlock(
     blocking(move || core.unlock(password, secret_key_hex)).await?;
     #[cfg(desktop)]
     crate::mcp::resume_access(&app);
+    #[cfg(desktop)]
+    crate::system_agent::resume_access(&app);
     #[cfg(mobile)]
     let _ = app;
     Ok(())
@@ -317,6 +323,8 @@ pub async fn unlock(
 pub async fn lock(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
     #[cfg(desktop)]
     crate::mcp::revoke(&app);
+    #[cfg(desktop)]
+    crate::system_agent::revoke(&app);
     #[cfg(mobile)]
     let _ = app;
     // Drop every live object first (sessions/tunnels/sftp close on drop).

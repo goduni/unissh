@@ -221,6 +221,8 @@ pub async fn keychain_unlock(
         crate::commands::blocking(move || core.unlock(password, secret_key_hex)).await?;
         #[cfg(desktop)]
         crate::mcp::resume_access(&app);
+        #[cfg(desktop)]
+        crate::system_agent::resume_access(&app);
         Ok(())
     }
     #[cfg(not(native_keychain))]
