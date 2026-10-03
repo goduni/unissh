@@ -84,3 +84,38 @@ max_reassertion_age_seconds = 604800  # 7 days: max silent session reassertion b
 # Server-trusted infrastructure access (overview/instance/seq-bump), NOT a keyset —
 # grants no decryption. Set via env: UNISSH__OPS__TOKEN=...
 token = ""
+
+[audit]
+# Audit export sinks. Each sink is optional; an absent section means no sink,
+# and sinks are configured here only (never through the API). Delivery is
+# at-least-once from a persisted cursor: a restart resumes where it left off and
+# a batch may arrive twice, so receivers dedupe on `seq`.
+#
+# Webhook: POSTs batches of entries as JSON, signed with
+# `X-UniSSH-Signature: sha256=<hex HMAC-SHA256 of the body>`. A 2xx acknowledges;
+# anything else (or a timeout) retries the same batch with backoff (1 s .. 5 min).
+# The secret is never written here: name an environment variable OR a file.
+# The HMAC key is the secret's literal bytes (never hex/base64-decoded). Use https.
+# A webhook without a readable secret refuses to start the server.
+# Env: UNISSH__AUDIT__WEBHOOK__URL, UNISSH__AUDIT__WEBHOOK__SECRET_ENV, ...
+# [audit.webhook]
+# url = "https://siem.example.com/unissh"
+# secret_env = "UNISSH_AUDIT_WEBHOOK_SECRET"   # or: secret_file = "/run/secrets/audit_webhook"
+# batch_size = 100
+# timeout_secs = 10
+#
+# Syslog: one RFC 5424 message per entry, structured data
+# [unissh@32473 seq event space_id vault_id], body = the entry JSON (base64 for a
+# client-signed entry), UTF-8 sent as MSG-ANY without a BOM. 32473 is RFC 5612's
+# documentation PEN (UniSSH has none by design); `unissh@32473` is a frozen wire
+# identifier. UDP sends and forgets: the cursor advances once the datagrams are
+# sent, so a lost datagram is lost, and an entry larger than one datagram
+# (~64 KB) is skipped with a warning. TCP (octet counting, RFC 6587) advances only after the
+# write succeeds. No TLS: send to a local forwarder for that.
+# Both sinks may be set at once; each keeps its own cursor.
+# Env: UNISSH__AUDIT__SYSLOG__ADDRESS, UNISSH__AUDIT__SYSLOG__PROTOCOL, ...
+# [audit.syslog]
+# address = "127.0.0.1:514"   # host:port; IPv6 in brackets: "[::1]:514"
+# protocol = "tcp"            # "tcp" (default) or "udp"
+# facility = "auth"           # kern, user, ..., auth, authpriv, ..., local0..local7
+# app_name = "unissh"

@@ -1,7 +1,7 @@
 //! Audit repository (§4.7/§11): append-only, instance-wide monotonic seq,
 //! admin-query. Two categories: client-signed (author==owner) and server-observed.
 
-use super::models::{AuditChainRow, AuditRow, BlobRow};
+use super::models::{AuditChainRow, AuditExportRow, AuditRow, BlobRow};
 use super::{Dialect, Store, Val};
 use crate::error::AppResult;
 
@@ -182,6 +182,60 @@ impl Store {
             vec![Val::I(since_seq), Val::I(limit)],
         )
         .await
+    }
+
+    /// Highest assigned audit seq (0 for an empty log).
+    pub async fn max_audit_seq(&self) -> AppResult<i64> {
+        Ok(self
+            .fetch_scalar_i64("SELECT COALESCE(MAX(seq), 0) FROM audit_log", vec![])
+            .await?
+            .unwrap_or(0))
+    }
+
+    /// One page of full rows for the JSON Lines export: `from_seq <= seq <= to_seq`,
+    /// ASC, at most `limit`. The export pages by seq instead of holding one cursor
+    /// open, so a long download never pins a pooled connection.
+    pub async fn export_audit_page(
+        &self,
+        from_seq: i64,
+        to_seq: i64,
+        limit: i64,
+    ) -> AppResult<Vec<AuditExportRow>> {
+        self.fetch_all_as::<AuditExportRow>(
+            "SELECT seq, source, entry_blob, signature, author_pubkey, vault_id, space_id, \
+             recorded_at, server_seq, prev_hash \
+             FROM audit_log WHERE seq >= ? AND seq <= ? ORDER BY seq ASC LIMIT ?",
+            vec![Val::I(from_seq), Val::I(to_seq), Val::I(limit)],
+        )
+        .await
+    }
+
+    /// Last audit seq acknowledged by `sink` (0 when it has never delivered).
+    pub async fn audit_sink_cursor(&self, sink: &str) -> AppResult<i64> {
+        Ok(self
+            .fetch_scalar_i64(
+                "SELECT last_seq FROM audit_sink_cursor WHERE sink = ?",
+                vec![Val::t(sink)],
+            )
+            .await?
+            .unwrap_or(0))
+    }
+
+    /// Record that `sink` acknowledged everything up to `last_seq`.
+    pub async fn set_audit_sink_cursor(
+        &self,
+        sink: &str,
+        last_seq: i64,
+        now: i64,
+    ) -> AppResult<()> {
+        self.exec(
+            "INSERT INTO audit_sink_cursor (sink, last_seq, updated_at) VALUES (?, ?, ?) \
+             ON CONFLICT (sink) DO UPDATE SET last_seq = excluded.last_seq, \
+             updated_at = excluded.updated_at",
+            vec![Val::t(sink), Val::I(last_seq), Val::I(now)],
+        )
+        .await?;
+        Ok(())
     }
 
     /// Verify the audit hash-chain (§11.2). Returns

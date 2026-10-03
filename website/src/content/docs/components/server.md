@@ -68,13 +68,13 @@ All crypto blobs are base64 (STANDARD). **One server = one instance — there is
 
 ### Audit
 
-`POST /v1/audit`, `GET /v1/audit` (admin). The log is a server-side hash chain; `GET /v1/admin/audit/verify` recomputes it. Entry formats: [Audit log & entry format](../server-audit/).
+`POST /v1/audit`, `GET /v1/audit` (admin), `GET /v1/audit/export` (owner; JSON Lines, optional `from_seq`/`to_seq`). The log is a server-side hash chain; `GET /v1/admin/audit/verify` recomputes it. Entry formats: [Audit log & entry format](../server-audit/).
 
 ### Admin / ops (for the admin panel)
 
 A Bearer-admin (owner / space-admin), per-instance read surface plus lifecycle controls, deliberately **suspended-gate-exempt** so a suspended account stays recoverable:
 
-`GET /v1/admin/{overview,devices,sessions,invites,vaults,vault,objects,relay,keysets,config,metrics,metrics/summary,health,migrations,instance}`, `GET /v1/admin/audit/verify`, and `POST /v1/admin/{account/status,session/revoke,seq-bump}` (plus `PUT /v1/admin/config` for the live-editable subset).
+`GET /v1/admin/{overview,devices,sessions,invites,vaults,vault,objects,relay,keysets,config,metrics,metrics/summary,health,migrations,instance}`, `GET /v1/admin/audit/{verify,sinks}`, and `POST /v1/admin/{account/status,session/revoke,seq-bump}` (plus `PUT /v1/admin/config` for the live-editable subset).
 
 These are **read-projections of open metadata** plus lifecycle controls; they **never** expose ciphertext (object bytes, keyset bytes, or relay messages). `config` reads the effective config with secrets masked (and `PUT`s the live-editable subset). Account-disable is enforced in the auth path (existing sessions stop) with owner / last-admin anti-lockout.
 

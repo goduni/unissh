@@ -325,6 +325,14 @@ overclaiming them would be dishonest:
   can still refuse to serve the log wholesale, and server-observed entries are
   unsigned — their **integrity in the recorded sequence** is provable, their
   **origin** is not.
+- **Audit webhook: a new outbound channel.** When `[audit.webhook]` is configured,
+  the server POSTs audit entries and their metadata (account/device ids, vault ids,
+  timestamps) to that URL, HMAC-signed for integrity but not encrypted by the
+  server. Use an `https://` URL; plain `http://` to a non-loopback host is warned
+  about at boot. The sink is set in config only, never through the API.
+  `[audit.syslog]` sends the same entries (minus the hash fields) in plaintext over
+  UDP or TCP with no TLS and no authentication; a non-loopback collector is warned
+  about at boot, and the documented setup is a local forwarder.
 
 There is also **no "reset password via email"** for zero-knowledge vaults — that
 would nullify the property. Lose every device **and** the Emergency Kit (Secret

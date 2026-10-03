@@ -7,7 +7,7 @@ mod common;
 
 use common::{TestApp, claim_owner, make_identity, spawn};
 use serde_json::{Value, json};
-use unissh_server::ids::b64;
+use unissh_server::ids::{b64, sha256, unb64};
 use unissh_storage::{CachePolicy, SyncTarget, VaultRecord};
 use unissh_sync::{AuditObject, SyncObject};
 
@@ -463,6 +463,134 @@ async fn audit_chain_verifies_and_detects_tampering() {
     assert_eq!(v2["broken_at"], 1);
 }
 
+// ---- audit JSON Lines export ----
+
+/// Owner plus a log with server-observed rows (claim/login) and two
+/// client-signed rows, so both `entry` encodings are exported.
+async fn admin_with_audit(app: &TestApp) -> Owner {
+    let a = claim_admin(app).await;
+    for tag in [7u8, 8] {
+        let r = app
+            .client
+            .post(format!("{}/v1/audit", app.base))
+            .header("Authorization", format!("Bearer {}", a.bearer))
+            .json(&json!({ "audit_object": audit_obj(tag, &a.ed) }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 201);
+    }
+    a
+}
+
+async fn export(app: &TestApp, query: &str, bearer: &str) -> reqwest::Response {
+    app.client
+        .get(format!("{}/v1/audit/export{query}", app.base))
+        .header("Authorization", format!("Bearer {bearer}"))
+        .send()
+        .await
+        .unwrap()
+}
+
+fn jsonl(body: &str) -> Vec<Value> {
+    body.lines()
+        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
+        .collect()
+}
+
+#[tokio::test]
+async fn audit_export_is_owner_only() {
+    let app = spawn().await;
+    let _a = admin_with_audit(&app).await;
+    let (_acct, member_bearer) = add_member(&app, None).await;
+
+    let r = export(&app, "", &member_bearer).await;
+    assert_eq!(r.status(), 403, "a member cannot export the audit log");
+}
+
+#[tokio::test]
+async fn audit_export_honours_seq_range() {
+    let app = spawn().await;
+    let a = admin_with_audit(&app).await;
+
+    let r = export(&app, "?from_seq=2&to_seq=3", &a.bearer).await;
+    assert_eq!(r.status(), 200);
+    let seqs: Vec<i64> = jsonl(&r.text().await.unwrap())
+        .iter()
+        .map(|l| l["seq"].as_i64().unwrap())
+        .collect();
+    assert_eq!(seqs, vec![2, 3]);
+
+    let bad = export(&app, "?from_seq=3&to_seq=2", &a.bearer).await;
+    assert_eq!(bad.status(), 400, "an inverted range is refused");
+}
+
+/// Offline re-implementation of the `unissh-audit-chain-v2` record encoding,
+/// fed only from the exported fields.
+fn exported_record_bytes(l: &Value) -> Vec<u8> {
+    fn lp(b: &mut Vec<u8>, x: &[u8]) {
+        b.extend_from_slice(&(x.len() as u32).to_be_bytes());
+        b.extend_from_slice(x);
+    }
+    fn opt(b: &mut Vec<u8>, v: &Value) {
+        match v.as_str() {
+            Some(s) => {
+                b.push(1);
+                lp(b, &unb64(s).unwrap());
+            }
+            None => b.push(0),
+        }
+    }
+    let mut b = b"unissh-audit-chain-v2".to_vec();
+    b.extend_from_slice(&l["seq"].as_i64().unwrap().to_be_bytes());
+    lp(&mut b, l["source"].as_str().unwrap().as_bytes());
+    lp(&mut b, &unb64(l["entry_blob"].as_str().unwrap()).unwrap());
+    opt(&mut b, &l["signature"]);
+    opt(&mut b, &l["author_pubkey"]);
+    opt(&mut b, &l["vault_id"]);
+    b.extend_from_slice(&l["recorded_at"].as_i64().unwrap().to_be_bytes());
+    b.extend_from_slice(&l["server_seq"].as_i64().unwrap_or(-1).to_be_bytes());
+    b
+}
+
+#[tokio::test]
+async fn audit_export_is_json_lines_that_verify_offline() {
+    // A 2-row page makes the 3+ row fixture span several streamed pages.
+    let app = common::spawn_with(|c| c.limits.delta_page_size = 2).await;
+    let a = admin_with_audit(&app).await;
+
+    let r = export(&app, "", &a.bearer).await;
+    assert_eq!(r.status(), 200);
+    let lines = jsonl(&r.text().await.unwrap());
+
+    let mut head = vec![0u8; 32];
+    for l in &lines {
+        for k in ["space_id", "server_seq"] {
+            assert!(l.get(k).is_some(), "chain field {k} present");
+        }
+        match l["source"].as_str().unwrap() {
+            "server-observed" => assert!(l["entry"].is_object(), "decoded JSON"),
+            _ => assert_eq!(l["entry"], l["entry_blob"], "client-signed stays base64"),
+        }
+        let mut input = head.clone();
+        input.extend_from_slice(&exported_record_bytes(l));
+        head = sha256(&input).to_vec();
+        assert_eq!(
+            l["prev_hash"].as_str().unwrap(),
+            b64(&head),
+            "seq {}",
+            l["seq"]
+        );
+    }
+
+    let v = get_json(&app, "/v1/admin/audit/verify", &a.bearer).await;
+    assert!(lines.len() > 2, "the export crossed a page boundary");
+    assert_eq!(v["count"].as_u64().unwrap(), lines.len() as u64);
+    assert_eq!(v["head_hash"].as_str().unwrap(), b64(&head));
+    assert!(lines.iter().any(|l| l["source"] == "client-signed"));
+    assert!(lines.iter().any(|l| l["source"] == "server-observed"));
+}
+
 // ---- config hot-reload (validate_signatures) + metrics summary ----
 
 #[tokio::test]
@@ -544,4 +672,338 @@ async fn instance_generation_tracks_writes() {
 
     let ov1 = get_json(&app, "/v1/admin/overview", &a.bearer).await;
     assert_eq!(ov1["instance_generation"], 2);
+}
+
+// ---- audit webhook sink, against an in-test receiver ----
+
+#[derive(Clone)]
+struct HookReceiver {
+    status: std::sync::Arc<std::sync::atomic::AtomicU16>,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<(axum::http::HeaderMap, axum::body::Bytes)>>>,
+}
+
+/// An axum receiver at `/hook` that records each request and answers `status`.
+async fn spawn_hook_receiver(status: u16) -> (HookReceiver, String) {
+    use axum::extract::State;
+    let rx = HookReceiver {
+        status: std::sync::Arc::new(std::sync::atomic::AtomicU16::new(status)),
+        seen: Default::default(),
+    };
+    let router = axum::Router::new()
+        .route(
+            "/hook",
+            axum::routing::post(
+                |State(rx): State<HookReceiver>,
+                 headers: axum::http::HeaderMap,
+                 body: axum::body::Bytes| async move {
+                    rx.seen.lock().unwrap().push((headers, body));
+                    let code = rx.status.load(std::sync::atomic::Ordering::SeqCst);
+                    axum::http::StatusCode::from_u16(code).unwrap()
+                },
+            ),
+        )
+        .with_state(rx.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    (rx, format!("http://{addr}/hook"))
+}
+
+#[tokio::test]
+async fn audit_webhook_posts_signed_batches_and_advances_only_on_2xx() {
+    use hmac::{Hmac, KeyInit, Mac};
+    use std::sync::Arc;
+    use unissh_server::audit_sinks::webhook::WebhookSink;
+    use unissh_server::audit_sinks::{Delivery, Step};
+
+    let app = spawn().await;
+    let store = &app.state.store;
+    let base = store.max_audit_seq().await.unwrap();
+    for ev in ["login", "logout"] {
+        store
+            .append_audit_server_observed(&json!({ "ev": ev }), None, app.now())
+            .await
+            .unwrap();
+    }
+    let (rx, url) = spawn_hook_receiver(500).await;
+    let secret = b"shared-hook-secret".to_vec();
+    let sink = WebhookSink::new(
+        &url,
+        secret.clone(),
+        std::time::Duration::from_secs(5),
+        app.instance_id.clone(),
+    )
+    .unwrap();
+    let mut delivery = Delivery::new(
+        Arc::new(sink),
+        store.clone(),
+        Arc::new(store.clone()),
+        app.state.clock.clone(),
+        100,
+    );
+
+    // 500: the batch fails and the cursor stays put.
+    assert!(matches!(delivery.step().await, Step::Failed { .. }));
+    assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), base);
+
+    // 200: acknowledged, the cursor moves to the last seq of the batch.
+    rx.status.store(200, std::sync::atomic::Ordering::SeqCst);
+    let (first, last) = (base + 1, base + 2);
+    assert_eq!(delivery.step().await, Step::Delivered { first, last });
+    assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), last);
+
+    let seen = rx.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    let (headers, body) = &seen[1];
+    // The signature verifies with the shared secret over the exact body bytes.
+    let mut mac = <Hmac<sha2::Sha256>>::new_from_slice(&secret).unwrap();
+    mac.update(body);
+    let expected = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    assert_eq!(headers["x-unissh-signature"], expected.as_str());
+    assert_eq!(
+        headers["x-unissh-delivery"],
+        format!("{first}-{last}").as_str()
+    );
+    assert_eq!(headers["content-type"], "application/json");
+
+    let v: Value = serde_json::from_slice(body).unwrap();
+    assert_eq!(v["instance"], app.instance_id.as_str());
+    let entries = v["entries"].as_array().unwrap();
+    let seqs: Vec<i64> = entries.iter().map(|e| e["seq"].as_i64().unwrap()).collect();
+    assert_eq!(seqs, vec![first, last]);
+    let mut keys: Vec<&str> = entries[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "author_pubkey",
+            "entry",
+            "entry_blob",
+            "prev_hash",
+            "recorded_at",
+            "seq",
+            "server_seq",
+            "signature",
+            "source",
+            "space_id",
+            "vault_id",
+        ]
+    );
+    assert_eq!(entries[0]["entry"]["ev"], "login");
+    assert_eq!(
+        unb64(entries[0]["entry_blob"].as_str().unwrap()).unwrap(),
+        serde_json::to_vec(&json!({ "ev": "login" })).unwrap()
+    );
+}
+
+/// Read one RFC 6587 octet-counted frame (`<len> <msg>`) from `conn`.
+async fn read_frame(conn: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut len = Vec::new();
+    loop {
+        let b = conn.read_u8().await.unwrap();
+        if b == b' ' {
+            break;
+        }
+        assert!(b.is_ascii_digit(), "frame length must be decimal digits");
+        len.push(b);
+    }
+    let n: usize = std::str::from_utf8(&len).unwrap().parse().unwrap();
+    let mut msg = vec![0u8; n];
+    conn.read_exact(&mut msg).await.unwrap();
+    String::from_utf8(msg).unwrap()
+}
+
+#[tokio::test]
+async fn audit_syslog_tcp_sends_octet_counted_rfc5424_and_advances_the_cursor() {
+    use std::sync::Arc;
+    use unissh_server::audit_sinks::syslog::{Header, SyslogSink};
+    use unissh_server::audit_sinks::{Delivery, Step};
+
+    let app = spawn().await;
+    let store = &app.state.store;
+    let base = store.max_audit_seq().await.unwrap();
+    let vault = [7u8; 16];
+    store
+        .append_audit_server_observed(&json!({ "event": "login" }), None, app.now())
+        .await
+        .unwrap();
+    store
+        .append_audit_server_observed(
+            &json!({ "event": "access_grant" }),
+            Some(&vault[..]),
+            app.now(),
+        )
+        .await
+        .unwrap();
+    // The sink connects into the listen backlog; the test accepts after delivery.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let sink = SyslogSink::new(
+        listener.local_addr().unwrap().to_string(),
+        true,
+        Header {
+            facility: 16, // local0
+            hostname: "-".into(),
+            app_name: "unissh".into(),
+        },
+    );
+    let mut delivery = Delivery::new(
+        Arc::new(sink),
+        store.clone(),
+        Arc::new(store.clone()),
+        app.state.clock.clone(),
+        100,
+    );
+
+    let (first, last) = (base + 1, base + 2);
+    assert_eq!(delivery.step().await, Step::Delivered { first, last });
+    assert_eq!(store.audit_sink_cursor("syslog").await.unwrap(), last);
+
+    let (mut conn, _) = listener.accept().await.unwrap();
+    for (seq, event, vault_id) in [
+        (first, "login", String::new()),
+        (last, "access_grant", b64(&vault)),
+    ] {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), read_frame(&mut conn))
+            .await
+            .unwrap();
+        // <local0.notice>1 TIMESTAMP HOST APP PROCID MSGID [SD] BODY
+        let (head, body) = msg.split_once("] ").unwrap();
+        assert!(head.starts_with("<133>1 "), "{head}");
+        assert!(
+            head.ends_with(&format!(
+                " - unissh - {event} [unissh@32473 seq=\"{seq}\" event=\"{event}\" \
+                 space_id=\"\" vault_id=\"{vault_id}\""
+            )),
+            "{head}"
+        );
+        let entry: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(entry, json!({ "event": event }));
+    }
+
+    // The collector drops the connection: the next batch goes out on a new one.
+    drop(conn);
+    store
+        .append_audit_server_observed(&json!({ "event": "logout" }), None, app.now())
+        .await
+        .unwrap();
+    // Let the FIN reach the sink's socket before its pre-batch liveness probe.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let next = last + 1;
+    assert_eq!(
+        delivery.step().await,
+        Step::Delivered {
+            first: next,
+            last: next
+        }
+    );
+    let (mut conn, _) = tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+        .await
+        .expect("the sink must open a new connection")
+        .unwrap();
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), read_frame(&mut conn))
+        .await
+        .unwrap();
+    assert!(msg.contains(&format!("seq=\"{next}\"")), "{msg}");
+}
+
+// ---- audit sink status (`GET /v1/admin/audit/sinks`) ----
+
+#[tokio::test]
+async fn audit_sink_status_is_owner_only() {
+    let app = spawn().await;
+    let a = claim_admin(&app).await;
+    let (_acct, member_bearer) = add_member(&app, None).await;
+
+    let r = app
+        .client
+        .get(format!("{}/v1/admin/audit/sinks", app.base))
+        .header("Authorization", format!("Bearer {member_bearer}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403, "a member cannot read sink status");
+    // The harness configures no sink: the owner gets an empty list.
+    let v = get_json(&app, "/v1/admin/audit/sinks", &a.bearer).await;
+    assert_eq!(v, json!({ "sinks": [] }));
+}
+
+#[tokio::test]
+async fn audit_sink_status_reflects_a_delivered_batch_and_a_failing_sink() {
+    use std::sync::{Arc, Mutex};
+    use unissh_server::audit_sinks::syslog::{Header, SyslogSink};
+    use unissh_server::audit_sinks::webhook::WebhookSink;
+    use unissh_server::audit_sinks::{Delivery, SharedSinkStatus, Sink, SinkStatus, Step};
+
+    let app = spawn().await;
+    let a = claim_admin(&app).await;
+    let store = &app.state.store;
+    let (_rx, url) = spawn_hook_receiver(200).await;
+    let webhook = WebhookSink::new(
+        &url,
+        b"s".to_vec(),
+        std::time::Duration::from_secs(5),
+        app.instance_id.clone(),
+    )
+    .unwrap();
+    // A syslog collector that is gone: the port refuses connections.
+    let gone = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = gone.local_addr().unwrap().to_string();
+    drop(gone);
+    let header = Header {
+        facility: 16,
+        hostname: "-".into(),
+        app_name: "unissh".into(),
+    };
+    let syslog = SyslogSink::new(addr, true, header);
+
+    let mut steps = Vec::new();
+    let mut statuses = Vec::new();
+    for sink in [Arc::new(webhook) as Arc<dyn Sink>, Arc::new(syslog)] {
+        let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
+            sink: sink.name().to_string(),
+            ..Default::default()
+        }));
+        let mut d = Delivery::new(
+            sink,
+            store.clone(),
+            Arc::new(store.clone()),
+            app.state.clock.clone(),
+            100,
+        );
+        steps.push(d.step_recorded(&status).await);
+        statuses.push(status);
+    }
+    app.state.audit_sinks.set(statuses).unwrap();
+    let head = store.max_audit_seq().await.unwrap();
+    assert!(head > 0, "claim + login wrote audit entries");
+    assert_eq!(
+        steps[0],
+        Step::Delivered {
+            first: 1,
+            last: head
+        }
+    );
+    assert!(matches!(steps[1], Step::Failed { .. }));
+
+    let v = get_json(&app, "/v1/admin/audit/sinks", &a.bearer).await;
+    let now = app.now();
+    assert_eq!(
+        v,
+        json!({ "sinks": [
+            {
+                "sink": "webhook", "last_seq": head, "lag": 0,
+                "last_success_at": now, "last_error": null, "last_error_at": null,
+            },
+            {
+                "sink": "syslog", "last_seq": 0, "lag": head,
+                "last_success_at": null, "last_error": "connect", "last_error_at": now,
+            },
+        ] })
+    );
 }

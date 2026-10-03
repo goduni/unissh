@@ -3,17 +3,22 @@
 
 use crate::codec::{ObjectTag, parse_open};
 use crate::error::{AppError, AppResult};
-use crate::http::extract::AuthCtx;
+use crate::http::extract::{AuthCtx, OwnerCtx};
 use crate::ids;
 use crate::state::AppState;
+use crate::store::models::AuditExportRow;
+use axum::body::{Body, Bytes};
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::routing::post;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/v1/audit", post(audit_append).get(audit_query))
+    Router::new()
+        .route("/v1/audit", post(audit_append).get(audit_query))
+        .route("/v1/audit/export", get(audit_export))
 }
 
 #[derive(Deserialize)]
@@ -126,4 +131,125 @@ async fn audit_query(
         has_more,
         next_since,
     }))
+}
+
+// ---- JSON Lines export ----
+
+#[derive(Deserialize)]
+struct ExportQuery {
+    from_seq: Option<i64>,
+    to_seq: Option<i64>,
+}
+
+/// One exported line: every chained column (so the file verifies offline with
+/// the `unissh-audit-chain-v2` recipe) plus a readable `entry`. Also the entry
+/// object of a webhook batch (`crate::audit_sinks::webhook`).
+#[derive(Serialize)]
+pub(crate) struct ExportLine {
+    seq: i64,
+    server_seq: Option<i64>,
+    source: String,
+    recorded_at: i64,
+    author_pubkey: Option<String>,
+    vault_id: Option<String>,
+    space_id: Option<String>,
+    prev_hash: Option<String>,
+    signature: Option<String>,
+    /// Decoded JSON for a server-observed entry; base64 for a client-signed
+    /// (opaque) one, or for a server-observed blob that is not JSON.
+    entry: serde_json::Value,
+    /// The exact chained bytes, base64. A re-serialised `entry` is not
+    /// guaranteed byte-identical, so offline verification hashes these.
+    entry_blob: String,
+}
+
+/// The readable form of an entry: decoded JSON for a server-observed entry;
+/// base64 (a JSON string) for a client-signed one, or for a server-observed
+/// blob that is not JSON. Shared by the export, the webhook and syslog.
+pub(crate) fn entry_value(r: &AuditExportRow) -> serde_json::Value {
+    if r.source == "server-observed" {
+        serde_json::from_slice(&r.entry_blob).ok()
+    } else {
+        None
+    }
+    .unwrap_or_else(|| serde_json::Value::String(ids::b64(&r.entry_blob)))
+}
+
+impl From<&AuditExportRow> for ExportLine {
+    fn from(r: &AuditExportRow) -> Self {
+        let entry = entry_value(r);
+        ExportLine {
+            seq: r.seq,
+            server_seq: r.server_seq,
+            source: r.source.clone(),
+            recorded_at: r.recorded_at,
+            author_pubkey: r.author_pubkey.as_deref().map(ids::b64),
+            vault_id: r.vault_id.as_deref().map(ids::b64),
+            space_id: r.space_id.as_deref().map(ids::b64),
+            prev_hash: r.prev_hash.as_deref().map(ids::b64),
+            signature: r.signature.as_deref().map(ids::b64),
+            entry,
+            entry_blob: ids::b64(&r.entry_blob),
+        }
+    }
+}
+
+/// `GET /v1/audit/export?from_seq&to_seq`: the audit log (or the inclusive seq
+/// range) as JSON Lines, owner only. Streamed page by page; the upper bound is
+/// pinned to the head at request time, so the file is a consistent slice even
+/// while new entries are appended.
+async fn audit_export(
+    _owner: OwnerCtx,
+    State(state): State<AppState>,
+    Query(q): Query<ExportQuery>,
+) -> AppResult<Response> {
+    let from = q.from_seq.unwrap_or(1);
+    if from < 1 {
+        return Err(AppError::malformed("from_seq must be >= 1"));
+    }
+    if q.to_seq.is_some_and(|to| to < from) {
+        return Err(AppError::malformed("to_seq must be >= from_seq"));
+    }
+    let head = state.store.max_audit_seq().await?;
+    let to = q.to_seq.map_or(head, |t| t.min(head));
+
+    // Rows per round-trip: the same page size as the `/v1/audit` listing.
+    let page = (state.config.limits.delta_page_size as i64).max(1);
+    let store = state.store.clone();
+    let pages = futures_util::stream::try_unfold(from, move |next| {
+        let store = store.clone();
+        async move {
+            if next > to {
+                return Ok(None);
+            }
+            let rows = store.export_audit_page(next, to, page).await?;
+            let Some(last) = rows.last().map(|r| r.seq) else {
+                return Ok(None);
+            };
+            let mut buf = Vec::new();
+            for r in &rows {
+                serde_json::to_writer(&mut buf, &ExportLine::from(r))
+                    .map_err(|_| AppError::internal("audit export serialisation"))?;
+                buf.push(b'\n');
+            }
+            Ok::<_, AppError>(Some((Bytes::from(buf), last + 1)))
+        }
+    });
+    // Headers are already sent once the body streams: a failure can only cut
+    // the download short. Log the error code, never row contents.
+    let body = futures_util::TryStreamExt::map_err(pages, |e: AppError| {
+        tracing::warn!(code = e.code.as_str(), "audit export aborted mid-stream");
+        std::io::Error::other("audit export aborted")
+    });
+
+    let filename = format!("attachment; filename=\"unissh-audit-{from}-{to}.jsonl\"");
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/jsonl".to_string()),
+            (header::CONTENT_DISPOSITION, filename),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        Body::from_stream(body),
+    )
+        .into_response())
 }

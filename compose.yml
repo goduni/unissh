@@ -117,6 +117,17 @@ services:
       # container — without this line a pinned code in .env never reaches the server.
       UNISSH__SETUP__CODE: "${UNISSH__SETUP__CODE:-}"
       UNISSH__OPS__TOKEN: "${UNISSH__OPS__TOKEN:-}"
+      # --- Audit webhook (optional; from .env, see deploy/README.md) ---
+      # All empty → no sink. Set URL + SECRET_ENV=UNISSH_AUDIT_WEBHOOK_SECRET + the secret.
+      UNISSH__AUDIT__WEBHOOK__URL: "${UNISSH__AUDIT__WEBHOOK__URL:-}"
+      UNISSH__AUDIT__WEBHOOK__SECRET_ENV: "${UNISSH__AUDIT__WEBHOOK__SECRET_ENV:-}"
+      UNISSH_AUDIT_WEBHOOK_SECRET: "${UNISSH_AUDIT_WEBHOOK_SECRET:-}"
+      # --- Audit syslog (optional; from .env) --- empty ADDRESS → no sink;
+      # empty PROTOCOL/FACILITY/APP_NAME → defaults (tcp, auth, unissh).
+      UNISSH__AUDIT__SYSLOG__ADDRESS: "${UNISSH__AUDIT__SYSLOG__ADDRESS:-}"
+      UNISSH__AUDIT__SYSLOG__PROTOCOL: "${UNISSH__AUDIT__SYSLOG__PROTOCOL:-}"
+      UNISSH__AUDIT__SYSLOG__FACILITY: "${UNISSH__AUDIT__SYSLOG__FACILITY:-}"
+      UNISSH__AUDIT__SYSLOG__APP_NAME: "${UNISSH__AUDIT__SYSLOG__APP_NAME:-}"
     volumes:
       - unissh-data:/app/data        # SQLite db; owned by uid 65532 (distroless nonroot).
     read_only: true                  # immutable rootfs; only the named volume + tmpfs are writable.

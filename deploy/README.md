@@ -292,6 +292,45 @@ nothing secret is baked into images. Config uses figment env keys
 `UNISSH__SECTION__KEY` (double underscore). Generate strong tokens with
 `openssl rand -hex 32`.
 
+## Audit webhook (optional)
+
+To stream the audit log to a SIEM, set in `.env` (`compose.yml` already passes
+these three through; left empty, there is no sink):
+
+```bash
+UNISSH__AUDIT__WEBHOOK__URL=https://siem.example.com/unissh
+UNISSH__AUDIT__WEBHOOK__SECRET_ENV=UNISSH_AUDIT_WEBHOOK_SECRET
+UNISSH_AUDIT_WEBHOOK_SECRET=<openssl rand -hex 32>
+```
+
+Batches are signed with `X-UniSSH-Signature: sha256=<HMAC-SHA256 of the body>`.
+The HMAC key is the secret string's own bytes exactly as written (a hex-looking
+secret is **not** hex-decoded), so receivers must use it as-is. A partly set
+webhook (a URL without a secret, or the reverse) refuses to start the server.
+Use an `https://` URL: the batches carry audit metadata. Delivery is
+at-least-once from a persisted cursor: receivers dedupe on `seq`. See
+`server/config.example.toml` (`[audit.webhook]`) for every key.
+
+## Audit syslog (optional)
+
+To send the audit log to a syslog collector (RFC 5424, one message per entry),
+set in `.env` (`compose.yml` passes these through; an empty address means no
+sink):
+
+```bash
+UNISSH__AUDIT__SYSLOG__ADDRESS=syslog.internal:514
+UNISSH__AUDIT__SYSLOG__PROTOCOL=tcp        # or udp
+UNISSH__AUDIT__SYSLOG__FACILITY=auth       # optional; default auth
+UNISSH__AUDIT__SYSLOG__APP_NAME=unissh     # optional; default unissh
+```
+
+**TCP** (octet counting) advances the cursor only after the write succeeds;
+**UDP** sends and forgets, so a datagram lost on the way is lost, and an entry
+too large for one datagram (~64 KB) is skipped with a warning. There is no
+TLS: point it at a forwarder on the same host or network. It can run next to
+the webhook; each sink keeps its own cursor. See `server/config.example.toml`
+(`[audit.syslog]`).
+
 ## Maintenance
 
 - **Rollback / sequence floor:** `docker compose run --rm server seq-bump ...`

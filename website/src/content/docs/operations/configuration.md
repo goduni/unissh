@@ -141,6 +141,53 @@ token = ""                       # empty → ops surface DISABLED (the default)
 
 This is **server-trusted infrastructure access** (overview / instance / `seq-bump`), **not** a keyset and never decryption. It is not how the [admin panel](../../components/server-ui/) normally signs in — the panel authenticates by escrow or SSO; the ops token is a last-resort infrastructure lever.
 
+### `[audit]`
+
+Optional **audit export sinks**. Absent means the server exports nothing; sinks are configured here only, never through the API. The log holds server events only: SSH sessions never pass through the server and are not recorded here (see [the audit log](../../components/server-audit/)).
+
+```toml
+[audit.webhook]
+url = "https://siem.example.com/unissh"
+secret_env = "UNISSH_AUDIT_WEBHOOK_SECRET"   # or: secret_file = "/run/secrets/audit_webhook"
+batch_size = 100                             # entries per POST
+timeout_secs = 10                            # a timeout fails the batch
+```
+
+The webhook POSTs batches of entries as JSON, each entry shaped like a line of the [JSON Lines export](../../components/server-audit/#export-json-lines), with `X-UniSSH-Signature: sha256=<hex HMAC-SHA256 of the body>` and `X-UniSSH-Delivery: <first seq>-<last seq>`. A `2xx` acknowledges the batch; anything else, a redirect or a timeout retries the **same** batch with exponential backoff (1 s up to 5 min, with jitter).
+
+- **The secret never goes in the TOML.** `secret_env` names an environment variable that holds it; `secret_file` is a path to a file that holds it (a trailing newline is ignored). Set exactly one. A webhook without a readable secret is a **startup error**.
+- **The HMAC key is the secret's literal bytes**, exactly as written. A hex- or base64-looking secret is not decoded, so receivers must not decode it either.
+- **Use `https://`.** Batches carry audit entries and metadata; a plain `http://` URL to a non-loopback host is accepted but warned about at boot.
+- A section whose `url`, `secret_env` and `secret_file` are all empty counts as absent (so a deployment can pass empty variables through); a partly set one fails startup.
+- **At-least-once.** The server records the last acknowledged `seq` and resumes after it on restart. A batch can arrive twice (for example, a crash right after the receiver answered), so **receivers dedupe on `seq`**.
+- Every key also works from the environment: `UNISSH__AUDIT__WEBHOOK__URL`, `UNISSH__AUDIT__WEBHOOK__SECRET_ENV`, and so on.
+- Writing the receiver: the body, the signature recipe with a worked example, and the dedupe rule are in [Audit webhook integration](../../components/audit-webhook/).
+
+```toml
+[audit.syslog]
+address = "127.0.0.1:514"   # host:port of the collector; IPv6 in brackets: "[::1]:514"
+protocol = "tcp"            # "tcp" (default) or "udp"
+facility = "auth"           # kern, user, ..., auth, authpriv, ..., local0..local7
+app_name = "unissh"         # RFC 5424 APP-NAME
+```
+
+The syslog sink sends one [RFC 5424](https://www.rfc-editor.org/rfc/rfc5424) message per entry, at severity `notice`:
+
+```text
+<37>1 2026-10-03T09:12:44Z unissh.example.com unissh - login [unissh@32473 seq="42" event="login" space_id="" vault_id=""] {"event":"login",...}
+```
+
+- **Header.** The timestamp is the entry's `recorded_at` (UTC). The hostname is the host of `server.public_url`, or `-` when it is unset. MSGID is the event kind, or `-` when there is none.
+- **Structured data.** `unissh@32473` carries `seq`, `event`, `space_id` and `vault_id` (base64; empty when the entry has none, and `event` is empty for a client-signed entry). UniSSH has no IANA Private Enterprise Number of its own, by design; 32473 is the number [RFC 5612](https://www.rfc-editor.org/rfc/rfc5612) reserves for documentation. `unissh@32473` is a frozen wire identifier: collector parsers key on it, so changing it would be a breaking change.
+- **Body.** The entry exactly as in the JSON Lines export's `entry`: compact JSON for a server event, the base64 of the blob for a client-signed entry. It is UTF-8 sent as RFC 5424 MSG-ANY **without a BOM**, so collectors should not expect one. For chain verification use the export or the webhook, which carry `entry_blob` and the hash fields.
+- **UDP vs TCP.** **UDP sends and forgets:** the cursor advances once every datagram of a batch is sent, so a datagram lost on the way is lost. An entry too large for one datagram (65,507 bytes over IPv4, 65,527 over IPv6) is skipped with a `udp_oversize` warning naming its `seq`, so it never holds back later entries; use TCP if entries can be that large. **TCP** uses octet counting ([RFC 6587](https://www.rfc-editor.org/rfc/rfc6587)) on one persistent connection, re-opened after an error, and advances the cursor only after the write succeeds; otherwise the same batch is retried with backoff.
+- **No TLS.** Syslog goes out in plaintext; a non-loopback collector is warned about at boot. Use a forwarder on the same host (rsyslog, syslog-ng, Vector) to carry it further over TLS.
+- Both sinks can be configured at once; each keeps its own cursor, so one sink's outage does not hold back the other.
+- Each sink's last delivered `seq`, lag and last error show on the admin panel's audit screen and at `GET /v1/admin/audit/sinks`; Prometheus gets `unissh_audit_sink_delivered_seq{sink}`, `unissh_audit_sink_lag{sink}` and `unissh_audit_sink_failures_total{sink}` (see [watching the sink](../../components/audit-webhook/#watching-the-sink)).
+- An empty `address` with every other key empty or default counts as absent; an empty `protocol`, `facility` or `app_name` takes its default. A bad address, protocol, facility or app name is a **startup error**. From the environment: `UNISSH__AUDIT__SYSLOG__ADDRESS`, `UNISSH__AUDIT__SYSLOG__PROTOCOL`, and so on.
+
+**Where a sink starts.** The delivered position (the cursor) is kept per sink **type**, `webhook` or `syslog`, not per URL or address. Changing `url` or `address` to a new receiver continues from the old cursor, so the new receiver gets no history. A sink type that has never delivered starts at `seq` 1 and sends the whole log. To backfill a new receiver, load the [JSON Lines export](../../components/server-audit/#export-json-lines) into it, or stop the server and delete that sink's row from the `audit_sink_cursor` table.
+
 ## Environment overrides
 
 Any key maps to an environment variable by uppercasing and joining with double underscores:

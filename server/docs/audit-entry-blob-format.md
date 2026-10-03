@@ -3,6 +3,8 @@
 Reference for rendering `GET /v1/audit` entries in the admin panel. Resolves
 handoff **P3.9**.
 
+**This log records server events only. SSH sessions never pass through the server and are not recorded here.** The server is a control plane: SSH connections, commands and file transfers go directly from the client to the host and leave no trace in this log.
+
 `GET /v1/audit?since_seq&limit` returns:
 
 ```json
@@ -110,6 +112,59 @@ Independent of `entry_blob` content, the whole log is a hash chain
 `GET /v1/admin/audit/verify` → `{ok, count, broken_at, head_hash}` — it does
 **not** need to recompute the chain itself, and `prev_hash` is not exposed on the
 `/v1/audit` listing.
+
+---
+
+## 4. Export (JSON Lines)
+
+`GET /v1/audit/export?from_seq&to_seq` streams the log as [JSON Lines](https://jsonlines.org/) (`Content-Type: application/jsonl`), one entry per line in `seq` order. It is **owner only** (the same gate as `/v1/admin/*`); the admin panel's audit screen has an **Export** control for it.
+
+- `from_seq` and `to_seq` are optional, inclusive, and must be positive integers with `to_seq >= from_seq` (otherwise `400`). Omitted, the export starts at `1` and ends at the newest entry.
+- The upper bound is pinned to the newest entry at request time, so a download is a consistent slice even while the server keeps appending.
+- The body is streamed in pages; an error part-way through ends the download early. The chain cannot detect a missing tail, so compare the last line's `seq` with the pinned upper bound in the `Content-Disposition` file name (`unissh-audit-<from>-<to>.jsonl`): they must be equal. A cut-off final line fails to parse.
+
+Each line:
+
+```json
+{
+  "seq": 42,
+  "server_seq": null,
+  "source": "server-observed",
+  "recorded_at": 1700000000,
+  "author_pubkey": null,
+  "vault_id": null,
+  "space_id": null,
+  "prev_hash": "<base64>",
+  "signature": null,
+  "entry": { "event": "login", "account_id": "Ym9i...", "device_id": "ZGV2...", "ts": 1700000000 },
+  "entry_blob": "<base64>"
+}
+```
+
+Binary fields are base64 or `null`. `entry` is the decoded JSON for a `server-observed` entry and the base64 string for a `client-signed` one (the same value as `entry_blob`). `entry_blob` is always the exact stored bytes: verify against it, not a re-serialised `entry`.
+
+### Verifying an export offline
+
+Recompute the chain from the first exported line. For an export from `seq` 1 the running hash starts at 32 zero bytes; for a range, start from the `prev_hash` of the line before it (in an earlier export). For each line, in order:
+
+```text
+record_bytes = "unissh-audit-chain-v2"            (ASCII, no length prefix)
+             ‖ seq                                 (i64, big-endian)
+             ‖ lp(source)                          (UTF-8)
+             ‖ lp(entry_blob)
+             ‖ opt(signature)
+             ‖ opt(author_pubkey)
+             ‖ opt(vault_id)
+             ‖ recorded_at                         (i64, big-endian)
+             ‖ server_seq                          (i64, big-endian; -1 when null)
+
+lp(x)  = len(x) as u32 big-endian ‖ x
+opt(x) = 0x00 when null, else 0x01 ‖ lp(x)
+
+chain = SHA-256( chain ‖ record_bytes )   and it must equal the line's prev_hash
+```
+
+`space_id` is exported for context but is not part of `record_bytes`. The last line's `prev_hash` of a whole-log export equals the `head_hash` returned by `GET /v1/admin/audit/verify` at that point. A matching chain proves the file was not edited, reordered or cut in the middle; as with the server-side check, it does not by itself prove that no entries were dropped from the tail, so keep the head hash of each export to compare with the next.
 
 ---
 

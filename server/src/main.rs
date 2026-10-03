@@ -289,6 +289,24 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Audit export sinks (`[audit.*]`): one delivery task each. They and the
+    // listener stop together on SIGTERM/Ctrl-C; an in-flight batch is simply
+    // re-sent after the restart (at-least-once).
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let sinks = unissh_server::audit_sinks::spawn_configured(&state, stop_rx)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let handle = axum_server::Handle::<SocketAddr>::new();
+    {
+        let handle = handle.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            tracing::info!("shutdown requested");
+            let _ = stop_tx.send(true);
+            // 8 s drain + 1 s sink join stays inside Docker's default 10 s stop grace.
+            handle.graceful_shutdown(Some(std::time::Duration::from_secs(8)));
+        });
+    }
+
     let make = app(state).into_make_service_with_connect_info::<SocketAddr>();
 
     match tls {
@@ -299,15 +317,49 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .map_err(|e| anyhow::anyhow!("load TLS cert/key: {e}"))?;
             tracing::info!(%bind, "unissh-server listening (rustls TLS 1.3)");
-            axum_server::bind_rustls(bind, tls).serve(make).await?;
+            axum_server::bind_rustls(bind, tls)
+                .handle(handle)
+                .serve(make)
+                .await?;
         }
         unissh_server::TlsPlan::Plain => {
             tracing::warn!(
                 %bind, trust_proxy,
                 "unissh-server listening (plain HTTP — terminate TLS at a reverse proxy and set trust_proxy=true)"
             );
-            axum_server::bind(bind).serve(make).await?;
+            axum_server::bind(bind).handle(handle).serve(make).await?;
         }
     }
+    // The sinks were told to stop with the listener; give them one shared second.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        futures_util::future::join_all(sinks),
+    )
+    .await;
     Ok(())
+}
+
+/// Resolves on Ctrl-C or (unix) SIGTERM, which is what `docker stop` sends.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        // No signal handler (rare) → never resolve, rather than shut down at once.
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = term => {}
+    }
 }

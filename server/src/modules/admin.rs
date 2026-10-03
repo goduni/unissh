@@ -35,6 +35,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/admin/seq-bump", post(seq_bump))
         .route("/v1/admin/migrations", get(migrations_list))
         .route("/v1/admin/audit/verify", get(audit_verify))
+        .route("/v1/admin/audit/sinks", get(audit_sinks))
         .route("/v1/admin/instance", get(instance_info))
 }
 
@@ -591,4 +592,36 @@ async fn audit_verify(_owner: OwnerCtx, State(state): State<AppState>) -> AppRes
         "broken_at": broken_at,
         "head_hash": head.as_deref().map(ids::b64),
     })))
+}
+
+// ---- audit export sinks (`[audit.*]`) ----
+
+/// Per configured sink: the persisted cursor (`last_seq`), how far it trails the
+/// log (`lag`), and the last success/failure this process saw. `last_error` is a
+/// short code (`http_500`, `timeout`), never a URL, secret or entry content.
+/// Empty when no sink is configured.
+async fn audit_sinks(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let statuses: Vec<crate::audit_sinks::SinkStatus> = state
+        .audit_sinks
+        .get()
+        .map(|v| {
+            v.iter()
+                .map(|s| s.lock().unwrap_or_else(|p| p.into_inner()).clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let head = state.store.max_audit_seq().await?;
+    let mut out = Vec::with_capacity(statuses.len());
+    for s in statuses {
+        let last_seq = state.store.audit_sink_cursor(&s.sink).await?;
+        out.push(json!({
+            "sink": s.sink,
+            "last_seq": last_seq,
+            "lag": (head - last_seq).max(0),
+            "last_success_at": s.last_success_at,
+            "last_error": s.last_error,
+            "last_error_at": s.last_error_at,
+        }));
+    }
+    Ok(Json(json!({ "sinks": out })))
 }

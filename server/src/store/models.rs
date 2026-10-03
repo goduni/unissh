@@ -248,6 +248,22 @@ pub struct AuditChainRow {
     pub prev_hash: Option<Vec<u8>>,
 }
 
+/// A full `audit_log` row for the JSON Lines export: every column the chain
+/// hashes plus `space_id` and the stored chain head.
+#[derive(Debug, Clone, FromRow)]
+pub struct AuditExportRow {
+    pub seq: i64,
+    pub source: String,
+    pub entry_blob: Vec<u8>,
+    pub signature: Option<Vec<u8>>,
+    pub author_pubkey: Option<Vec<u8>>,
+    pub vault_id: Option<Vec<u8>>,
+    pub space_id: Option<Vec<u8>>,
+    pub recorded_at: i64,
+    pub server_seq: Option<i64>,
+    pub prev_hash: Option<Vec<u8>>,
+}
+
 // ---- v2 (redesign/server-v2): singleton instance row ----
 
 /// The singleton `instance` row (v2 schema): this server's identity, claim
