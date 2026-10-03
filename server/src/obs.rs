@@ -40,7 +40,9 @@ pub fn init_tracing(cfg: &ObsConfig) {
 
 /// Install the Prometheus recorder and return a handle for rendering `/metrics`.
 pub fn init_metrics() -> Option<PrometheusHandle> {
-    PrometheusBuilder::new().install_recorder().ok()
+    let handle = PrometheusBuilder::new().install_recorder().ok()?;
+    crate::audit_sinks::describe_metrics();
+    Some(handle)
 }
 
 /// In-memory ring-buffer of Prometheus-counter samples for

@@ -220,6 +220,13 @@ impl Delivery {
         (self.jitter)(base)
     }
 
+    /// [`Delivery::step`], then record the outcome in `status` and the sink metrics.
+    pub async fn step_recorded(&mut self, status: &SharedSinkStatus) -> Step {
+        let step = self.step().await;
+        record(status, &step, self.clock.now_unix());
+        step
+    }
+
     /// Step until `shutdown` turns true (or its sender is dropped), recording
     /// each outcome in `status`.
     pub async fn run(mut self, status: SharedSinkStatus, mut shutdown: watch::Receiver<bool>) {
@@ -230,11 +237,9 @@ impl Delivery {
                 break;
             }
             let step = tokio::select! {
-                s = self.step() => s,
+                s = self.step_recorded(&status) => s,
                 _ = shutdown.changed() => break,
             };
-            // Ticket-04 metrics hook in here too.
-            record(&status, &step, self.clock.now_unix());
             let wait = step.wait();
             if wait.is_zero() {
                 continue;
@@ -248,7 +253,24 @@ impl Delivery {
     }
 }
 
-/// Last known state of one sink, for the status endpoint (ticket 04).
+/// Gauge: the last seq a sink acknowledged (and recorded), labelled `sink`.
+pub const METRIC_DELIVERED_SEQ: &str = "unissh_audit_sink_delivered_seq";
+/// Counter: failed delivery attempts (sink error, log read, cursor write), labelled `sink`.
+pub const METRIC_FAILURES_TOTAL: &str = "unissh_audit_sink_failures_total";
+
+/// Describe the sink metrics on the installed recorder (`obs::init_metrics`).
+pub fn describe_metrics() {
+    metrics::describe_gauge!(
+        METRIC_DELIVERED_SEQ,
+        "Last audit seq acknowledged by the sink and recorded in its cursor"
+    );
+    metrics::describe_counter!(
+        METRIC_FAILURES_TOTAL,
+        "Failed audit sink delivery attempts (each is retried with backoff)"
+    );
+}
+
+/// Last known state of one sink, for `GET /v1/admin/audit/sinks`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SinkStatus {
     pub sink: String,
@@ -268,11 +290,13 @@ fn record(status: &SharedSinkStatus, step: &Step, now: i64) {
         Step::Delivered { last, .. } => {
             s.last_delivered_seq = Some(*last);
             s.last_success_at = Some(now);
+            metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => s.sink.clone()).set(*last as f64);
         }
         Step::Idle => {}
         Step::Failed { error, .. } => {
             s.last_error = Some(error.0.clone());
             s.last_error_at = Some(now);
+            metrics::counter!(METRIC_FAILURES_TOTAL, "sink" => s.sink.clone()).increment(1);
         }
     }
 }
@@ -554,5 +578,36 @@ mod tests {
         assert_eq!(d_down.step().await, Step::Delivered { first: 1, last: 2 });
         assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), 2);
         assert_eq!(store.audit_sink_cursor("syslog").await.unwrap(), 3);
+    }
+
+    #[test]
+    fn recorded_steps_show_on_the_prometheus_exporter() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
+            sink: "webhook".into(),
+            ..Default::default()
+        }));
+        metrics::with_local_recorder(&recorder, || {
+            describe_metrics();
+            record(&status, &Step::Delivered { first: 1, last: 7 }, 10);
+            for _ in 0..2 {
+                let error = SinkError("http_500".into());
+                let delay = BACKOFF_MIN;
+                record(&status, &Step::Failed { delay, error }, 11);
+            }
+        });
+        let text = handle.render();
+        for line in [
+            "# TYPE unissh_audit_sink_delivered_seq gauge",
+            "unissh_audit_sink_delivered_seq{sink=\"webhook\"} 7",
+            "# TYPE unissh_audit_sink_failures_total counter",
+            "unissh_audit_sink_failures_total{sink=\"webhook\"} 2",
+        ] {
+            assert!(
+                text.lines().any(|l| l == line),
+                "missing {line:?} in\n{text}"
+            );
+        }
     }
 }

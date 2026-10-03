@@ -911,3 +911,99 @@ async fn audit_syslog_tcp_sends_octet_counted_rfc5424_and_advances_the_cursor() 
         .unwrap();
     assert!(msg.contains(&format!("seq=\"{next}\"")), "{msg}");
 }
+
+// ---- audit sink status (`GET /v1/admin/audit/sinks`) ----
+
+#[tokio::test]
+async fn audit_sink_status_is_owner_only() {
+    let app = spawn().await;
+    let a = claim_admin(&app).await;
+    let (_acct, member_bearer) = add_member(&app, None).await;
+
+    let r = app
+        .client
+        .get(format!("{}/v1/admin/audit/sinks", app.base))
+        .header("Authorization", format!("Bearer {member_bearer}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403, "a member cannot read sink status");
+    // The harness configures no sink: the owner gets an empty list.
+    let v = get_json(&app, "/v1/admin/audit/sinks", &a.bearer).await;
+    assert_eq!(v, json!({ "sinks": [] }));
+}
+
+#[tokio::test]
+async fn audit_sink_status_reflects_a_delivered_batch_and_a_failing_sink() {
+    use std::sync::{Arc, Mutex};
+    use unissh_server::audit_sinks::syslog::{Header, SyslogSink};
+    use unissh_server::audit_sinks::webhook::WebhookSink;
+    use unissh_server::audit_sinks::{Delivery, SharedSinkStatus, Sink, SinkStatus, Step};
+
+    let app = spawn().await;
+    let a = claim_admin(&app).await;
+    let store = &app.state.store;
+    let (_rx, url) = spawn_hook_receiver(200).await;
+    let webhook = WebhookSink::new(
+        &url,
+        b"s".to_vec(),
+        std::time::Duration::from_secs(5),
+        app.instance_id.clone(),
+    )
+    .unwrap();
+    // A syslog collector that is gone: the port refuses connections.
+    let gone = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = gone.local_addr().unwrap().to_string();
+    drop(gone);
+    let header = Header {
+        facility: 16,
+        hostname: "-".into(),
+        app_name: "unissh".into(),
+    };
+    let syslog = SyslogSink::new(addr, true, header);
+
+    let mut steps = Vec::new();
+    let mut statuses = Vec::new();
+    for sink in [Arc::new(webhook) as Arc<dyn Sink>, Arc::new(syslog)] {
+        let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
+            sink: sink.name().to_string(),
+            ..Default::default()
+        }));
+        let mut d = Delivery::new(
+            sink,
+            store.clone(),
+            Arc::new(store.clone()),
+            app.state.clock.clone(),
+            100,
+        );
+        steps.push(d.step_recorded(&status).await);
+        statuses.push(status);
+    }
+    app.state.audit_sinks.set(statuses).unwrap();
+    let head = store.max_audit_seq().await.unwrap();
+    assert!(head > 0, "claim + login wrote audit entries");
+    assert_eq!(
+        steps[0],
+        Step::Delivered {
+            first: 1,
+            last: head
+        }
+    );
+    assert!(matches!(steps[1], Step::Failed { .. }));
+
+    let v = get_json(&app, "/v1/admin/audit/sinks", &a.bearer).await;
+    let now = app.now();
+    assert_eq!(
+        v,
+        json!({ "sinks": [
+            {
+                "sink": "webhook", "last_seq": head, "lag": 0,
+                "last_success_at": now, "last_error": null, "last_error_at": null,
+            },
+            {
+                "sink": "syslog", "last_seq": 0, "lag": head,
+                "last_success_at": null, "last_error": "connect", "last_error_at": now,
+            },
+        ] })
+    );
+}

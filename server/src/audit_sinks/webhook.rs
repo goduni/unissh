@@ -137,3 +137,19 @@ impl Sink for WebhookSink {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::signature;
+
+    /// The worked example in the website's "Audit webhook" page: the key is the
+    /// literal secret string, the MAC covers the body bytes exactly as sent.
+    #[test]
+    fn signature_matches_the_documented_example() {
+        let body = r#"{"instance":"aW5zdGFuY2UtaWQ=","entries":[{"seq":42,"server_seq":null,"source":"server-observed","recorded_at":1700000000,"author_pubkey":null,"vault_id":null,"space_id":null,"prev_hash":"UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFw=","signature":null,"entry":{"account_id":"Ym9iLWFjY291bnQ=","device_id":"Ym9iLWRldmljZQ==","event":"login","ts":1700000000},"entry_blob":"eyJhY2NvdW50X2lkIjoiWW05aUxXRmpZMjkxYm5RPSIsImRldmljZV9pZCI6IlltOWlMV1JsZG1salpRPT0iLCJldmVudCI6ImxvZ2luIiwidHMiOjE3MDAwMDAwMDB9"}]}"#;
+        assert_eq!(
+            signature(b"example-secret", body.as_bytes()),
+            "sha256=8006caf6788f2bc1e15ea2c1075275b230f3b3c28110f1ab4bad5d5d936e1f04"
+        );
+    }
+}
