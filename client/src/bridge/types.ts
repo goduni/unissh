@@ -408,6 +408,7 @@ export type ApiErrorKind =
   | "alreadyExists"
   | "hostKeyMismatch"
   | "rotationInProgress"
+  | "rotationPartlyFinished"
   | "ssh"
   | "server"
   | "other";
@@ -420,6 +421,8 @@ export interface ApiError {
   fingerprint?: string;
   /** `rotationInProgress` variant: the live candidate's item id. */
   candidateId?: string;
+  /** `rotationPartlyFinished` variant: the original key's item id. */
+  keyId?: string;
   /** `server` variant: the server's snake_case code + message. */
   code?: string;
   message?: string;
@@ -508,6 +511,8 @@ export function apiErrorMessage(e: unknown): string {
         return i18n.t("error.hostKeyMismatch", { host: e.host ?? "", port: e.port ?? 0 });
       case "rotationInProgress":
         return i18n.t("error.rotationInProgress", { item: e.candidateId ?? "" });
+      case "rotationPartlyFinished":
+        return i18n.t("error.rotationPartlyFinished", { item: e.keyId ?? "" });
       case "ssh":
         return e.msg || i18n.t("error.sshGeneric");
       case "server":
@@ -525,6 +530,8 @@ export function apiErrorMessage(e: unknown): string {
 export interface KeyRotationLink {
   keyId: string;
   candidateId: string;
+  /** Started on another device: only abandon is possible here, not finish. */
+  startedElsewhere: boolean;
 }
 
 export interface ServerStatus {

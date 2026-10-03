@@ -204,7 +204,9 @@ function RevealField({
 }
 
 // ── Keys ───────────────────────────────────────────────────────
-/** The row's part in a staged rotation (device-local link from the core):
+/** The row's part in a staged rotation (from the core's device-local links,
+ *  plus candidates synced from a device that started the rotation — those
+ *  carry `startedElsewhere` and can only be abandoned here):
  *  `original` — this key has a live candidate; `candidate` — this key IS one. */
 type RotationRole = { role: "original" | "candidate"; link: KeyRotationLink };
 
@@ -305,7 +307,7 @@ function KeyRow({
     ctx.confirm({
       title: t("secrets.finishRotationTitle"),
       body: t("secrets.finishRotationBody", { item: keyId, candidate: candidateId }),
-      danger: true,
+      danger: false,
       confirmLabel: t("secrets.finishRotationConfirm"),
       icon: "refresh",
       onConfirm: async () => {
@@ -322,10 +324,13 @@ function KeyRow({
 
   const onAbandonRotation = () => {
     if (!vault || !rotation) return;
-    const { keyId, candidateId } = rotation.link;
+    const { keyId, candidateId, startedElsewhere } = rotation.link;
     ctx.confirm({
       title: t("secrets.abandonRotationTitle"),
-      body: t("secrets.abandonRotationBody", { item: keyId, candidate: candidateId }),
+      body: t(startedElsewhere ? "secrets.abandonRotationElsewhereBody" : "secrets.abandonRotationBody", {
+        item: keyId,
+        candidate: candidateId,
+      }),
       danger: true,
       confirmLabel: t("secrets.abandonRotationConfirm"),
       icon: "trash",
@@ -460,8 +465,15 @@ function KeyRow({
         {rotation && (
           <MetaChip icon="refresh" tone="warn">
             {rotation.role === "original"
-              ? t("secrets.rotationPending", { item: rotation.link.candidateId })
-              : t("secrets.rotationCandidateOf", { item: rotation.link.keyId })}
+              ? t(rotation.link.startedElsewhere ? "secrets.rotationPendingElsewhere" : "secrets.rotationPending", {
+                  item: rotation.link.candidateId,
+                })
+              : t(
+                  rotation.link.startedElsewhere
+                    ? "secrets.rotationCandidateOfElsewhere"
+                    : "secrets.rotationCandidateOf",
+                  { item: rotation.link.keyId },
+                )}
           </MetaChip>
         )}
         <div
@@ -518,7 +530,11 @@ function KeyRow({
               },
               ...(rotation
                 ? [
-                    { label: t("secrets.finishRotation"), icon: "check" as const, onClick: onFinishRotation },
+                    // Finishing overwrites key material, so it is offered only
+                    // on the device that started the rotation and holds the link.
+                    ...(rotation.link.startedElsewhere
+                      ? []
+                      : [{ label: t("secrets.finishRotation"), icon: "check" as const, onClick: onFinishRotation }]),
                     { label: t("secrets.abandonRotation"), icon: "x" as const, onClick: onAbandonRotation },
                   ]
                 : [
@@ -621,7 +637,7 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const vault = useApp((s) => s.vaultId);
   const [links, setLinks] = useState<KeyRotationLink[]>([]);
 
-  // Staged rotations live in device-local core metadata; re-read whenever the
+  // Staged rotations (device-local links + synced candidates); re-read whenever the
   // key set changes (begin/finish/abandon all reload the vault). Keyed on a
   // signature, not the array, which the parent rebuilds on every render.
   const keySig = keys.map((k) => `${k.itemId}:${k.version}`).join("\n");
