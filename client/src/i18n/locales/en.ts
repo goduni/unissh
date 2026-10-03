@@ -290,7 +290,6 @@ export const en = {
   agentApproval: {
     title: "Sign with your key?",
     body: "A program on {{host}} is asking your agent to sign with the key this session is using.",
-    wouldLogIn: "This signature would log in as {{target}}",
     unknownUse: "Not an SSH login — the payload could not be identified.",
     systemSubtitle: "System agent",
     systemBody: "A program on this computer is asking UniSSH to sign with the key {{key}}.",

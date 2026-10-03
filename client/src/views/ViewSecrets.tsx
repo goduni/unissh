@@ -485,7 +485,6 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   // Desktop only: the keys this device offers to the system agent (device-local,
   // never synced). Reloaded with the key list, since a rotated key stops being
   // offered until it is shared again.
-  // …and only where a listener exists (Windows has none yet).
   const [agent, setAgent] = useState(false);
   useEffect(() => {
     if (!isDesktopOs()) return;
@@ -502,6 +501,9 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const [shared, setShared] = useState<Set<string> | null>(null);
   const loadShared = async () => {
     const list = await systemAgentSharedKeys();
+    // A late reply for a vault switched away from must not mark same-named
+    // keys of the current one as shared.
+    if (useApp.getState().vaultId !== vault) return;
     setShared(new Set(list.filter((k) => k.vaultId === vault).map((k) => k.itemId)));
   };
   useEffect(() => {

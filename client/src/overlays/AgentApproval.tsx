@@ -32,8 +32,6 @@ interface ApprovalRequest {
   executable: string | null;
   /** The user an SSH login would log in as; empty otherwise. Never the server. */
   user: string;
-  /** `user@service` when the payload is an SSH login; empty otherwise. */
-  target: string;
 }
 
 async function answer(id: number, approved: boolean) {
@@ -133,7 +131,10 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
                 : t("agentApproval.processPidOnly", { pid: req.pid })}
           </div>
         )}
-        {system && req.user ? (
+        {req.user ? (
+          // The user only, for both origins: the payload's service is always
+          // `ssh-connection`, and it never names the server. A forwarded
+          // request's host is in the subtitle.
           <div
             style={{
               fontFamily: MONO,
@@ -145,19 +146,6 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
             }}
           >
             {t("agentApproval.wouldLogInUser", { user: req.user })}
-          </div>
-        ) : !system && req.target ? (
-          <div
-            style={{
-              fontFamily: MONO,
-              fontSize: TEXT.small,
-              padding: `${rem(8)} ${rem(10)}`,
-              borderRadius: 8,
-              background: p.bg2,
-              border: `1px solid ${p.line}`,
-            }}
-          >
-            {t("agentApproval.wouldLogIn", { target: req.target })}
           </div>
         ) : (
           // Not an SSH login — a git signature, say. Saying so is better than
