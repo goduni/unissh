@@ -23,25 +23,35 @@
 //! takes effect on the next `ssh-add -l` and a locked core offers nothing.
 //!
 //! Every signature is approved first ([`LocalAgent`]): the registered
-//! [`AgentApprover`] is asked with the key, the login the payload names and the
-//! calling process. Only then is the key loaded into the embedded agent (if it
-//! is not cached already) and the signature made there; the private key never
-//! leaves it. The share is checked again after the approval, so a key unshared,
-//! replaced or locked away while the prompt was open is not used.
+//! [`AgentApprover`] is asked with the key and its vault, the user the payload
+//! would log in as and the calling process (as the OS reported it; advisory).
+//! At most [`MAX_PENDING_PROMPTS`] prompts are open at once, and a client that
+//! hangs up withdraws its prompt. Only then is the key loaded into the embedded
+//! agent (if it is not cached already) and the signature made there; the
+//! private key never leaves it. The share is checked again after the approval,
+//! so a key unshared, replaced or locked away while the prompt was open is not
+//! used.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use unissh_ssh_transport::{AgentCaller, AgentKeys, LocalAgent, LocalApproval, OfferedKey};
 
 use super::{
-    agent_key_id, load_key_into_agent, lock_recover, resolve_vid, userauth_target, AgentApprover,
-    AgentSignOrigin, AgentSignRequest, Core, CoreState, FfiError, InMemoryAgent, Vault,
-    ITEM_TYPE_SSH_KEY,
+    agent_key_id, load_key_into_agent, lock_recover, next_agent_sign_id, resolve_vid,
+    userauth_login, AgentApprover, AgentSignOrigin, AgentSignRequest, Core, CoreState, FfiError,
+    InMemoryAgent, Vault, ITEM_TYPE_SSH_KEY,
 };
 
 // Keep the storage slot stable; a format change gets a new key.
 const KEY: &str = "system_agent.shared.v1";
+
+/// How many signature prompts the system agent may have open at once, across
+/// all connections. Any local program can open connections; beyond this a
+/// request is refused at once instead of holding a thread and stacking yet
+/// another dialog on the person.
+const MAX_PENDING_PROMPTS: usize = 4;
 
 /// One shared key, as stored.
 #[derive(Clone, Serialize, Deserialize)]
@@ -194,10 +204,69 @@ impl AgentKeys for SharedKeys {
     }
 }
 
-/// Puts each system-agent signature to the registered approver, without
-/// holding any core lock while the person decides.
+/// Puts each system-agent signature of one connection to the registered
+/// approver, without holding any core lock while the person decides.
 struct SystemApproval {
     approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    state: Arc<Mutex<Option<CoreState>>>,
+    /// Prompts open across every connection; see [`MAX_PENDING_PROMPTS`].
+    in_flight: Arc<AtomicUsize>,
+    connection: Mutex<Connection>,
+}
+
+/// This connection's open prompt, if any, and whether its client left.
+#[derive(Default)]
+struct Connection {
+    closed: bool,
+    pending: Option<u64>,
+}
+
+/// One of the [`MAX_PENDING_PROMPTS`] slots, given back on drop.
+struct PromptSlot<'a>(&'a AtomicUsize);
+
+impl<'a> PromptSlot<'a> {
+    fn take(in_flight: &'a AtomicUsize) -> Option<Self> {
+        in_flight
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                (n < MAX_PENDING_PROMPTS).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Self(in_flight))
+    }
+}
+
+impl Drop for PromptSlot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl SystemApproval {
+    /// The name of the vault holding `key`, for the prompt; empty if unknown.
+    fn vault_name(&self, key: &OfferedKey) -> String {
+        let mut guard = lock_recover(&self.state);
+        let Some(state) = guard.as_mut() else {
+            return String::new();
+        };
+        let Some(vault_id) = read_entries(state).ok().and_then(|entries| {
+            entries
+                .into_iter()
+                .find(|e| agent_key_id(&e.vault_id, &e.item_id) == key.key_id)
+                .map(|e| e.vault_id)
+        }) else {
+            return String::new();
+        };
+        let vid = resolve_vid(&state.storage, &vault_id);
+        if let Some(name) = state.vault_names.get(&vid) {
+            return name.clone();
+        }
+        let Ok(vault) = Vault::open(&state.storage, &state.keyset, &vid) else {
+            return vault_id;
+        };
+        let name = String::from_utf8_lossy(vault.name()).to_string();
+        state.vault_names.insert(vid, name.clone());
+        name
+    }
 }
 
 impl LocalApproval for SystemApproval {
@@ -206,15 +275,50 @@ impl LocalApproval for SystemApproval {
             log::info!("system agent: no approver registered; signature refused");
             return false;
         };
-        approver.approve(AgentSignRequest {
+        let Some(_slot) = PromptSlot::take(&self.in_flight) else {
+            log::warn!("system agent: too many signature prompts pending; request refused");
+            return false;
+        };
+        let vault = self.vault_name(key);
+        let id = next_agent_sign_id();
+        {
+            let mut connection = lock_recover(&self.connection);
+            if connection.closed {
+                return false;
+            }
+            connection.pending = Some(id);
+        }
+        let login = userauth_login(blob);
+        let approved = approver.approve(AgentSignRequest {
+            id,
             origin: AgentSignOrigin::SystemAgent {
                 pid: caller.pid,
                 executable: caller.executable.clone(),
             },
             host: String::new(),
             key: key.comment.clone(),
-            target: userauth_target(blob).unwrap_or_default(),
-        })
+            vault,
+            user: login
+                .as_ref()
+                .map(|(user, _)| user.clone())
+                .unwrap_or_default(),
+            target: login
+                .map(|(user, service)| format!("{user}@{service}"))
+                .unwrap_or_default(),
+        });
+        lock_recover(&self.connection).pending = None;
+        approved
+    }
+
+    fn abandon(&self) {
+        let pending = {
+            let mut connection = lock_recover(&self.connection);
+            connection.closed = true;
+            connection.pending.take()
+        };
+        if let (Some(id), Some(approver)) = (pending, lock_recover(&self.approver).clone()) {
+            approver.cancel(id);
+        }
     }
 }
 
@@ -223,7 +327,8 @@ impl LocalApproval for SystemApproval {
 #[derive(Clone)]
 pub struct SystemAgent {
     keys: Arc<SharedKeys>,
-    approval: Arc<SystemApproval>,
+    approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    in_flight: Arc<AtomicUsize>,
 }
 
 impl SystemAgent {
@@ -236,7 +341,12 @@ impl SystemAgent {
     {
         let policy = Arc::new(LocalAgent {
             keys: self.keys.clone(),
-            approval: self.approval.clone(),
+            approval: Arc::new(SystemApproval {
+                approver: self.approver.clone(),
+                state: self.keys.state.clone(),
+                in_flight: self.in_flight.clone(),
+                connection: Mutex::new(Connection::default()),
+            }),
             caller,
         });
         unissh_ssh_transport::serve_agent(policy, stream).await;
@@ -250,9 +360,8 @@ impl Core {
             keys: Arc::new(SharedKeys {
                 state: self.state.clone(),
             }),
-            approval: Arc::new(SystemApproval {
-                approver: self.approver.clone(),
-            }),
+            approver: self.approver.clone(),
+            in_flight: Arc::new(AtomicUsize::new(0)),
         }
     }
 

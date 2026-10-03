@@ -7641,6 +7641,8 @@ pub enum AgentSignOrigin {
 /// A signature an agent UniSSH serves has been asked to produce.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct AgentSignRequest {
+    /// Names this request for [`AgentApprover::cancel`]. Unique per process.
+    pub id: u64,
     /// Where the request came from.
     pub origin: AgentSignOrigin,
     /// The host whose session the request arrived through. Empty for the system
@@ -7649,6 +7651,12 @@ pub struct AgentSignRequest {
     /// The key asked for (its vault item id). Empty for a forwarded agent, which
     /// only ever offers the key its session is using.
     pub key: String,
+    /// The name of the vault holding `key`, so keys with the same id in two
+    /// vaults can be told apart. Empty for a forwarded agent.
+    pub vault: String,
+    /// When the payload is an SSH authentication request, the user it would log
+    /// in as. The payload does not name the server. Empty otherwise.
+    pub user: String,
     /// When the payload is an SSH authentication request, the identity it would
     /// log in as — parsed out so the prompt can say where the signature goes
     /// rather than only that one was asked for. Empty when it is something else.
@@ -7667,6 +7675,16 @@ pub trait AgentApprover: Send + Sync {
     /// Return `true` to sign. Called on a blocking thread, so it may wait for a
     /// person.
     fn approve(&self, request: AgentSignRequest) -> bool;
+    /// The request `id` is no longer wanted (its client hung up): withdraw the
+    /// prompt and let `approve` return `false`. May arrive before `approve`
+    /// has registered `id`, or after it returned.
+    fn cancel(&self, id: u64);
+}
+
+/// A fresh [`AgentSignRequest::id`].
+fn next_agent_sign_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Adapts the UI approver to the transport's, and pulls the target out of an SSH
@@ -7677,23 +7695,32 @@ struct ApprovalBridge {
 
 impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
     fn approve(&self, host: &str, blob: &[u8]) -> bool {
+        let login = userauth_login(blob);
         self.inner.approve(AgentSignRequest {
+            id: next_agent_sign_id(),
             origin: AgentSignOrigin::Forwarded,
             host: host.to_string(),
             key: String::new(),
-            target: userauth_target(blob).unwrap_or_default(),
+            vault: String::new(),
+            user: login
+                .as_ref()
+                .map(|(user, _)| user.clone())
+                .unwrap_or_default(),
+            target: login
+                .map(|(user, service)| format!("{user}@{service}"))
+                .unwrap_or_default(),
         })
     }
 }
 
-/// Extracts `user@service` from an SSH userauth signing blob.
+/// Extracts `(user, service)` from an SSH userauth signing blob.
 ///
 /// The payload of a publickey authentication is
 /// `string(session_id) byte(50) string(user) string(service) string("publickey") …`.
 /// Reading the user and service turns "something wants a signature" into "this
 /// would log in as X" — without it the prompt is a button people learn to press.
 /// Anything that does not parse returns `None` rather than a guess.
-fn userauth_target(blob: &[u8]) -> Option<String> {
+fn userauth_login(blob: &[u8]) -> Option<(String, String)> {
     fn take<'a>(input: &mut &'a [u8]) -> Option<&'a [u8]> {
         if input.len() < 4 {
             return None;
@@ -7715,7 +7742,7 @@ fn userauth_target(blob: &[u8]) -> Option<String> {
     b = &b[1..];
     let user = std::str::from_utf8(take(&mut b)?).ok()?;
     let service = std::str::from_utf8(take(&mut b)?).ok()?;
-    Some(format!("{user}@{service}"))
+    Some((user.to_string(), service.to_string()))
 }
 
 /// Asked when the server wants something no stored credential can answer — a
