@@ -48,6 +48,8 @@ import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
 import { isOwnedCloud, serverShortLabel, vaultServer } from "@/bridge/vaults";
+import { planMoveToServer } from "@/bridge/moveToServer";
+import { NHSelect } from "@/overlays/Modals";
 import {
   apiErrorMessage,
   isServerErrorCode,
@@ -57,6 +59,7 @@ import {
   type DeviceInfo,
   type InstanceInfo,
   type JoinPreview,
+  type ItemInfo,
   type MemberInfo,
   type MemberRole,
   type PairingPayload,
@@ -1723,6 +1726,30 @@ function SettingsVaults() {
   const reload = () => useApp.getState().reloadVaults();
   const errToast = (e: unknown) => toast(apiErrorMessage(e), "err");
 
+  // "Move to server…" on a local vault: the vault + its items (for the per-kind
+  // counts), the picked server/space, and the in-flight flag.
+  const [moving, setMoving] = useState<{ vault: VaultInfo; items: ItemInfo[] } | null>(null);
+  const [moveServer, setMoveServer] = useState<string | null>(null);
+  const [moveSpace, setMoveSpace] = useState("");
+  const [moveBusy, setMoveBusy] = useState(false);
+
+  const startMove = async (v: VaultInfo) => {
+    // The core needs a space id and the first push needs a session: with no
+    // signed-in server there is nothing to move to, so say why up front.
+    if (planMoveToServer([], servers).servers.length === 0) {
+      toast(t("vault.toServerNeedsSession"), "warn");
+      return;
+    }
+    try {
+      const items = await api.listItems(v.vaultId);
+      setMoveServer(null);
+      setMoveSpace("");
+      setMoving({ vault: v, items });
+    } catch (e) {
+      errToast(e);
+    }
+  };
+
   // Binding management (bind / move / unbind) is OWNER-ONLY: only a vault you
   // administer (admin in its space) may be re-homed. A member sees where a shared
   // vault lives but can't move it — that would desync the team and scatter the
@@ -1971,6 +1998,11 @@ function SettingsVaults() {
             }}
           >
             {t(kind === "server" ? "vault.move" : "vault.bind")}
+          </Btn>
+        )}
+        {kind === "local" && (
+          <Btn variant="ghost" size="sm" icon="cloud" onClick={() => void startMove(v)}>
+            {t("vault.toServer")}
           </Btn>
         )}
         {canBind && kind === "server" && (
@@ -2269,6 +2301,125 @@ function SettingsVaults() {
                     </button>
                   );
                 })}
+              </div>
+            </Modal>
+          );
+        })()}
+
+      {moving &&
+        (() => {
+          const v = moving.vault;
+          const plan = planMoveToServer(moving.items, servers, {
+            serverId: moveServer,
+            activeServerId,
+          });
+          const space = plan.spaces.find((sp) => sp.spaceId === moveSpace) ?? plan.spaces[0];
+          const target = plan.server;
+          const close = () => {
+            if (!moveBusy) setMoving(null);
+          };
+          const confirmMove = async () => {
+            if (!target?.serverId || moveBusy) return;
+            setMoveBusy(true);
+            try {
+              const res = await api.serverMoveVaultToServer(
+                v.vaultId,
+                target.serverId,
+                space?.spaceId,
+              );
+              // The local id is gone: follow the vault to its new id before the
+              // reload, which would otherwise fall back to the first vault.
+              if (useApp.getState().vaultId === v.vaultId) await useApp.getState().setVault(res.vaultId);
+              forgetTerminalWorkspace(v.vaultId);
+              await reload();
+              setMoving(null);
+              if (res.pushError) {
+                toast(t("vault.toServerPushFailed", { reason: apiErrorMessage(res.pushError) }), "warn");
+              } else {
+                toast(t("vault.toServerDone", { name: v.name, server: serverShortLabel(target) }), "ok");
+              }
+            } catch (e) {
+              errToast(e);
+            } finally {
+              setMoveBusy(false);
+            }
+          };
+          return (
+            <Modal
+              icon="cloud"
+              title={t("vault.toServerTitle")}
+              subtitle={v.name}
+              onClose={close}
+              w={480}
+              footer={
+                <>
+                  <Btn variant="ghost" onClick={close} disabled={moveBusy}>
+                    {t("common.cancel")}
+                  </Btn>
+                  <Btn
+                    variant="primary"
+                    icon="cloud"
+                    disabled={!target || moveBusy}
+                    onClick={() => void confirmMove()}
+                  >
+                    {t("vault.toServerConfirm")}
+                  </Btn>
+                </>
+              }
+            >
+              <Field label={t("vault.toServerServer")}>
+                {plan.needsServerPicker ? (
+                  <NHSelect
+                    value={target?.serverId ?? ""}
+                    onChange={(id) => {
+                      setMoveServer(id);
+                      setMoveSpace("");
+                    }}
+                    options={plan.servers.map((s) => ({
+                      value: s.serverId as string,
+                      label: serverShortLabel(s),
+                    }))}
+                    empty=""
+                  />
+                ) : (
+                  <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>
+                    {target ? serverShortLabel(target) : ""}
+                  </div>
+                )}
+              </Field>
+              <Field label={t("vault.toServerSpace")}>
+                {plan.needsSpacePicker ? (
+                  <NHSelect
+                    value={space?.spaceId ?? ""}
+                    onChange={setMoveSpace}
+                    options={plan.spaces.map((sp) => ({
+                      value: sp.spaceId,
+                      label: sp.name || sp.spaceId,
+                    }))}
+                    empty=""
+                  />
+                ) : (
+                  <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>
+                    {space ? space.name || space.spaceId : t("vault.toServerPrimarySpace")}
+                  </div>
+                )}
+              </Field>
+              <Field label={t("vault.toServerContents")}>
+                {plan.counts.length === 0 ? (
+                  <div style={{ fontSize: TEXT.base, color: p.txt3 }}>{t("vault.toServerEmpty")}</div>
+                ) : (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: rem(6) }}>
+                    {plan.counts.map((c) => (
+                      <Tag key={c.kind}>
+                        {tDyn(`vault.toServerKind.${c.kind}`)}: {c.count}
+                      </Tag>
+                    ))}
+                  </div>
+                )}
+              </Field>
+              <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5 }}>
+                <p style={{ margin: `0 0 ${rem(6)}` }}>{t("vault.toServerReplaces", { name: v.name })}</p>
+                <p style={{ margin: 0 }}>{t("vault.toServerHistory")}</p>
               </div>
             </Modal>
           );

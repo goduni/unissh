@@ -338,7 +338,7 @@ function SwitchRow({
 
 // Inline picker — re-uses Input's chrome to render a clickable <select> for
 // choosing a stored key / password item.
-function NHSelect({
+export function NHSelect({
   value,
   onChange,
   options,

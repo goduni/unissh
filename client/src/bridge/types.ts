@@ -213,6 +213,9 @@ export enum ItemType {
   Group = 5,
   Note = 6,
   Identity = 7,
+  Binding = 8,
+  Snippet = 9,
+  Recording = 10,
 }
 
 export interface ItemInfo {
@@ -406,6 +409,8 @@ export type ApiErrorKind =
   | "invalidCredentials"
   | "notFound"
   | "alreadyExists"
+  | "alreadyCloud"
+  | "noServer"
   | "hostKeyMismatch"
   | "ssh"
   | "server"
@@ -501,6 +506,10 @@ export function apiErrorMessage(e: unknown): string {
         return i18n.t("error.notFound");
       case "alreadyExists":
         return i18n.t("error.alreadyExists");
+      case "alreadyCloud":
+        return i18n.t("error.alreadyCloud");
+      case "noServer":
+        return i18n.t("error.noServer");
       case "hostKeyMismatch":
         return i18n.t("error.hostKeyMismatch", { host: e.host ?? "", port: e.port ?? 0 });
       case "ssh":
@@ -575,6 +584,15 @@ export interface SyncReport {
   conflicts: number;
   rejected: number;
   pushed: number;
+}
+
+/** Result of moving a local vault to a server: the new cloud vault id (hex) and the
+ *  first push — `push` on success, `pushError` when it failed (the move stands; the
+ *  vault is bound and uploads on the next sync). */
+export interface MovedVault {
+  vaultId: string;
+  push: SyncReport | null;
+  pushError: ApiError | null;
 }
 
 export type MemberRole = "viewer" | "editor" | "admin";

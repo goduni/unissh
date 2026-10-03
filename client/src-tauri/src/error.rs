@@ -15,6 +15,10 @@ pub enum ApiError {
     NotFound,
     /// Instance / vault / item id collision.
     AlreadyExists,
+    /// The vault is already a cloud vault (a local-only operation was asked of it).
+    AlreadyCloud,
+    /// No server to bind to: the cloud operation got an empty space/tenant.
+    NoServer,
     /// Pinned host key changed — possible MITM. The UI must warn and offer trust.
     #[serde(rename_all = "camelCase")]
     HostKeyMismatch {
@@ -56,6 +60,8 @@ impl From<FfiError> for ApiError {
             FfiError::InvalidCredentials => ApiError::InvalidCredentials,
             FfiError::NotFound => ApiError::NotFound,
             FfiError::AlreadyExists => ApiError::AlreadyExists,
+            FfiError::AlreadyCloud => ApiError::AlreadyCloud,
+            FfiError::NoServer => ApiError::NoServer,
             FfiError::HostKeyMismatch {
                 host,
                 port,

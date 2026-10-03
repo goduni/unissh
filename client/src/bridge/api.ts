@@ -54,6 +54,7 @@ import type {
   SshExecResult,
   ServerVault,
   SyncReport,
+  MovedVault,
   TermEvent,
   VaultInfo,
   VaultIntegrityReport,
@@ -871,6 +872,17 @@ export const serverPullVault = (vaultId: string, serverId?: string) =>
 /** Bind an already-cloud vault (hex id) to a server, then sync it up (Push). */
 export const serverBindAndPushVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_bind_and_push_vault", { vaultId, serverId: serverId ?? null });
+
+/** Move a LOCAL vault to a server (default active) into `spaceId` (omit for the
+ *  link's primary space): the core re-keys it into a new cloud vault in one
+ *  transaction, then the first push runs. Resolves with the new vault id; a failed
+ *  push comes back in `pushError` and does not undo the move. */
+export const serverMoveVaultToServer = (vaultId: string, serverId?: string, spaceId?: string) =>
+  invoke<MovedVault>("server_move_vault_to_server", {
+    vaultId,
+    serverId: serverId ?? null,
+    spaceId: spaceId ?? null,
+  });
 
 // ── cloud membership / sharing ─────────────────────────────────
 export const serverListAccounts = (serverId?: string) =>
