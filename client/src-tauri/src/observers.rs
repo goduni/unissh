@@ -17,6 +17,8 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
+#[cfg(desktop)]
+use tauri::{Manager, UserAttentionType};
 use unissh_ffi::{
     AgentApprover, AgentSignOrigin, AgentSignRequest, AuthPromptRequest, AuthPrompter,
     BroadcastObserver, ExecObserver, SessionObserver, SftpProgressObserver,
@@ -293,22 +295,28 @@ struct PendingApproval {
 /// (`agent-approval-cancelled`, carrying the id, like `auth-prompt-cancelled`).
 pub struct AppApprover {
     app: AppHandle,
-    pending: Mutex<HashMap<u64, PendingApproval>>,
+    /// One lock for both, so a `cancel` never slips between the early-cancel
+    /// check and the registration of the same id.
+    state: Mutex<ApprovalState>,
+}
+
+#[derive(Default)]
+struct ApprovalState {
+    pending: HashMap<u64, PendingApproval>,
     /// Cancellations that arrived before their `approve` registered the id.
-    cancelled_early: Mutex<std::collections::HashSet<u64>>,
+    cancelled_early: std::collections::HashSet<u64>,
 }
 
 impl AppApprover {
     pub fn new(app: AppHandle) -> Self {
         Self {
             app,
-            pending: Mutex::new(HashMap::new()),
-            cancelled_early: Mutex::new(std::collections::HashSet::new()),
+            state: Mutex::new(ApprovalState::default()),
         }
     }
 
     pub fn answer(&self, id: u64, approved: bool) {
-        let pending = self.pending.lock().expect("approval map").remove(&id);
+        let pending = self.state.lock().expect("approval map").pending.remove(&id);
         if let Some(pending) = pending {
             let _ = pending.answer.send(approved);
         }
@@ -317,7 +325,12 @@ impl AppApprover {
     /// Refuses `id` if it is still waiting, and tells the window to drop it.
     /// Returns whether it was waiting.
     fn withdraw(&self, id: u64) -> bool {
-        let pending = self.pending.lock().expect("approval map").remove(&id);
+        let pending = self.state.lock().expect("approval map").pending.remove(&id);
+        self.refuse(id, pending)
+    }
+
+    /// Refuses a prompt already taken out of the map, if there was one.
+    fn refuse(&self, id: u64, pending: Option<PendingApproval>) -> bool {
         let Some(pending) = pending else {
             return false;
         };
@@ -330,9 +343,10 @@ impl AppApprover {
     /// screen lock, sleep, exit), so no answer could reach the caller anyway.
     pub fn cancel_system(&self) {
         let ids: Vec<u64> = self
-            .pending
+            .state
             .lock()
             .expect("approval map")
+            .pending
             .iter()
             .filter(|(_, p)| p.system)
             .map(|(id, _)| *id)
@@ -346,21 +360,21 @@ impl AppApprover {
 impl AgentApprover for AppApprover {
     fn approve(&self, request: AgentSignRequest) -> bool {
         let id = request.id;
-        if self.cancelled_early.lock().expect("cancel set").remove(&id) {
-            return false;
-        }
         let (origin, pid, executable) = match request.origin {
             AgentSignOrigin::Forwarded => ("forwarded", None, None),
             AgentSignOrigin::SystemAgent { pid, executable } => ("system", pid, executable),
         };
+        let system = origin == "system";
         let (tx, rx) = sync_channel(1);
-        self.pending.lock().expect("approval map").insert(
-            id,
-            PendingApproval {
-                answer: tx,
-                system: origin == "system",
-            },
-        );
+        {
+            let mut state = self.state.lock().expect("approval map");
+            if state.cancelled_early.remove(&id) {
+                return false;
+            }
+            state
+                .pending
+                .insert(id, PendingApproval { answer: tx, system });
+        }
 
         let event = AgentApprovalEvent {
             id,
@@ -374,8 +388,18 @@ impl AgentApprover for AppApprover {
             target: request.target,
         };
         if self.app.emit("agent-approval", event).is_err() {
-            self.pending.lock().expect("approval map").remove(&id);
+            self.state.lock().expect("approval map").pending.remove(&id);
             return false;
+        }
+        // The system agent's caller types in another terminal, so UniSSH may
+        // sit behind other windows. Flag the waiting prompt (dock bounce,
+        // taskbar flash) without taking focus: a keystroke meant for that
+        // terminal must never land on Approve.
+        #[cfg(desktop)]
+        if system {
+            if let Some(window) = self.app.get_webview_window("main") {
+                let _ = window.request_user_attention(Some(UserAttentionType::Informational));
+            }
         }
 
         // Refusing on timeout, not granting. An unanswered prompt means nobody
@@ -390,16 +414,21 @@ impl AgentApprover for AppApprover {
     }
 
     fn cancel(&self, id: u64) {
-        if !self.withdraw(id) {
-            // Not registered yet (or already over). Remember it so a late
-            // `approve` refuses without showing anything; an id that is over
-            // never comes back, so this only holds the rare early ones.
-            let mut early = self.cancelled_early.lock().expect("cancel set");
-            if early.len() >= 64 {
-                // Only ever ids that lost a race; never let them pile up.
-                early.clear();
+        let pending = {
+            let mut state = self.state.lock().expect("approval map");
+            let pending = state.pending.remove(&id);
+            if pending.is_none() {
+                // Not registered yet (or already over). Remember it so a late
+                // `approve` refuses without showing anything; an id that is
+                // over never comes back, so this only holds the rare early ones.
+                if state.cancelled_early.len() >= 64 {
+                    // Only ever ids that lost a race; never let them pile up.
+                    state.cancelled_early.clear();
+                }
+                state.cancelled_early.insert(id);
             }
-            early.insert(id);
-        }
+            pending
+        };
+        self.refuse(id, pending);
     }
 }

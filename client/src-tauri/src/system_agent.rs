@@ -70,6 +70,7 @@ struct Live {
 }
 
 pub struct Controller {
+    app: tauri::AppHandle,
     core: Arc<Core>,
     settings_path: PathBuf,
     /// The socket path, or on Windows the pipe name; `None` only where the
@@ -92,15 +93,13 @@ impl Controller {
         // the transport always dials OpenSSH's own pipe, never this one. The
         // name is still handed over, so the core knows it either way.
         #[cfg(windows)]
-        let endpoint = {
-            let _ = app;
-            Some(PathBuf::from(pipe::NAME))
-        };
+        let endpoint = Some(PathBuf::from(pipe::NAME));
         // Whether or not the listener is on: a host using "system agent" auth
         // with SSH_AUTH_SOCK pointed here is misconfigured either way, and gets
         // a typed error saying so instead of a loop (or a bare "not found").
         core.set_system_agent_endpoint(endpoint.clone());
         Arc::new(Self {
+            app: app.clone(),
             core,
             settings_path,
             endpoint,
@@ -193,7 +192,7 @@ impl Controller {
     }
 
     /// Stops the listener held in `running`, waiting up to 2 s for it to
-    /// remove its socket before aborting it.
+    /// remove its socket before aborting it, and withdraws its open prompts.
     async fn stop(&self, running: &mut Option<Running>) {
         self.live.lock().unwrap().stop = None;
         if let Some(mut old) = running.take() {
@@ -206,6 +205,7 @@ impl Controller {
                 let _ = old.task.await;
             }
         }
+        withdraw_prompts(&self.app);
     }
 
     fn set_error(&self, error: Option<&'static str>) {
