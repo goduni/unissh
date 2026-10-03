@@ -1,13 +1,18 @@
-//! Serving the ssh-agent protocol over a forwarded channel.
+//! Serving the ssh-agent protocol: over a forwarded channel, and to local
+//! programs through the system agent's socket.
 //!
-//! Agent forwarding lets a program on the remote host ask *your* machine to
-//! sign something — which is the only way `git` on a server, or `ssh` from it,
-//! can use your key. It is also the reason the feature is off by default: while
-//! the session lives, anything able to reach that socket on the remote host can
-//! ask for a signature, and that includes every process running as you there,
-//! not only root.
+//! One protocol implementation, two policies. [`answer`] speaks the wire format
+//! and the refusal rules; an [`AgentKeys`] decides what is offered and whether a
+//! signature is produced.
 //!
-//! So this implementation is deliberately narrower than a general agent:
+//! Agent forwarding (opt-in per connection) lets a program on the remote host
+//! ask *your* machine to sign something — which is the only way `git` on a
+//! server, or `ssh` from it, can use your key. It is also the reason the feature
+//! is off by default: while the session lives, anything able to reach that
+//! socket on the remote host can ask for a signature, and that includes every
+//! process running as you there, not only root.
+//!
+//! So [`ForwardedAgent`] is deliberately narrower than a general agent:
 //!
 //! * **One key.** Only the key this connection authenticated with is offered.
 //!   OpenSSH forwards the whole agent; doing that would hand the remote host
@@ -16,9 +21,14 @@
 //! * **Every signature is confirmed.** A request that is not approved is
 //!   refused. Silent use is the actual risk; a prompt is what turns it into
 //!   something you can see.
+//!
+//! For every agent, whatever its policy:
+//!
 //! * **Read-only.** Adding, removing, locking and unlocking keys are refused
-//!   outright. Those requests arrive from the remote machine, and a forwarded
-//!   agent has no business honouring them.
+//!   outright. The vault governs what an agent holds, not whoever can reach its
+//!   socket.
+//! * **A signature only for an offered key.** A request naming any other key is
+//!   refused rather than substituted.
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -50,6 +60,48 @@ pub trait AgentApproval: Send + Sync {
     fn approve(&self, host: &str, blob: &[u8]) -> bool;
 }
 
+/// One identity an agent offers.
+#[derive(Clone, Debug)]
+pub struct OfferedKey {
+    /// The key id the signer knows it by. Never leaves the process.
+    pub key_id: Vec<u8>,
+    /// The public half, in OpenSSH text form.
+    pub public_openssh: String,
+    /// What `ssh-add -l` shows next to it.
+    pub comment: String,
+}
+
+impl OfferedKey {
+    /// The wire encoding of the public key: the base64 field of the OpenSSH
+    /// line. This is what the protocol calls a "key blob", and what a client
+    /// compares against when it asks us to sign.
+    fn blob(&self) -> Option<Vec<u8>> {
+        key_blob(&self.public_openssh)
+    }
+}
+
+/// The policy half of an agent: which identities it offers, and whether a
+/// signature is produced. The protocol half is [`answer`].
+pub trait AgentKeys: Send + Sync {
+    /// The identities offered right now. Resolved per request, so a policy that
+    /// changes (a key shared or unshared, a vault locked) takes effect on the
+    /// next request without restarting anything.
+    fn offered(&self) -> Vec<OfferedKey>;
+    /// Signs `data` with `key`, one of the keys [`Self::offered`] returned, or
+    /// refuses with `None`. Approval, if the policy has any, happens here.
+    /// Returns `(algorithm, signature)`.
+    fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)>;
+}
+
+impl<T: AgentKeys + ?Sized> AgentKeys for std::sync::Arc<T> {
+    fn offered(&self) -> Vec<OfferedKey> {
+        (**self).offered()
+    }
+    fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
+        (**self).sign(key, data)
+    }
+}
+
 /// The single identity a forwarded agent will offer, and the policy around it.
 pub struct ForwardedAgent {
     /// Where signatures come from. The private key never crosses this.
@@ -65,17 +117,9 @@ pub struct ForwardedAgent {
 }
 
 impl ForwardedAgent {
-    /// The wire encoding of the public key: the base64 field of the OpenSSH
-    /// line. This is what the protocol calls a "key blob", and what a client
-    /// compares against when it asks us to sign.
+    #[cfg(test)]
     fn key_blob(&self) -> Option<Vec<u8>> {
-        // Through the real parser rather than a base64 decode of the middle
-        // field: it validates the key at the same time, and the wire encoding is
-        // exactly what a client compares against.
-        russh::keys::PublicKey::from_openssh(self.public_openssh.trim())
-            .ok()?
-            .to_bytes()
-            .ok()
+        key_blob(&self.public_openssh)
     }
 
     fn comment(&self) -> String {
@@ -85,6 +129,43 @@ impl ForwardedAgent {
             .unwrap_or("unissh")
             .to_string()
     }
+}
+
+impl AgentKeys for ForwardedAgent {
+    fn offered(&self) -> Vec<OfferedKey> {
+        // Exactly one, always: the key this connection used.
+        vec![OfferedKey {
+            key_id: self.key_id.clone(),
+            public_openssh: self.public_openssh.clone(),
+            comment: self.comment(),
+        }]
+    }
+
+    fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
+        if !self.approval.approve(&self.host, data) {
+            log::info!("forwarded agent: signature declined by the user");
+            return None;
+        }
+        match self.keys.sign(&key.key_id, data) {
+            Ok(signed) => Some(signed),
+            Err(e) => {
+                log::warn!("forwarded agent: signing failed: {e}");
+                None
+            }
+        }
+    }
+}
+
+/// The key blob of an OpenSSH public key line.
+///
+/// Through the real parser rather than a base64 decode of the middle field: it
+/// validates the key at the same time, and the wire encoding is exactly what a
+/// client compares against.
+fn key_blob(public_openssh: &str) -> Option<Vec<u8>> {
+    russh::keys::PublicKey::from_openssh(public_openssh.trim())
+        .ok()?
+        .to_bytes()
+        .ok()
 }
 
 fn put_string(out: &mut Vec<u8>, s: &[u8]) {
@@ -119,23 +200,27 @@ fn failure() -> Vec<u8> {
 /// Answers one agent request. Returns the reply frame.
 ///
 /// Split out from the I/O so it can be tested without a channel: this is where
-/// the policy lives, and policy is what has to be right.
-pub fn answer(agent: &ForwardedAgent, request: &[u8]) -> Vec<u8> {
+/// the protocol rules live, and they are what has to be right.
+pub fn answer<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Vec<u8> {
     let Some((&kind, mut body)) = request.split_first() else {
         return failure();
     };
 
     match kind {
         msg::REQUEST_IDENTITIES => {
-            let Some(blob) = agent.key_blob() else {
-                return failure();
-            };
-            let comment = agent.comment();
+            // A key that does not parse is left out rather than failing the
+            // whole list: one bad entry must not hide the others.
+            let identities: Vec<(Vec<u8>, String)> = agent
+                .offered()
+                .into_iter()
+                .filter_map(|key| Some((key.blob()?, key.comment)))
+                .collect();
             let mut out = vec![msg::IDENTITIES_ANSWER];
-            // Exactly one, always: the key this connection used.
-            out.extend_from_slice(&1u32.to_be_bytes());
-            put_string(&mut out, &blob);
-            put_string(&mut out, comment.as_bytes());
+            out.extend_from_slice(&(identities.len() as u32).to_be_bytes());
+            for (blob, comment) in &identities {
+                put_string(&mut out, blob);
+                put_string(&mut out, comment.as_bytes());
+            }
             framed(out)
         }
         msg::SIGN_REQUEST => {
@@ -143,22 +228,19 @@ pub fn answer(agent: &ForwardedAgent, request: &[u8]) -> Vec<u8> {
             else {
                 return failure();
             };
-            // Flags follow; we do not honour RSA hash selection (see the note on
-            // `sign` below), so they are read only to keep the parse honest.
-            let Some(blob) = agent.key_blob() else {
+            // Flags follow; RSA hash selection is not honoured yet, so they are
+            // not read.
+            let Some(key) = agent
+                .offered()
+                .into_iter()
+                .find(|key| key.blob().as_deref() == Some(want_blob))
+            else {
+                // A key we do not offer. Refused rather than substituted.
+                log::warn!("agent: signature requested for a key we do not offer");
                 return failure();
             };
-            if want_blob != blob {
-                // A key we do not offer. Refused rather than substituted.
-                log::warn!("forwarded agent: signature requested for a key we do not offer");
-                return failure();
-            }
-            if !agent.approval.approve(&agent.host, data) {
-                log::info!("forwarded agent: signature declined by the user");
-                return failure();
-            }
-            match agent.keys.sign(&agent.key_id, data) {
-                Ok((algorithm, signature)) => {
+            match agent.sign(&key, data) {
+                Some((algorithm, signature)) => {
                     let mut inner = Vec::new();
                     put_string(&mut inner, algorithm.as_bytes());
                     put_string(&mut inner, &signature);
@@ -166,25 +248,23 @@ pub fn answer(agent: &ForwardedAgent, request: &[u8]) -> Vec<u8> {
                     put_string(&mut out, &inner);
                     framed(out)
                 }
-                Err(e) => {
-                    log::warn!("forwarded agent: signing failed: {e}");
-                    failure()
-                }
+                None => failure(),
             }
         }
-        // Everything else — add, remove, lock, unlock, extensions. These arrive
-        // from the remote machine, and a forwarded agent honouring them would
-        // let the far end reshape what your local agent holds.
+        // Everything else — add, remove, lock, unlock, extensions. Whoever can
+        // reach the socket does not get to reshape what the agent holds.
         other => {
-            log::warn!("forwarded agent: refusing request type {other}");
+            log::warn!("agent: refusing request type {other}");
             failure()
         }
     }
 }
 
-/// Serves the protocol on one forwarded channel until it closes.
-pub async fn serve<S>(agent: std::sync::Arc<ForwardedAgent>, mut stream: S)
+/// Serves the protocol on one stream (a forwarded channel, or a local socket
+/// connection) until it closes.
+pub async fn serve<A, S>(agent: std::sync::Arc<A>, mut stream: S)
 where
+    A: AgentKeys + ?Sized,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let mut header = [0u8; 4];
@@ -194,14 +274,14 @@ where
         }
         let len = u32::from_be_bytes(header) as usize;
         if len == 0 || len > MAX_FRAME {
-            log::warn!("forwarded agent: refusing a {len}-byte frame");
+            log::warn!("agent: refusing a {len}-byte frame");
             return;
         }
         let mut body = vec![0u8; len];
         if stream.read_exact(&mut body).await.is_err() {
             return;
         }
-        let reply = answer(&agent, &body);
+        let reply = answer(&*agent, &body);
         if stream.write_all(&reply).await.is_err() {
             return;
         }
@@ -347,5 +427,70 @@ mod tests {
             let reply = answer(&a, &bad);
             assert_eq!(reply[4], msg::FAILURE);
         }
+    }
+
+    /// An agent offering several keys, as the system agent does. It signs with
+    /// whichever key it is handed and records which one that was.
+    struct Listed {
+        keys: Vec<OfferedKey>,
+        signed_with: std::sync::Mutex<Vec<Vec<u8>>>,
+    }
+    impl AgentKeys for Listed {
+        fn offered(&self) -> Vec<OfferedKey> {
+            self.keys.clone()
+        }
+        fn sign(&self, key: &OfferedKey, _data: &[u8]) -> Option<(String, Vec<u8>)> {
+            self.signed_with.lock().unwrap().push(key.key_id.clone());
+            Some(("ssh-ed25519".to_string(), vec![0xAA; 64]))
+        }
+    }
+
+    fn listed(comments: &[&str]) -> Listed {
+        Listed {
+            keys: comments
+                .iter()
+                .map(|comment| OfferedKey {
+                    key_id: comment.as_bytes().to_vec(),
+                    public_openssh: test_public_key(),
+                    comment: comment.to_string(),
+                })
+                .collect(),
+            signed_with: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Reads an IDENTITIES_ANSWER frame the way `ssh-add -l` does.
+    fn identities(reply: &[u8]) -> Vec<(Vec<u8>, String)> {
+        assert_eq!(reply[4], msg::IDENTITIES_ANSWER);
+        let mut body = &reply[9..];
+        let count = u32::from_be_bytes([reply[5], reply[6], reply[7], reply[8]]);
+        (0..count)
+            .map(|_| {
+                let blob = take_string(&mut body).unwrap().to_vec();
+                let comment = String::from_utf8(take_string(&mut body).unwrap().to_vec()).unwrap();
+                (blob, comment)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn identities_list_every_offered_key_with_its_comment() {
+        let agent = listed(&["work", "deploy"]);
+        let listed = identities(&answer(&agent, &[msg::REQUEST_IDENTITIES]));
+        let expected: Vec<(Vec<u8>, String)> = agent
+            .keys
+            .iter()
+            .map(|k| (k.blob().unwrap(), k.comment.clone()))
+            .collect();
+        assert_eq!(listed, expected);
+    }
+
+    #[test]
+    fn a_sign_request_uses_the_key_it_names() {
+        let agent = listed(&["work", "deploy"]);
+        let second = agent.keys[1].blob().unwrap();
+        let reply = answer(&agent, &sign_request(&second, b"to-sign"));
+        assert_eq!(reply[4], msg::SIGN_RESPONSE);
+        assert_eq!(*agent.signed_with.lock().unwrap(), vec![b"deploy".to_vec()]);
     }
 }
