@@ -39,6 +39,13 @@ starts with `0.`:
   (on by default on desktop, off on phones, applied to new panes) controls it; the
   pixel budget is 16 MP on desktop and 4 MP on phones, and recordings replay
   their images.
+- Snippet parameters: a snippet command may contain `{{name}}` or
+  `{{name:default}}`; picking it in the command palette asks for the values in a
+  small form (Enter submits, Escape cancels) before typing it. `{{host}}`,
+  `{{user}}` and `{{port}}` come from the host. Fleet can pick a snippet into its
+  command field and resolves built-ins per target; parameterised startup snippets
+  ask once at connect; the snippet editor lists the parameters it finds. Stored
+  snippets are unchanged.
 
 ## [0.5.0] — 2026-10-02
 
