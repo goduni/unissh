@@ -33,8 +33,18 @@
 //!   socket.
 //! * **A signature only for an offered key.** A request naming any other key is
 //!   refused rather than substituted.
+//! * **Certificates sign with their key.** A certificate is offered as an
+//!   identity of its own, after its key; a request naming the certificate is
+//!   signed (and approved) as a request for that key, since the certificate is
+//!   only the public half a server checks against its CA.
+//! * **RSA hashes as asked.** `SSH_AGENT_RSA_SHA2_256` gives `rsa-sha2-256`,
+//!   `SSH_AGENT_RSA_SHA2_512` gives `rsa-sha2-512` (the 256 flag wins if both
+//!   are set, as in OpenSSH). An RSA request with neither asks for a SHA-1
+//!   `ssh-rsa` signature, which the core never makes: it is refused before
+//!   anyone is asked to approve it.
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use unissh_ssh_agent::RsaHash;
 
 use crate::client::KeySource;
 
@@ -45,6 +55,12 @@ mod msg {
     pub const IDENTITIES_ANSWER: u8 = 12;
     pub const SIGN_REQUEST: u8 = 13;
     pub const SIGN_RESPONSE: u8 = 14;
+}
+
+/// `SIGN_REQUEST` flags (PROTOCOL.agent).
+mod flag {
+    pub const RSA_SHA2_256: u32 = 2;
+    pub const RSA_SHA2_512: u32 = 4;
 }
 
 /// A frame longer than this is refused rather than allocated. The remote side
@@ -67,9 +83,12 @@ pub trait AgentApproval: Send + Sync {
 /// One identity an agent offers.
 #[derive(Clone, Debug)]
 pub struct OfferedKey {
-    /// The key id the signer knows it by. Never leaves the process.
+    /// The key id the signer knows it by. Never leaves the process. A key and
+    /// its certificate, offered as two identities, share it: both sign with
+    /// the same private key.
     pub key_id: Vec<u8>,
-    /// The public half, in OpenSSH text form.
+    /// The public half, in OpenSSH text form: a public key line, or an OpenSSH
+    /// certificate line for a certificate identity.
     pub public_openssh: String,
     /// What `ssh-add -l` shows next to it.
     pub comment: String,
@@ -82,6 +101,15 @@ impl OfferedKey {
     fn blob(&self) -> Option<Vec<u8>> {
         key_blob(&self.public_openssh)
     }
+
+    /// Whether this is an RSA key or an RSA certificate, whose signature hash
+    /// the request's flags choose.
+    fn is_rsa(&self) -> bool {
+        matches!(
+            self.public_openssh.split_whitespace().next(),
+            Some("ssh-rsa" | "ssh-rsa-cert-v01@openssh.com")
+        )
+    }
 }
 
 /// The policy half of an agent: which identities it offers, and whether a
@@ -93,8 +121,9 @@ pub trait AgentKeys: Send + Sync {
     fn offered(&self) -> Vec<OfferedKey>;
     /// Signs `data` with `key`, one of the keys [`Self::offered`] returned, or
     /// refuses with `None`. Approval, if the policy has any, happens here.
+    /// `rsa` is the hash an RSA key signs with; other key types ignore it.
     /// Returns `(algorithm, signature)`.
-    fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)>;
+    fn sign(&self, key: &OfferedKey, data: &[u8], rsa: RsaHash) -> Option<(String, Vec<u8>)>;
     /// The client went away while a request was still being answered. A policy
     /// waiting on a person withdraws its prompt here; the answer, whatever it
     /// becomes, is discarded.
@@ -105,8 +134,8 @@ impl<T: AgentKeys + ?Sized> AgentKeys for std::sync::Arc<T> {
     fn offered(&self) -> Vec<OfferedKey> {
         (**self).offered()
     }
-    fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
-        (**self).sign(key, data)
+    fn sign(&self, key: &OfferedKey, data: &[u8], rsa: RsaHash) -> Option<(String, Vec<u8>)> {
+        (**self).sign(key, data, rsa)
     }
     fn hang_up(&self) {
         (**self).hang_up()
@@ -147,12 +176,12 @@ impl AgentKeys for ForwardedAgent {
         }]
     }
 
-    fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
+    fn sign(&self, key: &OfferedKey, data: &[u8], rsa: RsaHash) -> Option<(String, Vec<u8>)> {
         if !self.approval.approve(&self.host, data) {
             log::info!("forwarded agent: signature declined by the user");
             return None;
         }
-        match self.keys.sign(&key.key_id, data) {
+        match self.keys.sign(&key.key_id, data, rsa) {
             Ok(signed) => Some(signed),
             Err(e) => {
                 log::warn!("forwarded agent: signing failed: {e}");
@@ -201,12 +230,12 @@ impl<K: AgentKeys> AgentKeys for LocalAgent<K> {
         self.keys.offered()
     }
 
-    fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
+    fn sign(&self, key: &OfferedKey, data: &[u8], rsa: RsaHash) -> Option<(String, Vec<u8>)> {
         if !self.approval.approve(key, &self.caller, data) {
             log::info!("system agent: signature declined by the user");
             return None;
         }
-        self.keys.sign(key, data)
+        self.keys.sign(key, data, rsa)
     }
 
     fn hang_up(&self) {
@@ -214,16 +243,27 @@ impl<K: AgentKeys> AgentKeys for LocalAgent<K> {
     }
 }
 
-/// The key blob of an OpenSSH public key line.
+/// The key blob of an OpenSSH public key line, or of an OpenSSH certificate
+/// line (whose blob is the whole certificate).
 ///
 /// Through the real parser rather than a base64 decode of the middle field: it
 /// validates the key at the same time, and the wire encoding is exactly what a
 /// client compares against.
 fn key_blob(public_openssh: &str) -> Option<Vec<u8>> {
-    russh::keys::PublicKey::from_openssh(public_openssh.trim())
-        .ok()?
-        .to_bytes()
-        .ok()
+    let line = public_openssh.trim();
+    match russh::keys::PublicKey::from_openssh(line) {
+        Ok(key) => key.to_bytes().ok(),
+        Err(_) => russh::keys::Certificate::from_openssh(line)
+            .ok()?
+            .to_bytes()
+            .ok(),
+    }
+}
+
+fn take_u32(input: &mut &[u8]) -> Option<u32> {
+    let (head, rest) = input.split_first_chunk::<4>()?;
+    *input = rest;
+    Some(u32::from_be_bytes(*head))
 }
 
 fn put_string(out: &mut Vec<u8>, s: &[u8]) {
@@ -286,8 +326,8 @@ pub fn answer<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Vec<u8> {
             else {
                 return failure();
             };
-            // Flags follow; RSA hash selection is not honoured yet, so they are
-            // not read.
+            // A client that leaves the flags out asked for none.
+            let flags = take_u32(&mut body).unwrap_or(0);
             let Some(key) = agent
                 .offered()
                 .into_iter()
@@ -297,7 +337,20 @@ pub fn answer<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Vec<u8> {
                 log::warn!("agent: signature requested for a key we do not offer");
                 return failure();
             };
-            match agent.sign(&key, data) {
+            let rsa = if flags & flag::RSA_SHA2_256 != 0 {
+                RsaHash::Sha256
+            } else if flags & flag::RSA_SHA2_512 != 0 {
+                RsaHash::Sha512
+            } else if key.is_rsa() {
+                // A SHA-1 `ssh-rsa` signature. The core never makes one, and
+                // answering with another hash would hand the client a signature
+                // of a type it did not ask for. Refused before any prompt.
+                log::info!("agent: refusing an ssh-rsa (SHA-1) signature request");
+                return failure();
+            } else {
+                RsaHash::default() // not an RSA key: no hash to choose
+            };
+            match agent.sign(&key, data, rsa) {
                 Some((algorithm, signature)) => {
                     let mut inner = Vec::new();
                     put_string(&mut inner, algorithm.as_bytes());
@@ -404,7 +457,12 @@ mod tests {
         fn certificate_openssh(&self, _id: &[u8]) -> Option<String> {
             None
         }
-        fn sign(&self, _id: &[u8], data: &[u8]) -> Result<(String, Vec<u8>), TransportError> {
+        fn sign(
+            &self,
+            _id: &[u8],
+            data: &[u8],
+            _rsa: RsaHash,
+        ) -> Result<(String, Vec<u8>), TransportError> {
             self.signed.lock().unwrap().push(data.to_vec());
             Ok(("ssh-ed25519".to_string(), vec![0xAA; 64]))
         }
@@ -447,11 +505,35 @@ mod tests {
     }
 
     fn sign_request(blob: &[u8], data: &[u8]) -> Vec<u8> {
+        sign_request_flagged(blob, data, 0)
+    }
+
+    fn sign_request_flagged(blob: &[u8], data: &[u8], flags: u32) -> Vec<u8> {
         let mut req = vec![msg::SIGN_REQUEST];
         put_string(&mut req, blob);
         put_string(&mut req, data);
-        req.extend_from_slice(&0u32.to_be_bytes()); // flags
+        req.extend_from_slice(&flags.to_be_bytes());
         req
+    }
+
+    /// The `(algorithm, signature)` of a SIGN_RESPONSE frame, checked against
+    /// `public` (an OpenSSH public key line) the way a server would.
+    fn verified(reply: &[u8], public: &str, data: &[u8]) -> String {
+        use russh::keys::signature::Verifier;
+
+        assert_eq!(reply[4], msg::SIGN_RESPONSE);
+        let mut body = &reply[5..];
+        let mut inner = take_string(&mut body).unwrap();
+        let algorithm = std::str::from_utf8(take_string(&mut inner).unwrap()).unwrap();
+        let signature = russh::keys::ssh_key::Signature::new(
+            russh::keys::Algorithm::new(algorithm).unwrap(),
+            take_string(&mut inner).unwrap().to_vec(),
+        )
+        .unwrap();
+        let public = russh::keys::PublicKey::from_openssh(public).unwrap();
+        // Through the trait: `PublicKey` also has an inherent SSHSIG `verify`.
+        Verifier::verify(&public, data, &signature).expect("the signature verifies");
+        algorithm.to_string()
     }
 
     #[test]
@@ -528,9 +610,14 @@ mod tests {
         fn offered(&self) -> Vec<OfferedKey> {
             self.keys.clone()
         }
-        fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
+        fn sign(&self, key: &OfferedKey, data: &[u8], rsa: RsaHash) -> Option<(String, Vec<u8>)> {
             self.signed_with.lock().unwrap().push(key.key_id.clone());
-            let signature = self.signer.lock().unwrap().sign(&key.key_id, data).ok()?;
+            let signature = self
+                .signer
+                .lock()
+                .unwrap()
+                .sign_with(&key.key_id, data, rsa)
+                .ok()?;
             Some((signature.algorithm, signature.signature))
         }
     }
@@ -639,30 +726,149 @@ mod tests {
     /// signature that comes back is one a server holding that public key accepts.
     #[test]
     fn an_approved_signature_verifies_against_the_key_it_names() {
-        use russh::keys::signature::Verifier;
-
         let (agent, keys, prompt) = local(true);
         let deploy = &keys.keys[1];
         let reply = answer(&agent, &sign_request(&deploy.blob().unwrap(), b"to-sign"));
-        assert_eq!(reply[4], msg::SIGN_RESPONSE);
         assert_eq!(
             *prompt.asked.lock().unwrap(),
             vec![("deploy".to_string(), caller())]
         );
-
-        let mut body = &reply[5..];
-        let mut inner = take_string(&mut body).unwrap();
-        let algorithm = std::str::from_utf8(take_string(&mut inner).unwrap()).unwrap();
-        let signature = russh::keys::ssh_key::Signature::new(
-            russh::keys::Algorithm::new(algorithm).unwrap(),
-            take_string(&mut inner).unwrap().to_vec(),
-        )
-        .unwrap();
-        let public = russh::keys::PublicKey::from_openssh(&deploy.public_openssh).unwrap();
-        // Through the trait: `PublicKey` also has an inherent SSHSIG `verify`.
-        Verifier::verify(&public, b"to-sign", &signature)
-            .expect("the signature verifies against the named key");
+        verified(&reply, &deploy.public_openssh, b"to-sign");
     }
+
+    /// A key with a certificate is listed twice, key first, and a request
+    /// naming the certificate is approved as that key and signed with it.
+    #[test]
+    fn a_certificate_is_offered_after_its_key_and_signs_with_it() {
+        use russh::keys::ssh_key::{certificate, private::Ed25519Keypair, PrivateKey};
+
+        let keys = listed(&["work"]);
+        let work = keys.keys[0].clone();
+        let public = russh::keys::PublicKey::from_openssh(&work.public_openssh).unwrap();
+        let ca = PrivateKey::from(Ed25519Keypair::from_seed(&[8; 32]));
+        let mut builder =
+            certificate::Builder::new(vec![9; 32], public.key_data().clone(), 0, u64::MAX).unwrap();
+        builder.cert_type(certificate::CertType::User).unwrap();
+        builder.valid_principal("alice").unwrap();
+        let cert = builder.sign(&ca).unwrap();
+        let cert_identity = OfferedKey {
+            public_openssh: cert.to_openssh().unwrap(),
+            ..work.clone()
+        };
+        let keys = Arc::new(Listed {
+            keys: vec![work.clone(), cert_identity],
+            ..keys
+        });
+        let prompt = Arc::new(Prompt {
+            answer: true,
+            asked: Default::default(),
+        });
+        let agent = LocalAgent {
+            keys: keys.clone(),
+            approval: prompt.clone(),
+            caller: caller(),
+        };
+
+        let listed = identities(&answer(&agent, &[msg::REQUEST_IDENTITIES]));
+        assert_eq!(
+            listed,
+            vec![
+                (work.blob().unwrap(), "work".to_string()),
+                (cert.to_bytes().unwrap(), "work".to_string()),
+            ]
+        );
+
+        let reply = answer(&agent, &sign_request(&cert.to_bytes().unwrap(), b"to-sign"));
+        assert_eq!(
+            *prompt.asked.lock().unwrap(),
+            vec![("work".to_string(), caller())]
+        );
+        assert_eq!(*keys.signed_with.lock().unwrap(), vec![b"work".to_vec()]);
+        verified(&reply, &work.public_openssh, b"to-sign");
+    }
+
+    /// `SSH_AGENT_RSA_SHA2_256` and `_512` choose the hash; an RSA request with
+    /// neither (a SHA-1 `ssh-rsa` signature) is refused before any prompt.
+    #[test]
+    fn rsa_flags_choose_the_signature_hash() {
+        let mut signer = unissh_ssh_agent::InMemoryAgent::new();
+        let pem = unissh_ssh_agent::normalize_private_key_to_openssh(RSA_PKCS1).unwrap();
+        signer
+            .add_from_openssh(b"rsa".to_vec(), pem.as_bytes())
+            .unwrap();
+        let rsa = OfferedKey {
+            key_id: b"rsa".to_vec(),
+            public_openssh: RSA_PUB.to_string(),
+            comment: "rsa".to_string(),
+        };
+        let prompt = Arc::new(Prompt {
+            answer: true,
+            asked: std::sync::Mutex::new(Vec::new()),
+        });
+        let agent = LocalAgent {
+            keys: Listed {
+                keys: vec![rsa.clone()],
+                signer: signer.into(),
+                signed_with: Default::default(),
+            },
+            approval: prompt.clone(),
+            caller: caller(),
+        };
+        let blob = rsa.blob().unwrap();
+
+        for (flags, algorithm) in [
+            (2, "rsa-sha2-256"),
+            (4, "rsa-sha2-512"),
+            (6, "rsa-sha2-256"),
+        ] {
+            let reply = answer(&agent, &sign_request_flagged(&blob, b"to-sign", flags));
+            assert_eq!(
+                verified(&reply, RSA_PUB, b"to-sign"),
+                algorithm,
+                "flags {flags}"
+            );
+        }
+        prompt.asked.lock().unwrap().clear();
+        let reply = answer(&agent, &sign_request_flagged(&blob, b"to-sign", 0));
+        assert_eq!(reply[4], msg::FAILURE);
+        assert!(
+            prompt.asked.lock().unwrap().is_empty(),
+            "refused before the prompt"
+        );
+    }
+
+    /// A classic RSA-2048 (PKCS#1) and its public key: generating one at test
+    /// time is slow in a debug build.
+    const RSA_PKCS1: &str = "\
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA0Nz6qk+yFoEL3gBixnDidk4jLEIvDk25O5yTpEMmmIHa/o8x
+MVd1pYkXbh2IZwy/SrTyUqWDvAif5Monzuti7kT/0/VMldm4X/JNhfr6K+p5Y+oJ
+61cHMNzW+PVe/SFCdqYeFZaa4v0feSKfc3pdTawrVyopGQ9Onj/W2QS5OGdwFblq
+zqzaJKZWA9qvFy90qmTpliSxxr7mY5C/RMwqiXt9+4DtPeJBRK9BNZ8AkMGbwgP8
+/WW6yqYDd1L62AxLA+uNymQWf6t9nWaSf03mREe1zVXS/HFIVeSPBDej80gULfJt
+3ftjQNTem6PxSqAOdHWBS2PCtrRVClMSnLcvPwIDAQABAoIBAACnSj+Uc33n3dZO
+K1ZHm5DUJS90pSyp/x0hfYUlkosmqEmbamshAeAtGAK4eVCvUc+c+qcEsAeW3Wn3
+dUlhHaI4QpH7rXIkGm+rjoBxGQ8XQlWW7ojSob2zA/KxvsrQVmXBNTRpnE/47T88
+EGbjnbE2VJgxgdyNu/4X5yKQZ2jnYaONCPPozU9/P94oXj+huOl8LQQ3P+dukcMu
+13X/Bdbo7FjmHL0Fci7Ii33PZm350lcfeIuOIYltglZNSTUPrJy9FIrQ8H8BY6yM
+GKrI6UMbMWSopJdwEi99pCoPGr7O7frz9Ly7Cpl1axj9WfsA/G6MZMjnFLAyvYKv
+43AdHPECgYEA9+pbS3o9LwMok/cqPHzrYnK1Vn0BHH10HqeXpuwJE4lsps2Fo2LH
+Xz1Wi9+/JY1jObnadWMkkAvx1ZUsp4FkcLOr/HDZOYF+uaEw+gKRVpOlWCLICjlm
+GjeP5X72aoHUJ8PNBvjqAVp8ylKBFE9ukLzZsVb4FBPS+bMu63pJ8YsCgYEA16yb
+cUO9N2uzlQMAUckIDyoUnHptRdcHapXDneZd/SnKzcU/hD/S/RcVqQB1YANpZyeM
+/bNzSfkWcxVkaWC7Z2maHn/DXm3ZhFT15I5ELAbdq37e+vUbdvWGcBuCzmtwFdIl
+yeqx6BzHoUWaVuPAZ5Z5VJQoTH1OhHuQFJUxx50CgYEAlLu/JdsiVdAZShwg9MUl
+Gp0i+c5pGkSRo8p8CyLUlyn9S11F7a3XWuYbxDLqJIdcnkdILuDaEKl53t9uONhB
+//NrHTo+uGdeNdPk5DkiJMTTj7reNHQXM2deJxsyjtdxBqJLoQE4srMs5tz0n9C/
+zoneOKyqjLEQA8piPdfSAN0CgYASvq3D6l9HsdSp3tjoQtCwgLfJ4dodd9LtMJcP
+4jXJCxjVSY97rxBnbtozFhcdgS5oCMf4ROCATWXmGrXfcsjW9BaxD+mrC2EcX0X/
+112VdgNOJHi81xDMBgrpM3rq9euH+fvO0NcllVrEaYhAhQrz9eAVucrG2x035oVf
+RJhPAQKBgQCcjnPyuFuq3zIIAVSA1ryvtFW5n95eij/AABeBhKjcsKKC9TyPy145
+5mXOxoXcTAT4qbLxLc34BVjC49DoquOVble2OBVWWNng+x+AKyJXVaih7o+mTt6Y
+otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
+-----END RSA PRIVATE KEY-----";
+
+    const RSA_PUB: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDQ3PqqT7IWgQveAGLGcOJ2TiMsQi8OTbk7nJOkQyaYgdr+jzExV3WliRduHYhnDL9KtPJSpYO8CJ/kyifO62LuRP/T9UyV2bhf8k2F+vor6nlj6gnrVwcw3Nb49V79IUJ2ph4Vlpri/R95Ip9zel1NrCtXKikZD06eP9bZBLk4Z3AVuWrOrNokplYD2q8XL3SqZOmWJLHGvuZjkL9EzCqJe337gO094kFEr0E1nwCQwZvCA/z9ZbrKpgN3UvrYDEsD643KZBZ/q32dZpJ/TeZER7XNVdL8cUhV5I8EN6PzSBQt8m3d+2NA1N6bo/FKoA50dYFLY8K2tFUKUxKcty8/ rsa";
 
     #[test]
     fn a_key_we_do_not_offer_is_refused() {

@@ -69,3 +69,4 @@ pub use forward::{
 };
 pub use proxy::{ProxyKind, ProxyOptions};
 pub use sftp::{DirEntry, FileStat, Sftp, SftpCancel, SftpProgress, TransferOutcome};
+pub use unissh_ssh_agent::RsaHash;
