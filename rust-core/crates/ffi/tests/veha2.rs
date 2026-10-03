@@ -1264,6 +1264,8 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
         false,
     )
     .unwrap();
+    // `me` holds the identities, so it is the account's Personal vault.
+    core.set_personal_vault(s(ME)).unwrap();
     core.create_vault(s(OTHER), s("Other")).unwrap();
     core.save_connection(
         s(OTHER),
@@ -1398,6 +1400,14 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     }
     assert!(vault_pushed);
     assert_eq!(pushed_items, items_before);
+
+    // Moving a vault that is not the Personal vault leaves the pointer alone;
+    // moving the Personal vault re-points it at the new id in the same step.
+    assert_eq!(core.get_personal_vault().unwrap().as_deref(), Some(ME));
+    let new_me = core
+        .convert_vault_to_cloud(s(ME), TENANT.to_string())
+        .unwrap();
+    assert_eq!(core.get_personal_vault().unwrap(), Some(new_me));
 }
 
 #[test]

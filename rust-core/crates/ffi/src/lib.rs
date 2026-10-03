@@ -5623,7 +5623,9 @@ impl Core {
     /// this device (see [`rehome_reference`], [`rehome_references`]). Item version
     /// history is not copied — the copies start at version 1. The local vault is
     /// tombstoned and disappears from `list_vaults`; its keys are unloaded from the
-    /// agent. Creating, copying, binding, re-pointing and tombstoning happen in ONE
+    /// agent. When it was the account's Personal vault, the Personal pointer moves
+    /// to the new id; any other vault leaves the pointer untouched. Creating,
+    /// copying, binding, re-pointing and tombstoning happen in ONE
     /// storage transaction: any failure leaves the local vault exactly as it was,
     /// no other vault changed and no cloud vault behind.
     ///
@@ -5692,7 +5694,17 @@ impl Core {
                     &new_vid,
                     &old_label,
                     &new_hex,
-                )
+                )?;
+                // The account's Personal vault stays the Personal vault under its
+                // new id; for any other vault the pointer is left alone (and not
+                // re-signed).
+                write_account_state(&state.storage, &state.keyset, |p| {
+                    let personal = p.personal_vault_id == old_vid;
+                    if personal {
+                        p.personal_vault_id = new_vid.clone();
+                    }
+                    personal
+                })
             })?;
 
             state.vault_names.remove(&old_vid);
@@ -5703,6 +5715,39 @@ impl Core {
             Ok(new_hex)
         })
     }
+}
+
+/// Read-modify-write of the per-account state (A3.2) on `storage`: decrypt the
+/// current (or an empty) one and apply `mutate`; when it reports a change,
+/// re-seal + sign with version+1 and save. Synced to the account's devices on the
+/// next sync_push. Opens no transaction of its own, so a caller can make the
+/// write part of a larger one.
+fn write_account_state(
+    storage: &Storage,
+    keyset: &unissh_keychain::UnlockedKeyset,
+    mutate: impl FnOnce(&mut AccountStatePayload) -> bool,
+) -> Result<(), FfiError> {
+    let author = keyset.signing.verifying.to_bytes().to_vec();
+    let (mut payload, cur_version) = match storage
+        .get_account_state(&author)
+        .map_err(FfiError::other)?
+    {
+        Some(row) => {
+            let plain = open_account_payload(keyset, &row.payload).map_err(map_vault_err)?;
+            (AccountStatePayload::decode(&plain)?, row.version)
+        }
+        None => (AccountStatePayload::default(), 0),
+    };
+    if !mutate(&mut payload) {
+        return Ok(());
+    }
+    let sealed = seal_account_payload(keyset, &payload.encode()).map_err(map_vault_err)?;
+    let new_version = cur_version.saturating_add(1);
+    let sig = sign_account_state(keyset, new_version, &sealed).map_err(map_vault_err)?;
+    storage
+        .set_account_state(&author, new_version, &sealed, &sig)
+        .map_err(FfiError::other)?;
+    Ok(())
 }
 
 /// One item on its way into a new vault: `(item_id, item_type, plaintext content)`.
@@ -5824,8 +5869,11 @@ fn rehome_reference(
 /// tombstoned. A re-keyed binding is written under its new id and the old one is
 /// tombstoned.
 ///
-/// A vault this keyset cannot open holds nothing this device can resolve and is
-/// skipped. Any other failure aborts (and so rolls back) the move. The rewrites
+/// A vault this keyset cannot open — no usable key for it, or a record, grant or
+/// membership chain that does not verify (any `Vault::open` error other than a
+/// storage failure) — holds nothing this device can resolve and is skipped. A
+/// storage failure, and any failure inside a vault that did open, aborts (and so
+/// rolls back) the move. The rewrites
 /// are ordinary local edits: in a cloud vault they push on its next sync, and in
 /// a shared vault the user may not write to, that push meets the existing sync
 /// conflict/authority behaviour like any other edit.
@@ -5840,8 +5888,10 @@ fn rehome_references(
         if rec.vault_id == moved_vid {
             continue;
         }
-        let Ok(vault) = Vault::open(storage, keyset, &rec.vault_id) else {
-            continue;
+        let vault = match Vault::open(storage, keyset, &rec.vault_id) {
+            Ok(vault) => vault,
+            Err(e @ unissh_vault::VaultError::Storage(_)) => return Err(map_vault_err(e)),
+            Err(_) => continue,
         };
         for m in vault.list_items().map_err(map_vault_err)? {
             if m.item_type != ITEM_TYPE_CONNECTION && m.item_type != ITEM_TYPE_BINDING {
@@ -6061,30 +6111,10 @@ impl Core {
         mutate: impl FnOnce(&mut AccountStatePayload),
     ) -> Result<(), FfiError> {
         self.with_state(|state| {
-            let author = state.keyset.signing.verifying.to_bytes().to_vec();
-            let (mut payload, cur_version) = match state
-                .storage
-                .get_account_state(&author)
-                .map_err(FfiError::other)?
-            {
-                Some(row) => {
-                    let plain =
-                        open_account_payload(&state.keyset, &row.payload).map_err(map_vault_err)?;
-                    (AccountStatePayload::decode(&plain)?, row.version)
-                }
-                None => (AccountStatePayload::default(), 0),
-            };
-            mutate(&mut payload);
-            let sealed =
-                seal_account_payload(&state.keyset, &payload.encode()).map_err(map_vault_err)?;
-            let new_version = cur_version.saturating_add(1);
-            let sig =
-                sign_account_state(&state.keyset, new_version, &sealed).map_err(map_vault_err)?;
-            state
-                .storage
-                .set_account_state(&author, new_version, &sealed, &sig)
-                .map_err(FfiError::other)?;
-            Ok(())
+            write_account_state(&state.storage, &state.keyset, |p| {
+                mutate(p);
+                true
+            })
         })
     }
 
