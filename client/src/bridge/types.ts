@@ -183,6 +183,20 @@ export interface VaultIntegrityReport {
   issues: IntegrityIssue[];
 }
 
+/** Biometric unlock on this device (Touch ID on macOS). `supported` is false on
+ *  every platform without an adapter, and on a Mac that cannot do Touch ID. */
+export interface BiometricStatus {
+  supported: boolean;
+  /** The sealed password is stored and its Touch ID-gated secret still exists. */
+  enabled: boolean;
+  /** The sealed password is stored but its secret is gone (fingerprints
+   *  changed): biometric unlock must be enabled again. */
+  invalidated: boolean;
+}
+
+/** How `biometric_unlock` ended. Anything but "unlocked" shows the password. */
+export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated";
+
 export type DbConsistencyKind =
   | "orphanItem"
   | "badVersion"

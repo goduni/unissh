@@ -1,7 +1,7 @@
 // Entry flow overlays — onboarding (create_account), Emergency Kit (one-time
 // Secret Key reveal), and unlock. All wired to the real core.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useReducer, useRef, useState } from "react";
 import { writeSecretToClipboard } from "@/bridge/clipboard";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
@@ -10,6 +10,7 @@ import { MONO, rem, rgba, TEXT, UI } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { recoverInstance } from "@/store/recovery";
+import { biometricUnlockReducer, initialBiometricUnlock } from "@/store/biometricUnlock";
 import { isDesktopOs } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
 import { useWindowControls } from "@/shell/WindowChrome";
@@ -716,6 +717,12 @@ function Unlock() {
   // header at boot, so it's known before unlocking. null/true → keep the field.
   const requiresPassword = useApp((s) => s.requiresPassword);
   const lockReason = useApp((s) => s.lockReason);
+  // Biometric path (Touch ID): see store/biometricUnlock.ts for the transitions.
+  // The password and the Secret Key never come back to JS on this path — Rust
+  // reads, unseals and unlocks.
+  const [bio, dispatchBio] = useReducer(biometricUnlockReducer, initialBiometricUnlock);
+  // One prompt per entry into "prompting", even under StrictMode's double effects.
+  const prompted = useRef(false);
 
   // prefill the Secret Key from the OS keychain if it was saved on this device
   // (cached read — at most one keychain access per process)
@@ -730,6 +737,64 @@ function Unlock() {
       .catch(() => {});
   }, []);
 
+  // Is biometric unlock enabled here? Only a password vault has anything stored
+  // behind it; anywhere without an adapter the answer is simply "no".
+  useEffect(() => {
+    if (requiresPassword === false) {
+      dispatchBio({ type: "status", enabled: false });
+      return;
+    }
+    api
+      .biometricStatus()
+      .then((s) => dispatchBio({ type: "status", enabled: s.enabled }))
+      .catch(() => dispatchBio({ type: "status", enabled: false }));
+  }, [requiresPassword]);
+
+  // Prompt as soon as the screen enters "prompting" — but not while the window
+  // is in the background (a lock on screen-lock or sleep lands here while the
+  // user is away): then on the first focus, so the sheet meets the user.
+  useEffect(() => {
+    if (bio.phase !== "prompting") {
+      prompted.current = false;
+      return;
+    }
+    if (prompted.current) return;
+    const go = () => {
+      if (prompted.current) return;
+      prompted.current = true;
+      api
+        .biometricUnlock(t("onboarding.biometricReason"))
+        .then((outcome) => {
+          dispatchBio({ type: "outcome", outcome });
+          if (outcome === "unlocked") void afterUnlock();
+        })
+        .catch((e) => {
+          logWarn(`biometric unlock failed: ${apiErrorMessage(e)}`);
+          dispatchBio({ type: "error" });
+        });
+    };
+    if (document.hasFocus()) {
+      go();
+      return;
+    }
+    window.addEventListener("focus", go, { once: true });
+    return () => window.removeEventListener("focus", go);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one prompt per phase entry
+  }, [bio.phase]);
+
+  // Everything after the core said yes, whichever way it was asked.
+  const afterUnlock = async () => {
+    useApp.setState({ unlocked: true, overlay: null, lockReason: null });
+    await useApp.getState().reloadVaults();
+    await useApp.getState().reloadServerStatus();
+    // Bind legacy unbound cloud vaults now — the normal locked cold-start path
+    // doesn't run boot()'s unlocked branch, so this is where it actually fires.
+    await useApp.getState().maybeBindLegacyCloudVaults();
+    // Pull cloud vaults from any live server session (no-op without one).
+    useApp.getState().cloudAutoSync();
+    toast(t("onboarding.toast.unlocked"), "ok");
+  };
+
   const unlock = async () => {
     if (busy) return;
     setBusy(true);
@@ -739,15 +804,7 @@ function Unlock() {
       // store the key only if it wasn't already in the keychain — avoids a
       // write (and its prompt) on every unlock.
       if (!fromKeychain) rememberSecretKey(cleanKey);
-      useApp.setState({ unlocked: true, overlay: null, lockReason: null });
-      await useApp.getState().reloadVaults();
-      await useApp.getState().reloadServerStatus();
-      // Bind legacy unbound cloud vaults now — the normal locked cold-start path
-      // doesn't run boot()'s unlocked branch, so this is where it actually fires.
-      await useApp.getState().maybeBindLegacyCloudVaults();
-      // Pull cloud vaults from any live server session (no-op without one).
-      useApp.getState().cloudAutoSync();
-      toast(t("onboarding.toast.unlocked"), "ok");
+      await afterUnlock();
     } catch (e) {
       logWarn(`unlock failed: ${apiErrorMessage(e)}`);
       toast(apiErrorMessage(e), "err");
@@ -812,11 +869,33 @@ function Unlock() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void unlock();
+          if (bio.phase !== "prompting") void unlock();
         }}
         style={{ display: "flex", flexDirection: "column", gap: rem(13) }}
       >
-        {requiresPassword !== false && (
+        {bio.phase === "prompting" && (
+          <div
+            role="status"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: rem(8),
+              padding: `${rem(10)} 0`,
+              fontSize: TEXT.base,
+              color: p.txt2,
+            }}
+          >
+            <Spinner size={14} color={p.txt2} />
+            {t("onboarding.biometricWaiting")}
+          </div>
+        )}
+        {bio.notice && (
+          <div role="status" style={{ fontSize: TEXT.small, color: p.txt2, lineHeight: 1.45 }}>
+            {t(bio.notice === "invalidated" ? "onboarding.biometricInvalidated" : "onboarding.biometricFailed")}
+          </div>
+        )}
+        {requiresPassword !== false && bio.phase !== "prompting" && (
           <Field label={t("onboarding.masterPassword")} labelGap={7}>
             <Input
               icon="lock"
@@ -860,12 +939,17 @@ function Unlock() {
             icon={busy ? undefined : "unlock"}
             full
             onClick={unlock}
-            disabled={busy}
+            disabled={busy || bio.phase === "prompting"}
             style={isMobile ? { minHeight: rem(48) } : undefined}
           >
             {busy ? <Spinner size={16} color={p.accentInk} /> : t("onboarding.unlock")}
           </Btn>
         </div>
+        {bio.phase === "password" && bio.available && (
+          <Btn type="button" variant="ghost" icon="fingerprint" full onClick={() => dispatchBio({ type: "retry" })} disabled={busy}>
+            {t("onboarding.biometricRetry")}
+          </Btn>
+        )}
       </form>
       <button
         onClick={() => useApp.getState().setOverlay("join")}

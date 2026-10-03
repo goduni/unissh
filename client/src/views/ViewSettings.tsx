@@ -54,6 +54,7 @@ import {
   ItemType,
   type AccountInfo,
   type AuditEntry,
+  type BiometricStatus,
   type DeviceInfo,
   type InstanceInfo,
   type JoinPreview,
@@ -79,7 +80,7 @@ import { useFmt } from "@/i18n/format";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useUpdate } from "@/store/update";
 import { updatesSupported } from "@/bridge/updater";
-import { osPlatform } from "@/bridge/platform";
+import { isMac, osPlatform } from "@/bridge/platform";
 import { SettingsShortcuts } from "./SettingsShortcuts";
 import { SettingsSupport } from "./SettingsSupport";
 import { TerminalPreview } from "./TerminalPreview";
@@ -1237,6 +1238,125 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** "Unlock with Touch ID". Offered only on a Mac that can do Touch ID, and only
+ *  for a password vault (a Secret-Key-only vault has no password to remember).
+ *  Turning it on asks for the master password once — Rust checks it against the
+ *  keyset before storing anything, so enabling proves the password is held.
+ *  Turning it off erases the stored password and its Keychain key at once. An
+ *  invalidated one (fingerprints changed) stays visible, to say so and to be
+ *  turned on again. */
+function BiometricRow() {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const requiresPassword = useApp((s) => s.requiresPassword);
+  const [status, setStatus] = useState<BiometricStatus | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () =>
+    api
+      .biometricStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  useEffect(() => {
+    if (isMac()) void refresh();
+  }, []);
+
+  if (!isMac() || requiresPassword !== true || !status) return null;
+  if (!status.supported && !status.enabled && !status.invalidated) return null;
+
+  const turnOff = async () => {
+    setBusy(true);
+    await guard(async () => {
+      await api.biometricDisable();
+      toast(t("settings.biometricOff"), "ok");
+    });
+    await refresh();
+    setBusy(false);
+  };
+
+  const turnOn = async () => {
+    if (busy || !pw) return;
+    setBusy(true);
+    try {
+      await api.biometricEnable(pw);
+      setPw("");
+      setConfirming(false);
+      toast(t("settings.biometricOn"), "ok");
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+    }
+    await refresh();
+    setBusy(false);
+  };
+
+  return (
+    <>
+      <SettingRow
+        title={t("settings.biometricTitle")}
+        desc={status.invalidated ? t("settings.biometricInvalidated") : t("settings.biometricDesc")}
+      >
+        <Toggle
+          checked={status.enabled || confirming}
+          onChange={(v) => {
+            if (busy) return;
+            if (v) setConfirming(true);
+            else if (confirming && !status.enabled) setConfirming(false);
+            else void turnOff();
+          }}
+        />
+      </SettingRow>
+      {confirming && !status.enabled && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void turnOn();
+          }}
+          style={{
+            marginTop: rem(12),
+            padding: rem(16),
+            borderRadius: 12,
+            border: `1px solid ${p.line2}`,
+            background: p.bg1,
+            display: "flex",
+            flexDirection: "column",
+            gap: rem(11),
+          }}
+        >
+          <div style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("settings.biometricConfirm")}</div>
+          <input
+            {...NO_AUTOCORRECT}
+            type="password"
+            autoFocus
+            value={pw}
+            onChange={(e) => setPw(e.target.value)}
+            placeholder={t("settings.biometricPwPlaceholder")}
+            style={inputStyle(p)}
+          />
+          <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
+            <Btn
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => {
+                setPw("");
+                setConfirming(false);
+              }}
+              disabled={busy}
+            >
+              {t("common.cancel")}
+            </Btn>
+            <Btn size="sm" icon="fingerprint" type="submit" disabled={busy || !pw}>
+              {t("settings.biometricTurnOn")}
+            </Btn>
+          </div>
+        </form>
+      )}
+    </>
+  );
+}
+
 function SettingsSecurity() {
   const p = usePalette();
   const { t } = useTranslation();
@@ -1290,6 +1410,7 @@ function SettingsSecurity() {
         </Btn>
       </SettingRow>
       {changing && <ChangePasswordForm onClose={() => setChanging(false)} />}
+      <BiometricRow />
       <SettingRow title={t("settings.clipClearTitle")} desc={t("settings.clipClearDesc")}>
         <Toggle checked={clip} onChange={onClip} />
       </SettingRow>

@@ -7,6 +7,8 @@ import type {
   AccountInfo,
   AuditEntry,
   AuthMethod,
+  BiometricStatus,
+  BiometricUnlockOutcome,
   BroadcastEvent,
   ConnectionProfile,
   Identity,
@@ -747,6 +749,17 @@ export const keychainGetSecretKey = () => invoke<string | null>("keychain_get_se
 export const keychainUnlock = (password: string | null) =>
   invoke<void>("keychain_unlock", { password });
 export const keychainDeleteSecretKey = () => invoke<void>("keychain_delete_secret_key");
+
+// ── biometric unlock (Touch ID on macOS) ───────────────────────
+// The password goes IN once, when enabling (from the form that already holds
+// it). It never comes back out: the biometric unlock reads, unseals and uses it
+// entirely in Rust.
+export const biometricStatus = () => invoke<BiometricStatus>("biometric_status");
+export const biometricEnable = (password: string) => invoke<void>("biometric_enable", { password });
+export const biometricDisable = () => invoke<void>("biometric_disable");
+/** `reason` is the localised line the system prompt shows under the app name. */
+export const biometricUnlock = (reason: string) =>
+  invoke<BiometricUnlockOutcome>("biometric_unlock", { reason });
 
 // ── cloud server: identity / session ───────────────────────────
 // The cloud integration is additive: a local-only instance never touches it.
