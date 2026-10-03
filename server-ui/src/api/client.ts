@@ -102,11 +102,18 @@ export function createClient(
     return inflightRefresh;
   }
 
-  async function call<T>(path: string, opts: CallOpts = {}, retried = false): Promise<T> {
+  /** Authenticated fetch: Bearer, one refresh-and-retry on 401, errors mapped to
+   *  ApiError. Returns the OK response for the caller to read. */
+  async function send(
+    path: string,
+    opts: CallOpts = {},
+    accept = "application/json",
+    retried = false,
+  ): Promise<Response> {
     const auth = getAuth();
     const base = auth.instanceUrl.replace(/\/+$/, "");
     const url = base + path + qs(opts.query);
-    const headers: Record<string, string> = { Accept: "application/json" };
+    const headers: Record<string, string> = { Accept: accept };
 
     if (opts.bearer) {
       if (!auth.bearer) throw new ApiError("unauthenticated", "keyset locked", 401);
@@ -131,13 +138,18 @@ export function createClient(
       // operator keeps working instead of being bounced to the keyset-unlock screen.
       if (res.status === 401 && opts.bearer && !retried) {
         const ok = await refreshOnce();
-        if (ok) return call<T>(path, opts, true);
+        if (ok) return send(path, opts, accept, true);
         // Refresh failed (session revoked, device removed): the keyset session is
         // dead. Signal it so the UI auto-locks and says so.
         onAuthLost?.("keyset");
       }
       throw await errorFromResponse(res);
     }
+    return res;
+  }
+
+  async function call<T>(path: string, opts: CallOpts = {}): Promise<T> {
+    const res = await send(path, opts);
     if (res.status === 204) return undefined as T;
     const text = await res.text();
     if (!text) return undefined as T;
@@ -256,6 +268,15 @@ export function createClient(
         call<MigrationsResp>("/v1/admin/migrations", { bearer: true }),
       auditVerify: () =>
         call<AuditVerify>("/v1/admin/audit/verify", { bearer: true }),
+      /** The audit log (or an inclusive seq range) as a JSON Lines file. */
+      auditExport: async (range: { from_seq?: number; to_seq?: number }): Promise<Blob> => {
+        const res = await send(
+          "/v1/audit/export",
+          { bearer: true, query: range },
+          "application/jsonl",
+        );
+        return res.blob();
+      },
     },
 
     // ── identity (Bearer: crypto + directory flows) ──

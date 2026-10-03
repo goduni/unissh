@@ -6,7 +6,7 @@ import type { AuditEntry } from "../api/types";
 import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Icon } from "../ui/icons";
-import { Btn, PubkeyChip, Tag, ZkBanner } from "../ui/primitives";
+import { Btn, Card, Field, PubkeyChip, Tag, TextInput, ZkBanner } from "../ui/primitives";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -86,6 +86,7 @@ export function Audit() {
   // The tamper finding is the panel's headline security result — it must NOT be a
   // 4.5s toast that vanishes. Hold it as a persistent, dismissible card.
   const [result, setResult] = useState<VerifyResult | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const verify = async () => {
     try {
@@ -135,14 +136,125 @@ export function Audit() {
       sub={t("screen.audit.sub")}
       zk
       actions={
-        <Btn icon="shieldcheck" size="sm" onClick={() => void verify()}>
-          {t("screen.audit.verifyChain")}
-        </Btn>
+        <>
+          <Btn icon="download" size="sm" onClick={() => setExportOpen((o) => !o)}>
+            {t("screen.audit.export")}
+          </Btn>
+          <Btn icon="shieldcheck" size="sm" onClick={() => void verify()}>
+            {t("screen.audit.verifyChain")}
+          </Btn>
+        </>
       }
     >
+      {exportOpen ? <ExportCard onClose={() => setExportOpen(false)} /> : null}
       {result ? <VerifyResultCard result={result} onDismiss={() => setResult(null)} /> : null}
       <AuditBody />
     </Screen>
+  );
+}
+
+/** Optional inclusive seq bound: "" → none; otherwise a positive integer. */
+function parseSeq(v: string): number | undefined | null {
+  const s = v.trim();
+  if (!s) return undefined;
+  return /^[1-9][0-9]*$/.test(s) ? Number(s) : null;
+}
+
+/** Download the log (or a seq range) as JSON Lines, with the chain fields. */
+function ExportCard({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fromSeq = parseSeq(from);
+  const toSeq = parseSeq(to);
+  const invalid =
+    fromSeq === null ||
+    toSeq === null ||
+    (fromSeq !== undefined && toSeq !== undefined && toSeq < fromSeq);
+
+  const download = async () => {
+    if (invalid) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const blob = await api.admin.auditExport({ from_seq: fromSeq, to_seq: toSeq });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `unissh-audit-${fromSeq ?? 1}-${toSeq ?? "head"}.jsonl`;
+      a.click();
+      URL.revokeObjectURL(url);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card style={{ marginBottom: 14 }}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void download();
+        }}
+      >
+        <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>
+          {t("screen.audit.exportTitle")}
+        </div>
+        <div style={{ fontSize: 12, color: "var(--txt3)", lineHeight: 1.5, marginBottom: 14 }}>
+          {t("screen.audit.exportHint")}
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 160px" }}>
+            <Field label={t("screen.audit.exportFrom")} tag="from_seq">
+              <TextInput
+                value={from}
+                onChange={setFrom}
+                placeholder="1"
+                mono
+                inputMode="numeric"
+                ariaLabel={t("screen.audit.exportFrom")}
+              />
+            </Field>
+          </div>
+          <div style={{ flex: "1 1 160px" }}>
+            <Field label={t("screen.audit.exportTo")} tag="to_seq">
+              <TextInput
+                value={to}
+                onChange={setTo}
+                placeholder={t("screen.audit.exportToHead")}
+                mono
+                inputMode="numeric"
+                ariaLabel={t("screen.audit.exportTo")}
+              />
+            </Field>
+          </div>
+        </div>
+        {invalid ? (
+          <div role="alert" style={{ fontSize: 12, color: "var(--red)", marginBottom: 10 }}>
+            {t("screen.audit.exportInvalid")}
+          </div>
+        ) : null}
+        {error ? (
+          <div role="alert" style={{ fontSize: 12, color: "var(--red)", marginBottom: 10 }}>
+            {error}
+          </div>
+        ) : null}
+        <div style={{ display: "flex", gap: 9, justifyContent: "flex-end" }}>
+          <Btn size="sm" variant="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </Btn>
+          <Btn size="sm" variant="primary" type="submit" icon="download" loading={busy} disabled={invalid}>
+            {t("screen.audit.exportDownload")}
+          </Btn>
+        </div>
+      </form>
+    </Card>
   );
 }
 

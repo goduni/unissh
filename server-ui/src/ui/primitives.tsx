@@ -619,6 +619,8 @@ export function TextInput({
   mono,
   onFile,
   accept,
+  ariaLabel,
+  inputMode,
 }: {
   value?: string;
   onChange?: (v: string) => void;
@@ -627,6 +629,8 @@ export function TextInput({
   mono?: boolean;
   onFile?: (f: File) => void;
   accept?: string;
+  ariaLabel?: string;
+  inputMode?: "text" | "numeric";
 }) {
   return (
     <input
@@ -634,6 +638,8 @@ export function TextInput({
       value={type === "file" ? undefined : value}
       accept={accept}
       placeholder={placeholder}
+      aria-label={ariaLabel}
+      inputMode={inputMode}
       onChange={(e) => {
         if (type === "file") {
           const f = e.target.files?.[0];
