@@ -301,16 +301,24 @@ function ExportCard({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** How long a sink may trail the log without a success before it reads as
+ *  lagging. A healthy sink trails by up to one idle poll (2 s) plus one batch. */
+const SINK_LAG_GRACE_S = 30;
+
+/**
+ * - failing: the latest failure is newer than the latest success (the server
+ *   counts an idle poll that found nothing to send as a success);
+ * - lagging: entries are waiting (lag > 0) and no success for SINK_LAG_GRACE_S;
+ * - healthy: otherwise, including a sink that is behind but delivering.
+ */
 type SinkState = "healthy" | "lagging" | "failing";
 
-/** Failing while the latest failure is newer than the latest success (an error
- *  in the same second as a later success reads as recovered); otherwise lagging
- *  while the cursor trails the log. */
-function sinkState(s: AuditSink): SinkState {
+function sinkState(s: AuditSink, nowS = Date.now() / 1000): SinkState {
   if (s.last_error_at != null && s.last_error_at > (s.last_success_at ?? -Infinity)) {
     return "failing";
   }
-  return s.lag > 0 ? "lagging" : "healthy";
+  const stale = s.last_success_at == null || nowS - s.last_success_at > SINK_LAG_GRACE_S;
+  return s.lag > 0 && stale ? "lagging" : "healthy";
 }
 
 const SINK_TONE: Record<SinkState, { tag: TagTone; dot: DotStatus }> = {

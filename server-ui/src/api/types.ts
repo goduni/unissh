@@ -280,7 +280,8 @@ export interface AuditVerify {
 
 /** One configured audit export sink (`[audit.webhook]`, `[audit.syslog]`).
  *  `last_seq` is the persisted cursor; `lag` = newest audit seq − `last_seq`.
- *  The timestamps are what this server process has seen since it started;
+ *  The timestamps are what this server process has seen since it started
+ *  (`last_success_at` = last acknowledged batch or idle poll that found nothing to send);
  *  `last_error` is a short code (`http_500`, `timeout`, `connect`). */
 export interface AuditSink {
   sink: string;
