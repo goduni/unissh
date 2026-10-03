@@ -5664,6 +5664,12 @@ impl Core {
             // A local vault id is the UTF-8 string the UI addresses it by — the form
             // stored in hop references and hashed into legacy profile uids.
             let old_label = String::from_utf8_lossy(&old_vid).into_owned();
+            let profile_uids = moved_profile_uids(&source, &metas, &old_label)?;
+            let moved = VaultMove {
+                old: &old_label,
+                new: &new_hex,
+                profile_uids: &profile_uids,
+            };
 
             state.storage.transaction(|| {
                 // Items are read from the local vault one at a time as they are copied,
@@ -5672,7 +5678,7 @@ impl Core {
                 let items = metas
                     .iter()
                     .filter_map(|m| match source.get_item(&m.item_id) {
-                        Ok(Some(item)) => Some(rehome_item(item, &old_label, &new_hex)),
+                        Ok(Some(item)) => Some(rehome_item(item, &moved)),
                         Ok(None) => None,
                         Err(e) => Some(Err(map_vault_err(e))),
                     });
@@ -5688,13 +5694,7 @@ impl Core {
                 // `Vault::delete` is itself transactional; nested here it runs under a
                 // savepoint, so this outer transaction still decides the whole move.
                 source.delete().map_err(map_vault_err)?;
-                rehome_references(
-                    &state.storage,
-                    &state.keyset,
-                    &new_vid,
-                    &old_label,
-                    &new_hex,
-                )?;
+                rehome_references(&state.storage, &state.keyset, &new_vid, &moved)?;
                 // The account's Personal vault stays the Personal vault under its
                 // new id; for any other vault the pointer is left alone (and not
                 // re-signed).
@@ -5753,6 +5753,80 @@ fn write_account_state(
 /// One item on its way into a new vault: `(item_id, item_type, plaintext content)`.
 type CopiedItem = (Vec<u8>, u32, Zeroizing<Vec<u8>>);
 
+/// A local vault on its way to a cloud id, with the uids of the host profiles it
+/// holds. Local vault ids are NOT unique across devices — every device's default
+/// vault is `personal` — while bindings and hops live in vaults that are often
+/// cloud and synced, so a reference naming `old` may be another device's
+/// `(old, uid)`. A reference is re-pointed only when it names `old` AND one of
+/// `profile_uids`.
+struct VaultMove<'a> {
+    old: &'a str,
+    new: &'a str,
+    profile_uids: &'a std::collections::HashSet<String>,
+}
+
+impl VaultMove<'_> {
+    /// `(vault_id, profile_uid)` names a host of the moved vault.
+    fn holds(&self, vault_id: Option<&str>, profile_uid: Option<&str>) -> bool {
+        vault_id == Some(self.old) && profile_uid.is_some_and(|u| self.profile_uids.contains(u))
+    }
+
+    /// Re-points every `ref=<old>/<uid>` hop of a pinned destination whose uid is
+    /// a host of the moved vault; `None` when there is none. Token-exact: the pin
+    /// is split on its own `|` and `>` separators and re-joined with them.
+    fn repoint_pin(&self, pin: &str) -> Option<String> {
+        let mut changed = false;
+        let out = pin
+            .split('|')
+            .map(|segment| {
+                segment
+                    .split('>')
+                    .map(|token| {
+                        let hop = token.strip_prefix("via=").unwrap_or(token);
+                        let lead = &token[..token.len() - hop.len()];
+                        let uid = hop
+                            .strip_prefix("ref=")
+                            .and_then(|r| r.strip_prefix(self.old)?.strip_prefix('/'));
+                        match uid {
+                            Some(uid) if self.profile_uids.contains(uid) => {
+                                changed = true;
+                                format!("{lead}ref={}/{uid}", self.new)
+                            }
+                            _ => token.to_string(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(">")
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        changed.then_some(out)
+    }
+}
+
+/// The uids of the host profiles in the vault being moved (stored, or for a
+/// legacy profile the one derived from `old_vault` — see [`legacy_profile_uid`]).
+fn moved_profile_uids(
+    source: &Vault,
+    metas: &[unissh_vault::ItemMeta],
+    old_vault: &str,
+) -> Result<std::collections::HashSet<String>, FfiError> {
+    let mut uids = std::collections::HashSet::new();
+    for m in metas.iter().filter(|m| m.item_type == ITEM_TYPE_CONNECTION) {
+        let Some(item) = source.get_item(&m.item_id).map_err(map_vault_err)? else {
+            continue;
+        };
+        let stored = serde_json::from_slice::<serde_json::Value>(&item.content)
+            .ok()
+            .and_then(|v| v.get("uid").and_then(|u| u.as_str()).map(str::to_owned))
+            .filter(|u| !u.is_empty());
+        uids.insert(stored.unwrap_or_else(|| {
+            legacy_profile_uid(old_vault, &String::from_utf8_lossy(&m.item_id))
+        }));
+    }
+    Ok(uids)
+}
+
 /// A rewritten item: `(item_id, plaintext content)` — the id changes only for a
 /// re-keyed binding.
 type RehomedItem = (Vec<u8>, Zeroizing<Vec<u8>>);
@@ -5763,43 +5837,35 @@ type RehomedItem = (Vec<u8>, Zeroizing<Vec<u8>>);
 /// everything else is copied byte for byte.
 fn rehome_item(
     item: unissh_vault::DecryptedItem,
-    old_vault: &str,
-    new_vault: &str,
+    moved: &VaultMove,
 ) -> Result<CopiedItem, FfiError> {
-    match rehome_reference(
-        item.item_type,
-        &item.item_id,
-        &item.content,
-        old_vault,
-        new_vault,
-        true,
-    )? {
+    match rehome_reference(item.item_type, &item.item_id, &item.content, moved, true)? {
         Some((item_id, content)) => Ok((item_id, item.item_type, content)),
         None => Ok((item.item_id, item.item_type, item.content)),
     }
 }
 
-/// Rewrites one item that may refer to vault `old_vault`, which is being moved to
-/// `new_vault`, so it keeps meaning the same thing. Returns the (possibly new)
+/// Rewrites one item that may refer to a host of the vault being moved (see
+/// [`VaultMove`]), so it keeps meaning the same thing. Returns the (possibly new)
 /// item id and the new content, or `None` when the item needs no change.
 ///
 /// - Connection profile: a jump hop referencing a bastion in the moved vault
-///   (`hop_ref.vault_id == old_vault`) is re-pointed. When the profile itself is
+///   (`hop_ref` = old id + one of its uids) is re-pointed. When the profile itself is
 ///   in the moved vault (`in_moved_vault`), a legacy profile with no stored uid
 ///   gets the uid it was always read with ([`legacy_profile_uid`] of the OLD id)
 ///   pinned, since that derivation would change with the vault id.
-/// - Personal-identity binding: one keyed by the moved vault (`team_vault_id ==
-///   old_vault`) is re-keyed to `new_vault`, which changes its item id
-///   ([`binding_item_id`]); a `ref=<old>/` hop in its pinned destination is
-///   re-pointed, so the anti-redirect check still matches the re-pointed hop.
+/// - Personal-identity binding: one keyed by a host of the moved vault
+///   (`team_vault_id` = old id, `profile_uid` one of its uids) is re-keyed to the
+///   new id, which changes its item id ([`binding_item_id`]); a `ref=<old>/<uid>`
+///   hop to one of its hosts in the pinned destination is re-pointed, so the
+///   anti-redirect check still matches the re-pointed hop.
 ///
 /// Edits a `serde_json::Value`, so fields this version does not know survive.
 fn rehome_reference(
     item_type: u32,
     item_id: &[u8],
     content: &[u8],
-    old_vault: &str,
-    new_vault: &str,
+    moved: &VaultMove,
     in_moved_vault: bool,
 ) -> Result<Option<RehomedItem>, FfiError> {
     if item_type != ITEM_TYPE_CONNECTION && item_type != ITEM_TYPE_BINDING {
@@ -5819,7 +5885,7 @@ fn rehome_reference(
             .and_then(|u| u.as_str())
             .is_some_and(|u| !u.is_empty());
         if in_moved_vault && !has_uid {
-            let uid = legacy_profile_uid(old_vault, &String::from_utf8_lossy(item_id));
+            let uid = legacy_profile_uid(moved.old, &String::from_utf8_lossy(item_id));
             body.insert("uid".into(), serde_json::Value::String(uid));
             changed = true;
         }
@@ -5828,29 +5894,33 @@ fn rehome_reference(
                 let Some(hop_ref) = hop.get_mut("hop_ref").and_then(|h| h.as_object_mut()) else {
                     continue;
                 };
-                if hop_ref.get("vault_id").and_then(|v| v.as_str()) == Some(old_vault) {
-                    hop_ref.insert("vault_id".into(), new_vault.into());
+                if moved.holds(
+                    hop_ref.get("vault_id").and_then(|v| v.as_str()),
+                    hop_ref.get("profile_uid").and_then(|u| u.as_str()),
+                ) {
+                    hop_ref.insert("vault_id".into(), moved.new.into());
                     changed = true;
                 }
             }
         }
     } else {
-        if body.get("team_vault_id").and_then(|v| v.as_str()) == Some(old_vault) {
-            body.insert("team_vault_id".into(), new_vault.into());
-            let uid = body
-                .get("profile_uid")
-                .and_then(|u| u.as_str())
-                .unwrap_or_default();
-            new_id = binding_item_id(new_vault, uid).into_bytes();
+        let uid = body
+            .get("profile_uid")
+            .and_then(|u| u.as_str())
+            .map(str::to_owned);
+        if moved.holds(
+            body.get("team_vault_id").and_then(|v| v.as_str()),
+            uid.as_deref(),
+        ) {
+            body.insert("team_vault_id".into(), moved.new.into());
+            new_id = binding_item_id(moved.new, uid.as_deref().unwrap_or_default()).into_bytes();
             changed = true;
         }
-        let old_hop = format!("ref={old_vault}/");
         if let Some(pin) = body
             .get("destination_pin")
             .and_then(|p| p.as_str())
-            .filter(|p| p.contains(&old_hop))
+            .and_then(|p| moved.repoint_pin(p))
         {
-            let pin = pin.replace(&old_hop, &format!("ref={new_vault}/"));
             body.insert("destination_pin".into(), pin.into());
             changed = true;
         }
@@ -5881,9 +5951,9 @@ fn rehome_references(
     storage: &Storage,
     keyset: &unissh_keychain::UnlockedKeyset,
     moved_vid: &[u8],
-    old_vault: &str,
-    new_vault: &str,
+    moved: &VaultMove,
 ) -> Result<(), FfiError> {
+    let mut skipped = 0usize;
     for rec in storage.list_vaults()? {
         if rec.vault_id == moved_vid {
             continue;
@@ -5891,7 +5961,10 @@ fn rehome_references(
         let vault = match Vault::open(storage, keyset, &rec.vault_id) {
             Ok(vault) => vault,
             Err(e @ unissh_vault::VaultError::Storage(_)) => return Err(map_vault_err(e)),
-            Err(_) => continue,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
         };
         for m in vault.list_items().map_err(map_vault_err)? {
             if m.item_type != ITEM_TYPE_CONNECTION && m.item_type != ITEM_TYPE_BINDING {
@@ -5900,14 +5973,8 @@ fn rehome_references(
             let Some(item) = vault.get_item(&m.item_id).map_err(map_vault_err)? else {
                 continue;
             };
-            let Some((item_id, content)) = rehome_reference(
-                m.item_type,
-                &m.item_id,
-                &item.content,
-                old_vault,
-                new_vault,
-                false,
-            )?
+            let Some((item_id, content)) =
+                rehome_reference(m.item_type, &m.item_id, &item.content, moved, false)?
             else {
                 continue;
             };
@@ -5918,6 +5985,9 @@ fn rehome_references(
                 vault.delete_item(&m.item_id).map_err(map_vault_err)?;
             }
         }
+    }
+    if skipped > 0 {
+        log::warn!("vault move: {skipped} vault(s) this keyset cannot open were not checked for references");
     }
     Ok(())
 }
@@ -10409,6 +10479,21 @@ mod tests {
         assert_ne!(agent_key_id("v", "aultk"), agent_key_id("va", "ultk"));
     }
 
+    /// Moving or deleting vault `v` unloads its keys; a vault whose id merely
+    /// starts with `v` keeps its own.
+    #[test]
+    fn unload_vault_keys_drops_only_that_vaults_keys() {
+        let (private, _) = generate_ed25519_openssh().unwrap();
+        let mut agent = InMemoryAgent::new();
+        for (vault, key) in [("v", "k1"), ("v", "k2"), ("va", "k1")] {
+            agent
+                .add_from_openssh(agent_key_id(vault, key), private.as_bytes())
+                .unwrap();
+        }
+        unload_vault_keys(&mut agent, "v");
+        assert_eq!(agent.list(), vec![agent_key_id("va", "k1")]);
+    }
+
     /// Regression (A4a namespace): delete_item and replacing key material MUST
     /// unload the private key from the in-memory agent under the same namespaced key
     /// agent_key_id(vault,item) it was loaded with — otherwise remove is a no-op and
@@ -11591,10 +11676,15 @@ mod tests {
     #[test]
     fn moved_legacy_profile_keeps_its_derived_uid() {
         let legacy = br#"{"label":"web","host":"web.example","port":22,"user":"root","jumps":[]}"#;
-        let (id, content) =
-            rehome_reference(ITEM_TYPE_CONNECTION, b"web", legacy, "loc", "00ff", true)
-                .unwrap()
-                .expect("a legacy profile is rewritten");
+        let uids = std::collections::HashSet::new();
+        let moved = VaultMove {
+            old: "loc",
+            new: "00ff",
+            profile_uids: &uids,
+        };
+        let (id, content) = rehome_reference(ITEM_TYPE_CONNECTION, b"web", legacy, &moved, true)
+            .unwrap()
+            .expect("a legacy profile is rewritten");
         assert_eq!(id, b"web");
         let stored: StoredProfile = serde_json::from_slice(&content).unwrap();
         assert_eq!(stored.uid, Some(legacy_profile_uid("loc", "web")));

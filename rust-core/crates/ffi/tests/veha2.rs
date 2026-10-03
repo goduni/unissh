@@ -1264,6 +1264,20 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
         false,
     )
     .unwrap();
+    // Another device's own `ops-local` host, bound in this (synced) identity vault:
+    // same local vault id, but a uid the moved vault never held — left untouched.
+    let foreign_pin = format!("b.example:22|via=ref={LOCAL}/device-b-bastion");
+    core.set_binding(
+        s(ME),
+        IdentityBinding {
+            team_vault_id: s(LOCAL),
+            profile_uid: s("device-b-host"),
+            identity_item_id: s("alice"),
+            destination_pin: foreign_pin.clone(),
+        },
+        false,
+    )
+    .unwrap();
     // `me` holds the identities, so it is the account's Personal vault.
     core.set_personal_vault(s(ME)).unwrap();
     core.create_vault(s(OTHER), s("Other")).unwrap();
@@ -1359,6 +1373,12 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
         .resolve_personal_auth(new_id.clone(), db.uid.clone(), destination(&db), s("root"))
         .unwrap();
     assert_eq!(personal.user, "alice");
+    let foreign = core
+        .get_binding(s(ME), s(LOCAL), s("device-b-host"))
+        .unwrap()
+        .expect("another device's binding keeps its key");
+    assert_eq!(foreign.team_vault_id, LOCAL);
+    assert_eq!(foreign.destination_pin, foreign_pin);
     // A hop in another vault now points at the moved bastion.
     let inner = core.get_connection(s(OTHER), s("inner")).unwrap();
     let inner_hop = inner.jumps[0].hop_ref.as_ref().unwrap();
@@ -1408,6 +1428,110 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
         .convert_vault_to_cloud(s(ME), TENANT.to_string())
         .unwrap();
     assert_eq!(core.get_personal_vault().unwrap(), Some(new_me));
+}
+
+/// Identity, binding and Personal-auth host all in one local vault: the binding
+/// is copied under the id derived from the NEW vault id, its pin follows the
+/// moved bastion hop, and the host still resolves its identity after the move.
+#[test]
+fn moved_vault_rekeys_its_own_binding() {
+    use unissh_ffi::{
+        AuthMethod, ConnectionProfile, HopRef, Identity, IdentityBinding, JumpHost, ProfileAuth,
+    };
+
+    const SOLO: &str = "solo";
+    let s = |x: &str| x.to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault(s(SOLO), s("Solo")).unwrap();
+    core.save_password(s(SOLO), s("my-pw"), s("mine")).unwrap();
+    core.save_identity(
+        s(SOLO),
+        Identity {
+            identity_id: s("alice"),
+            label: s("Alice"),
+            user: s("alice"),
+            key_item_id: None,
+            password_item_id: Some(s("my-pw")),
+        },
+    )
+    .unwrap();
+    let host = |id: &str, auth: ProfileAuth, jumps: Vec<JumpHost>| ConnectionProfile {
+        profile_id: s(id),
+        uid: String::new(),
+        label: s(id),
+        host: format!("{id}.example"),
+        port: 22,
+        user: s("root"),
+        auth,
+        username_template: None,
+        jumps,
+        proxy: None,
+        tags: vec![],
+        startup_snippet_ids: vec![],
+        record_sessions: false,
+        agent_forward: false,
+    };
+    core.save_connection(
+        s(SOLO),
+        host("bastion", ProfileAuth::PromptPassword, vec![]),
+    )
+    .unwrap();
+    let bastion_uid = core.get_connection(s(SOLO), s("bastion")).unwrap().uid;
+    let via_bastion = JumpHost {
+        host: String::new(),
+        port: 0,
+        user: String::new(),
+        auth: AuthMethod::Password {
+            password: String::new(),
+        },
+        hop_ref: Some(HopRef {
+            vault_id: s(SOLO),
+            profile_uid: bastion_uid,
+        }),
+    };
+    core.save_connection(
+        s(SOLO),
+        host("db", ProfileAuth::Personal, vec![via_bastion]),
+    )
+    .unwrap();
+    let destination = |p: &ConnectionProfile| {
+        core.personal_destination(
+            p.host.clone(),
+            p.port,
+            p.username_template.clone(),
+            p.jumps.clone(),
+            p.proxy.clone(),
+        )
+    };
+    let db = core.get_connection(s(SOLO), s("db")).unwrap();
+    core.set_binding(
+        s(SOLO),
+        IdentityBinding {
+            team_vault_id: s(SOLO),
+            profile_uid: db.uid.clone(),
+            identity_item_id: s("alice"),
+            destination_pin: destination(&db),
+        },
+        false,
+    )
+    .unwrap();
+
+    let new_id = core
+        .convert_vault_to_cloud(s(SOLO), TENANT.to_string())
+        .unwrap();
+
+    let binding = core
+        .get_binding(new_id.clone(), new_id.clone(), db.uid.clone())
+        .unwrap()
+        .expect("the binding is keyed by the new vault id");
+    assert_eq!(binding.team_vault_id, new_id);
+    let db = core.get_connection(new_id.clone(), s("db")).unwrap();
+    let personal = core
+        .resolve_personal_auth(new_id, db.uid.clone(), destination(&db), s("root"))
+        .unwrap();
+    assert_eq!(personal.user, "alice");
 }
 
 #[test]
