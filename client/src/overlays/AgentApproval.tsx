@@ -10,7 +10,7 @@
 // closing, Escape, a timeout, a dead window. Defaulting the other way would make
 // the prompt decorative.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "@/i18n";
@@ -24,11 +24,14 @@ interface ApprovalRequest {
   origin: "forwarded" | "system";
   /** Forwarded: the session's host. */
   host: string;
-  /** System agent: the key asked for. */
+  /** System agent: the key asked for, and its vault. */
   key: string;
-  /** System agent: the calling process, where the OS reported it. */
+  vault: string;
+  /** System agent: the calling process, as the OS reported it (advisory). */
   pid: number | null;
   executable: string | null;
+  /** The user an SSH login would log in as; empty otherwise. Never the server. */
+  user: string;
   /** `user@service` when the payload is an SSH login; empty otherwise. */
   target: string;
 }
@@ -43,38 +46,40 @@ async function answer(id: number, approved: boolean) {
 }
 
 export function AgentApproval() {
-  const [req, setReq] = useState<ApprovalRequest | null>(null);
   // Queued, not dropped: a single `git fetch` can ask more than once, and a
-  // request nobody sees is a request that quietly times out.
-  const queue = useRef<ApprovalRequest[]>([]);
+  // request nobody sees is a request that quietly times out. The first one is
+  // on screen. One the core withdraws (timed out, its client hung up, the
+  // agent stopped) is removed wherever it is — it can no longer be answered.
+  const [queue, setQueue] = useState<ApprovalRequest[]>([]);
 
   useEffect(() => {
-    let dispose: (() => void) | undefined;
+    const disposers: (() => void)[] = [];
     let alive = true;
-    (async () => {
-      const un = await listen<ApprovalRequest>("agent-approval", (e) => {
-        const next = e.payload;
-        setReq((cur) => {
-          if (cur) {
-            queue.current.push(next);
-            return cur;
-          }
-          return next;
-        });
-      });
-      if (alive) dispose = un;
+    const keep = (un: () => void) => {
+      if (alive) disposers.push(un);
       else un();
-    })();
+    };
+    void listen<ApprovalRequest>("agent-approval", (e) => {
+      setQueue((q) => [...q, e.payload]);
+    }).then(keep);
+    void listen<number>("agent-approval-cancelled", (e) => {
+      setQueue((q) => q.filter((r) => r.id !== e.payload));
+    }).then(keep);
     return () => {
       alive = false;
-      dispose?.();
+      disposers.forEach((un) => un());
     };
   }, []);
 
+  const req = queue[0];
   if (!req) return null;
 
   return (
-    <Dialog key={req.id} req={req} onDone={() => setReq(queue.current.shift() ?? null)} />
+    <Dialog
+      key={req.id}
+      req={req}
+      onDone={() => setQueue((q) => q.filter((r) => r.id !== req.id))}
+    />
   );
 }
 
@@ -113,7 +118,10 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
       <div style={{ display: "flex", flexDirection: "column", gap: rem(10), fontSize: TEXT.base }}>
         <div>
           {system
-            ? t("agentApproval.systemBody", { key: req.key })
+            ? t(req.vault ? "agentApproval.systemBodyVault" : "agentApproval.systemBody", {
+                key: req.key,
+                vault: req.vault,
+              })
             : t("agentApproval.body", { host: req.host })}
         </div>
         {system && (
@@ -125,7 +133,20 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
                 : t("agentApproval.processPidOnly", { pid: req.pid })}
           </div>
         )}
-        {req.target ? (
+        {system && req.user ? (
+          <div
+            style={{
+              fontFamily: MONO,
+              fontSize: TEXT.small,
+              padding: `${rem(8)} ${rem(10)}`,
+              borderRadius: 8,
+              background: p.bg2,
+              border: `1px solid ${p.line}`,
+            }}
+          >
+            {t("agentApproval.wouldLogInUser", { user: req.user })}
+          </div>
+        ) : !system && req.target ? (
           <div
             style={{
               fontFamily: MONO,
