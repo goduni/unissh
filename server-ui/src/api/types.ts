@@ -278,6 +278,23 @@ export interface AuditVerify {
   head_hash: string | null;
 }
 
+/** One configured audit export sink (`[audit.webhook]`, `[audit.syslog]`).
+ *  `last_seq` is the persisted cursor; `lag` = newest audit seq − `last_seq`.
+ *  The timestamps are what this server process has seen since it started;
+ *  `last_error` is a short code (`http_500`, `timeout`, `connect`). */
+export interface AuditSink {
+  sink: string;
+  last_seq: number;
+  lag: number;
+  last_success_at: number | null;
+  last_error: string | null;
+  last_error_at: number | null;
+}
+
+export interface AuditSinksResp {
+  sinks: AuditSink[];
+}
+
 // Config: effective config with masked secrets ("***"). Source-of-value isn't
 // surfaced by the server, so we render the value + a derived "secret" marker.
 export interface ConfigResp {

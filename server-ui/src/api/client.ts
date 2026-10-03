@@ -5,6 +5,7 @@ import type {
   AttestationsResp,
   AuditResp,
   AuditVerify,
+  AuditSinksResp,
   AuthChallenge,
   ClaimReq,
   ClaimResp,
@@ -268,6 +269,8 @@ export function createClient(
         call<MigrationsResp>("/v1/admin/migrations", { bearer: true }),
       auditVerify: () =>
         call<AuditVerify>("/v1/admin/audit/verify", { bearer: true }),
+      auditSinks: () =>
+        call<AuditSinksResp>("/v1/admin/audit/sinks", { bearer: true }),
       /** The audit log (or an inclusive seq range) as a JSON Lines file, with the
        *  server's file name (it carries the seq range pinned at request time) when
        *  the Content-Disposition header is readable. */

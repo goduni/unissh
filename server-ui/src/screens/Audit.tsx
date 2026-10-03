@@ -2,11 +2,25 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { fmtRelative } from "../util/format";
-import type { AuditEntry } from "../api/types";
+import type { AuditEntry, AuditSink } from "../api/types";
 import { truncId } from "../util/bytes";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Icon } from "../ui/icons";
-import { Btn, Card, Field, PubkeyChip, Tag, TextInput, ZkBanner } from "../ui/primitives";
+import {
+  Btn,
+  Card,
+  ErrorCard,
+  Field,
+  PubkeyChip,
+  Spinner,
+  StatusDot,
+  Tag,
+  TextInput,
+  ZkBanner,
+  type DotStatus,
+  type TagTone,
+} from "../ui/primitives";
+import { useAsync } from "../util/useAsync";
 import { Screen } from "./Screen";
 import { MONO } from "../theme/tokens";
 
@@ -154,6 +168,7 @@ export function Audit() {
     >
       {exportOpen ? <ExportCard onClose={() => setExportOpen(false)} /> : null}
       {result ? <VerifyResultCard result={result} onDismiss={() => setResult(null)} /> : null}
+      <SinksCard />
       <AuditBody />
     </Screen>
   );
@@ -283,6 +298,98 @@ function ExportCard({ onClose }: { onClose: () => void }) {
         </div>
       </form>
     </Card>
+  );
+}
+
+type SinkState = "healthy" | "lagging" | "failing";
+
+/** Failing while the latest failure is newer than the latest success (an error
+ *  in the same second as a later success reads as recovered); otherwise lagging
+ *  while the cursor trails the log. */
+function sinkState(s: AuditSink): SinkState {
+  if (s.last_error_at != null && s.last_error_at > (s.last_success_at ?? -Infinity)) {
+    return "failing";
+  }
+  return s.lag > 0 ? "lagging" : "healthy";
+}
+
+const SINK_TONE: Record<SinkState, { tag: TagTone; dot: DotStatus }> = {
+  healthy: { tag: "green", dot: "online" },
+  lagging: { tag: "amber", dot: "warn" },
+  failing: { tag: "red", dot: "offline" },
+};
+
+/** Delivery state of each sink configured in the server's `[audit.*]` config. */
+function SinksCard() {
+  const { t } = useTranslation();
+  const sinks = useAsync(() => api.admin.auditSinks(), []);
+  const list = sinks.data?.sinks ?? [];
+
+  return (
+    <Card style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <div style={{ flex: 1, fontSize: 13.5, fontWeight: 700 }}>{t("screen.audit.sinksTitle")}</div>
+        <Btn icon="refresh" size="sm" variant="ghost" onClick={sinks.reload} loading={sinks.loading}>
+          {t("common.checkNow")}
+        </Btn>
+      </div>
+      {sinks.error ? (
+        <ErrorCard message={sinks.error} onRetry={sinks.reload} />
+      ) : sinks.data === null ? (
+        <Spinner size={16} />
+      ) : list.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--txt3)", lineHeight: 1.5 }}>
+          {t("screen.audit.sinksNone")}
+        </div>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 10 }}>
+          {list.map((s) => (
+            <SinkRow key={s.sink} sink={s} />
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+function SinkRow({ sink }: { sink: AuditSink }) {
+  const { t } = useTranslation();
+  const state = sinkState(sink);
+  const tone = SINK_TONE[state];
+  const fact = { fontSize: 12, color: "var(--txt2)" } as const;
+  return (
+    <li style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+      <span style={{ marginTop: 5 }}>
+        <StatusDot status={tone.dot} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 700 }}>{sink.sink}</span>
+          <Tag tone={tone.tag}>{t(`screen.audit.sinkState.${state}`)}</Tag>
+        </div>
+        <div style={{ display: "flex", gap: "4px 16px", flexWrap: "wrap", marginTop: 4 }}>
+          <span style={fact}>
+            {t("screen.audit.sinkLastSeq")}{" "}
+            <span style={{ fontFamily: MONO }}>{sink.last_seq}</span>
+          </span>
+          <span style={fact}>
+            {t("screen.audit.sinkLag")} <span style={{ fontFamily: MONO }}>{sink.lag}</span>
+          </span>
+          <span style={fact}>
+            {t("screen.audit.sinkLastSuccess")} {fmtRelative(sink.last_success_at)}
+          </span>
+        </div>
+        {sink.last_error ? (
+          <div style={{ ...fact, marginTop: 3 }}>
+            {t("screen.audit.sinkLastError")}{" "}
+            <span style={{ fontFamily: MONO, color: state === "failing" ? "var(--red)" : undefined }}>
+              {sink.last_error}
+            </span>{" "}
+            · {fmtRelative(sink.last_error_at)}
+          </div>
+        ) : null}
+      </div>
+    </li>
   );
 }
 
