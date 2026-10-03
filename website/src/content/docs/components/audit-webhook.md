@@ -38,10 +38,10 @@ Acknowledge only after the entries are stored durably on your side. If you answe
 
 Delivery is **at-least-once**. A batch can arrive more than once, for example when the server crashes or loses its database write after you answered `2xx`, or when your `2xx` never reached it. Nothing is ever skipped: the server resumes after the last `seq` it recorded as delivered, including after a restart.
 
-**Receivers dedupe on `seq`.** `seq` is unique per instance and never reused, so `(instance, seq)` identifies an entry. Because batches arrive in order, the simplest rule is to keep the highest `seq` stored per `instance` and drop any entry at or below it. A unique key on `(instance, seq)` works as well.
+**Receivers dedupe on `seq`.** `seq` is unique per instance and never reused while the database lives (see the caution below), so `(instance, seq)` identifies an entry. Because batches arrive in order, the simplest rule is to keep the highest `seq` stored per `instance` and drop any entry at or below it. A unique key on `(instance, seq)` works as well.
 
 :::caution[After a database restore]
-`seq` is assigned as one more than the newest entry and is never reused while the database lives. If the server's database is restored from an older backup, its log and its sink cursor go back together, and new entries get `seq` values your receiver has already stored, with different content. A receiver that only drops "seen" `seq`s would then silently discard them. Compare the `prev_hash` of a re-sent `seq` with the one you stored: equal means a duplicate; different means the log was rolled back, which is worth an alert.
+`seq` is assigned as one more than the newest entry and is never reused while the database lives. If the server's database is restored from an older backup, its log and its sink cursor go back together, and new entries get `seq` values your receiver has already stored, with different content. A receiver that only drops "seen" `seq`s would then silently discard them. Compare the `prev_hash` of a re-sent `seq` with the one you stored. `prev_hash` is this entry's own chain hash: it covers the entry's content and everything before it, so a re-issued `seq` with different content always has a different `prev_hash`. Equal means a duplicate; different means the log was rolled back, which is worth an alert.
 :::
 
 ## Verifying the signature
@@ -92,9 +92,9 @@ The server's own test suite checks this exact example, so the page and the code 
 
 ## Watching the sink
 
-- **Admin panel.** The audit screen shows each configured sink with its last delivered `seq`, its lag behind the newest entry, its last success time and its last error, marked **healthy**, **lagging** or **failing**.
-- **API.** `GET /v1/admin/audit/sinks` (instance owner only) returns `{ "sinks": [ { "sink", "last_seq", "lag", "last_success_at", "last_error", "last_error_at" } ] }`. `last_seq` is the persisted cursor, and `lag` is the newest audit `seq` minus `last_seq`. The timestamps and the error are what the running process has seen since it started. `last_error` is a short code such as `http_500`, `timeout` or `connect`, never a URL, a secret or entry contents. The list is empty when no sink is configured.
-- **Prometheus.** `unissh_audit_sink_delivered_seq{sink}` is a gauge of the last delivered `seq`, and `unissh_audit_sink_failures_total{sink}` counts failed attempts. `sink` is `webhook` or `syslog`. Alert on a failure rate that stays up, or on the gauge standing still while the log grows.
+- **Admin panel.** The audit screen shows each configured sink with its last delivered `seq`, its lag behind the newest entry, its last success time and its last error, marked **failing** (the latest failure is newer than the latest success), **lagging** (entries are waiting and there has been no success for 30 s) or **healthy**.
+- **API.** `GET /v1/admin/audit/sinks` (instance owner only) returns `{ "sinks": [ { "sink", "last_seq", "lag", "last_success_at", "last_error", "last_error_at" } ] }`. `last_seq` is the persisted cursor, and `lag` is the newest audit `seq` minus `last_seq`. The timestamps and the error are what the running process has seen since it started; `last_success_at` is the last acknowledged batch or the last poll that found the sink caught up. `last_error` is a short code such as `http_500`, `timeout` or `connect`, never a URL, a secret or entry contents. The list is empty when no sink is configured.
+- **Prometheus.** `unissh_audit_sink_delivered_seq{sink}` is a gauge of the last delivered `seq`, and `unissh_audit_sink_failures_total{sink}` counts failed attempts. `sink` is `webhook` or `syslog`. Both series exist from the moment the sink starts (the gauge at the saved cursor, the counter at 0), so alerts have data even after a restart. Alert on a failure rate that stays up, or on the gauge standing still while the log grows.
 
 ## Syslog instead
 
