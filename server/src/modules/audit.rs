@@ -135,9 +135,6 @@ async fn audit_query(
 
 // ---- JSON Lines export ----
 
-/// Rows fetched per round-trip while streaming an export.
-const EXPORT_PAGE: i64 = 500;
-
 #[derive(Deserialize)]
 struct ExportQuery {
     from_seq: Option<i64>,
@@ -208,6 +205,8 @@ async fn audit_export(
     let head = state.store.max_audit_seq().await?;
     let to = q.to_seq.map_or(head, |t| t.min(head));
 
+    // Rows per round-trip: the same page size as the `/v1/audit` listing.
+    let page = (state.config.limits.delta_page_size as i64).max(1);
     let store = state.store.clone();
     let pages = futures_util::stream::try_unfold(from, move |next| {
         let store = store.clone();
@@ -215,7 +214,7 @@ async fn audit_export(
             if next > to {
                 return Ok(None);
             }
-            let rows = store.export_audit_page(next, to, EXPORT_PAGE).await?;
+            let rows = store.export_audit_page(next, to, page).await?;
             let Some(last) = rows.last().map(|r| r.seq) else {
                 return Ok(None);
             };

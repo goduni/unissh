@@ -555,7 +555,8 @@ fn exported_record_bytes(l: &Value) -> Vec<u8> {
 
 #[tokio::test]
 async fn audit_export_is_json_lines_that_verify_offline() {
-    let app = spawn().await;
+    // A 2-row page makes the 3+ row fixture span several streamed pages.
+    let app = common::spawn_with(|c| c.limits.delta_page_size = 2).await;
     let a = admin_with_audit(&app).await;
 
     let r = export(&app, "", &a.bearer).await;
@@ -583,6 +584,7 @@ async fn audit_export_is_json_lines_that_verify_offline() {
     }
 
     let v = get_json(&app, "/v1/admin/audit/verify", &a.bearer).await;
+    assert!(lines.len() > 2, "the export crossed a page boundary");
     assert_eq!(v["count"].as_u64().unwrap(), lines.len() as u64);
     assert_eq!(v["head_hash"].as_str().unwrap(), b64(&head));
     assert!(lines.iter().any(|l| l["source"] == "client-signed"));

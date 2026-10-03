@@ -94,7 +94,8 @@ pub fn build_router(state: AppState) -> Router {
 
 /// Build the CORS layer from the allowlist of origins. Empty/no valid ones → `None`
 /// (the panel is behind the same origin/proxy — the layer isn't needed). Allows the headers and
-/// methods the admin panel sends (§ handoff P2.6); exposes the API version and Retry-After.
+/// methods the admin panel sends (§ handoff P2.6); exposes the API version, Retry-After and
+/// Content-Disposition (the audit export's file name).
 fn cors_layer(origins: &[String]) -> Option<CorsLayer> {
     if origins.is_empty() {
         return None;
@@ -125,6 +126,8 @@ fn cors_layer(origins: &[String]) -> Option<CorsLayer> {
             .expose_headers([
                 HeaderName::from_static("unissh-api-version"),
                 header::RETRY_AFTER,
+                // The audit export's file name carries the pinned seq range.
+                header::CONTENT_DISPOSITION,
             ]),
     )
 }
