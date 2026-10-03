@@ -117,11 +117,6 @@ pub struct ForwardedAgent {
 }
 
 impl ForwardedAgent {
-    #[cfg(test)]
-    fn key_blob(&self) -> Option<Vec<u8>> {
-        key_blob(&self.public_openssh)
-    }
-
     fn comment(&self) -> String {
         self.public_openssh
             .split_whitespace()
@@ -262,9 +257,13 @@ pub fn answer<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Vec<u8> {
 
 /// Serves the protocol on one stream (a forwarded channel, or a local socket
 /// connection) until it closes.
+///
+/// Each request is answered on a blocking thread: the policy may take the
+/// core's lock, read the vault, or wait up to a minute for a person to approve
+/// a signature, and none of that may stall the runtime's async workers.
 pub async fn serve<A, S>(agent: std::sync::Arc<A>, mut stream: S)
 where
-    A: AgentKeys + ?Sized,
+    A: AgentKeys + ?Sized + 'static,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let mut header = [0u8; 4];
@@ -281,7 +280,10 @@ where
         if stream.read_exact(&mut body).await.is_err() {
             return;
         }
-        let reply = answer(&*agent, &body);
+        let policy = agent.clone();
+        let Ok(reply) = tokio::task::spawn_blocking(move || answer(&*policy, &body)).await else {
+            return;
+        };
         if stream.write_all(&reply).await.is_err() {
             return;
         }
@@ -371,7 +373,7 @@ mod tests {
     #[test]
     fn a_declined_signature_is_refused() {
         let (a, keys) = agent(false);
-        let blob = a.key_blob().unwrap();
+        let blob = key_blob(&a.public_openssh).unwrap();
         let reply = answer(&a, &sign_request(&blob, b"to-sign"));
         assert_eq!(reply[4], msg::FAILURE);
         assert!(
@@ -383,7 +385,7 @@ mod tests {
     #[test]
     fn an_approved_signature_is_produced() {
         let (a, keys) = agent(true);
-        let blob = a.key_blob().unwrap();
+        let blob = key_blob(&a.public_openssh).unwrap();
         let reply = answer(&a, &sign_request(&blob, b"to-sign"));
         assert_eq!(reply[4], msg::SIGN_RESPONSE);
         assert_eq!(keys.signed.lock().unwrap().len(), 1);
