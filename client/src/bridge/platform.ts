@@ -24,3 +24,6 @@ export const isTauri = (): boolean => osPlatform() !== "unknown";
  *  and window controls. */
 export const isDesktopOs = (): boolean =>
   isTauri() && osPlatform() !== "android" && osPlatform() !== "ios";
+
+/** Running on a phone OS. False in a browser preview, which stands in for desktop. */
+export const isPhoneOs = (): boolean => osPlatform() === "android" || osPlatform() === "ios";

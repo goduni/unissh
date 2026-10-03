@@ -36,6 +36,7 @@ import {
 import { useDialogFocus, useDialogKeys, useMenu } from "@/components/a11y";
 import { Modal } from "@/components/Modal";
 import { TerminalWorkspaces } from "./TerminalWorkspaces";
+import { KeyRotationModal } from "./KeyRotationModal";
 import { drawQr } from "@/support/qr";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
@@ -61,6 +62,7 @@ import type {
 import type { ConnectArgs } from "@/bridge/api";
 import type { TunnelType } from "@/store/app";
 import { exportPath } from "@/support/paths";
+import { authorizedKeysAppendCmd } from "@/support/authorizedKeys";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -3016,15 +3018,7 @@ function CopyKeyToServerModal({
       ctx.toast(t("modals.copyKey.selectHost"), "warn");
       return;
     }
-    // Single-quote the key so the remote shell treats it literally; OpenSSH public
-    // keys never contain a single quote, but escape defensively all the same.
-    const q = "'" + openssh.trim().replace(/'/g, "'\\''") + "'";
-    // Idempotent ssh-copy-id: create ~/.ssh with the perms sshd's StrictModes
-    // requires, then append the key only if an identical line isn't already there.
-    const cmd =
-      `mkdir -p ~/.ssh && chmod 700 ~/.ssh && ` +
-      `touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && ` +
-      `{ grep -qxF ${q} ~/.ssh/authorized_keys || printf '%s\\n' ${q} >> ~/.ssh/authorized_keys; }`;
+    const cmd = authorizedKeysAppendCmd(openssh);
 
     setBusy(true);
     setErrors([]);
@@ -3591,6 +3585,15 @@ export function Modals() {
       <CopyKeyToServerModal
         openssh={modal.openssh}
         keyItemId={modal.keyItemId}
+        onClose={closeModal}
+      />
+    );
+  if (modal.kind === "keyRotation")
+    return (
+      <KeyRotationModal
+        keyItemId={modal.keyItemId}
+        hasCertificate={modal.hasCertificate}
+        candidateId={modal.candidateId}
         onClose={closeModal}
       />
     );

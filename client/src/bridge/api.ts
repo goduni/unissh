@@ -21,6 +21,7 @@ import type {
   InstanceInfo,
   InstanceStatus,
   InviteInfo,
+  KeyRotationLink,
   JoinPreview,
   SpaceInfo,
   DirectoryEntry,
@@ -169,6 +170,18 @@ export const exportSshKey = (vaultId: string, itemId: string) =>
 /** Rotate an SSH key in place (same item id). Returns the new public key to install. */
 export const rotateSshKey = (vaultId: string, itemId: string) =>
   afterMut(vaultId, invoke<string>("rotate_ssh_key", { vaultId, itemId }));
+/** Staged rotation: generate a candidate key beside `keyId`. Returns its item id. */
+export const beginKeyRotation = (vaultId: string, keyId: string) =>
+  afterMut(vaultId, invoke<string>("begin_key_rotation", { vaultId, keyId }));
+/** Commit a staged rotation into `keyId` (old material stays in its history). */
+export const finishKeyRotation = (vaultId: string, keyId: string, candidateId: string) =>
+  afterMut(vaultId, invoke<void>("finish_key_rotation", { vaultId, keyId, candidateId }));
+/** Abandon a staged rotation: the candidate is deleted, the original untouched. */
+export const abandonKeyRotation = (vaultId: string, candidateId: string) =>
+  afterMut(vaultId, invoke<void>("abandon_key_rotation", { vaultId, candidateId }));
+/** Rotations in progress on this device (device-local links, live candidates only). */
+export const listKeyRotations = (vaultId: string) =>
+  invoke<KeyRotationLink[]>("list_key_rotations", { vaultId });
 export const renameItem = (vaultId: string, itemId: string, newItemId: string) =>
   afterMut(vaultId, invoke<void>("rename_item", { vaultId, itemId, newItemId }));
 export const deleteItem = (vaultId: string, itemId: string) =>

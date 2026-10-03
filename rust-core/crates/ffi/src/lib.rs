@@ -60,8 +60,11 @@ use unissh_vault::{
 
 pub mod automation;
 pub mod automation_recording;
+mod key_rotation;
 mod ssh_include;
 mod terminal_workspace;
+
+pub use key_rotation::KeyRotationLink;
 
 uniffi::setup_scaffolding!();
 
@@ -167,6 +170,25 @@ pub enum FfiError {
         /// SHA256 fingerprint of the key the server ACTUALLY presented.
         fingerprint: String,
     },
+    /// A staged key rotation is already in progress for this key: its live
+    /// candidate must be finished or abandoned before another begins.
+    #[error("key rotation already in progress (candidate {candidate_id})")]
+    RotationInProgress {
+        /// Item id of the live candidate.
+        candidate_id: String,
+    },
+    /// The original key already holds the candidate's material (a finish was
+    /// interrupted after its first write): the rotation must be finished, not
+    /// abandoned.
+    #[error("rotation of {key_id} is partly committed; finish it")]
+    RotationPartlyFinished {
+        /// Item id of the original key.
+        key_id: String,
+    },
+    /// A key-only login (`publickey_only`) was asked for with an auth method
+    /// that is not a key: a password would stand in for the key it must prove.
+    #[error("a key-only login needs key authentication")]
+    PublickeyOnlyNeedsKey,
     /// SSH error.
     #[error("ssh error: {msg}")]
     Ssh {
@@ -1008,6 +1030,13 @@ pub struct MultiExecTarget {
     pub jumps: Vec<JumpHost>,
     /// Outbound proxy for the first TCP hop (may be absent).
     pub proxy: Option<ProxyConfig>,
+    /// Log in to the target with its key only — no keyboard-interactive, so no
+    /// password prompt can stand in for the key. For proving that a key is
+    /// accepted (the verify/remove steps of a key rotation). Hops are unaffected.
+    /// Requires key auth (`Agent` / `SystemAgent`); any other method is refused
+    /// with [`FfiError::PublickeyOnlyNeedsKey`].
+    #[uniffi(default = false)]
+    pub publickey_only: bool,
 }
 
 /// Category of a structural DB-integrity violation (FFI mirror of `ConsistencyKind`).
@@ -3031,26 +3060,13 @@ impl Core {
     /// the vault and returns the **public** key (OpenSSH). The private key is not handed out.
     pub fn generate_ssh_key(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
         self.with_state_mut(|state| {
-            let (private_pem, public) = generate_ed25519_openssh().map_err(FfiError::ssh)?;
-            ensure_item_type(
-                &state.storage,
-                &vault_id,
-                item_id.as_bytes(),
-                ITEM_TYPE_SSH_KEY,
-            )?;
             let vault = Vault::open(
                 &state.storage,
                 &state.keyset,
                 &resolve_vid(&state.storage, &vault_id),
             )
             .map_err(FfiError::other)?;
-            vault
-                .put_item(
-                    item_id.as_bytes(),
-                    ITEM_TYPE_SSH_KEY,
-                    private_pem.as_bytes(),
-                )
-                .map_err(FfiError::other)?;
+            let public = store_new_ssh_key(&state.storage, &vault, &vault_id, &item_id)?;
             // The key material was replaced under the same id → unload the previous private key from
             // the agent (namespaced), otherwise connects in this session will keep signing
             // with the OLD key (load_key_into_agent short-circuits on agent.contains).
@@ -3234,34 +3250,12 @@ impl Core {
             )
             .map_err(FfiError::other)?;
             // The key must exist and be an SSH key — you can't "rotate" nothing.
-            let existing = vault
-                .get_item(item_id.as_bytes())
-                .map_err(FfiError::other)?
-                .ok_or(FfiError::NotFound)?;
-            if existing.item_type != ITEM_TYPE_SSH_KEY {
-                return Err(FfiError::other("item is not an SSH key"));
-            }
-            let (private_pem, public) = generate_ed25519_openssh().map_err(FfiError::ssh)?;
-            vault
-                .put_item(
-                    item_id.as_bytes(),
-                    ITEM_TYPE_SSH_KEY,
-                    private_pem.as_bytes(),
-                )
-                .map_err(FfiError::other)?;
+            require_ssh_key(&vault, &item_id)?;
+            let public = store_new_ssh_key(&state.storage, &vault, &vault_id, &item_id)?;
             // The attached certificate no longer matches the new pair — remove it,
             // otherwise `load_key_into_agent` would re-attach the mismatched cert on the
             // next connect and cert authentication would silently break.
-            let cert = cert_item_id(&item_id);
-            if vault
-                .get_item(cert.as_bytes())
-                .map_err(FfiError::other)?
-                .is_some()
-            {
-                vault
-                    .delete_item(cert.as_bytes())
-                    .map_err(FfiError::other)?;
-            }
+            drop_certificate(&vault, &item_id)?;
             // Unload the old key from the in-memory agent (like delete_item/rename_item),
             // otherwise connects in this session would keep using the previous pair, since
             // `load_key_into_agent` short-circuits on `agent.contains()`.
@@ -3657,13 +3651,20 @@ impl Core {
         let mut connected: Vec<(String, SshClient)> = Vec::new();
         let mut results: Vec<MultiExecResult> = Vec::new();
         for t in &targets {
-            match self.connect_session(
+            match connect_with_options(
+                &self.state,
+                &self.rt,
+                &self.prompter,
+                &self.approver,
                 &t.auth,
                 &t.jumps,
                 t.proxy.as_ref(),
                 t.host.clone(),
                 t.port,
                 t.user.clone(),
+                false,
+                None,
+                t.publickey_only,
             ) {
                 Ok(client) => connected.push((t.host.clone(), client)),
                 Err(e) => results.push(MultiExecResult {
@@ -3796,6 +3797,7 @@ impl Core {
                             auth: pa.auth,
                             jumps: p.jumps,
                             proxy: p.proxy,
+                            publickey_only: false,
                         });
                     }
                 }
@@ -6343,6 +6345,7 @@ impl Core {
                                 auth: pa.auth,
                                 jumps: p.jumps.clone(),
                                 proxy: p.proxy.clone(),
+                                publickey_only: false,
                             });
                         }
                         Err(_) => {
@@ -6527,9 +6530,54 @@ fn connect_with_policy(
     agent_forward: bool,
     policy: Option<&automation::ConnectionPolicy>,
 ) -> Result<SshClient, FfiError> {
+    connect_with_options(
+        state,
+        rt,
+        prompter,
+        approver,
+        auth,
+        jumps,
+        proxy,
+        host,
+        port,
+        user,
+        agent_forward,
+        policy,
+        false,
+    )
+}
+
+/// As [`connect_with_policy`], plus `publickey_only` for the target (see
+/// [`MultiExecTarget::publickey_only`]).
+#[allow(clippy::too_many_arguments)]
+fn connect_with_options(
+    state: &Arc<Mutex<Option<CoreState>>>,
+    rt: &tokio::runtime::Runtime,
+    prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
+    approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    auth: &AuthMethod,
+    jumps: &[JumpHost],
+    proxy: Option<&ProxyConfig>,
+    host: String,
+    port: u16,
+    user: String,
+    agent_forward: bool,
+    policy: Option<&automation::ConnectionPolicy>,
+    publickey_only: bool,
+) -> Result<SshClient, FfiError> {
     // Cloned out before the state lock is taken: the prompt fires while that lock
     // is held (see the note above), so reaching back for another lock here would
     // be one more chance to deadlock for no benefit.
+    // `publickey_only` only stops escalation; with a password as the first
+    // method the password itself would still be sent and prove nothing.
+    if publickey_only
+        && !matches!(
+            auth,
+            AuthMethod::Agent { .. } | AuthMethod::SystemAgent { .. }
+        )
+    {
+        return Err(FfiError::PublickeyOnlyNeedsKey);
+    }
     let prompter = lock_recover(prompter).clone();
     let mut guard = lock_recover(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;
@@ -6585,6 +6633,7 @@ fn connect_with_policy(
         ConnectOptions::new(host.clone(), port, user, target_auth),
         prompter.as_ref(),
     );
+    target.publickey_only = publickey_only;
 
     // The proxy wraps the first TCP dial: hop #1 of the chain, or the target
     // itself for a direct connection. The connection's own proxy wins; a
@@ -6941,6 +6990,7 @@ fn profile_to_target(vault_id: &str, p: ConnectionProfile) -> MultiExecTarget {
         auth: profile_auth_to_method(vault_id, p.auth),
         jumps: p.jumps,
         proxy: p.proxy,
+        publickey_only: false,
     }
 }
 
@@ -7027,6 +7077,57 @@ fn ensure_item_type(
         if !rec.tombstone && rec.item_type != expected_type {
             return Err(FfiError::AlreadyExists);
         }
+    }
+    Ok(())
+}
+
+/// The live item `item_id`, which must be an SSH key: `NotFound` when absent or
+/// tombstoned, an "is not an SSH key" error for any other type.
+fn require_ssh_key(vault: &Vault, item_id: &str) -> Result<unissh_vault::DecryptedItem, FfiError> {
+    let item = vault
+        .get_item(item_id.as_bytes())
+        .map_err(FfiError::other)?
+        .ok_or(FfiError::NotFound)?;
+    if item.item_type != ITEM_TYPE_SSH_KEY {
+        return Err(FfiError::other("item is not an SSH key"));
+    }
+    Ok(item)
+}
+
+/// Generates an Ed25519 pair **in the core** and stores its private half as the
+/// SSH key `item_id` (a new item, or a new version of an existing key; another
+/// live item type there is `AlreadyExists`). Returns the OpenSSH public key.
+/// The caller unloads `item_id` from the agent.
+fn store_new_ssh_key(
+    storage: &Storage,
+    vault: &Vault,
+    vault_id: &str,
+    item_id: &str,
+) -> Result<String, FfiError> {
+    let (private_pem, public) = generate_ed25519_openssh().map_err(FfiError::ssh)?;
+    ensure_item_type(storage, vault_id, item_id.as_bytes(), ITEM_TYPE_SSH_KEY)?;
+    vault
+        .put_item(
+            item_id.as_bytes(),
+            ITEM_TYPE_SSH_KEY,
+            private_pem.as_bytes(),
+        )
+        .map_err(FfiError::other)?;
+    Ok(public)
+}
+
+/// Removes the certificate attached to `key_id`, if any (after the key's material
+/// changed, it certifies a public key the item no longer holds).
+fn drop_certificate(vault: &Vault, key_id: &str) -> Result<(), FfiError> {
+    let cert = cert_item_id(key_id);
+    if vault
+        .get_item(cert.as_bytes())
+        .map_err(FfiError::other)?
+        .is_some()
+    {
+        vault
+            .delete_item(cert.as_bytes())
+            .map_err(FfiError::other)?;
     }
     Ok(())
 }

@@ -246,6 +246,8 @@ function SettingsAppearance() {
   const isPhone = useIsMobile();
   const gpuRendering = useApp((s) => s.gpuRendering);
   const setGpuRendering = useApp((s) => s.setGpuRendering);
+  const terminalImages = useApp((s) => s.terminalImages);
+  const setTerminalImages = useApp((s) => s.setTerminalImages);
   const customChrome = useApp((s) => s.customChrome);
   const setCustomChrome = useApp((s) => s.setCustomChrome);
   const setWindowControlsSide = useApp((s) => s.setWindowControlsSide);
@@ -475,6 +477,9 @@ function SettingsAppearance() {
           <Toggle checked={gpuRendering} onChange={setGpuRendering} />
         </SettingRow>
       )}
+      <SettingRow title={t("settings.terminalImagesTitle")} desc={t("settings.terminalImagesDesc")}>
+        <Toggle checked={terminalImages} onChange={setTerminalImages} />
+      </SettingRow>
       <SettingRow title={t("settings.termFontTitle")} desc={t("settings.termFontDesc")}>
         <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
           <Btn
@@ -1260,6 +1265,8 @@ function SettingsSecurity() {
     setClip(v);
     lsSet("unissh.clipclear", v ? "1" : "0");
   };
+  const keyAgeDays = useApp((s) => s.keyAgeDays);
+  const setKeyAgeDays = useApp((s) => s.setKeyAgeDays);
 
   const checkDbConsistency = async () => {
     await guard(async () => {
@@ -1298,6 +1305,18 @@ function SettingsSecurity() {
       {changing && <ChangePasswordForm onClose={() => setChanging(false)} />}
       <SettingRow title={t("settings.clipClearTitle")} desc={t("settings.clipClearDesc")}>
         <Toggle checked={clip} onChange={onClip} />
+      </SettingRow>
+      <SettingRow title={t("settings.keyAgeTitle")} desc={t("settings.keyAgeDesc")}>
+        <Segmented<string>
+          value={String(keyAgeDays)}
+          onChange={(v) => setKeyAgeDays(parseInt(v, 10))}
+          options={[
+            { value: "0", label: t("settings.keyAgeOff") },
+            { value: "180", label: t("settings.keyAge180") },
+            { value: "365", label: t("settings.keyAge365") },
+            { value: "730", label: t("settings.keyAge730") },
+          ]}
+        />
       </SettingRow>
 
       <SectionLabel>{t("settings.sectionRecovery")}</SectionLabel>
