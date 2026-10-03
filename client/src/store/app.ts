@@ -6,7 +6,7 @@ import { create } from "zustand";
 import * as api from "@/bridge/api";
 import { onVaultMutated } from "@/bridge/sync-hook";
 import { clearSecretKey } from "@/bridge/secretKey";
-import { osPlatform } from "@/bridge/platform";
+import { isPhoneOs, osPlatform } from "@/bridge/platform";
 import { i18n, refineLangFromSystem } from "@/i18n";
 
 /** Sentinel for the "all hosts" filter — decoupled from its display label so the
@@ -484,6 +484,9 @@ interface AppStore {
   /** Days after which a vault key carries the "old" chip in Secrets; 0 = never. */
   keyAgeDays: number;
   setKeyAgeDays: (days: number) => void;
+  /** Render sixel and iTerm2 inline images in new panes. */
+  terminalImages: boolean;
+  setTerminalImages: (on: boolean) => void;
   /** Draw our own title bar (and leave the window undecorated), rather than
    *  handing the frame to the window manager. Resolved at boot: an explicit
    *  choice if the user made one, otherwise off under a tiling WM and on
@@ -699,6 +702,17 @@ const lsGpuRendering = (): boolean => {
 /** Key-age threshold (days) for the "old" chip. Device-local: a nudge, not policy. */
 const lsKeyAgeDays = (): number => parseKeyAgeDays(lsRead("unissh.keyAgeDays"));
 
+/** Inline images (sixel, iTerm2) in terminal panes. On by default on desktop;
+ *  off by default on phones, so a phone does not spend memory on them unasked. */
+const lsTerminalImages = (): boolean => {
+  try {
+    const v = localStorage.getItem("unissh.terminalImages");
+    return v === null ? !isPhoneOs() : v === "1";
+  } catch {
+    return !isPhoneOs();
+  }
+};
+
 /** The user's EXPLICIT choice about the custom title bar, or `null` for "never
  *  said" — which is the whole point of the tri-state. A plain boolean default
  *  cannot express it: we need to tell "wants the bar" apart from "has not
@@ -885,6 +899,7 @@ export const useApp = create<AppStore>((set, get) => ({
   modernAlgorithms: lsModernAlgorithms(),
   gpuRendering: lsGpuRendering(),
   keyAgeDays: lsKeyAgeDays(),
+  terminalImages: lsTerminalImages(),
   // Provisional: the current look, so a browser preview and the first paint on
   // every non-tiling desktop are right without waiting on IPC. `boot` replaces
   // it with the detected answer when the user has never chosen.
@@ -1572,6 +1587,14 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ keyAgeDays: v });
     try {
       localStorage.setItem("unissh.keyAgeDays", String(v));
+    } catch {
+      /* ignore */
+    }
+  },
+  setTerminalImages: (on) => {
+    set({ terminalImages: on });
+    try {
+      localStorage.setItem("unissh.terminalImages", on ? "1" : "0");
     } catch {
       /* ignore */
     }

@@ -5,12 +5,20 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, NO_AUTOCORRECT, type IconName } from "@/components/primitives";
-import { useApp, type Route } from "@/store/app";
+import { paneProfile, useApp, type Route } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { apiErrorMessage, type ConnectionProfile } from "@/bridge/types";
 import * as api from "@/bridge/api";
 import { toast } from "@/store/toast";
 import { useTranslation, tDyn } from "@/i18n";
+import {
+  builtinsFromProfile,
+  parseParams,
+  planSnippet,
+  resolveCommand,
+  type BuiltinValues,
+} from "@/support/snippetParams";
+import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
 
 import { isDesktopOs } from "@/bridge/platform";
 
@@ -65,7 +73,26 @@ type FlatItem =
   | { id: string; icon: IconName; label: string; sub: string; kind: "host"; host: ConnectionProfile }
   | { id: string; icon: IconName; label: string; sub: string; kind: "nav"; route: Route }
   | { id: string; icon: IconName; label: string; sub: string; kind: "action"; action: ActionCmd["action"] }
-  | { id: string; icon: IconName; label: string; sub: string; kind: "snippet"; command: string };
+  | { id: string; icon: IconName; label: string; sub: string; kind: "snippet"; command: string; hasParams: boolean };
+
+/** A parameterised snippet waiting on its form. The pane is pinned when the
+ *  snippet is picked, so the values land where the user was looking then. */
+interface PendingSnippet {
+  label: string;
+  command: string;
+  sessionId: string;
+  builtins: BuiltinValues;
+}
+
+/** Typed into the pane, not executed for the user: the text lands at the
+ *  prompt exactly as if they had pasted it, and pressing Enter stays their
+ *  decision. A snippet that ran itself on selection would make a mis-click
+ *  destructive. */
+function typeIntoPane(sessionId: string, text: string) {
+  void api
+    .sessionWrite(sessionId, Array.from(new TextEncoder().encode(text)))
+    .catch((e) => toast(apiErrorMessage(e), "err"));
+}
 
 interface Group {
   title: string;
@@ -102,6 +129,7 @@ export function CommandPalette() {
     };
   }, [open, vaultId]);
 
+  const [pending, setPending] = useState<PendingSnippet | null>(null);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -161,6 +189,7 @@ export function CommandPalette() {
         sub: sn.command.split("\n")[0],
         kind: "snippet" as const,
         command: sn.command,
+        hasParams: parseParams(sn.command).length > 0,
       }));
 
     return [
@@ -177,7 +206,24 @@ export function CommandPalette() {
     setSel(0);
   }, [q]);
 
-  if (!open) return null;
+  let form: React.ReactNode = null;
+  if (pending) {
+    const { ask, fromHost } = planSnippet(pending.command, pending.builtins);
+    form = (
+      <SnippetParamsForm
+        label={pending.label}
+        ask={ask}
+        fromHost={fromHost}
+        onCancel={() => setPending(null)}
+        onSubmit={(values) => {
+          setPending(null);
+          typeIntoPane(pending.sessionId, resolveCommand(pending.command, values, pending.builtins));
+        }}
+      />
+    );
+  }
+
+  if (!open) return form;
 
   const close = () => setPalette(false);
 
@@ -187,10 +233,6 @@ export function CommandPalette() {
       ctx.connect(it.host);
     } else if (it.kind === "snippet") {
       setPalette(false);
-      // Typed into the pane, not executed for the user: the text lands at the
-      // prompt exactly as if they had pasted it, and pressing Enter stays their
-      // decision. A snippet that ran itself on selection would make a
-      // mis-click destructive.
       const st = useApp.getState();
       const tab = st.terminals.find((x) => x.id === st.activeTermId);
       const pane = tab?.panes.find((x) => x.id === tab.activePaneId);
@@ -198,9 +240,17 @@ export function CommandPalette() {
         toast(t("command.snippetNoPane"), "warn");
         return;
       }
-      void api
-        .sessionWrite(pane.sessionId, Array.from(new TextEncoder().encode(it.command)))
-        .catch((e) => toast(apiErrorMessage(e), "err"));
+      // Built-ins come from the pane's host; a local shell has none, so there
+      // they are asked like any other parameter. With nothing left to ask there
+      // is no form: the command (escapes resolved, built-ins filled in) goes
+      // straight into the pane — for a plain command, byte for byte.
+      const builtins = builtinsFromProfile(paneProfile(pane));
+      const { ready } = planSnippet(it.command, builtins);
+      if (ready !== null) {
+        typeIntoPane(pane.sessionId, ready);
+        return;
+      }
+      setPending({ label: it.label, command: it.command, sessionId: pane.sessionId, builtins });
     } else if (it.kind === "nav") {
       setPalette(false);
       ctx.go(it.route);
@@ -235,188 +285,196 @@ export function CommandPalette() {
 
   let idx = -1;
   return (
-    <div
-      onClick={close}
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 300,
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        paddingTop: "12vh",
-        background: p.name === "dark" ? "rgba(6,7,11,0.55)" : "rgba(40,44,60,0.35)",
-        backdropFilter: "blur(3px)",
-      }}
-    >
+    <>
+      {form}
       <div
-        onClick={(e) => e.stopPropagation()}
+        onClick={close}
         style={{
-          width: rem(600),
-          maxWidth: "90%",
-          maxHeight: "70vh",
+          position: "absolute",
+          inset: 0,
+          zIndex: 300,
           display: "flex",
-          flexDirection: "column",
-          background: p.bg1,
-          border: `1px solid ${p.line2}`,
-          borderRadius: 16,
-          boxShadow: p.shadow,
-          overflow: "hidden",
+          alignItems: "flex-start",
+          justifyContent: "center",
+          paddingTop: "12vh",
+          background: p.name === "dark" ? "rgba(6,7,11,0.55)" : "rgba(40,44,60,0.35)",
+          backdropFilter: "blur(3px)",
         }}
       >
         <div
+          onClick={(e) => e.stopPropagation()}
           style={{
+            width: rem(600),
+            maxWidth: "90%",
+            maxHeight: "70vh",
             display: "flex",
-            alignItems: "center",
-            gap: rem(11),
-            padding: `${rem(14)} ${rem(16)}`,
-            borderBottom: `1px solid ${p.line}`,
+            flexDirection: "column",
+            background: p.bg1,
+            border: `1px solid ${p.line2}`,
+            borderRadius: 16,
+            boxShadow: p.shadow,
+            overflow: "hidden",
           }}
         >
-          <Icon name="search" size={18} color={p.txt3} />
-          <input
-            ref={inputRef}
-            {...NO_AUTOCORRECT}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={onKey}
-            placeholder={t("command.searchPlaceholder")}
+          <div
             style={{
-              flex: 1,
-              background: "none",
-              border: "none",
-              outline: "none",
-              color: p.txt,
-              fontSize: TEXT.lead,
-              fontFamily: UI,
+              display: "flex",
+              alignItems: "center",
+              gap: rem(11),
+              padding: `${rem(14)} ${rem(16)}`,
+              borderBottom: `1px solid ${p.line}`,
             }}
-          />
-          <span
+          >
+            <Icon name="search" size={18} color={p.txt3} />
+            <input
+              ref={inputRef}
+              {...NO_AUTOCORRECT}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={onKey}
+              placeholder={t("command.searchPlaceholder")}
+              style={{
+                flex: 1,
+                background: "none",
+                border: "none",
+                outline: "none",
+                color: p.txt,
+                fontSize: TEXT.lead,
+                fontFamily: UI,
+              }}
+            />
+            <span
+              style={{
+                fontFamily: MONO,
+                fontSize: TEXT.micro,
+                padding: `${rem(2)} ${rem(7)}`,
+                borderRadius: 6,
+                background: p.bg3,
+                border: `1px solid ${p.line}`,
+                color: p.txt3,
+              }}
+            >
+              esc
+            </span>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", padding: rem(8) }}>
+            {flat.length === 0 ? (
+              <div style={{ padding: `${rem(34)} 0`, textAlign: "center", color: p.txt3, fontSize: TEXT.body }}>
+                {t("command.empty", { q })}
+              </div>
+            ) : (
+              groups.map((g) => (
+                <div key={g.title} style={{ marginBottom: rem(6) }}>
+                  <div
+                    style={{
+                      padding: `${rem(6)} ${rem(10)} ${rem(4)}`,
+                      fontSize: TEXT.micro,
+                      fontWeight: 700,
+                      letterSpacing: rem(0.6),
+                      color: p.txt3,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {g.title}
+                  </div>
+                  {g.items.map((it, i) => {
+                    idx++;
+                    const active = idx === sel;
+                    const myIdx = idx;
+                    return (
+                      <div
+                        key={it.id}
+                        onMouseEnter={() => setSel(myIdx)}
+                        onClick={() => run(it)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: rem(11),
+                          padding: `${rem(9)} ${rem(10)}`,
+                          cursor: "pointer",
+                          borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
+                          boxShadow: active ? `inset 2px 0 0 ${p.accent}` : undefined,
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: rem(30),
+                            height: rem(30),
+                            borderRadius: 8,
+                            background: p.bg2,
+                            border: `1px solid ${p.line}`,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Icon name={it.icon} size={15} color={p.txt2} />
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: TEXT.body,
+                              fontWeight: 600,
+                              color: p.txt,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {it.label}
+                          </div>
+                          <div
+                            style={{
+                              fontFamily: it.kind === "host" ? MONO : UI,
+                              fontSize: TEXT.small,
+                              color: p.txt3,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {it.sub}
+                          </div>
+                        </div>
+                        {it.kind === "host" && (
+                          <span style={{ fontSize: TEXT.micro, color: p.txt3 }}>↵ {t("command.terminalHint")}</span>
+                        )}
+                        {it.kind === "snippet" && it.hasParams && (
+                          <span style={{ fontSize: TEXT.micro, color: p.txt3, whiteSpace: "nowrap" }}>
+                            <span style={{ fontFamily: MONO }}>{"{ }"}</span> {t("command.snippetParamsHint")}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))
+            )}
+          </div>
+          <div
             style={{
-              fontFamily: MONO,
-              fontSize: TEXT.micro,
-              padding: `${rem(2)} ${rem(7)}`,
-              borderRadius: 6,
-              background: p.bg3,
-              border: `1px solid ${p.line}`,
+              display: "flex",
+              alignItems: "center",
+              gap: rem(14),
+              padding: `${rem(9)} ${rem(14)}`,
+              borderTop: `1px solid ${p.line}`,
+              fontSize: TEXT.small,
               color: p.txt3,
             }}
           >
-            esc
-          </span>
-        </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: rem(8) }}>
-          {flat.length === 0 ? (
-            <div style={{ padding: `${rem(34)} 0`, textAlign: "center", color: p.txt3, fontSize: TEXT.body }}>
-              {t("command.empty", { q })}
-            </div>
-          ) : (
-            groups.map((g) => (
-              <div key={g.title} style={{ marginBottom: rem(6) }}>
-                <div
-                  style={{
-                    padding: `${rem(6)} ${rem(10)} ${rem(4)}`,
-                    fontSize: TEXT.micro,
-                    fontWeight: 700,
-                    letterSpacing: rem(0.6),
-                    color: p.txt3,
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {g.title}
-                </div>
-                {g.items.map((it, i) => {
-                  idx++;
-                  const active = idx === sel;
-                  const myIdx = idx;
-                  return (
-                    <div
-                      key={it.id}
-                      onMouseEnter={() => setSel(myIdx)}
-                      onClick={() => run(it)}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: rem(11),
-                        padding: `${rem(9)} ${rem(10)}`,
-                        cursor: "pointer",
-                        borderTop: i === 0 ? undefined : `1px solid ${p.line}`,
-                        boxShadow: active ? `inset 2px 0 0 ${p.accent}` : undefined,
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: rem(30),
-                          height: rem(30),
-                          borderRadius: 8,
-                          background: p.bg2,
-                          border: `1px solid ${p.line}`,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          flexShrink: 0,
-                        }}
-                      >
-                        <Icon name={it.icon} size={15} color={p.txt2} />
-                      </span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div
-                          style={{
-                            fontSize: TEXT.body,
-                            fontWeight: 600,
-                            color: p.txt,
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
-                          {it.label}
-                        </div>
-                        <div
-                          style={{
-                            fontFamily: it.kind === "host" ? MONO : UI,
-                            fontSize: TEXT.small,
-                            color: p.txt3,
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
-                          {it.sub}
-                        </div>
-                      </div>
-                      {it.kind === "host" && (
-                        <span style={{ fontSize: TEXT.micro, color: p.txt3 }}>↵ {t("command.terminalHint")}</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ))
-          )}
-        </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: rem(14),
-            padding: `${rem(9)} ${rem(14)}`,
-            borderTop: `1px solid ${p.line}`,
-            fontSize: TEXT.small,
-            color: p.txt3,
-          }}
-        >
-          <span>
-            <b style={{ color: p.txt2 }}>↑↓</b> {t("command.navHint")}
-          </span>
-          <span>
-            <b style={{ color: p.txt2 }}>↵</b> {t("command.selectHint")}
-          </span>
-          <span>
-            <b style={{ color: p.txt2 }}>esc</b> {t("command.closeHint")}
-          </span>
+            <span>
+              <b style={{ color: p.txt2 }}>↑↓</b> {t("command.navHint")}
+            </span>
+            <span>
+              <b style={{ color: p.txt2 }}>↵</b> {t("command.selectHint")}
+            </span>
+            <span>
+              <b style={{ color: p.txt2 }}>esc</b> {t("command.closeHint")}
+            </span>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
