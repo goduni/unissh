@@ -17,9 +17,13 @@ import { useCtx } from "@/store/ctx";
 import { useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
-import type { ItemInfo, Identity, ServerStatus, VaultInfo } from "@/bridge/types";
+import { logWarn } from "@/bridge/log";
+import type { ConnectionProfile, ItemInfo, Identity, KeyRotationLink, ServerStatus, VaultInfo } from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
+import { isKeyOld, keyUsage, keyUsageCount } from "@/support/keyHygiene";
+import { confirmFinishRotation } from "@/overlays/finishRotation";
+import { useFmt } from "@/i18n/format";
 
 type SecretTab = "keys" | "passwords" | "notes" | "identities";
 
@@ -42,20 +46,6 @@ function useCopied(resetMs = 1200) {
     setTimeout(() => setCopied(false), resetMs);
   };
   return { copied, flash };
-}
-
-/** How many hosts in the active vault still depend on a given SSH key — as their
- *  own login or via a jump hop. Drives the "in use" caution before deleting it. */
-function countKeyRefs(keyItemId: string): number {
-  let n = 0;
-  for (const h of useApp.getState().hosts) {
-    if (
-      (h.auth.type === "key" && h.auth.keyItemId === keyItemId) ||
-      h.jumps.some((j) => j.auth.type === "agent" && j.auth.keyItemId === keyItemId)
-    )
-      n++;
-  }
-  return n;
 }
 
 function TabBar({
@@ -216,12 +206,35 @@ function RevealField({
 }
 
 // ── Keys ───────────────────────────────────────────────────────
-function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; first?: boolean }) {
+/** The row's part in a staged rotation (from the core's device-local links,
+ *  plus candidates synced from a device that started the rotation — those
+ *  carry `startedElsewhere` and can only be abandoned here):
+ *  `original` — this key has a live candidate; `candidate` — this key IS one. */
+type RotationRole = { role: "original" | "candidate"; link: KeyRotationLink };
+
+function KeyRow({
+  item,
+  isMobile,
+  first,
+  rotation,
+}: {
+  item: ItemInfo;
+  isMobile: boolean;
+  first?: boolean;
+  rotation?: RotationRole;
+}) {
   const p = usePalette();
   const { t, i18n } = useTranslation();
   const ctx = useCtx();
-  const uses = countKeyRefs(item.itemId);
+  const { fmtDate } = useFmt();
+  const hosts = useApp((s) => s.hosts);
+  const keyAgeDays = useApp((s) => s.keyAgeDays);
   const vault = useApp((s) => s.vaultId);
+  const usage = keyUsage(hosts, vault ?? "", item.itemId);
+  const uses = keyUsageCount(usage);
+  const old = isKeyOld(item.createdAt, keyAgeDays, Date.now());
+  const [open, setOpen] = useState(false);
+  const detailsId = `key-details-${item.itemId}`;
   const [fp, setFp] = useState<string | null>(null);
   const [openssh, setOpenssh] = useState<string | null>(null);
   const { copied, flash } = useCopied();
@@ -243,7 +256,7 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
     return () => {
       alive = false;
     };
-  }, [vault, item.itemId]);
+  }, [vault, item.itemId, item.version]);
 
   const doCopy = () => {
     if (!openssh) return;
@@ -277,9 +290,54 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
     });
   };
 
+  // Guided rotation: the dialog shows the plan, creates the candidate key on
+  // confirm, and moves each machine over (deploy → verify → remove). Continuing
+  // reopens it for the candidate this device already began.
+  const onStartRotation = () =>
+    ctx.openModal({ kind: "keyRotation", keyItemId: item.itemId, hasCertificate: item.hasCertificate });
+  const onContinueRotation = () => {
+    if (!rotation) return;
+    ctx.openModal({
+      kind: "keyRotation",
+      keyItemId: item.itemId,
+      hasCertificate: item.hasCertificate,
+      candidateId: rotation.link.candidateId,
+    });
+  };
+
+  const onFinishRotation = () => {
+    if (!vault || !rotation) return;
+    const { keyId, candidateId } = rotation.link;
+    confirmFinishRotation(ctx, { vault, keyId, candidateId });
+  };
+
+  const onAbandonRotation = () => {
+    if (!vault || !rotation) return;
+    const { keyId, candidateId, startedElsewhere } = rotation.link;
+    ctx.confirm({
+      title: t("secrets.abandonRotationTitle"),
+      body: t(startedElsewhere ? "secrets.abandonRotationElsewhereBody" : "secrets.abandonRotationBody", {
+        item: keyId,
+        candidate: candidateId,
+      }),
+      danger: true,
+      confirmLabel: t("secrets.abandonRotationConfirm"),
+      icon: "trash",
+      onConfirm: async () => {
+        try {
+          await api.abandonKeyRotation(vault, candidateId);
+          await useApp.getState().reloadVault();
+          ctx.toast(t("secrets.rotationAbandoned"), "ok");
+        } catch (e) {
+          ctx.toast(apiErrorMessage(e), "err");
+        }
+      },
+    });
+  };
+
   // Rotate in place: new keypair under the same item id, so every host
-  // referencing it follows automatically. Only the servers' authorized_keys
-  // must be updated with the new public key (shown/copyable after rotation).
+  // referencing it follows automatically — but the old private key is replaced
+  // at once, so hosts lacking the new public key refuse logins until updated.
   const onRotate = () => {
     if (!vault) return;
     ctx.confirm({
@@ -336,113 +394,239 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
     justifyContent: "center",
   } as const;
   return (
-    <HairlineRow
-      first={first}
-      style={{
-        alignItems: isMobile ? "stretch" : "center",
-        flexDirection: isMobile ? "column" : "row",
-        gap: isMobile ? rem(10) : rem(14),
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: isMobile ? rem(12) : rem(14), minWidth: 0 }}>
-        <span
-          style={{
-            width: rem(40),
-            height: rem(40),
-            borderRadius: 12,
-            background: p.bg3,
-            border: `1px solid ${p.line}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-          }}
-        >
-          <Icon name="key" size={18} color={p.txt2} />
-        </span>
-        <div style={{ width: isMobile ? "auto" : rem(150), flexShrink: 0, minWidth: 0 }}>
-          <div style={{ fontSize: TEXT.body, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {item.itemId}
-          </div>
-          <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
-            {t("secrets.updatedAgo", { ago: fmtRelativeUnix(item.updatedAt, i18n.language) })}
-            {item.hasCertificate ? " · cert" : ""}
+    <>
+      <HairlineRow
+        first={first}
+        style={{
+          alignItems: isMobile ? "stretch" : "center",
+          flexDirection: isMobile ? "column" : "row",
+          gap: isMobile ? rem(10) : rem(14),
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? rem(12) : rem(14), minWidth: 0 }}>
+          <span
+            style={{
+              width: rem(40),
+              height: rem(40),
+              borderRadius: 12,
+              background: p.bg3,
+              border: `1px solid ${p.line}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Icon name="key" size={18} color={p.txt2} />
+          </span>
+          <div style={{ width: isMobile ? "auto" : rem(150), flexShrink: 0, minWidth: 0 }}>
+            <div style={{ fontSize: TEXT.body, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {item.itemId}
+            </div>
+            <div style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt3 }}>
+              {t("secrets.updatedAgo", { ago: fmtRelativeUnix(item.updatedAt, i18n.language) })}
+              {item.hasCertificate ? " · cert" : ""}
+            </div>
           </div>
         </div>
-      </div>
-      <span
-        style={{
-          flex: 1,
-          width: isMobile ? "100%" : undefined,
-          fontFamily: MONO,
-          fontSize: TEXT.small,
-          color: p.txt2,
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-      >
-        {fp ?? "…"}
-      </span>
-      <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
-        {uses === 0 ? t("secrets.unused") : t("secrets.usedByHosts", { count: uses })}
-      </MetaChip>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: isMobile ? rem(10) : rem(14),
-          flexWrap: isMobile ? "wrap" : "nowrap",
-          justifyContent: isMobile ? "flex-end" : "flex-start",
-        }}
-      >
-        <button
-          onClick={doCopy}
-          title={t("secrets.copyPublicKey")}
-          aria-label={t("secrets.copyPublicKey")}
-          disabled={!openssh}
+        <span
           style={{
-            ...actBtn,
-            border: `1px solid ${p.line}`,
-            background: copied ? p.accentSoft : p.bg2,
-            color: copied ? p.accentText : p.txt3,
-            cursor: openssh ? "pointer" : "default",
-            opacity: openssh ? 1 : 0.5,
+            flex: 1,
+            width: isMobile ? "100%" : undefined,
+            fontFamily: MONO,
+            fontSize: TEXT.small,
+            color: p.txt2,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}
         >
-          <Icon name={copied ? "check" : "copy"} size={14} />
-        </button>
-        <RowOverflowMenu
-          ariaLabel={t("secrets.keyActions")}
-          items={[
-            {
-              label: t("secrets.copyToServer"),
-              icon: "upload",
-              onClick: () => {
-                if (openssh)
-                  ctx.openModal({ kind: "copyKeyToServer", openssh, keyItemId: item.itemId });
+          {fp ?? "…"}
+        </span>
+        <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
+          {uses === 0 ? t("secrets.unused") : t("secrets.usedByHosts", { count: uses })}
+        </MetaChip>
+        {old && (
+          <span title={t("secrets.keyOldTitle", { days: keyAgeDays })}>
+            <MetaChip icon="clock">{t("secrets.keyOld")}</MetaChip>
+          </span>
+        )}
+        {rotation && (
+          <MetaChip icon="refresh" tone="warn">
+            {rotation.role === "original"
+              ? t(rotation.link.startedElsewhere ? "secrets.rotationPendingElsewhere" : "secrets.rotationPending", {
+                  item: rotation.link.candidateId,
+                })
+              : t(
+                  rotation.link.startedElsewhere
+                    ? "secrets.rotationCandidateOfElsewhere"
+                    : "secrets.rotationCandidateOf",
+                  { item: rotation.link.keyId },
+                )}
+          </MetaChip>
+        )}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: isMobile ? rem(10) : rem(14),
+            flexWrap: isMobile ? "wrap" : "nowrap",
+            justifyContent: isMobile ? "flex-end" : "flex-start",
+          }}
+        >
+          <button
+            onClick={() => setOpen((v) => !v)}
+            title={t("secrets.keyDetails")}
+            aria-label={t("secrets.keyDetails")}
+            aria-expanded={open}
+            aria-controls={detailsId}
+            style={{
+              ...actBtn,
+              border: `1px solid ${p.line}`,
+              background: open ? p.bg3 : p.bg2,
+              color: p.txt3,
+              cursor: "pointer",
+            }}
+          >
+            <Icon name={open ? "cd" : "cr"} size={14} />
+          </button>
+          <button
+            onClick={doCopy}
+            title={t("secrets.copyPublicKey")}
+            aria-label={t("secrets.copyPublicKey")}
+            disabled={!openssh}
+            style={{
+              ...actBtn,
+              border: `1px solid ${p.line}`,
+              background: copied ? p.accentSoft : p.bg2,
+              color: copied ? p.accentText : p.txt3,
+              cursor: openssh ? "pointer" : "default",
+              opacity: openssh ? 1 : 0.5,
+            }}
+          >
+            <Icon name={copied ? "check" : "copy"} size={14} />
+          </button>
+          <RowOverflowMenu
+            ariaLabel={t("secrets.keyActions")}
+            items={[
+              {
+                label: t("secrets.copyToServer"),
+                icon: "upload",
+                onClick: () => {
+                  if (openssh)
+                    ctx.openModal({ kind: "copyKeyToServer", openssh, keyItemId: item.itemId });
+                },
               },
-            },
-            { label: t("secrets.rotateKey"), icon: "refresh", onClick: onRotate },
-            { label: t("secrets.exportPrivateKey"), icon: "download", onClick: onExport },
-          ]}
-        />
-        <button
-          onClick={onDelete}
-          title={t("common.delete")}
-          aria-label={t("common.delete")}
+              ...(rotation
+                ? [
+                    // Finishing overwrites key material, so it is offered only
+                    // on the device that started the rotation and holds the link.
+                    ...(rotation.link.startedElsewhere
+                      ? []
+                      : [
+                          // Continue runs the plan for the original key, so it lives on that row.
+                          ...(rotation.role === "original"
+                            ? [{ label: t("secrets.continueRotation"), icon: "refresh" as const, onClick: onContinueRotation }]
+                            : []),
+                          { label: t("secrets.finishRotation"), icon: "check" as const, onClick: onFinishRotation },
+                        ]),
+                    { label: t("secrets.abandonRotation"), icon: "x" as const, onClick: onAbandonRotation },
+                  ]
+                : [
+                    { label: t("secrets.startRotation"), icon: "refresh" as const, onClick: onStartRotation },
+                    { label: t("secrets.rotateKey"), icon: "refresh" as const, onClick: onRotate },
+                  ]),
+              { label: t("secrets.exportPrivateKey"), icon: "download", onClick: onExport },
+            ]}
+          />
+          {/* A key in a rotation is removed through Abandon only: a plain delete
+              of the candidate (or of the original under it) skips the warning
+              that machines already switched accept nothing else. */}
+          {!rotation && (
+            <button
+              onClick={onDelete}
+              title={t("common.delete")}
+              aria-label={t("common.delete")}
+              style={{
+                ...actBtn,
+                border: `1px solid ${p.line}`,
+                background: p.bg2,
+                color: p.red,
+                cursor: "pointer",
+              }}
+            >
+              <Icon name="trash" size={14} />
+            </button>
+          )}
+        </div>
+      </HairlineRow>
+      {open && (
+        <div
+          id={detailsId}
           style={{
-            ...actBtn,
-            border: `1px solid ${p.line}`,
-            background: p.bg2,
-            color: p.red,
-            cursor: "pointer",
+            display: "flex",
+            flexDirection: "column",
+            gap: rem(10),
+            padding: `0 ${rem(6)} ${rem(14)} ${isMobile ? rem(6) : rem(60)}`,
+            fontSize: TEXT.small,
+            color: p.txt2,
           }}
         >
-          <Icon name="trash" size={14} />
-        </button>
+          <div style={{ fontFamily: MONO, color: p.txt3 }}>
+            {t("secrets.keyCreated", { date: fmtDate(item.createdAt) || "—" })}
+          </div>
+          {uses === 0 ? (
+            <div>{t("secrets.keyNoHosts")}</div>
+          ) : (
+            <>
+              <KeyHostList label={t("secrets.keyUsedDirect")} hosts={usage.direct} />
+              <KeyHostList label={t("secrets.keyUsedJump")} hosts={usage.jump} />
+            </>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** One "where used" list in a key's details: each host is a button that opens
+ *  its profile. Renders nothing when empty, so a key that only hops shows one. */
+function KeyHostList({ label, hosts }: { label: string; hosts: ConnectionProfile[] }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const ctx = useCtx();
+  if (hosts.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: rem(4) }}>
+      <div style={{ fontSize: TEXT.micro, fontWeight: 700, color: p.txt3, textTransform: "uppercase" }}>
+        {label}
       </div>
-    </HairlineRow>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: rem(6) }}>
+        {hosts.map((h) => (
+          <li key={h.profileId}>
+            <button
+              onClick={() => ctx.openModal({ kind: "host", edit: h })}
+              aria-label={t("secrets.keyOpenHost", { host: h.label })}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: rem(6),
+                padding: `${rem(4)} ${rem(10)}`,
+                borderRadius: 8,
+                border: `1px solid ${p.line}`,
+                background: p.bg2,
+                color: p.txt,
+                cursor: "pointer",
+                fontSize: TEXT.small,
+              }}
+            >
+              <Icon name="server" size={12} color={p.txt3} />
+              {h.label}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -450,11 +634,52 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
+  const vault = useApp((s) => s.vaultId);
+  const [links, setLinks] = useState<KeyRotationLink[]>([]);
+
+  // Staged rotations (device-local links + synced candidates); re-read whenever the
+  // key set changes (begin/finish/abandon all reload the vault). Keyed on a
+  // signature, not the array, which the parent rebuilds on every render.
+  const keySig = keys.map((k) => `${k.itemId}:${k.version}`).join("\n");
+  useEffect(() => {
+    let alive = true;
+    if (!vault) return;
+    api
+      .listKeyRotations(vault)
+      .then((l) => alive && setLinks(l))
+      .catch((e) => {
+        logWarn(`list key rotations failed: ${apiErrorMessage(e)}`);
+        if (alive) setLinks([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [vault, keySig]);
+
+  const rotationOf = (itemId: string): RotationRole | undefined => {
+    const asOriginal = links.find((l) => l.keyId === itemId);
+    if (asOriginal) return { role: "original", link: asOriginal };
+    const asCandidate = links.find((l) => l.candidateId === itemId);
+    return asCandidate ? { role: "candidate", link: asCandidate } : undefined;
+  };
+
+  // A candidate sits right under its original, so the pair reads as one. It
+  // leaves its own place only when that original is listed to carry it —
+  // otherwise (original deleted) it would vanish with its private key.
+  const keyIds = new Set(keys.map((k) => k.itemId));
+  const placed = new Set(links.filter((l) => keyIds.has(l.keyId)).map((l) => l.candidateId));
+  const ordered = keys.flatMap((k) => {
+    if (placed.has(k.itemId)) return [];
+    const link = links.find((l) => l.keyId === k.itemId);
+    const cand = link && keys.find((c) => c.itemId === link.candidateId);
+    return cand ? [k, cand] : [k];
+  });
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
       <div>
-        {keys.map((k, i) => (
-          <KeyRow key={k.itemId} item={k} isMobile={isMobile} first={i === 0} />
+        {ordered.map((k, i) => (
+          <KeyRow key={k.itemId} item={k} isMobile={isMobile} first={i === 0} rotation={rotationOf(k.itemId)} />
         ))}
       </div>
       <button

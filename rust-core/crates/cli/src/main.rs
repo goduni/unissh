@@ -619,6 +619,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     auth: build_auth(&vault, item.clone(), ssh_password.clone())?,
                     jumps: vec![],
                     proxy: None,
+                    publickey_only: false,
                 });
             }
             print_multi(core.ssh_exec_multi(targets, command, max_concurrency, timeout)?);

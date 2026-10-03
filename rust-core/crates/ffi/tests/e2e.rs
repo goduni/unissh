@@ -716,6 +716,7 @@ fn multi_exec_on_several_hosts() {
 
     let mk = |port: u16| MultiExecTarget {
         proxy: None,
+        publickey_only: false,
         host: "127.0.0.1".to_string(),
         port,
         user: "root".to_string(),
@@ -1195,6 +1196,208 @@ fn rename_item_e2e() {
         )
         .unwrap();
     assert_eq!(res.stdout.trim(), "renamed-ok");
+}
+
+/// A vault with one generated key `key`, for the staged-rotation tests.
+fn rotation_fixture(dir: &std::path::Path) -> std::sync::Arc<Core> {
+    let core = new_core(dir);
+    core.create_account(None).unwrap();
+    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.generate_ssh_key("v".to_string(), "key".to_string())
+        .unwrap();
+    core
+}
+
+fn public_key(core: &Core, item: &str) -> Result<String, unissh_ffi::FfiError> {
+    core.get_public_key("v".to_string(), item.to_string())
+        .map(|p| p.openssh)
+}
+
+#[test]
+fn key_rotation_begin_creates_distinct_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = rotation_fixture(dir.path());
+    let before = public_key(&core, "key").unwrap();
+
+    let candidate = core
+        .begin_key_rotation("v".to_string(), "key".to_string())
+        .unwrap();
+
+    assert_ne!(candidate, "key");
+    assert_ne!(public_key(&core, &candidate).unwrap(), before);
+    assert_eq!(public_key(&core, "key").unwrap(), before);
+    assert_eq!(
+        core.list_item_versions("v".to_string(), "key".to_string())
+            .unwrap(),
+        vec![1]
+    );
+    assert_eq!(
+        core.list_key_rotations("v".to_string()).unwrap(),
+        vec![unissh_ffi::KeyRotationLink {
+            key_id: "key".to_string(),
+            candidate_id: candidate,
+            started_elsewhere: false,
+        }]
+    );
+}
+
+#[test]
+fn key_rotation_finish_commits_candidate_into_original() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = rotation_fixture(dir.path());
+    let old_pub = public_key(&core, "key").unwrap();
+    // A certificate for the old public key (it must not survive the rotation).
+    let work = tempfile::tempdir().unwrap();
+    let ca = work.path().join("ca");
+    assert!(Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-N", ""])
+        .arg("-f")
+        .arg(&ca)
+        .status()
+        .unwrap()
+        .success());
+    let user_pub = work.path().join("user.pub");
+    std::fs::write(&user_pub, format!("{old_pub}\n")).unwrap();
+    assert!(Command::new("ssh-keygen")
+        .arg("-s")
+        .arg(&ca)
+        .args(["-I", "unissh-test", "-n", "root", "-V", "+1h"])
+        .arg(&user_pub)
+        .status()
+        .unwrap()
+        .success());
+    let cert = std::fs::read_to_string(work.path().join("user-cert.pub")).unwrap();
+    core.import_ssh_certificate("v".to_string(), "key".to_string(), cert)
+        .unwrap();
+    let candidate = core
+        .begin_key_rotation("v".to_string(), "key".to_string())
+        .unwrap();
+    let new_pub = public_key(&core, &candidate).unwrap();
+
+    core.finish_key_rotation("v".to_string(), "key".to_string(), candidate.clone())
+        .unwrap();
+
+    assert_eq!(public_key(&core, "key").unwrap(), new_pub);
+    assert_eq!(
+        core.list_item_versions("v".to_string(), "key".to_string())
+            .unwrap(),
+        vec![2, 1],
+        "the old material stays in the item's history"
+    );
+    let items = core.list_items("v".to_string()).unwrap();
+    assert!(
+        !items
+            .iter()
+            .find(|i| i.item_id == "key")
+            .unwrap()
+            .has_certificate
+    );
+    assert!(!items.iter().any(|i| i.item_id == candidate));
+    assert!(core.list_key_rotations("v".to_string()).unwrap().is_empty());
+}
+
+#[test]
+fn key_rotation_abandon_tombstones_only_the_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = rotation_fixture(dir.path());
+    let before = public_key(&core, "key").unwrap();
+    let candidate = core
+        .begin_key_rotation("v".to_string(), "key".to_string())
+        .unwrap();
+
+    core.abandon_key_rotation("v".to_string(), candidate.clone())
+        .unwrap();
+
+    assert!(matches!(
+        public_key(&core, &candidate),
+        Err(unissh_ffi::FfiError::NotFound)
+    ));
+    assert_eq!(public_key(&core, "key").unwrap(), before);
+    assert_eq!(
+        core.list_item_versions("v".to_string(), "key".to_string())
+            .unwrap(),
+        vec![1]
+    );
+    assert!(core.list_key_rotations("v".to_string()).unwrap().is_empty());
+}
+
+#[test]
+fn key_rotation_second_begin_refused_while_candidate_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = rotation_fixture(dir.path());
+    let candidate = core
+        .begin_key_rotation("v".to_string(), "key".to_string())
+        .unwrap();
+
+    let second = core.begin_key_rotation("v".to_string(), "key".to_string());
+
+    assert!(matches!(
+        second,
+        Err(unissh_ffi::FfiError::RotationInProgress { candidate_id }) if candidate_id == candidate
+    ));
+}
+
+#[test]
+fn key_rotation_unlinked_candidate_listed_elsewhere_abandonable_not_finishable() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = rotation_fixture(dir.path());
+    let before = public_key(&core, "key").unwrap();
+    // As a candidate synced from another device arrives: a plain key at the
+    // derived id, with no link on this device.
+    core.generate_ssh_key("v".to_string(), "key (rotation)".to_string())
+        .unwrap();
+
+    assert_eq!(
+        core.list_key_rotations("v".to_string()).unwrap(),
+        vec![unissh_ffi::KeyRotationLink {
+            key_id: "key".to_string(),
+            candidate_id: "key (rotation)".to_string(),
+            started_elsewhere: true,
+        }]
+    );
+    assert!(matches!(
+        core.finish_key_rotation(
+            "v".to_string(),
+            "key".to_string(),
+            "key (rotation)".to_string()
+        ),
+        Err(unissh_ffi::FfiError::NotFound)
+    ));
+    core.abandon_key_rotation("v".to_string(), "key (rotation)".to_string())
+        .unwrap();
+    assert!(matches!(
+        public_key(&core, "key (rotation)"),
+        Err(unissh_ffi::FfiError::NotFound)
+    ));
+    assert_eq!(public_key(&core, "key").unwrap(), before);
+}
+
+#[test]
+fn key_rotation_replaced_candidate_listed_elsewhere_not_finishable() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = rotation_fixture(dir.path());
+    let candidate = core
+        .begin_key_rotation("v".to_string(), "key".to_string())
+        .unwrap();
+    // The candidate is deleted elsewhere and a different key syncs in under its
+    // id: this device's link still names the id, but not that key.
+    core.delete_item("v".to_string(), candidate.clone())
+        .unwrap();
+    core.generate_ssh_key("v".to_string(), candidate.clone())
+        .unwrap();
+
+    assert!(matches!(
+        core.finish_key_rotation("v".to_string(), "key".to_string(), candidate.clone()),
+        Err(unissh_ffi::FfiError::NotFound)
+    ));
+    assert_eq!(
+        core.list_key_rotations("v".to_string()).unwrap(),
+        vec![unissh_ffi::KeyRotationLink {
+            key_id: "key".to_string(),
+            candidate_id: candidate,
+            started_elsewhere: true,
+        }]
+    );
 }
 
 #[test]
@@ -2042,6 +2245,7 @@ mod fleetserver {
 fn pw_target(port: u16) -> MultiExecTarget {
     MultiExecTarget {
         proxy: None,
+        publickey_only: false,
         host: "127.0.0.1".to_string(),
         port,
         user: "root".to_string(),
@@ -2805,6 +3009,7 @@ fn check_consistency_ok() {
 fn key_target(port: u16) -> MultiExecTarget {
     MultiExecTarget {
         proxy: None,
+        publickey_only: false,
         host: "127.0.0.1".to_string(),
         port,
         user: "root".to_string(),

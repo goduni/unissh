@@ -46,6 +46,18 @@ starts with `0.`:
   command field and resolves built-ins per target; parameterised startup snippets
   ask once at connect; the snippet editor lists the parameters it finds. Stored
   snippets are unchanged.
+- Key hygiene: a key's detail panel in Secrets lists the hosts that log in with
+  it and the hosts that reach a bastion with it; keys older than a device-local
+  threshold (Settings → Security, default one year) carry a quiet chip. Staged
+  rotation: Start creates a candidate key, a guided flow deploys it to every
+  host that uses the key, verifies the login with the candidate only, then
+  removes the exact old line; Finish writes the new material into the key (old
+  material stays in local history), Abandon drops the candidate. The in-place
+  Replace key now says the old material is discarded immediately.
+
+### Compatibility
+
+**Vault format and server protocol are unchanged.**
 
 ## [0.5.0] — 2026-10-02
 

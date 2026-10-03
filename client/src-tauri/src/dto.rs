@@ -620,6 +620,9 @@ pub struct MultiExecTarget {
     pub jumps: Vec<JumpHost>,
     #[serde(default)]
     pub proxy: Option<ProxyConfig>,
+    /// Target logs in with its key only — no keyboard-interactive fallback.
+    #[serde(default)]
+    pub publickey_only: bool,
 }
 impl From<MultiExecTarget> for ffi::MultiExecTarget {
     fn from(t: MultiExecTarget) -> Self {
@@ -630,6 +633,7 @@ impl From<MultiExecTarget> for ffi::MultiExecTarget {
             auth: t.auth.into(),
             jumps: t.jumps.into_iter().map(Into::into).collect(),
             proxy: t.proxy.map(Into::into),
+            publickey_only: t.publickey_only,
         }
     }
 }
@@ -982,6 +986,25 @@ impl From<ffi::PublicKeyInfo> for PublicKeyInfo {
         PublicKeyInfo {
             openssh: p.openssh,
             fingerprint: p.fingerprint,
+        }
+    }
+}
+
+/// A staged key rotation in progress on this device (ids only, no key material).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyRotationLink {
+    pub key_id: String,
+    pub candidate_id: String,
+    /// Started on another device: abandonable here, not finishable.
+    pub started_elsewhere: bool,
+}
+impl From<ffi::KeyRotationLink> for KeyRotationLink {
+    fn from(l: ffi::KeyRotationLink) -> Self {
+        KeyRotationLink {
+            key_id: l.key_id,
+            candidate_id: l.candidate_id,
+            started_elsewhere: l.started_elsewhere,
         }
     }
 }
