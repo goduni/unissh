@@ -232,6 +232,8 @@ impl Delivery {
     pub async fn run(mut self, status: SharedSinkStatus, mut shutdown: watch::Receiver<bool>) {
         let name = self.sink.name().to_string();
         tracing::info!(sink = %name, "audit sink started");
+        let cursor = self.cursor.load(&name).await.ok();
+        seed_metrics(&name, cursor);
         loop {
             if *shutdown.borrow() {
                 break;
@@ -276,6 +278,7 @@ pub struct SinkStatus {
     pub sink: String,
     /// Last seq acknowledged by this process (the persisted cursor is authoritative).
     pub last_delivered_seq: Option<i64>,
+    /// Last time the sink acknowledged a batch or was found caught up (an idle poll).
     pub last_success_at: Option<i64>,
     /// Error code of the most recent failure (cleared by nothing: pair it with the timestamps).
     pub last_error: Option<String>,
@@ -283,6 +286,16 @@ pub struct SinkStatus {
 }
 
 pub type SharedSinkStatus = Arc<Mutex<SinkStatus>>;
+
+/// Create both series at sink start, so an alert has data before the first
+/// delivery or failure (after a restart, or for a sink failing from boot): the
+/// gauge from the persisted cursor (when it could be read), the counter at 0.
+fn seed_metrics(sink: &str, cursor: Option<i64>) {
+    if let Some(seq) = cursor {
+        metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => sink.to_string()).set(seq as f64);
+    }
+    metrics::counter!(METRIC_FAILURES_TOTAL, "sink" => sink.to_string()).increment(0);
+}
 
 fn record(status: &SharedSinkStatus, step: &Step, now: i64) {
     let mut s = status.lock().unwrap_or_else(|p| p.into_inner());
@@ -292,7 +305,9 @@ fn record(status: &SharedSinkStatus, step: &Step, now: i64) {
             s.last_success_at = Some(now);
             metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => s.sink.clone()).set(*last as f64);
         }
-        Step::Idle => {}
+        // Caught up: the log read worked and nothing is pending, so a sink that
+        // recovered from a failure reads as healthy before its next delivery.
+        Step::Idle => s.last_success_at = Some(now),
         Step::Failed { error, .. } => {
             s.last_error = Some(error.0.clone());
             s.last_error_at = Some(now);
@@ -588,26 +603,45 @@ mod tests {
             sink: "webhook".into(),
             ..Default::default()
         }));
+        let has = |text: &str, line: &str| {
+            assert!(
+                text.lines().any(|l| l == line),
+                "missing {line:?} in\n{text}"
+            );
+        };
         metrics::with_local_recorder(&recorder, || {
             describe_metrics();
-            record(&status, &Step::Delivered { first: 1, last: 7 }, 10);
+            // At sink start, before any step: both series exist.
+            seed_metrics("webhook", Some(3));
+            let start = handle.render();
+            has(
+                &start,
+                "unissh_audit_sink_delivered_seq{sink=\"webhook\"} 3",
+            );
+            has(
+                &start,
+                "unissh_audit_sink_failures_total{sink=\"webhook\"} 0",
+            );
+            record(&status, &Step::Delivered { first: 4, last: 7 }, 10);
             for _ in 0..2 {
                 let error = SinkError("http_500".into());
                 let delay = BACKOFF_MIN;
                 record(&status, &Step::Failed { delay, error }, 11);
             }
+            // An idle poll after the failures is a success: the sink caught up.
+            record(&status, &Step::Idle, 12);
         });
+        assert_eq!(status.lock().unwrap().last_success_at, Some(12));
         let text = handle.render();
         for line in [
+            "# HELP unissh_audit_sink_delivered_seq Last audit seq acknowledged by the sink and recorded in its cursor",
+            "# HELP unissh_audit_sink_failures_total Failed audit sink delivery attempts (each is retried with backoff)",
             "# TYPE unissh_audit_sink_delivered_seq gauge",
             "unissh_audit_sink_delivered_seq{sink=\"webhook\"} 7",
             "# TYPE unissh_audit_sink_failures_total counter",
             "unissh_audit_sink_failures_total{sink=\"webhook\"} 2",
         ] {
-            assert!(
-                text.lines().any(|l| l == line),
-                "missing {line:?} in\n{text}"
-            );
+            has(&text, line);
         }
     }
 }
