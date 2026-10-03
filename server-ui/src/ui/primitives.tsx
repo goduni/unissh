@@ -29,6 +29,8 @@ export function Btn({
   title,
   children,
   style,
+  ariaExpanded,
+  ariaControls,
 }: {
   variant?: BtnVariant;
   size?: BtnSize;
@@ -42,6 +44,8 @@ export function Btn({
   title?: string;
   children?: ReactNode;
   style?: CSSProperties;
+  ariaExpanded?: boolean;
+  ariaControls?: string;
 }) {
   const variantStyle: CSSProperties =
     variant === "primary"
@@ -58,6 +62,8 @@ export function Btn({
     <button
       type={type}
       title={title}
+      aria-expanded={ariaExpanded}
+      aria-controls={ariaControls}
       onClick={onClick}
       disabled={disabled || loading}
       style={{
@@ -621,6 +627,7 @@ export function TextInput({
   accept,
   ariaLabel,
   inputMode,
+  autoFocus,
 }: {
   value?: string;
   onChange?: (v: string) => void;
@@ -631,10 +638,12 @@ export function TextInput({
   accept?: string;
   ariaLabel?: string;
   inputMode?: "text" | "numeric";
+  autoFocus?: boolean;
 }) {
   return (
     <input
       type={type}
+      autoFocus={autoFocus}
       value={type === "file" ? undefined : value}
       accept={accept}
       placeholder={placeholder}

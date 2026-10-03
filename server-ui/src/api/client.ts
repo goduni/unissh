@@ -268,14 +268,21 @@ export function createClient(
         call<MigrationsResp>("/v1/admin/migrations", { bearer: true }),
       auditVerify: () =>
         call<AuditVerify>("/v1/admin/audit/verify", { bearer: true }),
-      /** The audit log (or an inclusive seq range) as a JSON Lines file. */
-      auditExport: async (range: { from_seq?: number; to_seq?: number }): Promise<Blob> => {
+      /** The audit log (or an inclusive seq range) as a JSON Lines file, with the
+       *  server's file name (it carries the seq range pinned at request time) when
+       *  the Content-Disposition header is readable. */
+      auditExport: async (range: {
+        from_seq?: number;
+        to_seq?: number;
+      }): Promise<{ blob: Blob; filename: string | null }> => {
         const res = await send(
           "/v1/audit/export",
           { bearer: true, query: range },
           "application/jsonl",
         );
-        return res.blob();
+        const cd = res.headers.get("Content-Disposition") ?? "";
+        const filename = /filename="([^"]+)"/.exec(cd)?.[1] ?? null;
+        return { blob: await res.blob(), filename };
       },
     },
 

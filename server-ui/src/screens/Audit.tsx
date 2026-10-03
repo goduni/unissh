@@ -137,7 +137,13 @@ export function Audit() {
       zk
       actions={
         <>
-          <Btn icon="download" size="sm" onClick={() => setExportOpen((o) => !o)}>
+          <Btn
+            icon="download"
+            size="sm"
+            onClick={() => setExportOpen((o) => !o)}
+            ariaExpanded={exportOpen}
+            ariaControls="audit-export"
+          >
             {t("screen.audit.export")}
           </Btn>
           <Btn icon="shieldcheck" size="sm" onClick={() => void verify()}>
@@ -160,6 +166,20 @@ function parseSeq(v: string): number | undefined | null {
   return /^[1-9][0-9]*$/.test(s) ? Number(s) : null;
 }
 
+/** File name when the server's Content-Disposition isn't readable (cross-origin
+ *  without the header exposed): the range actually exported, read off the body's
+ *  last line, so the pinned upper bound is not lost. */
+async function fallbackName(blob: Blob, from: number): Promise<string> {
+  const lines = (await blob.text()).trimEnd().split("\n");
+  try {
+    const last = JSON.parse(lines[lines.length - 1]) as { seq?: number };
+    if (typeof last.seq === "number") return `unissh-audit-${from}-${last.seq}.jsonl`;
+  } catch {
+    /* empty export or unparsable tail → generic name */
+  }
+  return `unissh-audit-${from}.jsonl`;
+}
+
 /** Download the log (or a seq range) as JSON Lines, with the chain fields. */
 function ExportCard({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
@@ -180,11 +200,11 @@ function ExportCard({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      const blob = await api.admin.auditExport({ from_seq: fromSeq, to_seq: toSeq });
+      const { blob, filename } = await api.admin.auditExport({ from_seq: fromSeq, to_seq: toSeq });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `unissh-audit-${fromSeq ?? 1}-${toSeq ?? "head"}.jsonl`;
+      a.download = filename ?? (await fallbackName(blob, fromSeq ?? 1));
       a.click();
       URL.revokeObjectURL(url);
       onClose();
@@ -198,6 +218,13 @@ function ExportCard({ onClose }: { onClose: () => void }) {
   return (
     <Card style={{ marginBottom: 14 }}>
       <form
+        id="audit-export"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            onClose();
+          }
+        }}
         onSubmit={(e) => {
           e.preventDefault();
           void download();
@@ -217,6 +244,7 @@ function ExportCard({ onClose }: { onClose: () => void }) {
                 onChange={setFrom}
                 placeholder="1"
                 mono
+                autoFocus
                 inputMode="numeric"
                 ariaLabel={t("screen.audit.exportFrom")}
               />
