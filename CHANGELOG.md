@@ -62,6 +62,14 @@ starts with `0.`:
   account's Personal vault stays the Personal vault. The confirmation shows what
   moves and offers **Export backup first**. Item version history starts fresh on
   the server. See [upgrading](docs/upgrading.md#moving-a-local-vault-to-a-server).
+- Audit log export for self-hosted servers: an owner-only JSON Lines download
+  from the admin audit screen (whole log or a sequence range) carries every field
+  needed to verify the hash chain offline; an optional webhook sink (`[audit.webhook]`,
+  HMAC-signed batches, at-least-once with a persisted cursor and exponential
+  backoff) and a syslog sink (`[audit.syslog]`, RFC 5424 over UDP or TCP) deliver
+  entries continuously; the admin screen shows each sink's lag and last error, and
+  the Prometheus exporter gains per-sink metrics. The server now shuts down
+  gracefully on SIGTERM. The audit entry format and chain are unchanged.
 
 ### Compatibility
 
