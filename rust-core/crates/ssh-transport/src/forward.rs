@@ -95,6 +95,10 @@ pub trait AgentKeys: Send + Sync {
     /// refuses with `None`. Approval, if the policy has any, happens here.
     /// Returns `(algorithm, signature)`.
     fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)>;
+    /// The client went away while a request was still being answered. A policy
+    /// waiting on a person withdraws its prompt here; the answer, whatever it
+    /// becomes, is discarded.
+    fn hang_up(&self) {}
 }
 
 impl<T: AgentKeys + ?Sized> AgentKeys for std::sync::Arc<T> {
@@ -103,6 +107,9 @@ impl<T: AgentKeys + ?Sized> AgentKeys for std::sync::Arc<T> {
     }
     fn sign(&self, key: &OfferedKey, data: &[u8]) -> Option<(String, Vec<u8>)> {
         (**self).sign(key, data)
+    }
+    fn hang_up(&self) {
+        (**self).hang_up()
     }
 }
 
@@ -172,6 +179,9 @@ pub trait LocalApproval: Send + Sync {
     /// data to be signed (an SSH authentication request names the user it logs
     /// in as). Called on a blocking thread; it may wait for a person.
     fn approve(&self, key: &OfferedKey, caller: &AgentCaller, blob: &[u8]) -> bool;
+    /// The connection this approval belongs to closed: withdraw a pending
+    /// prompt (it must then answer `false`) and refuse any later one.
+    fn abandon(&self) {}
 }
 
 /// The system agent's policy: the identities `keys` offers, and a signature
@@ -197,6 +207,10 @@ impl<K: AgentKeys> AgentKeys for LocalAgent<K> {
             return None;
         }
         self.keys.sign(key, data)
+    }
+
+    fn hang_up(&self) {
+        self.approval.abandon();
     }
 }
 
@@ -309,28 +323,45 @@ pub fn answer<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Vec<u8> {
 ///
 /// Each request is answered on a blocking thread: the policy may take the
 /// core's lock, read the vault, or wait up to a minute for a person to approve
-/// a signature, and none of that may stall the runtime's async workers.
+/// a signature, and none of that may stall the runtime's async workers. While
+/// it runs the stream is still read, so a client that hangs up is noticed at
+/// once ([`AgentKeys::hang_up`]) rather than after the prompt times out. Bytes
+/// a client sends ahead are kept for the next request.
 pub async fn serve<A, S>(agent: std::sync::Arc<A>, mut stream: S)
 where
     A: AgentKeys + ?Sized + 'static,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let mut header = [0u8; 4];
+    let mut inbox: Vec<u8> = Vec::new();
     loop {
-        if stream.read_exact(&mut header).await.is_err() {
+        if fill(&mut stream, &mut inbox, 4).await.is_err() {
             return; // the far end closed
         }
-        let len = u32::from_be_bytes(header) as usize;
+        let len = u32::from_be_bytes([inbox[0], inbox[1], inbox[2], inbox[3]]) as usize;
         if len == 0 || len > MAX_FRAME {
             log::warn!("agent: refusing a {len}-byte frame");
             return;
         }
-        let mut body = vec![0u8; len];
-        if stream.read_exact(&mut body).await.is_err() {
+        if fill(&mut stream, &mut inbox, 4 + len).await.is_err() {
             return;
         }
+        let body: Vec<u8> = inbox.drain(..4 + len).skip(4).collect();
         let policy = agent.clone();
-        let Ok(reply) = tokio::task::spawn_blocking(move || answer(&*policy, &body)).await else {
+        let mut job = tokio::task::spawn_blocking(move || answer(&*policy, &body));
+        let reply = loop {
+            let mut chunk = [0u8; 4096];
+            tokio::select! {
+                done = &mut job => break done,
+                read = stream.read(&mut chunk), if inbox.len() <= 4 + MAX_FRAME => match read {
+                    Ok(0) | Err(_) => {
+                        agent.hang_up();
+                        return;
+                    }
+                    Ok(n) => inbox.extend_from_slice(&chunk[..n]),
+                },
+            }
+        };
+        let Ok(reply) = reply else {
             return;
         };
         if stream.write_all(&reply).await.is_err() {
@@ -338,6 +369,23 @@ where
         }
         let _ = stream.flush().await;
     }
+}
+
+/// Reads from `stream` until `inbox` holds at least `want` bytes.
+async fn fill<S: tokio::io::AsyncRead + Unpin>(
+    stream: &mut S,
+    inbox: &mut Vec<u8>,
+    want: usize,
+) -> std::io::Result<()> {
+    let mut chunk = [0u8; 4096];
+    while inbox.len() < want {
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        inbox.extend_from_slice(&chunk[..n]);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -625,6 +673,60 @@ mod tests {
         assert!(
             prompt.asked.lock().unwrap().is_empty() && keys.signed_with.lock().unwrap().is_empty(),
             "the key check must come before the prompt and the signature"
+        );
+    }
+
+    /// Keeps the prompt open until the connection is abandoned, then refuses.
+    #[derive(Default)]
+    struct HeldOpen {
+        asked: std::sync::atomic::AtomicBool,
+        abandoned: std::sync::Mutex<bool>,
+        wake: std::sync::Condvar,
+    }
+    impl LocalApproval for HeldOpen {
+        fn approve(&self, _key: &OfferedKey, _caller: &AgentCaller, _blob: &[u8]) -> bool {
+            self.asked.store(true, std::sync::atomic::Ordering::SeqCst);
+            let abandoned = self.abandoned.lock().unwrap();
+            // Bounded, so a regression fails the test instead of hanging it.
+            let _ = self
+                .wake
+                .wait_timeout_while(abandoned, std::time::Duration::from_secs(10), |a| !*a)
+                .unwrap();
+            false
+        }
+        fn abandon(&self) {
+            *self.abandoned.lock().unwrap() = true;
+            self.wake.notify_all();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_client_that_hangs_up_withdraws_its_pending_prompt() {
+        use tokio::io::AsyncWriteExt;
+
+        let keys = Arc::new(listed(&["work"]));
+        let prompt = Arc::new(HeldOpen::default());
+        let agent = Arc::new(LocalAgent {
+            keys: keys.clone(),
+            approval: prompt.clone(),
+            caller: caller(),
+        });
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let served = tokio::spawn(serve(agent, server));
+        let request = sign_request(&keys.keys[0].blob().unwrap(), b"to-sign");
+        client.write_all(&framed(request)).await.unwrap();
+        while !prompt.asked.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        drop(client);
+        tokio::time::timeout(std::time::Duration::from_secs(5), served)
+            .await
+            .expect("serving ends as soon as the client is gone")
+            .unwrap();
+        assert!(
+            *prompt.abandoned.lock().unwrap(),
+            "the prompt was withdrawn"
         );
     }
 }
