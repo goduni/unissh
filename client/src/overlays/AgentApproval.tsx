@@ -1,9 +1,10 @@
-// AgentApproval — a forwarded agent asking whether to sign.
+// AgentApproval — a forwarded agent, or the system agent, asking whether to sign.
 //
 // This dialog is the feature. Agent forwarding without it is what OpenSSH gives
 // you: while the session lives, anything running as your user on the remote host
 // can use your key and nothing anywhere shows it happened. With it, every
-// signature is a thing you saw.
+// signature is a thing you saw. The system agent asks the same way, naming the
+// key and the program on this computer that wants it.
 //
 // So every path out of here that is not an explicit approval must refuse —
 // closing, Escape, a timeout, a dead window. Defaulting the other way would make
@@ -20,7 +21,14 @@ import { Btn } from "@/components/primitives";
 
 interface ApprovalRequest {
   id: number;
+  origin: "forwarded" | "system";
+  /** Forwarded: the session's host. */
   host: string;
+  /** System agent: the key asked for. */
+  key: string;
+  /** System agent: the calling process, where the OS reported it. */
+  pid: number | null;
+  executable: string | null;
   /** `user@service` when the payload is an SSH login; empty otherwise. */
   target: string;
 }
@@ -74,6 +82,7 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
   const { t } = useTranslation();
   const p = usePalette();
   const [busy, setBusy] = useState(false);
+  const system = req.origin === "system";
 
   const finish = (approved: boolean) => {
     if (busy) return;
@@ -85,7 +94,7 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
     <Modal
       icon="shield"
       title={t("agentApproval.title")}
-      subtitle={req.host}
+      subtitle={system ? t("agentApproval.systemSubtitle") : req.host}
       // Closing is declining. The safe direction has to be the easy one.
       onClose={() => finish(false)}
       w={420}
@@ -102,7 +111,20 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
       }
     >
       <div style={{ display: "flex", flexDirection: "column", gap: rem(10), fontSize: TEXT.base }}>
-        <div>{t("agentApproval.body", { host: req.host })}</div>
+        <div>
+          {system
+            ? t("agentApproval.systemBody", { key: req.key })
+            : t("agentApproval.body", { host: req.host })}
+        </div>
+        {system && (
+          <div style={{ fontSize: TEXT.small, color: p.txt2, overflowWrap: "anywhere" }}>
+            {req.pid == null
+              ? t("agentApproval.unknownProcess")
+              : req.executable
+                ? t("agentApproval.process", { executable: req.executable, pid: req.pid })
+                : t("agentApproval.processPidOnly", { pid: req.pid })}
+          </div>
+        )}
         {req.target ? (
           <div
             style={{
