@@ -5675,6 +5675,46 @@ impl Core {
         })
     }
 
+    /// Checks a master password against the on-disk keyset while the instance is
+    /// unlocked, changing nothing. Rust-only (not exported to the mobile bindings):
+    /// the desktop shell calls it before it agrees to remember the password behind
+    /// a biometric, so enabling biometric unlock proves the password is held and a
+    /// mistyped one is never stored.
+    ///
+    /// `Locked` while locked; `InvalidCredentials` for a wrong password or Secret
+    /// Key, and also for an instance without a master password (there is nothing
+    /// to remember). The state lock is held throughout, serialising against a
+    /// concurrent `change_password`, which rewrites the same record.
+    pub fn verify_unlock_password(
+        &self,
+        password: String,
+        secret_key_hex: String,
+    ) -> Result<(), FfiError> {
+        let guard = self.locked_state();
+        if guard.is_none() {
+            return Err(FfiError::Locked);
+        }
+        let password = Zeroizing::new(password);
+        let secret_key_hex = Zeroizing::new(secret_key_hex);
+        let enc_bytes = std::fs::read(&self.keyset_path).map_err(|_| FfiError::NotFound)?;
+        let enc = EncryptedKeyset::from_bytes(&enc_bytes).map_err(FfiError::other)?;
+        if enc.kdf_params.is_none() || password.is_empty() {
+            return Err(FfiError::InvalidCredentials);
+        }
+        let sk_bytes = Zeroizing::new(
+            hex::decode(secret_key_hex.trim()).map_err(|_| FfiError::InvalidCredentials)?,
+        );
+        let secret_key =
+            SecretKey::from_slice(&sk_bytes).map_err(|_| FfiError::InvalidCredentials)?;
+        unlock_account(&enc, Some(password.as_bytes()), &secret_key)
+            .map(drop)
+            .map_err(|e| match e {
+                unissh_keychain::KeychainError::InvalidCredentials
+                | unissh_keychain::KeychainError::PasswordRequired => FfiError::InvalidCredentials,
+                other => FfiError::other(other),
+            })
+    }
+
     /// Takes the state lock, recovering from mutex poisoning (the data
     /// under the lock is ordinary, not invariant-bearing) so that a single panic does not
     /// "jam" the entire Core forever on calls through the FFI.
