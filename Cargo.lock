@@ -5364,6 +5364,7 @@ dependencies = [
  "clap",
  "ed25519-dalek 2.2.0",
  "figment",
+ "futures-util",
  "getrandom 0.4.3",
  "hex",
  "hmac 0.13.0",

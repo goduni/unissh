@@ -7,7 +7,7 @@ mod common;
 
 use common::{TestApp, claim_owner, make_identity, spawn};
 use serde_json::{Value, json};
-use unissh_server::ids::b64;
+use unissh_server::ids::{b64, sha256, unb64};
 use unissh_storage::{CachePolicy, SyncTarget, VaultRecord};
 use unissh_sync::{AuditObject, SyncObject};
 
@@ -461,6 +461,132 @@ async fn audit_chain_verifies_and_detects_tampering() {
     let v2 = get_json(&app, "/v1/admin/audit/verify", &a.bearer).await;
     assert_eq!(v2["ok"], false, "tampering detected");
     assert_eq!(v2["broken_at"], 1);
+}
+
+// ---- audit JSON Lines export ----
+
+/// Owner plus a log with server-observed rows (claim/login) and two
+/// client-signed rows, so both `entry` encodings are exported.
+async fn admin_with_audit(app: &TestApp) -> Owner {
+    let a = claim_admin(app).await;
+    for tag in [7u8, 8] {
+        let r = app
+            .client
+            .post(format!("{}/v1/audit", app.base))
+            .header("Authorization", format!("Bearer {}", a.bearer))
+            .json(&json!({ "audit_object": audit_obj(tag, &a.ed) }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 201);
+    }
+    a
+}
+
+async fn export(app: &TestApp, query: &str, bearer: &str) -> reqwest::Response {
+    app.client
+        .get(format!("{}/v1/audit/export{query}", app.base))
+        .header("Authorization", format!("Bearer {bearer}"))
+        .send()
+        .await
+        .unwrap()
+}
+
+fn jsonl(body: &str) -> Vec<Value> {
+    body.lines()
+        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
+        .collect()
+}
+
+#[tokio::test]
+async fn audit_export_is_owner_only() {
+    let app = spawn().await;
+    let _a = admin_with_audit(&app).await;
+    let (_acct, member_bearer) = add_member(&app, None).await;
+
+    let r = export(&app, "", &member_bearer).await;
+    assert_eq!(r.status(), 403, "a member cannot export the audit log");
+}
+
+#[tokio::test]
+async fn audit_export_honours_seq_range() {
+    let app = spawn().await;
+    let a = admin_with_audit(&app).await;
+
+    let r = export(&app, "?from_seq=2&to_seq=3", &a.bearer).await;
+    assert_eq!(r.status(), 200);
+    let seqs: Vec<i64> = jsonl(&r.text().await.unwrap())
+        .iter()
+        .map(|l| l["seq"].as_i64().unwrap())
+        .collect();
+    assert_eq!(seqs, vec![2, 3]);
+
+    let bad = export(&app, "?from_seq=3&to_seq=2", &a.bearer).await;
+    assert_eq!(bad.status(), 400, "an inverted range is refused");
+}
+
+/// Offline re-implementation of the `unissh-audit-chain-v2` record encoding,
+/// fed only from the exported fields.
+fn exported_record_bytes(l: &Value) -> Vec<u8> {
+    fn lp(b: &mut Vec<u8>, x: &[u8]) {
+        b.extend_from_slice(&(x.len() as u32).to_be_bytes());
+        b.extend_from_slice(x);
+    }
+    fn opt(b: &mut Vec<u8>, v: &Value) {
+        match v.as_str() {
+            Some(s) => {
+                b.push(1);
+                lp(b, &unb64(s).unwrap());
+            }
+            None => b.push(0),
+        }
+    }
+    let mut b = b"unissh-audit-chain-v2".to_vec();
+    b.extend_from_slice(&l["seq"].as_i64().unwrap().to_be_bytes());
+    lp(&mut b, l["source"].as_str().unwrap().as_bytes());
+    lp(&mut b, &unb64(l["entry_blob"].as_str().unwrap()).unwrap());
+    opt(&mut b, &l["signature"]);
+    opt(&mut b, &l["author_pubkey"]);
+    opt(&mut b, &l["vault_id"]);
+    b.extend_from_slice(&l["recorded_at"].as_i64().unwrap().to_be_bytes());
+    b.extend_from_slice(&l["server_seq"].as_i64().unwrap_or(-1).to_be_bytes());
+    b
+}
+
+#[tokio::test]
+async fn audit_export_is_json_lines_that_verify_offline() {
+    let app = spawn().await;
+    let a = admin_with_audit(&app).await;
+
+    let r = export(&app, "", &a.bearer).await;
+    assert_eq!(r.status(), 200);
+    let lines = jsonl(&r.text().await.unwrap());
+
+    let mut head = vec![0u8; 32];
+    for l in &lines {
+        for k in ["space_id", "server_seq"] {
+            assert!(l.get(k).is_some(), "chain field {k} present");
+        }
+        match l["source"].as_str().unwrap() {
+            "server-observed" => assert!(l["entry"].is_object(), "decoded JSON"),
+            _ => assert_eq!(l["entry"], l["entry_blob"], "client-signed stays base64"),
+        }
+        let mut input = head.clone();
+        input.extend_from_slice(&exported_record_bytes(l));
+        head = sha256(&input).to_vec();
+        assert_eq!(
+            l["prev_hash"].as_str().unwrap(),
+            b64(&head),
+            "seq {}",
+            l["seq"]
+        );
+    }
+
+    let v = get_json(&app, "/v1/admin/audit/verify", &a.bearer).await;
+    assert_eq!(v["count"].as_u64().unwrap(), lines.len() as u64);
+    assert_eq!(v["head_hash"].as_str().unwrap(), b64(&head));
+    assert!(lines.iter().any(|l| l["source"] == "client-signed"));
+    assert!(lines.iter().any(|l| l["source"] == "server-observed"));
 }
 
 // ---- config hot-reload (validate_signatures) + metrics summary ----
