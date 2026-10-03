@@ -1010,6 +1010,11 @@ pub struct MultiExecTarget {
     pub jumps: Vec<JumpHost>,
     /// Outbound proxy for the first TCP hop (may be absent).
     pub proxy: Option<ProxyConfig>,
+    /// Log in to the target with its key only — no keyboard-interactive, so no
+    /// password prompt can stand in for the key. For proving that a key is
+    /// accepted (the verify/remove steps of a key rotation). Hops are unaffected.
+    #[uniffi(default = false)]
+    pub publickey_only: bool,
 }
 
 /// Category of a structural DB-integrity violation (FFI mirror of `ConsistencyKind`).
@@ -3624,13 +3629,20 @@ impl Core {
         let mut connected: Vec<(String, SshClient)> = Vec::new();
         let mut results: Vec<MultiExecResult> = Vec::new();
         for t in &targets {
-            match self.connect_session(
+            match connect_with_options(
+                &self.state,
+                &self.rt,
+                &self.prompter,
+                &self.approver,
                 &t.auth,
                 &t.jumps,
                 t.proxy.as_ref(),
                 t.host.clone(),
                 t.port,
                 t.user.clone(),
+                false,
+                None,
+                t.publickey_only,
             ) {
                 Ok(client) => connected.push((t.host.clone(), client)),
                 Err(e) => results.push(MultiExecResult {
@@ -3763,6 +3775,7 @@ impl Core {
                             auth: pa.auth,
                             jumps: p.jumps,
                             proxy: p.proxy,
+                            publickey_only: false,
                         });
                     }
                 }
@@ -5899,6 +5912,7 @@ impl Core {
                                 auth: pa.auth,
                                 jumps: p.jumps.clone(),
                                 proxy: p.proxy.clone(),
+                                publickey_only: false,
                             });
                         }
                         Err(_) => {
@@ -6083,6 +6097,41 @@ fn connect_with_policy(
     agent_forward: bool,
     policy: Option<&automation::ConnectionPolicy>,
 ) -> Result<SshClient, FfiError> {
+    connect_with_options(
+        state,
+        rt,
+        prompter,
+        approver,
+        auth,
+        jumps,
+        proxy,
+        host,
+        port,
+        user,
+        agent_forward,
+        policy,
+        false,
+    )
+}
+
+/// As [`connect_with_policy`], plus `publickey_only` for the target (see
+/// [`MultiExecTarget::publickey_only`]).
+#[allow(clippy::too_many_arguments)]
+fn connect_with_options(
+    state: &Arc<Mutex<Option<CoreState>>>,
+    rt: &tokio::runtime::Runtime,
+    prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
+    approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    auth: &AuthMethod,
+    jumps: &[JumpHost],
+    proxy: Option<&ProxyConfig>,
+    host: String,
+    port: u16,
+    user: String,
+    agent_forward: bool,
+    policy: Option<&automation::ConnectionPolicy>,
+    publickey_only: bool,
+) -> Result<SshClient, FfiError> {
     // Cloned out before the state lock is taken: the prompt fires while that lock
     // is held (see the note above), so reaching back for another lock here would
     // be one more chance to deadlock for no benefit.
@@ -6141,6 +6190,7 @@ fn connect_with_policy(
         ConnectOptions::new(host.clone(), port, user, target_auth),
         prompter.as_ref(),
     );
+    target.publickey_only = publickey_only;
 
     // The proxy wraps the first TCP dial: hop #1 of the chain, or the target
     // itself for a direct connection. The connection's own proxy wins; a
@@ -6497,6 +6547,7 @@ fn profile_to_target(vault_id: &str, p: ConnectionProfile) -> MultiExecTarget {
         auth: profile_auth_to_method(vault_id, p.auth),
         jumps: p.jumps,
         proxy: p.proxy,
+        publickey_only: false,
     }
 }
 

@@ -620,6 +620,9 @@ pub struct MultiExecTarget {
     pub jumps: Vec<JumpHost>,
     #[serde(default)]
     pub proxy: Option<ProxyConfig>,
+    /// Target logs in with its key only — no keyboard-interactive fallback.
+    #[serde(default)]
+    pub publickey_only: bool,
 }
 impl From<MultiExecTarget> for ffi::MultiExecTarget {
     fn from(t: MultiExecTarget) -> Self {
@@ -630,6 +633,7 @@ impl From<MultiExecTarget> for ffi::MultiExecTarget {
             auth: t.auth.into(),
             jumps: t.jumps.into_iter().map(Into::into).collect(),
             proxy: t.proxy.map(Into::into),
+            publickey_only: t.publickey_only,
         }
     }
 }

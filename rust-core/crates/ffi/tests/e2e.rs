@@ -716,6 +716,7 @@ fn multi_exec_on_several_hosts() {
 
     let mk = |port: u16| MultiExecTarget {
         proxy: None,
+        publickey_only: false,
         host: "127.0.0.1".to_string(),
         port,
         user: "root".to_string(),
@@ -2216,6 +2217,7 @@ mod fleetserver {
 fn pw_target(port: u16) -> MultiExecTarget {
     MultiExecTarget {
         proxy: None,
+        publickey_only: false,
         host: "127.0.0.1".to_string(),
         port,
         user: "root".to_string(),
@@ -2979,6 +2981,7 @@ fn check_consistency_ok() {
 fn key_target(port: u16) -> MultiExecTarget {
     MultiExecTarget {
         proxy: None,
+        publickey_only: false,
         host: "127.0.0.1".to_string(),
         port,
         user: "root".to_string(),
