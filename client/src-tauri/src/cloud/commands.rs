@@ -1247,19 +1247,15 @@ pub async fn server_keyset_pull_and_unlock(
     let cfg = require_config(&state, server_id.as_deref())?;
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
-    blocking_api(move || {
+    // The installed keyset may be wrapped under another password.
+    blocking_api(crate::biometric::installing_keyset(&state, move || {
         let http = client::http();
         let (blob, _generation) = identity::keyset_get(http, &cfg.base_url, &access)?;
         core.unlock_from_server_blob(blob, password, secret_key_hex)
             .map_err(ApiError::from)
-    })
+    }))
     .await?;
-    #[cfg(desktop)]
-    crate::mcp::resume_access(&app);
-    #[cfg(desktop)]
-    crate::system_agent::resume_access(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    crate::commands::resume_after_unlock(&app);
     Ok(())
 }
 
@@ -1388,6 +1384,7 @@ pub async fn server_escrow_fetch_and_unlock(
     let core = state.core.clone();
     let base = base_url.clone();
     let hd = handle.clone();
+    let bio_blob = crate::biometric::blob_path(&state);
 
     // Recover + unlock the keyset in one blocking pass, then hand off to the shared tail.
     let account_id = blocking_api(move || {
@@ -1414,18 +1411,14 @@ pub async fn server_escrow_fetch_and_unlock(
             password,
             secret_key_hex,
             crate::keychain::save_secret_key_now,
+            &bio_blob,
         )?;
         Ok(account_id)
     })
     .await?;
 
     // Keep escrow's fetched account id as the link identity and its handle on the link.
-    #[cfg(desktop)]
-    crate::mcp::resume_access(&app);
-    #[cfg(desktop)]
-    crate::system_agent::resume_access(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    crate::commands::resume_after_unlock(&app);
     self_enroll_login_and_persist(&state, base_url, Some(account_id), Some(handle)).await
 }
 
@@ -1451,6 +1444,7 @@ pub async fn server_import_keyset_and_unlock(
 ) -> ApiResult<ServerStatus> {
     client::validate_base_url(&base_url)?;
     let core = state.core.clone();
+    let bio_blob = crate::biometric::blob_path(&state);
     // Install + unlock the keyset from the file blob (blocking; the raw bytes + credentials enter
     // ONLY the core here). Unlike escrow there is no fetch to learn the account id from — the
     // follow-up self-enroll returns it (the same keyset resolves the same account).
@@ -1461,16 +1455,12 @@ pub async fn server_import_keyset_and_unlock(
             password,
             secret_key_hex,
             crate::keychain::save_secret_key_now,
+            &bio_blob,
         )
     })
     .await?;
     // Offline import carries no handle (escrow keys off one); the account's handle syncs later.
-    #[cfg(desktop)]
-    crate::mcp::resume_access(&app);
-    #[cfg(desktop)]
-    crate::system_agent::resume_access(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    crate::commands::resume_after_unlock(&app);
     self_enroll_login_and_persist(&state, base_url, None, None).await
 }
 
@@ -1559,11 +1549,13 @@ pub async fn server_onboard_join(
     let core_pake = core.clone();
     let base = base_url.clone();
     let channel = channel_id.clone();
-    blocking_api(move || {
+    // A keyset from another device: nothing sealed here before may open it.
+    blocking_api(crate::biometric::installing_keyset(&state, move || {
         let http = client::http();
         let code = client::unb64(&oob_code)?;
-        onboard::responder_join(&core_pake, http, &base, &channel, code, password)
-    })
+        onboard::responder_join(&core_pake, http, &base, &channel, code, password)?;
+        Ok(())
+    }))
     .await?;
 
     // 2) Persist a cloud link for the new device and make it active. Idempotent:

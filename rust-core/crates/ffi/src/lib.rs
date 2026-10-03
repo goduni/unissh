@@ -1569,14 +1569,7 @@ impl Core {
     /// Unlocks the instance with a password (if needed) and the Secret Key (hex from the Emergency Kit).
     pub fn unlock(&self, password: Option<String>, secret_key_hex: String) -> Result<(), FfiError> {
         let password = password.map(Zeroizing::new);
-        let secret_key_hex = Zeroizing::new(secret_key_hex);
-        let enc_bytes = std::fs::read(&self.keyset_path).map_err(|_| FfiError::NotFound)?;
-        let enc = EncryptedKeyset::from_bytes(&enc_bytes).map_err(FfiError::other)?;
-        let sk_bytes = Zeroizing::new(
-            hex::decode(secret_key_hex.trim()).map_err(|_| FfiError::InvalidCredentials)?,
-        );
-        let secret_key =
-            SecretKey::from_slice(&sk_bytes).map_err(|_| FfiError::InvalidCredentials)?;
+        let (enc, secret_key) = self.open_keyset_inputs(Zeroizing::new(secret_key_hex))?;
 
         // migrate-on-open: a keyset written by an old scheme (before round 2) is opened
         // via a probe and returned re-wrapped under the current scheme (`migrated`). This
@@ -1584,13 +1577,7 @@ impl Core {
         // earlier builds. Persisting the re-wrap is below, AFTER opening storage and the floor check.
         let (unlocked, migrated) =
             unlock_account_migrating(&enc, password.as_deref().map(|s| s.as_bytes()), &secret_key)
-                .map_err(|e| match e {
-                    unissh_keychain::KeychainError::InvalidCredentials
-                    | unissh_keychain::KeychainError::PasswordRequired => {
-                        FfiError::InvalidCredentials
-                    }
-                    other => FfiError::other(other),
-                })?;
+                .map_err(map_keychain_err)?;
 
         let db_key = derive_db_key(&unlocked);
         let storage = Storage::open(&self.db_path, &db_key[..]).map_err(FfiError::other)?;
@@ -3002,15 +2989,7 @@ impl Core {
         let mut guard = self.locked_state();
         let old_password = old_password.map(Zeroizing::new);
         let new_password = new_password.map(Zeroizing::new);
-        let secret_key_hex = Zeroizing::new(secret_key_hex);
-
-        let enc_bytes = std::fs::read(&self.keyset_path).map_err(|_| FfiError::NotFound)?;
-        let enc = EncryptedKeyset::from_bytes(&enc_bytes).map_err(FfiError::other)?;
-        let sk_bytes = Zeroizing::new(
-            hex::decode(secret_key_hex.trim()).map_err(|_| FfiError::InvalidCredentials)?,
-        );
-        let secret_key =
-            SecretKey::from_slice(&sk_bytes).map_err(|_| FfiError::InvalidCredentials)?;
+        let (enc, secret_key) = self.open_keyset_inputs(Zeroizing::new(secret_key_hex))?;
 
         let new_enc = change_password(
             &enc,
@@ -3019,11 +2998,7 @@ impl Core {
             &secret_key,
             KdfParams::recommended(),
         )
-        .map_err(|e| match e {
-            unissh_keychain::KeychainError::InvalidCredentials
-            | unissh_keychain::KeychainError::PasswordRequired => FfiError::InvalidCredentials,
-            other => FfiError::other(other),
-        })?;
+        .map_err(map_keychain_err)?;
 
         let new_bytes = new_enc.to_bytes().map_err(FfiError::other)?;
         write_keyset_atomic(&self.keyset_path, &new_bytes)?;
@@ -6168,6 +6143,55 @@ impl Core {
             }
             Ok(created)
         })
+    }
+
+    /// Checks a master password against the on-disk keyset while the instance is
+    /// unlocked, changing nothing. Rust-only (not exported to the mobile bindings):
+    /// the desktop shell calls it before it agrees to remember the password behind
+    /// a biometric, so enabling biometric unlock proves the password is held and a
+    /// mistyped one is never stored.
+    ///
+    /// `Locked` while locked; `InvalidCredentials` for a wrong password or Secret
+    /// Key, and also for an instance without a master password (there is nothing
+    /// to remember). The state lock is held throughout, serialising against a
+    /// concurrent `change_password`, which rewrites the same record.
+    pub fn verify_unlock_password(
+        &self,
+        password: String,
+        secret_key_hex: String,
+    ) -> Result<(), FfiError> {
+        let guard = self.locked_state();
+        if guard.is_none() {
+            return Err(FfiError::Locked);
+        }
+        let password = Zeroizing::new(password);
+        let (enc, secret_key) = self.open_keyset_inputs(Zeroizing::new(secret_key_hex))?;
+        if enc.kdf_params.is_none() || password.is_empty() {
+            return Err(FfiError::InvalidCredentials);
+        }
+        // The migrating variant, so a keyset written by an older scheme is
+        // accepted too; any re-wrap it computes is discarded — persisting it is
+        // `unlock`'s job, not a check's.
+        unlock_account_migrating(&enc, Some(password.as_bytes()), &secret_key)
+            .map(drop)
+            .map_err(map_keychain_err)
+    }
+
+    /// The shared prelude of every call that opens the keyset with a Secret Key:
+    /// the on-disk record and the parsed key. A missing record is `NotFound`; a
+    /// Secret Key that is not hex or not the right length is `InvalidCredentials`.
+    fn open_keyset_inputs(
+        &self,
+        secret_key_hex: Zeroizing<String>,
+    ) -> Result<(EncryptedKeyset, SecretKey), FfiError> {
+        let enc_bytes = std::fs::read(&self.keyset_path).map_err(|_| FfiError::NotFound)?;
+        let enc = EncryptedKeyset::from_bytes(&enc_bytes).map_err(FfiError::other)?;
+        let sk_bytes = Zeroizing::new(
+            hex::decode(secret_key_hex.trim()).map_err(|_| FfiError::InvalidCredentials)?,
+        );
+        let secret_key =
+            SecretKey::from_slice(&sk_bytes).map_err(|_| FfiError::InvalidCredentials)?;
+        Ok((enc, secret_key))
     }
 
     /// Takes the state lock, recovering from mutex poisoning (the data

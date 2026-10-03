@@ -76,8 +76,7 @@ pub fn is_screen_locked() -> bool {
 /// Wake alone must not restore access while the OS screen remains locked.
 fn wake(app: &AppHandle) {
     if !is_screen_locked() {
-        crate::mcp::resume_access(app);
-        crate::system_agent::resume_access(app);
+        crate::commands::resume_after_unlock(app);
     }
 }
 
@@ -95,12 +94,10 @@ fn emit_with_token(app: &AppHandle, signal: SystemLockSignal, token: Option<u64>
         signal,
         SystemLockSignal::ScreenLock | SystemLockSignal::Suspend
     ) {
-        crate::mcp::revoke(app);
-        crate::system_agent::revoke(app);
+        crate::commands::revoke_agent_access(app);
     }
     if matches!(signal, SystemLockSignal::ScreenUnlock) {
-        crate::mcp::resume_access(app);
-        crate::system_agent::resume_access(app);
+        crate::commands::resume_after_unlock(app);
     }
     log::info!("system-lock: {signal:?}");
     let _ = app.emit("system-lock", SystemLockEvent { signal, token });

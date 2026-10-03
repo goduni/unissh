@@ -12,7 +12,9 @@
 //!
 //! The passwordless mode (SSO + trusted devices) is provided as [`UnlockMode::SecretKeyOnly`]:
 //! the root is the Secret Key (+ a device secret in the future). Biometrics are not
-//! implemented here — that is the UI project's platform layer.
+//! implemented here — that is the UI project's platform layer. What the platform
+//! layer stores behind a biometric is sealed by [`device_wrap`], which sits beside
+//! the hierarchy and does not change it.
 //!
 //! ## What is not here
 //! Storage (`storage`), vaults/VK (`vault`), SSH. Per-instance isolation is the
@@ -22,6 +24,7 @@
 #![warn(missing_docs)]
 
 mod account;
+pub mod device_wrap;
 mod error;
 mod keyset;
 mod onboarding_floor;
@@ -34,6 +37,7 @@ pub use account::{
     build_registration, build_registration_request, generate_account_id, load_account_id,
     store_account_id, verify_registration, ACCOUNT_ID_LEN,
 };
+pub use device_wrap::{DeviceWrapError, DEVICE_WRAP_VERSION};
 pub use error::KeychainError;
 pub use keyset::{
     change_password, create_account, unlock_account, unlock_account_migrating, EncryptedKeyset,

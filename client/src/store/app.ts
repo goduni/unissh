@@ -6,7 +6,7 @@ import { create } from "zustand";
 import * as api from "@/bridge/api";
 import { onVaultMutated } from "@/bridge/sync-hook";
 import { clearSecretKey } from "@/bridge/secretKey";
-import { isPhoneOs, osPlatform } from "@/bridge/platform";
+import { isPhoneOs, osPlatform, presenceGateApplies } from "@/bridge/platform";
 import { i18n, refineLangFromSystem } from "@/i18n";
 
 /** Sentinel for the "all hosts" filter — decoupled from its display label so the
@@ -482,6 +482,11 @@ interface AppStore {
   setModernAlgorithms: (on: boolean) => void;
   gpuRendering: boolean;
   setGpuRendering: (on: boolean) => void;
+  /** Secret-Key-only vaults: ask Touch ID / Windows Hello before the
+   *  remembered Secret Key is used (at startup and on the unlock screen).
+   *  Device-local; stores nothing behind the prompt. */
+  presenceGate: boolean;
+  setPresenceGate: (on: boolean) => void;
   /** Days after which a vault key carries the "old" chip in Secrets; 0 = never. */
   keyAgeDays: number;
   setKeyAgeDays: (days: number) => void;
@@ -700,6 +705,17 @@ const lsGpuRendering = (): boolean => {
   }
 };
 
+/** The Secret-Key-only presence gate. Off by default. Device-local, beside
+ *  `unissh.startup`: both decide what boot() does with the remembered Secret
+ *  Key before anything is unlocked, and both are read from here. */
+const lsPresenceGate = (): boolean => {
+  try {
+    return localStorage.getItem("unissh.presenceGate") === "1";
+  } catch {
+    return false;
+  }
+};
+
 /** Key-age threshold (days) for the "old" chip. Device-local: a nudge, not policy. */
 const lsKeyAgeDays = (): number => parseKeyAgeDays(lsRead("unissh.keyAgeDays"));
 
@@ -899,6 +915,7 @@ export const useApp = create<AppStore>((set, get) => ({
   keepaliveSecs: lsKeepaliveSecs(),
   modernAlgorithms: lsModernAlgorithms(),
   gpuRendering: lsGpuRendering(),
+  presenceGate: lsPresenceGate(),
   keyAgeDays: lsKeyAgeDays(),
   terminalImages: lsTerminalImages(),
   // Provisional: the current look, so a browser preview and the first paint on
@@ -990,13 +1007,16 @@ export const useApp = create<AppStore>((set, get) => ({
       // behaviour; the "start locked" setting is the explicit opt-out. A master-
       // password instance can't auto-unlock (the password is stored nowhere) → it
       // falls to the unlock screen. The keychain read is cached and shared with that
-      // screen, so a miss here doesn't cause a second OS prompt.
+      // screen, so a miss here doesn't cause a second OS prompt. With the presence
+      // gate on, it falls there too: that screen asks Touch ID / Windows Hello
+      // first and only then unlocks with the remembered key.
       if (
         status.exists &&
         !status.partial &&
         !status.unlocked &&
         status.requiresPassword === false &&
-        lsRead("unissh.startup") !== "locked"
+        lsRead("unissh.startup") !== "locked" &&
+        !presenceGateApplies(status.requiresPassword, get().presenceGate)
       ) {
         try {
           // Unlock inside Rust — the Secret Key never crosses into the JS heap
@@ -1579,6 +1599,14 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ gpuRendering: on });
     try {
       localStorage.setItem("unissh.gpuRendering", on ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  },
+  setPresenceGate: (on) => {
+    set({ presenceGate: on });
+    try {
+      localStorage.setItem("unissh.presenceGate", on ? "1" : "0");
     } catch {
       /* ignore */
     }

@@ -1,7 +1,7 @@
 // Entry flow overlays — onboarding (create_account), Emergency Kit (one-time
 // Secret Key reveal), and unlock. All wired to the real core.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useReducer, useRef, useState } from "react";
 import { writeSecretToClipboard } from "@/bridge/clipboard";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
@@ -10,7 +10,8 @@ import { MONO, rem, rgba, TEXT, UI } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { recoverInstance } from "@/store/recovery";
-import { isDesktopOs } from "@/bridge/platform";
+import { biometricUnlockReducer, initialBiometricUnlock } from "@/store/biometricUnlock";
+import { biometricMethod, isDesktopOs, isWindows, presenceGateApplies } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
 import { useWindowControls } from "@/shell/WindowChrome";
 import { useIsMobile, useNarrow } from "@/store/responsive";
@@ -716,10 +717,29 @@ function Unlock() {
   // header at boot, so it's known before unlocking. null/true → keep the field.
   const requiresPassword = useApp((s) => s.requiresPassword);
   const lockReason = useApp((s) => s.lockReason);
+  // The Secret-Key-only presence gate: the remembered Secret Key is used only
+  // after Touch ID / Windows Hello, so it is not put in the field either —
+  // otherwise dismissing the prompt would leave a one-click unlock behind it.
+  const presenceGate = useApp((s) => s.presenceGate);
+  const gateMode = presenceGateApplies(requiresPassword, presenceGate);
+  // Biometric path (Touch ID / Windows Hello): see store/biometricUnlock.ts for the transitions.
+  // The password and the Secret Key never come back to JS on this path — Rust
+  // reads, unseals and unlocks.
+  const [bio, dispatchBio] = useReducer(biometricUnlockReducer, initialBiometricUnlock);
+  // One prompt per entry into "prompting", even under StrictMode's double effects.
+  const prompted = useRef(false);
+  // Locked by the OS (screen lock, sleep): the window can still report focus
+  // under the lock screen, so the first prompt waits for a sign the user is
+  // back at it rather than appearing where nobody can answer it.
+  const waitForReturn = useRef(lockReason === "screen-lock" || lockReason === "suspend");
+  // A prompt skipped from the view may still unlock later, beside a manual
+  // unlock: the steps after unlocking run once.
+  const finished = useRef(false);
 
   // prefill the Secret Key from the OS keychain if it was saved on this device
   // (cached read — at most one keychain access per process)
   useEffect(() => {
+    if (gateMode) return;
     readSecretKeyOnce()
       .then((k) => {
         if (k) {
@@ -728,7 +748,111 @@ function Unlock() {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [gateMode]);
+
+  // Is biometric unlock enabled here? Only a password vault has anything stored
+  // behind it; anywhere without an adapter the answer is simply "no".
+  useEffect(() => {
+    const none = { type: "status", enabled: false, secretKeyRemembered: false } as const;
+    if (gateMode) {
+      api
+        .biometricStatus(true)
+        .then((s) =>
+          dispatchBio({
+            type: "gate",
+            on: true,
+            secretKeyRemembered: s.secretKeyRemembered,
+            presenceSupported: s.presenceSupported,
+          }),
+        )
+        .catch(() => dispatchBio({ type: "gate", on: false, secretKeyRemembered: false, presenceSupported: false }));
+      return;
+    }
+    if (requiresPassword === false) {
+      dispatchBio(none);
+      return;
+    }
+    // Without stored material Rust does not touch the keychain for this, so a
+    // device without biometric unlock shows the password field at once.
+    api
+      .biometricStatus(false)
+      .then((s) => dispatchBio({ type: "status", enabled: s.enabled, secretKeyRemembered: s.secretKeyRemembered }))
+      .catch(() => dispatchBio(none));
+  }, [requiresPassword, gateMode]);
+
+  // Prompt as soon as the screen enters "prompting" — but not while the window
+  // is in the background: then on the first focus, so the sheet meets the
+  // user. After an OS lock, not before a sign of the user (focus, the pointer
+  // or a key reaching the window, the window becoming visible): under the lock
+  // screen the window may still claim focus. A retry is the user, so it is
+  // immediate.
+  useEffect(() => {
+    if (bio.phase !== "prompting") {
+      prompted.current = false;
+      return;
+    }
+    if (prompted.current) return;
+    const go = () => {
+      if (prompted.current) return;
+      prompted.current = true;
+      waitForReturn.current = false;
+      // The presence gate's Windows prompt shows the reason on its own, as a
+      // sentence; Touch ID puts it after "UniSSH is trying to".
+      const prompt = bio.gate
+        ? api.biometricPresenceUnlock(
+            t(isWindows() ? "onboarding.presenceReasonWindows" : "onboarding.biometricReason"),
+          )
+        : api.biometricUnlock(t("onboarding.biometricReason"));
+      prompt
+        .then((outcome) => {
+          dispatchBio({ type: "outcome", outcome });
+          if (outcome === "unlocked") {
+            afterUnlock().catch((e) => {
+              logWarn(`post-unlock steps failed: ${apiErrorMessage(e)}`);
+              toast(apiErrorMessage(e), "err");
+            });
+          }
+        })
+        .catch((e) => {
+          logWarn(`biometric unlock failed: ${apiErrorMessage(e)}`);
+          dispatchBio({ type: "error" });
+        });
+    };
+    const osLock = waitForReturn.current;
+    if (document.hasFocus() && !osLock) {
+      go();
+      return;
+    }
+    const signs = osLock ? (["focus", "pointermove", "pointerdown", "keydown"] as const) : (["focus"] as const);
+    function detach() {
+      for (const name of signs) window.removeEventListener(name, onSign);
+      document.removeEventListener("visibilitychange", onSign);
+    }
+    function onSign() {
+      if (document.visibilityState !== "visible") return;
+      detach();
+      go();
+    }
+    for (const name of signs) window.addEventListener(name, onSign);
+    if (osLock) document.addEventListener("visibilitychange", onSign);
+    return detach;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one prompt per phase entry
+  }, [bio.phase]);
+
+  // Everything after the core said yes, whichever way it was asked.
+  const afterUnlock = async () => {
+    if (finished.current) return;
+    finished.current = true;
+    useApp.setState({ unlocked: true, overlay: null, lockReason: null });
+    await useApp.getState().reloadVaults();
+    await useApp.getState().reloadServerStatus();
+    // Bind legacy unbound cloud vaults now — the normal locked cold-start path
+    // doesn't run boot()'s unlocked branch, so this is where it actually fires.
+    await useApp.getState().maybeBindLegacyCloudVaults();
+    // Pull cloud vaults from any live server session (no-op without one).
+    useApp.getState().cloudAutoSync();
+    toast(t("onboarding.toast.unlocked"), "ok");
+  };
 
   const unlock = async () => {
     if (busy) return;
@@ -737,17 +861,13 @@ function Unlock() {
     try {
       await api.unlock(password ? password : null, cleanKey);
       // store the key only if it wasn't already in the keychain — avoids a
-      // write (and its prompt) on every unlock.
-      if (!fromKeychain) rememberSecretKey(cleanKey);
-      useApp.setState({ unlocked: true, overlay: null, lockReason: null });
-      await useApp.getState().reloadVaults();
-      await useApp.getState().reloadServerStatus();
-      // Bind legacy unbound cloud vaults now — the normal locked cold-start path
-      // doesn't run boot()'s unlocked branch, so this is where it actually fires.
-      await useApp.getState().maybeBindLegacyCloudVaults();
-      // Pull cloud vaults from any live server session (no-op without one).
-      useApp.getState().cloudAutoSync();
-      toast(t("onboarding.toast.unlocked"), "ok");
+      // write (and its prompt) on every unlock. Under the presence gate the
+      // field is never prefilled, yet the key is already remembered (that is
+      // what the gate guards): no rewrite there either — unless the remembered
+      // one is gone or no longer opens this vault.
+      const remembered = bio.gate && bio.notice !== "noSecretKey";
+      if (!fromKeychain && !remembered) rememberSecretKey(cleanKey);
+      await afterUnlock();
     } catch (e) {
       logWarn(`unlock failed: ${apiErrorMessage(e)}`);
       toast(apiErrorMessage(e), "err");
@@ -812,11 +932,59 @@ function Unlock() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void unlock();
+          if (bio.phase === "password") void unlock();
         }}
         style={{ display: "flex", flexDirection: "column", gap: rem(13) }}
       >
-        {requiresPassword !== false && (
+        {bio.phase === "prompting" && (
+          <div
+            role="status"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: rem(8),
+              padding: `${rem(10)} 0`,
+              fontSize: TEXT.base,
+              color: p.txt2,
+            }}
+          >
+            <Spinner size={14} color={p.txt2} />
+            {t("onboarding.biometricWaiting", { method: biometricMethod() })}
+          </div>
+        )}
+        {bio.phase === "prompting" && (
+          // The way out of a prompt that never answers (a dialog behind the
+          // window, a hung check): the manual unlock, at once.
+          <Btn type="button" variant="ghost" full onClick={() => dispatchBio({ type: "skip" })}>
+            {t(bio.gate ? "onboarding.presenceSkip" : "onboarding.biometricSkip")}
+          </Btn>
+        )}
+        {bio.notice && (
+          <div role="status" style={{ fontSize: TEXT.small, color: p.txt2, lineHeight: 1.45 }}>
+            {t(
+              bio.notice === "invalidated"
+                ? isWindows()
+                  ? "onboarding.biometricInvalidatedWindows"
+                  : "onboarding.biometricInvalidated"
+                : bio.notice === "noSecretKey"
+                  ? bio.gate
+                    ? "onboarding.presenceNoSecretKey"
+                    : "onboarding.biometricNoSecretKey"
+                  : bio.notice === "gateUnavailable"
+                    ? "onboarding.presenceUnavailable"
+                  : bio.notice === "gated"
+                    ? "onboarding.presenceGated"
+                    : bio.gate
+                      ? "onboarding.presenceFailed"
+                      : "onboarding.biometricFailed",
+              { method: biometricMethod() },
+            )}
+          </div>
+        )}
+        {/* Hidden while the biometric status is pending as well, so an enabled
+            Touch ID does not flash the password field before the prompt. */}
+        {requiresPassword !== false && bio.phase !== "prompting" && bio.phase !== "checking" && (
           <Field label={t("onboarding.masterPassword")} labelGap={7}>
             <Input
               icon="lock"
@@ -860,12 +1028,17 @@ function Unlock() {
             icon={busy ? undefined : "unlock"}
             full
             onClick={unlock}
-            disabled={busy}
+            disabled={busy || bio.phase === "prompting" || bio.phase === "checking"}
             style={isMobile ? { minHeight: rem(48) } : undefined}
           >
             {busy ? <Spinner size={16} color={p.accentInk} /> : t("onboarding.unlock")}
           </Btn>
         </div>
+        {bio.phase === "password" && bio.available && (
+          <Btn type="button" variant="ghost" icon="fingerprint" full onClick={() => dispatchBio({ type: "retry" })} disabled={busy}>
+            {t("onboarding.biometricRetry", { method: biometricMethod() })}
+          </Btn>
+        )}
       </form>
       <button
         onClick={() => useApp.getState().setOverlay("join")}

@@ -9,8 +9,9 @@
 //! Lifecycle: the listener runs only while the vault is unlocked and the screen
 //! is not locked. [`revoke`] stops it at once (vault lock, screen lock, sleep,
 //! exit) and [`resume_access`] brings it back after an unlock or a wake, if the
-//! setting is on — the same call sites as `crate::mcp::revoke` /
-//! `crate::mcp::resume_access`, so the user never re-enables it by hand. A
+//! setting is on — both called, beside MCP's, from
+//! `crate::commands::revoke_agent_access` / `resume_after_unlock`, so the user
+//! never re-enables it by hand. A
 //! connection open at a revoke is cut with the listener.
 //!
 //! The endpoint is a Unix socket on macOS and Linux (`endpoint`, `peer`) and
@@ -476,8 +477,8 @@ impl Controller {
     }
 }
 
-/// Stops the listener: vault lock, screen lock, sleep. Beside every
-/// `crate::mcp::revoke` call.
+/// Stops the listener: vault lock, screen lock, sleep. Called with
+/// `crate::mcp::revoke` from `crate::commands::revoke_agent_access`.
 pub fn revoke(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         controller.revoke();
@@ -494,7 +495,8 @@ fn withdraw_prompts(app: &tauri::AppHandle) {
 }
 
 /// Restarts the listener after an unlock or a wake, if it is enabled and the
-/// vault is unlocked. Beside every `crate::mcp::resume_access` call.
+/// vault is unlocked. Called with `crate::mcp::resume_access` from
+/// `crate::commands::resume_after_unlock`.
 pub fn resume_access(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         controller.resume();

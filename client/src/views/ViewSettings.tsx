@@ -55,6 +55,7 @@ import {
   ItemType,
   type AccountInfo,
   type AuditEntry,
+  type BiometricStatus,
   type DeviceInfo,
   type InstanceInfo,
   type JoinPreview,
@@ -82,7 +83,7 @@ import { useFmt } from "@/i18n/format";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useUpdate } from "@/store/update";
 import { updatesSupported } from "@/bridge/updater";
-import { isDesktopOs, osPlatform } from "@/bridge/platform";
+import { biometricMethod, isDesktopOs, isMac, isWindows, osPlatform } from "@/bridge/platform";
 import { SettingsShortcuts } from "./SettingsShortcuts";
 import { SettingsSupport } from "./SettingsSupport";
 import { SettingsSystemAgent } from "./SettingsSystemAgent";
@@ -1167,7 +1168,15 @@ function SettingsLocalTerminal() {
 }
 
 // ── Security ───────────────────────────────────────────────────
-function ChangePasswordForm({ onClose }: { onClose: () => void }) {
+function ChangePasswordForm({
+  onClose,
+  onChanged,
+}: {
+  onClose: () => void;
+  /** After a successful change; `biometricWiped` when biometric unlock was on
+   *  and has been turned off (its stored password belonged to the old one). */
+  onChanged: (biometricWiped: boolean) => void;
+}) {
   const p = usePalette();
   const { t } = useTranslation();
   const [oldPw, setOldPw] = useState("");
@@ -1179,7 +1188,7 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
     if (busy) return;
     setBusy(true);
     try {
-      await api.changePassword(
+      const wipe = await api.changePassword(
         oldPw ? oldPw : null,
         newPw ? newPw : null,
         secretKey.replace(/[\s-]/g, ""),
@@ -1188,6 +1197,10 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
       // whether "start unlocked" can ever apply.
       useApp.setState({ requiresPassword: !!newPw });
       toast(t("settings.masterPwChanged"), "ok");
+      // Never "erased" when it was not: what is left opens nothing any more
+      // (the core refuses the old password) and goes at the next attempt.
+      if (wipe === "failed") toast(t("settings.biometricWipeFailed", { method: biometricMethod() }), "warn");
+      onChanged(wipe === "erased");
       onClose();
     } catch (e) {
       toast(apiErrorMessage(e), "err");
@@ -1249,12 +1262,250 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** "Unlock with Touch ID" / "Unlock with Windows Hello". Only for a password
+ *  vault (a Secret-Key-only vault has no password to remember; it gets
+ *  `PresenceGateRow` instead). On a Mac it is offered only where Touch ID can
+ *  be used (an unsigned build may never get there, so it is hidden rather than
+ *  promised); on Windows it is always shown, and without Windows Hello set up
+ *  it is disabled with that reason.
+ *  Turning it on asks for the master password once — Rust checks it against the
+ *  keyset before storing anything, so enabling proves the password is held.
+ *  Turning it off erases the stored password and its device secret at once.
+ *  An invalidated one (fingerprints changed, Hello reset) stays visible, to say
+ *  so and to be turned on again; so does one turned off by a password change
+ *  (`reenable`). A stranded one (stored, but the platform cannot use it now)
+ *  shows as off with the reason and a button to forget what is stored.
+ *  Biometric unlock stores only the password, so it depends on the Secret Key
+ *  being remembered on this device; without it the row says so and cannot be
+ *  switched on. */
+function BiometricRow({ reenable }: { reenable: boolean }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const requiresPassword = useApp((s) => s.requiresPassword);
+  const [status, setStatus] = useState<BiometricStatus | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () =>
+    api
+      .biometricStatus(true)
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  const offered = isMac() || isWindows();
+  // Only a password vault has this row; a keychain read for any other is waste.
+  useEffect(() => {
+    if (offered && requiresPassword === true) void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the platform does not change
+  }, [requiresPassword]);
+
+  if (!offered || requiresPassword !== true || !status) return null;
+  const win = isWindows();
+  const method = biometricMethod();
+  const unusable = !status.supported && !status.enabled && !status.invalidated && !status.stranded;
+  if (unusable && !win) return null;
+
+  const turnOff = async () => {
+    setBusy(true);
+    await guard(async () => {
+      await api.biometricDisable();
+      toast(t("settings.biometricOff", { method }), "ok");
+    });
+    await refresh();
+    setBusy(false);
+  };
+
+  const turnOn = async () => {
+    if (busy || !pw) return;
+    setBusy(true);
+    try {
+      await api.biometricEnable(pw);
+      setPw("");
+      setConfirming(false);
+      toast(t("settings.biometricOn", { method }), "ok");
+    } catch (e) {
+      toast(apiErrorMessage(e), "err");
+    }
+    await refresh();
+    setBusy(false);
+  };
+
+  return (
+    <>
+      <SettingRow
+        title={t("settings.biometricTitle", { method })}
+        desc={
+          status.stranded
+            ? t(win ? "settings.biometricStrandedWindows" : "settings.biometricStranded")
+            : unusable
+            ? t("settings.biometricUnsupportedWindows")
+            : reenable && !status.enabled
+              ? t("settings.biometricReenable", { method })
+            : !status.secretKeyRemembered
+              ? t(status.enabled ? "settings.biometricNeedsSecretKeyOn" : "settings.biometricNeedsSecretKey", {
+                  method,
+                })
+              : status.invalidated
+                ? t(win ? "settings.biometricInvalidatedWindows" : "settings.biometricInvalidated")
+                : t(win ? "settings.biometricDescWindows" : "settings.biometricDesc")
+        }
+      >
+        {status.stranded ? (
+          // Off, and cannot be turned on here now; what is stored can go.
+          <Btn variant="ghost" size="sm" icon="trash" onClick={turnOff} disabled={busy}>
+            {t("settings.biometricForget")}
+          </Btn>
+        ) : (
+          <Toggle
+            checked={status.enabled || confirming}
+            // Turning it on needs the remembered Secret Key; turning it off never does.
+            disabled={!status.secretKeyRemembered && !status.enabled}
+            onChange={(v) => {
+              if (busy) return;
+              if (v) setConfirming(true);
+              else if (confirming && !status.enabled) setConfirming(false);
+              else void turnOff();
+            }}
+          />
+        )}
+      </SettingRow>
+      {confirming && !status.enabled && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void turnOn();
+          }}
+          style={{
+            marginTop: rem(12),
+            padding: rem(16),
+            borderRadius: 12,
+            border: `1px solid ${p.line2}`,
+            background: p.bg1,
+            display: "flex",
+            flexDirection: "column",
+            gap: rem(11),
+          }}
+        >
+          <div style={{ fontSize: TEXT.base, fontWeight: 700 }}>{t("settings.biometricConfirm", { method })}</div>
+          <input
+            {...NO_AUTOCORRECT}
+            type="password"
+            autoFocus
+            value={pw}
+            onChange={(e) => setPw(e.target.value)}
+            placeholder={t("settings.biometricPwPlaceholder")}
+            style={inputStyle(p)}
+          />
+          <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
+            <Btn
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => {
+                setPw("");
+                setConfirming(false);
+              }}
+              disabled={busy}
+            >
+              {t("common.cancel")}
+            </Btn>
+            <Btn size="sm" icon="fingerprint" type="submit" disabled={busy || !pw}>
+              {t("settings.biometricTurnOn")}
+            </Btn>
+          </div>
+        </form>
+      )}
+    </>
+  );
+}
+
+/** "Require Touch ID / Windows Hello at startup", for a Secret-Key-only vault
+ *  on a device that remembers its Secret Key — which otherwise opens with no
+ *  check at all. On, the remembered key is used only after the platform's
+ *  presence prompt; dismissed, the vault stays locked and the Secret Key can
+ *  still be typed from the Emergency Kit. Nothing is stored behind the prompt,
+ *  so turning it on or off needs no password. Turning it on shows the prompt
+ *  once and saves the setting only if it confirmed — a prompt that never works
+ *  on this machine must not be what stands between the user and the vault.
+ *  Turning it off is free. Shown where the prompt can be shown, and wherever it
+ *  is on (so it can always be turned off). */
+function PresenceGateRow() {
+  const { t } = useTranslation();
+  const requiresPassword = useApp((s) => s.requiresPassword);
+  const on = useApp((s) => s.presenceGate);
+  const setOn = useApp((s) => s.setPresenceGate);
+  const [status, setStatus] = useState<BiometricStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const offered = isMac() || isWindows();
+  // Only a Secret-Key-only vault has this row; a keychain read for any other is waste.
+  useEffect(() => {
+    if (offered && requiresPassword === false)
+      void api
+        .biometricStatus(true)
+        .then(setStatus)
+        .catch(() => setStatus(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the platform does not change
+  }, [requiresPassword]);
+
+  if (!offered || requiresPassword !== false || !status) return null;
+  if (!status.presenceSupported && !on) return null;
+  const method = biometricMethod();
+
+  const turnOn = async () => {
+    setBusy(true);
+    try {
+      const check = await api.biometricConfirmPresence(
+        t(isWindows() ? "settings.presenceGateReasonWindows" : "settings.presenceGateReason"),
+      );
+      if (check === "confirmed") setOn(true);
+      else
+        toast(
+          t(check === "cancelled" ? "settings.presenceGateNotConfirmed" : "settings.presenceGateCannotPrompt", {
+            method,
+          }),
+          "warn",
+        );
+    } catch (e) {
+      toast(t("settings.presenceGateFailed", { method, error: apiErrorMessage(e) }), "err");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <SettingRow
+      title={t("settings.presenceGateTitle", { method })}
+      desc={
+        !status.presenceSupported
+          ? t("settings.presenceGateUnavailable", { method })
+          : !status.secretKeyRemembered
+            ? t(on ? "settings.presenceGateNeedsSecretKeyOn" : "settings.presenceGateNeedsSecretKey")
+            : t("settings.presenceGateDesc", { method })
+      }
+    >
+      <Toggle
+        checked={on}
+        // Turning it off is always allowed; on only where it can be proven.
+        disabled={busy || (!on && (!status.presenceSupported || !status.secretKeyRemembered))}
+        onChange={(v) => {
+          if (busy) return;
+          if (v) void turnOn();
+          else setOn(false);
+        }}
+      />
+    </SettingRow>
+  );
+}
+
 function SettingsSecurity() {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
   const knownHosts = useApp((s) => s.knownHosts);
   const [changing, setChanging] = useState(false);
+  // Biometric unlock is wiped by a password change; the row then asks for it
+  // again (and is remounted, so it reads the new status).
+  const [pwChanges, setPwChanges] = useState(0);
+  const [biometricWiped, setBiometricWiped] = useState(false);
   // Same slot-and-dialog shape as the per-vault integrity check. This was left on
   // a toast when that one moved off it, which meant the answer to "is my database
   // sound" still vanished in under three seconds and still named a count instead
@@ -1303,7 +1554,17 @@ function SettingsSecurity() {
           {t("settings.change")}
         </Btn>
       </SettingRow>
-      {changing && <ChangePasswordForm onClose={() => setChanging(false)} />}
+      {changing && (
+        <ChangePasswordForm
+          onClose={() => setChanging(false)}
+          onChanged={(wiped) => {
+            setBiometricWiped((was) => was || wiped);
+            setPwChanges((n) => n + 1);
+          }}
+        />
+      )}
+      <BiometricRow key={`bio-${pwChanges}`} reenable={biometricWiped} />
+      <PresenceGateRow key={`gate-${pwChanges}`} />
       <SettingRow title={t("settings.clipClearTitle")} desc={t("settings.clipClearDesc")}>
         <Toggle checked={clip} onChange={onClip} />
       </SettingRow>
