@@ -703,6 +703,17 @@ impl From<ffi::FfiSyncReport> for SyncReport {
     }
 }
 
+/// Result of moving a local vault to a server: the new cloud vault id (hex) and
+/// the outcome of the first push — exactly one of `push` / `push_error` is set. A
+/// push error leaves the move in place (the vault syncs on the next pass).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedVault {
+    pub vault_id: String,
+    pub push: Option<SyncReport>,
+    pub push_error: Option<crate::error::ApiError>,
+}
+
 /// One row of the server-side vault catalog (`GET /v1/vaults`), enriched with this
 /// device's local state so the picker can offer Pull / Push / in-sync per vault.
 #[derive(Debug, Clone, Serialize)]

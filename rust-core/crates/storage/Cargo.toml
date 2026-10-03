@@ -11,6 +11,7 @@ license.workspace = true
 
 [dependencies]
 thiserror = "2"
+log = "0.4"
 zeroize = "1.8"
 hex = "0.4"
 sha2 = "0.10"

@@ -819,10 +819,15 @@ pub async fn server_pull_vault(
     Ok(report.into())
 }
 
-/// **Adopt a LOCAL vault onto a server** (Push; defaults to active): bind the vault to
-/// the server's space, then sync so it uploads. Requires a session.
+/// **Bind an already-cloud vault to a server, then push it** (the "Push" action in the
+/// server vaults list; the server defaults to the active one). Sets the cloud vault's
+/// binding label to the server's space via `bind_cloud_vault` (re-dirtying the vault and
+/// its contents so all of it uploads), then runs `sync_now` for that space and returns
+/// its report. Only cloud-target vaults are bindable: for a local vault the bind matches
+/// no row and the sync pushes nothing of it (converting a local vault is a separate
+/// operation). Requires a session.
 #[tauri::command]
-pub async fn server_adopt_vault(
+pub async fn server_bind_and_push_vault(
     vault_id: String,
     server_id: Option<String>,
     state: State<'_, AppState>,
@@ -840,6 +845,45 @@ pub async fn server_adopt_vault(
     })
     .await?;
     Ok(report.into())
+}
+
+/// **Move a LOCAL vault to a server** (the "Move to server…" action; the server
+/// defaults to the active one). Converts the vault in the core
+/// (`convert_vault_to_cloud`: a re-keyed copy into a new cloud vault bound to
+/// `space_id` — or the link's primary space when `None` — with the local vault
+/// tombstoned, all in one transaction), then runs the first push (`sync_now` for
+/// that space). Requires a live session up front, so a signed-out server refuses
+/// before anything changes. A failed push does NOT undo the conversion: the vault
+/// stays bound and dirty, the next sync uploads it, and the failure comes back in
+/// `push_error` next to the new vault id.
+#[tauri::command]
+pub async fn server_move_vault_to_server(
+    vault_id: String,
+    server_id: Option<String>,
+    space_id: Option<String>,
+    state: State<'_, AppState>,
+) -> ApiResult<dto::MovedVault> {
+    let cfg = require_config(&state, server_id.as_deref())?;
+    let access = require_access(&state, server_id.as_deref())?;
+    let core = state.core.clone();
+    blocking_api(move || {
+        let space = space_id.unwrap_or(cfg.space_id);
+        let new_id = core
+            .convert_vault_to_cloud(vault_id, space.clone())
+            .map_err(ApiError::from)?;
+        let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
+            Arc::new(HttpSyncTransport::new(cfg.base_url, access));
+        let (push, push_error) = match core.sync_now(transport, space) {
+            Ok(report) => (Some(report.into()), None),
+            Err(e) => (None, Some(ApiError::from(e))),
+        };
+        Ok(dto::MovedVault {
+            vault_id: new_id,
+            push,
+            push_error,
+        })
+    })
+    .await
 }
 
 // ---------- membership / sharing ----------
