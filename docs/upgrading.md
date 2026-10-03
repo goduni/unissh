@@ -77,7 +77,9 @@ to the confirmation.
 
 The vault keeps its name, groups, items and host identities; host jumps and
 Personal-identity bindings on this device that referred to it are re-pointed, and
-if it was the account's Personal vault it remains the Personal vault. It is a
+if it was the account's Personal vault it remains the Personal vault. A reference
+re-pointed inside another Cloud vault is an ordinary edit to that vault and
+reaches your other devices when that vault syncs. It is a
 re-keyed copy under a new vault id, made in one transaction: the local copy is
 replaced, item version history starts fresh on the server, and the first sync
 pushes the vault. If that push fails, the move is kept: a vault moved into the
