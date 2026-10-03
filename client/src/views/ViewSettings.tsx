@@ -79,9 +79,10 @@ import { useFmt } from "@/i18n/format";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useUpdate } from "@/store/update";
 import { updatesSupported } from "@/bridge/updater";
-import { osPlatform } from "@/bridge/platform";
+import { isDesktopOs, osPlatform } from "@/bridge/platform";
 import { SettingsShortcuts } from "./SettingsShortcuts";
 import { SettingsSupport } from "./SettingsSupport";
+import { SettingsSystemAgent } from "./SettingsSystemAgent";
 import { TerminalPreview } from "./TerminalPreview";
 
 // ── localStorage helpers ───────────────────────────────────────
@@ -101,7 +102,7 @@ function lsSet(key: string, val: string) {
 }
 
 // ── shared layout atoms (mirroring the prototype) ──────────────
-function SettingRow({
+export function SettingRow({
   title,
   desc,
   children,
@@ -1310,6 +1311,8 @@ function SettingsSecurity() {
           {t("settings.check")}
         </Btn>
       </SettingRow>
+
+      {isDesktopOs() && <SettingsSystemAgent />}
 
       <div
         style={{

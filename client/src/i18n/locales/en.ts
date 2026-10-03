@@ -1300,6 +1300,27 @@ export const en = {
     }
   },
 
+  systemAgent: {
+    "section": "System agent",
+    "enableTitle": "Offer keys to programs on this computer",
+    "enableDesc": "Runs an ssh-agent that ssh, git and ssh-add can use. Only keys you switch on in Secrets are offered, only while the vault is unlocked, and only to your user account.",
+    "statusRunning": "Running",
+    "statusOff": "Off",
+    "errorUnsupported": "Not available on this platform yet",
+    "errorInUse": "Another agent is using the socket",
+    "errorBindFailed": "Socket could not be created",
+    "errorListenerFailed": "Stopped unexpectedly",
+    "setupTitle": "Point your tools at it",
+    "setupDesc": "Add the first line to your shell profile, or the second to a Host block in ~/.ssh/config.",
+    "shellLabel": "Shell",
+    "sshConfigLabel": "ssh_config",
+    "copy": "Copy",
+    "copied": "Copied",
+    "signingNote": "In this version the agent lists keys only; signature requests are refused.",
+    "offerKeyShort": "Agent",
+    "offerKey": "Offer {{item}} to the system agent",
+    "offerKeyDesc": "Offer this key to ssh, git and other programs on this computer through the system agent. Applies to this device only."
+  },
   settings: {
     "heading": "Settings",
     "tabAppearance": "Appearance",

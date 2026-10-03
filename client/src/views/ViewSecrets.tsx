@@ -9,7 +9,7 @@ import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTranslation } from "@/i18n";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT, UI } from "@/theme/tokens";
-import { Btn, Icon, NO_AUTOCORRECT, Spinner, Tag, VaultBadge } from "@/components/primitives";
+import { Btn, Icon, NO_AUTOCORRECT, Spinner, Tag, Toggle, VaultBadge } from "@/components/primitives";
 import { Modal } from "@/components/Modal";
 import { UnderlineTabs, fmtRelativeUnix, FlatAvatar, MetaChip, RowOverflowMenu, Card, HairlineRow } from "@/components/mono";
 import { useApp } from "@/store/app";
@@ -20,6 +20,9 @@ import { apiErrorMessage, ItemType } from "@/bridge/types";
 import type { ItemInfo, Identity, ServerStatus, VaultInfo } from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
+import { isDesktopOs } from "@/bridge/platform";
+import { systemAgentSetShared, systemAgentSharedKeys } from "@/bridge/systemAgent";
+import { guard } from "@/store/action";
 
 type SecretTab = "keys" | "passwords" | "notes" | "identities";
 
@@ -216,7 +219,20 @@ function RevealField({
 }
 
 // ── Keys ───────────────────────────────────────────────────────
-function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; first?: boolean }) {
+function KeyRow({
+  item,
+  isMobile,
+  first,
+  agentShared,
+  onAgentShared,
+}: {
+  item: ItemInfo;
+  isMobile: boolean;
+  first?: boolean;
+  /** Desktop only: whether this key is offered to the system agent. Absent → no switch. */
+  agentShared?: boolean;
+  onAgentShared?: (shared: boolean) => void;
+}) {
   const p = usePalette();
   const { t, i18n } = useTranslation();
   const ctx = useCtx();
@@ -387,6 +403,21 @@ function KeyRow({ item, isMobile, first }: { item: ItemInfo; isMobile: boolean; 
       <MetaChip icon="link" tone={uses === 0 ? "warn" : "neutral"}>
         {uses === 0 ? t("secrets.unused") : t("secrets.usedByHosts", { count: uses })}
       </MetaChip>
+      {agentShared !== undefined && onAgentShared && (
+        <span
+          title={t("systemAgent.offerKeyDesc")}
+          style={{ display: "inline-flex", alignItems: "center", gap: rem(8), flexShrink: 0 }}
+        >
+          <span aria-hidden style={{ fontSize: TEXT.small, color: agentShared ? p.txt : p.txt3 }}>
+            {t("systemAgent.offerKeyShort")}
+          </span>
+          <Toggle
+            checked={agentShared}
+            onChange={onAgentShared}
+            aria-label={t("systemAgent.offerKey", { item: item.itemId })}
+          />
+        </span>
+      )}
       <div
         style={{
           display: "flex",
@@ -450,11 +481,40 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   const p = usePalette();
   const { t } = useTranslation();
   const ctx = useCtx();
+  const vault = useApp((s) => s.vaultId);
+  // Desktop only: the keys this device offers to the system agent (device-local,
+  // never synced). Reloaded with the key list, since a rotated key stops being
+  // offered until it is shared again.
+  const agent = isDesktopOs();
+  const [shared, setShared] = useState<Set<string> | null>(null);
+  const loadShared = async () => {
+    const list = await systemAgentSharedKeys();
+    setShared(new Set(list.filter((k) => k.vaultId === vault).map((k) => k.itemId)));
+  };
+  useEffect(() => {
+    if (!agent || !vault) return;
+    void guard(loadShared);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent, vault, keys]);
+  const setAgentShared = (itemId: string, on: boolean) => {
+    if (!vault) return;
+    void guard(async () => {
+      await systemAgentSetShared(vault, itemId, on);
+      await loadShared();
+    });
+  };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: rem(12) }}>
       <div>
         {keys.map((k, i) => (
-          <KeyRow key={k.itemId} item={k} isMobile={isMobile} first={i === 0} />
+          <KeyRow
+            key={k.itemId}
+            item={k}
+            isMobile={isMobile}
+            first={i === 0}
+            agentShared={agent && shared ? shared.has(k.itemId) : undefined}
+            onAgentShared={agent ? (on) => setAgentShared(k.itemId, on) : undefined}
+          />
         ))}
       </div>
       <button
