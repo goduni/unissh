@@ -28,7 +28,9 @@
 //! Windows Hello check in front of that (`biometric_presence_unlock`). It stores
 //! nothing and seals nothing: the platform is asked "is the owner here" and, on
 //! yes, the existing remembered-key unlock runs. It is a presence check, not a
-//! protection of the key — see `THREAT_MODEL.md`.
+//! protection of the key — see `THREAT_MODEL.md`. Settings turns it on only
+//! after the same prompt has worked once (`biometric_confirm_presence`), so a
+//! prompt that never succeeds on this machine cannot lock the user out.
 //!
 //! **Wiping is deliberately narrow.** Material is destroyed only on an explicit
 //! "this is dead" signal — the adapter says `Invalidated`/`Absent`, the blob does
@@ -179,8 +181,36 @@ pub struct BiometricStatus {
     /// stores only the password, so without a remembered Secret Key it cannot
     /// unlock and is neither offered nor attempted; the presence gate guards the
     /// remembered key and so has nothing to guard without it. Only asked where
-    /// `supported` or `presence_supported`.
+    /// `supported` or `presence_supported`, and — unless the caller wants it
+    /// regardless (`with_secret_key`) — only when material is stored.
     pub secret_key_remembered: bool,
+}
+
+/// How turning the presence gate on went: the prompt is shown once, and the
+/// setting is stored only on `Confirmed`.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PresenceCheck {
+    /// The platform confirmed the owner is here.
+    Confirmed,
+    /// Dismissed, not matched, or locked out.
+    Cancelled,
+    /// The prompt cannot be shown on this device right now.
+    Unavailable,
+}
+
+/// What wiping biometric unlock after a keyset change did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeysetWipe {
+    /// Nothing was stored.
+    Nothing,
+    /// Both halves are gone: biometric unlock must be turned on again.
+    Erased,
+    /// Material was stored and could not be (fully) removed. It no longer
+    /// opens anything — the core refuses the old password — and the next
+    /// biometric attempt wipes it; the UI must not call it erased.
+    Failed,
 }
 
 /// How a biometric unlock attempt ended. Expected outcomes are values, not
@@ -269,17 +299,46 @@ pub(crate) fn forget_now(blob: &Path) -> ApiResult<()> {
 /// changed (or was added or removed), or a keyset came from a recovery or a
 /// pairing. A password sealed for the old keyset must not stay behind, so both
 /// halves are wiped and biometric unlock has to be turned on again, with the
-/// password of the keyset now on disk. Returns whether there was material to
-/// wipe (so the UI can say "turn it on again"). Best-effort and blocking: the
+/// password of the keyset now on disk. Says what happened (so the UI can say
+/// "turn it on again", or that the wipe failed). Best-effort and blocking: the
 /// keyset change has already happened and is not undone by a wipe that fails;
 /// a stale password left behind is still caught (and wiped) by the next
 /// biometric unlock, which the core then refuses.
-pub(crate) fn forget_after_keyset_change(blob: &Path) -> bool {
-    let had = blob.exists();
-    if let Err(e) = forget_now(blob) {
-        log::warn!("biometric: wipe after a keyset change failed: {e:?}");
+///
+/// Not called directly by commands: a keyset is installed either through
+/// `cloud::recovery::install_keyset`, which wipes, or inside
+/// [`installing_keyset`]. Both make the wipe part of the install, so a new
+/// keyset-installing command cannot forget it.
+///
+/// Without a blob there is no password to outlive the keyset, so the platform
+/// store is not touched at all (a device secret alone opens nothing, and the
+/// next enable replaces it): no Keychain or Windows Hello call on every new
+/// account or pairing.
+pub(crate) fn forget_after_keyset_change(blob: &Path) -> KeysetWipe {
+    if !blob.exists() {
+        return KeysetWipe::Nothing;
     }
-    had
+    match forget_now(blob) {
+        Ok(()) => KeysetWipe::Erased,
+        Err(e) => {
+            log::warn!("biometric: wipe after a keyset change failed: {e:?}");
+            KeysetWipe::Failed
+        }
+    }
+}
+
+/// Wrap a blocking `install` that re-wraps or replaces this device's keyset
+/// (create, change password, pull, pairing) so that biometric unlock is wiped
+/// right after it succeeds, in the same blocking pass. For `blocking_api`.
+pub(crate) fn installing_keyset<T: Send + 'static>(
+    state: &AppState,
+    install: impl FnOnce() -> ApiResult<T> + Send + 'static,
+) -> impl FnOnce() -> ApiResult<(T, KeysetWipe)> + Send + 'static {
+    let blob = blob_path(state);
+    move || {
+        let installed = install()?;
+        Ok((installed, forget_after_keyset_change(&blob)))
+    }
 }
 
 /// The status from what the platform and the disk say. Pure.
@@ -302,25 +361,41 @@ fn status_from(
     }
 }
 
-fn status_now(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> BiometricStatus {
+/// `with_secret_key`: also answer `secret_key_remembered` when no material is
+/// stored (Settings, and the presence gate, need it). Without it the keychain
+/// is asked only for stored material that could be used — so the password
+/// unlock screen of a device without biometric unlock never waits on a
+/// keychain read (on macOS one that may show a Keychain dialog). The answer is
+/// cached per process anyway (`keychain::secret_key_remembered_now`).
+fn status_now(
+    store: Option<&dyn DeviceSecretStore>,
+    blob: &Path,
+    with_secret_key: bool,
+) -> BiometricStatus {
     let secret = store.map_or(SecretState::Unsupported, |s| s.state());
     let presence = store.is_some_and(|s| s.presence_available());
-    // The keychain is asked only where an answer matters.
-    let ask = secret != SecretState::Unsupported || presence;
-    status_from(
-        secret,
-        blob.exists(),
-        presence,
-        ask && secret_key_remembered_now(),
-    )
+    let stored = blob.exists();
+    let usable = secret != SecretState::Unsupported;
+    let ask = (stored && usable) || (with_secret_key && (usable || presence));
+    status_from(secret, stored, presence, ask && secret_key_remembered_now())
 }
 
 // ---------- commands ----------
 
 #[tauri::command]
-pub async fn biometric_status(state: State<'_, AppState>) -> ApiResult<BiometricStatus> {
+pub async fn biometric_status(
+    with_secret_key: bool,
+    state: State<'_, AppState>,
+) -> ApiResult<BiometricStatus> {
     let blob = blob_path(&state);
-    blocking_api(move || Ok(status_now(platform_store().as_deref(), &blob))).await
+    blocking_api(move || {
+        Ok(status_now(
+            platform_store().as_deref(),
+            &blob,
+            with_secret_key,
+        ))
+    })
+    .await
 }
 
 /// Remember the master password behind the biometric. Only while unlocked, and
@@ -339,7 +414,7 @@ pub async fn biometric_enable(password: String, state: State<'_, AppState>) -> A
         }
         let secret_key_hex = stored_secret_key_hex_now()?
             .ok_or_else(|| ApiError::other("the Secret Key is not remembered on this device"))?;
-        core.verify_unlock_password(password.to_string(), secret_key_hex)?;
+        core.verify_unlock_password(password.to_string(), String::clone(&secret_key_hex))?;
         // From here on a failure must leave the feature OFF, not half-on: a new
         // secret beside an old blob would read as "invalidated", and an old
         // secret is replaced by `create` anyway.
@@ -416,7 +491,7 @@ pub async fn biometric_unlock(
                 return invalidated("material is not a password");
             }
         };
-        match core.unlock(Some(password), secret_key_hex) {
+        match core.unlock(Some(password), String::clone(&secret_key_hex)) {
             Ok(()) => Ok(BiometricUnlockOutcome::Unlocked),
             // The stored password no longer opens the keyset: it was changed.
             Err(FfiError::InvalidCredentials) => invalidated("stored password no longer valid"),
@@ -456,14 +531,43 @@ pub async fn biometric_presence_unlock(
             }
             Err(e) => return Err(secret_error(e)),
         }
-        core.unlock(None, secret_key_hex)?;
-        Ok(BiometricUnlockOutcome::Unlocked)
+        match core.unlock(None, String::clone(&secret_key_hex)) {
+            Ok(()) => Ok(BiometricUnlockOutcome::Unlocked),
+            // The remembered key no longer opens this vault (it belongs to
+            // another keyset): the same as having none — type it from the Kit.
+            Err(FfiError::InvalidCredentials) => Ok(BiometricUnlockOutcome::NoSecretKey),
+            Err(e) => Err(e.into()),
+        }
     })
     .await?;
     if matches!(outcome, BiometricUnlockOutcome::Unlocked) {
         resume_after_unlock(&app);
     }
     Ok(outcome)
+}
+
+/// Before the presence gate is turned on: show the prompt once and report how
+/// it went. Unlocks nothing and stores nothing; Settings saves the setting only
+/// on `Confirmed`, so a gate whose prompt never works here is never switched on.
+#[tauri::command]
+pub async fn biometric_confirm_presence(reason: String) -> ApiResult<PresenceCheck> {
+    blocking_api(move || {
+        let Some(store) = platform_store() else {
+            return Ok(PresenceCheck::Unavailable);
+        };
+        if !store.presence_available() {
+            return Ok(PresenceCheck::Unavailable);
+        }
+        match store.confirm_presence(&reason) {
+            Ok(()) => Ok(PresenceCheck::Confirmed),
+            Err(SecretError::Cancelled) => Ok(PresenceCheck::Cancelled),
+            Err(SecretError::Unsupported | SecretError::Invalidated) => {
+                Ok(PresenceCheck::Unavailable)
+            }
+            Err(e @ SecretError::Failed(_)) => Err(secret_error(e)),
+        }
+    })
+    .await
 }
 
 #[cfg(test)]

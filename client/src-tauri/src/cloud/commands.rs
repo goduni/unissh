@@ -1203,16 +1203,13 @@ pub async fn server_keyset_pull_and_unlock(
     let cfg = require_config(&state, server_id.as_deref())?;
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
-    let bio_blob = crate::biometric::blob_path(&state);
-    blocking_api(move || {
+    // The installed keyset may be wrapped under another password.
+    blocking_api(crate::biometric::installing_keyset(&state, move || {
         let http = client::http();
         let (blob, _generation) = identity::keyset_get(http, &cfg.base_url, &access)?;
         core.unlock_from_server_blob(blob, password, secret_key_hex)
-            .map_err(ApiError::from)?;
-        // The installed keyset may be wrapped under another password.
-        crate::biometric::forget_after_keyset_change(&bio_blob);
-        Ok(())
-    })
+            .map_err(ApiError::from)
+    }))
     .await?;
     #[cfg(desktop)]
     crate::mcp::resume_access(&app);
@@ -1373,8 +1370,8 @@ pub async fn server_escrow_fetch_and_unlock(
             password,
             secret_key_hex,
             crate::keychain::save_secret_key_now,
+            &bio_blob,
         )?;
-        crate::biometric::forget_after_keyset_change(&bio_blob);
         Ok(account_id)
     })
     .await?;
@@ -1420,9 +1417,8 @@ pub async fn server_import_keyset_and_unlock(
             password,
             secret_key_hex,
             crate::keychain::save_secret_key_now,
-        )?;
-        crate::biometric::forget_after_keyset_change(&bio_blob);
-        Ok(())
+            &bio_blob,
+        )
     })
     .await?;
     // Offline import carries no handle (escrow keys off one); the account's handle syncs later.
@@ -1518,15 +1514,13 @@ pub async fn server_onboard_join(
     let core_pake = core.clone();
     let base = base_url.clone();
     let channel = channel_id.clone();
-    let bio_blob = crate::biometric::blob_path(&state);
-    blocking_api(move || {
+    // A keyset from another device: nothing sealed here before may open it.
+    blocking_api(crate::biometric::installing_keyset(&state, move || {
         let http = client::http();
         let code = client::unb64(&oob_code)?;
         onboard::responder_join(&core_pake, http, &base, &channel, code, password)?;
-        // A keyset from another device: nothing sealed here before may open it.
-        crate::biometric::forget_after_keyset_change(&bio_blob);
         Ok(())
-    })
+    }))
     .await?;
 
     // 2) Persist a cloud link for the new device and make it active. Idempotent:

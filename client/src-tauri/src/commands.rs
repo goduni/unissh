@@ -319,10 +319,11 @@ pub async fn create_account(
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
-    let secret_key = blocking(move || core.create_account(password)).await?;
     // A new keyset: nothing left from an earlier instance may unlock it.
-    let blob = crate::biometric::blob_path(&state);
-    blocking_api(move || Ok(crate::biometric::forget_after_keyset_change(&blob))).await?;
+    let (secret_key, _) = blocking_api(crate::biometric::installing_keyset(&state, move || {
+        Ok(core.create_account(password)?)
+    }))
+    .await?;
     Ok(secret_key)
 }
 
@@ -467,20 +468,22 @@ pub async fn set_algorithm_policy(modern: bool, state: State<'_, AppState>) -> A
 }
 
 /// Change, add or remove the master password. On success the biometric unlock
-/// material sealed for the old password is wiped; the answer is whether there
-/// was any, so Settings can ask for it to be turned on again (with the new
-/// password, in this session).
+/// material sealed for the old password is wiped; the answer says whether there
+/// was any and whether the wipe worked, so Settings can ask for it to be turned
+/// on again (with the new password, in this session) or say it failed.
 #[tauri::command]
 pub async fn change_password(
     old_password: Option<String>,
     new_password: Option<String>,
     secret_key_hex: String,
     state: State<'_, AppState>,
-) -> ApiResult<bool> {
+) -> ApiResult<crate::biometric::KeysetWipe> {
     let core = state.core.clone();
-    blocking(move || core.change_password(old_password, new_password, secret_key_hex)).await?;
-    let blob = crate::biometric::blob_path(&state);
-    blocking_api(move || Ok(crate::biometric::forget_after_keyset_change(&blob))).await
+    let ((), wipe) = blocking_api(crate::biometric::installing_keyset(&state, move || {
+        Ok(core.change_password(old_password, new_password, secret_key_hex)?)
+    }))
+    .await?;
+    Ok(wipe)
 }
 
 // ---------- vaults ----------

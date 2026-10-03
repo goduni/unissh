@@ -426,12 +426,14 @@ pub fn run() {
             keychain::keychain_get_secret_key,
             keychain::keychain_unlock,
             keychain::keychain_delete_secret_key,
-            // unlock with Touch ID (macOS; reports unsupported elsewhere)
+            // unlock with Touch ID (macOS) or Windows Hello (Windows); reports
+            // unsupported elsewhere
             biometric::biometric_status,
             biometric::biometric_enable,
             biometric::biometric_disable,
             biometric::biometric_unlock,
             biometric::biometric_presence_unlock,
+            biometric::biometric_confirm_presence,
             // cloud server — identity / session / devices
             cloud::commands::server_status,
             cloud::commands::server_instance_info,

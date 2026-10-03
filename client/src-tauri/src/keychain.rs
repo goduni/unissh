@@ -15,6 +15,10 @@
 //! by the very loop we would be blocking. macOS can prompt for its own reasons.
 //! The thread this runs on is not a detail.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
+use zeroize::Zeroizing;
+
 use crate::error::{ApiError, ApiResult};
 
 #[cfg(native_keychain)]
@@ -44,10 +48,12 @@ use crate::commands::blocking_api as off_main;
 pub(crate) fn save_secret_key_now(secret_key: &str) -> ApiResult<()> {
     #[cfg(native_keychain)]
     {
-        ks_entry()?.set_password(secret_key).map_err(|e| {
+        let saved = ks_entry()?.set_password(secret_key).map_err(|e| {
             log::warn!("keychain: failed to store the Secret Key: {e}");
             ApiError::other(e)
-        })
+        });
+        note_remembered(saved.as_ref().ok().map(|()| true));
+        saved
     }
     #[cfg(not(native_keychain))]
     {
@@ -66,7 +72,7 @@ pub(crate) fn get_secret_key_now() -> ApiResult<Option<String>> {
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(ApiError::other(e)),
         });
-        match direct {
+        let found = match direct {
             Ok(Some(s)) => Ok(Some(s)),
             // Nothing stored, or no store to ask: an older Linux build kept the
             // key somewhere else. Look there before answering "not stored".
@@ -75,7 +81,9 @@ pub(crate) fn get_secret_key_now() -> ApiResult<Option<String>> {
                 Some(s) => Ok(Some(s)),
                 None => Err(e),
             },
-        }
+        };
+        note_remembered(found.as_ref().ok().map(Option::is_some));
+        found
     }
     #[cfg(not(native_keychain))]
     {
@@ -87,18 +95,47 @@ pub(crate) fn get_secret_key_now() -> ApiResult<Option<String>> {
 /// dashes stripped, exactly as the old JS unlock path did), or `None` when this
 /// device has never stored one. Blocking. Shared by every unlock that happens
 /// entirely in Rust — the trusted-device one below and the biometric one.
-pub(crate) fn stored_secret_key_hex_now() -> ApiResult<Option<String>> {
+pub(crate) fn stored_secret_key_hex_now() -> ApiResult<Option<Zeroizing<String>>> {
     Ok(get_secret_key_now()?.map(|raw| {
-        raw.chars()
-            .filter(|c| !c.is_whitespace() && *c != '-')
-            .collect()
+        let raw = Zeroizing::new(raw);
+        Zeroizing::new(
+            raw.chars()
+                .filter(|c| !c.is_whitespace() && *c != '-')
+                .collect(),
+        )
     }))
 }
 
+/// What this process last learned about whether a Secret Key is stored:
+/// unknown, no, yes. Set by every successful read, save and delete in this
+/// module, so "is it remembered" costs one keychain access per process at
+/// most. That matters on macOS, where a build whose code signature changed
+/// since the item was written gets a Keychain dialog on every access.
+static REMEMBERED: AtomicU8 = AtomicU8::new(UNKNOWN);
+const UNKNOWN: u8 = 0;
+const NO: u8 = 1;
+const YES: u8 = 2;
+
+#[cfg_attr(not(native_keychain), allow(dead_code))]
+fn note_remembered(answer: Option<bool>) {
+    let v = match answer {
+        None => UNKNOWN,
+        Some(false) => NO,
+        Some(true) => YES,
+    };
+    REMEMBERED.store(v, Ordering::Relaxed);
+}
+
 /// Whether this device remembers a Secret Key, without keeping it: the value
-/// read to answer is wiped at once. Blocking. A keychain error counts as "no".
+/// read to answer is wiped at once, and the answer is cached for the process
+/// (see [`REMEMBERED`]). Blocking when it has to ask. A keychain error counts
+/// as "no" and is not cached.
 pub(crate) fn secret_key_remembered_now() -> bool {
-    get_secret_key_now().is_ok_and(|k| k.map(zeroize::Zeroizing::new).is_some())
+    match REMEMBERED.load(Ordering::Relaxed) {
+        YES => true,
+        NO => false,
+        _ => get_secret_key_now().is_ok_and(|k| k.map(Zeroizing::new).is_some()),
+    }
 }
 
 // ---------- the pre-switch Linux store ----------
@@ -163,11 +200,13 @@ pub(crate) fn delete_secret_key_now() -> ApiResult<()> {
         // The old Linux store too, and first: "forget my Secret Key" that leaves a
         // readable copy behind is the one outcome this function must not have.
         purge_keyutils(ACCOUNT);
-        match ks_entry()?.delete_credential() {
+        let deleted = match ks_entry()?.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(ApiError::other(e)),
-        }
+        };
+        note_remembered(deleted.as_ref().ok().map(|()| false));
+        deleted
     }
     #[cfg(not(native_keychain))]
     {
@@ -225,7 +264,8 @@ pub async fn keychain_unlock(
             .await?
             .ok_or_else(|| ApiError::other("no Secret Key stored in keychain"))?;
         let core = state.core.clone();
-        crate::commands::blocking(move || core.unlock(password, secret_key_hex)).await?;
+        crate::commands::blocking(move || core.unlock(password, String::clone(&secret_key_hex)))
+            .await?;
         crate::commands::resume_after_unlock(&app);
         Ok(())
     }
