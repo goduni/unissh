@@ -256,9 +256,12 @@ boundary, so what crosses it is spelled out here.
   Administrators group). Remote pipe clients are rejected, and the default
   integrity label keeps lower-integrity processes of the same user out. Either
   way only processes running as the same OS user can connect; nothing else
-  authenticates a caller. On Windows the pipe is created as its first
+  authenticates a caller. The two differ in who can claim the address: on
+  Unix the `0700` directory keeps other users from placing anything there,
+  while a pipe name is machine-wide and predictable, and the DACL guards only
+  the instances UniSSH created. The pipe is therefore created as its first
   instance, so if anything already holds the name the agent reports it in use
-  instead of starting. OpenSSH's own `openssh-ssh-agent` pipe is never taken
+  instead of joining it. OpenSSH's own `openssh-ssh-agent` pipe is never taken
   over.
 - **What a connected process can do without asking:** list the shared keys'
   public halves (and, for a key with an attached certificate, that certificate
@@ -325,6 +328,14 @@ as the same user can also attack the app directly (debugging it, reading its
 memory, driving its UI) without going through the agent at all. Root or an
 administrator is outside this boundary entirely. The system agent assumes a
 trusted desktop session, as the MCP listener does.
+
+On Windows, another user's process can create `\\.\pipe\unissh-agent`
+while UniSSH's agent is not listening (locked, disabled, or not started yet),
+since the name disappears with the last instance. The user's tools then talk
+to that process: it receives their agent requests and can offer its own
+identities, though it gets no UniSSH keys or signatures. The first-instance
+check protects the agent, not the clients; "in use" in Settings is the
+signal.
 
 ## Metadata visible by design
 
