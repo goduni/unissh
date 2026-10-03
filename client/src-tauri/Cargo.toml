@@ -52,6 +52,15 @@ sha2 = "0.10"
 
 # The SSH core — depended on directly as a path dependency (its crate-type includes `lib`).
 unissh-ffi = { path = "../../rust-core/crates/ffi" }
+# The key hierarchy, named directly for two things the FFI facade has no reason
+# to export: `device_wrap` (sealing the biometric-unlock material under a device
+# secret) and checking a password against the on-disk keyset before that material
+# is stored (src/biometric.rs). Already compiled as part of unissh-ffi; naming it
+# adds nothing to the build.
+unissh-keychain = { path = "../../rust-core/crates/keychain" }
+# Zeroizing buffers for the biometric-unlock material and device secret. Already
+# in the tree through the core.
+zeroize = "1"
 
 # Mobile-only biometric unlock (no desktop support / no-op on desktop).
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
@@ -140,6 +149,25 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 # metrics on macOS 26 Tahoe (see run()): built against SDK 26 the traffic lights
 # otherwise render at the enlarged Liquid Glass size. Same major as iOS below.
 objc2 = "0.6"
+# Unlock with Touch ID (see src/biometric/macos.rs): a data-protection Keychain
+# item whose access control requires the CURRENT biometric set, written and read
+# with the raw SecItem* calls because the safe `passwords` API in
+# security-framework cannot attach an authentication context (the prompt's
+# reason string) to a query. Both crates are the copies keyring's apple-native
+# backend already resolves (security-framework 3.7 / core-foundation 0.10), so
+# nothing new is built; `OSX_10_15` on the -sys crate only makes
+# `kSecUseDataProtectionKeychain` visible.
+security-framework = "3"
+security-framework-sys = { version = "2.17", features = ["OSX_10_15"] }
+core-foundation = "0.10"
+# `LAContext`: whether Touch ID is available and enrolled, and the context that
+# carries the prompt's reason into the Keychain read. The one genuinely new crate
+# for this feature, from the same objc2 0.3 generation as the AppKit/Foundation
+# bindings above.
+objc2-local-authentication = { version = "0.3", default-features = false, features = [
+    "std",
+    "LAContext",
+] }
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 # Lock the vault when the session locks or the machine suspends: a hidden

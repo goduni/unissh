@@ -89,6 +89,18 @@ pub(crate) fn get_secret_key_now() -> ApiResult<Option<String>> {
     }
 }
 
+/// The stored Secret Key normalised the way the core parses it (spacing and
+/// dashes stripped, exactly as the old JS unlock path did), or `None` when this
+/// device has never stored one. Blocking. Shared by every unlock that happens
+/// entirely in Rust — the trusted-device one below and the biometric one.
+pub(crate) fn stored_secret_key_hex_now() -> ApiResult<Option<String>> {
+    Ok(get_secret_key_now()?.map(|raw| {
+        raw.chars()
+            .filter(|c| !c.is_whitespace() && *c != '-')
+            .collect()
+    }))
+}
+
 // ---------- the pre-switch Linux store ----------
 //
 // Everything this app knows about keyutils lives in these two functions, and
@@ -209,14 +221,9 @@ pub async fn keychain_unlock(
     let _ = &app;
     #[cfg(native_keychain)]
     {
-        let raw = off_main(get_secret_key_now)
+        let secret_key_hex = off_main(stored_secret_key_hex_now)
             .await?
             .ok_or_else(|| ApiError::other("no Secret Key stored in keychain"))?;
-        // Normalize (strip spacing/dashes) exactly as the old JS unlock path did.
-        let secret_key_hex: String = raw
-            .chars()
-            .filter(|c| !c.is_whitespace() && *c != '-')
-            .collect();
         let core = state.core.clone();
         crate::commands::blocking(move || core.unlock(password, secret_key_hex)).await?;
         #[cfg(desktop)]
