@@ -187,10 +187,11 @@ In decreasing order of importance:
 3. **A malicious team member** with legitimate vault access. Cryptography does not
    help here — least-privilege (cryptographic vault roles: viewer/editor/admin) and
    audit do.
-4. **A compromised client device.** Mitigated by auto-lock, OS keychain / Secure
-   Enclave storage of the Secret Key, biometric unlock, and a minimal
-   plaintext lifetime — but a fully compromised, unlocked device sees what its user
-   sees.
+4. **A compromised client device.** Mitigated by auto-lock (also on screen lock
+   and sleep), OS-keychain storage of the Secret Key, and a minimal plaintext
+   lifetime — but a fully compromised, unlocked device sees what its user sees.
+   Optional desktop biometric unlock is a convenience with stated limits, not a
+   stronger lock (see *Biometric unlock*).
 5. **An active MITM during public-key distribution.** Arises when sharing /
    onboarding, where a member's public key is first learned (see the TOFU gap
    below).
@@ -234,6 +235,103 @@ code-execution surface, so it is stated plainly rather than left implicit.
 
 Not protected, and not claimed to be: the local terminal does not sandbox,
 restrict or audit what you type into your own shell. It is your machine.
+
+## Biometric unlock (desktop: Touch ID, Windows Hello)
+
+Opt-in, per device, macOS and Windows only. Linux is not offered: its
+fingerprint stack answers yes/no and protects no secret. The key hierarchy is
+unchanged — the password alone always unlocks, and nothing biometric is bound
+into the Unlock Key.
+
+**What is stored.** For a password vault, after a password unlock the user may
+let the device remember the **master password**, sealed (device-wrap v1, see
+`SECURITY.md`) in `biometric-unlock.bin` beside the keyset. The sealing key is
+derived (HKDF) from a **device secret** that is never written to disk:
+
+- *macOS:* 32 random bytes in a data-protection Keychain item created with
+  `biometryCurrentSet` and `WhenPasscodeSetThisDeviceOnly` — readable only after
+  a Touch ID match by a finger enrolled when it was made, excluded from backups
+  and iCloud Keychain.
+- *Windows:* the signature of a Windows Hello key credential over a random
+  challenge. The Hello private key stays in the Hello container (TPM-backed
+  where the machine has one) and every signature shows the Hello prompt. The
+  challenge sits in Credential Manager and is not secret.
+
+The Secret Key is not part of the sealed material; it is the one the device
+already remembers in the OS keychain, without which biometric unlock is
+neither offered nor attempted.
+
+**Protects against:**
+
+- **Offline theft of the disk, a backup or a roaming profile.** The blob (and on
+  Windows the challenge) are useless without the device secret, which is only
+  reproduced on that device, behind the biometric prompt.
+- **A finger enrolled later (macOS).** The item is bound to the enrolled set;
+  the set's domain-state hash is also recorded and compared. A changed set
+  reads as invalidated and the user must re-enable with the password.
+- **Stale material outliving the password.** Changing, adding or removing the
+  master password wipes the material, as does any path that replaces this
+  device's keyset (Emergency-Kit or escrow recovery, device pairing, a keyset
+  pulled from a server, a new account) and resetting the instance. A password
+  the keyset no longer accepts is also wiped when it is next tried. Turning the
+  setting off wipes both halves at once.
+
+**Does not protect against:**
+
+- **Anyone who can pass the platform check today.** Every finger enrolled on
+  the Mac now is a way in. On Windows, every face or finger enrolled in Hello
+  *and the Hello PIN* are ways in; adding a face or finger does **not**
+  invalidate anything — only resetting Hello or removing its PIN does.
+- **Code running as you on the unlocked OS session.** Malware can trigger the
+  prompt, or socially engineer you into approving a prompt it timed, and
+  receives what the unlock releases. It could already read the remembered
+  Secret Key and wait for a typed password; biometric unlock adds no defence
+  here.
+- **Wider exposure of a reused password.** Before, a compromised session
+  exposed the vault; now one biometric approval in it also releases the master
+  password itself into the app's memory. If that password is used anywhere
+  else, it is exposed there too. Use a unique master password.
+- **Windows roaming profiles.** The blob (Roaming AppData) and the challenge
+  (Credential Manager) roam; the Hello key does not. Enabling on a second
+  machine overwrites the first machine's material, which then reads as
+  invalidated and is wiped there: the machines take turns. Nothing leaks, but
+  only one of them works at a time.
+- **Two instances under one OS user.** The Keychain item, Hello credential and
+  challenge are named per OS user, not per instance. A second instance
+  enabling biometric unlock replaces the first one's device secret; the first
+  then asks to be re-enabled.
+- **A change in Windows' signature scheme.** The Windows construction assumes
+  Hello signs deterministically (RSA PKCS#1 v1.5 today). Were that to change,
+  the signature would no longer open the blob: the material is wiped as
+  invalidated and must be re-enabled. It fails safe, never into a wrong unlock.
+- **Availability on unsigned macOS builds.** Biometry-protected Keychain items
+  require the data-protection Keychain, which macOS ties to a signed app with a
+  keychain-access-group entitlement. An unsigned or ad-hoc build is refused
+  (`errSecMissingEntitlement`) and reports Touch ID unlock as unavailable; it
+  is then not offered at all rather than offered weaker.
+
+When the platform stops offering biometrics after material was stored (Hello
+turned off or its PIN removed, Touch ID gone, a closed lid), the material is
+not wiped on its own — "not now" and "not any more" look the same — but
+Settings shows the feature off, says why, and offers to forget it.
+
+**Secret-Key-only vaults: the presence gate.** A Secret-Key-only vault on a
+device that remembers the Secret Key opens at startup with no check at all.
+The optional *Require Touch ID / Windows Hello at startup* asks for the
+platform's presence prompt first (`LAContext` on macOS, `UserConsentVerifier`
+on Windows) and, while it is on, the unlock screen does not fill in the
+remembered key either; a dismissed prompt leaves the vault locked, with the
+Secret Key from the Emergency Kit as the manual way in. Nothing is stored for
+it. It is a **presence check, not a protection of the key**: the setting is
+device-local app state (the webview's `localStorage`, beside the startup
+setting), and the Secret Key stays readable without a prompt by any process
+running as you, exactly as before. It stops someone at your unlocked session
+from opening the vault through the app's own UI; it does not stop code running
+as you, or anyone who can edit the app's local state.
+
+Instances whose server sign-in is SSO or escrow behave the same: sign-in is a
+server-plane matter, and the local unlock is password-based or Secret-Key-only
+on every instance alike.
 
 ## Metadata visible by design
 

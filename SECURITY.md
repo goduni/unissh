@@ -254,6 +254,8 @@ construction. It holds nothing the password does not, so a construction change
 does not migrate it: an unreadable or unknown-version blob is wiped and surfaces
 as "turn biometric unlock on again". It still carries a version byte (bound into
 its AAD) so that change is detected rather than misparsed; no golden vector.
+What biometric unlock protects against, and what it does not, is stated in
+`THREAT_MODEL.md` (*Biometric unlock*).
 
 The frozen codecs (`aead_*_pre_agility`, `derive_unlock_key_legacy_v1`,
 `*_key_pre_agility`) are pinned by golden vectors; `pre_agility.rs::*_incompatible`
