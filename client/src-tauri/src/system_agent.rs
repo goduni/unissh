@@ -89,6 +89,10 @@ impl Controller {
             let _ = app;
             None
         };
+        // Whether or not the listener is on: a host using "system agent" auth
+        // with SSH_AUTH_SOCK pointed here is misconfigured either way, and gets
+        // a typed error saying so instead of a loop (or a bare "not found").
+        core.set_system_agent_endpoint(endpoint.clone());
         Arc::new(Self {
             core,
             settings_path,
