@@ -147,7 +147,7 @@ impl Controller {
             self.set_error(Some("unsupported"));
             return;
         };
-        match self.listen(&path) {
+        match self.listen(&path).await {
             Ok((stop, task)) => {
                 // Checked again now that it is bound: a lock that landed while
                 // binding must not leave it serving. (A lock revokes before it
@@ -228,7 +228,7 @@ impl Controller {
         let Some(path) = self.endpoint.clone() else {
             return Err(self.fail("unsupported"));
         };
-        let (stop, mut task) = match self.listen(&path) {
+        let (stop, mut task) = match self.listen(&path).await {
             Ok(started) => started,
             Err(code) => return Err(self.fail(code)),
         };
@@ -260,7 +260,7 @@ impl Controller {
 
     /// Binds the socket and spawns the accept loop.
     #[cfg(unix)]
-    fn listen(
+    async fn listen(
         &self,
         path: &Path,
     ) -> Result<(CancellationToken, tauri::async_runtime::JoinHandle<()>), &'static str> {
@@ -332,9 +332,11 @@ impl Controller {
     /// flag) and spawns the accept loop. The next instance is created before
     /// the connected one is handed off, so a client arriving meanwhile finds
     /// the pipe rather than "not found". The pipe disappears when the last
-    /// instance closes, so there is nothing to clean up on stop.
+    /// instance closes, so there is nothing to clean up on stop: the loop
+    /// waits for its connections, each of which disconnects its client, so
+    /// the name is free again by the time `stop` sees the task end.
     #[cfg(windows)]
-    fn listen(
+    async fn listen(
         &self,
         path: &Path,
     ) -> Result<(CancellationToken, tauri::async_runtime::JoinHandle<()>), &'static str> {
@@ -342,17 +344,7 @@ impl Controller {
             log::warn!("system agent: pipe security descriptor failed: {e}");
             "bind_failed"
         })?;
-        // tokio registers each instance with the runtime's reactor on creation.
-        let runtime = tauri::async_runtime::handle();
-        let _entered = runtime.inner().enter();
-        let first = pipe::create(path.as_os_str(), &security, true).map_err(|e| {
-            if pipe::in_use(&e) {
-                "in_use"
-            } else {
-                log::warn!("system agent: pipe creation failed: {e}");
-                "bind_failed"
-            }
-        })?;
+        let first = Self::first_instance(path, &security).await?;
 
         let agent = self.core.system_agent();
         let stop = CancellationToken::new();
@@ -362,7 +354,13 @@ impl Controller {
         let task = tauri::async_runtime::spawn(async move {
             log::info!("system agent: listening");
             let mut server = first;
+            let mut connections: Vec<tauri::async_runtime::JoinHandle<()>> = Vec::new();
+            let mut failures = 0u32;
             loop {
+                // A persistent OS error must not turn this loop into a spin.
+                if failures >= 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
                 let connected = tokio::select! {
                     _ = token.cancelled() => break,
                     connected = server.connect() => connected,
@@ -375,27 +373,71 @@ impl Controller {
                         break;
                     }
                 };
-                let stream = std::mem::replace(&mut server, next);
+                let mut stream = std::mem::replace(&mut server, next);
                 // A client that gave up between connecting and being accepted
                 // costs this instance only, not the listener.
                 if let Err(e) = connected {
+                    failures += 1;
                     log::debug!("system agent: pipe connect failed: {e}");
                     continue;
                 }
+                failures = 0;
+                connections.retain(|c| !c.inner().is_finished());
                 let agent = agent.clone();
                 let token = token.clone();
-                tauri::async_runtime::spawn(async move {
+                connections.push(tauri::async_runtime::spawn(async move {
                     let caller = pipe::caller(&stream);
                     tokio::select! {
                         _ = token.cancelled() => {}
-                        _ = agent.serve(stream, caller) => {}
+                        _ = agent.serve(&mut stream, caller) => {}
                     }
-                });
+                    // Cut the client off rather than wait for it to close its
+                    // end: an instance a client still holds keeps the name
+                    // taken, and the next start needs it free.
+                    let _ = stream.disconnect();
+                }));
             }
             drop(server);
+            // Already cancelled on a stop; after a listener failure this ends
+            // the connections too, so the task finishes and status says so.
+            token.cancel();
+            for connection in connections {
+                let _ = connection.await;
+            }
             log::info!("system agent: stopped");
         });
         Ok((stop, task))
+    }
+
+    /// Creates the first instance. `ERROR_ACCESS_DENIED` means the name still
+    /// exists; right after this app's own listener stopped that is usually its
+    /// last instance on its way out, so it is retried for about two seconds
+    /// before being reported as in use. (A name held by anyone else is
+    /// reported the same way, just that much later.)
+    #[cfg(windows)]
+    async fn first_instance(
+        path: &Path,
+        security: &pipe::Security,
+    ) -> Result<tokio::net::windows::named_pipe::NamedPipeServer, &'static str> {
+        let mut attempt = 0;
+        loop {
+            match pipe::create(path.as_os_str(), security, true) {
+                Ok(first) => return Ok(first),
+                Err(e) if pipe::in_use(&e) && attempt < 10 => {
+                    log::debug!("system agent: pipe name still taken ({e}); retrying");
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+                Err(e) if pipe::in_use(&e) => {
+                    log::debug!("system agent: pipe name taken: {e}");
+                    return Err("in_use");
+                }
+                Err(e) => {
+                    log::warn!("system agent: pipe creation failed: {e}");
+                    return Err("bind_failed");
+                }
+            }
+        }
     }
 
     async fn status(&self) -> Value {
