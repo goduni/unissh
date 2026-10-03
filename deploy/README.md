@@ -311,6 +311,25 @@ Use an `https://` URL: the batches carry audit metadata. Delivery is
 at-least-once from a persisted cursor: receivers dedupe on `seq`. See
 `server/config.example.toml` (`[audit.webhook]`) for every key.
 
+## Audit syslog (optional)
+
+To send the audit log to a syslog collector (RFC 5424, one message per entry),
+set in `.env` (`compose.yml` passes these through; an empty address means no
+sink):
+
+```bash
+UNISSH__AUDIT__SYSLOG__ADDRESS=syslog.internal:514
+UNISSH__AUDIT__SYSLOG__PROTOCOL=tcp        # or udp
+UNISSH__AUDIT__SYSLOG__FACILITY=auth       # optional; default auth
+UNISSH__AUDIT__SYSLOG__APP_NAME=unissh     # optional; default unissh
+```
+
+**TCP** (octet counting) advances the cursor only after the write succeeds;
+**UDP** sends and forgets, so a datagram lost on the way is lost. There is no
+TLS: point it at a forwarder on the same host or network. It can run next to
+the webhook; each sink keeps its own cursor. See `server/config.example.toml`
+(`[audit.syslog]`).
+
 ## Maintenance
 
 - **Rollback / sequence floor:** `docker compose run --rm server seq-bump ...`

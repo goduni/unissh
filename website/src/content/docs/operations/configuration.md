@@ -162,6 +162,28 @@ The webhook POSTs batches of entries as JSON, each entry shaped like a line of t
 - **At-least-once.** The server records the last acknowledged `seq` and resumes after it on restart. A batch can arrive twice (for example, a crash right after the receiver answered), so **receivers dedupe on `seq`**.
 - Every key also works from the environment: `UNISSH__AUDIT__WEBHOOK__URL`, `UNISSH__AUDIT__WEBHOOK__SECRET_ENV`, and so on.
 
+```toml
+[audit.syslog]
+address = "127.0.0.1:514"   # host:port of the collector
+protocol = "tcp"            # "tcp" (default) or "udp"
+facility = "auth"           # kern, user, ..., auth, authpriv, ..., local0..local7
+app_name = "unissh"         # RFC 5424 APP-NAME
+```
+
+The syslog sink sends one [RFC 5424](https://www.rfc-editor.org/rfc/rfc5424) message per entry, at severity `notice`:
+
+```text
+<37>1 2026-10-03T09:12:44Z unissh.example.com unissh - login [unissh@32473 seq="42" event="login" space_id="" vault_id=""] {"event":"login",...}
+```
+
+- **Header.** The timestamp is the entry's `recorded_at` (UTC). The hostname is the host of `server.public_url`, or `-` when it is unset. MSGID is the event kind, or `-` when there is none.
+- **Structured data.** `unissh@32473` carries `seq`, `event`, `space_id` and `vault_id` (base64; empty when the entry has none, and `event` is empty for a client-signed entry). UniSSH has no IANA Private Enterprise Number of its own; 32473 is the number [RFC 5612](https://www.rfc-editor.org/rfc/rfc5612) reserves for documentation.
+- **Body.** The entry exactly as in the JSON Lines export's `entry`: compact JSON for a server event, the base64 of the blob for a client-signed entry. For chain verification use the export or the webhook, which carry `entry_blob` and the hash fields.
+- **UDP vs TCP.** **UDP sends and forgets:** the cursor advances once every datagram of a batch is sent, so a datagram lost on the way is lost. **TCP** uses octet counting ([RFC 6587](https://www.rfc-editor.org/rfc/rfc6587)) on one persistent connection, re-opened after an error, and advances the cursor only after the write succeeds; otherwise the same batch is retried with backoff.
+- **No TLS.** Syslog goes out in plaintext; a non-loopback collector is warned about at boot. Use a forwarder on the same host (rsyslog, syslog-ng, Vector) to carry it further over TLS.
+- Both sinks can be configured at once; each keeps its own cursor, so one sink's outage does not hold back the other.
+- An empty `address` with every other key empty or default counts as absent; an empty `protocol`, `facility` or `app_name` takes its default. A bad address, protocol, facility or app name is a **startup error**. From the environment: `UNISSH__AUDIT__SYSLOG__ADDRESS`, `UNISSH__AUDIT__SYSLOG__PROTOCOL`, and so on.
+
 ## Environment overrides
 
 Any key maps to an environment variable by uppercasing and joining with double underscores:

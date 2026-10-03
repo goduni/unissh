@@ -103,3 +103,17 @@ token = ""
 # secret_env = "UNISSH_AUDIT_WEBHOOK_SECRET"   # or: secret_file = "/run/secrets/audit_webhook"
 # batch_size = 100
 # timeout_secs = 10
+#
+# Syslog: one RFC 5424 message per entry, structured data
+# [unissh@32473 seq event space_id vault_id], body = the entry JSON (base64 for a
+# client-signed entry). 32473 is RFC 5612's documentation PEN (UniSSH has none).
+# UDP sends and forgets: the cursor advances once the datagrams are sent, so a
+# lost datagram is lost. TCP (octet counting, RFC 6587) advances only after the
+# write succeeds. No TLS: send to a local forwarder for that.
+# Both sinks may be set at once; each keeps its own cursor.
+# Env: UNISSH__AUDIT__SYSLOG__ADDRESS, UNISSH__AUDIT__SYSLOG__PROTOCOL, ...
+# [audit.syslog]
+# address = "127.0.0.1:514"   # host:port
+# protocol = "tcp"            # "tcp" (default) or "udp"
+# facility = "auth"           # kern, user, ..., auth, authpriv, ..., local0..local7
+# app_name = "unissh"
