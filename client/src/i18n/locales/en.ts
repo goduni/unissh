@@ -1373,6 +1373,8 @@ export const en = {
     "windowControlsRight": "Right",
     "gpuRenderingTitle": "GPU rendering",
     "gpuRenderingDesc": "Draw the terminal with WebGL instead of the DOM. Smoother on long, fast output. Some graphics drivers render nothing at all with it — if the terminal goes blank, turn this back off. Takes effect on newly opened panes.",
+    "terminalImagesTitle": "Inline images",
+    "terminalImagesDesc": "Show pictures that programs draw in the terminal (sixel, iTerm2 protocol). Turn off so a remote host cannot paint your screen. Takes effect on newly opened panes.",
     "termFontTitle": "Terminal font size",
     "termFontDesc": "Zoom the terminal text. Also ⌘/Ctrl +, −, 0 while a terminal is open.",
     "termFontSmaller": "Smaller",

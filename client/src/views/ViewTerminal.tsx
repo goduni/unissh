@@ -29,10 +29,11 @@ import { localRecordingRequest, useLocalMachine } from "@/store/localShell";
 import { createPaneEvents, type PaneEvents } from "@/views/terminal/paneSession";
 import { parseOsc52 } from "@/views/terminal/osc52";
 import { resetStaleAppModes } from "@/views/terminal/staleModes";
+import { newImageAddon } from "@/views/terminal/imageAddon";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, isApiError, type ConnectionProfile } from "@/bridge/types";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
-import { isMac } from "@/bridge/platform";
+import { isMac, isPhoneOs } from "@/bridge/platform";
 import { matchesShortcut, useShortcuts } from "@/store/shortcuts";
 import { ContextMenu } from "@/components/ContextMenu";
 import { TermTabStrip } from "@/views/TermTabStrip";
@@ -357,6 +358,8 @@ async function runStartupSnippets(
     // live pane means tearing down and rebuilding it, which would drop the
     // scrollback. The setting takes effect on the next pane.
     const gpuRendering = useApp.getState().gpuRendering;
+    // Same for inline images: read once, applies to new panes.
+    const terminalImages = useApp.getState().terminalImages;
     // Every xterm option comes from termOptions() — the same function the live settings
     // preview uses — so the preview can never drift from a real pane. termPrefs is read
     // once at mount; later changes reach the pane through the live-apply effect below,
@@ -422,6 +425,15 @@ async function runStartupSnippets(
         }
       } catch {
         /* DOM renderer remains */
+      }
+    }
+    // Inline images (sixel, iTerm2), after the renderer so they draw on top of
+    // whichever one is active.
+    if (terminalImages) {
+      try {
+        term.loadAddon(newImageAddon(isPhoneOs() ? "mobile" : "desktop"));
+      } catch {
+        /* image sequences are discarded, as before */
       }
     }
     try {

@@ -243,6 +243,8 @@ function SettingsAppearance() {
   const isPhone = useIsMobile();
   const gpuRendering = useApp((s) => s.gpuRendering);
   const setGpuRendering = useApp((s) => s.setGpuRendering);
+  const terminalImages = useApp((s) => s.terminalImages);
+  const setTerminalImages = useApp((s) => s.setTerminalImages);
   const customChrome = useApp((s) => s.customChrome);
   const setCustomChrome = useApp((s) => s.setCustomChrome);
   const setWindowControlsSide = useApp((s) => s.setWindowControlsSide);
@@ -472,6 +474,9 @@ function SettingsAppearance() {
           <Toggle checked={gpuRendering} onChange={setGpuRendering} />
         </SettingRow>
       )}
+      <SettingRow title={t("settings.terminalImagesTitle")} desc={t("settings.terminalImagesDesc")}>
+        <Toggle checked={terminalImages} onChange={setTerminalImages} />
+      </SettingRow>
       <SettingRow title={t("settings.termFontTitle")} desc={t("settings.termFontDesc")}>
         <div style={{ display: "flex", alignItems: "center", gap: rem(8) }}>
           <Btn
