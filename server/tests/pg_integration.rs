@@ -90,6 +90,19 @@ async fn postgres_store_parity() {
         .await
         .unwrap_err();
     assert_eq!(err.code, unissh_server::ErrorCode::Conflict);
+
+    // audit sink cursor (migration 0005): unset reads 0, the upsert inserts and
+    // then updates through ON CONFLICT
+    assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), 0);
+    store
+        .set_audit_sink_cursor("webhook", 3, 100)
+        .await
+        .unwrap();
+    store
+        .set_audit_sink_cursor("webhook", 7, 101)
+        .await
+        .unwrap();
+    assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), 7);
 }
 
 #[tokio::test]

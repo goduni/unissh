@@ -126,6 +126,18 @@ describe("workspace persistence lifecycle", () => {
     expect(storage.forVault("second")).toBeDefined();
   });
 
+  it("moves a vault's current and named layouts to its new id", async () => {
+    const storage = new WorkspaceStorage({ load: async () => [7, null], save: vi.fn().mockResolvedValue(undefined), error: vi.fn() });
+    await storage.load();
+    storage.save("local", tabs(), "tab1");
+    expect(storage.saveNamed("local", "Ops", tabs(), "tab1")).toBeNull();
+    storage.moveVault("local", "cloud");
+    expect(storage.forVault("local")).toBeUndefined();
+    expect(restoreWorkspace(storage.forVault("cloud"), [host], true).terminals).toHaveLength(1);
+    expect(storage.namedForVault("cloud").map((w) => w.name)).toEqual(["Ops"]);
+    expect(storage.activeVaultId).toBe("cloud");
+  });
+
   it("ignores a late load after lock and does not overwrite unreadable or future data", async () => {
     const read = deferred<[number, string | null]>();
     const io = { load: () => read.promise, save: vi.fn(), error: vi.fn() };

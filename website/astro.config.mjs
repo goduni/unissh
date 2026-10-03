@@ -62,6 +62,7 @@ export default defineConfig({
             { label: 'Crate reference', slug: 'components/crates' },
             { label: 'Server & API surface', slug: 'components/server' },
             { label: 'Audit log & entry format', slug: 'components/server-audit' },
+            { label: 'Audit webhook integration', slug: 'components/audit-webhook' },
             { label: 'Desktop & mobile client', slug: 'components/client' },
             { label: 'Admin panel (server-ui)', slug: 'components/server-ui' },
           ],

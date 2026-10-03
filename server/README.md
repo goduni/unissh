@@ -91,11 +91,12 @@ credential is in the body (setup code / invite token / password proof / id_token
 - **vaults / policy:** `POST /v1/vaults/claim` (claim a vault namespace),
   `POST /v1/grants/publish`, `GET /v1/grants`, `GET /v1/pending` (a vault-admin's
   crypto to-do queue: the grant/revoke bindings the calling keyset must fulfil).
-- **audit:** `POST /v1/audit`, `GET /v1/audit` (admin).
+- **audit:** `POST /v1/audit`, `GET /v1/audit` (admin), `GET /v1/audit/export`
+  (owner; JSON Lines, optional `from_seq`/`to_seq`).
 - **admin** (Bearer, owner / space admin, **suspended-gate-exempt** so a suspended
   account stays recoverable): `GET /v1/admin/{overview,devices,sessions,invites,
   vaults,vault,objects,relay,keysets,config,metrics,metrics/summary,health,
-  migrations,instance}`, `GET /v1/admin/audit/verify`, and
+  migrations,instance}`, `GET /v1/admin/audit/{verify,sinks}`, and
   `POST /v1/admin/{account/status,session/revoke,seq-bump}`; `config` reads the
   effective config (secrets masked) and `PUT`s the live-editable subset. These are
   read-projections of **open metadata** + lifecycle controls for the self-hosted

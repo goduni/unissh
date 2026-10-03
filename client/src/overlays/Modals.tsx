@@ -27,6 +27,7 @@ import {
   Icon,
   IconName,
   Input,
+  NHSelect,
   NO_AUTOCORRECT,
   Spinner,
   Tag,
@@ -35,6 +36,7 @@ import {
 import { useDialogFocus, useDialogKeys, useMenu } from "@/components/a11y";
 import { Modal } from "@/components/Modal";
 import { TerminalWorkspaces } from "./TerminalWorkspaces";
+import { KeyRotationModal } from "./KeyRotationModal";
 import { drawQr } from "@/support/qr";
 import { toast } from "@/store/toast";
 import { guard } from "@/store/action";
@@ -60,6 +62,7 @@ import type {
 import type { ConnectArgs } from "@/bridge/api";
 import type { TunnelType } from "@/store/app";
 import { exportPath } from "@/support/paths";
+import { authorizedKeysAppendCmd } from "@/support/authorizedKeys";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -338,58 +341,6 @@ function SwitchRow({
 
 // Inline picker — re-uses Input's chrome to render a clickable <select> for
 // choosing a stored key / password item.
-function NHSelect({
-  value,
-  onChange,
-  options,
-  empty,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-  empty: string;
-}) {
-  const p = usePalette();
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        height: rem(40),
-        padding: `0 ${rem(12)}`,
-        borderRadius: 8,
-        background: p.bg2,
-        border: `1px solid ${p.line2}`,
-      }}
-    >
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          background: "none",
-          border: "none",
-          outline: "none",
-          fontFamily: MONO,
-          fontSize: TEXT.base,
-          color: options.length ? p.txt : p.txt3,
-          appearance: "none",
-          cursor: "pointer",
-        }}
-      >
-        {options.length === 0 && <option value="">{empty}</option>}
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      <Icon name="cd" size={15} color={p.txt3} />
-    </div>
-  );
-}
-
 const slug = (s: string) =>
   s
     .toLowerCase()
@@ -3067,15 +3018,7 @@ function CopyKeyToServerModal({
       ctx.toast(t("modals.copyKey.selectHost"), "warn");
       return;
     }
-    // Single-quote the key so the remote shell treats it literally; OpenSSH public
-    // keys never contain a single quote, but escape defensively all the same.
-    const q = "'" + openssh.trim().replace(/'/g, "'\\''") + "'";
-    // Idempotent ssh-copy-id: create ~/.ssh with the perms sshd's StrictModes
-    // requires, then append the key only if an identical line isn't already there.
-    const cmd =
-      `mkdir -p ~/.ssh && chmod 700 ~/.ssh && ` +
-      `touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && ` +
-      `{ grep -qxF ${q} ~/.ssh/authorized_keys || printf '%s\\n' ${q} >> ~/.ssh/authorized_keys; }`;
+    const cmd = authorizedKeysAppendCmd(openssh);
 
     setBusy(true);
     setErrors([]);
@@ -3642,6 +3585,15 @@ export function Modals() {
       <CopyKeyToServerModal
         openssh={modal.openssh}
         keyItemId={modal.keyItemId}
+        onClose={closeModal}
+      />
+    );
+  if (modal.kind === "keyRotation")
+    return (
+      <KeyRotationModal
+        keyItemId={modal.keyItemId}
+        hasCertificate={modal.hasCertificate}
+        candidateId={modal.candidateId}
         onClose={closeModal}
       />
     );

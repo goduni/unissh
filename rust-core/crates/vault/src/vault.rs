@@ -663,8 +663,8 @@ impl<'a> Vault<'a> {
         let item = self.get_item(old_id)?.ok_or(VaultError::NotFound)?;
         // Atomically: create the new id and bury the old one in one transaction, so
         // a failure between steps does not leave the content live under both ids. The tombstone
-        // and clearing the old id's history are inlined (not via delete_item, otherwise there would be
-        // a nested BEGIN).
+        // and clearing the old id's history are written inline here rather than through
+        // delete_item (a nested transaction would also work: it runs under a savepoint).
         self.storage.transaction(|| {
             self.put_item(new_id, item.item_type, item.content.as_slice())?;
             let tomb = self.tombstone_record(old_id, item.item_type, item.version + 1)?;

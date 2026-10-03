@@ -126,6 +126,13 @@ pub struct ConnectOptions {
     /// a vault key through a prompt; it fails with
     /// [`TransportError::SystemAgentIsUniSsh`] rather than loop.
     pub own_system_agent: Option<std::path::PathBuf>,
+    /// Never escalate past the first method to keyboard-interactive (so no
+    /// stored-password answer and no prompt to the user); a refusal of `auth`
+    /// is final, `AuthFailed`. It changes escalation only: `auth` itself is
+    /// still used as configured, so a password auth still sends its password.
+    /// Pair it with key auth for a login whose whole point is to prove that one
+    /// key is accepted, such as the verify step of a key rotation.
+    pub publickey_only: bool,
 }
 
 impl ConnectOptions {
@@ -141,6 +148,7 @@ impl ConnectOptions {
             agent_forward: None,
             proxy: None,
             own_system_agent: None,
+            publickey_only: false,
         }
     }
 
@@ -192,6 +200,7 @@ impl core::fmt::Debug for ConnectOptions {
             .field("agent_forward", &self.agent_forward.is_some())
             .field("proxy", &self.proxy)
             .field("own_system_agent", &self.own_system_agent)
+            .field("publickey_only", &self.publickey_only)
             .finish()
     }
 }
@@ -1436,12 +1445,7 @@ async fn authenticate(
         //
         // Both are the same call; what differs is whether a stored password is
         // allowed to answer, which `keyboard_interactive` decides per round.
-        let escalate = matches!(
-            first,
-            AuthResult::Failure { ref remaining_methods, .. }
-                if remaining_methods.contains(&MethodKind::KeyboardInteractive)
-        );
-        Ok::<AuthResult, TransportError>(if escalate {
+        Ok::<AuthResult, TransportError>(if should_escalate(&first, opts.publickey_only) {
             let password = match &opts.auth {
                 Auth::Password { password } => Some(password),
                 Auth::Agent { .. } | Auth::SystemAgent { .. } => None,
@@ -1475,6 +1479,19 @@ async fn authenticate(
             Err(TransportError::AuthFailed)
         }
     }
+}
+
+/// Whether a first auth attempt that did not finish the job goes on to
+/// keyboard-interactive: only when the server still offers it, and never for a
+/// publickey-only connection, where a prompt would let a password stand in for
+/// the key being proven.
+fn should_escalate(first: &AuthResult, publickey_only: bool) -> bool {
+    !publickey_only
+        && matches!(
+            first,
+            AuthResult::Failure { remaining_methods, .. }
+                if remaining_methods.contains(&MethodKind::KeyboardInteractive)
+        )
 }
 
 /// Maximum number of InfoRequest rounds in keyboard-interactive: a malicious/broken
@@ -1887,12 +1904,15 @@ mod tests {
     #[cfg(unix)]
     use super::refuse_own_agent;
     use super::{
-        answer_from_password, require_loopback, AlgorithmPolicy, ClientHandler, PromptField,
+        answer_from_password, require_loopback, should_escalate, AlgorithmPolicy, ClientHandler,
+        PromptField,
     };
     use crate::error::TransportError;
+    use russh::client::AuthResult;
     use russh::client::Handler;
     use russh::keys::ssh_key::{certificate, private::Ed25519Keypair};
     use russh::keys::{PrivateKey, PublicKeyOrCertificate};
+    use russh::{MethodKind, MethodSet};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use zeroize::Zeroizing;
@@ -1904,6 +1924,16 @@ mod tests {
             remote_forwards: Arc::new(Mutex::new(HashMap::new())),
             agent_forward: None,
         }
+    }
+
+    #[test]
+    fn publickey_only_never_escalates_to_keyboard_interactive() {
+        let offered = || AuthResult::Failure {
+            remaining_methods: MethodSet::from(&[MethodKind::KeyboardInteractive][..]),
+            partial_success: false,
+        };
+        assert!(should_escalate(&offered(), false));
+        assert!(!should_escalate(&offered(), true));
     }
 
     #[test]

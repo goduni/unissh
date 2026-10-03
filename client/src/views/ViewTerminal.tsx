@@ -29,13 +29,22 @@ import { localRecordingRequest, useLocalMachine } from "@/store/localShell";
 import { createPaneEvents, type PaneEvents } from "@/views/terminal/paneSession";
 import { parseOsc52 } from "@/views/terminal/osc52";
 import { resetStaleAppModes } from "@/views/terminal/staleModes";
+import { newImageAddon } from "@/views/terminal/imageAddon";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, isApiError, type ConnectionProfile } from "@/bridge/types";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
-import { isMac } from "@/bridge/platform";
+import { isMac, isPhoneOs } from "@/bridge/platform";
 import { matchesShortcut, useShortcuts } from "@/store/shortcuts";
 import { ContextMenu } from "@/components/ContextMenu";
 import { TermTabStrip } from "@/views/TermTabStrip";
+import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
+import {
+  builtinsFromProfile,
+  planSnippet,
+  resolveCommand,
+  type BuiltinParam,
+  type SnippetParam,
+} from "@/support/snippetParams";
 import { useTerminalShortcuts } from "@/shell/useTerminalShortcuts";
 
 // True only when the terminal host has a real layout box. A hidden ancestor
@@ -317,6 +326,29 @@ function TerminalPane({
   const [pw, setPw] = useState<string | null>(null);
   // Hover state so a split pane can offer an obvious close (✕) affordance.
   const [paneHover, setPaneHover] = useState(false);
+  // The parameter form for the startup snippet being asked about, if any. The
+  // startup loop awaits the promise whose resolver sits in the ref: the
+  // answers, or null when cancelled — or when the session it was for closed or
+  // was replaced, so a form for a dead session can never write anything.
+  const [startupAsk, setStartupAsk] = useState<{
+    label: string;
+    ask: SnippetParam[];
+    fromHost: { name: BuiltinParam; value: string }[];
+  } | null>(null);
+  const startupResolveRef = useRef<((values: Record<string, string> | null) => void) | null>(null);
+  const settleStartupAsk = (values: Record<string, string> | null) => {
+    const resolve = startupResolveRef.current;
+    startupResolveRef.current = null;
+    setStartupAsk(null);
+    resolve?.(values);
+  };
+  const askStartup = (form: NonNullable<typeof startupAsk>) => {
+    settleStartupAsk(null);
+    return new Promise<Record<string, string> | null>((resolve) => {
+      startupResolveRef.current = resolve;
+      setStartupAsk(form);
+    });
+  };
 
   /** Types a host's startup snippets into a freshly opened session.
  *
@@ -325,6 +357,12 @@ function TerminalPane({
  * user is choosing one interactively and Enter must stay theirs. The list is
  * ordered, so they are sent in sequence.
  *
+ * A snippet with `{{parameters}}` the host cannot answer asks for them in the
+ * shared form before it is typed; cancelling skips that snippet and the rest
+ * still run. Every command goes through `resolveCommand`, which leaves
+ * brace-free text unchanged, so parameterless snippets never ask. Once the
+ * session is no longer this pane's (`alive` false), nothing more is typed.
+ *
  * Failures are swallowed on purpose: a missing snippet (deleted on another
  * device, not yet synced) must not turn a working connection into an error.
  */
@@ -332,6 +370,7 @@ async function runStartupSnippets(
   sessionId: string,
   profile: ConnectionProfile | null,
   vaultId: string,
+  alive: () => boolean,
 ) {
   const ids = profile?.startupSnippetIds ?? [];
   if (!ids.length || !vaultId) return;
@@ -339,10 +378,21 @@ async function runStartupSnippets(
     const library = await api.listSnippets(vaultId);
     const byId = new Map(library.map((s) => [s.snippetId, s]));
     const enc = new TextEncoder();
+    const builtins = builtinsFromProfile(profile);
     for (const id of ids) {
       const snippet = byId.get(id);
       if (!snippet) continue;
-      await api.sessionWrite(sessionId, Array.from(enc.encode(snippet.command + "\n")));
+      const { ask, fromHost, ready } = planSnippet(snippet.command, builtins);
+      let command = ready;
+      if (command === null) {
+        // The host is named too: several panes may be connecting at once.
+        const label = [profile?.label, snippet.label].filter(Boolean).join(" · ");
+        const values = await askStartup({ label, ask, fromHost });
+        if (values) command = resolveCommand(snippet.command, values, builtins);
+      }
+      if (!alive()) return;
+      if (command === null) continue;
+      await api.sessionWrite(sessionId, Array.from(enc.encode(command + "\n")));
     }
   } catch {
     /* a startup snippet must never break the session it was meant to set up */
@@ -357,6 +407,8 @@ async function runStartupSnippets(
     // live pane means tearing down and rebuilding it, which would drop the
     // scrollback. The setting takes effect on the next pane.
     const gpuRendering = useApp.getState().gpuRendering;
+    // Same for inline images: read once, applies to new panes.
+    const terminalImages = useApp.getState().terminalImages;
     // Every xterm option comes from termOptions() — the same function the live settings
     // preview uses — so the preview can never drift from a real pane. termPrefs is read
     // once at mount; later changes reach the pane through the live-apply effect below,
@@ -422,6 +474,15 @@ async function runStartupSnippets(
         }
       } catch {
         /* DOM renderer remains */
+      }
+    }
+    // Inline images (sixel, iTerm2), after the renderer so they draw on top of
+    // whichever one is active.
+    if (terminalImages) {
+      try {
+        term.loadAddon(newImageAddon(isPhoneOs() ? "mobile" : "desktop"));
+      } catch {
+        /* image sequences are discarded, as before */
       }
     }
     try {
@@ -847,7 +908,7 @@ async function runStartupSnippets(
         if (target.kind === "local") return;
         // Refresh the host's "recently connected" timestamp on every (re)connect.
         useApp.getState().markConnected(target.profile.profileId);
-        void runStartupSnippets(id, target.profile, vaultId);
+        void runStartupSnippets(id, target.profile, vaultId, () => !cancelled && sessionIdRef.current === id);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -903,6 +964,8 @@ async function runStartupSnippets(
       });
     return () => {
       cancelled = true;
+      // A startup form left open belongs to the session going away: cancel it.
+      settleStartupAsk(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pw, pane.gen]);
@@ -1237,6 +1300,18 @@ async function runStartupSnippets(
         </div>
       )}
       {needsPassword && pw == null && <PasswordGate onSubmit={(v) => setPw(v)} />}
+      {/* Only while its tab is shown, so a background pane's form never sits on
+          the dialog stack catching an Escape meant for a visible dialog. */}
+      {startupAsk && visible && (
+        <SnippetParamsForm
+          label={startupAsk.label}
+          ask={startupAsk.ask}
+          fromHost={startupAsk.fromHost}
+          submitLabel={t("snippetParams.run")}
+          onCancel={() => settleStartupAsk(null)}
+          onSubmit={(values) => settleStartupAsk(values)}
+        />
+      )}
       {/* Host-key mismatch: the security card replaces the reconnect affordance on
           BOTH shells (it renders inside the shared pane) — a mismatch must never
           offer a plain Reconnect. */}

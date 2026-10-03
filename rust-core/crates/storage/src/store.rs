@@ -229,11 +229,39 @@ impl Storage {
     /// `ROLLBACK` on error). Lets upper layers perform atomic multi-step
     /// operations (e.g. rename = put+tombstone). The closure's error must be
     /// convertible from [`StorageError`].
+    ///
+    /// Nests: called while a transaction is already open, it runs the closure
+    /// under a `SAVEPOINT` instead — an error undoes only the closure's writes,
+    /// success folds them into the outer transaction, and the OUTER transaction
+    /// alone decides what is committed. So an operation that is atomic on its own
+    /// (e.g. a vault tombstone) can also be one step of a larger atomic operation.
     pub fn transaction<T, E, F>(&self, f: F) -> Result<T, E>
     where
         F: FnOnce() -> Result<T, E>,
         E: From<StorageError>,
     {
+        if !self.conn.is_autocommit() {
+            self.conn
+                .execute_batch("SAVEPOINT nested")
+                .map_err(|e| E::from(StorageError::from(e)))?;
+            return match f() {
+                Ok(v) => {
+                    self.conn
+                        .execute_batch("RELEASE nested")
+                        .map_err(|e| E::from(StorageError::from(e)))?;
+                    Ok(v)
+                }
+                Err(e) => {
+                    if let Err(rb) = self
+                        .conn
+                        .execute_batch("ROLLBACK TO nested; RELEASE nested")
+                    {
+                        log::warn!("storage: rolling back a nested transaction failed: {rb}");
+                    }
+                    Err(e)
+                }
+            };
+        }
         self.conn
             .execute_batch("BEGIN")
             .map_err(|e| E::from(StorageError::from(e)))?;
@@ -245,7 +273,9 @@ impl Storage {
                 Ok(v)
             }
             Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
+                if let Err(rb) = self.conn.execute_batch("ROLLBACK") {
+                    log::warn!("storage: rolling back a transaction failed: {rb}");
+                }
                 Err(e)
             }
         }
@@ -924,14 +954,16 @@ impl Storage {
         Ok(())
     }
 
-    /// Dirty vault records bound to `tenant` (for sync_push).
+    /// Dirty CLOUD vault records bound to `tenant` (for sync_push). Local vaults
+    /// carry an empty `sync_tenant`, so the target filter keeps an empty tenant
+    /// from selecting them.
     pub fn list_dirty_bound_vaults(&self, tenant: &[u8]) -> Result<Vec<VaultRecord>, StorageError> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT vault_id, sync_target, name_blob, wrapped_vk, version, tombstone, signature, author_pubkey, key_epoch, cache_policy, sync_tenant
-             FROM vaults WHERE dirty = 1 AND sync_tenant = ?1 ORDER BY vault_id",
+             FROM vaults WHERE dirty = 1 AND sync_tenant = ?1 AND sync_target = ?2 ORDER BY vault_id",
         )?;
         let rows = stmt
-            .query_map(params![tenant], map_vault_row)?
+            .query_map(params![tenant, SyncTarget::Cloud.to_i64()], map_vault_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -941,10 +973,10 @@ impl Storage {
         let mut stmt = self.conn.prepare_cached(
             "SELECT i.vault_id, i.item_id, i.item_type, i.content_blob, i.wrapped_item_key, i.version, i.tombstone, i.signature, i.author_pubkey, i.created_at, i.updated_at, i.key_epoch
              FROM items i JOIN vaults v ON i.vault_id = v.vault_id
-             WHERE v.sync_tenant = ?1 AND i.dirty = 1 ORDER BY i.vault_id, i.item_id",
+             WHERE v.sync_tenant = ?1 AND v.sync_target = ?2 AND i.dirty = 1 ORDER BY i.vault_id, i.item_id",
         )?;
         let rows = stmt
-            .query_map(params![tenant], map_item_row)?
+            .query_map(params![tenant, SyncTarget::Cloud.to_i64()], map_item_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -957,10 +989,13 @@ impl Storage {
         let mut stmt = self.conn.prepare_cached(
             "SELECT m.vault_id, m.key_epoch, m.manifest_blob, m.signature, m.author_pubkey
              FROM membership_manifests m JOIN vaults v ON m.vault_id = v.vault_id
-             WHERE v.sync_tenant = ?1 AND m.dirty = 1 ORDER BY m.vault_id, m.key_epoch",
+             WHERE v.sync_tenant = ?1 AND v.sync_target = ?2 AND m.dirty = 1 ORDER BY m.vault_id, m.key_epoch",
         )?;
         let rows = stmt
-            .query_map(params![tenant], map_manifest_row)?
+            .query_map(
+                params![tenant, SyncTarget::Cloud.to_i64()],
+                map_manifest_row,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -973,10 +1008,10 @@ impl Storage {
         let mut stmt = self.conn.prepare_cached(
             "SELECT g.vault_id, g.member_pubkey, g.key_epoch, g.role, g.not_after, g.wrapped_vk, g.signature, g.author_pubkey
              FROM membership_grants g JOIN vaults v ON g.vault_id = v.vault_id
-             WHERE v.sync_tenant = ?1 AND g.dirty = 1 ORDER BY g.vault_id, g.member_pubkey, g.key_epoch",
+             WHERE v.sync_tenant = ?1 AND v.sync_target = ?2 AND g.dirty = 1 ORDER BY g.vault_id, g.member_pubkey, g.key_epoch",
         )?;
         let rows = stmt
-            .query_map(params![tenant], map_grant_row)?
+            .query_map(params![tenant, SyncTarget::Cloud.to_i64()], map_grant_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -1715,6 +1750,48 @@ mod purge_tests {
         // neighboring vault intact
         assert!(s.get_vault(&other).unwrap().is_some());
         assert_eq!(s.list_items(&other).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn dirty_bound_queries_with_an_empty_tenant_return_no_local_vault() {
+        let s = st();
+        let local = b"vault-local".to_vec();
+        let mut rec = vrec(&local);
+        rec.sync_target = SyncTarget::Local;
+        s.put_vault(&rec).unwrap();
+        s.put_item(&irec(&local, b"item")).unwrap();
+        s.mark_vault_dirty(&local).unwrap();
+        s.mark_item_dirty(&local, b"item").unwrap();
+        assert!(s.list_dirty_bound_vaults(b"").unwrap().is_empty());
+        assert!(s.list_dirty_bound_items(b"").unwrap().is_empty());
+    }
+
+    #[test]
+    fn nested_transaction_is_decided_by_the_outer_one() {
+        let s = st();
+        let (a, b) = (b"vault-a".to_vec(), b"vault-b".to_vec());
+        // The inner transaction succeeds, the outer one then fails: nothing stays.
+        let r: Result<(), StorageError> = s.transaction(|| {
+            s.put_vault(&vrec(&a))?;
+            s.transaction(|| s.put_vault(&vrec(&b)))?;
+            Err(StorageError::BadKeyLength)
+        });
+        assert!(r.is_err());
+        assert!(s.get_vault(&a).unwrap().is_none());
+        assert!(s.get_vault(&b).unwrap().is_none());
+        // The inner one fails, the outer one goes on: only the inner writes are undone.
+        s.transaction(|| {
+            s.put_vault(&vrec(&a))?;
+            let inner: Result<(), StorageError> = s.transaction(|| {
+                s.put_vault(&vrec(&b))?;
+                Err(StorageError::BadKeyLength)
+            });
+            assert!(inner.is_err());
+            Ok::<(), StorageError>(())
+        })
+        .unwrap();
+        assert!(s.get_vault(&a).unwrap().is_some());
+        assert!(s.get_vault(&b).unwrap().is_none());
     }
 
     #[test]

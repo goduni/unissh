@@ -677,6 +677,53 @@ pub async fn rotate_ssh_key(
     blocking(move || core.rotate_ssh_key(vault_id, item_id)).await
 }
 
+/// Staged rotation, step 1: generate a candidate key beside `key_id` (a separate
+/// ordinary key item, linked device-locally). Returns the candidate's item id.
+#[tauri::command]
+pub async fn begin_key_rotation(
+    vault_id: String,
+    key_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<String> {
+    let core = state.core.clone();
+    blocking(move || core.begin_key_rotation(vault_id, key_id)).await
+}
+
+/// Staged rotation, commit: the candidate's material becomes a new version of
+/// `key_id` (old material kept in history); the certificate and candidate go.
+#[tauri::command]
+pub async fn finish_key_rotation(
+    vault_id: String,
+    key_id: String,
+    candidate_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking(move || core.finish_key_rotation(vault_id, key_id, candidate_id)).await
+}
+
+/// Staged rotation, abandon: tombstone the candidate; the original is untouched.
+#[tauri::command]
+pub async fn abandon_key_rotation(
+    vault_id: String,
+    candidate_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking(move || core.abandon_key_rotation(vault_id, candidate_id)).await
+}
+
+/// Rotations in progress on this device for a vault (live candidates only).
+#[tauri::command]
+pub async fn list_key_rotations(
+    vault_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::KeyRotationLink>> {
+    let core = state.core.clone();
+    let links = blocking(move || core.list_key_rotations(vault_id)).await?;
+    Ok(links.into_iter().map(Into::into).collect())
+}
+
 #[tauri::command]
 pub async fn rename_item(
     vault_id: String,

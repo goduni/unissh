@@ -18,6 +18,7 @@ pub struct Config {
     pub ops: OpsConfig,
     pub setup: SetupConfig,
     pub oidc: OidcConfig,
+    pub audit: AuditConfig,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -181,6 +182,257 @@ impl OidcConfig {
     }
 }
 
+/// `[audit]`: where the audit log is exported. Every sink is optional and
+/// configured here only, never through the API, so a compromised admin session
+/// cannot redirect the log.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuditConfig {
+    /// `[audit.webhook]`. Absent → no webhook sink.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook: Option<WebhookConfig>,
+    /// `[audit.syslog]`. Absent → no syslog sink.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub syslog: Option<SyslogConfig>,
+}
+
+/// `[audit.webhook]`: POST batches of entries, HMAC-SHA256 signed.
+///
+/// The shared secret is never a config value: it is read at boot from the
+/// environment variable named by `secret_env` or from the file at
+/// `secret_file`, so it stays out of the TOML that sits next to the URL. This
+/// struct holds only the name/path of the secret. The URL itself often carries
+/// a token (query, path or userinfo), so the manual `Debug` below redacts it.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebhookConfig {
+    pub url: String,
+    /// Name of the environment variable holding the HMAC secret.
+    pub secret_env: String,
+    /// Path of a file holding the HMAC secret (trailing newline ignored).
+    pub secret_file: String,
+    /// Entries per POST.
+    pub batch_size: u32,
+    /// Per-request timeout; a timeout fails the batch.
+    pub timeout_secs: u64,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            secret_env: String::new(),
+            secret_file: String::new(),
+            batch_size: 100,
+            timeout_secs: 10,
+        }
+    }
+}
+
+impl WebhookConfig {
+    /// Every field that names a destination or a secret is empty: the section
+    /// exists only because a deployment passes empty env vars through (e.g.
+    /// `UNISSH__AUDIT__WEBHOOK__URL: "${UNISSH__AUDIT__WEBHOOK__URL:-}"`).
+    fn is_unset(&self) -> bool {
+        self.url.is_empty() && self.secret_env.is_empty() && self.secret_file.is_empty()
+    }
+
+    /// Read the HMAC secret from `secret_env` or `secret_file` (exactly one).
+    /// Errors name the setting, never the value.
+    pub fn resolve_secret(&self) -> Result<Vec<u8>, String> {
+        match (self.secret_env.is_empty(), self.secret_file.is_empty()) {
+            (true, true) => Err(
+                "audit.webhook needs a secret: set secret_env (the name of an \
+                 environment variable) or secret_file (a path)"
+                    .into(),
+            ),
+            (false, false) => Err("audit.webhook: set secret_env or secret_file, not both".into()),
+            (false, true) => match std::env::var(&self.secret_env) {
+                Ok(v) if !v.is_empty() => Ok(v.into_bytes()),
+                _ => Err(format!(
+                    "audit.webhook.secret_env: environment variable {} is unset or empty",
+                    self.secret_env
+                )),
+            },
+            (true, false) => {
+                let raw = std::fs::read(&self.secret_file).map_err(|e| {
+                    format!(
+                        "audit.webhook.secret_file: cannot read {}: {}",
+                        self.secret_file,
+                        e.kind()
+                    )
+                })?;
+                let mut v = raw;
+                while v.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                    v.pop();
+                }
+                if v.is_empty() {
+                    return Err(format!(
+                        "audit.webhook.secret_file: {} is empty",
+                        self.secret_file
+                    ));
+                }
+                Ok(v)
+            }
+        }
+    }
+
+    /// Boot-time validation: a malformed sink is a startup error, not a warning.
+    pub fn validate(&self) -> Result<(), String> {
+        let url = reqwest::Url::parse(&self.url)
+            .map_err(|_| "audit.webhook.url is not a valid URL".to_string())?;
+        if url.scheme() != "https" && url.scheme() != "http" {
+            return Err("audit.webhook.url must be http:// or https://".into());
+        }
+        if self.batch_size == 0 {
+            return Err("audit.webhook.batch_size must be at least 1".into());
+        }
+        if self.timeout_secs == 0 {
+            return Err("audit.webhook.timeout_secs must be at least 1".into());
+        }
+        self.resolve_secret().map(|_| ())
+    }
+}
+
+/// `[audit.syslog]`: one RFC 5424 message per entry, over UDP or TCP (RFC 6587
+/// octet counting). No TLS: point it at a local forwarder for that.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyslogConfig {
+    /// Collector as `host:port` (a name is resolved at connect time).
+    pub address: String,
+    /// `"udp"` (send and forget) or `"tcp"` (acknowledged by a completed write).
+    pub protocol: String,
+    /// Facility keyword: `kern`, `user`, ..., `auth`, `authpriv`, ..., `local0`..`local7`.
+    pub facility: String,
+    /// RFC 5424 APP-NAME: 1-48 printable ASCII characters, no spaces.
+    pub app_name: String,
+}
+
+impl Default for SyslogConfig {
+    fn default() -> Self {
+        Self {
+            address: String::new(),
+            protocol: "tcp".into(),
+            facility: "auth".into(),
+            app_name: "unissh".into(),
+        }
+    }
+}
+
+/// RFC 5424 §6.2.1 facility keywords, in code order (0..=23).
+const SYSLOG_FACILITIES: [&str; 24] = [
+    "kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news", "uucp", "cron", "authpriv",
+    "ftp", "ntp", "audit", "alert", "clock", "local0", "local1", "local2", "local3", "local4",
+    "local5", "local6", "local7",
+];
+
+/// `host:port` → (host without IPv6 brackets, non-zero port). An IPv6 host must
+/// be bracketed (`[::1]:514`): unbracketed, `::1:514` is ambiguous and would
+/// never resolve.
+pub fn split_host_port(address: &str) -> Option<(&str, u16)> {
+    let (host, port) = address.rsplit_once(':')?;
+    let port = port.parse::<u16>().ok().filter(|p| *p != 0)?;
+    let host = match host.strip_prefix('[') {
+        Some(inner) => inner.strip_suffix(']')?,
+        None if host.contains(':') || host.contains(']') => return None,
+        None => host,
+    };
+    (!host.is_empty()).then_some((host, port))
+}
+
+impl SyslogConfig {
+    /// No destination, and every other field empty or at its default: the
+    /// section exists only because a deployment passes empty env vars through.
+    fn is_unset(&self) -> bool {
+        let d = Self::default();
+        self.address.is_empty()
+            && (self.protocol.is_empty() || self.protocol == d.protocol)
+            && (self.facility.is_empty() || self.facility == d.facility)
+            && (self.app_name.is_empty() || self.app_name == d.app_name)
+    }
+
+    /// An empty optional field (an empty env var passed through) means its default.
+    fn fill_defaults(&mut self) {
+        let d = Self::default();
+        for (v, def) in [
+            (&mut self.protocol, d.protocol),
+            (&mut self.facility, d.facility),
+            (&mut self.app_name, d.app_name),
+        ] {
+            if v.is_empty() {
+                *v = def;
+            }
+        }
+        self.protocol.make_ascii_lowercase();
+    }
+
+    /// The numeric facility (0..=23), or `None` for an unknown keyword.
+    pub fn facility_code(&self) -> Option<u8> {
+        SYSLOG_FACILITIES
+            .iter()
+            .position(|f| f.eq_ignore_ascii_case(&self.facility))
+            .map(|i| i as u8)
+    }
+
+    /// Boot-time validation. The address is checked for shape only (`host:port`
+    /// with a non-zero port): a collector name need not resolve at boot.
+    pub fn validate(&self) -> Result<(), String> {
+        if split_host_port(&self.address).is_none() {
+            return Err(
+                "audit.syslog.address must be host:port (an IPv6 host in brackets: [::1]:514)"
+                    .into(),
+            );
+        }
+        if !self.protocol.eq_ignore_ascii_case("udp") && !self.protocol.eq_ignore_ascii_case("tcp")
+        {
+            return Err("audit.syslog.protocol must be \"udp\" or \"tcp\"".into());
+        }
+        if self.facility_code().is_none() {
+            return Err(format!(
+                "audit.syslog.facility must be one of {}",
+                SYSLOG_FACILITIES.join(", ")
+            ));
+        }
+        let name_ok = (1..=48).contains(&self.app_name.len())
+            && self.app_name.bytes().all(|b| (33..=126).contains(&b));
+        if !name_ok {
+            return Err(
+                "audit.syslog.app_name must be 1-48 printable ASCII characters without spaces"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl AuditConfig {
+    /// Drop sinks whose section is present but entirely empty (see
+    /// `WebhookConfig::is_unset`, `SyslogConfig::is_unset`). A partly set
+    /// section stays and fails validation.
+    pub fn normalize(&mut self) {
+        if self.webhook.as_ref().is_some_and(WebhookConfig::is_unset) {
+            self.webhook = None;
+        }
+        if self.syslog.as_ref().is_some_and(SyslogConfig::is_unset) {
+            self.syslog = None;
+        }
+        if let Some(s) = &mut self.syslog {
+            s.fill_defaults();
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(w) = &self.webhook {
+            w.validate()?;
+        }
+        if let Some(s) = &self.syslog {
+            s.validate()?;
+        }
+        Ok(())
+    }
+}
+
 impl Default for OidcConfig {
     fn default() -> Self {
         Self {
@@ -287,6 +539,17 @@ impl std::fmt::Debug for DbConfig {
             .finish()
     }
 }
+impl std::fmt::Debug for WebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookConfig")
+            .field("url", &redacted(&self.url))
+            .field("secret_env", &self.secret_env)
+            .field("secret_file", &self.secret_file)
+            .field("batch_size", &self.batch_size)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
+}
 impl std::fmt::Debug for OpsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpsConfig")
@@ -317,11 +580,18 @@ impl Config {
             }
         }
         fig = fig.merge(Env::prefixed("UNISSH__").split("__"));
-        let config: Config = fig.extract().map_err(Box::new)?;
+        let mut config: Config = fig.extract().map_err(Box::new)?;
+        config.audit.normalize();
         // Fail fast on a bad OIDC group_map so no per-login SSO path can be broken by
         // one malformed entry (see `OidcConfig::validate`).
         config
             .oidc
+            .validate()
+            .map_err(|msg| Box::new(figment::Error::from(msg)))?;
+        // A configured sink that cannot run (no secret, bad URL) must stop the
+        // boot: a silently idle sink is a log that quietly stops leaving.
+        config
+            .audit
             .validate()
             .map_err(|msg| Box::new(figment::Error::from(msg)))?;
         Ok(config)
@@ -392,5 +662,49 @@ mod oidc_validate_tests {
             ..Default::default()
         };
         assert!(c.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod audit_validate_tests {
+    use super::Config;
+
+    #[test]
+    fn webhook_without_a_secret_fails_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[audit.webhook]\nurl = \"https://siem.example.com/hook\"\n",
+        )
+        .unwrap();
+        let err = Config::load(Some(&path)).unwrap_err();
+        assert!(
+            err.to_string().contains("audit.webhook needs a secret"),
+            "{err}"
+        );
+        // An all-empty section (compose passing `${X:-}` through) means no sink.
+        std::fs::write(&path, "[audit.webhook]\nurl = \"\"\n").unwrap();
+        assert!(Config::load(Some(&path)).unwrap().audit.webhook.is_none());
+    }
+
+    #[test]
+    fn syslog_with_a_bad_setting_fails_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[audit.syslog]\naddress = \"127.0.0.1:514\"\nprotocol = \"tls\"\n",
+        )
+        .unwrap();
+        let err = Config::load(Some(&path)).unwrap_err();
+        assert!(err.to_string().contains("audit.syslog.protocol"), "{err}");
+        // An all-empty section (compose passing `${X:-}` through) means no sink.
+        std::fs::write(
+            &path,
+            "[audit.syslog]\naddress = \"\"\nprotocol = \"\"\nfacility = \"\"\n",
+        )
+        .unwrap();
+        assert!(Config::load(Some(&path)).unwrap().audit.syslog.is_none());
     }
 }

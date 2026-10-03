@@ -13,14 +13,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, rgba, SPACE, TEXT } from "@/theme/tokens";
-import { Icon, Btn, Checkbox, NO_AUTOCORRECT, Spinner } from "@/components/primitives";
+import { Icon, Btn, BTN_RESET, Checkbox, NO_AUTOCORRECT, Spinner } from "@/components/primitives";
 import { pressActivate } from "@/components/a11y";
+import { Modal } from "@/components/Modal";
+import { SnippetParamsForm } from "@/overlays/SnippetParamsForm";
+import {
+  builtinsFromProfile,
+  fleetCommands,
+  parseParams,
+  splitFleetParams,
+  type FleetTarget,
+} from "@/support/snippetParams";
 import { useApp, HOST_FILTER_ALL } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useTranslation } from "@/i18n";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useFmt } from "@/i18n/format";
 import * as api from "@/bridge/api";
+import { EXEC_CONCURRENCY, EXEC_TIMEOUT_SECS } from "@/support/execLimits";
 import { apiErrorMessage, mismatchFromError } from "@/bridge/types";
 import type { PendingMismatch } from "@/store/app";
 import type { ConnectionProfile, MultiExecResult, MultiExecTarget } from "@/bridge/types";
@@ -30,11 +40,9 @@ type Phase = "idle" | "running" | "done";
 // Per-host run status derived from phase + launch/result/cancel maps.
 type HostStatus = "queued" | "running" | "ok" | "fail" | "cancelled";
 
-// How many hosts run at once. Bounded (instead of the core's "all in parallel")
-// so Stop / stop-on-error have a real queue of not-yet-started hosts to cut.
-const FLEET_CONCURRENCY = 8;
-// Per-host command deadline (matches the previous batched behaviour).
-const EXEC_TIMEOUT_SECS = 30;
+// The resolver's view of a run's targets: each host answers its own built-ins.
+const fleetTargets = (hs: ConnectionProfile[]): FleetTarget[] =>
+  hs.map((h) => ({ id: h.profileId, builtins: builtinsFromProfile(h) }));
 
 function statusColor(
   p: ReturnType<typeof usePalette>,
@@ -55,6 +63,7 @@ const HostTile = React.memo(function HostTile({
   h,
   st,
   result,
+  command,
   selectable,
   checked,
   index,
@@ -64,6 +73,9 @@ const HostTile = React.memo(function HostTile({
   h: ConnectionProfile;
   st: HostStatus;
   result?: MultiExecResult;
+  /** The command this host runs — parameters and built-ins resolved for it.
+   *  Absent while idle (nothing has been resolved yet). */
+  command?: string;
   /** Idle-phase picker: the tile shows a checkbox and is click-to-toggle. False
    *  during running/done (the selection is frozen into the run snapshot). */
   selectable: boolean;
@@ -215,6 +227,12 @@ const HostTile = React.memo(function HostTile({
           background: p.bg0,
         }}
       >
+        {command !== undefined && (
+          <div style={{ color: p.txt3, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+            <span aria-hidden>❯ </span>
+            {command}
+          </div>
+        )}
         {(st === "queued" || st === "cancelled") && <span style={{ color: p.txt3 }}>—</span>}
         {st === "running" && <span style={{ color: p.accentText }}>▋</span>}
         {result && (
@@ -277,6 +295,14 @@ export function ViewFleet() {
   // be typed (or pasted) deliberately; the placeholder carries the hint instead.
   const [command, setCommand] = useState("");
   const [stopOnError, setStopOnError] = useState(true);
+  // The snippet library, read when the picker opens (as the palette does) so a
+  // snippet synced from another device shows up without a cache to invalidate.
+  const [snippets, setSnippets] = useState<api.Snippet[] | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // The parameter form, open between Run and the actual launch.
+  const [paramsForm, setParamsForm] = useState<ReturnType<typeof splitFleetParams> | null>(null);
+  // What each host of the last run executed, keyed by profileId.
+  const [runCommands, setRunCommands] = useState<Record<string, string>>({});
   // All per-host maps are keyed by profileId — hostnames can repeat across
   // profiles (same box, different port/user), and h.host keys would collide.
   const [results, setResults] = useState<Record<string, MultiExecResult>>({});
@@ -294,6 +320,7 @@ export function ViewFleet() {
   const stopOnErrorRef = useRef(stopOnError);
   stopOnErrorRef.current = stopOnError;
   const execBtnRef = useRef<HTMLButtonElement | null>(null);
+  const commandRef = useRef<HTMLInputElement | null>(null);
   // Shift-click range: the last-toggled visible index, and a live mirror of the
   // visible list so the stable toggle handler can resolve a range without
   // capturing a stale closure.
@@ -444,12 +471,49 @@ export function ViewFleet() {
     return "queued";
   };
 
-  const run = async () => {
+  useEffect(() => {
+    if (!pickerOpen || !vaultId) return;
+    let cancelled = false;
+    void api
+      .listSnippets(vaultId)
+      .then((list) => {
+        if (!cancelled) setSnippets(list);
+      })
+      .catch(() => {
+        if (!cancelled) setSnippets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pickerOpen, vaultId]);
+
+  const pickSnippet = (sn: api.Snippet) => {
+    setCommand(sn.command);
+    setPickerOpen(false);
+    commandRef.current?.focus();
+  };
+
+  // Run: parameters the hosts can't answer are asked once, in the form; with
+  // nothing to ask the run starts straight away (a plain command, or one that
+  // only uses built-ins).
+  const run = () => {
+    const cmd = command.trim();
+    if (!cmd || selectedRunnable.length === 0 || !vaultId || phase === "running") return;
+    const split = splitFleetParams(cmd, fleetTargets(selectedRunnable));
+    if (split.ask.length > 0) setParamsForm(split);
+    else void execute({});
+  };
+
+  const execute = async (values: Record<string, string>) => {
     const cmd = command.trim();
     if (!cmd || selectedRunnable.length === 0 || !vaultId || phase === "running") return;
     // Freeze the scope at launch — the grid, Stop and cancellation all run off
     // this snapshot, so a background host sync can't add/drop/reorder tiles mid-run.
     const snapshot = selectedRunnable;
+    // Each host's command, resolved once at launch: the form's values for all,
+    // the built-ins from that host.
+    const commands = fleetCommands(cmd, values, fleetTargets(snapshot));
+    setRunCommands(commands);
     setRunHosts(snapshot);
     setPhase("running");
     setResults({});
@@ -483,7 +547,7 @@ export function ViewFleet() {
             jumps: h.jumps,
             proxy: h.proxy,
           };
-          const out = await api.sshExecMulti([target], cmd, 0, EXEC_TIMEOUT_SECS);
+          const out = await api.sshExecMulti([target], commands[h.profileId], 0, EXEC_TIMEOUT_SECS);
           r = out[0] ?? {
             host: h.host,
             stdout: "",
@@ -509,7 +573,7 @@ export function ViewFleet() {
       }
     };
     await Promise.all(
-      Array.from({ length: Math.min(FLEET_CONCURRENCY, queue.length) }, () => worker()),
+      Array.from({ length: Math.min(EXEC_CONCURRENCY, queue.length) }, () => worker()),
     );
     // Whatever is still queued was never launched — mark it honestly.
     if (queue.length) {
@@ -551,6 +615,7 @@ export function ViewFleet() {
     setResults({});
     setStarted({});
     setCancelledIds({});
+    setRunCommands({});
     setRunHosts(null);
     lastIdxRef.current = null;
     setPhase("idle");
@@ -754,6 +819,7 @@ export function ViewFleet() {
           </span>
           <input
             {...NO_AUTOCORRECT}
+            ref={commandRef}
             value={command}
             onChange={(e) => setCommand(e.target.value)}
             onKeyDown={(e) => {
@@ -764,7 +830,7 @@ export function ViewFleet() {
                 // Nothing selected → Enter does nothing (Run is disabled).
                 if (selectedRunnable.length === 0) return;
                 if (selectedRunnable.length > 1) execBtnRef.current?.focus();
-                else void run();
+                else run();
               }
             }}
             disabled={phase === "running"}
@@ -786,6 +852,17 @@ export function ViewFleet() {
               outline: "none",
             }}
           />
+          <Btn
+            variant="ghost"
+            size="sm"
+            icon="terminal"
+            onClick={() => setPickerOpen(true)}
+            disabled={phase === "running"}
+            title={t("fleet.snippetPickTitle")}
+            aria-haspopup="dialog"
+          >
+            {t("fleet.snippetPick")}
+          </Btn>
           <Checkbox
             checked={stopOnError}
             onChange={setStopOnError}
@@ -915,6 +992,7 @@ export function ViewFleet() {
                 h={h}
                 st={statusOf(h)}
                 result={results[h.profileId]}
+                command={phase === "idle" ? undefined : runCommands[h.profileId]}
                 selectable={phase === "idle"}
                 checked={sel.has(h.profileId)}
                 index={i}
@@ -925,6 +1003,79 @@ export function ViewFleet() {
           </div>
         )}
       </div>
+
+      {pickerOpen && (
+        <Modal
+          icon="terminal"
+          title={t("fleet.snippetPickerTitle")}
+          subtitle={t("fleet.snippetPickerSubtitle")}
+          onClose={() => setPickerOpen(false)}
+        >
+          {snippets === null ? (
+            <Spinner size={16} />
+          ) : snippets.length === 0 ? (
+            <div style={{ fontSize: TEXT.base, color: p.txt3 }}>{t("fleet.snippetPickerEmpty")}</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: rem(2) }}>
+              {snippets.map((sn) => (
+                <button
+                  key={sn.snippetId}
+                  type="button"
+                  onClick={() => pickSnippet(sn)}
+                  style={{
+                    ...BTN_RESET,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: rem(10),
+                    width: "100%",
+                    padding: `${rem(8)} ${rem(10)}`,
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = p.bg2)}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: TEXT.base, fontWeight: 600, color: p.txt }}>{sn.label}</div>
+                    <div
+                      style={{
+                        fontFamily: MONO,
+                        fontSize: TEXT.small,
+                        color: p.txt3,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {sn.command}
+                    </div>
+                  </div>
+                  {parseParams(sn.command).length > 0 && (
+                    <span style={{ fontSize: TEXT.micro, color: p.txt3, whiteSpace: "nowrap" }}>
+                      <span style={{ fontFamily: MONO }}>{"{ }"}</span> {t("command.snippetParamsHint")}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {paramsForm && (
+        <SnippetParamsForm
+          label={command.trim()}
+          ask={paramsForm.ask}
+          fromHost={paramsForm.fromHost}
+          submitLabel={t("fleet.runOnHosts", { count: selectedRunnable.length })}
+          onCancel={() => setParamsForm(null)}
+          onSubmit={(values) => {
+            setParamsForm(null);
+            void execute(values);
+          }}
+        />
+      )}
     </div>
   );
 }
