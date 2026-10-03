@@ -3921,6 +3921,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e48e0b8b339e0d9d2ed4416b7f93f9d4daadff7d4dd797f89867cde11aeac607"
 dependencies = [
+ "block2",
  "objc2",
  "objc2-foundation",
 ]
@@ -7491,6 +7492,7 @@ name = "unissh"
 version = "0.5.0"
 dependencies = [
  "base64 0.23.1",
+ "block2",
  "core-foundation 0.10.1",
  "dashmap",
  "jni 0.22.4",

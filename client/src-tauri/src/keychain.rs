@@ -29,13 +29,7 @@ fn ks_entry() -> Result<keyring::Entry, ApiError> {
 
 /// Run a keychain call off the main thread. See the module note.
 #[cfg(native_keychain)]
-async fn off_main<T, F>(f: F) -> ApiResult<T>
-where
-    F: FnOnce() -> ApiResult<T> + Send + 'static,
-    T: Send + 'static,
-{
-    tauri::async_runtime::spawn_blocking(f).await?
-}
+use crate::commands::blocking_api as off_main;
 
 // ---------- blocking core (call only from a blocking thread) ----------
 
@@ -217,7 +211,7 @@ pub async fn keychain_unlock(
     password: Option<String>,
     state: tauri::State<'_, crate::state::AppState>,
 ) -> ApiResult<()> {
-    #[cfg(not(desktop))]
+    #[cfg(not(native_keychain))]
     let _ = &app;
     #[cfg(native_keychain)]
     {
@@ -226,8 +220,7 @@ pub async fn keychain_unlock(
             .ok_or_else(|| ApiError::other("no Secret Key stored in keychain"))?;
         let core = state.core.clone();
         crate::commands::blocking(move || core.unlock(password, secret_key_hex)).await?;
-        #[cfg(desktop)]
-        crate::mcp::resume_access(&app);
+        crate::commands::resume_after_unlock(&app);
         Ok(())
     }
     #[cfg(not(native_keychain))]

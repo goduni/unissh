@@ -5,36 +5,65 @@
 //! `kSecAccessControlBiometryCurrentSet` and protection
 //! `WhenPasscodeSetThisDeviceOnly`:
 //!
-//! * reading its data requires Touch ID, and the prompt carries the reason the
-//!   caller passes in, through an `LAContext` attached to the query;
+//! * reading its data requires Touch ID;
 //! * enrolling or removing a finger invalidates it for good — that is what
 //!   "current set" means, and it is why a re-enrolment asks the user to enable
 //!   biometric unlock again rather than letting a newly added finger in;
 //! * `ThisDeviceOnly` keeps it out of backups and iCloud Keychain, and removing
 //!   the Mac's login password destroys it.
 //!
+//! **Detecting a re-enrolment deterministically.** An invalidated item is not
+//! reliably reported as such: an attribute-only lookup does not evaluate the data
+//! ACL, and a read can fail with the same `errSecAuthFailed` a bad finger gives.
+//! So two signals are used, neither of which is a guess:
+//!
+//! 1. The biometric **domain state** — a hash LocalAuthentication changes
+//!    whenever the enrolled set changes — is recorded on the item at creation
+//!    (`kSecAttrGeneric`; not secret) and compared with the current one: before a
+//!    prompt, from `canEvaluatePolicy` (no prompt), and after the match. A
+//!    mismatch means the item was made for a different set of fingers.
+//!    `LAContext.domainState.biometry.stateHash` is used on macOS 15+, the
+//!    deprecated `evaluatedPolicyDomainState` before; the stored value is tagged
+//!    with which API produced it, and values from different APIs are never
+//!    compared (an OS upgrade across 15 then simply skips this signal). Apple
+//!    warns the value may change across major OS versions; then the user is
+//!    asked to re-enable once, which is the safe direction.
+//! 2. The policy is **evaluated first** (that is the prompt, with the caller's
+//!    reason), and the item is then read with that already-authenticated context.
+//!    A read that fails authentication after a successful match cannot be a bad
+//!    finger: the item is dead.
+//!
+//! Everything else — a closed lid, a lockout, `errSecMissingEntitlement`, an
+//! unmapped status — never wipes (see the module note in `biometric.rs`).
+//!
 //! The raw `SecItem*` calls are used instead of security-framework's `passwords`
-//! helpers because those cannot attach an authentication context to a query.
-//! `keyring` is untouched and keeps serving the Secret Key item.
+//! helpers because those cannot attach an authentication context or return the
+//! attributes alongside the data. `keyring` is untouched and keeps serving the
+//! Secret Key item.
 //!
 //! **Status codes this file turns into meaning** (from `SecBase.h`):
-//! `errSecUserCanceled` (-128) and `errSecAuthFailed` (-25293) are a dismissed or
-//! failed prompt; `errSecItemNotFound` (-25300) on a read is an invalidated
-//! secret; `errSecInteractionNotAllowed` (-25308) answers the non-interactive
-//! probe with "it exists, and would need Touch ID"; `errSecMissingEntitlement`
-//! (-34018) is a build that may not use the data-protection Keychain at all
-//! (see the note on [`TouchId::state`]).
+//! `errSecUserCanceled` (-128); `errSecAuthFailed` (-25293); `errSecItemNotFound`
+//! (-25300); `errSecInteractionNotAllowed` (-25308, the non-interactive probe's
+//! "it exists, and would need Touch ID"); `errSecMissingEntitlement` (-34018, a
+//! build that may not use the data-protection Keychain: Apple ties it to a signed
+//! app with a keychain-access-group entitlement, which an unsigned or ad-hoc
+//! bundle does not have — the feature is then `Unsupported` and not offered).
 //!
 //! None of this is unit-testable — every path ends in a system prompt or a
 //! Keychain the test runner does not have. It is checked by hand on a Mac.
 
+use std::ffi::c_void;
+use std::sync::mpsc;
+
+use block2::RcBlock;
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::data::CFData;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef};
 use objc2::rc::Retained;
-use objc2_foundation::NSString;
+use objc2::runtime::Bool;
+use objc2_foundation::{NSError, NSString};
 use objc2_local_authentication::{LAContext, LAPolicy};
 use security_framework::access_control::{ProtectionMode, SecAccessControl};
 use security_framework::random::SecRandom;
@@ -49,6 +78,13 @@ use zeroize::Zeroizing;
 
 use super::{DeviceSecretStore, SecretError, SecretState};
 
+// `kSecAttrGeneric` (user-defined data on a generic password) is exported by
+// Security.framework but not declared by security-framework-sys 2.17.
+#[link(name = "Security", kind = "framework")]
+extern "C" {
+    static kSecAttrGeneric: CFStringRef;
+}
+
 const SERVICE: &str = "me.goduni.unissh";
 const ACCOUNT: &str = "biometric-device-secret";
 const LABEL: &str = "UniSSH biometric unlock";
@@ -61,11 +97,14 @@ const ERR_SEC_ITEM_NOT_FOUND: i32 = -25_300;
 const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25_308;
 const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34_018;
 
-/// `LAError` codes `canEvaluatePolicy` reports for a Mac that cannot do Touch
-/// ID: no sensor (-6), nothing enrolled (-7), no login password (-5). Lockout
-/// (-8, too many failed matches) is deliberately absent: the sensor is there and
-/// will come back, so the feature stays offered.
+/// `LAError` codes meaning "this Mac cannot do Touch ID right now": no login
+/// password (-5), no sensor reachable — including a closed lid — (-6), nothing
+/// enrolled (-7). Never a reason to wipe.
 const LA_ERROR_UNAVAILABLE: [isize; 3] = [-5, -6, -7];
+
+/// Domain-state tags: which API produced a stored hash.
+const TAG_LEGACY: u8 = 0;
+const TAG_DOMAIN_STATE: u8 = 1;
 
 pub(super) struct TouchId;
 
@@ -91,21 +130,19 @@ fn item() -> Vec<(CFString, CFType)> {
     }
 }
 
-/// An `LAContext` as a dictionary value. Every Objective-C object is a valid
-/// `CFTypeRef` (toll-free bridging covers retain/release), and the dictionary
-/// retains it for as long as the query lives.
-fn context_value(ctx: &LAContext) -> CFType {
-    // SAFETY: `ctx` is a live Objective-C object; wrapping under the get rule
-    // takes our own +1, released when the CFType drops.
-    unsafe { CFType::wrap_under_get_rule(std::ptr::from_ref(ctx).cast()) }
+fn yes(query: &mut Vec<(CFString, CFType)>, k: CFStringRef) {
+    query.push((key(k), CFBoolean::true_value().into_CFType()));
 }
 
+/// Attach an `LAContext`. Every Objective-C object is a valid `CFTypeRef`
+/// (toll-free bridging covers retain/release), and the dictionary retains it for
+/// as long as the query lives.
 fn with_context(mut query: Vec<(CFString, CFType)>, ctx: &LAContext) -> Vec<(CFString, CFType)> {
-    // SAFETY: reading an `extern` static exported by Security.framework.
-    query.push((
-        key(unsafe { kSecUseAuthenticationContext }),
-        context_value(ctx),
-    ));
+    // SAFETY: `ctx` is a live Objective-C object; wrapping under the get rule
+    // takes our own +1, released when the CFType drops. The key is an `extern`
+    // static exported by Security.framework.
+    let value = unsafe { CFType::wrap_under_get_rule(std::ptr::from_ref(ctx).cast()) };
+    query.push((key(unsafe { kSecUseAuthenticationContext }), value));
     query
 }
 
@@ -119,62 +156,131 @@ fn copy_matching(query: &[(CFString, CFType)]) -> (i32, Option<CFType>) {
     (status, value)
 }
 
+/// A `CFData` value out of an attributes dictionary returned by the Keychain.
+fn dict_bytes(dict: &CFDictionary, k: CFStringRef) -> Option<Vec<u8>> {
+    let v = dict.find(k.cast::<c_void>())?;
+    // SAFETY: the value is a live CF object owned by `dict`; get rule = +1 of ours.
+    let v = unsafe { CFType::wrap_under_get_rule(*v) };
+    v.downcast_into::<CFData>().map(|d| d.bytes().to_vec())
+}
+
 fn new_context() -> Retained<LAContext> {
     // SAFETY: `+[LAContext new]` has no preconditions.
     unsafe { LAContext::new() }
 }
 
-impl TouchId {
-    /// Can this Mac do Touch ID right now (sensor present, a finger enrolled, a
-    /// login password set)?
-    fn biometry_available() -> bool {
-        let ctx = new_context();
-        // SAFETY: plain preflight query on a fresh context.
-        match unsafe {
-            ctx.canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthenticationWithBiometrics)
-        } {
-            Ok(()) => true,
-            Err(e) => !LA_ERROR_UNAVAILABLE.contains(&e.code()),
-        }
+/// Preflight on `ctx`: can Touch ID be used now? Lockout (-8) counts as yes —
+/// the sensor is there and will come back. A successful preflight also fills in
+/// the context's domain state, which is what lets `state()` compare it without a
+/// prompt.
+fn biometry_available(ctx: &LAContext) -> bool {
+    // SAFETY: plain preflight query on a context we own.
+    match unsafe { ctx.canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthenticationWithBiometrics) }
+    {
+        Ok(()) => true,
+        Err(e) => !LA_ERROR_UNAVAILABLE.contains(&e.code()),
     }
 }
 
+/// The tagged biometric domain-state hash of `ctx`, after a preflight or an
+/// evaluation; `None` when the system has none to give (e.g. locked out).
+fn domain_hash(ctx: &LAContext) -> Option<Vec<u8>> {
+    let (tag, data) = if objc2::available!(macos = 15.0) {
+        // SAFETY: `domainState` exists from macOS 15, checked just above.
+        let hash = unsafe { ctx.domainState().biometry().stateHash() };
+        (TAG_DOMAIN_STATE, hash?)
+    } else {
+        // SAFETY: plain property read; the replacement above is not available.
+        #[allow(deprecated)]
+        let hash = unsafe { ctx.evaluatedPolicyDomainState() };
+        (TAG_LEGACY, hash?)
+    };
+    let mut out = vec![tag];
+    out.extend_from_slice(&data.to_vec());
+    Some(out)
+}
+
+/// The enrolled set provably changed since the item was made: both hashes
+/// known, produced by the same API, and different. Anything less is not proof.
+fn enrolment_changed(stored: Option<&[u8]>, current: Option<&[u8]>) -> bool {
+    match (stored, current) {
+        (Some(s), Some(c)) => s.first() == c.first() && s != c,
+        _ => false,
+    }
+}
+
+/// Show the Touch ID prompt with `reason` on `ctx` and wait for the answer.
+/// Called on a blocking thread; the reply arrives on a LocalAuthentication queue.
+fn evaluate(ctx: &LAContext, reason: &str) -> Result<(), isize> {
+    let (tx, rx) = mpsc::channel::<Result<(), isize>>();
+    let reply = RcBlock::new(move |ok: Bool, err: *mut NSError| {
+        let result = if ok.as_bool() {
+            Ok(())
+        } else if err.is_null() {
+            Err(0)
+        } else {
+            // SAFETY: LocalAuthentication passes a valid NSError when it fails.
+            Err(unsafe { (*err).code() })
+        };
+        let _ = tx.send(result);
+    });
+    // SAFETY: the reply block is `Send`-safe (it only owns an mpsc Sender), as
+    // the method requires; the reason is a valid NSString.
+    unsafe {
+        ctx.evaluatePolicy_localizedReason_reply(
+            LAPolicy::DeviceOwnerAuthenticationWithBiometrics,
+            &NSString::from_str(reason),
+            &reply,
+        );
+    }
+    rx.recv().unwrap_or(Err(0))
+}
+
 impl DeviceSecretStore for TouchId {
-    /// Without a prompt: the item is looked up for its attributes only, through
-    /// a context that forbids interaction, so an item that would need Touch ID
-    /// answers `errSecInteractionNotAllowed` instead of asking.
-    ///
-    /// `errSecMissingEntitlement` means this build may not use the
-    /// data-protection Keychain at all. Apple ties that Keychain to a signed app
-    /// with a keychain-access-group entitlement backed by a provisioning profile,
-    /// which an unsigned or ad-hoc-signed bundle does not have. Such a build
-    /// reports `Unsupported` and the setting is simply not offered — the honest
-    /// answer, rather than an option that fails when switched on.
+    /// Without a prompt: the item's attributes are read through a context that
+    /// forbids interaction, so an item that would need Touch ID answers
+    /// `errSecInteractionNotAllowed` instead of asking.
     fn state(&self) -> SecretState {
-        if !Self::biometry_available() {
+        let ctx = new_context();
+        if !biometry_available(&ctx) {
             return SecretState::Unsupported;
         }
-        let ctx = new_context();
+        let current = domain_hash(&ctx);
+        let probe = new_context();
         // SAFETY: setter on a fresh context we own.
-        unsafe { ctx.setInteractionNotAllowed(true) };
-        let mut query = with_context(item(), &ctx);
+        unsafe { probe.setInteractionNotAllowed(true) };
+        let mut query = with_context(item(), &probe);
         // SAFETY: reading an `extern` static exported by Security.framework.
-        query.push((
-            key(unsafe { kSecReturnAttributes }),
-            CFBoolean::true_value().into_CFType(),
-        ));
-        match copy_matching(&query).0 {
-            ERR_SEC_SUCCESS | ERR_SEC_INTERACTION_NOT_ALLOWED => SecretState::Present,
-            ERR_SEC_MISSING_ENTITLEMENT => SecretState::Unsupported,
+        yes(&mut query, unsafe { kSecReturnAttributes });
+        let (status, value) = copy_matching(&query);
+        match status {
+            ERR_SEC_SUCCESS => {
+                let stored = value
+                    .and_then(|v| v.downcast_into::<CFDictionary>())
+                    // SAFETY: reading an `extern` static declared above.
+                    .and_then(|d| dict_bytes(&d, unsafe { kSecAttrGeneric }));
+                if enrolment_changed(stored.as_deref(), current.as_deref()) {
+                    SecretState::Absent
+                } else {
+                    SecretState::Present
+                }
+            }
+            ERR_SEC_INTERACTION_NOT_ALLOWED => SecretState::Present,
             ERR_SEC_ITEM_NOT_FOUND => SecretState::Absent,
+            ERR_SEC_MISSING_ENTITLEMENT => SecretState::Unsupported,
             other => {
                 log::warn!("biometric: Keychain probe returned OSStatus {other}");
-                SecretState::Absent
+                SecretState::Unknown
             }
         }
     }
 
     fn create(&self) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+        let ctx = new_context();
+        if !biometry_available(&ctx) {
+            return Err(SecretError::Unsupported);
+        }
+        let enrolment = domain_hash(&ctx);
         self.delete()?;
         let mut secret = Zeroizing::new(vec![0u8; SECRET_LEN]);
         SecRandom::default()
@@ -190,6 +296,12 @@ impl DeviceSecretStore for TouchId {
         unsafe {
             attrs.push((key(kSecAttrLabel), CFString::new(LABEL).into_CFType()));
             attrs.push((key(kSecAttrAccessControl), access.into_CFType()));
+            if let Some(hash) = &enrolment {
+                attrs.push((
+                    key(kSecAttrGeneric),
+                    CFData::from_buffer(hash).into_CFType(),
+                ));
+            }
             // The one copy we cannot zeroize: CFData owns its buffer.
             attrs.push((
                 key(kSecValueData),
@@ -198,9 +310,9 @@ impl DeviceSecretStore for TouchId {
         }
         let dict = CFDictionary::from_CFType_pairs(&attrs);
         // SAFETY: valid attribute dictionary; no result is requested.
-        let status = unsafe { SecItemAdd(dict.as_concrete_TypeRef(), std::ptr::null_mut()) };
-        match status {
+        match unsafe { SecItemAdd(dict.as_concrete_TypeRef(), std::ptr::null_mut()) } {
             ERR_SEC_SUCCESS => Ok(secret),
+            ERR_SEC_MISSING_ENTITLEMENT => Err(SecretError::Unsupported),
             other => Err(SecretError::Failed(format!(
                 "storing the Touch ID secret failed: OSStatus {other}"
             ))),
@@ -208,31 +320,55 @@ impl DeviceSecretStore for TouchId {
     }
 
     fn read(&self, reason: &str) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+        // No prompt for an item that is provably dead or cannot be used here.
+        match self.state() {
+            SecretState::Unsupported => return Err(SecretError::Unsupported),
+            SecretState::Absent => return Err(SecretError::Invalidated),
+            SecretState::Present | SecretState::Unknown => {}
+        }
         let ctx = new_context();
-        // SAFETY: setter on a fresh context we own.
-        unsafe { ctx.setLocalizedReason(&NSString::from_str(reason)) };
+        match evaluate(&ctx, reason) {
+            Ok(()) => {}
+            Err(code) if LA_ERROR_UNAVAILABLE.contains(&code) => {
+                return Err(SecretError::Unsupported)
+            }
+            // Failed match (-1), cancel (-2), fallback (-3), system/app cancel
+            // (-4, -9), lockout (-8): the password, this time; keep everything.
+            Err(-1 | -2 | -3 | -4 | -8 | -9) => return Err(SecretError::Cancelled),
+            Err(code) => {
+                return Err(SecretError::Failed(format!(
+                    "Touch ID evaluation failed: LAError {code}"
+                )))
+            }
+        }
+        let current = domain_hash(&ctx);
         let mut query = with_context(item(), &ctx);
-        // SAFETY: reading an `extern` static exported by Security.framework.
-        query.push((
-            key(unsafe { kSecReturnData }),
-            CFBoolean::true_value().into_CFType(),
-        ));
+        // SAFETY: reading `extern` statics exported by Security.framework.
+        unsafe {
+            yes(&mut query, kSecReturnData);
+            yes(&mut query, kSecReturnAttributes);
+        }
         let (status, value) = copy_matching(&query);
         match status {
             ERR_SEC_SUCCESS => {
-                let data = value
-                    .and_then(|v| v.downcast_into::<CFData>())
+                let dict = value
+                    .and_then(|v| v.downcast_into::<CFDictionary>())
+                    .ok_or_else(|| SecretError::Failed("Keychain returned no item".into()))?;
+                // SAFETY: reading `extern` statics.
+                let stored = dict_bytes(&dict, unsafe { kSecAttrGeneric });
+                if enrolment_changed(stored.as_deref(), current.as_deref()) {
+                    return Err(SecretError::Invalidated);
+                }
+                // SAFETY: reading an `extern` static exported by Security.framework.
+                let data = dict_bytes(&dict, unsafe { kSecValueData })
                     .ok_or_else(|| SecretError::Failed("Keychain returned no data".into()))?;
-                Ok(Zeroizing::new(data.bytes().to_vec()))
+                Ok(Zeroizing::new(data))
             }
             ERR_SEC_USER_CANCELED => Err(SecretError::Cancelled),
-            // A failed match and a secret that died under us can both surface
-            // as an auth failure; only the latter leaves no item behind.
-            ERR_SEC_AUTH_FAILED => match self.state() {
-                SecretState::Present => Err(SecretError::Cancelled),
-                _ => Err(SecretError::Invalidated),
-            },
-            ERR_SEC_ITEM_NOT_FOUND => Err(SecretError::Invalidated),
+            // The match on this very context just succeeded, so an item that
+            // still refuses it is dead, not a bad finger.
+            ERR_SEC_AUTH_FAILED | ERR_SEC_ITEM_NOT_FOUND => Err(SecretError::Invalidated),
+            ERR_SEC_MISSING_ENTITLEMENT => Err(SecretError::Unsupported),
             other => Err(SecretError::Failed(format!(
                 "reading the Touch ID secret failed: OSStatus {other}"
             ))),

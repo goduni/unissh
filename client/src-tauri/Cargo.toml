@@ -52,11 +52,11 @@ sha2 = "0.10"
 
 # The SSH core — depended on directly as a path dependency (its crate-type includes `lib`).
 unissh-ffi = { path = "../../rust-core/crates/ffi" }
-# The key hierarchy, named directly for two things the FFI facade has no reason
-# to export: `device_wrap` (sealing the biometric-unlock material under a device
-# secret) and checking a password against the on-disk keyset before that material
-# is stored (src/biometric.rs). Already compiled as part of unissh-ffi; naming it
-# adds nothing to the build.
+# The key hierarchy, named directly for one thing the FFI facade has no reason
+# to export: `device_wrap`, which seals the biometric-unlock material under a
+# device secret (src/biometric.rs). Checking the password before it is stored
+# goes through the facade (`Core::verify_unlock_password`). Already compiled as
+# part of unissh-ffi; naming it adds nothing to the build.
 unissh-keychain = { path = "../../rust-core/crates/keychain" }
 # Zeroizing buffers for the biometric-unlock material and device secret. Already
 # in the tree through the core.
@@ -160,14 +160,18 @@ objc2 = "0.6"
 security-framework = "3"
 security-framework-sys = { version = "2.17", features = ["OSX_10_15"] }
 core-foundation = "0.10"
-# `LAContext`: whether Touch ID is available and enrolled, and the context that
-# carries the prompt's reason into the Keychain read. The one genuinely new crate
-# for this feature, from the same objc2 0.3 generation as the AppKit/Foundation
-# bindings above.
+# `LAContext`: whether Touch ID is available and enrolled, the prompt itself
+# (`evaluatePolicy`, hence `block2` for its reply), and the biometric domain
+# state that detects a re-enrolment (`LADomainState` on macOS 15+). The one
+# genuinely new crate for this feature, from the same objc2 0.3 generation as the
+# AppKit/Foundation bindings above; block2 0.6 is already in the tree under wry.
 objc2-local-authentication = { version = "0.3", default-features = false, features = [
     "std",
+    "block2",
     "LAContext",
+    "LADomainState",
 ] }
+block2 = "0.6"
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 # Lock the vault when the session locks or the machine suspends: a hidden

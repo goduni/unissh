@@ -35,6 +35,27 @@ where
         .map_err(ApiError::from)
 }
 
+/// Run blocking wrapper-level work (keychain, biometric prompt, files) off the
+/// async runtime and the main thread. The one copy of this helper: keychain
+/// and biometric commands both need it, and a prompt served by the main loop
+/// must never be waited on from that loop.
+pub(crate) async fn blocking_api<T, F>(f: F) -> ApiResult<T>
+where
+    F: FnOnce() -> ApiResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f).await?
+}
+
+/// What every successful unlock does next, however it was asked for (typed
+/// password, trusted-device keychain, biometric): give paused MCP access back.
+pub(crate) fn resume_after_unlock(app: &tauri::AppHandle) {
+    #[cfg(desktop)]
+    crate::mcp::resume_access(app);
+    #[cfg(mobile)]
+    let _ = app;
+}
+
 /// Run a blocking, infallible core call off the async runtime.
 async fn blocking_ok<T, F>(f: F) -> ApiResult<T>
 where
@@ -171,6 +192,10 @@ pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -
     // Forget cloud links + the stale keychain Secret Key so re-onboarding is clean.
     state.cloud.clear_all();
     let _ = crate::keychain::keychain_delete_secret_key().await;
+    // And biometric unlock: the sealed password beside the keyset and its
+    // device secret in the platform store. Idempotent, best-effort like the rest.
+    let blob = crate::biometric::blob_path(&state);
+    let _ = blocking_api(move || crate::biometric::forget_now(&blob)).await;
     Ok(())
 }
 
@@ -306,10 +331,7 @@ pub async fn unlock(
 ) -> ApiResult<()> {
     let core = state.core.clone();
     blocking(move || core.unlock(password, secret_key_hex)).await?;
-    #[cfg(desktop)]
-    crate::mcp::resume_access(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    resume_after_unlock(&app);
     Ok(())
 }
 

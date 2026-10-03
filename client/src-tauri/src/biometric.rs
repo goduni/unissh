@@ -20,6 +20,12 @@
 //! Everything else — the blob, the password check, the unlock, the wipe on
 //! invalidation — is platform-independent and lives in this file.
 //!
+//! **Wiping is deliberately narrow.** Material is destroyed only on an explicit
+//! "this is dead" signal — the adapter says `Invalidated`/`Absent`, the blob does
+//! not open under the secret, or the core rejects the stored password. A closed
+//! lid, a lockout, a failed finger or an OS status code nobody mapped is never
+//! one of those: it falls back to the password and keeps the material.
+//!
 //! Every call here may block (a Keychain query, a prompt the user is looking at,
 //! an Argon2id run), so each command does its work on the blocking pool, never on
 //! the main thread — the prompt is served by the very loop we would block.
@@ -33,6 +39,7 @@ use unissh_ffi::FfiError;
 use unissh_keychain::device_wrap;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::commands::{blocking_api, resume_after_unlock};
 use crate::error::{ApiError, ApiResult};
 use crate::keychain::stored_secret_key_hex_now;
 use crate::state::AppState;
@@ -44,47 +51,64 @@ mod macos;
 /// device secret, which never leaves the platform store, it opens to nothing.
 const BLOB_FILE: &str = "biometric-unlock.bin";
 
-/// Whether the platform's biometric-gated secret exists. Asking must never
+/// What the platform knows about its biometric-gated secret. Asking must never
 /// prompt.
-// Constructed only by a platform adapter; on a target without one (Linux, and
-// Windows until its adapter lands) the variants exist for the shared code alone.
+// Absent/Present/Unknown are constructed only by a platform adapter; on a
+// target without one (Linux, and Windows until its adapter lands) they exist
+// for the shared code alone.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SecretState {
-    /// This device or build cannot do biometric unlock at all.
+    /// This device or build cannot do biometric unlock right now (no sensor,
+    /// nothing enrolled, a closed lid, a build without the needed entitlement).
     Unsupported,
-    /// Supported, and no secret stored (never enabled, or invalidated).
+    /// Explicitly not there, or explicitly dead (on macOS: the item is not found,
+    /// or the Touch ID set changed since it was made). The only state in which
+    /// stored material counts as invalidated.
     Absent,
-    /// A secret is stored.
+    /// A usable secret is stored.
     Present,
+    /// The platform gave an answer nobody mapped. Never wipes and is never
+    /// reported as invalidated; an unlock attempt will tell.
+    Unknown,
 }
 
 /// Why the device secret could not be produced.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) enum SecretError {
-    /// The user dismissed the prompt, or the biometric did not match. The
-    /// stored material stays; the user types the password this time.
+    /// The user dismissed the prompt, the biometric did not match, or it is
+    /// locked out. The material stays; the user types the password this time.
     Cancelled,
-    /// The secret is gone or permanently unreadable — on macOS, the Touch ID
-    /// set changed. The material is dead and must be wiped; re-enable required.
+    /// The secret is explicitly gone or dead. The material is wiped and the user
+    /// is asked to enable biometric unlock again.
     Invalidated,
-    /// The platform refused for a reason the user cannot answer with a finger.
-    /// Carries a diagnostic (an OS status code), never secret material.
+    /// The platform cannot do this here at all (see [`SecretState::Unsupported`]).
+    /// Never wipes; the setting is simply not offered.
+    Unsupported,
+    /// Anything else. Carries a diagnostic (an OS status code), never secret
+    /// material. Never wipes.
     Failed(String),
 }
 
 /// What a platform contributes to biometric unlock. See the module note.
+///
+/// Contract, written for more than one platform:
+/// * `state` never prompts, on any platform.
+/// * `create` makes a fresh secret behind the biometric, replacing any earlier
+///   one, and returns it. Whether that prompts is the platform's business: on
+///   macOS storing a Keychain item does not; Windows Hello prompts when the
+///   credential is created and again on every signature.
+/// * `read` produces the same secret behind the prompt. `reason` is the localised
+///   line for the prompt; a platform whose prompt takes no message ignores it.
+/// * `delete` is idempotent.
+/// * The blob itself is stored by the shared code today (a file beside the
+///   keyset). If an adapter needs it elsewhere (the Windows design keeps the
+///   ciphertext in Credential Manager), blob storage may move behind this trait.
 pub(crate) trait DeviceSecretStore {
-    /// Non-interactive: never shows a prompt.
     fn state(&self) -> SecretState;
-    /// Generate a fresh device secret, store it behind the biometric (replacing
-    /// any earlier one), and return it. Storing does not prompt.
     fn create(&self) -> Result<Zeroizing<Vec<u8>>, SecretError>;
-    /// Read the device secret. This is what shows the system prompt, carrying
-    /// `reason` (already localised by the caller).
     fn read(&self, reason: &str) -> Result<Zeroizing<Vec<u8>>, SecretError>;
-    /// Delete the device secret. Deleting nothing is a success.
     fn delete(&self) -> Result<(), SecretError>;
 }
 
@@ -106,14 +130,19 @@ fn platform_store() -> Option<Box<dyn DeviceSecretStore>> {
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BiometricStatus {
-    /// This device can do biometric unlock (hardware present, a finger
+    /// This device can do biometric unlock right now (sensor present, a finger
     /// enrolled, and a build that may use the protected Keychain).
     pub supported: bool,
-    /// Material is stored and its device secret is still there.
+    /// Material is stored and its device secret is (as far as the platform
+    /// says without a prompt) still there.
     pub enabled: bool,
-    /// Material is stored but its device secret is gone (the biometric set
-    /// changed): the user must re-enable.
+    /// Material is stored but its device secret is explicitly gone (the
+    /// biometric set changed): the user must re-enable.
     pub invalidated: bool,
+    /// This device remembers the Secret Key in the OS keychain. Biometric unlock
+    /// stores only the password, so without a remembered Secret Key it cannot
+    /// unlock and is neither offered nor attempted. Only asked where `supported`.
+    pub secret_key_remembered: bool,
 }
 
 /// How a biometric unlock attempt ended. Expected outcomes are values, not
@@ -123,14 +152,18 @@ pub struct BiometricStatus {
 pub enum BiometricUnlockOutcome {
     /// The vault is open.
     Unlocked,
-    /// Prompt dismissed or not matched: show the password field.
+    /// Prompt dismissed, not matched, or not possible right now: show the
+    /// password field. The material is kept.
     Cancelled,
     /// The stored material was dead and has been wiped: show the password
     /// field and say that biometric unlock must be enabled again.
     Invalidated,
+    /// The Secret Key is not remembered on this device, so the stored password
+    /// alone cannot unlock. Nothing was prompted and nothing wiped.
+    NoSecretKey,
 }
 
-fn blob_path(state: &AppState) -> PathBuf {
+pub(crate) fn blob_path(state: &AppState) -> PathBuf {
     state.keyset_path.with_file_name(BLOB_FILE)
 }
 
@@ -142,41 +175,41 @@ fn secret_error(e: SecretError) -> ApiError {
     match e {
         SecretError::Cancelled => ApiError::other("biometric prompt cancelled"),
         SecretError::Invalidated => ApiError::other("biometric unlock must be enabled again"),
+        SecretError::Unsupported => unsupported(),
         SecretError::Failed(msg) => ApiError::other(msg),
     }
 }
 
-async fn off_main<T, F>(f: F) -> ApiResult<T>
-where
-    F: FnOnce() -> ApiResult<T> + Send + 'static,
-    T: Send + 'static,
-{
-    tauri::async_runtime::spawn_blocking(f).await?
-}
-
 /// Write the blob so that a crash leaves either the old file or the new one,
-/// never half of one, and readable by this user only.
+/// never half of one, and readable by this user only. A failed write leaves no
+/// temporary file behind.
 fn write_blob(path: &Path, blob: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("bin.tmp");
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(&tmp)?;
-    f.write_all(blob)?;
-    f.sync_all()?;
-    drop(f);
-    std::fs::rename(&tmp, path)
+    let write = || -> std::io::Result<()> {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
+        f.write_all(blob)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// Wipe both halves: the blob and the device secret. Each is attempted even if
 /// the other fails — "off" that leaves one half behind is the outcome to avoid.
-/// Missing halves are not errors. This is the one place material is forgotten;
-/// disabling, invalidation, and (ticket 03) a password change all come here.
-pub(crate) fn forget_now(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> ApiResult<()> {
+/// Missing halves are not errors. This is the one place material is forgotten:
+/// disabling, invalidation, a failed enable and resetting the instance come
+/// here; so should a password change (ticket 03).
+fn forget_with(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> ApiResult<()> {
     let file = match std::fs::remove_file(blob) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -189,15 +222,22 @@ pub(crate) fn forget_now(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> 
     file.and(secret)
 }
 
+/// [`forget_with`] this platform's store. Blocking.
+pub(crate) fn forget_now(blob: &Path) -> ApiResult<()> {
+    forget_with(platform_store().as_deref(), blob)
+}
+
 fn status_now(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> BiometricStatus {
     let secret = store.map_or(SecretState::Unsupported, |s| s.state());
+    let supported = secret != SecretState::Unsupported;
     let stored = blob.exists();
     BiometricStatus {
-        supported: secret != SecretState::Unsupported,
-        enabled: stored && secret == SecretState::Present,
-        // Not when merely `Unsupported`: a closed lid (clamshell) reports no
-        // sensor for a while, and that is not a reason to call the material dead.
+        supported,
+        enabled: stored && matches!(secret, SecretState::Present | SecretState::Unknown),
+        // Only on an explicit "dead": a closed lid (Unsupported) or an
+        // unmapped answer (Unknown) is not a reason to call the material gone.
         invalidated: stored && secret == SecretState::Absent,
+        secret_key_remembered: supported && stored_secret_key_hex_now().is_ok_and(|k| k.is_some()),
     }
 }
 
@@ -206,11 +246,7 @@ fn status_now(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> BiometricSt
 #[tauri::command]
 pub async fn biometric_status(state: State<'_, AppState>) -> ApiResult<BiometricStatus> {
     let blob = blob_path(&state);
-    off_main(move || {
-        let store = platform_store();
-        Ok(status_now(store.as_deref(), &blob))
-    })
-    .await
+    blocking_api(move || Ok(status_now(platform_store().as_deref(), &blob))).await
 }
 
 /// Remember the master password behind the biometric. Only while unlocked, and
@@ -222,7 +258,7 @@ pub async fn biometric_enable(password: String, state: State<'_, AppState>) -> A
     let password = Zeroizing::new(password);
     let core = state.core.clone();
     let blob = blob_path(&state);
-    off_main(move || {
+    blocking_api(move || {
         let store = platform_store().ok_or_else(unsupported)?;
         if store.state() == SecretState::Unsupported {
             return Err(unsupported());
@@ -230,12 +266,19 @@ pub async fn biometric_enable(password: String, state: State<'_, AppState>) -> A
         let secret_key_hex = stored_secret_key_hex_now()?
             .ok_or_else(|| ApiError::other("the Secret Key is not remembered on this device"))?;
         core.verify_unlock_password(password.to_string(), secret_key_hex)?;
-        let secret = store.create().map_err(secret_error)?;
-        let sealed = device_wrap::wrap(password.as_bytes(), &secret).map_err(ApiError::other)?;
-        if let Err(e) = write_blob(&blob, &sealed) {
-            // Half-enabled is worse than off: drop the secret we just made.
-            let _ = store.delete();
-            return Err(ApiError::other(e));
+        // From here on a failure must leave the feature OFF, not half-on: a new
+        // secret beside an old blob would read as "invalidated", and an old
+        // secret is replaced by `create` anyway.
+        let enabled = store
+            .create()
+            .map_err(secret_error)
+            .and_then(|secret| {
+                device_wrap::wrap(password.as_bytes(), &secret).map_err(ApiError::other)
+            })
+            .and_then(|sealed| write_blob(&blob, &sealed).map_err(ApiError::other));
+        if let Err(e) = enabled {
+            let _ = forget_with(Some(store.as_ref()), &blob);
+            return Err(e);
         }
         log::info!("biometric unlock enabled");
         Ok(())
@@ -247,9 +290,8 @@ pub async fn biometric_enable(password: String, state: State<'_, AppState>) -> A
 #[tauri::command]
 pub async fn biometric_disable(state: State<'_, AppState>) -> ApiResult<()> {
     let blob = blob_path(&state);
-    off_main(move || {
-        let store = platform_store();
-        forget_now(store.as_deref(), &blob)?;
+    blocking_api(move || {
+        forget_now(&blob)?;
         log::info!("biometric unlock disabled");
         Ok(())
     })
@@ -268,22 +310,25 @@ pub async fn biometric_unlock(
 ) -> ApiResult<BiometricUnlockOutcome> {
     let core = state.core.clone();
     let blob = blob_path(&state);
-    let outcome = off_main(move || {
+    let outcome = blocking_api(move || {
         let store = platform_store().ok_or_else(unsupported)?;
         let sealed =
             std::fs::read(&blob).map_err(|_| ApiError::other("biometric unlock is not enabled"))?;
+        // Before the prompt: a Touch ID that cannot end in an unlock is not asked for.
+        let Some(secret_key_hex) = stored_secret_key_hex_now()? else {
+            return Ok(BiometricUnlockOutcome::NoSecretKey);
+        };
         let invalidated = |why: &str| {
             log::warn!("biometric unlock invalidated ({why}); material wiped");
-            forget_now(Some(store.as_ref()), &blob).map(|()| BiometricUnlockOutcome::Invalidated)
+            forget_with(Some(store.as_ref()), &blob).map(|()| BiometricUnlockOutcome::Invalidated)
         };
-        // Before the prompt: a Touch ID that cannot end in an unlock is not asked for.
-        let secret_key_hex = stored_secret_key_hex_now()?
-            .ok_or_else(|| ApiError::other("the Secret Key is not remembered on this device"))?;
         let secret = match store.read(&reason) {
             Ok(secret) => secret,
-            Err(SecretError::Cancelled) => return Ok(BiometricUnlockOutcome::Cancelled),
+            Err(SecretError::Cancelled | SecretError::Unsupported) => {
+                return Ok(BiometricUnlockOutcome::Cancelled)
+            }
             Err(SecretError::Invalidated) => return invalidated("device secret gone"),
-            Err(e) => return Err(secret_error(e)),
+            Err(e @ SecretError::Failed(_)) => return Err(secret_error(e)),
         };
         let Ok(mut material) = device_wrap::unwrap(&sealed, &secret) else {
             return invalidated("blob does not open under the device secret");
@@ -304,10 +349,7 @@ pub async fn biometric_unlock(
     })
     .await?;
     if matches!(outcome, BiometricUnlockOutcome::Unlocked) {
-        #[cfg(desktop)]
-        crate::mcp::resume_access(&app);
+        resume_after_unlock(&app);
     }
-    #[cfg(not(desktop))]
-    let _ = &app;
     Ok(outcome)
 }
