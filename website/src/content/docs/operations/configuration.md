@@ -141,6 +141,24 @@ token = ""                       # empty → ops surface DISABLED (the default)
 
 This is **server-trusted infrastructure access** (overview / instance / `seq-bump`), **not** a keyset and never decryption. It is not how the [admin panel](../../components/server-ui/) normally signs in — the panel authenticates by escrow or SSO; the ops token is a last-resort infrastructure lever.
 
+### `[audit]`
+
+Optional **audit export sinks**. Absent means the server exports nothing; sinks are configured here only, never through the API. The log holds server events only: SSH sessions never pass through the server and are not recorded here (see [the audit log](../../components/server-audit/)).
+
+```toml
+[audit.webhook]
+url = "https://siem.example.com/unissh"
+secret_env = "UNISSH_AUDIT_WEBHOOK_SECRET"   # or: secret_file = "/run/secrets/audit_webhook"
+batch_size = 100                             # entries per POST
+timeout_secs = 10                            # a timeout fails the batch
+```
+
+The webhook POSTs batches of entries as JSON, each entry shaped like a line of the [JSON Lines export](../../components/server-audit/#export-json-lines), with `X-UniSSH-Signature: sha256=<hex HMAC-SHA256 of the body>` and `X-UniSSH-Delivery: <first seq>-<last seq>`. A `2xx` acknowledges the batch; anything else, a redirect or a timeout retries the **same** batch with exponential backoff (1 s up to 5 min, with jitter).
+
+- **The secret never goes in the TOML.** `secret_env` names an environment variable that holds it; `secret_file` is a path to a file that holds it (a trailing newline is ignored). Set exactly one. A webhook without a readable secret is a **startup error**.
+- **At-least-once.** The server records the last acknowledged `seq` and resumes after it on restart. A batch can arrive twice (for example, a crash right after the receiver answered), so **receivers dedupe on `seq`**.
+- Every key also works from the environment: `UNISSH__AUDIT__WEBHOOK__URL`, `UNISSH__AUDIT__WEBHOOK__SECRET_ENV`, and so on.
+
 ## Environment overrides
 
 Any key maps to an environment variable by uppercasing and joining with double underscores:
