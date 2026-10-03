@@ -1373,6 +1373,34 @@ fn key_rotation_unlinked_candidate_listed_elsewhere_abandonable_not_finishable()
 }
 
 #[test]
+fn key_rotation_replaced_candidate_listed_elsewhere_not_finishable() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = rotation_fixture(dir.path());
+    let candidate = core
+        .begin_key_rotation("v".to_string(), "key".to_string())
+        .unwrap();
+    // The candidate is deleted elsewhere and a different key syncs in under its
+    // id: this device's link still names the id, but not that key.
+    core.delete_item("v".to_string(), candidate.clone())
+        .unwrap();
+    core.generate_ssh_key("v".to_string(), candidate.clone())
+        .unwrap();
+
+    assert!(matches!(
+        core.finish_key_rotation("v".to_string(), "key".to_string(), candidate.clone()),
+        Err(unissh_ffi::FfiError::NotFound)
+    ));
+    assert_eq!(
+        core.list_key_rotations("v".to_string()).unwrap(),
+        vec![unissh_ffi::KeyRotationLink {
+            key_id: "key".to_string(),
+            candidate_id: candidate,
+            started_elsewhere: true,
+        }]
+    );
+}
+
+#[test]
 fn trust_host_e2e() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());

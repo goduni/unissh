@@ -177,6 +177,10 @@ pub enum FfiError {
         /// Item id of the original key.
         key_id: String,
     },
+    /// A key-only login (`publickey_only`) was asked for with an auth method
+    /// that is not a key: a password would stand in for the key it must prove.
+    #[error("a key-only login needs key authentication")]
+    PublickeyOnlyNeedsKey,
     /// SSH error.
     #[error("ssh error: {msg}")]
     Ssh {
@@ -1013,6 +1017,8 @@ pub struct MultiExecTarget {
     /// Log in to the target with its key only — no keyboard-interactive, so no
     /// password prompt can stand in for the key. For proving that a key is
     /// accepted (the verify/remove steps of a key rotation). Hops are unaffected.
+    /// Requires key auth (`Agent` / `SystemAgent`); any other method is refused
+    /// with [`FfiError::PublickeyOnlyNeedsKey`].
     #[uniffi(default = false)]
     pub publickey_only: bool,
 }
@@ -6135,6 +6141,16 @@ fn connect_with_options(
     // Cloned out before the state lock is taken: the prompt fires while that lock
     // is held (see the note above), so reaching back for another lock here would
     // be one more chance to deadlock for no benefit.
+    // `publickey_only` only stops escalation; with a password as the first
+    // method the password itself would still be sent and prove nothing.
+    if publickey_only
+        && !matches!(
+            auth,
+            AuthMethod::Agent { .. } | AuthMethod::SystemAgent { .. }
+        )
+    {
+        return Err(FfiError::PublickeyOnlyNeedsKey);
+    }
     let prompter = lock_recover(prompter).clone();
     let mut guard = lock_recover(state);
     let st = guard.as_mut().ok_or(FfiError::Locked)?;

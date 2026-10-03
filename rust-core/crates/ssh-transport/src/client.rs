@@ -119,10 +119,12 @@ pub struct ConnectOptions {
     /// is no TCP dial there to wrap, so the field is meaningless for them (the
     /// FFI layer only ever sets it on the first-dialed options).
     pub proxy: Option<crate::proxy::ProxyOptions>,
-    /// Authenticate with the configured key and nothing else: never escalate to
-    /// keyboard-interactive (so no stored-password answer and no prompt to the
-    /// user). For a login whose whole point is to prove that one key is accepted,
-    /// such as the verify step of a key rotation; a refusal is `AuthFailed`.
+    /// Never escalate past the first method to keyboard-interactive (so no
+    /// stored-password answer and no prompt to the user); a refusal of `auth`
+    /// is final, `AuthFailed`. It changes escalation only: `auth` itself is
+    /// still used as configured, so a password auth still sends its password.
+    /// Pair it with key auth for a login whose whole point is to prove that one
+    /// key is accepted, such as the verify step of a key rotation.
     pub publickey_only: bool,
 }
 

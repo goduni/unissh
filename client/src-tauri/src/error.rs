@@ -77,6 +77,9 @@ impl From<FfiError> for ApiError {
             FfiError::RotationPartlyFinished { key_id } => {
                 ApiError::RotationPartlyFinished { key_id }
             }
+            FfiError::PublickeyOnlyNeedsKey => {
+                ApiError::other("A key-only login needs key authentication.")
+            }
             FfiError::Ssh { msg } => ApiError::Ssh { msg },
             FfiError::Other { msg } => ApiError::Other { msg },
         }

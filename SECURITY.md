@@ -196,7 +196,10 @@ a rebuild — e.g. `UNISSH_LOG=debug` or `UNISSH_LOG=info,unissh_sync=debug,russ
 A staged key rotation (start → finish) keeps the previous private key, encrypted
 like any item version, in the key item's local version history, which is never
 synced, until the key is deleted (at most the 20 newest versions are kept).
-"Replace key now" (in-place rotation) does not keep it.
+It is kept for reference only: the app offers no way to restore or use it.
+"Replace key now" (in-place rotation) does not keep it. The device-local link
+from a key to its candidate records the candidate's id and the SHA256
+fingerprint of its public key, never private material.
 
 ## On-disk format changes (migration discipline)
 

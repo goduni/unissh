@@ -3,9 +3,15 @@
 //! original item as a new version — or abandoned.
 //!
 //! The candidate → original link is device-local metadata in the instance's
-//! `meta` table (SQLCipher-protected, never synced, never exported). The vault
-//! itself sees nothing new: the candidate is a plain SSH key item, so no item
-//! type, AAD or canonical encoding changes.
+//! `meta` table (SQLCipher-protected, never synced, never exported). It names
+//! the candidate's id and the SHA256 fingerprint of its PUBLIC key — never any
+//! private material. The vault itself sees nothing new: the candidate is a
+//! plain SSH key item, so no item type, AAD or canonical encoding changes.
+//!
+//! A link counts only while the live candidate still holds the key it was
+//! created with. Ids are names: the candidate can be deleted elsewhere and a
+//! different key synced in under the same id (in one pull, even). Such a key is
+//! treated as started on another device — abandon-only, never finishable.
 //!
 //! The candidate's id is derived from the original's, so a candidate started on
 //! another device syncs in under the same id. Here it is listed as
@@ -16,18 +22,29 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use unissh_vault::Vault;
+use unissh_ssh_agent::{ssh_key::HashAlg, InMemoryAgent};
+use unissh_vault::{DecryptedItem, Vault};
 
 use super::{
     agent_key_id, drop_certificate, require_ssh_key, resolve_vid, store_new_ssh_key, Core,
     CoreState, FfiError, ITEM_TYPE_SSH_KEY,
 };
 
-/// Per-vault meta slot; the JSON maps original key id → candidate key id.
-const META_PREFIX: &str = "key.rotation.v1:";
+/// Per-vault meta slot; the JSON maps original key id → [`Link`]. `v1` (id-only
+/// links, which cannot tell a replaced candidate apart) is ignored: its
+/// candidates show as started elsewhere and can still be abandoned.
+const META_PREFIX: &str = "key.rotation.v2:";
 
 /// Suffix that turns an original key id into its candidate's id.
 const CANDIDATE_SUFFIX: &str = " (rotation)";
+
+/// One device-local link: the candidate item and the fingerprint of the public
+/// key it was created with.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Link {
+    candidate_id: String,
+    fingerprint: String,
+}
 
 /// A rotation in progress: `candidate_id` holds the new material for `key_id`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,8 +53,9 @@ pub struct KeyRotationLink {
     pub key_id: String,
     /// The candidate key item holding the new material.
     pub candidate_id: String,
-    /// The rotation was started on another device: this one has no link, only
-    /// the synced candidate. It can be abandoned here, not finished.
+    /// The rotation was started on another device: this one has no link (or a
+    /// link to a key the candidate no longer holds), only the synced candidate.
+    /// It can be abandoned here, not finished.
     pub started_elsewhere: bool,
 }
 
@@ -50,7 +68,7 @@ fn meta_key(vid: &[u8]) -> String {
     format!("{META_PREFIX}{}", hex::encode(vid))
 }
 
-fn load_links(state: &CoreState, vid: &[u8]) -> Result<BTreeMap<String, String>, FfiError> {
+fn load_links(state: &CoreState, vid: &[u8]) -> Result<BTreeMap<String, Link>, FfiError> {
     match state
         .storage
         .get_meta(&meta_key(vid))
@@ -64,13 +82,40 @@ fn load_links(state: &CoreState, vid: &[u8]) -> Result<BTreeMap<String, String>,
 fn save_links(
     state: &CoreState,
     vid: &[u8],
-    links: &BTreeMap<String, String>,
+    links: &BTreeMap<String, Link>,
 ) -> Result<(), FfiError> {
     let bytes = serde_json::to_vec(links).map_err(FfiError::other)?;
     state
         .storage
         .set_meta(&meta_key(vid), &bytes)
         .map_err(FfiError::other)
+}
+
+/// SHA256 fingerprint of an SSH key item's public half.
+fn public_fingerprint(item: &DecryptedItem) -> Result<String, FfiError> {
+    let mut tmp = InMemoryAgent::new();
+    tmp.add_from_item(b"x".to_vec(), item)
+        .map_err(FfiError::ssh)?;
+    let public = tmp
+        .public_key(b"x")
+        .ok_or_else(|| FfiError::ssh("no public key"))?;
+    Ok(public.fingerprint(HashAlg::Sha256).to_string())
+}
+
+/// The live candidate `link` points at, when it is still the key the link was
+/// created with: an SSH key whose public fingerprint matches. `None` when it is
+/// gone, or when a different item now holds its id.
+fn linked_candidate(vault: &Vault, link: &Link) -> Result<Option<DecryptedItem>, FfiError> {
+    let Some(item) = vault
+        .get_item(link.candidate_id.as_bytes())
+        .map_err(FfiError::other)?
+    else {
+        return Ok(None);
+    };
+    if item.item_type != ITEM_TYPE_SSH_KEY || public_fingerprint(&item)? != link.fingerprint {
+        return Ok(None);
+    }
+    Ok(Some(item))
 }
 
 impl Core {
@@ -99,8 +144,15 @@ impl Core {
                 });
             }
             store_new_ssh_key(&state.storage, &vault, &vault_id, &candidate_id)?;
+            let fingerprint = public_fingerprint(&require_ssh_key(&vault, &candidate_id)?)?;
             let mut links = load_links(state, &vid)?;
-            links.insert(key_id, candidate_id.clone());
+            links.insert(
+                key_id,
+                Link {
+                    candidate_id: candidate_id.clone(),
+                    fingerprint,
+                },
+            );
             save_links(state, &vid, &links)?;
             Ok(candidate_id)
         })
@@ -110,7 +162,8 @@ impl Core {
     /// of `key_id` (the previous material stays in the item's version history),
     /// the certificate attached to `key_id` is removed (it certifies the old
     /// public key), and the candidate is tombstoned. Only the candidate recorded
-    /// for `key_id` on this device is accepted (`NotFound` otherwise).
+    /// for `key_id` on this device, still holding the key it was created with,
+    /// is accepted (`NotFound` otherwise).
     pub fn finish_key_rotation(
         &self,
         vault_id: String,
@@ -122,11 +175,12 @@ impl Core {
             let vault =
                 Vault::open(&state.storage, &state.keyset, &vid).map_err(FfiError::other)?;
             let mut links = load_links(state, &vid)?;
-            if links.get(&key_id) != Some(&candidate_id) {
-                return Err(FfiError::NotFound);
-            }
+            let link = match links.get(&key_id) {
+                Some(l) if l.candidate_id == candidate_id => l,
+                _ => return Err(FfiError::NotFound),
+            };
+            let candidate = linked_candidate(&vault, link)?.ok_or(FfiError::NotFound)?;
             require_ssh_key(&vault, &key_id)?;
-            let candidate = require_ssh_key(&vault, &candidate_id)?;
             vault
                 .put_item_keep_history(
                     key_id.as_bytes(),
@@ -172,39 +226,57 @@ impl Core {
             let vault =
                 Vault::open(&state.storage, &state.keyset, &vid).map_err(FfiError::other)?;
             let mut links = load_links(state, &vid)?;
-            let linked = links
-                .iter()
-                .find(|(_, c)| **c == candidate_id)
-                .map(|(k, _)| k.clone());
-            let candidate = match &linked {
-                Some(key_id) => {
-                    let candidate = vault
-                        .get_item(candidate_id.as_bytes())
-                        .map_err(FfiError::other)?;
-                    let original = vault.get_item(key_id.as_bytes()).map_err(FfiError::other)?;
-                    if let (Some(c), Some(o)) = (&candidate, &original) {
-                        if c.content.as_slice() == o.content.as_slice() {
-                            return Err(FfiError::RotationPartlyFinished {
-                                key_id: key_id.clone(),
-                            });
+            let key_id = candidate_id
+                .strip_suffix(CANDIDATE_SUFFIX)
+                .ok_or(FfiError::NotFound)?
+                .to_string();
+            let linked = match links.get(&key_id) {
+                Some(l) if l.candidate_id == candidate_id => Some(linked_candidate(&vault, l)?),
+                _ => None,
+            };
+            match linked {
+                // This device's candidate, still live: refuse when an
+                // interrupted finish already copied it into the original.
+                Some(Some(candidate)) => {
+                    if let Some(original) =
+                        vault.get_item(key_id.as_bytes()).map_err(FfiError::other)?
+                    {
+                        if candidate.content.as_slice() == original.content.as_slice() {
+                            return Err(FfiError::RotationPartlyFinished { key_id });
                         }
                     }
-                    candidate
+                    vault
+                        .delete_item(candidate_id.as_bytes())
+                        .map_err(FfiError::other)?;
+                }
+                // This device's link, but its candidate is gone or replaced:
+                // forget the link; a live replacement is abandoned as a key
+                // started elsewhere (both must be SSH keys).
+                Some(None) => {
+                    if vault
+                        .get_item(candidate_id.as_bytes())
+                        .map_err(FfiError::other)?
+                        .is_some()
+                    {
+                        require_ssh_key(&vault, &key_id)?;
+                        require_ssh_key(&vault, &candidate_id)?;
+                        vault
+                            .delete_item(candidate_id.as_bytes())
+                            .map_err(FfiError::other)?;
+                    }
                 }
                 None => {
-                    let key_id = candidate_id
-                        .strip_suffix(CANDIDATE_SUFFIX)
-                        .ok_or(FfiError::NotFound)?;
-                    require_ssh_key(&vault, key_id)?;
-                    Some(require_ssh_key(&vault, &candidate_id)?)
+                    require_ssh_key(&vault, &key_id)?;
+                    require_ssh_key(&vault, &candidate_id)?;
+                    vault
+                        .delete_item(candidate_id.as_bytes())
+                        .map_err(FfiError::other)?;
                 }
-            };
-            if candidate.is_some() {
-                vault
-                    .delete_item(candidate_id.as_bytes())
-                    .map_err(FfiError::other)?;
             }
-            if let Some(key_id) = linked {
+            if links
+                .get(&key_id)
+                .is_some_and(|l| l.candidate_id == candidate_id)
+            {
                 links.remove(&key_id);
                 save_links(state, &vid, &links)?;
             }
@@ -214,9 +286,11 @@ impl Core {
     }
 
     /// Rotations in progress for `vault_id`: this device's links whose candidate
-    /// is still live, plus live candidate keys synced from another device (an
-    /// SSH key at a key's derived candidate id with no link here), flagged
-    /// `started_elsewhere`.
+    /// is live and still holds the key it was created with, plus live candidate
+    /// keys at a key's derived candidate id that no such link covers (synced
+    /// from another device, or a replacement of this device's candidate),
+    /// flagged `started_elsewhere`. Links whose candidate is gone or replaced
+    /// are dropped as they are found.
     pub fn list_key_rotations(&self, vault_id: String) -> Result<Vec<KeyRotationLink>, FfiError> {
         self.with_state_mut(|state| {
             let vid = resolve_vid(&state.storage, &vault_id);
@@ -230,13 +304,24 @@ impl Core {
                 .filter(|m| m.item_type == ITEM_TYPE_SSH_KEY)
                 .map(|m| String::from_utf8_lossy(&m.item_id).into_owned())
                 .collect();
-            let links = load_links(state, &vid)?;
+            let mut links = load_links(state, &vid)?;
+            let before = links.len();
+            let mut kept = BTreeMap::new();
+            for (key_id, link) in std::mem::take(&mut links) {
+                // Only a live key is decrypted to check its fingerprint.
+                if keys.contains(&link.candidate_id) && linked_candidate(&vault, &link)?.is_some() {
+                    kept.insert(key_id, link);
+                }
+            }
+            links = kept;
+            if links.len() != before {
+                save_links(state, &vid, &links)?;
+            }
             let mut out: Vec<KeyRotationLink> = links
                 .iter()
-                .filter(|(_, c)| keys.contains(*c))
-                .map(|(k, c)| KeyRotationLink {
+                .map(|(k, l)| KeyRotationLink {
                     key_id: k.clone(),
-                    candidate_id: c.clone(),
+                    candidate_id: l.candidate_id.clone(),
                     started_elsewhere: false,
                 })
                 .collect();
@@ -244,7 +329,7 @@ impl Core {
                 .iter()
                 .filter(|k| !links.contains_key(*k))
                 .map(|k| (k, candidate_item_id(k)))
-                .filter(|(_, c)| keys.contains(c) && !links.values().any(|l| l == c))
+                .filter(|(_, c)| keys.contains(c))
                 .map(|(k, c)| KeyRotationLink {
                     key_id: k.clone(),
                     candidate_id: c,
