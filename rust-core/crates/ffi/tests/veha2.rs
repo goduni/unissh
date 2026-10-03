@@ -984,10 +984,10 @@ fn create_cloud_vault_requires_active_server() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    // Empty tenant (no active server) → refusal with a clear error.
+    // Empty tenant (no active server) → the typed refusal.
     assert!(matches!(
         core.create_cloud_vault("X".to_string(), String::new()),
-        Err(unissh_ffi::FfiError::Other { .. })
+        Err(unissh_ffi::FfiError::NoServer)
     ));
 }
 
@@ -1109,8 +1109,8 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     use std::sync::Mutex;
     use sync_backend::AppTransport;
     use unissh_ffi::{
-        AuthMethod, ConnectionProfile, FfiSyncTarget, HopRef, JumpHost, ProfileAuth, ResolveStatus,
-        ServerGroup, Snippet,
+        AuthMethod, ConnectionProfile, FfiSyncTarget, HopRef, Identity, IdentityBinding, JumpHost,
+        ProfileAuth, ResolveStatus, ServerGroup, Snippet,
     };
     use unissh_sync::{InMemoryTransport, SyncObject, SyncTransport};
 
@@ -1189,7 +1189,7 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
             ProfileAuth::VaultPassword {
                 password_item_id: s("db-pw"),
             },
-            vec![via_bastion],
+            vec![via_bastion.clone()],
             vec![s("uptime")],
         ),
     )
@@ -1212,6 +1212,67 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
             member_ids: vec![s("bastion")],
             parent_id: Some(s("prod")),
         },
+    )
+    .unwrap();
+
+    // A Personal-auth host in the moved vault, reached through the bastion, bound to
+    // an identity in another private vault; and a host in a third vault whose hop
+    // goes through the moved vault's bastion.
+    const ME: &str = "me";
+    const OTHER: &str = "other";
+    core.create_vault(s(ME), s("Me")).unwrap();
+    core.save_password(s(ME), s("my-pw"), s("mine")).unwrap();
+    core.save_identity(
+        s(ME),
+        Identity {
+            identity_id: s("alice"),
+            label: s("Alice"),
+            user: s("alice"),
+            key_item_id: None,
+            password_item_id: Some(s("my-pw")),
+        },
+    )
+    .unwrap();
+    core.save_connection(
+        s(LOCAL),
+        host(
+            "db",
+            ProfileAuth::Personal,
+            vec![via_bastion.clone()],
+            vec![],
+        ),
+    )
+    .unwrap();
+    let destination = |p: &ConnectionProfile| {
+        core.personal_destination(
+            p.host.clone(),
+            p.port,
+            p.username_template.clone(),
+            p.jumps.clone(),
+            p.proxy.clone(),
+        )
+    };
+    let db = core.get_connection(s(LOCAL), s("db")).unwrap();
+    core.set_binding(
+        s(ME),
+        IdentityBinding {
+            team_vault_id: s(LOCAL),
+            profile_uid: db.uid.clone(),
+            identity_item_id: s("alice"),
+            destination_pin: destination(&db),
+        },
+        false,
+    )
+    .unwrap();
+    core.create_vault(s(OTHER), s("Other")).unwrap();
+    core.save_connection(
+        s(OTHER),
+        host(
+            "inner",
+            ProfileAuth::PromptPassword,
+            vec![via_bastion.clone()],
+            vec![],
+        ),
     )
     .unwrap();
 
@@ -1290,6 +1351,21 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
         core.get_note(new_id.clone(), s("runbook")).unwrap(),
         "restart nginx"
     );
+    // The Personal-auth host still resolves its identity through the moved hop.
+    let db = core.get_connection(new_id.clone(), s("db")).unwrap();
+    let personal = core
+        .resolve_personal_auth(new_id.clone(), db.uid.clone(), destination(&db), s("root"))
+        .unwrap();
+    assert_eq!(personal.user, "alice");
+    // A hop in another vault now points at the moved bastion.
+    let inner = core.get_connection(s(OTHER), s("inner")).unwrap();
+    let inner_hop = inner.jumps[0].hop_ref.as_ref().unwrap();
+    assert_eq!(inner_hop.vault_id, new_id);
+    assert!(core
+        .list_connections(new_id.clone())
+        .unwrap()
+        .iter()
+        .any(|c| c.uid == inner_hop.profile_uid));
     let edge = core.get_group(new_id.clone(), s("edge")).unwrap();
     assert_eq!(edge.parent_id.as_deref(), Some("prod"));
     let plan = core.dry_run_group(new_id.clone(), s("prod")).unwrap();

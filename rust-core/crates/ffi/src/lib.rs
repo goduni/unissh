@@ -1629,32 +1629,29 @@ impl Core {
     /// `tenant_b64` (a 1:1 binding). `tenant_b64` is the base64 `tenant_id` of the active
     /// server (as in `ServerConfig.tenant_id`); stored as an opaque routing
     /// label by which `sync_now` decides which server to push the vault to.
-    /// An empty `tenant_b64` is rejected (the client must pass an active server).
-    /// Returns `vault_id` as a hex string (a UUIDv4 is non-UTF8 bytes; cloud methods
+    /// An empty `tenant_b64` is rejected with [`FfiError::NoServer`] (the client must
+    /// pass an active server). Returns `vault_id` as a hex string (a UUIDv4 is non-UTF8 bytes; cloud methods
     /// accept hex).
     pub fn create_cloud_vault(&self, name: String, tenant_b64: String) -> Result<String, FfiError> {
         if tenant_b64.is_empty() {
-            return Err(FfiError::Other {
-                msg: "cloud vault requires an active server (empty tenant)".into(),
-            });
+            return Err(FfiError::NoServer);
         }
         self.with_state_mut(|state| {
             let vid = unissh_vault::new_vault_id();
-            Vault::create_with_target(
-                &state.storage,
-                &state.keyset,
-                vid.clone(),
-                name.as_bytes(),
-                SyncTarget::Cloud,
-            )
-            .map_err(map_vault_err)?;
-            // Bind ONLY the freshly created vault by its vault_id (1:1), so as not to
-            // affect other unbound legacy cloud vaults (they must be bound to
-            // their own server, not this one).
-            state
-                .storage
-                .set_vault_tenant(&vid, tenant_b64.as_bytes())
-                .map_err(FfiError::other)?;
+            // Born bound: the same routine as the backup import and the local-to-cloud
+            // move, with no items; it binds ONLY this vault (1:1), so other unbound
+            // legacy cloud vaults are left for their own server.
+            state.storage.transaction(|| {
+                create_vault_with_items(
+                    &state.storage,
+                    &state.keyset,
+                    vid.clone(),
+                    name.as_bytes(),
+                    SyncTarget::Cloud,
+                    Some(tenant_b64.as_bytes()),
+                    std::iter::empty(),
+                )
+            })?;
             let vid_hex = hex::encode(&vid);
             state.vault_names.insert(vid, name);
             Ok(vid_hex)
@@ -2528,13 +2525,18 @@ impl Core {
     /// `tenant_b64` is the base64 `tenant_id` of the server being synced (as in
     /// `ServerConfig.tenant_id`). **1:1 binding:** the push emits ONLY the cloud vaults
     /// bound to this tenant (see `sync_push`); local vaults and those bound to
-    /// other servers are not sent. An empty `tenant_b64` → nothing is pushed.
+    /// other servers are not sent. An empty `tenant_b64` → [`FfiError::NoServer`].
     pub fn sync_now(
         &self,
         transport: Arc<dyn FfiSyncTransport>,
         tenant_b64: String,
     ) -> Result<FfiSyncReport, FfiError> {
         self.with_state_mut(|state| {
+            // An empty tenant names no server: refuse rather than sync against a label
+            // that local vaults (stored with an empty tenant) also carry.
+            if tenant_b64.is_empty() {
+                return Err(FfiError::NoServer);
+            }
             let genesis_owner = state.keyset.signing.verifying.to_bytes().to_vec();
             let ctx = SyncContext {
                 genesis_owner,
@@ -2676,6 +2678,7 @@ impl Core {
                 Vault::open(&state.storage, &state.keyset, &vid).map_err(FfiError::other)?;
             vault.delete().map_err(FfiError::other)?;
             state.vault_names.remove(vid.as_slice());
+            unload_vault_keys(&mut state.agent, &vault_id);
             Ok(())
         })
     }
@@ -5617,13 +5620,15 @@ impl Core {
     /// and signature, and cloud ids are 16-byte UUIDs, so a new cloud vault with the
     /// same name is created and every live item is re-encrypted into it under its
     /// ORIGINAL item id and type (key / certificate / password / note / snippet /
-    /// group / host references keep resolving). Host profiles keep their uid; the
-    /// only content rewrites are those that keep a profile meaning the same thing
-    /// in its new vault (see [`rehome_profile`]). Item version history is not
-    /// copied — the copies start at version 1. The local vault is tombstoned and
-    /// disappears from `list_vaults`. Creating, copying, binding and tombstoning
-    /// happen in ONE storage transaction: any failure leaves the local vault exactly
-    /// as it was and no cloud vault behind.
+    /// group / host references keep resolving). Host profiles keep their uid.
+    /// References to the vault BY ID are re-pointed at the new id — host hops and
+    /// Personal-identity bindings, in the moved vault and in every other vault on
+    /// this device (see [`rehome_reference`], [`rehome_references`]). Item version
+    /// history is not copied — the copies start at version 1. The local vault is
+    /// tombstoned and disappears from `list_vaults`; its keys are unloaded from the
+    /// agent. Creating, copying, binding, re-pointing and tombstoning happen in ONE
+    /// storage transaction: any failure leaves the local vault exactly as it was,
+    /// no other vault changed and no cloud vault behind.
     ///
     /// Nothing is pushed here: the new vault is dirty and bound, and the next
     /// `sync_now` for `tenant_b64` uploads it.
@@ -5683,13 +5688,21 @@ impl Core {
                 )?;
                 // `Vault::delete` is itself transactional; nested here it runs under a
                 // savepoint, so this outer transaction still decides the whole move.
-                source.delete().map_err(map_vault_err)
+                source.delete().map_err(map_vault_err)?;
+                rehome_references(
+                    &state.storage,
+                    &state.keyset,
+                    &new_vid,
+                    &old_label,
+                    &new_hex,
+                )
             })?;
 
             state.vault_names.remove(&old_vid);
             state
                 .vault_names
                 .insert(new_vid, String::from_utf8_lossy(&name).into_owned());
+            unload_vault_keys(&mut state.agent, &vault_id);
             Ok(new_hex)
         })
     }
@@ -5698,75 +5711,168 @@ impl Core {
 /// One item on its way into a new vault: `(item_id, item_type, plaintext content)`.
 type CopiedItem = (Vec<u8>, u32, Zeroizing<Vec<u8>>);
 
-/// Prepares a local vault's item for the cloud vault it is converted into. Only
-/// connection profiles change (see [`rehome_profile`]); every other item is copied
-/// byte for byte.
+/// A rewritten item: `(item_id, plaintext content)` — the id changes only for a
+/// re-keyed binding.
+type RehomedItem = (Vec<u8>, Zeroizing<Vec<u8>>);
+
+/// Prepares a local vault's item for the cloud vault it is converted into: the
+/// moved vault's own references are re-pointed (see [`rehome_reference`]),
+/// including a binding's item id, which is derived from the vault it binds;
+/// everything else is copied byte for byte.
 fn rehome_item(
     item: unissh_vault::DecryptedItem,
     old_vault: &str,
     new_vault: &str,
 ) -> Result<CopiedItem, FfiError> {
-    let content = if item.item_type == ITEM_TYPE_CONNECTION {
-        rehome_profile(&item.content, &item.item_id, old_vault, new_vault)?.unwrap_or(item.content)
-    } else {
-        item.content
-    };
-    Ok((item.item_id, item.item_type, content))
+    match rehome_reference(
+        item.item_type,
+        &item.item_id,
+        &item.content,
+        old_vault,
+        new_vault,
+        true,
+    )? {
+        Some((item_id, content)) => Ok((item_id, item.item_type, content)),
+        None => Ok((item.item_id, item.item_type, item.content)),
+    }
 }
 
-/// Keeps a connection profile meaning the same thing after its vault id changes
-/// from `old_vault` to `new_vault`:
-/// - a legacy profile with no stored uid had one derived from (vault id, item id)
-///   on every read ([`legacy_profile_uid`]); that derived uid is pinned into the
-///   body, so the profile keeps the identity bindings and hop references know;
-/// - a jump hop referencing a bastion in the SAME vault (`hop_ref.vault_id ==
-///   old_vault`) is re-pointed at `new_vault`.
+/// Rewrites one item that may refer to vault `old_vault`, which is being moved to
+/// `new_vault`, so it keeps meaning the same thing. Returns the (possibly new)
+/// item id and the new content, or `None` when the item needs no change.
+///
+/// - Connection profile: a jump hop referencing a bastion in the moved vault
+///   (`hop_ref.vault_id == old_vault`) is re-pointed. When the profile itself is
+///   in the moved vault (`in_moved_vault`), a legacy profile with no stored uid
+///   gets the uid it was always read with ([`legacy_profile_uid`] of the OLD id)
+///   pinned, since that derivation would change with the vault id.
+/// - Personal-identity binding: one keyed by the moved vault (`team_vault_id ==
+///   old_vault`) is re-keyed to `new_vault`, which changes its item id
+///   ([`binding_item_id`]); a `ref=<old>/` hop in its pinned destination is
+///   re-pointed, so the anti-redirect check still matches the re-pointed hop.
 ///
 /// Edits a `serde_json::Value`, so fields this version does not know survive.
-/// `None` = nothing to change (or not a JSON object): the caller copies the
-/// original bytes unchanged.
-fn rehome_profile(
-    content: &[u8],
+fn rehome_reference(
+    item_type: u32,
     item_id: &[u8],
+    content: &[u8],
     old_vault: &str,
     new_vault: &str,
-) -> Result<Option<Zeroizing<Vec<u8>>>, FfiError> {
+    in_moved_vault: bool,
+) -> Result<Option<RehomedItem>, FfiError> {
+    if item_type != ITEM_TYPE_CONNECTION && item_type != ITEM_TYPE_BINDING {
+        return Ok(None);
+    }
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(content) else {
         return Ok(None);
     };
-    let Some(profile) = value.as_object_mut() else {
+    let Some(body) = value.as_object_mut() else {
         return Ok(None);
     };
+    let mut new_id = item_id.to_vec();
     let mut changed = false;
-    let has_uid = profile
-        .get("uid")
-        .and_then(|u| u.as_str())
-        .is_some_and(|u| !u.is_empty());
-    if !has_uid {
-        let uid = legacy_profile_uid(old_vault, &String::from_utf8_lossy(item_id));
-        profile.insert("uid".into(), serde_json::Value::String(uid));
-        changed = true;
-    }
-    if let Some(jumps) = profile.get_mut("jumps").and_then(|j| j.as_array_mut()) {
-        for hop in jumps {
-            let Some(hop_ref) = hop.get_mut("hop_ref").and_then(|h| h.as_object_mut()) else {
-                continue;
-            };
-            if hop_ref.get("vault_id").and_then(|v| v.as_str()) == Some(old_vault) {
-                hop_ref.insert(
-                    "vault_id".into(),
-                    serde_json::Value::String(new_vault.into()),
-                );
-                changed = true;
+    if item_type == ITEM_TYPE_CONNECTION {
+        let has_uid = body
+            .get("uid")
+            .and_then(|u| u.as_str())
+            .is_some_and(|u| !u.is_empty());
+        if in_moved_vault && !has_uid {
+            let uid = legacy_profile_uid(old_vault, &String::from_utf8_lossy(item_id));
+            body.insert("uid".into(), serde_json::Value::String(uid));
+            changed = true;
+        }
+        if let Some(jumps) = body.get_mut("jumps").and_then(|j| j.as_array_mut()) {
+            for hop in jumps {
+                let Some(hop_ref) = hop.get_mut("hop_ref").and_then(|h| h.as_object_mut()) else {
+                    continue;
+                };
+                if hop_ref.get("vault_id").and_then(|v| v.as_str()) == Some(old_vault) {
+                    hop_ref.insert("vault_id".into(), new_vault.into());
+                    changed = true;
+                }
             }
+        }
+    } else {
+        if body.get("team_vault_id").and_then(|v| v.as_str()) == Some(old_vault) {
+            body.insert("team_vault_id".into(), new_vault.into());
+            let uid = body
+                .get("profile_uid")
+                .and_then(|u| u.as_str())
+                .unwrap_or_default();
+            new_id = binding_item_id(new_vault, uid).into_bytes();
+            changed = true;
+        }
+        let old_hop = format!("ref={old_vault}/");
+        if let Some(pin) = body
+            .get("destination_pin")
+            .and_then(|p| p.as_str())
+            .filter(|p| p.contains(&old_hop))
+        {
+            let pin = pin.replace(&old_hop, &format!("ref={new_vault}/"));
+            body.insert("destination_pin".into(), pin.into());
+            changed = true;
         }
     }
     if !changed {
         return Ok(None);
     }
-    Ok(Some(Zeroizing::new(
-        serde_json::to_vec(&value).map_err(FfiError::other)?,
-    )))
+    let content = serde_json::to_vec(&value).map_err(FfiError::other)?;
+    Ok(Some((new_id, Zeroizing::new(content))))
+}
+
+/// Re-points references to the moved vault held in OTHER vaults on this device
+/// (host hops to a bastion in it, Personal-identity bindings of its hosts — see
+/// [`rehome_reference`]); the moved vault's own copy was re-pointed while it was
+/// copied. Runs inside the conversion transaction, after the local vault was
+/// tombstoned. A re-keyed binding is written under its new id and the old one is
+/// tombstoned.
+///
+/// A vault this keyset cannot open holds nothing this device can resolve and is
+/// skipped. Any other failure aborts (and so rolls back) the move. The rewrites
+/// are ordinary local edits: in a cloud vault they push on its next sync, and in
+/// a shared vault the user may not write to, that push meets the existing sync
+/// conflict/authority behaviour like any other edit.
+fn rehome_references(
+    storage: &Storage,
+    keyset: &unissh_keychain::UnlockedKeyset,
+    moved_vid: &[u8],
+    old_vault: &str,
+    new_vault: &str,
+) -> Result<(), FfiError> {
+    for rec in storage.list_vaults()? {
+        if rec.vault_id == moved_vid {
+            continue;
+        }
+        let Ok(vault) = Vault::open(storage, keyset, &rec.vault_id) else {
+            continue;
+        };
+        for m in vault.list_items().map_err(map_vault_err)? {
+            if m.item_type != ITEM_TYPE_CONNECTION && m.item_type != ITEM_TYPE_BINDING {
+                continue;
+            }
+            let Some(item) = vault.get_item(&m.item_id).map_err(map_vault_err)? else {
+                continue;
+            };
+            let Some((item_id, content)) = rehome_reference(
+                m.item_type,
+                &m.item_id,
+                &item.content,
+                old_vault,
+                new_vault,
+                false,
+            )?
+            else {
+                continue;
+            };
+            vault
+                .put_item(&item_id, m.item_type, &content)
+                .map_err(map_vault_err)?;
+            if item_id != m.item_id {
+                vault.delete_item(&m.item_id).map_err(map_vault_err)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Creates vault `vault_id` named `name` with `sync_target`, binds it to `tenant`
@@ -9704,6 +9810,18 @@ fn agent_key_id(vault_id: &str, key_item_id: &str) -> Vec<u8> {
     out
 }
 
+/// Unloads every key the agent holds for vault `vault_id` (the id string the
+/// keys were loaded under, see [`agent_key_id`]) — when the vault is deleted or
+/// moved away under a new id, so its keys do not linger until lock.
+fn unload_vault_keys(agent: &mut InMemoryAgent, vault_id: &str) {
+    let prefix = agent_key_id(vault_id, "");
+    for id in agent.list() {
+        if id.starts_with(&prefix) {
+            agent.remove(&id);
+        }
+    }
+}
+
 fn load_key_into_agent(
     state: &mut CoreState,
     vault_id: &str,
@@ -11441,6 +11559,20 @@ mod tests {
             .any(|(id, s)| id == "ghost" && *s == ResolveStatus::Dangling));
     }
 
+    /// A legacy profile (no stored uid) moved with its vault keeps the uid it was
+    /// always read with — derived from the OLD vault id — pinned into its body.
+    #[test]
+    fn moved_legacy_profile_keeps_its_derived_uid() {
+        let legacy = br#"{"label":"web","host":"web.example","port":22,"user":"root","jumps":[]}"#;
+        let (id, content) =
+            rehome_reference(ITEM_TYPE_CONNECTION, b"web", legacy, "loc", "00ff", true)
+                .unwrap()
+                .expect("a legacy profile is rewritten");
+        assert_eq!(id, b"web");
+        let stored: StoredProfile = serde_json::from_slice(&content).unwrap();
+        assert_eq!(stored.uid, Some(legacy_profile_uid("loc", "web")));
+    }
+
     /// A failure part-way through the local-to-cloud copy rolls the whole
     /// conversion back. Injection: the last item of the local vault (by id order,
     /// which is the copy order) is a tampered record — re-stored at a bumped
@@ -11467,11 +11599,21 @@ mod tests {
             rec.version += 1;
             storage.put_item(&rec).unwrap();
         }
+        let snapshot = || {
+            let guard = core.locked_state();
+            let storage = &guard.as_ref().unwrap().storage;
+            (
+                storage.get_vault(b"loc").unwrap(),
+                storage.list_items_including_tombstones(b"loc").unwrap(),
+            )
+        };
+        let before = snapshot();
 
         let err = core
             .convert_vault_to_cloud("loc".into(), "dGVuYW50".into())
             .unwrap_err();
         assert!(matches!(err, FfiError::Other { .. }), "{err:?}");
+        assert_eq!(snapshot(), before, "local vault record and items untouched");
 
         let vaults = core.list_vaults().unwrap();
         assert_eq!(vaults.len(), 1, "no cloud vault left behind");
