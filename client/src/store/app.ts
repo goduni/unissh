@@ -104,7 +104,9 @@ export type ModalKind =
   | { kind: "workspaces" }
   /** A donation address rendered as a QR, generated offline (see support/qr.ts). */
   | { kind: "qr"; label: string; address: string }
-  | { kind: "copyKeyToServer"; openssh: string; keyItemId: string };
+  | { kind: "copyKeyToServer"; openssh: string; keyItemId: string }
+  /** Guided rotation of a vault key; `candidateId` continues one begun on this device. */
+  | { kind: "keyRotation"; keyItemId: string; hasCertificate: boolean; candidateId?: string };
 
 export type Device = "desktop" | "mobile";
 

@@ -288,17 +288,19 @@ function KeyRow({
     });
   };
 
-  // Staged rotation, step 1: a candidate key beside this one. Nothing changes
-  // for the hosts until Finish; the user installs the candidate's public key first.
-  const onStartRotation = async () => {
-    if (!vault) return;
-    try {
-      const candidate = await api.beginKeyRotation(vault, item.itemId);
-      await useApp.getState().reloadVault();
-      ctx.toast(t("secrets.rotationStarted", { item: candidate }), "ok");
-    } catch (e) {
-      ctx.toast(apiErrorMessage(e), "err");
-    }
+  // Guided rotation: the dialog shows the plan, creates the candidate key on
+  // confirm, and moves each machine over (deploy → verify → remove). Continuing
+  // reopens it for the candidate this device already began.
+  const onStartRotation = () =>
+    ctx.openModal({ kind: "keyRotation", keyItemId: item.itemId, hasCertificate: item.hasCertificate });
+  const onContinueRotation = () => {
+    if (!rotation) return;
+    ctx.openModal({
+      kind: "keyRotation",
+      keyItemId: item.itemId,
+      hasCertificate: item.hasCertificate,
+      candidateId: rotation.link.candidateId,
+    });
   };
 
   const onFinishRotation = () => {
@@ -534,7 +536,13 @@ function KeyRow({
                     // on the device that started the rotation and holds the link.
                     ...(rotation.link.startedElsewhere
                       ? []
-                      : [{ label: t("secrets.finishRotation"), icon: "check" as const, onClick: onFinishRotation }]),
+                      : [
+                          // Continue runs the plan for the original key, so it lives on that row.
+                          ...(rotation.role === "original"
+                            ? [{ label: t("secrets.continueRotation"), icon: "refresh" as const, onClick: onContinueRotation }]
+                            : []),
+                          { label: t("secrets.finishRotation"), icon: "check" as const, onClick: onFinishRotation },
+                        ]),
                     { label: t("secrets.abandonRotation"), icon: "x" as const, onClick: onAbandonRotation },
                   ]
                 : [

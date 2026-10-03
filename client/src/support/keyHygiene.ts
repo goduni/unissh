@@ -10,28 +10,38 @@ export interface KeyUsage {
   jump: ConnectionProfile[];
 }
 
+/** Predicates for "does this log in with key `keyItemId` of vault `vaultId`".
+ *  A hop is either inline (its own auth) or a reference to a saved profile
+ *  (`hopRef`), which the core resolves by vault + uid and then logs in with THAT
+ *  profile's auth — so a ref hop uses the key when it points into this vault at
+ *  a profile whose own login is the key. A ref hop's inline auth is a
+ *  placeholder and is ignored. Key ids are unique only per vault, so an inline
+ *  hop counts only when its auth names this vault. `hosts` are the vault's own. */
+export function keyMatcher(hosts: readonly ConnectionProfile[], vaultId: string, keyItemId: string) {
+  const usesKey = (h: ConnectionProfile) => h.auth.type === "key" && h.auth.keyItemId === keyItemId;
+  const byUid = new Map(hosts.map((h) => [h.uid, h]));
+  /** The saved profile a ref hop resolves to, when it is in this vault. */
+  const refProfile = (j: JumpHost): ConnectionProfile | undefined =>
+    j.hopRef && j.hopRef.vaultId === vaultId ? byUid.get(j.hopRef.profileUid) : undefined;
+  const hopUsesKey = (j: JumpHost): boolean => {
+    if (j.hopRef) {
+      const ref = refProfile(j);
+      return ref !== undefined && usesKey(ref);
+    }
+    return j.auth.type === "agent" && j.auth.vaultId === vaultId && j.auth.keyItemId === keyItemId;
+  };
+  return { usesKey, hopUsesKey, refProfile };
+}
+
 /** Hosts of vault `vaultId` (the list's own vault) using its key `keyItemId`,
- *  split by how. A hop is either inline (its own auth) or a reference to a saved
- *  profile (`hopRef`), which the core resolves by vault + uid and then logs in
- *  with THAT profile's auth — so a ref hop uses the key when it points into this
- *  vault at a profile whose own login is the key. A ref hop's inline auth is a
- *  placeholder and is ignored. A host appears at most once per list; one that
- *  logs in with the key AND hops with it is in both. */
+ *  split by how (see `keyMatcher`). A host appears at most once per list; one
+ *  that logs in with the key AND hops with it is in both. */
 export function keyUsage(
   hosts: readonly ConnectionProfile[],
   vaultId: string,
   keyItemId: string,
 ): KeyUsage {
-  const usesKey = (h: ConnectionProfile) => h.auth.type === "key" && h.auth.keyItemId === keyItemId;
-  const byUid = new Map(hosts.map((h) => [h.uid, h]));
-  const hopUsesKey = (j: JumpHost): boolean => {
-    if (j.hopRef) {
-      if (j.hopRef.vaultId !== vaultId) return false;
-      const ref = byUid.get(j.hopRef.profileUid);
-      return ref !== undefined && usesKey(ref);
-    }
-    return j.auth.type === "agent" && j.auth.keyItemId === keyItemId;
-  };
+  const { usesKey, hopUsesKey } = keyMatcher(hosts, vaultId, keyItemId);
   const direct: ConnectionProfile[] = [];
   const jump: ConnectionProfile[] = [];
   for (const h of hosts) {

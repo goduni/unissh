@@ -32,8 +32,13 @@ describe("keyUsage", () => {
     expect([ids(u.direct), ids(u.jump)]).toEqual([["web"], []]);
   });
 
-  it("lists a host that only hops with the key as jump", () => {
-    const u = keyUsage([host("db", { type: "promptPassword" }, [hop("k")])], "v", "k");
+  it("lists a host that only hops with the key as jump, not one hopping with another vault's same-id key", () => {
+    const foreign: JumpHost = { ...hop("k"), auth: { type: "agent", vaultId: "elsewhere", keyItemId: "k" } };
+    const u = keyUsage(
+      [host("db", { type: "promptPassword" }, [hop("k")]), host("far", { type: "promptPassword" }, [foreign])],
+      "v",
+      "k",
+    );
     expect([ids(u.direct), ids(u.jump)]).toEqual([[], ["db"]]);
   });
 
