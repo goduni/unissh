@@ -56,6 +56,9 @@ pub enum DeviceWrapError {
     /// The blob was written by a format this build does not know.
     #[error("unsupported device-wrap version {0}")]
     UnsupportedVersion(u8),
+    /// The AEAD refused to seal (an internal cipher failure, not bad input).
+    #[error("sealing the device-wrap blob failed")]
+    Seal,
     /// The blob is structurally broken (truncated, wrong inner header).
     #[error("malformed device-wrap blob")]
     Malformed,
@@ -72,7 +75,7 @@ pub fn wrap(material: &[u8], device_secret: &[u8]) -> Result<Vec<u8>, DeviceWrap
     }
     let key = derive_wrap_key(device_secret)?;
     let sealed = aead_encrypt(&key, material, &aad(DEVICE_WRAP_VERSION))
-        .map_err(|_| DeviceWrapError::Malformed)?;
+        .map_err(|_| DeviceWrapError::Seal)?;
     let mut out = Vec::with_capacity(1 + sealed.len());
     out.push(DEVICE_WRAP_VERSION);
     out.extend_from_slice(&sealed);
