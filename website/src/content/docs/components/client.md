@@ -47,7 +47,8 @@ The UI **never receives plaintext private keys** — only public keys, fingerpri
 The design prototype showed some indicators the core cannot back; these were intentionally dropped or made real rather than faked:
 
 - Host "online" / ping / cipher labels are **removed** — a host shows as active only when it has a live terminal session in-app.
-- Clipboard auto-clear is wired to the real platform clipboard. Biometric unlock is not available yet.
+- Clipboard auto-clear is wired to the real platform clipboard.
+- Biometric unlock is opt-in and pending verification on real hardware: Windows Hello on Windows; Touch ID on macOS only in a build you sign yourself with an Apple certificate and the keychain entitlement — the official unsigned release reports it unavailable. The master password always works too. See [the threat model](https://github.com/goduni/unissh/blob/main/THREAT_MODEL.md#biometric-unlock-desktop-touch-id-windows-hello).
 - A per-host **Forward the agent** toggle serves a deliberately narrow agent to the target: one key, a confirmation for every signature, add/remove/lock refused, and never to a jump host. Off by default — see [Connecting to hosts](../../overview/connecting/).
 - **Snippets** and **session recording** (asciicast, exportable) are per host and documented in [Connecting to hosts](../../overview/connecting/).
 - A per-host **System agent** auth kind delegates signing to the operating system's ssh-agent. That is how hardware works: FIDO/U2F tokens, PKCS#11 smart cards, Secure Enclave keys, 1Password and gpg-agent all sign through the agent. For such a host the key lives outside the vault — see [the threat model](https://github.com/goduni/unissh/blob/main/THREAT_MODEL.md).

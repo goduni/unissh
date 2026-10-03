@@ -502,8 +502,8 @@ There's a thorough, honest **backup & restore** guide (crash vs. disk-loss, the 
 
 ### Clients
 
-- **Secret Key (Emergency Kit)** is stored only in the OS keychain / Secure Enclave — never in plain files or logs.
-- Biometric unlock is not available yet on any platform; the master password (and the Secret Key remembered in the OS keychain) is how a vault opens.
+- **Secret Key (Emergency Kit)** is stored only in the OS keychain — never in plain files or logs.
+- Biometric unlock (desktop, opt-in, pending verification on real hardware): Windows Hello on Windows; Touch ID on macOS only in a build you sign yourself with an Apple certificate and the keychain entitlement — the official unsigned release reports it unavailable. The master password always works too. What it does and does not protect against is in [`THREAT_MODEL.md`](THREAT_MODEL.md#biometric-unlock-desktop-touch-id-windows-hello).
 - The desktop window, a unified **Theme** picker (dark/light/auto; the **Nebula** base with 5 accent presets, plus the pink **Barbie** theme; 17 linked terminal palettes), and clipboard auto-clear are real app settings. See [`client/README.md`](client/README.md).
 
 ---

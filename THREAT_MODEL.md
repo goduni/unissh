@@ -238,7 +238,10 @@ restrict or audit what you type into your own shell. It is your machine.
 
 ## Biometric unlock (desktop: Touch ID, Windows Hello)
 
-Opt-in, per device, macOS and Windows only. Linux is not offered: its
+Opt-in, per device, macOS and Windows only. On macOS, Touch ID unlock works
+only in a build the user signs themselves with an Apple certificate and the
+keychain entitlement; the official release is unsigned and reports it
+unavailable (see the last item below). Linux is not offered: its
 fingerprint stack answers yes/no and protects no secret. The key hierarchy is
 unchanged — the password alone always unlocks, and nothing biometric is bound
 into the Unlock Key.
@@ -255,7 +258,10 @@ derived (HKDF) from a **device secret** that is never written to disk:
 - *Windows:* the signature of a Windows Hello key credential over a random
   challenge. The Hello private key stays in the Hello container (TPM-backed
   where the machine has one) and every signature shows the Hello prompt. The
-  challenge sits in Credential Manager and is not secret.
+  challenge sits in Credential Manager and is not secret. On a machine without
+  a TPM the Hello key is protected by software only, and the PIN that releases
+  it is not guarded by the TPM's anti-hammering: whoever copies that container
+  offline can brute-force the PIN without a lockout.
 
 The Secret Key is not part of the sealed material; it is the one the device
 already remembers in the OS keychain, without which biometric unlock is
@@ -282,6 +288,11 @@ neither offered nor attempted.
   the Mac now is a way in. On Windows, every face or finger enrolled in Hello
   *and the Hello PIN* are ways in; adding a face or finger does **not**
   invalidate anything — only resetting Hello or removing its PIN does.
+- **Offline PIN guessing on a TPM-less Windows machine.** Without a TPM the
+  Hello key is software-protected and its PIN has no hardware anti-hammering;
+  an attacker with a copy of the disk can brute-force a short PIN offline and
+  then, with the blob and challenge from the same disk, the master password.
+  Use a long Hello PIN, or keep biometric unlock off, on such a machine.
 - **Code running as you on the unlocked OS session.** Malware can trigger the
   prompt, or socially engineer you into approving a prompt it timed, and
   receives what the unlock releases. It could already read the remembered
@@ -297,9 +308,14 @@ neither offered nor attempted.
   invalidated and is wiped there: the machines take turns. Nothing leaks, but
   only one of them works at a time.
 - **Two instances under one OS user.** The Keychain item, Hello credential and
-  challenge are named per OS user, not per instance. A second instance
-  enabling biometric unlock replaces the first one's device secret; the first
-  then asks to be re-enabled.
+  challenge are named per OS user, not per instance — and the name is the
+  fixed service `me.goduni.unissh`, so a development build and the release
+  build collide the same way. A second instance enabling biometric unlock
+  replaces the first one's device secret; the first then asks to be
+  re-enabled. Wiping is shared too: when one instance wipes (turned off, its
+  password changed, its keyset replaced, an invalidation), the shared device
+  secret goes, and the other instance's material goes dead with it. As with
+  roaming profiles, the instances take turns; only one works at a time.
 - **A change in Windows' signature scheme.** The Windows construction assumes
   Hello signs deterministically (RSA PKCS#1 v1.5 today). Were that to change,
   the signature would no longer open the blob: the material is wiped as
@@ -308,7 +324,11 @@ neither offered nor attempted.
   require the data-protection Keychain, which macOS ties to a signed app with a
   keychain-access-group entitlement. An unsigned or ad-hoc build is refused
   (`errSecMissingEntitlement`) and reports Touch ID unlock as unavailable; it
-  is then not offered at all rather than offered weaker.
+  is then not offered at all rather than offered weaker. The official UniSSH
+  release is such a build: Touch ID unlock is for a build you sign yourself
+  with an Apple certificate and that entitlement. There is no plan to sign the
+  official builds. The presence gate below needs no Keychain item and is not
+  affected.
 
 When the platform stops offering biometrics after material was stored (Hello
 turned off or its PIN removed, Touch ID gone, a closed lid), the material is
@@ -321,8 +341,9 @@ The optional *Require Touch ID / Windows Hello at startup* asks for the
 platform's presence prompt first (`LAContext` on macOS, `UserConsentVerifier`
 on Windows) and, while it is on, the unlock screen does not fill in the
 remembered key either; a dismissed prompt leaves the vault locked, with the
-Secret Key from the Emergency Kit as the manual way in. Nothing is stored for
-it. It is a **presence check, not a protection of the key**: the setting is
+Secret Key from the Emergency Kit as the manual way in. It is switched on only
+after the prompt has succeeded once on that device, so a prompt that never
+works there cannot be the only way in. Nothing is stored for it. It is a **presence check, not a protection of the key**: the setting is
 device-local app state (the webview's `localStorage`, beside the startup
 setting), and the Secret Key stays readable without a prompt by any process
 running as you, exactly as before. It stops someone at your unlocked session
