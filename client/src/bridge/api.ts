@@ -868,9 +868,9 @@ export const serverListVaults = (serverId?: string) =>
 /** Pull ONE vault (hex id) from a server onto this device (targeted; no cursor bump). */
 export const serverPullVault = (vaultId: string, serverId?: string) =>
   invoke<SyncReport>("server_pull_vault", { vaultId, serverId: serverId ?? null });
-/** Adopt a LOCAL vault (hex id) onto a server = bind + sync (Push). */
-export const serverAdoptVault = (vaultId: string, serverId?: string) =>
-  invoke<SyncReport>("server_adopt_vault", { vaultId, serverId: serverId ?? null });
+/** Bind an already-cloud vault (hex id) to a server, then sync it up (Push). */
+export const serverBindAndPushVault = (vaultId: string, serverId?: string) =>
+  invoke<SyncReport>("server_bind_and_push_vault", { vaultId, serverId: serverId ?? null });
 
 // ── cloud membership / sharing ─────────────────────────────────
 export const serverListAccounts = (serverId?: string) =>

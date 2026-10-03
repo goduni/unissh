@@ -819,10 +819,15 @@ pub async fn server_pull_vault(
     Ok(report.into())
 }
 
-/// **Adopt a LOCAL vault onto a server** (Push; defaults to active): bind the vault to
-/// the server's space, then sync so it uploads. Requires a session.
+/// **Bind an already-cloud vault to a server, then push it** (the "Push" action in the
+/// server vaults list; the server defaults to the active one). Sets the cloud vault's
+/// binding label to the server's space via `bind_cloud_vault` (re-dirtying the vault and
+/// its contents so all of it uploads), then runs `sync_now` for that space and returns
+/// its report. Only cloud-target vaults are bindable: for a local vault the bind matches
+/// no row and the sync pushes nothing of it (converting a local vault is a separate
+/// operation). Requires a session.
 #[tauri::command]
-pub async fn server_adopt_vault(
+pub async fn server_bind_and_push_vault(
     vault_id: String,
     server_id: Option<String>,
     state: State<'_, AppState>,
