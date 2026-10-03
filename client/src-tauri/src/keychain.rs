@@ -95,6 +95,12 @@ pub(crate) fn stored_secret_key_hex_now() -> ApiResult<Option<String>> {
     }))
 }
 
+/// Whether this device remembers a Secret Key, without keeping it: the value
+/// read to answer is wiped at once. Blocking. A keychain error counts as "no".
+pub(crate) fn secret_key_remembered_now() -> bool {
+    get_secret_key_now().is_ok_and(|k| k.map(zeroize::Zeroizing::new).is_some())
+}
+
 // ---------- the pre-switch Linux store ----------
 //
 // Everything this app knows about keyutils lives in these two functions, and

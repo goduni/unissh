@@ -1,4 +1,4 @@
-//! Unlock with Touch ID (macOS). Windows Hello plugs into the same seam later.
+//! Unlock with Touch ID (macOS) or Windows Hello (Windows).
 //!
 //! What this is, precisely: after a successful password unlock the user may let
 //! this device remember the master password behind a biometric. The password is
@@ -6,7 +6,10 @@
 //! the sealed blob is written to disk (`biometric-unlock.bin`, beside the keyset).
 //! The device secret itself lives in the platform's biometric-gated store; on
 //! macOS that is a Keychain item whose access control requires the *current*
-//! Touch ID set (see `macos.rs`), so re-enrolling a finger makes it unreadable.
+//! Touch ID set (see `macos.rs`), so re-enrolling a finger makes it unreadable;
+//! on Windows it is never stored at all — it is a Windows Hello signature over a
+//! fixed challenge, reproduced behind the Hello prompt each time (see
+//! `windows.rs`).
 //!
 //! What it is not: a change to the key hierarchy. The Unlock Key derivation and
 //! the keyset format are untouched, the password alone always unlocks, and a
@@ -41,11 +44,13 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::commands::{blocking_api, resume_after_unlock};
 use crate::error::{ApiError, ApiResult};
-use crate::keychain::stored_secret_key_hex_now;
+use crate::keychain::{secret_key_remembered_now, stored_secret_key_hex_now};
 use crate::state::AppState;
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 /// The sealed master password, next to the keyset. Ciphertext only: without the
 /// device secret, which never leaves the platform store, it opens to nothing.
@@ -54,9 +59,8 @@ const BLOB_FILE: &str = "biometric-unlock.bin";
 /// What the platform knows about its biometric-gated secret. Asking must never
 /// prompt.
 // Absent/Present/Unknown are constructed only by a platform adapter; on a
-// target without one (Linux, and Windows until its adapter lands) they exist
-// for the shared code alone.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+// target without one (Linux) they exist for the shared code alone.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SecretState {
     /// This device or build cannot do biometric unlock right now (no sensor,
@@ -74,7 +78,7 @@ pub(crate) enum SecretState {
 }
 
 /// Why the device secret could not be produced.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) enum SecretError {
     /// The user dismissed the prompt, the biometric did not match, or it is
@@ -102,9 +106,9 @@ pub(crate) enum SecretError {
 /// * `read` produces the same secret behind the prompt. `reason` is the localised
 ///   line for the prompt; a platform whose prompt takes no message ignores it.
 /// * `delete` is idempotent.
-/// * The blob itself is stored by the shared code today (a file beside the
-///   keyset). If an adapter needs it elsewhere (the Windows design keeps the
-///   ciphertext in Credential Manager), blob storage may move behind this trait.
+/// * The blob itself is stored by the shared code (a file beside the keyset),
+///   on every platform: it is ciphertext only. Whatever else an adapter needs
+///   to reproduce its secret (the Windows challenge) is the adapter's to keep.
 pub(crate) trait DeviceSecretStore {
     fn state(&self) -> SecretState;
     fn create(&self) -> Result<Zeroizing<Vec<u8>>, SecretError>;
@@ -120,7 +124,11 @@ fn platform_store() -> Option<Box<dyn DeviceSecretStore>> {
     {
         Some(Box::new(macos::TouchId))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Some(Box::new(windows::WindowsHello))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         None
     }
@@ -130,8 +138,9 @@ fn platform_store() -> Option<Box<dyn DeviceSecretStore>> {
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BiometricStatus {
-    /// This device can do biometric unlock right now (sensor present, a finger
-    /// enrolled, and a build that may use the protected Keychain).
+    /// This device can do biometric unlock right now (macOS: sensor present, a
+    /// finger enrolled, and a build that may use the protected Keychain;
+    /// Windows: Windows Hello set up for this user).
     pub supported: bool,
     /// Material is stored and its device secret is (as far as the platform
     /// says without a prompt) still there.
@@ -237,7 +246,7 @@ fn status_now(store: Option<&dyn DeviceSecretStore>, blob: &Path) -> BiometricSt
         // Only on an explicit "dead": a closed lid (Unsupported) or an
         // unmapped answer (Unknown) is not a reason to call the material gone.
         invalidated: stored && secret == SecretState::Absent,
-        secret_key_remembered: supported && stored_secret_key_hex_now().is_ok_and(|k| k.is_some()),
+        secret_key_remembered: supported && secret_key_remembered_now(),
     }
 }
 
