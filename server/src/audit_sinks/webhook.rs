@@ -56,12 +56,27 @@ impl WebhookSink {
         })
     }
 
+    /// `http://` to anything but a loopback host: batches cross the network in
+    /// plaintext.
+    pub fn is_plaintext_remote(&self) -> bool {
+        let loopback = self.url.host_str().is_some_and(|h| {
+            h.eq_ignore_ascii_case("localhost")
+                || h.trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
+        self.url.scheme() == "http" && !loopback
+    }
+
+    /// Reads the secret named in the config. `Config::load` already resolved it
+    /// once to validate; resolving again here keeps the secret out of `Config`.
     pub fn from_config(cfg: &WebhookConfig, instance: String) -> Result<Self, String> {
         let secret = cfg.resolve_secret()?;
         Self::new(
             &cfg.url,
             secret,
-            Duration::from_secs(cfg.timeout_secs.max(1)),
+            Duration::from_secs(cfg.timeout_secs),
             instance,
         )
     }

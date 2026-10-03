@@ -302,7 +302,8 @@ async fn main() -> anyhow::Result<()> {
             shutdown_signal().await;
             tracing::info!("shutdown requested");
             let _ = stop_tx.send(true);
-            handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+            // 8 s drain + 1 s sink join stays inside Docker's default 10 s stop grace.
+            handle.graceful_shutdown(Some(std::time::Duration::from_secs(8)));
         });
     }
 
@@ -329,9 +330,12 @@ async fn main() -> anyhow::Result<()> {
             axum_server::bind(bind).handle(handle).serve(make).await?;
         }
     }
-    for task in sinks {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
-    }
+    // The sinks were told to stop with the listener; give them one shared second.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        futures_util::future::join_all(sinks),
+    )
+    .await;
     Ok(())
 }
 

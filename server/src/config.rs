@@ -198,9 +198,9 @@ pub struct AuditConfig {
 /// The shared secret is never a config value: it is read at boot from the
 /// environment variable named by `secret_env` or from the file at
 /// `secret_file`, so it stays out of the TOML that sits next to the URL. This
-/// struct holds only the name/path, so its `Debug` and any config dump carry
-/// no secret.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// struct holds only the name/path of the secret. The URL itself often carries
+/// a token (query, path or userinfo), so the manual `Debug` below redacts it.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WebhookConfig {
     pub url: String,
@@ -227,6 +227,13 @@ impl Default for WebhookConfig {
 }
 
 impl WebhookConfig {
+    /// Every field that names a destination or a secret is empty: the section
+    /// exists only because a deployment passes empty env vars through (e.g.
+    /// `UNISSH__AUDIT__WEBHOOK__URL: "${UNISSH__AUDIT__WEBHOOK__URL:-}"`).
+    fn is_unset(&self) -> bool {
+        self.url.is_empty() && self.secret_env.is_empty() && self.secret_file.is_empty()
+    }
+
     /// Read the HMAC secret from `secret_env` or `secret_file` (exactly one).
     /// Errors name the setting, never the value.
     pub fn resolve_secret(&self) -> Result<Vec<u8>, String> {
@@ -285,6 +292,14 @@ impl WebhookConfig {
 }
 
 impl AuditConfig {
+    /// Drop sinks whose section is present but entirely empty (see
+    /// `WebhookConfig::is_unset`). A partly set section stays and fails validation.
+    pub fn normalize(&mut self) {
+        if self.webhook.as_ref().is_some_and(WebhookConfig::is_unset) {
+            self.webhook = None;
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         match &self.webhook {
             Some(w) => w.validate(),
@@ -399,6 +414,17 @@ impl std::fmt::Debug for DbConfig {
             .finish()
     }
 }
+impl std::fmt::Debug for WebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookConfig")
+            .field("url", &redacted(&self.url))
+            .field("secret_env", &self.secret_env)
+            .field("secret_file", &self.secret_file)
+            .field("batch_size", &self.batch_size)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
+}
 impl std::fmt::Debug for OpsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpsConfig")
@@ -429,7 +455,8 @@ impl Config {
             }
         }
         fig = fig.merge(Env::prefixed("UNISSH__").split("__"));
-        let config: Config = fig.extract().map_err(Box::new)?;
+        let mut config: Config = fig.extract().map_err(Box::new)?;
+        config.audit.normalize();
         // Fail fast on a bad OIDC group_map so no per-login SSO path can be broken by
         // one malformed entry (see `OidcConfig::validate`).
         config
@@ -531,5 +558,8 @@ mod audit_validate_tests {
             err.to_string().contains("audit.webhook needs a secret"),
             "{err}"
         );
+        // An all-empty section (compose passing `${X:-}` through) means no sink.
+        std::fs::write(&path, "[audit.webhook]\nurl = \"\"\n").unwrap();
+        assert!(Config::load(Some(&path)).unwrap().audit.webhook.is_none());
     }
 }

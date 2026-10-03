@@ -23,7 +23,7 @@ use crate::store::Store;
 use crate::store::models::AuditExportRow;
 use crate::time::SharedClock;
 use futures_util::future::BoxFuture;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -95,8 +95,8 @@ pub enum Step {
     Delivered { first: i64, last: i64 },
     /// Nothing after the cursor.
     Idle,
-    /// The batch (or the log read) failed; retry after `delay`.
-    Failed { delay: Duration },
+    /// The batch (or the log read) failed with `error`; retry after `delay`.
+    Failed { delay: Duration, error: SinkError },
 }
 
 impl Step {
@@ -105,7 +105,7 @@ impl Step {
         match self {
             Step::Delivered { .. } => Duration::ZERO,
             Step::Idle => IDLE_POLL,
-            Step::Failed { delay } => *delay,
+            Step::Failed { delay, .. } => *delay,
         }
     }
 }
@@ -164,7 +164,8 @@ impl Delivery {
                         retry_in_ms = delay.as_millis() as u64,
                         "audit sink could not read the log"
                     );
-                    return Step::Failed { delay };
+                    let error = SinkError(format!("log_read_{}", e.code.as_str()));
+                    return Step::Failed { delay, error };
                 }
             },
         };
@@ -194,7 +195,10 @@ impl Delivery {
             retry_in_ms = delay.as_millis() as u64,
             "audit sink delivery failed; the same batch will be retried"
         );
-        Step::Failed { delay }
+        Step::Failed {
+            delay,
+            error: SinkError(error),
+        }
     }
 
     async fn next_batch(&self) -> AppResult<Option<Batch>> {
@@ -212,11 +216,12 @@ impl Delivery {
             .saturating_mul(1u32 << self.failures.min(16))
             .min(BACKOFF_MAX);
         self.failures = self.failures.saturating_add(1);
-        (self.jitter)(base).min(BACKOFF_MAX)
+        (self.jitter)(base)
     }
 
-    /// Step until `shutdown` turns true (or its sender is dropped).
-    pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) {
+    /// Step until `shutdown` turns true (or its sender is dropped), recording
+    /// each outcome in `status`.
+    pub async fn run(mut self, status: SharedSinkStatus, mut shutdown: watch::Receiver<bool>) {
         let name = self.sink.name().to_string();
         tracing::info!(sink = %name, "audit sink started");
         loop {
@@ -227,6 +232,8 @@ impl Delivery {
                 s = self.step() => s,
                 _ = shutdown.changed() => break,
             };
+            // Ticket-04 metrics hook in here too.
+            record(&status, &step, self.clock.now_unix());
             let wait = step.wait();
             if wait.is_zero() {
                 continue;
@@ -240,28 +247,73 @@ impl Delivery {
     }
 }
 
-/// Up to +25 % of `base`, so retries from a fleet do not arrive in lockstep.
+/// Last known state of one sink, for the status endpoint (ticket 04).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SinkStatus {
+    pub sink: String,
+    /// Last seq acknowledged by this process (the persisted cursor is authoritative).
+    pub last_delivered_seq: Option<i64>,
+    pub last_success_at: Option<i64>,
+    /// Error code of the most recent failure (cleared by nothing: pair it with the timestamps).
+    pub last_error: Option<String>,
+    pub last_error_at: Option<i64>,
+}
+
+pub type SharedSinkStatus = Arc<Mutex<SinkStatus>>;
+
+fn record(status: &SharedSinkStatus, step: &Step, now: i64) {
+    let mut s = status.lock().unwrap_or_else(|p| p.into_inner());
+    match step {
+        Step::Delivered { last, .. } => {
+            s.last_delivered_seq = Some(*last);
+            s.last_success_at = Some(now);
+        }
+        Step::Idle => {}
+        Step::Failed { error, .. } => {
+            s.last_error = Some(error.0.clone());
+            s.last_error_at = Some(now);
+        }
+    }
+}
+
+/// A random point in `[0.75·base, base]`, so retries from a fleet (including
+/// those sitting at the 5-minute cap) do not arrive in lockstep.
 fn random_jitter(base: Duration) -> Duration {
     let mut b = [0u8; 8];
     crate::ids::fill_random(&mut b);
     let quarter = (base.as_millis() / 4) as u64;
-    let extra = if quarter == 0 {
+    let less = if quarter == 0 {
         0
     } else {
         u64::from_le_bytes(b) % (quarter + 1)
     };
-    base + Duration::from_millis(extra)
+    base - Duration::from_millis(less)
 }
 
-/// Start one delivery task per sink configured in `[audit]`. Errors (a secret
-/// that cannot be read, a client that cannot be built) stop the boot.
+/// Start one delivery task per sink configured in `[audit]`, and publish their
+/// status handles in `state.audit_sinks`. Errors (a secret that cannot be read,
+/// a client that cannot be built) stop the boot.
 pub fn spawn_configured(
     state: &AppState,
     shutdown: watch::Receiver<bool>,
 ) -> Result<Vec<JoinHandle<()>>, String> {
     let mut tasks = Vec::new();
+    let mut statuses = Vec::new();
     if let Some(cfg) = &state.config.audit.webhook {
         let sink = webhook::WebhookSink::from_config(cfg, crate::ids::b64(&state.instance_id))?;
+        if sink.is_plaintext_remote() {
+            // Never the URL: it may carry a token.
+            tracing::warn!(
+                sink = sink.name(),
+                "audit sink posts over plain http to a non-loopback host: entries and \
+                 metadata travel unencrypted; use https"
+            );
+        }
+        let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
+            sink: sink.name().to_string(),
+            ..Default::default()
+        }));
+        statuses.push(status.clone());
         let delivery = Delivery::new(
             Arc::new(sink),
             state.store.clone(),
@@ -269,8 +321,9 @@ pub fn spawn_configured(
             state.clock.clone(),
             cfg.batch_size,
         );
-        tasks.push(tokio::spawn(delivery.run(shutdown.clone())));
+        tasks.push(tokio::spawn(delivery.run(status, shutdown.clone())));
     }
+    let _ = state.audit_sinks.set(statuses);
     Ok(tasks)
 }
 
@@ -279,7 +332,6 @@ mod tests {
     use super::*;
     use crate::error::AppError;
     use crate::time::TestClock;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Records the seqs of every attempted batch; acks unless `fail` is set.
@@ -361,7 +413,14 @@ mod tests {
         let store = store_with(5).await;
         let sink = Arc::new(FakeSink::default());
         let mut d = delivery(&sink, &store, Arc::new(store.clone()));
-        while d.step().await != Step::Idle {}
+        let mut idle = false;
+        for _ in 0..10 {
+            if d.step().await == Step::Idle {
+                idle = true;
+                break;
+            }
+        }
+        assert!(idle, "never caught up");
         assert_eq!(sink.attempts(), vec![vec![1, 2], vec![3, 4], vec![5]]);
     }
 
@@ -416,7 +475,10 @@ mod tests {
             fail_save: AtomicBool::new(true),
         });
         let mut d = delivery(&sink, &store, cursor.clone());
-        assert!(matches!(d.step().await, Step::Failed { .. }));
+        match d.step().await {
+            Step::Failed { error, .. } => assert!(error.0.starts_with("cursor_write_"), "{error}"),
+            other => panic!("expected a failure, got {other:?}"),
+        }
         cursor.fail_save.store(false, Ordering::SeqCst);
         assert_eq!(d.step().await, Step::Delivered { first: 1, last: 2 });
         assert_eq!(sink.attempts(), vec![vec![1, 2], vec![1, 2]]);
