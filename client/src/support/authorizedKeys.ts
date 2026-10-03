@@ -27,13 +27,18 @@ export const REMOVE_EXIT_NO_FILE = 4;
 
 /** Idempotent ssh-copy-id: create `~/.ssh` with the permissions sshd's
  *  StrictModes requires, then append the key only if an identical line is not
- *  already there. Running it twice leaves one line. */
+ *  already there. Running it twice leaves one line. A file whose last line has
+ *  no newline gets one first, as ssh-copy-id does — otherwise the key would be
+ *  glued onto that line, breaking it and installing nothing. */
 export function authorizedKeysAppendCmd(openssh: string): string {
   const q = quoteKey(openssh);
   return posix(
-    `mkdir -p ~/.ssh && chmod 700 ~/.ssh && ` +
-      `touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && ` +
-      `{ grep -qxF ${q} ~/.ssh/authorized_keys || printf '%s\\n' ${q} >> ~/.ssh/authorized_keys; }`,
+    `f=~/.ssh/authorized_keys; ` +
+      `mkdir -p ~/.ssh && chmod 700 ~/.ssh && ` +
+      `touch "$f" && chmod 600 "$f" && ` +
+      `{ grep -qxF ${q} "$f" || { ` +
+      `{ [ ! -s "$f" ] || [ -z "$(tail -c1 "$f")" ] || echo >> "$f"; } && ` +
+      `printf '%s\\n' ${q} >> "$f"; }; }`,
   );
 }
 

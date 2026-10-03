@@ -81,9 +81,12 @@ export function KeyRotationModal({
   const { t } = useTranslation();
   const ctx = useCtx();
   const isMobile = useIsMobile();
-  const vault = useApp((s) => s.vaultId) ?? "";
+  const liveVault = useApp((s) => s.vaultId) ?? "";
   const hosts = useApp((s) => s.hosts);
-  // Frozen at open: the run works off this snapshot even if hosts sync meanwhile.
+  // Frozen at open: the run works off this snapshot even if hosts sync or the
+  // active vault changes meanwhile — the key, its candidate and the plan all
+  // belong to the vault the dialog was opened for.
+  const [vault] = useState(liveVault);
   const [plan] = useState(() => planRotation(hosts, vault, keyItemId));
   const [candidateId, setCandidateId] = useState<string | null>(resumeCandidate ?? null);
   const [run, setRun] = useState<RotationRun | null>(null);
@@ -204,6 +207,9 @@ export function KeyRotationModal({
       ? t("keyRotation.failedAt", { step: t(STEP_KEY[s.step]), error: s.error })
       : t("keyRotation.keptOld");
   };
+  // Hosts that reach the key only through target `id` as a hop: they follow it.
+  const dependentsOf = (id: string) =>
+    plan.dependents.filter((d) => d.targetIds.includes(id)).map((d) => d.host.label);
   const labelOf = (id: string) => {
     const tg = plan.targets.find((x) => x.id === id);
     return tg ? targetLabel(tg) : id;
@@ -226,7 +232,11 @@ export function KeyRotationModal({
       title={t("keyRotation.title", { item: keyItemId })}
       subtitle={t("keyRotation.subtitle")}
       // Mid-run the dialog stays: closing would orphan steps in flight. Stop first.
-      onClose={busy ? () => ctx.toast(t("keyRotation.busyClose"), "warn") : onClose}
+      onClose={
+        busy
+          ? () => ctx.toast(t(run?.cancelled ? "keyRotation.busyCloseStopped" : "keyRotation.busyClose"), "warn")
+          : onClose
+      }
       w={600}
       footer={
         <>
@@ -394,11 +404,17 @@ export function KeyRotationModal({
             <div style={{ ...note, color: p.amber }}>
               {t("keyRotation.notSwitchedLabel")}
               <ul style={{ margin: `${rem(4)} 0 0`, paddingLeft: rem(18) }}>
-                {notSwitched.map((tg) => (
-                  <li key={tg.id}>
-                    {targetLabel(tg)} — {outcome(tg)}
-                  </li>
-                ))}
+                {notSwitched.map((tg) => {
+                  const deps = dependentsOf(tg.id);
+                  return (
+                    <li key={tg.id}>
+                      {targetLabel(tg)} — {outcome(tg)}
+                      {deps.length > 0 && (
+                        <div style={{ color: p.txt3 }}>{t("keyRotation.notSwitchedWith", { hosts: deps.join(", ") })}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

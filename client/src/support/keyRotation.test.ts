@@ -153,6 +153,11 @@ describe("rotation run", () => {
     expect(startableSteps(run)).toEqual([]);
     run = recordStep(run, d, "verify", OK);
     expect(kinds(run)).toEqual({ [a]: "switched", [b]: "keptOld", [c]: "failed:deploy", [d]: "keptOld" });
+    // b was waiting to remove, d's verify landed after the cancel: both passed verify.
+    expect([run.states[b], run.states[d]]).toEqual([
+      { kind: "keptOld", after: "verify" },
+      { kind: "keptOld", after: "verify" },
+    ]);
     expect([runSettled(run), retryTarget(run, c)]).toEqual([true, run]);
   });
 

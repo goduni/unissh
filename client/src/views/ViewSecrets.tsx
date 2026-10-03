@@ -17,6 +17,7 @@ import { useCtx } from "@/store/ctx";
 import { useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType } from "@/bridge/types";
+import { logWarn } from "@/bridge/log";
 import type { ConnectionProfile, ItemInfo, Identity, KeyRotationLink, ServerStatus, VaultInfo } from "@/bridge/types";
 import { isOwnedCloud, serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { exportPath } from "@/support/paths";
@@ -538,20 +539,25 @@ function KeyRow({
               { label: t("secrets.exportPrivateKey"), icon: "download", onClick: onExport },
             ]}
           />
-          <button
-            onClick={onDelete}
-            title={t("common.delete")}
-            aria-label={t("common.delete")}
-            style={{
-              ...actBtn,
-              border: `1px solid ${p.line}`,
-              background: p.bg2,
-              color: p.red,
-              cursor: "pointer",
-            }}
-          >
-            <Icon name="trash" size={14} />
-          </button>
+          {/* A key in a rotation is removed through Abandon only: a plain delete
+              of the candidate (or of the original under it) skips the warning
+              that machines already switched accept nothing else. */}
+          {!rotation && (
+            <button
+              onClick={onDelete}
+              title={t("common.delete")}
+              aria-label={t("common.delete")}
+              style={{
+                ...actBtn,
+                border: `1px solid ${p.line}`,
+                background: p.bg2,
+                color: p.red,
+                cursor: "pointer",
+              }}
+            >
+              <Icon name="trash" size={14} />
+            </button>
+          )}
         </div>
       </HairlineRow>
       {open && (
@@ -641,7 +647,10 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
     api
       .listKeyRotations(vault)
       .then((l) => alive && setLinks(l))
-      .catch(() => alive && setLinks([]));
+      .catch((e) => {
+        logWarn(`list key rotations failed: ${apiErrorMessage(e)}`);
+        if (alive) setLinks([]);
+      });
     return () => {
       alive = false;
     };
@@ -654,10 +663,13 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
     return asCandidate ? { role: "candidate", link: asCandidate } : undefined;
   };
 
-  // A candidate sits right under its original, so the pair reads as one.
-  const candidates = new Set(links.map((l) => l.candidateId));
+  // A candidate sits right under its original, so the pair reads as one. It
+  // leaves its own place only when that original is listed to carry it —
+  // otherwise (original deleted) it would vanish with its private key.
+  const keyIds = new Set(keys.map((k) => k.itemId));
+  const placed = new Set(links.filter((l) => keyIds.has(l.keyId)).map((l) => l.candidateId));
   const ordered = keys.flatMap((k) => {
-    if (candidates.has(k.itemId)) return [];
+    if (placed.has(k.itemId)) return [];
     const link = links.find((l) => l.keyId === k.itemId);
     const cand = link && keys.find((c) => c.itemId === link.candidateId);
     return cand ? [k, cand] : [k];

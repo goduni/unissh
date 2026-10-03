@@ -139,8 +139,11 @@ export function planRotation(
 /** One target's place in a run:
  *   pending  — waiting to run `step`;
  *   running  — `step` is in flight;
- *   failed   — `step` failed with `error`; the old key is still authorized
- *              (a failed remove is an atomic rewrite that did not happen);
+ *   failed   — `step` failed with `error`; the old key is still authorized.
+ *              A failed remove either did not rewrite the file at all (the
+ *              rewrite is atomic), or did remove the exact line but found the
+ *              old key still there in another form (`REMOVE_EXIT_STILL_PRESENT`:
+ *              options prefix, CRLF, another comment);
  *   switched — the old key is removed, the candidate is the only one;
  *   keptOld  — the run was cancelled before this target switched; the old key
  *              is still authorized (and the candidate too if it got that far).
