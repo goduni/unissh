@@ -106,13 +106,13 @@ npm run tauri android init  && npm run tauri android dev
 **Prerequisites (clients):** Node 20.19+ / 22.12+ and Rust 1.95+. Linux desktop also needs the WebKitGTK stack: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev libxdo-dev libayatana-appindicator3-dev`. iOS needs Xcode + CocoaPods; Android needs Android Studio + SDK + NDK.
 </details>
 
-On first launch you pick a **Local** or **Cloud** vault. Local needs nothing else — you're done. For **Cloud** sync across devices or a team, stand up a server next.
+On first launch you pick a **Local** or **Cloud** vault. Local needs nothing else — you're done. For **Cloud** sync across devices or a team, stand up a server next. Starting Local doesn't lock you in: once you're signed in to a server, **Settings → Vaults → Move to server…** turns that vault into a Cloud vault.
 
 ### B. Self-host a sync server (optional)
 
 **Stop here if one device is all you need** — a local vault is fully functional without any of this, and standing a server up later takes nothing away: the client keeps working exactly as it does now, and a [portable encrypted backup](#features) carries the vault to another machine.
 
-Be aware of what that migration is and isn't, though: a restored backup lands as a **local** vault wherever it goes. Putting existing hosts behind sync today means creating a Cloud vault and moving them into it — there is no in-place local→cloud switch.
+When the server is up, an existing local vault moves onto it without re-typing anything: sign in to the server, then **Settings → Vaults → Move to server…** on that vault. You pick the server (and the space, if it has more than one), see what moves, and confirm; the vault becomes a Cloud vault with the same name, groups, items and host identities, and the first sync pushes it — only ciphertext, as for any Cloud vault. Under the hood it is a re-keyed copy into a new vault id, in one transaction: the local copy is replaced rather than kept beside it, host jumps and Personal-identity bindings that pointed at it follow it, a vault that was your Personal vault stays your Personal vault, and item version history starts fresh on the server. The confirmation offers **Export backup first** if you want a way back. Vault format and server protocol are unchanged. A restored *backup*, by contrast, still lands as a **local** vault wherever it goes — move it the same way afterwards.
 
 Running one buys you exactly four things: the same vault unlocked on your laptop, phone and tablet; hosts and secrets shared with a team, with membership, roles and revocation; a lost device cut off from the vault without re-keying everything; and a server-side audit trail. What it does **not** buy the server is the ability to read any of it — it holds ciphertext and routing metadata, and the keys never leave your devices.
 
@@ -646,7 +646,7 @@ Donations don't buy priority support or private builds. For anything else, write
 ## FAQ / Troubleshooting
 
 **Do I need the server? Can I run the client on its own?**
-No, and yes. The first run creates a **local** vault and the client is complete from there: hosts, keys, terminals, SFTP, tunnels and fleet commands all work with the vault encrypted on that device, with no account and no service of ours listening for anything. The server is a **sync** backend and nothing else — you only want one to share the same vault across your devices or with a team. Starting local costs you nothing later: a [portable encrypted backup](#features) moves the vault to any instance, including a server-linked one (where it restores as a local vault — sync means creating a Cloud vault and moving the hosts into it). SSH connections never route through the server either way.
+No, and yes. The first run creates a **local** vault and the client is complete from there: hosts, keys, terminals, SFTP, tunnels and fleet commands all work with the vault encrypted on that device, with no account and no service of ours listening for anything. The server is a **sync** backend and nothing else — you only want one to share the same vault across your devices or with a team. Starting local costs you nothing later: a [portable encrypted backup](#features) moves the vault to any instance, including a server-linked one (where it restores as a local vault). To put a local vault behind sync, use **Settings → Vaults → Move to server…**: it becomes a Cloud vault with the same items and hosts, nothing re-typed. SSH connections never route through the server either way.
 
 **macOS: "UniSSH can't be opened because the developer cannot be verified."**
 Expected — the build is unsigned. Right-click → **Open**, or **System Settings → Privacy & Security → Open Anyway**, or `xattr -dr com.apple.quarantine /Applications/UniSSH.app`. See [Installing unsigned builds](#installing-unsigned-builds).

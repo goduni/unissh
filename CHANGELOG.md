@@ -32,6 +32,22 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Added
+
+- **Move to server…** for local vaults (Settings → Vaults): converts a local
+  vault into a Cloud vault on a signed-in server and space, keeping its name,
+  groups, items and host identities, then pushes it. The conversion is a
+  re-keyed copy under a new vault id in one transaction; host jumps and
+  Personal-identity bindings that referred to the vault follow it, and the
+  account's Personal vault stays the Personal vault. The confirmation shows what
+  moves and offers **Export backup first**. Item version history starts fresh on
+  the server. See [upgrading](docs/upgrading.md#moving-a-local-vault-to-a-server).
+
+### Compatibility
+
+**Vault format and server protocol are unchanged** — the conversion writes an
+ordinary Cloud vault, and the server receives it like any new Cloud vault.
+
 ## [0.5.0] — 2026-10-02
 
 ### Added
