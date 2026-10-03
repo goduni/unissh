@@ -229,11 +229,36 @@ impl Storage {
     /// `ROLLBACK` on error). Lets upper layers perform atomic multi-step
     /// operations (e.g. rename = put+tombstone). The closure's error must be
     /// convertible from [`StorageError`].
+    ///
+    /// Nests: called while a transaction is already open, it runs the closure
+    /// under a `SAVEPOINT` instead — an error undoes only the closure's writes,
+    /// success folds them into the outer transaction, and the OUTER transaction
+    /// alone decides what is committed. So an operation that is atomic on its own
+    /// (e.g. a vault tombstone) can also be one step of a larger atomic operation.
     pub fn transaction<T, E, F>(&self, f: F) -> Result<T, E>
     where
         F: FnOnce() -> Result<T, E>,
         E: From<StorageError>,
     {
+        if !self.conn.is_autocommit() {
+            self.conn
+                .execute_batch("SAVEPOINT nested")
+                .map_err(|e| E::from(StorageError::from(e)))?;
+            return match f() {
+                Ok(v) => {
+                    self.conn
+                        .execute_batch("RELEASE nested")
+                        .map_err(|e| E::from(StorageError::from(e)))?;
+                    Ok(v)
+                }
+                Err(e) => {
+                    let _ = self
+                        .conn
+                        .execute_batch("ROLLBACK TO nested; RELEASE nested");
+                    Err(e)
+                }
+            };
+        }
         self.conn
             .execute_batch("BEGIN")
             .map_err(|e| E::from(StorageError::from(e)))?;
@@ -1715,6 +1740,34 @@ mod purge_tests {
         // neighboring vault intact
         assert!(s.get_vault(&other).unwrap().is_some());
         assert_eq!(s.list_items(&other).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn nested_transaction_is_decided_by_the_outer_one() {
+        let s = st();
+        let (a, b) = (b"vault-a".to_vec(), b"vault-b".to_vec());
+        // The inner transaction succeeds, the outer one then fails: nothing stays.
+        let r: Result<(), StorageError> = s.transaction(|| {
+            s.put_vault(&vrec(&a))?;
+            s.transaction(|| s.put_vault(&vrec(&b)))?;
+            Err(StorageError::BadKeyLength)
+        });
+        assert!(r.is_err());
+        assert!(s.get_vault(&a).unwrap().is_none());
+        assert!(s.get_vault(&b).unwrap().is_none());
+        // The inner one fails, the outer one goes on: only the inner writes are undone.
+        s.transaction(|| {
+            s.put_vault(&vrec(&a))?;
+            let inner: Result<(), StorageError> = s.transaction(|| {
+                s.put_vault(&vrec(&b))?;
+                Err(StorageError::BadKeyLength)
+            });
+            assert!(inner.is_err());
+            Ok::<(), StorageError>(())
+        })
+        .unwrap();
+        assert!(s.get_vault(&a).unwrap().is_some());
+        assert!(s.get_vault(&b).unwrap().is_none());
     }
 
     #[test]

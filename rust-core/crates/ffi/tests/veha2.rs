@@ -1076,3 +1076,294 @@ fn cloud_vault_rename_reflects_in_list() {
     let v = vaults.iter().find(|v| v.vault_id == vid).unwrap();
     assert_eq!(v.name, "New");
 }
+
+/// Signs `user_pub` with a throwaway CA via `ssh-keygen`, returning the OpenSSH
+/// user certificate (the shape `import_ssh_certificate` accepts).
+fn sign_user_cert(user_pub: &str) -> String {
+    use std::process::Command;
+    let work = tempfile::tempdir().unwrap();
+    let ca = work.path().join("ca");
+    assert!(Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-N", ""])
+        .arg("-f")
+        .arg(&ca)
+        .status()
+        .unwrap()
+        .success());
+    let user = work.path().join("user.pub");
+    std::fs::write(&user, format!("{user_pub}\n")).unwrap();
+    assert!(Command::new("ssh-keygen")
+        .arg("-s")
+        .arg(&ca)
+        .args(["-q", "-I", "unissh-test", "-n", "root", "-V", "+1h"])
+        .arg(&user)
+        .status()
+        .unwrap()
+        .success());
+    std::fs::read_to_string(work.path().join("user-cert.pub")).unwrap()
+}
+
+#[test]
+fn local_vault_moves_to_server_with_every_item_and_reference() {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+    use sync_backend::AppTransport;
+    use unissh_ffi::{
+        AuthMethod, ConnectionProfile, FfiSyncTarget, HopRef, JumpHost, ProfileAuth, ResolveStatus,
+        ServerGroup, Snippet,
+    };
+    use unissh_sync::{InMemoryTransport, SyncObject, SyncTransport};
+
+    const LOCAL: &str = "ops-local";
+    let s = |x: &str| x.to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault(s(LOCAL), s("Ops")).unwrap();
+
+    let user_pub = core.generate_ssh_key(s(LOCAL), s("key")).unwrap();
+    core.import_ssh_certificate(s(LOCAL), s("key"), sign_user_cert(&user_pub))
+        .unwrap();
+    core.save_password(s(LOCAL), s("db-pw"), s("hunter2"))
+        .unwrap();
+    core.save_note(s(LOCAL), s("runbook"), s("restart nginx"))
+        .unwrap();
+    core.save_snippet(
+        s(LOCAL),
+        Snippet {
+            snippet_id: s("uptime"),
+            label: s("Uptime"),
+            command: s("uptime"),
+            tags: vec![],
+        },
+    )
+    .unwrap();
+    let host = |id: &str, auth: ProfileAuth, jumps: Vec<JumpHost>, snippets: Vec<String>| {
+        ConnectionProfile {
+            profile_id: s(id),
+            uid: String::new(),
+            label: s(id),
+            host: format!("{id}.example"),
+            port: 22,
+            user: s("root"),
+            auth,
+            username_template: None,
+            jumps,
+            proxy: None,
+            tags: vec![],
+            startup_snippet_ids: snippets,
+            record_sessions: false,
+            agent_forward: false,
+        }
+    };
+    core.save_connection(
+        s(LOCAL),
+        host(
+            "bastion",
+            ProfileAuth::Key {
+                key_item_id: s("key"),
+            },
+            vec![],
+            vec![],
+        ),
+    )
+    .unwrap();
+    let bastion_uid = core.get_connection(s(LOCAL), s("bastion")).unwrap().uid;
+    let via_bastion = JumpHost {
+        host: String::new(),
+        port: 0,
+        user: String::new(),
+        auth: AuthMethod::Agent {
+            vault_id: s(LOCAL),
+            key_item_id: s("key"),
+        },
+        hop_ref: Some(HopRef {
+            vault_id: s(LOCAL),
+            profile_uid: bastion_uid.clone(),
+        }),
+    };
+    core.save_connection(
+        s(LOCAL),
+        host(
+            "web",
+            ProfileAuth::VaultPassword {
+                password_item_id: s("db-pw"),
+            },
+            vec![via_bastion],
+            vec![s("uptime")],
+        ),
+    )
+    .unwrap();
+    core.save_group(
+        s(LOCAL),
+        ServerGroup {
+            group_id: s("prod"),
+            label: s("Prod"),
+            member_ids: vec![s("web"), s("edge")],
+            parent_id: None,
+        },
+    )
+    .unwrap();
+    core.save_group(
+        s(LOCAL),
+        ServerGroup {
+            group_id: s("edge"),
+            label: s("Edge"),
+            member_ids: vec![s("bastion")],
+            parent_id: Some(s("prod")),
+        },
+    )
+    .unwrap();
+
+    let items_of = |vid: &str| -> BTreeMap<String, u32> {
+        core.list_items(s(vid))
+            .unwrap()
+            .into_iter()
+            .map(|i| (i.item_id, i.item_type))
+            .collect()
+    };
+    let uids_of = |vid: &str| -> BTreeMap<String, String> {
+        core.list_connections(s(vid))
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.profile_id, c.uid))
+            .collect()
+    };
+    let items_before = items_of(LOCAL);
+    let uids_before = uids_of(LOCAL);
+
+    let new_id = core
+        .convert_vault_to_cloud(s(LOCAL), TENANT.to_string())
+        .unwrap();
+
+    // A cloud vault with a 16-byte UUID id, bound to the server, same name; the
+    // local vault is gone from the list.
+    assert_eq!(hex::decode(&new_id).unwrap().len(), 16);
+    let vaults = core.list_vaults().unwrap();
+    assert!(vaults.iter().all(|v| v.vault_id != LOCAL));
+    let moved = vaults.iter().find(|v| v.vault_id == new_id).unwrap();
+    assert_eq!(moved.name, "Ops");
+    assert_eq!(moved.sync_target, FfiSyncTarget::Cloud);
+    assert_eq!(moved.sync_tenant.as_deref(), Some(TENANT));
+
+    // Same item ids and types, same host uids.
+    assert_eq!(items_of(&new_id), items_before);
+    assert_eq!(uids_of(&new_id), uids_before);
+
+    // Every reference resolves inside the new vault.
+    let web = core.get_connection(new_id.clone(), s("web")).unwrap();
+    let ProfileAuth::VaultPassword { password_item_id } = &web.auth else {
+        panic!("web keeps its vault-password auth");
+    };
+    assert_eq!(
+        core.get_password(new_id.clone(), password_item_id.clone())
+            .unwrap(),
+        "hunter2"
+    );
+    let snippets = core.list_snippets(new_id.clone()).unwrap();
+    assert_eq!(web.startup_snippet_ids, vec![s("uptime")]);
+    assert!(snippets
+        .iter()
+        .any(|sn| sn.snippet_id == "uptime" && sn.command == "uptime"));
+    let hop = web.jumps[0].hop_ref.as_ref().unwrap();
+    assert_eq!(hop.vault_id, new_id, "same-vault hop follows the vault");
+    assert_eq!(hop.profile_uid, bastion_uid);
+    let bastion = core.get_connection(new_id.clone(), s("bastion")).unwrap();
+    assert_eq!(bastion.uid, bastion_uid);
+    let ProfileAuth::Key { key_item_id } = &bastion.auth else {
+        panic!("bastion keeps its key auth");
+    };
+    assert_eq!(
+        core.get_public_key(new_id.clone(), key_item_id.clone())
+            .unwrap()
+            .openssh
+            .split_whitespace()
+            .nth(1),
+        user_pub.split_whitespace().nth(1)
+    );
+    assert!(core
+        .list_items(new_id.clone())
+        .unwrap()
+        .iter()
+        .any(|i| i.item_id == *key_item_id && i.has_certificate));
+    assert_eq!(
+        core.get_note(new_id.clone(), s("runbook")).unwrap(),
+        "restart nginx"
+    );
+    let edge = core.get_group(new_id.clone(), s("edge")).unwrap();
+    assert_eq!(edge.parent_id.as_deref(), Some("prod"));
+    let plan = core.dry_run_group(new_id.clone(), s("prod")).unwrap();
+    assert_eq!(plan.len(), 2, "web + bastion via the nested group");
+    assert!(plan.iter().all(|t| t.status == ResolveStatus::Ok));
+
+    // The first sync pushes the new vault and all its items; the local vault
+    // never reaches the server.
+    let backend = Arc::new(AppTransport {
+        inner: Mutex::new(InMemoryTransport::new()),
+    });
+    core.sync_now(backend.clone(), TENANT.to_string()).unwrap();
+    let new_raw = hex::decode(&new_id).unwrap();
+    let mut vault_pushed = false;
+    let mut pushed_items = BTreeMap::new();
+    for (_, obj) in backend.inner.lock().unwrap().delta_since(0) {
+        match obj {
+            SyncObject::Vault(v) => {
+                assert_ne!(v.vault_id, LOCAL.as_bytes(), "local vault pushed");
+                vault_pushed |= v.vault_id == new_raw;
+            }
+            SyncObject::Item(i) => {
+                assert_ne!(i.vault_id, LOCAL.as_bytes(), "local item pushed");
+                if i.vault_id == new_raw {
+                    pushed_items.insert(String::from_utf8(i.item_id).unwrap(), i.item_type);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(vault_pushed);
+    assert_eq!(pushed_items, items_before);
+}
+
+#[test]
+fn move_to_server_refusals_leave_the_vault_untouched() {
+    use unissh_ffi::{FfiError, FfiSyncTarget};
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    let secret = core.create_account(Some("pw".to_string())).unwrap();
+    core.create_vault("loc".to_string(), "Local".to_string())
+        .unwrap();
+    core.save_password("loc".to_string(), "p".to_string(), "s3cret".to_string())
+        .unwrap();
+    let cloud = core
+        .create_cloud_vault("Cloud".to_string(), TENANT.to_string())
+        .unwrap();
+
+    assert!(matches!(
+        core.convert_vault_to_cloud("loc".to_string(), String::new()),
+        Err(FfiError::NoServer)
+    ));
+    assert!(matches!(
+        core.convert_vault_to_cloud(cloud.clone(), TENANT.to_string()),
+        Err(FfiError::AlreadyCloud)
+    ));
+    core.lock();
+    assert!(matches!(
+        core.convert_vault_to_cloud("loc".to_string(), TENANT.to_string()),
+        Err(FfiError::Locked)
+    ));
+    core.unlock(Some("pw".to_string()), secret).unwrap();
+
+    let vaults = core.list_vaults().unwrap();
+    assert_eq!(vaults.len(), 2, "no vault created or removed");
+    let local = vaults.iter().find(|v| v.vault_id == "loc").unwrap();
+    assert_eq!(local.sync_target, FfiSyncTarget::Local);
+    assert_eq!(local.sync_tenant, None);
+    assert_eq!(
+        core.get_password("loc".to_string(), "p".to_string())
+            .unwrap(),
+        "s3cret"
+    );
+    let still_cloud = vaults.iter().find(|v| v.vault_id == cloud).unwrap();
+    assert_eq!(still_cloud.sync_tenant.as_deref(), Some(TENANT));
+}

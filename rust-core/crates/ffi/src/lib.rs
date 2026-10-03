@@ -148,6 +148,14 @@ pub enum FfiError {
     /// An instance already exists at this path (guards against overwriting the keyset/DB).
     #[error("instance already exists")]
     AlreadyExists,
+    /// The vault is already a cloud vault, so an operation that applies only to a
+    /// local vault (the local-to-cloud conversion) does not apply to it.
+    #[error("vault is already a cloud vault")]
+    AlreadyCloud,
+    /// A cloud operation was given no server: the tenant (space) binding label is
+    /// empty. The client must pass the space of an active server.
+    #[error("no server to bind to (empty tenant)")]
+    NoServer,
     /// The host key did not match the pinned one — a possible MITM (show the user
     /// the `fingerprint` of the presented key and offer `trust_host`).
     #[error("host key mismatch for {host}:{port}; presented {fingerprint}")]
@@ -171,6 +179,14 @@ pub enum FfiError {
         /// Message.
         msg: String,
     },
+}
+
+/// A storage failure inside a [`Storage::transaction`] whose closure returns
+/// `FfiError` (the transaction's own BEGIN/COMMIT errors need this conversion).
+impl From<unissh_storage::StorageError> for FfiError {
+    fn from(e: unissh_storage::StorageError) -> Self {
+        FfiError::other(e)
+    }
 }
 
 impl FfiError {
@@ -5574,22 +5590,17 @@ impl Core {
             }
             // Atomically: creating the vault + all items in a single transaction — a partial failure
             // won't leave a half-imported vault.
-            state
-                .storage
-                .transaction(|| {
-                    create_vault_with_items(
-                        &state.storage,
-                        &state.keyset,
-                        new_vault_id.as_bytes().to_vec(),
-                        &name,
-                        SyncTarget::Local,
-                        None,
-                        items.iter().map(|(item_id, item_type, content)| {
-                            (item_id.as_slice(), *item_type, content.as_slice())
-                        }),
-                    )
-                })
-                .map_err(map_vault_err)?;
+            state.storage.transaction(|| {
+                create_vault_with_items(
+                    &state.storage,
+                    &state.keyset,
+                    new_vault_id.as_bytes().to_vec(),
+                    &name,
+                    SyncTarget::Local,
+                    None,
+                    items.into_iter().map(Ok),
+                )
+            })?;
             state.vault_names.insert(
                 new_vault_id.into_bytes(),
                 String::from_utf8_lossy(&name).to_string(),
@@ -5597,6 +5608,165 @@ impl Core {
             Ok(())
         })
     }
+
+    /// **Moves a LOCAL vault to a server**: converts vault `vault_id` into a cloud
+    /// vault bound to `tenant_b64` (the base64 space id of the target server, as in
+    /// `ServerConfig.space_id`) and returns the new vault id (hex of a fresh UUIDv4).
+    ///
+    /// A re-keyed copy, not a flag flip: the vault id is bound into every AAD, wrap
+    /// and signature, and cloud ids are 16-byte UUIDs, so a new cloud vault with the
+    /// same name is created and every live item is re-encrypted into it under its
+    /// ORIGINAL item id and type (key / certificate / password / note / snippet /
+    /// group / host references keep resolving). Host profiles keep their uid; the
+    /// only content rewrites are those that keep a profile meaning the same thing
+    /// in its new vault (see [`rehome_profile`]). Item version history is not
+    /// copied — the copies start at version 1. The local vault is tombstoned and
+    /// disappears from `list_vaults`. Creating, copying, binding and tombstoning
+    /// happen in ONE storage transaction: any failure leaves the local vault exactly
+    /// as it was and no cloud vault behind.
+    ///
+    /// Nothing is pushed here: the new vault is dirty and bound, and the next
+    /// `sync_now` for `tenant_b64` uploads it.
+    ///
+    /// Refusals: [`FfiError::Locked`] (core locked), [`FfiError::NoServer`] (empty
+    /// tenant), [`FfiError::NotFound`] (no such live vault), [`FfiError::AlreadyCloud`]
+    /// (the vault is already a cloud vault).
+    pub fn convert_vault_to_cloud(
+        &self,
+        vault_id: String,
+        tenant_b64: String,
+    ) -> Result<String, FfiError> {
+        self.with_state_mut(|state| {
+            if tenant_b64.is_empty() {
+                return Err(FfiError::NoServer);
+            }
+            let old_vid = resolve_vid(&state.storage, &vault_id);
+            let record = state
+                .storage
+                .get_vault(&old_vid)?
+                .filter(|r| !r.tombstone)
+                .ok_or(FfiError::NotFound)?;
+            match record.sync_target {
+                SyncTarget::Local => {}
+                SyncTarget::Cloud => return Err(FfiError::AlreadyCloud),
+                _ => return Err(FfiError::other("unsupported vault sync target")),
+            }
+            let source =
+                Vault::open(&state.storage, &state.keyset, &old_vid).map_err(map_vault_err)?;
+            let name = source.name().to_vec();
+            let metas = source.list_items().map_err(map_vault_err)?;
+            let new_vid = unissh_vault::new_vault_id();
+            let new_hex = hex::encode(&new_vid);
+            // A local vault id is the UTF-8 string the UI addresses it by — the form
+            // stored in hop references and hashed into legacy profile uids.
+            let old_label = String::from_utf8_lossy(&old_vid).into_owned();
+
+            state.storage.transaction(|| {
+                // Items are read from the local vault one at a time as they are copied,
+                // so at most one plaintext is held at once; a source item that fails to
+                // verify or decrypt aborts the copy and rolls everything back.
+                let items = metas
+                    .iter()
+                    .filter_map(|m| match source.get_item(&m.item_id) {
+                        Ok(Some(item)) => Some(rehome_item(item, &old_label, &new_hex)),
+                        Ok(None) => None,
+                        Err(e) => Some(Err(map_vault_err(e))),
+                    });
+                create_vault_with_items(
+                    &state.storage,
+                    &state.keyset,
+                    new_vid.clone(),
+                    &name,
+                    SyncTarget::Cloud,
+                    Some(tenant_b64.as_bytes()),
+                    items,
+                )?;
+                // `Vault::delete` is itself transactional; nested here it runs under a
+                // savepoint, so this outer transaction still decides the whole move.
+                source.delete().map_err(map_vault_err)
+            })?;
+
+            state.vault_names.remove(&old_vid);
+            state
+                .vault_names
+                .insert(new_vid, String::from_utf8_lossy(&name).into_owned());
+            Ok(new_hex)
+        })
+    }
+}
+
+/// One item on its way into a new vault: `(item_id, item_type, plaintext content)`.
+type CopiedItem = (Vec<u8>, u32, Zeroizing<Vec<u8>>);
+
+/// Prepares a local vault's item for the cloud vault it is converted into. Only
+/// connection profiles change (see [`rehome_profile`]); every other item is copied
+/// byte for byte.
+fn rehome_item(
+    item: unissh_vault::DecryptedItem,
+    old_vault: &str,
+    new_vault: &str,
+) -> Result<CopiedItem, FfiError> {
+    let content = if item.item_type == ITEM_TYPE_CONNECTION {
+        rehome_profile(&item.content, &item.item_id, old_vault, new_vault)?.unwrap_or(item.content)
+    } else {
+        item.content
+    };
+    Ok((item.item_id, item.item_type, content))
+}
+
+/// Keeps a connection profile meaning the same thing after its vault id changes
+/// from `old_vault` to `new_vault`:
+/// - a legacy profile with no stored uid had one derived from (vault id, item id)
+///   on every read ([`legacy_profile_uid`]); that derived uid is pinned into the
+///   body, so the profile keeps the identity bindings and hop references know;
+/// - a jump hop referencing a bastion in the SAME vault (`hop_ref.vault_id ==
+///   old_vault`) is re-pointed at `new_vault`.
+///
+/// Edits a `serde_json::Value`, so fields this version does not know survive.
+/// `None` = nothing to change (or not a JSON object): the caller copies the
+/// original bytes unchanged.
+fn rehome_profile(
+    content: &[u8],
+    item_id: &[u8],
+    old_vault: &str,
+    new_vault: &str,
+) -> Result<Option<Zeroizing<Vec<u8>>>, FfiError> {
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(content) else {
+        return Ok(None);
+    };
+    let Some(profile) = value.as_object_mut() else {
+        return Ok(None);
+    };
+    let mut changed = false;
+    let has_uid = profile
+        .get("uid")
+        .and_then(|u| u.as_str())
+        .is_some_and(|u| !u.is_empty());
+    if !has_uid {
+        let uid = legacy_profile_uid(old_vault, &String::from_utf8_lossy(item_id));
+        profile.insert("uid".into(), serde_json::Value::String(uid));
+        changed = true;
+    }
+    if let Some(jumps) = profile.get_mut("jumps").and_then(|j| j.as_array_mut()) {
+        for hop in jumps {
+            let Some(hop_ref) = hop.get_mut("hop_ref").and_then(|h| h.as_object_mut()) else {
+                continue;
+            };
+            if hop_ref.get("vault_id").and_then(|v| v.as_str()) == Some(old_vault) {
+                hop_ref.insert(
+                    "vault_id".into(),
+                    serde_json::Value::String(new_vault.into()),
+                );
+                changed = true;
+            }
+        }
+    }
+    if !changed {
+        return Ok(None);
+    }
+    Ok(Some(Zeroizing::new(
+        serde_json::to_vec(&value).map_err(FfiError::other)?,
+    )))
 }
 
 /// Creates vault `vault_id` named `name` with `sync_target`, binds it to `tenant`
@@ -5608,23 +5778,43 @@ impl Core {
 /// Shared by the backup import (`SyncTarget::Local`, no tenant) and the
 /// local-to-cloud conversion (`SyncTarget::Cloud`, the target server's tenant).
 /// The binding goes through [`Storage::set_vault_tenant`], which marks the vault
-/// and its contents dirty so the next sync pushes all of it.
+/// and its contents dirty so the next sync pushes all of it. A tenant is refused
+/// loudly rather than dropped: an empty one is [`FfiError::NoServer`], and one
+/// paired with a non-cloud target is an error (`set_vault_tenant` only updates
+/// cloud rows, so it would otherwise be a silent no-op).
 ///
-/// Does NOT open a transaction (storage transactions do not nest): the caller
-/// wraps this in `Storage::transaction` together with whatever else must be
-/// atomic with it, so a failure on any item leaves no half-written vault.
-fn create_vault_with_items<'i>(
+/// `items` is fallible so a caller can produce each item lazily (e.g. decrypt it
+/// from a source vault); the first `Err` aborts the copy.
+///
+/// Does NOT open a transaction: the caller wraps this in `Storage::transaction`
+/// together with whatever else must be atomic with it, so a failure on any item
+/// leaves no half-written vault.
+fn create_vault_with_items(
     storage: &Storage,
     keyset: &unissh_keychain::UnlockedKeyset,
     vault_id: Vec<u8>,
     name: &[u8],
     sync_target: SyncTarget,
     tenant: Option<&[u8]>,
-    items: impl IntoIterator<Item = (&'i [u8], u32, &'i [u8])>,
-) -> Result<(), unissh_vault::VaultError> {
-    let vault = Vault::create_with_target(storage, keyset, vault_id, name, sync_target)?;
-    for (item_id, item_type, content) in items {
-        vault.put_item(item_id, item_type, content)?;
+    items: impl IntoIterator<Item = Result<CopiedItem, FfiError>>,
+) -> Result<(), FfiError> {
+    if let Some(tenant) = tenant {
+        if tenant.is_empty() {
+            return Err(FfiError::NoServer);
+        }
+        if !matches!(sync_target, SyncTarget::Cloud) {
+            return Err(FfiError::other(
+                "a server binding requires a cloud vault (tenant given for a local target)",
+            ));
+        }
+    }
+    let vault = Vault::create_with_target(storage, keyset, vault_id, name, sync_target)
+        .map_err(map_vault_err)?;
+    for item in items {
+        let (item_id, item_type, content) = item?;
+        vault
+            .put_item(&item_id, item_type, &content)
+            .map_err(map_vault_err)?;
     }
     if let Some(tenant) = tenant {
         storage.set_vault_tenant(vault.vault_id(), tenant)?;
@@ -11249,5 +11439,53 @@ mod tests {
         assert!(iss2
             .iter()
             .any(|(id, s)| id == "ghost" && *s == ResolveStatus::Dangling));
+    }
+
+    /// A failure part-way through the local-to-cloud copy rolls the whole
+    /// conversion back. Injection: the last item of the local vault (by id order,
+    /// which is the copy order) is a tampered record — re-stored at a bumped
+    /// version under its old signature, as a corrupted or rolled DB would hold it.
+    /// The items before it have already been re-encrypted into the new cloud vault
+    /// when its signature check fails mid-copy.
+    #[test]
+    fn convert_vault_to_cloud_rolls_back_on_mid_copy_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("loc".into(), "Local".into()).unwrap();
+        core.save_password("loc".into(), "a-pass".into(), "s1".into())
+            .unwrap();
+        core.save_note("loc".into(), "zz-note".into(), "n".into())
+            .unwrap();
+        {
+            let guard = core.locked_state();
+            let storage = &guard.as_ref().unwrap().storage;
+            let mut rec = storage.get_item(b"loc", b"zz-note").unwrap().unwrap();
+            rec.version += 1;
+            storage.put_item(&rec).unwrap();
+        }
+
+        let err = core
+            .convert_vault_to_cloud("loc".into(), "dGVuYW50".into())
+            .unwrap_err();
+        assert!(matches!(err, FfiError::Other { .. }), "{err:?}");
+
+        let vaults = core.list_vaults().unwrap();
+        assert_eq!(vaults.len(), 1, "no cloud vault left behind");
+        assert_eq!(vaults[0].vault_id, "loc");
+        assert_eq!(vaults[0].sync_target, FfiSyncTarget::Local);
+        assert_eq!(
+            core.get_password("loc".into(), "a-pass".into()).unwrap(),
+            "s1"
+        );
+        let guard = core.locked_state();
+        let storage = &guard.as_ref().unwrap().storage;
+        assert!(
+            storage.list_tombstoned_cloud_vaults().unwrap().is_empty(),
+            "not even a tombstoned cloud vault row"
+        );
     }
 }
