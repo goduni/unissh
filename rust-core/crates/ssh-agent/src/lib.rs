@@ -22,19 +22,28 @@
 //! these, `ssh-transport` implements `russh::auth::Signer`.
 //!
 //! ## Limitations / out of scope
-//! The SSH transport/connect itself is the `ssh-transport` crate. **Agent
-//! forwarding** is not implemented (spec 10.2) — `ProxyJump` is used instead, so
-//! the key is never handed to a bastion.
+//! The SSH transport/connect itself is the `ssh-transport` crate. This crate
+//! does not speak the agent protocol to anyone. Two features built on it do, in
+//! `ssh-transport`'s `forward` module, and both sign through this agent so the
+//! private key stays here:
 //!
-//! This crate is not the system agent and does not wrap one; keys added here live
-//! only in this process. Talking to the *operating system's* agent is a separate,
-//! per-host opt-in that lives in `ssh-transport`
+//! * **Agent forwarding** (opt-in per host): the remote side may ask for a
+//!   signature with the one key the connection used, each one confirmed.
+//!   A bastion is never forwarded to; `ProxyJump` keeps the key off it.
+//! * **The system agent** (opt-in, desktop): local programs reach the keys this
+//!   device shares through UniSSH's own socket, each signature confirmed.
+//!
+//! Keys added here live only in this process. Talking to the *operating
+//! system's* agent is a separate, per-host opt-in that lives in `ssh-transport`
 //! (`Auth::SystemAgent`) — that is the route to hardware tokens and smart cards,
 //! whose keys by definition never enter this agent.
 //!
+//! RSA keys sign with `rsa-sha2-512` by default, or `rsa-sha2-256` on request
+//! ([`RsaHash`]). SHA-1 `ssh-rsa` signatures are never produced.
+//!
 //! FIDO/U2F credentials (`sk-*`) are rejected at import: they parse, because the
 //! file holds a key handle rather than a private scalar, but signing needs the
-//! token. Use them through the system agent.
+//! token. Use them through the OS ssh-agent (`Auth::SystemAgent`).
 //!
 //! `mlock` is best-effort (see [`locked`]).
 
@@ -46,7 +55,9 @@ mod error;
 mod import;
 mod locked;
 
-pub use agent::{generate_ed25519_openssh, generate_openssh, AgentSignature, InMemoryAgent};
+pub use agent::{
+    generate_ed25519_openssh, generate_openssh, AgentSignature, InMemoryAgent, RsaHash,
+};
 pub use error::AgentError;
 pub use import::{normalize_private_key_to_openssh, normalize_private_key_with_passphrase};
 

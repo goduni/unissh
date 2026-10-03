@@ -19,8 +19,12 @@
 //! - Import of `~/.ssh/config` ([`SshConfig`]).
 //!
 //! ## Security
-//! - **Agent forwarding is DISABLED by default** (spec 10.2): the handler does not
-//!   enable agent-forward; ProxyJump is used instead (the key is not handed to the bastion).
+//! - **Agent forwarding is off by default** (spec 10.2). It is opt-in per
+//!   connection, offers only the key that connection authenticated with, asks
+//!   before every signature and is never served to a ProxyJump hop (see
+//!   [`ForwardedAgent`]). The same protocol code serves the desktop system agent
+//!   ([`serve_agent`], [`AgentKeys`]), which also asks before every signature
+//!   and names the calling process ([`LocalAgent`]).
 //! - **The private key never leaves the agent.** Authentication goes through
 //!   `russh::auth::Signer` on top of the embedded agent: the agent signs the
 //!   authentication data, and only the public key is handed out of the agent.
@@ -59,6 +63,10 @@ pub use config::{
     SkippedDirective, SshConfig,
 };
 pub use error::TransportError;
-pub use forward::{AgentApproval, ForwardedAgent};
+pub use forward::{
+    serve as serve_agent, AgentApproval, AgentCaller, AgentKeys, ForwardedAgent, LocalAgent,
+    LocalApproval, OfferedKey,
+};
 pub use proxy::{ProxyKind, ProxyOptions};
 pub use sftp::{DirEntry, FileStat, Sftp, SftpCancel, SftpProgress, TransferOutcome};
+pub use unissh_ssh_agent::RsaHash;

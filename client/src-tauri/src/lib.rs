@@ -14,6 +14,8 @@ mod state;
 // Desktop-only: the OS lock/suspend listeners have no counterpart on a phone,
 // and compiling the module there would only carry dead code (see its docs).
 #[cfg(desktop)]
+mod system_agent;
+#[cfg(desktop)]
 mod system_lock;
 
 use tauri::Manager;
@@ -141,6 +143,13 @@ pub fn run() {
                 let controller = mcp::Controller::new(core.clone(), prompter.clone(), dir.join("mcp.json"));
                 controller.resume();
                 app.manage(controller);
+                let agent = system_agent::Controller::new(
+                    app.handle(),
+                    core.clone(),
+                    dir.join("system-agent.json"),
+                );
+                agent.resume();
+                app.manage(agent);
             }
             app.manage(prompter);
             // Registered up front for the same reason: a forwarded agent that
@@ -253,6 +262,10 @@ pub fn run() {
             #[cfg(desktop)] mcp::mcp_cancel_command,
             #[cfg(desktop)] mcp::mcp_inspect_command,
             #[cfg(desktop)] mcp::mcp_search_commands,
+            #[cfg(desktop)] system_agent::system_agent_status,
+            #[cfg(desktop)] system_agent::system_agent_set_enabled,
+            #[cfg(desktop)] system_agent::system_agent_shared_keys,
+            #[cfg(desktop)] system_agent::system_agent_set_shared,
             // account / instance
             commands::instance_status,
             commands::terminal_workspace_load,
@@ -288,6 +301,10 @@ pub fn run() {
             commands::get_public_key,
             commands::export_ssh_key,
             commands::rotate_ssh_key,
+            commands::begin_key_rotation,
+            commands::finish_key_rotation,
+            commands::abandon_key_rotation,
+            commands::list_key_rotations,
             commands::rename_item,
             commands::delete_item,
             commands::list_item_versions,
@@ -462,7 +479,8 @@ pub fn run() {
             cloud::commands::server_restore_deleted_vaults,
             cloud::commands::server_list_vaults,
             cloud::commands::server_pull_vault,
-            cloud::commands::server_adopt_vault,
+            cloud::commands::server_bind_and_push_vault,
+            cloud::commands::server_move_vault_to_server,
             // cloud membership / sharing
             cloud::commands::server_list_accounts,
             cloud::commands::server_add_member,
@@ -502,6 +520,7 @@ pub fn run() {
             #[cfg(desktop)]
             if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
                 mcp::revoke(app);
+                system_agent::shutdown(app);
             }
             #[cfg(mobile)]
             let _ = (app, event);

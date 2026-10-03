@@ -48,10 +48,26 @@ where
 }
 
 /// What every successful unlock does next, however it was asked for (typed
-/// password, trusted-device keychain, biometric): give paused MCP access back.
+/// password, trusted-device keychain, biometric, server restore) and on a
+/// screen unlock or wake: give paused MCP and system-agent access back.
 pub(crate) fn resume_after_unlock(app: &tauri::AppHandle) {
     #[cfg(desktop)]
-    crate::mcp::resume_access(app);
+    {
+        crate::mcp::resume_access(app);
+        crate::system_agent::resume_access(app);
+    }
+    #[cfg(mobile)]
+    let _ = app;
+}
+
+/// The counterpart for lock, reset, screen lock and sleep: pause MCP and
+/// system-agent access.
+pub(crate) fn revoke_agent_access(app: &tauri::AppHandle) {
+    #[cfg(desktop)]
+    {
+        crate::mcp::revoke(app);
+        crate::system_agent::revoke(app);
+    }
     #[cfg(mobile)]
     let _ = app;
 }
@@ -132,10 +148,7 @@ pub async fn reset_partial_instance(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
-    #[cfg(desktop)]
-    crate::mcp::revoke(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    revoke_agent_access(&app);
     // Never touch a complete instance — that's real, recoverable data. Check this
     // FIRST and synchronously, so there is no `.await` window before the guard.
     if state.instance_exists() {
@@ -171,10 +184,7 @@ pub async fn reset_partial_instance(
 /// Idempotent: already-missing files are the desired end state.
 #[tauri::command]
 pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
-    #[cfg(desktop)]
-    crate::mcp::revoke(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    revoke_agent_access(&app);
     // Never wipe an instance the caller can actually open. Check synchronously
     // (no `.await` before it) so there is no unlocked->reset race window.
     let core = state.core.clone();
@@ -342,10 +352,7 @@ pub async fn unlock(
 
 #[tauri::command]
 pub async fn lock(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
-    #[cfg(desktop)]
-    crate::mcp::revoke(&app);
-    #[cfg(mobile)]
-    let _ = app;
+    revoke_agent_access(&app);
     // Drop every live object first (sessions/tunnels/sftp close on drop).
     state.sessions.clear();
     state.tunnels.clear();
@@ -702,6 +709,53 @@ pub async fn rotate_ssh_key(
 ) -> ApiResult<String> {
     let core = state.core.clone();
     blocking(move || core.rotate_ssh_key(vault_id, item_id)).await
+}
+
+/// Staged rotation, step 1: generate a candidate key beside `key_id` (a separate
+/// ordinary key item, linked device-locally). Returns the candidate's item id.
+#[tauri::command]
+pub async fn begin_key_rotation(
+    vault_id: String,
+    key_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<String> {
+    let core = state.core.clone();
+    blocking(move || core.begin_key_rotation(vault_id, key_id)).await
+}
+
+/// Staged rotation, commit: the candidate's material becomes a new version of
+/// `key_id` (old material kept in history); the certificate and candidate go.
+#[tauri::command]
+pub async fn finish_key_rotation(
+    vault_id: String,
+    key_id: String,
+    candidate_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking(move || core.finish_key_rotation(vault_id, key_id, candidate_id)).await
+}
+
+/// Staged rotation, abandon: tombstone the candidate; the original is untouched.
+#[tauri::command]
+pub async fn abandon_key_rotation(
+    vault_id: String,
+    candidate_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<()> {
+    let core = state.core.clone();
+    blocking(move || core.abandon_key_rotation(vault_id, candidate_id)).await
+}
+
+/// Rotations in progress on this device for a vault (live candidates only).
+#[tauri::command]
+pub async fn list_key_rotations(
+    vault_id: String,
+    state: State<'_, AppState>,
+) -> ApiResult<Vec<dto::KeyRotationLink>> {
+    let core = state.core.clone();
+    let links = blocking(move || core.list_key_rotations(vault_id)).await?;
+    Ok(links.into_iter().map(Into::into).collect())
 }
 
 #[tauri::command]

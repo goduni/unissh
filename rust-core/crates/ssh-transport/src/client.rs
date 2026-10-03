@@ -20,7 +20,7 @@ use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 use zeroize::Zeroizing;
 
-use unissh_ssh_agent::InMemoryAgent;
+use unissh_ssh_agent::{InMemoryAgent, RsaHash};
 
 use crate::error::TransportError;
 
@@ -119,6 +119,20 @@ pub struct ConnectOptions {
     /// is no TCP dial there to wrap, so the field is meaningless for them (the
     /// FFI layer only ever sets it on the first-dialed options).
     pub proxy: Option<crate::proxy::ProxyOptions>,
+    /// Where UniSSH's own system agent listens, if this process runs one.
+    ///
+    /// [`Auth::SystemAgent`] means "the OS agent". If `SSH_AUTH_SOCK` points at
+    /// UniSSH's own socket instead, the connection would be asking itself for
+    /// a vault key through a prompt; it fails with
+    /// [`TransportError::SystemAgentIsUniSsh`] rather than loop.
+    pub own_system_agent: Option<std::path::PathBuf>,
+    /// Never escalate past the first method to keyboard-interactive (so no
+    /// stored-password answer and no prompt to the user); a refusal of `auth`
+    /// is final, `AuthFailed`. It changes escalation only: `auth` itself is
+    /// still used as configured, so a password auth still sends its password.
+    /// Pair it with key auth for a login whose whole point is to prove that one
+    /// key is accepted, such as the verify step of a key rotation.
+    pub publickey_only: bool,
 }
 
 impl ConnectOptions {
@@ -133,7 +147,17 @@ impl ConnectOptions {
             prompter: None,
             agent_forward: None,
             proxy: None,
+            own_system_agent: None,
+            publickey_only: false,
         }
+    }
+
+    /// Names UniSSH's own system agent endpoint, so system-agent auth can refuse
+    /// it (see [`Self::own_system_agent`]).
+    #[must_use]
+    pub fn with_own_system_agent(mut self, endpoint: Option<std::path::PathBuf>) -> Self {
+        self.own_system_agent = endpoint;
+        self
     }
 
     /// Reaches the host through the given proxy (first TCP hop only).
@@ -175,6 +199,8 @@ impl core::fmt::Debug for ConnectOptions {
             .field("prompter", &self.prompter.is_some())
             .field("agent_forward", &self.agent_forward.is_some())
             .field("proxy", &self.proxy)
+            .field("own_system_agent", &self.own_system_agent)
+            .field("publickey_only", &self.publickey_only)
             .finish()
     }
 }
@@ -216,8 +242,14 @@ pub trait KeySource: Send + Sync {
     /// The certificate attached to `key_id`, in OpenSSH format, if any.
     fn certificate_openssh(&self, key_id: &[u8]) -> Option<String>;
     /// Signs `data` with `key_id`, returning `(algorithm, signature blob)`. The
-    /// private key never crosses this boundary.
-    fn sign(&self, key_id: &[u8], data: &[u8]) -> Result<(String, Vec<u8>), TransportError>;
+    /// private key never crosses this boundary. `rsa` is the hash an RSA key
+    /// signs with; other key types ignore it.
+    fn sign(
+        &self,
+        key_id: &[u8],
+        data: &[u8],
+        rsa: RsaHash,
+    ) -> Result<(String, Vec<u8>), TransportError>;
 }
 
 /// The obvious implementation for a caller that owns the storage outright —
@@ -240,9 +272,14 @@ impl KeySource for InMemoryAgent {
     fn certificate_openssh(&self, key_id: &[u8]) -> Option<String> {
         self.certificate(key_id).and_then(|c| c.to_openssh().ok())
     }
-    fn sign(&self, key_id: &[u8], data: &[u8]) -> Result<(String, Vec<u8>), TransportError> {
+    fn sign(
+        &self,
+        key_id: &[u8],
+        data: &[u8],
+        rsa: RsaHash,
+    ) -> Result<(String, Vec<u8>), TransportError> {
         let sig = self
-            .sign(key_id, data)
+            .sign_with(key_id, data, rsa)
             .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
         Ok((sig.algorithm, sig.signature))
     }
@@ -1365,7 +1402,7 @@ async fn authenticate(
                 } else {
                     None
                 };
-                let mut agent = SystemAgent::connect().await?;
+                let mut agent = SystemAgent::connect(opts.own_system_agent.as_deref()).await?;
                 // Refuse early and clearly when the agent does not hold the key.
                 // Otherwise the server sees a signature it cannot verify and
                 // reports a generic auth failure, sending the user to check the
@@ -1408,12 +1445,7 @@ async fn authenticate(
         //
         // Both are the same call; what differs is whether a stored password is
         // allowed to answer, which `keyboard_interactive` decides per round.
-        let escalate = matches!(
-            first,
-            AuthResult::Failure { ref remaining_methods, .. }
-                if remaining_methods.contains(&MethodKind::KeyboardInteractive)
-        );
-        Ok::<AuthResult, TransportError>(if escalate {
+        Ok::<AuthResult, TransportError>(if should_escalate(&first, opts.publickey_only) {
             let password = match &opts.auth {
                 Auth::Password { password } => Some(password),
                 Auth::Agent { .. } | Auth::SystemAgent { .. } => None,
@@ -1447,6 +1479,19 @@ async fn authenticate(
             Err(TransportError::AuthFailed)
         }
     }
+}
+
+/// Whether a first auth attempt that did not finish the job goes on to
+/// keyboard-interactive: only when the server still offers it, and never for a
+/// publickey-only connection, where a prompt would let a password stand in for
+/// the key being proven.
+fn should_escalate(first: &AuthResult, publickey_only: bool) -> bool {
+    !publickey_only
+        && matches!(
+            first,
+            AuthResult::Failure { remaining_methods, .. }
+                if remaining_methods.contains(&MethodKind::KeyboardInteractive)
+        )
 }
 
 /// Maximum number of InfoRequest rounds in keyboard-interactive: a malicious/broken
@@ -1592,9 +1637,12 @@ enum SystemAgent {
 const WINDOWS_OPENSSH_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
 
 impl SystemAgent {
-    async fn connect() -> Result<Self, TransportError> {
+    /// Connects to the OS agent. `own` is UniSSH's own system agent endpoint,
+    /// which is refused (see [`ConnectOptions::own_system_agent`]).
+    async fn connect(own: Option<&std::path::Path>) -> Result<Self, TransportError> {
         #[cfg(unix)]
         {
+            refuse_own_agent(std::env::var_os("SSH_AUTH_SOCK").as_deref(), own)?;
             russh::keys::agent::client::AgentClient::connect_env()
                 .await
                 .map(SystemAgent::Uds)
@@ -1602,6 +1650,9 @@ impl SystemAgent {
         }
         #[cfg(windows)]
         {
+            // UniSSH's own pipe is never this one: the default OpenSSH pipe
+            // name is deliberately not taken over, so there is no loop to refuse.
+            let _ = own;
             russh::keys::agent::client::AgentClient::connect_named_pipe(WINDOWS_OPENSSH_AGENT_PIPE)
                 .await
                 .map(SystemAgent::Pipe)
@@ -1609,6 +1660,7 @@ impl SystemAgent {
         }
         #[cfg(not(any(unix, windows)))]
         {
+            let _ = own;
             Err(TransportError::SystemAgent(
                 "no ssh-agent transport on this platform".into(),
             ))
@@ -1623,6 +1675,49 @@ impl SystemAgent {
             SystemAgent::Pipe(c) => c.request_identities().await,
         };
         r.map_err(|e| TransportError::SystemAgent(e.to_string()))
+    }
+}
+
+/// Refuses an agent endpoint (`SSH_AUTH_SOCK`) that is UniSSH's own system
+/// agent socket. The two are compared as canonical paths, so a symlink, a
+/// `..` or a symlinked directory (macOS `/var` → `/private/var`) does not hide
+/// the match. A socket that does not exist (the listener is off) is compared
+/// through its canonical directory, after following any symlinks that point
+/// at it, so a dangling `SSH_AUTH_SOCK` link to UniSSH's path still matches.
+#[cfg(unix)]
+fn refuse_own_agent(
+    configured: Option<&std::ffi::OsStr>,
+    own: Option<&std::path::Path>,
+) -> Result<(), TransportError> {
+    fn canonical(path: &std::path::Path) -> std::path::PathBuf {
+        if let Ok(path) = path.canonicalize() {
+            return path;
+        }
+        // Dangling: follow the links by hand (bounded, like the kernel's
+        // ELOOP limit), then canonicalise the directory of the final target.
+        let mut path = path.to_path_buf();
+        for _ in 0..40 {
+            let Ok(target) = std::fs::read_link(&path) else {
+                break;
+            };
+            path = match path.parent() {
+                Some(dir) => dir.join(target), // an absolute target replaces `dir`
+                None => target,
+            };
+        }
+        match (path.parent(), path.file_name()) {
+            (Some(dir), Some(name)) => dir.canonicalize().map(|dir| dir.join(name)).unwrap_or(path),
+            _ => path,
+        }
+    }
+    match (configured, own) {
+        (Some(configured), Some(own))
+            if !configured.is_empty()
+                && canonical(std::path::Path::new(configured)) == canonical(own) =>
+        {
+            Err(TransportError::SystemAgentIsUniSsh)
+        }
+        _ => Ok(()),
     }
 }
 
@@ -1641,8 +1736,13 @@ pub struct SystemAgentKey {
 ///
 /// This is the picker's data source, and the reason it exists: a user should be
 /// choosing a key they can see is loaded, not typing a fingerprint and hoping.
-pub async fn system_agent_keys() -> Result<Vec<SystemAgentKey>, TransportError> {
-    let mut agent = SystemAgent::connect().await?;
+///
+/// `own` is UniSSH's own system agent endpoint: listing it here would offer the
+/// vault's keys as if they were the OS agent's, so it is refused.
+pub async fn system_agent_keys(
+    own: Option<&std::path::Path>,
+) -> Result<Vec<SystemAgentKey>, TransportError> {
+    let mut agent = SystemAgent::connect(own).await?;
     let mut out = Vec::new();
     for id in agent.identities().await? {
         // Certificates are skipped: the certificate itself is the credential and
@@ -1702,11 +1802,16 @@ impl Signer for AgentSigner<'_> {
     async fn auth_sign(
         &mut self,
         _key: &AgentIdentity,
-        _hash_alg: Option<HashAlg>,
+        hash_alg: Option<HashAlg>,
         to_sign: Vec<u8>,
     ) -> Result<Vec<u8>, TransportError> {
         // The agent signs the whole authentication buffer (session_id || request).
-        let (algorithm, raw) = self.agent.sign(&self.key_id, &to_sign)?;
+        // An RSA key signs with the hash russh negotiated for it.
+        let rsa = match hash_alg {
+            Some(HashAlg::Sha256) => RsaHash::Sha256,
+            _ => RsaHash::Sha512,
+        };
+        let (algorithm, raw) = self.agent.sign(&self.key_id, &to_sign, rsa)?;
         let name = algorithm.as_bytes();
         let raw = &raw;
 
@@ -1796,13 +1901,18 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::refuse_own_agent;
     use super::{
-        answer_from_password, require_loopback, AlgorithmPolicy, ClientHandler, PromptField,
+        answer_from_password, require_loopback, should_escalate, AlgorithmPolicy, ClientHandler,
+        PromptField,
     };
     use crate::error::TransportError;
+    use russh::client::AuthResult;
     use russh::client::Handler;
     use russh::keys::ssh_key::{certificate, private::Ed25519Keypair};
     use russh::keys::{PrivateKey, PublicKeyOrCertificate};
+    use russh::{MethodKind, MethodSet};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use zeroize::Zeroizing;
@@ -1814,6 +1924,16 @@ mod tests {
             remote_forwards: Arc::new(Mutex::new(HashMap::new())),
             agent_forward: None,
         }
+    }
+
+    #[test]
+    fn publickey_only_never_escalates_to_keyboard_interactive() {
+        let offered = || AuthResult::Failure {
+            remaining_methods: MethodSet::from(&[MethodKind::KeyboardInteractive][..]),
+            partial_success: false,
+        };
+        assert!(should_escalate(&offered(), false));
+        assert!(!should_escalate(&offered(), true));
     }
 
     #[test]
@@ -1873,6 +1993,34 @@ mod tests {
             assert!(!handler.check_server_key(&presented).await.unwrap());
             assert!(handler.observed_host_key.lock().unwrap().is_none());
         }
+    }
+
+    /// System-agent auth refuses `SSH_AUTH_SOCK` when it is UniSSH's own
+    /// socket, however the path is spelled (including a dangling link), and
+    /// accepts any other agent.
+    #[cfg(unix)]
+    #[test]
+    fn system_agent_auth_refuses_unissh_own_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let own = dir.path().join("agent.sock"); // the listener is off: no file
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(dir.path(), &alias).unwrap();
+        let spelled_otherwise = alias.join(".").join("agent.sock");
+
+        assert!(matches!(
+            refuse_own_agent(Some(spelled_otherwise.as_os_str()), Some(&own)),
+            Err(TransportError::SystemAgentIsUniSsh)
+        ));
+        // A dangling link to it (the listener is off) still names it.
+        let link = dir.path().join("link.sock");
+        std::os::unix::fs::symlink(&own, &link).unwrap();
+        assert!(matches!(
+            refuse_own_agent(Some(link.as_os_str()), Some(&own)),
+            Err(TransportError::SystemAgentIsUniSsh)
+        ));
+        let other = dir.path().join("ssh-agent.sock");
+        assert!(refuse_own_agent(Some(other.as_os_str()), Some(&own)).is_ok());
+        assert!(refuse_own_agent(Some(own.as_os_str()), None).is_ok());
     }
 
     fn hidden(prompt: &str) -> PromptField {

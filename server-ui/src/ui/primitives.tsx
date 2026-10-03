@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { usePrefs } from "../store/prefs";
 import { Icon, type IconName } from "./icons";
@@ -29,6 +29,9 @@ export function Btn({
   title,
   children,
   style,
+  ariaExpanded,
+  ariaControls,
+  ref,
 }: {
   variant?: BtnVariant;
   size?: BtnSize;
@@ -42,6 +45,10 @@ export function Btn({
   title?: string;
   children?: ReactNode;
   style?: CSSProperties;
+  ariaExpanded?: boolean;
+  ariaControls?: string;
+  /** For returning focus to the button (e.g. a disclosure toggle on close). */
+  ref?: Ref<HTMLButtonElement>;
 }) {
   const variantStyle: CSSProperties =
     variant === "primary"
@@ -56,8 +63,11 @@ export function Btn({
 
   return (
     <button
+      ref={ref}
       type={type}
       title={title}
+      aria-expanded={ariaExpanded}
+      aria-controls={ariaControls}
       onClick={onClick}
       disabled={disabled || loading}
       style={{
@@ -619,6 +629,9 @@ export function TextInput({
   mono,
   onFile,
   accept,
+  ariaLabel,
+  inputMode,
+  autoFocus,
 }: {
   value?: string;
   onChange?: (v: string) => void;
@@ -627,13 +640,19 @@ export function TextInput({
   mono?: boolean;
   onFile?: (f: File) => void;
   accept?: string;
+  ariaLabel?: string;
+  inputMode?: "text" | "numeric";
+  autoFocus?: boolean;
 }) {
   return (
     <input
       type={type}
+      autoFocus={autoFocus}
       value={type === "file" ? undefined : value}
       accept={accept}
       placeholder={placeholder}
+      aria-label={ariaLabel}
+      inputMode={inputMode}
       onChange={(e) => {
         if (type === "file") {
           const f = e.target.files?.[0];

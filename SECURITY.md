@@ -191,6 +191,16 @@ The client log file rotates at ~5 MB and keeps one rotated copy (≈10 MB on dis
 Verbosity is `info` by default; set `UNISSH_LOG` (or `RUST_LOG`) to raise it without
 a rebuild — e.g. `UNISSH_LOG=debug` or `UNISSH_LOG=info,unissh_sync=debug,russh=info`.
 
+## SSH key rotation
+
+A staged key rotation (start → finish) keeps the previous private key, encrypted
+like any item version, in the key item's local version history, which is never
+synced, until the key is deleted (at most the 20 newest versions are kept).
+It is kept for reference only: the app offers no way to restore or use it.
+"Replace key now" (in-place rotation) does not keep it. The device-local link
+from a key to its candidate records the candidate's id and the SHA256
+fingerprint of its public key, never private material.
+
 ## On-disk format changes (migration discipline)
 
 Persisted crypto artifacts (the personal `EncryptedKeyset` sidecar, wrapped vault
@@ -372,7 +382,13 @@ plaintext private keys across the FFI/UI boundary (which must never happen). The
 onboarding / sign-in surface counts here too — the escrow endpoints'
 enumeration-resistance and constant-time behavior, the OIDC `id_token`
 verification (JWKS, asymmetric-only algorithms, `iss`/`aud`/`exp`) and nonce
-key-binding, and the single-winner claim CAS.
+key-binding, and the single-winner claim CAS. So does the desktop **system
+agent** (`rust-core/crates/ssh-transport/src/forward.rs`,
+`rust-core/crates/ffi/src/system_agent.rs`): a local process obtaining a
+signature without an in-app approval, a signature with a key the user did not
+share, or any key material at all is a bug. What it does *not* defend against
+(a same-user process the user approves) is set out in
+[`THREAT_MODEL.md`](THREAT_MODEL.md#the-system-agent-vault-keys-for-local-programs-one-approval-at-a-time).
 
 Out of scope: the unsigned-build OS warnings above, and the documented
 **server-trusted** (not cryptographic) limitations — revocation/live-grant expiry,

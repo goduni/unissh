@@ -49,8 +49,10 @@ let guard = client.local_forward("127.0.0.1:0", "db.internal", 5432).await?;
 
 ## Security
 
-- **Agent forwarding is DISABLED by default** (spec 10.2): the handler does not
-  enable agent-forward; ProxyJump is used instead (the key is not handed to the bastion).
+- **Agent forwarding is off by default** (spec 10.2): opt-in per connection, it
+  offers only the key that connection used, asks before every signature and is never
+  served to a ProxyJump hop. The same protocol code (`forward.rs`) serves the desktop
+  system agent, which also asks before every signature.
 - The private key for authentication is taken from the agent transiently (bridged
   via the stable OpenSSH format, since `ssh-agent` is on `ssh-key 0.6` and `russh`
   is on `0.7`) and zeroized right away. The persistent secret stays `mlock`-ed in the agent.

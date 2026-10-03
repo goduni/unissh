@@ -7,8 +7,8 @@ use crate::obs::MetricsHistory;
 use crate::store::Store;
 use crate::time::SharedClock;
 use metrics_exporter_prometheus::PrometheusHandle;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 /// Hot-reloadable runtime knobs (edited via `PUT /v1/admin/config` without a
 /// restart). Only values safe for atomic replacement on the hot path.
@@ -43,6 +43,9 @@ pub struct AppStateInner {
     pub started_at_unix: i64,
     /// Unix time of the last successful janitor run (0 = not yet).
     pub last_janitor_run: AtomicI64,
+    /// Status of each running audit export sink, set once when they start
+    /// (`audit_sinks::spawn_configured`); unset when none was started.
+    pub audit_sinks: OnceLock<Vec<crate::audit_sinks::SharedSinkStatus>>,
 }
 
 /// A cloneable state handle (axum requires `Clone` for `State`).
@@ -87,6 +90,7 @@ impl AppStateInner {
             rate,
             started_at_unix,
             last_janitor_run: AtomicI64::new(0),
+            audit_sinks: OnceLock::new(),
         })
     }
 

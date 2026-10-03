@@ -16,6 +16,8 @@ export function osPlatform(): string {
 /** macOS shows native traffic lights; other desktops need custom controls. */
 export const isMac = (): boolean => osPlatform() === "macos";
 
+/** Windows: Windows Hello for biometric unlock; the system agent is a named
+ *  pipe there, not a Unix socket. */
 export const isWindows = (): boolean => osPlatform() === "windows";
 
 /** The name of this desktop's biometric unlock, for copy that names it. A
@@ -37,3 +39,6 @@ export const isTauri = (): boolean => osPlatform() !== "unknown";
  *  and window controls. */
 export const isDesktopOs = (): boolean =>
   isTauri() && osPlatform() !== "android" && osPlatform() !== "ios";
+
+/** Running on a phone OS. False in a browser preview, which stands in for desktop. */
+export const isPhoneOs = (): boolean => osPlatform() === "android" || osPlatform() === "ios";

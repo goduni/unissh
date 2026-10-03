@@ -5364,6 +5364,7 @@ dependencies = [
  "clap",
  "ed25519-dalek 2.2.0",
  "figment",
+ "futures-util",
  "getrandom 0.4.3",
  "hex",
  "hmac 0.13.0",
@@ -5436,6 +5437,7 @@ name = "unissh-storage"
 version = "0.5.0"
 dependencies = [
  "hex",
+ "log",
  "rusqlite",
  "sha2 0.10.9",
  "tempfile",
