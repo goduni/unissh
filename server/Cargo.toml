@@ -61,3 +61,6 @@ unissh-keychain = { path = "../rust-core/crates/keychain" }
 unissh-storage = { path = "../rust-core/crates/storage" }
 unissh-sync = { path = "../rust-core/crates/sync" }
 unissh-vault = { path = "../rust-core/crates/vault" }
+
+[lints]
+workspace = true

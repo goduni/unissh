@@ -42,7 +42,6 @@
 //! The relay/bastion service and CA are not implemented (spec 11).
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 mod client;
 mod config;

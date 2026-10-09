@@ -34,7 +34,6 @@
 //! (no plaintext leaves), CRDT merge (LWW; CRDT — ⏳ LATER).
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 mod engine;
 mod error;

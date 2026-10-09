@@ -17,7 +17,6 @@
 //! `unissh-ffi` bridges [`PtySink`] to the recorder and to the UI's observer.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 mod shell;
 

@@ -18,6 +18,12 @@
 //!                     --proxy socks5://127.0.0.1:1080                         # http/socks4/socks5 proxy
 //! ```
 
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "a CLI writes its output and errors to the terminal by design"
+)]
+
 use std::error::Error;
 use std::sync::Arc;
 

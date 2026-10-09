@@ -36,3 +36,6 @@ tempfile = "3"
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }
 [target.'cfg(any(windows, target_os = "android", target_os = "ios"))'.dev-dependencies]
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+[lints]
+workspace = true
