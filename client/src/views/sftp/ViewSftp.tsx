@@ -32,9 +32,9 @@ import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConflictDialog, Chmo
 import { TextEditor } from "./TextEditor";
 import { openSession } from "./session";
 import { dragCtx } from "./drag";
-import { useShortcuts } from "@/store/shortcuts";
-import type { SftpAction } from "@/support/keybindings";
-import { actionTargets, menuKeys, type ListCursor } from "./shortcuts";
+import { shortcutAria, shortcutLabel, useShortcuts } from "@/store/shortcuts";
+import { sftpShortcutId, type SftpAction } from "@/support/keybindings";
+import { actionTargets, type ListCursor } from "./shortcuts";
 import {
   makeTransferSemaphore,
   serializeResolver,
@@ -104,7 +104,11 @@ export function ViewSftp() {
   const pendingSftpFocus = useApp((s) => s.pendingSftpFocus);
   const setPendingSftpFocus = useApp((s) => s.setPendingSftpFocus);
   const shortcutOverrides = useShortcuts((s) => s.overrides);
-  const keysOf = (action: SftpAction) => menuKeys(action, shortcutOverrides);
+  /** Menu-item hint for an action: its first bound key, and all of them for AT. */
+  const keysOf = (action: SftpAction) => ({
+    keys: shortcutLabel(sftpShortcutId(action), shortcutOverrides),
+    ariaKeys: shortcutAria(sftpShortcutId(action), shortcutOverrides),
+  });
 
   const [leftLoc, setLeftLoc] = useState<LocationRef>({ kind: "local" });
   // Right pane starts empty (a "pick a host" prompt) so the remote half of a
@@ -459,13 +463,17 @@ export function ViewSftp() {
     return oneCol || other.location.kind === "none" ? null : other;
   };
   const sendItems = (entries: Entry[], slot: SlotCtl): MenuItem[] => {
+    const here = keyOf(slot.location);
     const across = paneAcross(slot);
+    const acrossId = across && keyOf(across.location);
     return tabs
-      .filter((tab) => tab.id !== keyOf(slot.location))
+      // Its own tab is a destination only as the other pane's folder — where the
+      // copy key sends, so the item is there to carry the hint.
+      .filter((tab) => tab.id !== here || tab.id === acrossId)
       .map((tab) => ({
         icon: tab.kind === "remote" ? "upload" : "download",
         label: t("sftp.menu.sendTo", { name: tab.label }),
-        ...(across && tab.id === keyOf(across.location) ? keysOf("copy") : {}),
+        ...(tab.id === acrossId ? keysOf("copy") : {}),
         onClick: () => sendTo(entries, slot, refOf(tab.id)),
       }));
   };
@@ -521,7 +529,10 @@ export function ViewSftp() {
       other.focus();
     },
     parentDir: (slot) => {
-      slot.up();
+      // At the filesystem root there is no parent: leave the listing and the selection alone.
+      void slot.source?.parent(slot.cwd).then((dir) => {
+        if (dir !== slot.cwd) slot.up();
+      });
     },
     selectAll: (slot) => slot.selectAll(),
     pageUp: (_slot, cursor) => cursor.page(-1),

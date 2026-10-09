@@ -33,22 +33,24 @@ const label = (name: string) => `feedback.shortcut.${name}`;
 // sheet and menu hints read it, and ViewSftp must supply a handler of the same name.
 const fkeys = (digits: number[], ...extra: KeyBinding[]) => () =>
   [...digits.map((n) => binding(`F${n}`)), ...extra, ...digits.map((n) => binding(`Digit${n}`, { alt: true }))];
-const SFTP_DEFAULTS = {
-  switchPane: () => [binding("Tab")],
-  parentDir: () => [binding("Backspace")],
-  selectAll: (mac) => [binding("KeyA", mac ? { meta: true } : { ctrl: true })],
-  pageUp: () => [binding("PageUp")],
-  pageDown: () => [binding("PageDown")],
-  rename: fkeys([2], binding("F6", { shift: true })),
+// Each entry: the label (the menu item's own string where the action has one)
+// and the default keys.
+const SFTP_SHORTCUTS = {
+  switchPane: ["keybindings.actions.sftpSwitchPane", () => [binding("Tab")]],
+  parentDir: ["keybindings.actions.sftpParentDir", () => [binding("Backspace")]],
+  selectAll: ["keybindings.actions.sftpSelectAll", (mac) => [binding("KeyA", mac ? { meta: true } : { ctrl: true })]],
+  pageUp: ["keybindings.actions.sftpPageUp", () => [binding("PageUp")]],
+  pageDown: ["keybindings.actions.sftpPageDown", () => [binding("PageDown")]],
+  rename: ["sftp.menu.rename", fkeys([2], binding("F6", { shift: true }))],
   // View (F3) and edit (F4) are one action: the built-in editor has no read-only mode.
-  edit: fkeys([4, 3]),
-  copy: fkeys([5]),
-  newFolder: fkeys([7]),
+  edit: ["sftp.menu.openInApp", fkeys([4, 3])],
+  copy: ["sftp.send", fkeys([5])],
+  newFolder: ["sftp.menu.newFolder", fkeys([7])],
   // A Mac laptop has no Delete key without Fn either; ⌘⌫ is what Finder uses.
-  delete: (mac) => [...fkeys([8], binding("Delete"))(), ...(mac ? [binding("Backspace", { meta: true })] : [])],
-} satisfies Record<string, ShortcutDefinition["defaults"]>;
-export type SftpAction = keyof typeof SFTP_DEFAULTS;
-export const SFTP_ACTIONS = Object.keys(SFTP_DEFAULTS) as SftpAction[];
+  delete: ["sftp.menu.delete", (mac) => [...fkeys([8], binding("Delete"))(), ...(mac ? [binding("Backspace", { meta: true })] : [])]],
+} satisfies Record<string, [labelKey: string, defaults: ShortcutDefinition["defaults"]]>;
+export type SftpAction = keyof typeof SFTP_SHORTCUTS;
+export const SFTP_ACTIONS = Object.keys(SFTP_SHORTCUTS) as SftpAction[];
 export const sftpShortcutId = (action: SftpAction) => `sftp.${action}`;
 export const SHORTCUTS: ShortcutDefinition[] = [
   def("palette", label("commandPalette"), "global", legacyApp("KeyK")),
@@ -79,7 +81,7 @@ export const SHORTCUTS: ShortcutDefinition[] = [
   def("copySelection", "keybindings.actions.copySelection", "terminal", (mac) => mac ? [] : [binding("KeyC", { ctrl: true })]),
   def("paste", label("paste"), "terminal", (mac) => mac ? [binding("KeyV", { meta: true })] : [binding("KeyV", { ctrl: true }), binding("KeyV", { ctrl: true, shift: true })]),
   def("editorSave", "keybindings.actions.editorSave", "editor", (mac) => [binding("KeyS", mac ? { meta: true } : { ctrl: true })]),
-  ...SFTP_ACTIONS.map((action) => def(sftpShortcutId(action), `keybindings.sftpActions.${action}`, "sftp", SFTP_DEFAULTS[action])),
+  ...SFTP_ACTIONS.map((action) => def(sftpShortcutId(action), SFTP_SHORTCUTS[action][0], "sftp", SFTP_SHORTCUTS[action][1])),
 ];
 export const shortcutDefinition = (id: string) => SHORTCUTS.find((s) => s.id === id)!;
 export function bindingsFor(id: string, overrides: ShortcutOverrides, mac: boolean): KeyBinding[] {
@@ -96,10 +98,6 @@ export function eventBinding(e: Pick<KeyboardEvent, "code" | "key" | "ctrlKey" |
 }
 export function matchesBinding(e: KeyboardEvent, b: KeyBinding): boolean {
   return !e.isComposing && !e.getModifierState?.("AltGraph") && sameBinding(eventBinding(e), b);
-}
-/** The file-list action a key event is bound to, if any. */
-export function sftpActionFor(e: KeyboardEvent, overrides: ShortcutOverrides, mac: boolean): SftpAction | null {
-  return SFTP_ACTIONS.find((action) => bindingsFor(sftpShortcutId(action), overrides, mac).some((b) => matchesBinding(e, b))) ?? null;
 }
 // Two scopes conflict only if both can be live at once. The terminal owns its
 // route, and the SFTP editor covers the file lists it was opened from.
@@ -134,8 +132,10 @@ export function sanitizeOverrides(value: unknown): ShortcutOverrides {
   return out;
 }
 const keyNames: Record<string, string> = { ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓", Comma: ",", Period: ".", Slash: "/", Backslash: "\\", Semicolon: ";", Quote: "'", BracketLeft: "[", BracketRight: "]", Equal: "=", Minus: "−", Backquote: "`" };
+// Printed names only: aria-keyshortcuts wants these codes exactly as they are.
+const editKeyNames: Record<string, [mac: string, other: string]> = { Backspace: ["⌫", "Backspace"], Delete: ["⌦", "Delete"], PageUp: ["⇞", "PgUp"], PageDown: ["⇟", "PgDn"] };
 export function formatBinding(b: KeyBinding, mac: boolean): string {
-  const key = keyNames[b.code] ?? b.code.replace(/^Key|^Digit/, "");
+  const key = keyNames[b.code] ?? editKeyNames[b.code]?.[mac ? 0 : 1] ?? b.code.replace(/^Key|^Digit/, "");
   return mac ? `${b.ctrl ? "⌃" : ""}${b.alt ? "⌥" : ""}${b.shift ? "⇧" : ""}${b.meta ? "⌘" : ""}${key}`
     : [...(b.ctrl ? ["Ctrl"] : []), ...(b.alt ? ["Alt"] : []), ...(b.shift ? ["Shift"] : []), ...(b.meta ? ["Meta"] : []), key].join("+");
 }

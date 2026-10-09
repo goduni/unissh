@@ -45,12 +45,18 @@ export function matchesShortcut(e: KeyboardEvent, id: string): boolean {
   const { overrides, recording } = useShortcuts.getState();
   return !recording && bindingsFor(id, overrides, isMac()).some((b) => matchesBinding(e, b));
 }
-export function useShortcutLabel(id: string): string {
-  const overrides = useShortcuts((s) => s.overrides);
+/** The first key bound to an action, as printed in a hint; "" when unbound. */
+export function shortcutLabel(id: string, overrides: ShortcutOverrides): string {
   return bindingsFor(id, overrides, isMac()).slice(0, 1).map((b) => formatBinding(b, isMac())).join(" / ");
+}
+/** Every key bound to an action, in aria-keyshortcuts syntax. */
+export function shortcutAria(id: string, overrides: ShortcutOverrides): string | undefined {
+  return bindingsFor(id, overrides, isMac()).map(ariaBinding).join(" ") || undefined;
+}
+export function useShortcutLabel(id: string): string {
+  return shortcutLabel(id, useShortcuts((s) => s.overrides));
 }
 
 export function useShortcutAria(id: string): string | undefined {
-  const overrides = useShortcuts((s) => s.overrides);
-  return bindingsFor(id, overrides, isMac()).map(ariaBinding).join(" ") || undefined;
+  return shortcutAria(id, useShortcuts((s) => s.overrides));
 }

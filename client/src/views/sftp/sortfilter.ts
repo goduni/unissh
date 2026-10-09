@@ -14,9 +14,18 @@ export function compareEntries(a: Entry, b: Entry, key: SortKey, dir: "asc" | "d
   return dir === "asc" ? r : -r;
 }
 
-export function displayEntries(entries: Entry[], filter: string, sort: SortState): Entry[] {
+function filterEntries(entries: Entry[], filter: string): Entry[] {
   const f = filter.trim().toLowerCase();
-  const list = f ? entries.filter((e) => e.name.toLowerCase().includes(f)) : entries.slice();
+  return f ? entries.filter((e) => e.name.toLowerCase().includes(f)) : entries.slice();
+}
+
+/** The names the filter leaves on screen — all an operation may reach. */
+export function shownNames(entries: Entry[], filter: string): Set<string> {
+  return new Set(filterEntries(entries, filter).map((e) => e.name));
+}
+
+export function displayEntries(entries: Entry[], filter: string, sort: SortState): Entry[] {
+  const list = filterEntries(entries, filter);
   list.sort((a, b) => compareEntries(a, b, sort.key, sort.dir));
   return list;
 }
