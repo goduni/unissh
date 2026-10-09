@@ -1737,6 +1737,7 @@ export const en = {
     "retry": "Retry",
     "selected": "{{count}} selected",
     "send": "Send",
+    "move": "Move",
     "rowActions": "Actions",
     "noLocations": "No locations open",
     "addFirstHint": "Add a host to browse and transfer files",
@@ -1761,7 +1762,8 @@ export const en = {
       "properties": "Properties",
       "permissions": "Permissions…",
       "import": "Import from Files",
-      "sendTo": "Send to {{name}}"
+      "sendTo": "Send to {{name}}",
+      "moveTo": "Move to {{name}}"
     },
     "chmod": {
       "title": "Permissions",
@@ -1785,6 +1787,11 @@ export const en = {
       "deleteMany": "Delete {{count}} items?",
       "deleteRecursive": "Folders are deleted with all of their contents.",
       "delete": "Delete",
+      "moveTitle": "Move",
+      "moveOne": "Move «{{name}}» to {{to}}?",
+      "moveMany": "Move {{count}} items to {{to}}?",
+      "moveRemoves": "Each item is removed from {{from}} once it has arrived. Anything that fails, is skipped or is cancelled stays where it is.",
+      "move": "Move",
       "conflictTitle": "File already exists",
       "conflictBody": "On target: {{there}} · incoming: {{incoming}}",
       "overwrite": "Overwrite",
@@ -1804,6 +1811,7 @@ export const en = {
     },
     "queue": {
       "speed": "{{speed}}/s",
+      "move": "move",
       "resumeAll": "Resume all",
       "files": "Files: {{done}} / {{total}}",
       "progress": "{{done}} / {{total}}",
@@ -1892,6 +1900,8 @@ export const en = {
       "copied": "Path copied",
       "chmodDone": "Permissions changed",
       "sessionFailed": "Couldn’t open SFTP session",
+      "moveSameFolder": "Already in that folder — nothing to move",
+      "moveIntoItself": "Can’t move «{{name}}» into itself",
       "transferStarted": "Transfer started"
     }
   },

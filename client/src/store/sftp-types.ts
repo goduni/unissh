@@ -74,6 +74,8 @@ export interface Transfer {
   fromPath: string; // absolute source path
   kind: "file" | "dir";
   isSymlink?: boolean;
+  /** Remove the source once it has arrived: each file after its own commit. */
+  move?: boolean;
   bytesDone: number;
   bytesTotal: number;
   sourceSize?: number; // original file size, before accounting for relay legs

@@ -34,12 +34,14 @@ const source = (kind: "local" | "remote"): FileSource => ({
   remove: vi.fn().mockResolvedValue(undefined), unlink: vi.fn().mockResolvedValue(undefined), list: kind === "remote"
     ? vi.fn().mockRejectedValue(new Error("Directory listing unavailable"))
     : vi.fn().mockResolvedValue([]), mkdir: vi.fn().mockResolvedValue(undefined),
+  rename: vi.fn().mockResolvedValue(undefined), removeEmptyDir: vi.fn().mockResolvedValue(undefined),
 } as unknown as FileSource);
 function transfer(id = "t", kind: "file" | "dir" = "file"): Transfer {
   const t: Transfer = { id, kind, label: "file", from: { kind: "local" }, to: { kind: "remote", sessionId: "remote" }, fromPath: "/file", toDir: "/dst", bytesDone: 0, bytesTotal: 100, filesDone: 0, filesTotal: 1, state: "queued", speedBps: 0, etaSec: 0, offset: 0 };
   state.transfers.push(t);
   return t;
 }
+const moving = (kind: "file" | "dir" = "file"): Transfer => Object.assign(transfer("t", kind), { move: true });
 const resolver = vi.fn().mockResolvedValue({ choice: "overwrite", applyAll: true });
 const current = (id = "t") => state.transfers.find((t) => t.id === id)!;
 beforeEach(() => {
@@ -579,5 +581,109 @@ describe("transfer integrity regressions", () => {
       cancelAll(); write.resolve(false); await Promise.all(jobs);
       interval.mockRestore(); vi.useRealTimers();
     }
+  });
+});
+
+describe("moving between locations", () => {
+  const skip = async () => ({ choice: "skip" as const, applyAll: true });
+
+  it("removes the source file once its copy is committed", async () => {
+    const from = source("local"), to = source("remote");
+    await startTransfer(moving(), from, to, resolver);
+    expect(from.remove).toHaveBeenCalledExactlyOnceWith("/file");
+    expect(vi.mocked(to.commit).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(from.remove).mock.invocationCallOrder[0]);
+    expect(current().state).toBe("done");
+  });
+
+  it("keeps the source when the transfer fails", async () => {
+    const from = source("local");
+    api.sftpUpload.mockRejectedValue(new Error("disk full"));
+    await startTransfer(moving(), from, source("remote"), resolver);
+    expect(current()).toMatchObject({ state: "error", error: "disk full" });
+    expect(from.remove).not.toHaveBeenCalled();
+  });
+
+  it("keeps the source when the transfer is cancelled", async () => {
+    const from = source("local"); const write = deferred<boolean>(); api.sftpUpload.mockReturnValue(write.promise);
+    const run = startTransfer(moving(), from, source("remote"), resolver);
+    await vi.waitFor(() => expect(api.sftpUpload).toHaveBeenCalled());
+    cancelTransfer("t"); write.resolve(true); await run;
+    expect(current().state).toBe("cancelled");
+    expect(from.remove).not.toHaveBeenCalled();
+  });
+
+  it("keeps the source of a conflict the user skipped", async () => {
+    const from = source("local"), to = source("remote");
+    vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: false, size: 10 });
+    await startTransfer(moving(), from, to, skip);
+    expect(current().state).toBe("done");
+    expect(from.remove).not.toHaveBeenCalled();
+  });
+
+  it("removes emptied source folders bottom-up and keeps one a file stayed in", async () => {
+    const from = source("local"), to = source("remote");
+    const tree: Record<string, { name: string; isDir: boolean; size: number }[]> = {
+      "/file": [{ name: "moved", isDir: true, size: 0 }, { name: "held", isDir: true, size: 0 }],
+      "/file/moved": [{ name: "deep", isDir: true, size: 0 }],
+      "/file/moved/deep": [{ name: "x", isDir: false, size: 100 }],
+      "/file/held": [{ name: "y", isDir: false, size: 100 }],
+    };
+    vi.mocked(from.list).mockImplementation(async (path) => tree[path]);
+    vi.mocked(to.lstat).mockImplementation(async (path) => path.endsWith("/held/y") ? { name: "y", isDir: false, size: 10 } : null);
+    await startTransfer(moving("dir"), from, to, skip);
+    expect(current().state).toBe("done");
+    expect(vi.mocked(from.remove).mock.calls).toEqual([["/file/moved/deep/x"]]);
+    expect(vi.mocked(from.removeEmptyDir).mock.calls).toEqual([["/file/moved/deep"], ["/file/moved"]]);
+  });
+
+  it("reports a source it could not remove and still moves the rest", async () => {
+    const from = source("local"), to = source("remote");
+    vi.mocked(from.list).mockResolvedValue([{ name: "a", isDir: false, size: 100 }, { name: "b", isDir: false, size: 100 }]);
+    vi.mocked(from.remove).mockImplementation(async (path) => { if (path === "/file/a") throw new Error("permission denied"); });
+    await startTransfer(moving("dir"), from, to, resolver);
+    expect(to.commit).toHaveBeenCalledTimes(2);
+    expect(from.remove).toHaveBeenCalledWith("/file/b");
+    expect(from.removeEmptyDir).not.toHaveBeenCalled();
+    expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file/a: permission denied" });
+  });
+});
+
+describe("moving within one location", () => {
+  it("renames instead of copying", async () => {
+    const here = source("local");
+    await startTransfer(moving(), here, source("local"), resolver);
+    expect(here.commit).toHaveBeenCalledExactlyOnceWith("/file", "/dst/file", false);
+    expect(here.createNew).not.toHaveBeenCalled();
+    expect(here.remove).not.toHaveBeenCalled();
+    expect(current()).toMatchObject({ state: "done", filesDone: 1 });
+  });
+
+  it("asks before taking a name that is in use, and leaves both files on skip", async () => {
+    const from = source("local"), to = source("local");
+    vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: false, size: 10 });
+    vi.mocked(from.lstat).mockResolvedValue({ name: "file", isDir: false, size: 10 });
+    const prompt = vi.fn().mockResolvedValue({ choice: "skip", applyAll: false });
+    await startTransfer(moving(), from, to, prompt);
+    expect(prompt).toHaveBeenCalledOnce();
+    for (const src of [from, to]) { expect(src.commit).not.toHaveBeenCalled(); expect(src.rename).not.toHaveBeenCalled(); }
+    expect(current().state).toBe("done");
+  });
+
+  it("refuses to move a folder into its own subfolder", async () => {
+    const from = source("local"), to = source("local");
+    const t = moving("dir"); t.fromPath = "/a"; t.label = "a"; t.toDir = "/a/b";
+    await startTransfer(t, from, to, resolver);
+    expect(current()).toMatchObject({ state: "error", error: "Cannot move a path into itself" });
+    for (const src of [from, to]) { expect(src.rename).not.toHaveBeenCalled(); expect(src.mkdir).not.toHaveBeenCalled(); }
+  });
+
+  it("copies and then removes the source when the rename is refused", async () => {
+    const from = source("local"), to = source("local");
+    vi.mocked(from.commit).mockRejectedValue(new Error("Invalid cross-device link"));
+    api.localCopyPrepared.mockResolvedValueOnce(100);
+    await startTransfer(moving(), from, to, resolver);
+    expect(to.commit).toHaveBeenCalledWith(expect.stringContaining(".unissh-"), "/dst/file", false);
+    expect(from.remove).toHaveBeenCalledExactlyOnceWith("/file");
+    expect(current().state).toBe("done");
   });
 });

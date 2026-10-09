@@ -60,6 +60,8 @@ export interface FileSource {
   remove(path: string): Promise<void>;
   /** Remove a directory (local: recursive; remote: empty-only until Phase 2). */
   rmdir(path: string): Promise<void>;
+  /** Remove a directory only if it is empty; never recursive. */
+  removeEmptyDir(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   /** Change unix permissions — remote only (local FS chmod isn't exposed). */
   chmod?(path: string, mode: number): Promise<void>;
@@ -195,6 +197,9 @@ class RemoteSource implements FileSource {
     // SSH_FX_FAILURE / status 4); the core walks the tree bottom-up.
     return api.sftpRmdirRecursive(this.id, path);
   }
+  removeEmptyDir(path: string): Promise<void> {
+    return api.sftpRmdir(this.id, path);
+  }
   rename(from: string, to: string): Promise<void> {
     return api.sftpRename(this.id, from, to);
   }
@@ -281,6 +286,9 @@ class LocalSource implements FileSource {
   }
   async rmdir(path: string): Promise<void> {
     await api.localRemove(path, true);
+  }
+  async removeEmptyDir(path: string): Promise<void> {
+    await api.localRemove(path, false);
   }
   async rename(from: string, to: string): Promise<void> {
     // A plain rename(2): replaces an existing destination, as it always has.

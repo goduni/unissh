@@ -223,6 +223,55 @@ export function ConfirmDeleteDialog({
   );
 }
 
+/** The one announcement a move gets: what goes where, and that it leaves. */
+export function ConfirmMoveDialog({
+  names,
+  from,
+  to,
+  onConfirm,
+  onClose,
+}: {
+  names: string[];
+  from: string;
+  to: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  return (
+    <Modal
+      icon="arrows"
+      title={t("sftp.dlg.moveTitle")}
+      onClose={onClose}
+      footer={
+        <>
+          <div style={{ flex: 1 }} />
+          <Btn variant="ghost" size="sm" onClick={onClose}>
+            {t("common.cancel")}
+          </Btn>
+          <Btn
+            size="sm"
+            onClick={() => {
+              onConfirm();
+              onClose();
+            }}
+          >
+            {t("sftp.dlg.move")}
+          </Btn>
+        </>
+      }
+    >
+      <div style={{ fontSize: TEXT.base, color: p.txt, overflowWrap: "anywhere" }}>
+        {names.length === 1
+          ? t("sftp.dlg.moveOne", { name: names[0], to })
+          : t("sftp.dlg.moveMany", { count: names.length, to })}
+      </div>
+      <div style={{ fontSize: TEXT.small, color: p.amber, overflowWrap: "anywhere" }}>{t("sftp.dlg.moveRemoves", { from })}</div>
+    </Modal>
+  );
+}
+
 export function ConflictDialog({
   name,
   targetSize,
