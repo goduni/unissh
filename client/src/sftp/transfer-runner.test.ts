@@ -16,7 +16,6 @@ const { state, api } = vi.hoisted(() => {
 vi.mock("@/store/app", () => ({ useApp: { getState: () => state } }));
 vi.mock("@/bridge/api", () => api);
 vi.mock("@tauri-apps/api/path", () => ({ join: async (...p: string[]) => p.join("/"), tempDir: async () => "/tmp" }));
-vi.mock("@tauri-apps/plugin-fs", () => ({ remove: vi.fn().mockResolvedValue(undefined), copyFile: vi.fn(), stat: vi.fn() }));
 import { cancelAll, cancelTransfer, pauseTransfer, startTransfer, serializeResolver, resumeTransfer } from "./transfer-runner";
 import { Semaphore } from "./transfer-engine";
 

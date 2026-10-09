@@ -44,11 +44,14 @@ src-tauri/                Rust backend
 - **Security boundary:** authentication keeps private keys inside the core signer.
   Password/note reveal and explicit user-initiated key export are separate operations.
 
-The filesystem plugin sets `requireLiteralLeadingDot: false` so recursive SFTP
-copies can include hidden directories such as `.git` and `.claude` on Unix.
-Path permissions still come from `src-tauri/capabilities/default.json`; the
-plugin's default deny rules still apply. Keep this setting when changing scopes:
-without it, `$HOME/**` excludes dot-prefixed path components on Unix.
+The filesystem plugin sets `requireLiteralLeadingDot: false` so the remaining
+plugin callers (file imports and exports such as SSH config, key, known-hosts
+and backup files) can reach paths with dot-prefixed components on Unix, e.g. an
+`IdentityFile` under `~/.config`. Path permissions still come from
+`src-tauri/capabilities/default.json`; the plugin's default deny rules still
+apply. Keep this setting when changing scopes: without it, `$HOME/**` excludes
+dot-prefixed path components on Unix. The SFTP local pane does not go through
+the plugin scope: it uses the native `local_*` commands.
 
 SFTP copies preserve symbolic links as links, without scanning or downloading
 what they point to. Conflict checks use non-following metadata; overwrite prepares

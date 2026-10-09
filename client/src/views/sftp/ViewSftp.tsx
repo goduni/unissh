@@ -15,8 +15,8 @@ import { useApp } from "@/store/app";
 import { toast } from "@/store/toast";
 import { writeText as clipboardWrite } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
-import { copyFile } from "@tauri-apps/plugin-fs";
 import { basename, documentDir, homeDir, join } from "@tauri-apps/api/path";
+import * as api from "@/bridge/api";
 import { apiErrorMessage } from "@/bridge/types";
 import type { ConnectionProfile } from "@/bridge/types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
@@ -434,7 +434,7 @@ export function ViewSftp() {
       for (const src of files) {
         const name = dedupeName(await basename(src), taken);
         taken.add(name);
-        await copyFile(src, await join(slot.cwd, name));
+        await api.localCopyFile(src, await join(slot.cwd, name));
       }
       slot.refresh();
       toast(t("sftp.toast.imported"), "ok");
