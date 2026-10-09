@@ -1,12 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SftpSession } from "@/store/sftp-types";
 
-const { api, fs } = vi.hoisted(() => ({
-  api: { sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), sftpReopen: vi.fn() },
-  fs: { stat: vi.fn() },
+const { api } = vi.hoisted(() => ({
+  api: { sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), sftpReopen: vi.fn() },
 }));
 vi.mock("@/bridge/api", () => api);
-vi.mock("@tauri-apps/plugin-fs", () => fs);
 import { sourceFor } from "./sources";
 
 const remote = () => sourceFor({ kind: "remote", sessionId: "s" }, [{ id: "s", label: "server", host: "server", user: "user", port: 22 } as SftpSession]);
@@ -27,14 +25,6 @@ describe("conflict metadata failures", () => {
     const error = { kind: "ssh", msg: "connection failed" };
     api.sftpReopen.mockRejectedValue(error);
     await expect(remote().stat("/target")).rejects.toEqual(error);
-  });
-  it.each([2, 3])("recognizes missing local paths with OS error %s", async (code) => {
-    fs.stat.mockRejectedValue(`failed to read metadata (os error ${code})`);
-    expect(await sourceFor({ kind: "local" }, []).stat("/target")).toBeNull();
-  });
-  it("preserves local permission failures", async () => {
-    fs.stat.mockRejectedValue("Permission denied (os error 13)");
-    await expect(sourceFor({ kind: "local" }, []).stat("/target")).rejects.toBe("Permission denied (os error 13)");
   });
 });
 
@@ -61,6 +51,6 @@ describe("link metadata", () => {
     const local = sourceFor({ kind: "local" }, []);
     expect(await local.list("/venv")).toEqual([expect.objectContaining({ isDir: false, isSymlink: true })]);
     expect(await local.lstat("/venv/lib64")).toMatchObject({ isDir: false, isSymlink: true });
-    expect(fs.stat).not.toHaveBeenCalled();
+    expect(api.localStat).not.toHaveBeenCalled();
   });
 });

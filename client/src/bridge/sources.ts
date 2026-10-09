@@ -1,15 +1,14 @@
 // FileSource — a uniform façade over a browsable file location so the panes,
 // drag/drop, and the transfer engine don't care whether a slot is the local OS
-// filesystem or a remote SFTP session. Local path/fs calls go through the Tauri
-// plugins (dynamically imported, matching the rest of the client); remote calls
-// go through the bridge api.sftp*.
+// filesystem or a remote SFTP session. Local fs calls go through the native
+// api.local* commands, which reach every path the pane can browse (the fs
+// plugin's scope stops at $HOME); remote calls go through the bridge api.sftp*.
 
 import * as api from "@/bridge/api";
 import { apiErrorMessage, type SftpEntry } from "@/bridge/types";
 import type { Entry, LocationRef, SftpSession } from "@/store/sftp-types";
 import { breadcrumbSegments, isSafeName, isPortableWindowsName, remoteJoin, remoteParent, type Crumb } from "@/sftp/paths";
 import { dirname, join } from "@tauri-apps/api/path";
-import { mkdir, remove, rename, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 
 /** An error that looks like the SFTP channel/connection dropped (server reaped
  *  an idle channel, EOF, broken pipe, "channel closed") rather than a real
@@ -233,7 +232,7 @@ class RemoteSource implements FileSource {
   }
 }
 
-// ── local (OS filesystem via @tauri-apps/plugin-fs) ────────────
+// ── local (OS filesystem via native local_* commands) ──────────
 class LocalSource implements FileSource {
   readonly kind = "local" as const;
   readonly id = "local";
@@ -250,18 +249,8 @@ class LocalSource implements FileSource {
       .map((e) => ({ name: e.name, isDir: e.isDir && !e.isSymlink, isSymlink: e.isSymlink, size: e.size, fileKind: fileKind(e.mode), mode: e.mode, mtime: e.mtime || undefined }));
   }
   async stat(path: string): Promise<Entry | null> {
-    try {
-      const s = await stat(path);
-      return {
-        name: baseName(path),
-        isDir: s.isDirectory,
-        size: s.size,
-        mtime: s.mtime ? Math.floor(s.mtime.getTime() / 1000) : undefined,
-      };
-    } catch (error) {
-      if (/\bos error [23]\b|\bENOENT\b/i.test(apiErrorMessage(error))) return null;
-      throw error;
-    }
+    const s = await api.localStat(path);
+    return s ? { name: baseName(path), isDir: s.isDir, size: s.size, mtime: s.mtime || undefined } : null;
   }
   async lstat(path: string): Promise<Entry | null> {
     const entry = await api.localLstat(path);
@@ -281,20 +270,21 @@ class LocalSource implements FileSource {
   commit(from: string, to: string, replace: boolean): Promise<void> { return api.localCommit(from, to, replace); }
   setMetadata(path: string, mode?: number, mtime?: number): Promise<void> { return api.localSetMetadata(path, mode === undefined ? undefined : mode & 0o777, mtime); }
   async mkdir(path: string): Promise<void> {
-    await mkdir(path);
+    await api.localMkdir(path);
   }
   async createNew(path: string): Promise<void> {
     // O_CREAT|O_EXCL. writeTextFile would truncate an existing file instead.
     await api.localCreatePrivate(path);
   }
   async remove(path: string): Promise<void> {
-    await remove(path);
+    await api.localRemove(path, false);
   }
   async rmdir(path: string): Promise<void> {
-    await remove(path, { recursive: true });
+    await api.localRemove(path, true);
   }
   async rename(from: string, to: string): Promise<void> {
-    await rename(from, to);
+    // A plain rename(2): replaces an existing destination, as it always has.
+    await api.localCommit(from, to, true);
   }
   async readText(path: string): Promise<string> {
     return api.localReadText(path);
@@ -306,7 +296,7 @@ class LocalSource implements FileSource {
     const stage = await this.join(await this.parent(path), `.unissh-${crypto.randomUUID()}.part`);
     await this.createNew(stage);
     try {
-      await writeTextFile(stage, text);
+      await api.localWriteText(stage, text);
       await this.setMetadata(stage, metadata?.mode);
       if (await this.readText(path) !== original) throw new Error("File changed on disk. Reopen it before saving.");
       await this.commit(stage, path, metadata !== null);

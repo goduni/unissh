@@ -666,6 +666,9 @@ export const localCommit = (from: string, to: string, replace: boolean) => invok
 export const localSameFile = (from: string, to: string) => invoke<boolean>("local_same_file", { from, to });
 export const localRealpath = (path: string) => invoke<string>("local_realpath", { path });
 export const localReadText = (path: string, limit = 2 * 1024 * 1024) => invoke<string>("local_read_text", { path, limit });
+export const localWriteText = (path: string, text: string) => invoke<void>("local_write_text", { path, text });
+/** `from` is whatever the OS picker returned: a path, or a `file://` URL on iOS. */
+export const localCopyFile = (from: string, to: string) => invoke<void>("local_copy_file", { from, to });
 export const localSetMetadata = (path: string, mode?: number, mtime?: number) => invoke<void>("local_set_metadata", { path, mode, mtime });
 export const sftpSetMetadata = (id: string, path: string, mode?: number, mtime?: number, cancelId?: string) => invoke<void>("sftp_set_metadata", { id, cancelId, path, mode, mtime });
 export const sftpListDirCancel = (id: string, path: string, cancelId: string) => invoke<SftpEntry[]>("sftp_list_dir_cancel", { id, path, cancelId });
@@ -679,6 +682,10 @@ export const sftpListDir = (id: string, path: string) =>
   invoke<SftpEntry[]>("sftp_list_dir", { id, path });
 export const localListDir = (path: string, cancelId?: string) => invoke<LocalEntry[]>("local_list_dir", { path, cancelId });
 export const localLstat = (path: string) => invoke<LocalEntry | null>("local_lstat", { path });
+/** Follows links; null when the path (or a link's target) does not exist. */
+export const localStat = (path: string) => invoke<LocalEntry | null>("local_stat", { path });
+export const localMkdir = (path: string) => invoke<void>("local_mkdir", { path });
+export const localRemove = (path: string, recursive: boolean) => invoke<void>("local_remove", { path, recursive });
 export const localReadlink = (path: string) => invoke<string>("local_readlink", { path });
 export const localSymlink = (target: string, path: string, targetIsDir: boolean) =>
   invoke<void>("local_symlink", { target, path, targetIsDir });

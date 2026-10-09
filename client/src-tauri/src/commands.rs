@@ -1907,22 +1907,29 @@ fn open_regular(path: &str) -> ApiResult<std::fs::File> {
     Ok(file)
 }
 
+/// Open a file the caller already created for writing. Never creates one and
+/// never writes through a symbolic link.
+fn open_prepared(path: &str) -> ApiResult<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let file = options.open(path).map_err(ApiError::other)?;
+    if !file.metadata().map_err(ApiError::other)?.is_file() {
+        return Err(ApiError::other("Not a regular file"));
+    }
+    Ok(file)
+}
+
 #[tauri::command]
 pub async fn local_copy_prepared(from: String, to: String) -> ApiResult<u64> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::Write;
         let mut source = open_regular(&from)?;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
-        }
-        let mut target = options.open(to).map_err(ApiError::other)?;
-        if !target.metadata().map_err(ApiError::other)?.is_file() {
-            return Err(ApiError::other("Not a regular file"));
-        }
+        let mut target = open_prepared(&to)?;
         let source_identity =
             same_file::Handle::from_file(source.try_clone().map_err(ApiError::other)?)
                 .map_err(ApiError::other)?;
@@ -2083,6 +2090,31 @@ pub async fn local_read_text(path: String, limit: u32) -> ApiResult<String> {
     .await?
 }
 
+/// Replace the contents of a prepared file (see `local_create_private`).
+#[tauri::command]
+pub async fn local_write_text(path: String, text: String) -> ApiResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Write;
+        let mut target = open_prepared(&path)?;
+        target.set_len(0).map_err(ApiError::other)?;
+        target.write_all(text.as_bytes()).map_err(ApiError::other)?;
+        target.flush().map_err(ApiError::other)
+    })
+    .await?
+}
+
+/// Copy a file the OS picker returned into the local pane. The picker hands
+/// back a `file://` URL on iOS and a plain path on desktop, hence `FilePath`.
+#[tauri::command]
+pub async fn local_copy_file(from: tauri_plugin_fs::FilePath, to: String) -> ApiResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let from = from.into_path().map_err(ApiError::other)?;
+        std::fs::copy(from, to).map_err(ApiError::other)?;
+        Ok(())
+    })
+    .await?
+}
+
 #[tauri::command]
 pub async fn sftp_list_dir_cancel(
     id: String,
@@ -2180,30 +2212,75 @@ fn list_local_entries(
 /// Local transfer metadata must not follow links (including dangling links).
 #[tauri::command]
 pub async fn local_lstat(path: String) -> ApiResult<Option<dto::LocalEntry>> {
+    tauri::async_runtime::spawn_blocking(move || local_entry(&path, false)).await?
+}
+
+/// Like `local_lstat`, but follows links: a dangling link reads as absent.
+#[tauri::command]
+pub async fn local_stat(path: String) -> ApiResult<Option<dto::LocalEntry>> {
+    tauri::async_runtime::spawn_blocking(move || local_entry(&path, true)).await?
+}
+
+fn local_entry(path: &str, follow: bool) -> ApiResult<Option<dto::LocalEntry>> {
+    let md = if follow {
+        std::fs::metadata(path)
+    } else {
+        std::fs::symlink_metadata(path)
+    };
+    let md = match md {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(ApiError::other(e)),
+    };
+    Ok(Some(dto::LocalEntry {
+        name: std::path::Path::new(path)
+            .file_name()
+            .unwrap_or_default()
+            .to_str()
+            .ok_or_else(|| ApiError::other("Filename is not valid UTF-8"))?
+            .to_owned(),
+        is_dir: md.is_dir(),
+        is_symlink: md.is_symlink(),
+        mode: local_mode(&md),
+        size: md.len(),
+        mtime: md
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    }))
+}
+
+/// Create one directory. Not recursive: a missing parent or a taken name fails.
+#[tauri::command]
+pub async fn local_mkdir(path: String) -> ApiResult<()> {
+    tauri::async_runtime::spawn_blocking(move || std::fs::create_dir(path).map_err(ApiError::other))
+        .await?
+}
+
+/// Remove a file or a directory. Without `recursive` a directory must be
+/// empty. A symbolic link is removed itself; its referent is never followed.
+#[tauri::command]
+pub async fn local_remove(path: String, recursive: bool) -> ApiResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
-        let md = match std::fs::symlink_metadata(&path) {
-            Ok(md) => md,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(ApiError::other(e)),
-        };
-        Ok(Some(dto::LocalEntry {
-            name: std::path::Path::new(&path)
-                .file_name()
-                .unwrap_or_default()
-                .to_str()
-                .ok_or_else(|| ApiError::other("Filename is not valid UTF-8"))?
-                .to_owned(),
-            is_dir: md.is_dir(),
-            is_symlink: md.is_symlink(),
-            mode: local_mode(&md),
-            size: md.len(),
-            mtime: md
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        }))
+        let md = std::fs::symlink_metadata(&path).map_err(ApiError::other)?;
+        if md.is_dir() {
+            return if recursive {
+                std::fs::remove_dir_all(path)
+            } else {
+                std::fs::remove_dir(path)
+            }
+            .map_err(ApiError::other);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileTypeExt;
+            if md.file_type().is_symlink_dir() {
+                return std::fs::remove_dir(path).map_err(ApiError::other);
+            }
+        }
+        std::fs::remove_file(path).map_err(ApiError::other)
     })
     .await?
 }
@@ -2740,6 +2817,105 @@ mod local_symlink_tests {
             )
             .await
             .unwrap();
+        });
+    }
+
+    #[test]
+    fn stat_follows_links_and_reports_absence() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
+            std::fs::create_dir(path("lib")).unwrap();
+            let md = super::local_stat(path("lib")).await.unwrap().unwrap();
+            assert!(md.is_dir);
+            assert_eq!(md.name, "lib");
+            assert!(super::local_stat(path("missing")).await.unwrap().is_none());
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink("lib", path("lib64")).unwrap();
+                let md = super::local_stat(path("lib64")).await.unwrap().unwrap();
+                assert!(md.is_dir && !md.is_symlink);
+                std::os::unix::fs::symlink("missing", path("broken")).unwrap();
+                assert!(super::local_stat(path("broken")).await.unwrap().is_none());
+            }
+        });
+    }
+
+    #[test]
+    fn mkdir_creates_exactly_one_new_directory() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
+            super::local_mkdir(path("new")).await.unwrap();
+            assert!(dir.path().join("new").is_dir());
+            assert!(super::local_mkdir(path("new")).await.is_err());
+            let nested = dir.path().join("absent").join("child");
+            assert!(super::local_mkdir(nested.to_str().unwrap().to_owned())
+                .await
+                .is_err());
+            assert!(!dir.path().join("absent").exists());
+        });
+    }
+
+    #[test]
+    fn remove_is_recursive_only_on_request_and_spares_link_referents() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
+            std::fs::create_dir(path("tree")).unwrap();
+            std::fs::write(dir.path().join("tree").join("leaf"), b"leaf").unwrap();
+            std::fs::write(path("file"), b"file").unwrap();
+            super::local_remove(path("file"), false).await.unwrap();
+            assert!(!dir.path().join("file").exists());
+            assert!(super::local_remove(path("tree"), false).await.is_err());
+            assert!(dir.path().join("tree").join("leaf").exists());
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink("tree", path("link")).unwrap();
+                super::local_remove(path("link"), true).await.unwrap();
+                assert!(std::fs::symlink_metadata(path("link")).is_err());
+                assert!(dir.path().join("tree").join("leaf").exists());
+            }
+            super::local_remove(path("tree"), true).await.unwrap();
+            assert!(!dir.path().join("tree").exists());
+        });
+    }
+
+    #[test]
+    fn copy_file_accepts_picker_paths_and_file_urls() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
+            std::fs::write(path("picked"), b"picked").unwrap();
+            super::local_copy_file(path("picked").parse().unwrap(), path("copy"))
+                .await
+                .unwrap();
+            assert_eq!(std::fs::read(path("copy")).unwrap(), b"picked");
+            #[cfg(unix)]
+            {
+                let url = format!("file://{}", path("picked"));
+                super::local_copy_file(url.parse().unwrap(), path("from-url"))
+                    .await
+                    .unwrap();
+                assert_eq!(std::fs::read(path("from-url")).unwrap(), b"picked");
+            }
+        });
+    }
+
+    #[test]
+    fn write_text_replaces_a_prepared_file_and_never_creates_one() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
+            std::fs::write(path("stage"), b"a longer previous body").unwrap();
+            super::local_write_text(path("stage"), "new".into())
+                .await
+                .unwrap();
+            assert_eq!(std::fs::read(path("stage")).unwrap(), b"new");
+            assert!(super::local_write_text(path("absent"), "new".into())
+                .await
+                .is_err());
+            assert!(!dir.path().join("absent").exists());
         });
     }
 
