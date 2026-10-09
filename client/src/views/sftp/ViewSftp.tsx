@@ -1,4 +1,4 @@
-import { mapWorkers } from "@/sftp/transfer-engine";
+import { isWithin, mapWorkers } from "@/sftp/transfer-engine";
 // SFTP — drag-first, multi-location file manager. Desktop: two pane slots, each
 // with its own location tabs; drag between them (or onto a tab) to transfer.
 // Narrow/mobile: a single slot whose tab strip holds every location. This file
@@ -47,9 +47,6 @@ import { dedupeName } from "@/sftp/paths";
 
 const refOf = (id: string): LocationRef => (id === "local" ? { kind: "local" } : { kind: "remote", sessionId: id });
 const keyOf = (l: LocationRef): string => (l.kind === "remote" ? l.sessionId : l.kind);
-/** Whether `path` is `dir` or inside it, for either separator. */
-const insideDir = (dir: string, path: string): boolean =>
-  path === dir || path.startsWith(`${dir}/`) || path.startsWith(`${dir}\\`);
 const sendIcon = (l: LocationRef): IconName => (l.kind === "remote" ? "upload" : "download");
 
 // Module-level (survives view remounts, so ids never collide with the persistent
@@ -320,7 +317,7 @@ export function ViewSftp() {
       }
       try {
         for (const e of entries) {
-          if (!e.isDir || e.isSymlink || !insideDir(await fromSlot.source.join(fromSlot.cwd, e.name), toCwd)) continue;
+          if (!e.isDir || e.isSymlink || !isWithin(await fromSlot.source.join(fromSlot.cwd, e.name), toCwd, true)) continue;
           toast(t("sftp.toast.moveIntoItself", { name: e.name }), "err");
           return;
         }
@@ -352,7 +349,7 @@ export function ViewSftp() {
       for (const e of entries) {
         if (e.isDir) {
           const abs = await src.join(pl.cwd, e.name);
-          if (insideDir(abs, toCwd)) continue;
+          if (isWithin(abs, toCwd, true)) continue;
         }
         kept.push(e);
       }
@@ -560,6 +557,16 @@ export function ViewSftp() {
 
   // ── keyboard (the `sftp` shortcut scope) ─────────────────────
   // One handler per registry action; the registry decides which key means which.
+  /** F5 and F6 differ only in what happens to the source. */
+  const transferShortcut = (move: boolean) => (slot: SlotCtl, cursor: ListCursor): void => {
+    const entries = actionTargets(cursor.entry, slot);
+    if (!entries.length) return;
+    const across = paneAcross(slot);
+    if (across) return move ? void askMove(entries, slot, across.location, across.cwd) : sendTo(entries, slot, across.location, across.cwd);
+    // No pane across to aim at: offer the same destinations the row menu does.
+    const items = sendItems(entries, slot, move);
+    if (items.length) setMenu({ items, title: titleOf(entries), x: cursor.x, y: cursor.y });
+  };
   const shortcutHandlers: Record<SftpAction, (slot: SlotCtl, cursor: ListCursor) => void | false> = {
     switchPane: () => {
       const lists = paneAreaRef.current?.querySelectorAll<HTMLElement>("[data-sftp-list]") ?? [];
@@ -583,23 +590,8 @@ export function ViewSftp() {
     edit: (slot, { entry }) => {
       if (entry && !entry.isDir) void openEditor(slot, entry);
     },
-    copy: (slot, cursor) => {
-      const entries = actionTargets(cursor.entry, slot);
-      if (!entries.length) return;
-      const across = paneAcross(slot);
-      if (across) return sendTo(entries, slot, across.location, across.cwd);
-      // No pane across to aim at: offer the same destinations the row menu does.
-      const items = sendItems(entries, slot);
-      if (items.length) setMenu({ items, title: titleOf(entries), x: cursor.x, y: cursor.y });
-    },
-    move: (slot, cursor) => {
-      const entries = actionTargets(cursor.entry, slot);
-      if (!entries.length) return;
-      const across = paneAcross(slot);
-      if (across) return void askMove(entries, slot, across.location, across.cwd);
-      const items = sendItems(entries, slot, true);
-      if (items.length) setMenu({ items, title: titleOf(entries), x: cursor.x, y: cursor.y });
-    },
+    copy: transferShortcut(false),
+    move: transferShortcut(true),
     newFolder: (slot) => askNewFolder(slot),
     delete: (slot, { entry }) => {
       const entries = actionTargets(entry, slot);

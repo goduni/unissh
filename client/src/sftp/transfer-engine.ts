@@ -130,9 +130,10 @@ export async function mapWorkers<T, R>(items: readonly T[], concurrency: number,
 }
 
 /** Whether `path` is `dir` itself or lies inside it. Both must be normalized
- *  the same way and carry no trailing separator. */
-export function isWithin(dir: string, path: string): boolean {
-  return path === dir || path.startsWith(`${dir}/`);
+ *  the same way and carry no trailing separator. `nativeSeparators` also takes
+ *  a backslash as a separator, for local Windows paths that were not normalized. */
+export function isWithin(dir: string, path: string, nativeSeparators = false): boolean {
+  return path === dir || path.startsWith(`${dir}/`) || (nativeSeparators && path.startsWith(`${dir}\\`));
 }
 
 /** After a folder move: the source directories that may be removed, deepest
