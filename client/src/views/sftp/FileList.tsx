@@ -15,7 +15,7 @@ import type { FolderSizes } from "./folderSizes";
 import { displayEntries } from "./sortfilter";
 import { useVirtualRows } from "./useVirtualRows";
 import { pageRows } from "./virtualRows";
-import { runFileListShortcut, type ListCursor, type ListShortcutHandler } from "./shortcuts";
+import { runFileListShortcut, type CursorRequest, type ListCursor, type ListShortcutHandler } from "./shortcuts";
 
 export function FileList({
   entries,
@@ -26,6 +26,8 @@ export function FileList({
   folderSizes,
   sort,
   filter,
+  cursorOn,
+  onCursorDone,
   actionIcon,
   onSort,
   onOpenUp,
@@ -45,6 +47,10 @@ export function FileList({
   folderSizes: FolderSizes;
   sort: SortState;
   filter: string;
+  /** Put the cursor on this entry, and scroll to it, once it is listed. */
+  cursorOn?: CursorRequest | null;
+  /** The request was honoured; the owner drops it, so that it is used once. */
+  onCursorDone?: () => void;
   actionIcon?: IconName;
   onSort: (key: SortKey) => void;
   onOpenUp: () => void;
@@ -141,12 +147,27 @@ export function FileList({
   const listId = useId();
   const rowHeight = (isMobile ? 44 : 30) * uiScale / 100;
   const rows = useVirtualRows(display.length, rowHeight, display, error);
-  useEffect(() => setFocusIdx(0), [display]);
   const focusRow = (index: number) => {
     const next = Math.max(0, Math.min(navCount - 1, index));
     setFocusIdx(next);
     rows.reveal(next - base);
   };
+  // Where the cursor goes when what is listed changes: onto the entry a request
+  // names, if it is listed, else back to the top. A request can also arrive for
+  // the rows already shown, and moves the cursor without them changing. It is
+  // handed back as soon as it is honoured, so sorting or filtering later does
+  // not drag the cursor back — nor does mounting the list again.
+  const listed = useRef<Entry[] | null>(null);
+  useEffect(() => {
+    const changed = listed.current !== display;
+    listed.current = display;
+    const index = cursorOn ? display.findIndex((e) => e.name === cursorOn.name) : -1;
+    if (index >= 0) {
+      focusRow(base + index);
+      onCursorDone?.();
+    } else if (changed) setFocusIdx(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [display, cursorOn]);
   // Keep a drag source mounted if autoscrolling takes it outside the window.
   // Removing that DOM node ends a native HTML drag in some WebViews.
   const visibleIndices = Array.from({ length: rows.end - rows.start }, (_, i) => rows.start + i);

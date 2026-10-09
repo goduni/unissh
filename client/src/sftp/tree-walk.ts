@@ -42,6 +42,13 @@ export interface WalkOptions {
   onSkip?: (rel: string, error: unknown) => void;
 }
 
+/** Whether a failed listing means the session behind `src` is gone. Only a
+ *  remote source has a session to lose; a local error text can carry a path,
+ *  which must not be read as one. */
+export function isSessionLost(src: FileSource, error: unknown): boolean {
+  return src.kind === "remote" && isSftpDisconnect(apiErrorMessage(error));
+}
+
 /** List `root` and every directory below it on `src`, level by level. */
 export async function walkTree(src: FileSource, root: string, { sem, signal, onDir, onSkip }: WalkOptions): Promise<void> {
   let level = [{ path: root, rel: "" }];
@@ -55,9 +62,7 @@ export async function walkTree(src: FileSource, root: string, { sem, signal, onD
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
         if (rel === "") throw error;
-        // Only a remote source has a session to lose; a local error text can
-        // carry a path, which must not be read as one.
-        if (src.kind === "remote" && isSftpDisconnect(apiErrorMessage(error))) throw error;
+        if (isSessionLost(src, error)) throw error;
         onSkip?.(rel, error);
         return;
       }

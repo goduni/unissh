@@ -12,18 +12,24 @@ import { useFmt } from "@/i18n/format";
 import type { ConflictResolution } from "@/sftp/transfer-runner";
 import { validateEntryName, type NameError as NameErrorKind } from "./names";
 
-function TextInput({
+export function TextInput({
   value,
   onChange,
   onEnter,
+  onKeyDown,
   placeholder,
   selectBasename,
+  attrs,
 }: {
   value: string;
   onChange: (v: string) => void;
   onEnter?: () => void;
+  /** Sees every key first; a key it prevents is not taken as Enter. */
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   placeholder?: string;
   selectBasename?: boolean;
+  /** Roles and ARIA wiring for an input that drives something else. */
+  attrs?: React.AriaAttributes & { role?: React.AriaRole };
 }) {
   const p = usePalette();
   const ref = useRef<HTMLInputElement>(null);
@@ -48,11 +54,13 @@ function TextInput({
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") onEnter?.();
+        onKeyDown?.(e);
+        if (e.key === "Enter" && !e.defaultPrevented) onEnter?.();
       }}
       onFocus={() => setFocus(true)}
       onBlur={() => setFocus(false)}
       {...NO_AUTOCORRECT}
+      {...attrs}
       style={{
         width: "100%",
         boxSizing: "border-box",

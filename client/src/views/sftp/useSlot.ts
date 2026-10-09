@@ -10,9 +10,10 @@ import { useIsMobile } from "@/store/responsive";
 import { apiErrorMessage } from "@/bridge/types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
 import type { Entry, LocationRef, SftpSession, SortKey, SortState } from "@/store/sftp-types";
-import { displayEntries, shownNames } from "./sortfilter";
+import { displayEntries, revealPlan, shownNames } from "./sortfilter";
 import type { FolderSizes } from "./folderSizes";
 import { useFolderSizes } from "./useFolderSizes";
+import type { CursorRequest } from "./shortcuts";
 
 export interface SlotCtl {
   location: LocationRef;
@@ -30,6 +31,15 @@ export interface SlotCtl {
   up: () => void;
   goTo: (path: string) => void;
   refresh: () => void;
+  /** Open `dir` and put the cursor on its entry `name`, selected — clearing
+   *  the filter if it would hide the entry. A folder the pane already shows
+   *  with that entry in it is not listed again. */
+  reveal: (dir: string, name: string) => void;
+  /** The entry the last `reveal` asked the list to put its cursor on; null
+   *  once the list did, or any other listing was applied. */
+  cursorOn: CursorRequest | null;
+  /** The list put its cursor where `cursorOn` asked. */
+  cursorDone: () => void;
   select: (name: string, additive: boolean, range: boolean) => void;
   selectAll: () => void;
   clearSelection: () => void;
@@ -49,6 +59,10 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState("");
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
+  const [cursorOn, setCursorOn] = useState<CursorRequest | null>(null);
+  const cursorDone = useCallback(() => setCursorOn(null), []);
   const [sort, setSort] = useState<SortState>({ key: "name", dir: "asc" });
   const memo = useRef<Record<string, string>>({});
   const anchor = useRef<string | null>(null);
@@ -75,8 +89,20 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
   const hasSource = source != null;
   useEffect(() => resetFolderSizes, [locKey, hasSource, resetFolderSizes]);
 
+  /** Point the pane at the entry `name` of `list`, the listing it shows — or
+   *  at nothing, without a name or when the entry is not there. */
+  const pointAt = useCallback((list: Entry[], name?: string) => {
+    const plan = name == null ? null : revealPlan(list, filterRef.current, name);
+    const found = plan && name != null ? name : null;
+    if (plan?.clearFilter) setFilter("");
+    // Selected as well as pointed at: touch has no cursor ring to show it by.
+    setSelection(new Set(found ? [found] : []));
+    anchor.current = found;
+    setCursorOn(found ? { name: found } : null);
+  }, []);
+
   const load = useCallback(
-    async (dir: string) => {
+    async (dir: string, reveal?: string) => {
       if (!source) return;
       lastAttempt.current = dir; // remembered even on failure, so Retry re-attempts it
       const my = ++gen.current;
@@ -95,8 +121,7 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
         resetFolderSizes();
         setEntries(list);
         setCwd(dir);
-        setSelection(new Set());
-        anchor.current = null;
+        pointAt(list, reveal);
         memo.current[locKey] = dir;
       } catch (e) {
         if (my === gen.current) setError(apiErrorMessage(e));
@@ -104,7 +129,7 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
         if (my === gen.current) setLoading(false);
       }
     },
-    [source, locKey, resetFolderSizes],
+    [source, locKey, resetFolderSizes, pointAt],
   );
 
   // (re)initialise the cwd whenever the slot's location changes
@@ -156,6 +181,16 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
       }
     },
     [source, load],
+  );
+  const reveal = useCallback(
+    (dir: string, name: string) => {
+      // Already there, and nothing newer on its way: the listing stays as it
+      // is — and with it the folder totals worked out on it.
+      const here = dir === cwd && !loading && revealPlan(entriesRef.current, filterRef.current, name) != null;
+      if (here) pointAt(entriesRef.current, name);
+      else void load(dir, name);
+    },
+    [cwd, loading, load, pointAt],
   );
   const refresh = useCallback(() => {
     const dir = lastAttempt.current ?? cwd;
@@ -218,6 +253,9 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
     up,
     goTo,
     refresh,
+    reveal,
+    cursorOn,
+    cursorDone,
     select,
     selectAll,
     clearSelection,

@@ -70,7 +70,8 @@ describe("binding catalog", () => {
   it("allows the same keys only in mutually exclusive scopes", () => {
     const keys = [binding("KeyF", { ctrl: true, shift: true })];
     expect(conflictsFor("editorSave", keys, {}, false)).toEqual([]);
-    expect(conflictsFor("palette", keys, {}, false).map((s) => s.id)).toEqual(["find"]);
+    // Terminal find and the file search share the key: they are never live together.
+    expect(conflictsFor("palette", keys, {}, false).map((s) => s.id)).toEqual(["find", "sftp.search"]);
     // A file list is live beside the section shortcuts, never beside the terminal or the editor.
     expect(conflictsFor("sftp.copy", [binding("Digit1", { ctrl: true, shift: true }), binding("KeyS", { ctrl: true })], {}, false).map((s) => s.id)).toEqual(["nav.hosts"]);
   });

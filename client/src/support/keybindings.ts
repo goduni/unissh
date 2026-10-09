@@ -52,6 +52,9 @@ const SFTP_SHORTCUTS = {
   // Alt+Enter is "properties" in every desktop file manager, and the size of a
   // folder is the property this answers. Never Space: that key selects.
   folderSize: ["sftp.menu.folderSize", (mac) => [binding("Enter", { alt: true }), binding("Enter", mac ? { meta: true, shift: true } : { ctrl: true, shift: true })]],
+  // Alt+F7 is "find files" in an orthodox file manager, but GNOME hands that
+  // chord to the window manager before the app sees it — hence the second key.
+  search: ["sftp.search.title", (mac) => [binding("F7", { alt: true }), binding("KeyF", mac ? { meta: true, shift: true } : { ctrl: true, shift: true })]],
 } satisfies Record<string, [labelKey: string, defaults: ShortcutDefinition["defaults"]]>;
 export type SftpAction = keyof typeof SFTP_SHORTCUTS;
 export const SFTP_ACTIONS = Object.keys(SFTP_SHORTCUTS) as SftpAction[];
