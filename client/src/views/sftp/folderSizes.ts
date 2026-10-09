@@ -9,9 +9,9 @@
 // harmless.
 
 import { apiErrorMessage } from "@/bridge/types";
-import type { FileSource } from "@/bridge/sources";
+import { underCancelToken, type FileSource } from "@/bridge/sources";
 import type { Semaphore } from "@/sftp/transfer-engine";
-import { folderSize, underCancelToken, type FolderSizeResult } from "@/sftp/tree-walk";
+import { folderSize, type FolderSizeResult } from "@/sftp/tree-walk";
 import { FlushTimer } from "./flushTimer";
 
 /** What a folder's size cell shows once a total was asked for. */

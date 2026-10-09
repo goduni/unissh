@@ -10,7 +10,6 @@
 // it is collecting — never the tree.
 
 import type { Entry } from "@/store/sftp-types";
-import * as api from "@/bridge/api";
 import { apiErrorMessage } from "@/bridge/types";
 import { isSftpDisconnect, type FileSource } from "@/bridge/sources";
 import { isSafeName, isWalkableDir } from "@/sftp/paths";
@@ -43,6 +42,13 @@ export interface WalkOptions {
   onSkip?: (rel: string, error: unknown) => void;
 }
 
+/** Whether a failed listing means the session behind `src` is gone. Only a
+ *  remote source has a session to lose; a local error text can carry a path,
+ *  which must not be read as one. */
+export function isSessionLost(src: FileSource, error: unknown): boolean {
+  return src.kind === "remote" && isSftpDisconnect(apiErrorMessage(error));
+}
+
 /** List `root` and every directory below it on `src`, level by level. */
 export async function walkTree(src: FileSource, root: string, { sem, signal, onDir, onSkip }: WalkOptions): Promise<void> {
   let level = [{ path: root, rel: "" }];
@@ -56,9 +62,7 @@ export async function walkTree(src: FileSource, root: string, { sem, signal, onD
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
         if (rel === "") throw error;
-        // Only a remote source has a session to lose; a local error text can
-        // carry a path, which must not be read as one.
-        if (src.kind === "remote" && isSftpDisconnect(apiErrorMessage(error))) throw error;
+        if (isSessionLost(src, error)) throw error;
         onSkip?.(rel, error);
         return;
       }
@@ -76,28 +80,6 @@ export async function walkTree(src: FileSource, root: string, { sem, signal, onD
       }
     }, signal);
     level = next;
-  }
-}
-
-/** Run a walk over `source` under one cancel token for all of it, the way a
- *  transfer runs: the token is triggered when `signal` aborts, which stops the
- *  listings in flight on either kind of source, and is disposed when `run`
- *  ends. A source that takes no token is handed to `run` as it is. */
-export async function underCancelToken<T>(source: FileSource, signal: AbortSignal, run: (src: FileSource) => Promise<T>): Promise<T> {
-  let token: string | undefined;
-  const trigger = () => { if (token) api.cancelTrigger(token).catch(() => {}); };
-  signal.addEventListener("abort", trigger, { once: true });
-  try {
-    let src = source;
-    if (source.withCancelToken) {
-      token = await api.cancelNew();
-      signal.throwIfAborted();
-      src = source.withCancelToken(token);
-    }
-    return await run(src);
-  } finally {
-    signal.removeEventListener("abort", trigger);
-    if (token) await api.cancelDispose(token).catch(() => {});
   }
 }
 

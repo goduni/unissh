@@ -1,9 +1,11 @@
-// SearchDialog — find files and folders by name below a pane's folder. A thin
-// view over the pane's search (useFileSearch): it owns the query box, the cursor
-// in the result list and nothing else. The keyboard stays in the query box the
-// whole time, combobox-style — typing searches, the arrows walk the results.
+// SearchDialog — find files and folders by name below a pane's folder. It owns
+// the search (useFileSearch) along with the query box and the cursor in the
+// result list: the search lives exactly as long as the dialog, whatever the
+// pane's listing does meanwhile. The keyboard stays in the query box the whole
+// time, combobox-style — typing searches, the arrows walk the results.
 
 import { useEffect, useId, useRef, useState } from "react";
+import type { FileSource } from "@/bridge/sources";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT, UI } from "@/theme/tokens";
 import { Btn, Icon, Spinner, type IconName } from "@/components/primitives";
@@ -13,7 +15,7 @@ import { useTranslation } from "@/i18n";
 import { SEARCH_MAX_MATCHES, SEARCH_MAX_SCANNED, type SearchHit } from "@/sftp/tree-search";
 import { TextInput } from "./dialogs";
 import type { SearchSnapshot } from "./fileSearch";
-import type { FileSearchCtl } from "./useFileSearch";
+import { useFileSearch } from "./useFileSearch";
 import { useVirtualRows } from "./useVirtualRows";
 import { pageRows } from "./virtualRows";
 
@@ -26,14 +28,15 @@ const folderOf = ({ rel, entry }: SearchHit): string => rel.slice(0, Math.max(0,
 
 export function SearchDialog({
   root,
-  search,
+  source,
   gone,
   onGoTo,
   onClose,
 }: {
   /** The folder searched: the pane's, as it was when the dialog opened. */
   root: string;
-  search: FileSearchCtl;
+  /** Where `root` is: the pane's source. */
+  source: FileSource | null;
   /** The pane no longer shows `root`; there is nothing left to search or go to. */
   gone: boolean;
   onGoTo: (hit: SearchHit) => void;
@@ -45,35 +48,38 @@ export function SearchDialog({
   const { uiScale } = useTheme();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const { result } = search;
+  // However the dialog goes away, the search goes with it (see the hook).
+  const { result, start, stop } = useFileSearch(source);
   const { hits, state } = result;
+  // The query the results on screen answer. Until the box has rested, they are
+  // the previous query's: still worth looking at, not what Enter should take.
+  const [asked, setAsked] = useState("");
+  const stale = asked !== query;
+  const searchNow = () => {
+    setAsked(query);
+    start(root, query);
+  };
 
-  // The controller is rebuilt whenever any session opens or closes; a search
-  // must not start over because of that, so effects reach it through a ref.
-  const live = useRef(search);
-  live.current = search;
   const close = useRef(onClose);
   close.current = onClose;
-
   useEffect(() => {
     if (gone) close.current();
   }, [gone]);
-  // However the dialog goes away, the search goes with it.
-  useEffect(() => () => live.current.reset(), []);
   useEffect(() => {
-    if (!query.trim()) {
-      live.current.reset();
-      return;
-    }
-    const timer = setTimeout(() => live.current.start(root, query), SEARCH_DEBOUNCE_MS);
+    if (!stale) return;
+    // A blank query clears the list, and there is nothing to wait for.
+    const timer = setTimeout(searchNow, query.trim() ? SEARCH_DEBOUNCE_MS : 0);
     return () => clearTimeout(timer);
-  }, [query, root]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, stale, root, start]);
 
   const listId = useId();
   const rowHeight = ((isMobile ? 44 : 30) * uiScale) / 100;
   const rows = useVirtualRows(hits.length, rowHeight, result.run, null);
   useEffect(() => setActive(0), [result.run]);
   const current = hits[active];
+  // Scrolling by wheel can take the active row out of the rendered window.
+  const activeVisible = current != null && active >= rows.start && active < rows.end;
   const moveTo = (index: number) => {
     const next = Math.max(0, Math.min(hits.length - 1, index));
     setActive(next);
@@ -89,7 +95,10 @@ export function SearchDialog({
       moveTo(active + step);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (current) onGoTo(current);
+      // Pressed before the search for what was typed began: start that search
+      // instead of going to a result of the one before.
+      if (stale) searchNow();
+      else if (current) onGoTo(current);
     }
   };
 
@@ -136,17 +145,17 @@ export function SearchDialog({
           {!isMobile && <span style={{ fontSize: TEXT.small, color: p.txt3 }}>{t("sftp.search.keys")}</span>}
           <div style={{ flex: 1 }} />
           {state === "searching" ? (
-            <Btn variant="ghost" size="sm" onClick={search.stop}>
+            <Btn variant="ghost" size="sm" onClick={stop}>
               {t("sftp.search.stop")}
             </Btn>
           ) : (
             !idle && (
-              <Btn variant="ghost" size="sm" onClick={() => search.start(root, query)}>
+              <Btn variant="ghost" size="sm" onClick={searchNow}>
                 {t("sftp.search.again")}
               </Btn>
             )
           )}
-          <Btn size="sm" disabled={!current} onClick={() => current && onGoTo(current)}>
+          <Btn size="sm" disabled={stale || !current} onClick={() => !stale && current && onGoTo(current)}>
             {t("sftp.search.goTo")}
           </Btn>
         </>
@@ -163,7 +172,7 @@ export function SearchDialog({
           "aria-autocomplete": "list",
           "aria-expanded": hits.length > 0,
           "aria-controls": listId,
-          "aria-activedescendant": current ? `${listId}-${active}` : undefined,
+          "aria-activedescendant": activeVisible ? `${listId}-${active}` : undefined,
         }}
       />
 

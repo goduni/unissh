@@ -780,7 +780,7 @@ export function ViewSftp() {
       {dialog?.kind === "search" && searchPane && (
         <SearchDialog
           root={dialog.root}
-          search={searchPane.search}
+          source={searchPane.source}
           // Another location, a lost session, another folder, or a pane the
           // narrow layout no longer shows.
           gone={

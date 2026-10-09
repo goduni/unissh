@@ -229,7 +229,7 @@ export function PaneSlot({
         {/* Next to the filter it widens: the filter narrows this folder, this
             looks through everything below it. Key hints are for a keyboard. */}
         <IconBtn
-          icon="layers"
+          icon="search"
           size={isMobile ? 40 : 26}
           title={searchKeys && !isMobile ? `${t("sftp.search.title")} (${searchKeys})` : t("sftp.search.title")}
           onClick={onSearch}
@@ -317,6 +317,7 @@ export function PaneSlot({
           sort={slot.sort}
           filter={slot.filter}
           cursorOn={slot.cursorOn}
+          onCursorDone={slot.cursorDone}
           actionIcon={actionIcon}
           onSort={slot.toggleSort}
           onOpenUp={slot.up}

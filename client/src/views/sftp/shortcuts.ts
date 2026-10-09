@@ -18,6 +18,12 @@ export interface ListCursor {
   page: (dir: 1 | -1) => void;
 }
 
+/** One request to put a list's cursor on the entry `name`. It is used once: the
+ *  list that honours it says so, and a list mounted later never sees it. */
+export interface CursorRequest {
+  name: string;
+}
+
 /** Returning false leaves the key to the browser (e.g. Tab with no other pane). */
 export type ListShortcutHandler = (action: SftpAction, cursor: ListCursor) => void | false;
 

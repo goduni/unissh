@@ -37,12 +37,17 @@ describe("name matcher", () => {
     const match = nameMatcher(" ReadMe ")!;
     expect(["my-README.md", "readme", "read.me"].map(match)).toEqual([true, true, false]);
     expect(nameMatcher("  ")).toBeNull();
+    // A macOS folder lists names decomposed; the query is typed composed.
+    expect(["\u0438\u0306.txt", "\u0439.txt", "\u0438.txt"].map(nameMatcher("\u0439")!)).toEqual([true, true, false]);
   });
 
   it("matches a pattern against the whole name, with only * and ? special", () => {
     const names = ["a.log", "A.LOG", "a.log.gz", "alog", "ab.log"];
     expect(names.filter(nameMatcher("*.log")!)).toEqual(["a.log", "A.LOG", "ab.log"]);
     expect(names.filter(nameMatcher("?.log")!)).toEqual(["a.log", "A.LOG"]);
+    // A `*` that took too little the first time gives way and is tried again.
+    expect(nameMatcher("*.log")!("a.lo.log")).toBe(true);
+    expect(["abc", "a-b-b-c", "ab-cb-c", "acb", "abcd"].filter(nameMatcher("a*b*c")!)).toEqual(["abc", "a-b-b-c", "ab-cb-c"]);
     // Anything a regular expression would read as syntax is just a character.
     expect(["a(1)+[x].txt", "a1x.txt", "b.txt"].filter(nameMatcher("a(1)+[x].*")!)).toEqual(["a(1)+[x].txt"]);
     expect(["a.txt", "[ab].txt"].filter(nameMatcher("[ab].*")!)).toEqual(["[ab].txt"]);

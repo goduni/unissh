@@ -24,6 +24,14 @@ export function shownNames(entries: Entry[], filter: string): Set<string> {
   return new Set(filterEntries(entries, filter).map((e) => e.name));
 }
 
+/** What it takes to show the entry `name` of a listing under `filter`: null
+ *  when the listing has no such entry — it is simply not there to point at —
+ *  else whether the filter hides it and has to be cleared first. */
+export function revealPlan(entries: Entry[], filter: string, name: string): { clearFilter: boolean } | null {
+  if (!entries.some((e) => e.name === name)) return null;
+  return { clearFilter: !shownNames(entries, filter).has(name) };
+}
+
 export function displayEntries(entries: Entry[], filter: string, sort: SortState): Entry[] {
   const list = filterEntries(entries, filter);
   list.sort((a, b) => compareEntries(a, b, sort.key, sort.dir));

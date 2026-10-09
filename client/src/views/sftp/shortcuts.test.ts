@@ -3,7 +3,7 @@ import { binding, sanitizeOverrides, SHORTCUTS, type KeyBinding } from "@/suppor
 import { shortcutAria, shortcutLabel, useShortcuts } from "@/store/shortcuts";
 import type { Entry } from "@/store/sftp-types";
 import { actionTargets, fileListShortcut, runFileListShortcut, type ListCursor, type ListShortcutHandler } from "./shortcuts";
-import { shownNames } from "./sortfilter";
+import { revealPlan, shownNames } from "./sortfilter";
 
 const { platform } = vi.hoisted(() => ({ platform: { mac: false } }));
 vi.mock("@/bridge/platform", () => ({ isMac: () => platform.mac }));
@@ -87,6 +87,13 @@ describe("file list shortcuts", () => {
   it("selects all of what the filter shows and nothing it hides", () => {
     expect(shownNames([a, b, c], " B ")).toEqual(new Set(["b"]));
     expect(shownNames([a, b, c], "")).toEqual(new Set(["a", "b", "c"]));
+  });
+
+  it("reveals an entry that is listed, clearing the filter only when it hides the entry", () => {
+    expect(revealPlan([a, b, c], "", "b")).toEqual({ clearFilter: false });
+    expect(revealPlan([a, b, c], " B ", "b")).toEqual({ clearFilter: false });
+    expect(revealPlan([a, b, c], "a", "b")).toEqual({ clearFilter: true });
+    expect(revealPlan([a, b, c], "", "gone")).toBeNull();
   });
 
   it("prints the key that is bound now in menus, and nothing for an unbound action", () => {

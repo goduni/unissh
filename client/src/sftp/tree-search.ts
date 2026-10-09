@@ -5,9 +5,9 @@
 
 import type { Entry } from "@/store/sftp-types";
 import { apiErrorMessage } from "@/bridge/types";
-import { isSftpDisconnect, type FileSource } from "@/bridge/sources";
+import { underCancelToken, type FileSource } from "@/bridge/sources";
 import type { Semaphore } from "@/sftp/transfer-engine";
-import { underCancelToken, walkTree } from "@/sftp/tree-walk";
+import { isSessionLost, walkTree } from "@/sftp/tree-walk";
 
 /** Entries a search looks at before it stops by itself. */
 export const SEARCH_MAX_SCANNED = 200_000;
@@ -37,16 +37,20 @@ function globMatch(pattern: string[], text: string[]): boolean {
   return p === pattern.length;
 }
 
+/** One spelling for both sides of a comparison: a name is typed composed (NFC),
+ *  while a macOS folder lists it decomposed. */
+const fold = (text: string): string => text.normalize("NFC").toLowerCase();
+
 /** The test a query puts a name to, or null when the query is blank. Without
  *  wildcards it is a substring of the name; with `*` or `?` it is a pattern for
  *  the whole name. Never case-sensitive. */
 export function nameMatcher(query: string): ((name: string) => boolean) | null {
-  const q = query.trim().toLowerCase();
+  const q = fold(query.trim());
   if (!q) return null;
-  if (!/[*?]/.test(q)) return (name) => name.toLowerCase().includes(q);
+  if (!/[*?]/.test(q)) return (name) => fold(name).includes(q);
   // By code point, so that `?` stands for one character as the user sees it.
   const pattern = [...q];
-  return (name) => globMatch(pattern, [...name.toLowerCase()]);
+  return (name) => globMatch(pattern, [...fold(name)]);
 }
 
 /** One entry whose name matched. */
@@ -110,6 +114,10 @@ export async function searchTree(
   let matches = 0;
   let limit: SearchResult["limit"];
   let failure: { error: unknown } | undefined;
+  // Whether the walk was stopped, as of the moment it settled. Releasing the
+  // cancel token takes a while longer, and a Stop that lands in that gap must
+  // not turn a search that finished, or lost its session, into a cancelled one.
+  let stopped: boolean | undefined;
   try {
     await underCancelToken(source, walk.signal, (src) =>
       walkTree(src, root, {
@@ -134,19 +142,19 @@ export async function searchTree(
           onProgress({ ...progress }, hits);
           if (limit) walk.abort();
         },
-      }));
+      }).finally(() => { stopped = walk.signal.aborted; }));
   } catch (error) {
     failure = { error };
   } finally {
     signal?.removeEventListener("abort", cancel);
   }
+  // Stopped before there was a walk to settle.
+  stopped ??= walk.signal.aborted;
 
   const end = (state: SearchResult["state"], more?: Pick<SearchResult, "limit" | "error">): SearchResult =>
     ({ state, ...more, ...progress, matches });
   if (limit) return end("limit", { limit });
-  if (walk.signal.aborted) return end("cancelled");
+  if (stopped) return end("cancelled");
   if (!failure) return end("done");
-  const error = apiErrorMessage(failure.error);
-  // Only a remote source has a session to lose.
-  return source.kind === "remote" && isSftpDisconnect(error) ? end("lost") : end("failed", { error });
+  return isSessionLost(source, failure.error) ? end("lost") : end("failed", { error: apiErrorMessage(failure.error) });
 }

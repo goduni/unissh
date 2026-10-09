@@ -43,6 +43,24 @@ describe("file search", () => {
     expect(shown()).toMatchObject({ state: "searching", hits: [], scanned: 0 });
   });
 
+  it("ends a stopped search as cancelled, with what it had found", async () => {
+    vi.useFakeTimers();
+    const { search, shown } = controller();
+    const { run, found, end } = manual();
+    let signal!: AbortSignal;
+    search.start((s, onProgress) => {
+      signal = s;
+      return run(s, onProgress);
+    });
+    found("a");
+    search.stop();
+    expect(signal.aborted).toBe(true);
+    // The walk still owns the search: it is the one to say how it ended.
+    end({ ...done, state: "cancelled" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown()).toMatchObject({ state: "cancelled", hits: [hit("a")] });
+  });
+
   it("puts matches on screen in batches, and the rest when the search ends", async () => {
     vi.useFakeTimers();
     const { search, commits, shown } = controller();

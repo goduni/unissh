@@ -10,10 +10,10 @@ import { useIsMobile } from "@/store/responsive";
 import { apiErrorMessage } from "@/bridge/types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
 import type { Entry, LocationRef, SftpSession, SortKey, SortState } from "@/store/sftp-types";
-import { displayEntries, shownNames } from "./sortfilter";
+import { displayEntries, revealPlan, shownNames } from "./sortfilter";
 import type { FolderSizes } from "./folderSizes";
 import { useFolderSizes } from "./useFolderSizes";
-import { useFileSearch, type FileSearchCtl } from "./useFileSearch";
+import type { CursorRequest } from "./shortcuts";
 
 export interface SlotCtl {
   location: LocationRef;
@@ -32,11 +32,14 @@ export interface SlotCtl {
   goTo: (path: string) => void;
   refresh: () => void;
   /** Open `dir` and put the cursor on its entry `name`, selected — clearing
-   *  the filter if it would hide the entry. */
+   *  the filter if it would hide the entry. A folder the pane already shows
+   *  with that entry in it is not listed again. */
   reveal: (dir: string, name: string) => void;
   /** The entry the last `reveal` asked the list to put its cursor on; null
-   *  once any other listing was applied. */
+   *  once the list did, or any other listing was applied. */
   cursorOn: CursorRequest | null;
+  /** The list put its cursor where `cursorOn` asked. */
+  cursorDone: () => void;
   select: (name: string, additive: boolean, range: boolean) => void;
   selectAll: () => void;
   clearSelection: () => void;
@@ -46,14 +49,6 @@ export interface SlotCtl {
   startFolderSizes: (names: string[]) => void;
   /** Stops the named pending totals, or all of them. */
   cancelFolderSizes: (names?: string[]) => void;
-  /** The recursive search below this pane's folder. */
-  search: FileSearchCtl;
-}
-
-/** One request to move a list's cursor; `seq` tells two for the same name apart. */
-export interface CursorRequest {
-  name: string;
-  seq: number;
 }
 
 export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl {
@@ -67,7 +62,7 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
   const filterRef = useRef(filter);
   filterRef.current = filter;
   const [cursorOn, setCursorOn] = useState<CursorRequest | null>(null);
-  const cursorSeq = useRef(0);
+  const cursorDone = useCallback(() => setCursorOn(null), []);
   const [sort, setSort] = useState<SortState>({ key: "name", dir: "asc" });
   const memo = useRef<Record<string, string>>({});
   const anchor = useRef<string | null>(null);
@@ -94,19 +89,23 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
   const hasSource = source != null;
   useEffect(() => resetFolderSizes, [locKey, hasSource, resetFolderSizes]);
 
-  // A search belongs to the folder it was started in. Reloading the pane stops
-  // it (see `load`) with its results kept; a pane that no longer shows the
-  // location — or lost the session behind it — has no use for them.
-  const search = useFileSearch(source);
-  const { stop: stopSearch, reset: resetSearch } = search;
-  useEffect(() => resetSearch, [locKey, hasSource, resetSearch]);
+  /** Point the pane at the entry `name` of `list`, the listing it shows — or
+   *  at nothing, without a name or when the entry is not there. */
+  const pointAt = useCallback((list: Entry[], name?: string) => {
+    const plan = name == null ? null : revealPlan(list, filterRef.current, name);
+    const found = plan && name != null ? name : null;
+    if (plan?.clearFilter) setFilter("");
+    // Selected as well as pointed at: touch has no cursor ring to show it by.
+    setSelection(new Set(found ? [found] : []));
+    anchor.current = found;
+    setCursorOn(found ? { name: found } : null);
+  }, []);
 
   const load = useCallback(
     async (dir: string, reveal?: string) => {
       if (!source) return;
       lastAttempt.current = dir; // remembered even on failure, so Retry re-attempts it
       const my = ++gen.current;
-      stopSearch();
       // Totals are a snapshot of the listing being replaced (or re-read).
       resetFolderSizes();
       setLoading(true);
@@ -122,12 +121,7 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
         resetFolderSizes();
         setEntries(list);
         setCwd(dir);
-        // An entry that is gone by now is simply not there to point at.
-        const found = reveal != null && list.some((e) => e.name === reveal) ? reveal : null;
-        if (found && !shownNames(list, filterRef.current).has(found)) setFilter("");
-        setSelection(new Set(found ? [found] : []));
-        anchor.current = found;
-        setCursorOn(found ? { name: found, seq: ++cursorSeq.current } : null);
+        pointAt(list, reveal);
         memo.current[locKey] = dir;
       } catch (e) {
         if (my === gen.current) setError(apiErrorMessage(e));
@@ -135,7 +129,7 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
         if (my === gen.current) setLoading(false);
       }
     },
-    [source, locKey, resetFolderSizes, stopSearch],
+    [source, locKey, resetFolderSizes, pointAt],
   );
 
   // (re)initialise the cwd whenever the slot's location changes
@@ -188,7 +182,16 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
     },
     [source, load],
   );
-  const reveal = useCallback((dir: string, name: string) => void load(dir, name), [load]);
+  const reveal = useCallback(
+    (dir: string, name: string) => {
+      // Already there, and nothing newer on its way: the listing stays as it
+      // is — and with it the folder totals worked out on it.
+      const here = dir === cwd && !loading && revealPlan(entriesRef.current, filterRef.current, name) != null;
+      if (here) pointAt(entriesRef.current, name);
+      else void load(dir, name);
+    },
+    [cwd, loading, load, pointAt],
+  );
   const refresh = useCallback(() => {
     const dir = lastAttempt.current ?? cwd;
     if (dir) load(dir);
@@ -252,6 +255,7 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
     refresh,
     reveal,
     cursorOn,
+    cursorDone,
     select,
     selectAll,
     clearSelection,
@@ -259,6 +263,5 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
     folderSizes,
     startFolderSizes,
     cancelFolderSizes,
-    search,
   };
 }
