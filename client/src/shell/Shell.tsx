@@ -3,7 +3,7 @@
 // fed by real store data.
 
 import { useShortcutAria, useShortcutLabel } from "@/store/shortcuts";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT } from "@/theme/tokens";
@@ -22,7 +22,7 @@ import { useCtx } from "@/store/ctx";
 import { apiErrorMessage, type VaultInfo } from "@/bridge/types";
 import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { useTranslation, tDyn } from "@/i18n";
-import { indexHostGroups, isUngrouped } from "@/support/hostGroups";
+import { effectiveHostFilter, indexHostGroups, isUngrouped } from "@/support/hostGroups";
 
 // The four vault-item types share one screen (ViewSecrets, with in-screen tabs) and
 // now one nav destination. Active-state tests membership of this set, not route===,
@@ -915,7 +915,10 @@ export function Sidebar({
   const groups = useApp((s) => s.groups);
   const terminals = useApp((s) => s.terminals);
   const tunnels = useApp((s) => s.tunnels);
-  const hostFilter = useApp((s) => s.hostFilter);
+  const hostFilter = effectiveHostFilter(
+    useApp((s) => s.hostFilter),
+    groups,
+  );
   const moveHostsToGroup = useApp((s) => s.moveHostsToGroup);
   const setGroupsNavVisible = useApp((s) => s.setGroupsNavVisible);
   const ctx = useCtx();
@@ -943,12 +946,16 @@ export function Sidebar({
       .catch((e) => ctx.toast(apiErrorMessage(e), "err"));
   };
 
+  // Before the early return below: a hook cannot follow it.
+  const ungroupedCount = useMemo(() => {
+    const groupIndex = indexHostGroups(groups);
+    return hosts.filter((h) => isUngrouped(groupIndex, h.profileId)).length;
+  }, [groups, hosts]);
+
   if (!wide || collapsed) return <SidebarRail onExpand={wide ? onToggleCollapse : undefined} />;
 
   const onHosts = route === "hosts";
   const hostCount = hosts.length;
-  const groupIndex = indexHostGroups(groups);
-  const ungroupedCount = hosts.filter((h) => isUngrouped(groupIndex, h.profileId)).length;
 
   return (
     <div

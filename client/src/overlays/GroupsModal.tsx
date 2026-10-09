@@ -16,6 +16,7 @@ import { guard } from "@/store/action";
 import type { ServerGroup } from "@/bridge/types";
 import * as api from "@/bridge/api";
 import { useTranslation } from "@/i18n";
+import { indexHostGroups, isUngrouped } from "@/support/hostGroups";
 
 // Gate: mount the body (and its dialog hooks) only while open, so Escape/focus
 // register per-open per the useDialogKeys contract rather than for App's lifetime.
@@ -50,9 +51,8 @@ function GroupsModalBody() {
     g.memberIds.filter((id) => hosts.some((h) => h.profileId === id)).length;
 
   // hosts that belong to no group
-  const ungrouped = hosts.filter(
-    (h) => !groups.some((g) => g.memberIds.includes(h.profileId)),
-  );
+  const groupIndex = indexHostGroups(groups);
+  const ungrouped = hosts.filter((h) => isUngrouped(groupIndex, h.profileId));
 
   const startEdit = (g: ServerGroup) => {
     setEditing(g.groupId);

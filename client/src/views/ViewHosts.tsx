@@ -22,7 +22,7 @@ import { useTranslation, tDyn } from "@/i18n";
 import { nextRow } from "@/support/listNav";
 import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
 import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
-import { compareByGroup, indexHostGroups, isUngrouped } from "@/support/hostGroups";
+import { compareByGroup, effectiveHostFilter, indexHostGroups, isUngrouped } from "@/support/hostGroups";
 
 /** The address as the list shows it — and, since dragging a card no longer lets
  *  you select the text on it (a `draggable` element cannot be text-selected),
@@ -484,7 +484,10 @@ function HostRow({
           fontFamily: MONO,
           fontSize: TEXT.small,
           color: p.txt3,
-          flex: 1,
+          // A floor, not `flex: 1`: on a zero basis the address is whatever the
+          // columns after it leave, so it was at nothing before any of them gave
+          // up a pixel. See the note below for the order this buys.
+          flex: `1 1 ${rem(120)}`,
           minWidth: 0,
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -493,12 +496,20 @@ function HostRow({
       >
         {hostAddress(h)}
       </span>
-      {/* The group, tags and session columns YIELD; the auth badge and Connect do
-          not. The row's fixed columns add up to more than a narrow list pane can
-          hold (true before the interface scale existed — try a 1000px window), and
-          everything being unshrinkable meant the overflow came off the END of the
-          row: the connect button, clipped. Large type reaches that width sooner,
-          so the low-priority columns now give first and the actions survive. */}
+      {/* The address, group, tags and session columns YIELD; the checkbox, the
+          name, the auth badge and Connect do not. The row's fixed columns add up
+          to more than a narrow list pane can hold (true before the interface
+          scale existed — try a 1000px window), and everything being unshrinkable
+          meant the overflow came off the END of the row: the connect button,
+          clipped. Large type reaches that width sooner.
+
+          The order, as the pane narrows: the address first gives back what it
+          had beyond its 120 floor. From there the shortfall is shared in
+          proportion to shrink × width — 120 : 330 : 130 : 74 — so the group
+          column is gone when the address, the tags and the session column have
+          each lost a third, and those three then run out together. All four
+          bottom out at zero, so Connect is clipped no sooner than it was without
+          the floor: only below the unshrinkable sum. */}
       {groups && (
         <div
           title={groups.length > 0 ? groups.map((g) => g.label).join(", ") : undefined}
@@ -507,9 +518,9 @@ function HostRow({
             gap: rem(5),
             width: rem(110),
             minWidth: 0,
-            // The newest and least essential of the yielding columns (the rail
-            // and the sidebar both name the group already), so it gives up
-            // width faster than the two after it.
+            // The least essential of the yielding columns (the rail and the
+            // sidebar both name the group already), so it gives up width three
+            // times as fast as the address before it and the two after it.
             flexShrink: 3,
             overflow: "hidden",
             alignItems: "center",
@@ -646,7 +657,11 @@ function HostDetail({ h, session }: { h: ConnectionProfile; session: boolean }) 
   const known = knownHosts.find((k) => k.host === h.host && k.port === h.port);
   const firstJump = h.jumps[0];
   const lc = lastConnected[h.profileId];
-  const memberOf = groups.filter((g) => g.memberIds.includes(h.profileId));
+  // Label order, as the list's Group column and the group sort read it.
+  const memberOf = useMemo(
+    () => indexHostGroups(groups).get(h.profileId) ?? NO_GROUPS,
+    [groups, h.profileId],
+  );
 
   const onDelete = () => {
     if (!vault) return;
@@ -1340,7 +1355,10 @@ export function ViewHosts() {
   const hosts = useApp((s) => s.hosts);
   const groups = useApp((s) => s.groups);
   const terminals = useApp((s) => s.terminals);
-  const hostFilter = useApp((s) => s.hostFilter);
+  const hostFilter = effectiveHostFilter(
+    useApp((s) => s.hostFilter),
+    groups,
+  );
   const setHostFilter = useApp((s) => s.setHostFilter);
   const addHostsToGroup = useApp((s) => s.addHostsToGroup);
   const removeHostsFromGroup = useApp((s) => s.removeHostsFromGroup);
@@ -1354,8 +1372,8 @@ export function ViewHosts() {
   // dismissable scope token so the filter is never invisible.
   const activeGroup = groups.find((g) => g.groupId === hostFilter);
   // "Ungrouped" is a group scope as well, with no group item behind it: the same
-  // token names it. Not gated on the vault having groups — a filter left on it
-  // when the last group goes must still be visible and dismissable.
+  // token names it. A vault without groups never gets here with it — the filter
+  // reads as "All hosts" then (effectiveHostFilter).
   const scopeLabel =
     hostFilter === HOST_FILTER_UNGROUPED ? t("hosts.ungrouped") : activeGroup?.label;
   // profileId → groups, built once and shared by the "Ungrouped" filter, the group

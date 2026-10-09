@@ -31,7 +31,7 @@ import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useFmt } from "@/i18n/format";
 import * as api from "@/bridge/api";
 import { EXEC_CONCURRENCY, EXEC_TIMEOUT_SECS } from "@/support/execLimits";
-import { indexHostGroups, isUngrouped } from "@/support/hostGroups";
+import { effectiveHostFilter, indexHostGroups, isUngrouped } from "@/support/hostGroups";
 import { apiErrorMessage, mismatchFromError } from "@/bridge/types";
 import type { PendingMismatch } from "@/store/app";
 import type { ConnectionProfile, MultiExecResult, MultiExecTarget } from "@/bridge/types";
@@ -282,7 +282,10 @@ export function ViewFleet() {
   const gutter = narrow ? SPACE.gutterNarrow : SPACE.gutter;
   const hosts = useApp((s) => s.hosts);
   const groups = useApp((s) => s.groups);
-  const hostFilter = useApp((s) => s.hostFilter);
+  const hostFilter = effectiveHostFilter(
+    useApp((s) => s.hostFilter),
+    groups,
+  );
   const vaultId = useApp((s) => s.vaultId);
   const fleetSelection = useApp((s) => s.fleetSelection);
   const setFleetSelection = useApp((s) => s.setFleetSelection);

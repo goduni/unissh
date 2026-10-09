@@ -2,6 +2,8 @@
 // so the "Ungrouped" filter, the group sort and the list's Group column cannot
 // disagree about a host — the same reason the search lives in hostsSearch.ts.
 
+import { HOST_FILTER_ALL, HOST_FILTER_UNGROUPED } from "@/store/app";
+
 /** The fields read here. Structural rather than `ServerGroup` so the rules are
  *  testable without building whole vault items. */
 export interface GroupLike {
@@ -41,6 +43,16 @@ export function indexHostGroups<G extends GroupLike>(groups: G[]): HostGroupInde
 /** A host no group lists. */
 export const isUngrouped = (index: HostGroupIndex, profileId: string): boolean =>
   !index.has(profileId);
+
+/** The host filter as every screen should read it. "Ungrouped" means something
+ *  only while there are groups to be outside of: with none it is "All hosts"
+ *  under a name no control offers any more (delete the last group with it on).
+ *
+ *  Derived on read rather than written back to the store: groups are also empty
+ *  while a vault loads, and the selection should still be there once they
+ *  arrive. */
+export const effectiveHostFilter = (hostFilter: string, groups: readonly unknown[]): string =>
+  hostFilter === HOST_FILTER_UNGROUPED && groups.length === 0 ? HOST_FILTER_ALL : hostFilter;
 
 /** Comparator for the group sort: one contiguous block per group in label order,
  *  ungrouped hosts last, name within a block. */

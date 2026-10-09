@@ -63,6 +63,7 @@ import type { ConnectArgs } from "@/bridge/api";
 import type { TunnelType } from "@/store/app";
 import { exportPath } from "@/support/paths";
 import { authorizedKeysAppendCmd } from "@/support/authorizedKeys";
+import { indexHostGroups } from "@/support/hostGroups";
 
 // ── Form atoms ─────────────────────────────────────────────────
 interface MSegOption<T extends string> {
@@ -382,9 +383,6 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
   );
   const pvKey = privateVaults.map((v) => v.vaultId).join("|");
 
-  const initialGroup = edit
-    ? groups.find((g) => g.memberIds.includes(edit.profileId))?.groupId ?? ""
-    : "";
 
   const [label, setLabel] = useState(edit?.label ?? "");
   const [host, setHost] = useState(edit?.host ?? "");
@@ -499,7 +497,11 @@ function NewHostModal({ edit, onClose }: { edit?: ConnectionProfile; onClose: ()
     edit?.proxy?.password?.type === "vault" ? edit.proxy.password.passwordItemId : "",
   );
 
-  const [groupId, setGroupId] = useState(initialGroup);
+  // The group the host is filed under — first by label, the one the list's Group
+  // column names. Read once, when the form opens.
+  const [groupId, setGroupId] = useState(() =>
+    edit ? (indexHostGroups(groups).get(edit.profileId)?.[0]?.groupId ?? "") : "",
+  );
   // Inline "create a new group" inside the host modal. `groupId === NEW_GROUP`
   // means "assign to a group named newGroupName, created on save" — deferring the
   // create until save means a cancelled modal never leaves an orphan empty group.
