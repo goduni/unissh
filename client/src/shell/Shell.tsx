@@ -11,7 +11,7 @@ import { BTN_RESET, Icon, IconName, Logo, ResizeHandle, VaultBadge } from "@/com
 import { FlatAvatar, SyncBadge } from "@/components/mono";
 import { useExternalEdits } from "@/sftp/external-edit";
 import { useMenu } from "@/components/a11y";
-import { useApp, HOST_FILTER_ALL } from "@/store/app";
+import { useApp, HOST_FILTER_ALL, HOST_FILTER_UNGROUPED } from "@/store/app";
 import { hostDrag } from "@/support/hostDrag";
 import { isDesktopOs, isMac } from "@/bridge/platform";
 import { useFullscreen, useMaximized, useWindowControls } from "@/shell/WindowChrome";
@@ -22,6 +22,7 @@ import { useCtx } from "@/store/ctx";
 import { apiErrorMessage, type VaultInfo } from "@/bridge/types";
 import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { useTranslation, tDyn } from "@/i18n";
+import { indexHostGroups, isUngrouped } from "@/support/hostGroups";
 
 // The four vault-item types share one screen (ViewSecrets, with in-screen tabs) and
 // now one nav destination. Active-state tests membership of this set, not route===,
@@ -946,6 +947,8 @@ export function Sidebar({
 
   const onHosts = route === "hosts";
   const hostCount = hosts.length;
+  const groupIndex = indexHostGroups(groups);
+  const ungroupedCount = hosts.filter((h) => isUngrouped(groupIndex, h.profileId)).length;
 
   return (
     <div
@@ -1007,6 +1010,19 @@ export function Sidebar({
               onDropHosts={dropHostsOn(g.groupId, g.label)}
             />
           ))}
+          {/* The hosts no group lists — the one set the items above cannot show.
+              Only with groups: without any, it would be "All hosts" twice. Not a
+              drop target, for the reason "All hosts" is not (see NavItem). */}
+          {groups.length > 0 && (
+            <NavItem
+              icon="folder"
+              label={t("hosts.ungrouped")}
+              count={ungroupedCount}
+              sub
+              active={onHosts && hostFilter === HOST_FILTER_UNGROUPED}
+              onClick={() => ctx.goFiltered(HOST_FILTER_UNGROUPED)}
+            />
+          )}
         </NavGroup>
         <NavGroup label={t("shell.operationsHeader")}>
           <NavItem

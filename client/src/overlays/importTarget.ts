@@ -8,7 +8,7 @@ import { HOST_FILTER_ALL } from "@/store/app";
 /** The group an import should default to, or null for the vault root.
  *
  *  @param hostFilter the Hosts sidebar selection (`HOST_FILTER_ALL`, a tag, a
- *                    group id, or `__untagged`)
+ *                    group id, `__untagged` or `HOST_FILTER_UNGROUPED`)
  *  @param groups     the vault's groups — the only thing that can tell a group
  *                    id apart from a tag with the same text */
 export function defaultImportGroup(

@@ -7,21 +7,22 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { AUTH_LABEL_KEY, designPx, MONO, RADIUS, rem, SIZE, SPACE, TEXT, UI } from "@/theme/tokens";
-import { BTN_RESET, Icon, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot, Spinner, NO_AUTOCORRECT } from "@/components/primitives";
+import { BTN_RESET, Icon, type IconName, IconBtn, Btn, Checkbox, Tag, AuthBadge, ResizeHandle, StatusDot, Spinner, NO_AUTOCORRECT } from "@/components/primitives";
 import { Card, MetaChip, UnderlineTabs, fmtRelative } from "@/components/mono";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { pressActivate, useMenu } from "@/components/a11y";
-import { useApp, paneProfile, HOST_FILTER_ALL } from "@/store/app";
+import { useApp, paneProfile, HOST_FILTER_ALL, HOST_FILTER_UNGROUPED } from "@/store/app";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useCtx } from "@/store/ctx";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import * as api from "@/bridge/api";
 import { profileAuthKind, apiErrorMessage } from "@/bridge/types";
-import type { ConnectionProfile } from "@/bridge/types";
+import type { ConnectionProfile, ServerGroup } from "@/bridge/types";
 import { useTranslation, tDyn } from "@/i18n";
 import { nextRow } from "@/support/listNav";
 import { filterHosts, searchKeyAction } from "@/support/hostsSearch";
 import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
+import { compareByGroup, indexHostGroups, isUngrouped } from "@/support/hostGroups";
 
 /** The address as the list shows it — and, since dragging a card no longer lets
  *  you select the text on it (a `draggable` element cannot be text-selected),
@@ -30,7 +31,7 @@ import { HOST_DRAG_MIME, draggedHostIds, hostDrag } from "@/support/hostDrag";
 const hostAddress = (h: ConnectionProfile): string =>
   h.user ? `${h.user}@${h.host}` : h.host;
 
-type SortKey = "name" | "added" | "connected";
+type SortKey = "name" | "added" | "connected" | "group";
 type RailTab = "detail" | "sessions";
 
 // Sort-key → i18n sub-key under hosts.sort.* (label rendered via t at call sites).
@@ -38,6 +39,13 @@ const SORT_KEYS: Record<SortKey, string> = {
   name: "name",
   connected: "connected",
   added: "recent",
+  group: "group",
+};
+const SORT_ICONS: Record<SortKey, IconName> = {
+  name: "list",
+  connected: "clock",
+  added: "plus",
+  group: "folder",
 };
 
 // The chosen sort is remembered across sessions (localStorage), restored on load.
@@ -45,7 +53,7 @@ const HOST_SORT_LS = "unissh.hostSort";
 const loadHostSort = (): SortKey => {
   try {
     const v = localStorage.getItem(HOST_SORT_LS);
-    return v === "name" || v === "added" || v === "connected" ? v : "name";
+    return v === "name" || v === "added" || v === "connected" || v === "group" ? v : "name";
   } catch {
     return "name";
   }
@@ -360,12 +368,15 @@ function HostCard({
 }
 
 // ── HostRow (density: list) ────────────────────────────────────
+// A host no group lists, as HostRow's `groups` — one shared array, not one per row.
+const NO_GROUPS: ServerGroup[] = [];
 function HostRow({
   h,
   selected,
   active,
   session,
   first,
+  groups,
   cursor,
   onToggle,
   onOpen,
@@ -379,6 +390,9 @@ function HostRow({
   active: boolean;
   session: boolean;
   first?: boolean;
+  /** The groups listing this host, first by label first. Undefined when the
+   *  vault has no groups at all — the column is then not rendered. */
+  groups?: ServerGroup[];
   /** The search's keyboard highlight — see HostCard. */
   cursor?: boolean;
   onToggle: () => void;
@@ -479,12 +493,48 @@ function HostRow({
       >
         {hostAddress(h)}
       </span>
-      {/* Tags and the session column YIELD; the auth badge and Connect do not.
-          The row's fixed columns add up to more than a narrow list pane can hold
-          (true before the interface scale existed — try a 1000px window), and
+      {/* The group, tags and session columns YIELD; the auth badge and Connect do
+          not. The row's fixed columns add up to more than a narrow list pane can
+          hold (true before the interface scale existed — try a 1000px window), and
           everything being unshrinkable meant the overflow came off the END of the
           row: the connect button, clipped. Large type reaches that width sooner,
-          so the two low-priority columns now give first and the actions survive. */}
+          so the low-priority columns now give first and the actions survive. */}
+      {groups && (
+        <div
+          title={groups.length > 0 ? groups.map((g) => g.label).join(", ") : undefined}
+          style={{
+            display: "flex",
+            gap: rem(5),
+            width: rem(110),
+            minWidth: 0,
+            // The newest and least essential of the yielding columns (the rail
+            // and the sidebar both name the group already), so it gives up
+            // width faster than the two after it.
+            flexShrink: 3,
+            overflow: "hidden",
+            alignItems: "center",
+            fontSize: TEXT.small,
+            color: groups.length > 0 ? p.txt2 : p.txt3,
+          }}
+        >
+          {groups.length > 0 ? (
+            <>
+              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {groups[0].label}
+              </span>
+              {/* Several groups: the first by label, the same one the group sort
+                  files the host under, and a count for the rest. */}
+              {groups.length > 1 && (
+                <span style={{ flexShrink: 0, display: "inline-flex" }}>
+                  <MetaChip>{`+${groups.length - 1}`}</MetaChip>
+                </span>
+              )}
+            </>
+          ) : (
+            "—"
+          )}
+        </div>
+      )}
       <div style={{ display: "flex", gap: rem(5), width: rem(130), minWidth: 0, overflow: "hidden", alignItems: "center" }}>
         {h.tags.slice(0, 2).map((tg) => (
           <Tag key={tg}>{tg}</Tag>
@@ -1303,8 +1353,23 @@ export function ViewHosts() {
   // none of the tag chips highlight — surface the active group as its own visible,
   // dismissable scope token so the filter is never invisible.
   const activeGroup = groups.find((g) => g.groupId === hostFilter);
+  // "Ungrouped" is a group scope as well, with no group item behind it: the same
+  // token names it. Not gated on the vault having groups — a filter left on it
+  // when the last group goes must still be visible and dismissable.
+  const scopeLabel =
+    hostFilter === HOST_FILTER_UNGROUPED ? t("hosts.ungrouped") : activeGroup?.label;
+  // profileId → groups, built once and shared by the "Ungrouped" filter, the group
+  // sort and the list's Group column.
+  const groupIndex = useMemo(() => indexHostGroups(groups), [groups]);
 
   const [sort, setSort] = useState<SortKey>(loadHostSort);
+  // Sorting by group needs groups. The stored choice is left alone rather than
+  // rewritten: groups are empty while a vault loads and in a vault that simply
+  // has none, and the preference should still be there for the one that does.
+  const sortKeys = (Object.keys(SORT_KEYS) as SortKey[]).filter(
+    (k) => k !== "group" || groups.length > 0,
+  );
+  const sortBy: SortKey = sortKeys.includes(sort) ? sort : "name";
   const lastConnected = useApp((s) => s.lastConnected);
   // Persist the choice so it sticks until the user changes it again.
   const changeSort = (k: SortKey) => {
@@ -1512,16 +1577,19 @@ export function ViewHosts() {
   const filtered = useMemo(() => {
     if (hostFilter === HOST_FILTER_ALL) return hosts;
     if (hostFilter === "__untagged") return hosts.filter((x) => x.tags.length === 0);
+    if (hostFilter === HOST_FILTER_UNGROUPED)
+      return hosts.filter((x) => isUngrouped(groupIndex, x.profileId));
     const group = groups.find((g) => g.groupId === hostFilter);
     return hosts.filter(
       (x) => x.tags.includes(hostFilter) || (group?.memberIds.includes(x.profileId) ?? false),
     );
-  }, [hosts, groups, hostFilter]);
+  }, [hosts, groups, groupIndex, hostFilter]);
 
   const shown = useMemo(() => {
     const arr = [...filterHosts(filtered, query)];
-    if (sort === "name") arr.sort((a, b) => a.label.localeCompare(b.label));
-    else if (sort === "connected")
+    if (sortBy === "name") arr.sort((a, b) => a.label.localeCompare(b.label));
+    else if (sortBy === "group") arr.sort(compareByGroup(groupIndex));
+    else if (sortBy === "connected")
       // most-recently-connected first; never-connected hosts sink to the bottom,
       // tie-broken by name so the order is stable.
       arr.sort((a, b) => {
@@ -1532,7 +1600,7 @@ export function ViewHosts() {
     // "added" keeps store order (most recently saved last); show newest first
     else arr.reverse();
     return arr;
-  }, [filtered, sort, query, lastConnected]);
+  }, [filtered, sortBy, query, lastConnected, groupIndex]);
 
   const sessions = useMemo(
     () => hosts.filter((h) => activeIds.has(h.profileId)).length,
@@ -1557,7 +1625,7 @@ export function ViewHosts() {
   // Back to the top match whenever the list itself changes meaning. Without this,
   // arrowing to the fourth result and then typing one more letter would leave the
   // highlight on whatever host happened to land in that slot.
-  useEffect(() => setCursor(0), [query, hostFilter, sort]);
+  useEffect(() => setCursor(0), [query, hostFilter, sortBy]);
   // ⌘M swaps the whole shell, unmounting the box without a blur event — leaving
   // `searchFocus` stuck true and a card ringed for keys that can no longer arrive.
   useEffect(() => setSearchFocus(false), [touch]);
@@ -1821,10 +1889,10 @@ export function ViewHosts() {
           }}
         >
           <Icon
-            name={sort === "name" ? "list" : sort === "connected" ? "clock" : "plus"}
+            name={SORT_ICONS[sortBy]}
             size={14}
           />
-          {!tight && tDyn(`hosts.sort.${SORT_KEYS[sort]}`)}
+          {!tight && tDyn(`hosts.sort.${SORT_KEYS[sortBy]}`)}
           <Icon name="cd" size={12} color={p.txt3} />
         </button>
         {sortOpen && (
@@ -1845,11 +1913,11 @@ export function ViewHosts() {
               width: rem(220),
             }}
           >
-            {(Object.keys(SORT_KEYS) as SortKey[]).map((k) => (
+            {sortKeys.map((k) => (
               <button
                 key={k}
                 role="menuitemradio"
-                aria-checked={sort === k}
+                aria-checked={sortBy === k}
                 tabIndex={-1}
                 onClick={() => {
                   changeSort(k);
@@ -1865,24 +1933,24 @@ export function ViewHosts() {
                   borderRadius: 8,
                   cursor: "pointer",
                   fontSize: TEXT.base,
-                  fontWeight: sort === k ? 700 : 500,
-                  color: sort === k ? p.txt : p.txt2,
+                  fontWeight: sortBy === k ? 700 : 500,
+                  color: sortBy === k ? p.txt : p.txt2,
                   background: "transparent",
                 }}
                 onMouseEnter={(e) => {
-                  if (sort !== k) e.currentTarget.style.background = p.bg2;
+                  if (sortBy !== k) e.currentTarget.style.background = p.bg2;
                 }}
                 onMouseLeave={(e) => {
-                  if (sort !== k) e.currentTarget.style.background = "transparent";
+                  if (sortBy !== k) e.currentTarget.style.background = "transparent";
                 }}
               >
                 <Icon
-                  name={k === "name" ? "list" : k === "connected" ? "clock" : "plus"}
+                  name={SORT_ICONS[k]}
                   size={15}
-                  color={sort === k ? p.txt : p.txt3}
+                  color={sortBy === k ? p.txt : p.txt3}
                 />
                 <span style={{ flex: 1 }}>{tDyn(`hosts.sort.${SORT_KEYS[k]}`)}</span>
-                {sort === k && <Icon name="check" size={14} color={p.txt} />}
+                {sortBy === k && <Icon name="check" size={14} color={p.txt} />}
               </button>
             ))}
           </div>
@@ -2067,7 +2135,7 @@ export function ViewHosts() {
               : { flexWrap: "wrap" as const }),
           }}
         >
-          {activeGroup && (
+          {scopeLabel && (
             <span
               style={{
                 display: "inline-flex",
@@ -2082,7 +2150,7 @@ export function ViewHosts() {
                 whiteSpace: "nowrap",
               }}
             >
-              {activeGroup.label}
+              {scopeLabel}
               <button
                 onClick={() => setHostFilter(HOST_FILTER_ALL)}
                 title={t("hosts.resetFilter")}
@@ -2135,6 +2203,32 @@ export function ViewHosts() {
                 </button>
               );
             })}
+          {/* Same gate as the sidebar's entry: only when there are groups to be
+              outside of. */}
+          {touch && groups.length > 0 && (
+            <button
+              onClick={() => setHostFilter(HOST_FILTER_UNGROUPED)}
+              aria-pressed={hostFilter === HOST_FILTER_UNGROUPED}
+              style={{
+                flexShrink: 0,
+                display: "inline-flex",
+                alignItems: "center",
+                minHeight: SIZE.tapMin,
+                fontFamily: UI,
+                fontSize: TEXT.base,
+                fontWeight: 600,
+                cursor: "pointer",
+                padding: `${rem(2)} ${rem(1)} ${rem(5)}`,
+                border: "none",
+                borderRadius: 0,
+                borderBottom: `2px solid ${hostFilter === HOST_FILTER_UNGROUPED ? p.accent : "transparent"}`,
+                background: "transparent",
+                color: hostFilter === HOST_FILTER_UNGROUPED ? p.txt : p.txt3,
+              }}
+            >
+              {t("hosts.ungrouped")}
+            </button>
+          )}
           {touch && groups.length > 0 && (
             <span
               aria-hidden
@@ -2330,7 +2424,9 @@ export function ViewHosts() {
                   ? t("hosts.noHostsForQuery", { query: query.trim() })
                   : hostFilter === "__untagged"
                     ? t("hosts.allHostsTagged")
-                    : t("hosts.noHostsForTag", { tag: hostFilter })}
+                    : hostFilter === HOST_FILTER_UNGROUPED
+                      ? t("hosts.allHostsGrouped")
+                      : t("hosts.noHostsForTag", { tag: hostFilter })}
               </span>
               {query.trim() ? (
                 <Btn
@@ -2407,6 +2503,7 @@ export function ViewHosts() {
                   cursor={searching && i === cursorIdx}
                   session={activeIds.has(h.profileId)}
                   first={i === 0}
+                  groups={groups.length > 0 ? (groupIndex.get(h.profileId) ?? NO_GROUPS) : undefined}
                   onToggle={() => toggle(h.profileId)}
                   onOpen={() => openHost(h.profileId)}
                   onConnect={() => ctx.connect(h)}
