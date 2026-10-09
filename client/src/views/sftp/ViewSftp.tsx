@@ -32,6 +32,9 @@ import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConflictDialog, Chmo
 import { TextEditor } from "./TextEditor";
 import { openSession } from "./session";
 import { dragCtx } from "./drag";
+import { useShortcuts } from "@/store/shortcuts";
+import type { SftpAction } from "@/support/keybindings";
+import { actionTargets, menuKeys, type ListCursor } from "./shortcuts";
 import {
   makeTransferSemaphore,
   serializeResolver,
@@ -100,6 +103,8 @@ export function ViewSftp() {
   const closeSftpSession = useApp((s) => s.closeSftpSession);
   const pendingSftpFocus = useApp((s) => s.pendingSftpFocus);
   const setPendingSftpFocus = useApp((s) => s.setPendingSftpFocus);
+  const shortcutOverrides = useShortcuts((s) => s.overrides);
+  const keysOf = (action: SftpAction) => menuKeys(action, shortcutOverrides);
 
   const [leftLoc, setLeftLoc] = useState<LocationRef>({ kind: "local" });
   // Right pane starts empty (a "pick a host" prompt) so the remote half of a
@@ -443,42 +448,60 @@ export function ViewSftp() {
     }
   }
 
+  // ── operations shared by the context menus and the keyboard ──
+  const askRename = (slot: SlotCtl, entry: Entry) => setDialog({ kind: "rename", slot, entry });
+  const askDelete = (slot: SlotCtl, entries: Entry[]) => setDialog({ kind: "delete", slot, entries });
+  const askNewFolder = (slot: SlotCtl) => setDialog({ kind: "newfolder", slot });
+  /** The pane a "copy to the other pane" lands in — none when only one pane is
+   *  shown, or the other one has no location yet. */
+  const paneAcross = (slot: SlotCtl): SlotCtl | null => {
+    const other = slot === left ? right : left;
+    return oneCol || other.location.kind === "none" ? null : other;
+  };
+  const sendItems = (entries: Entry[], slot: SlotCtl): MenuItem[] => {
+    const across = paneAcross(slot);
+    return tabs
+      .filter((tab) => tab.id !== keyOf(slot.location))
+      .map((tab) => ({
+        icon: tab.kind === "remote" ? "upload" : "download",
+        label: t("sftp.menu.sendTo", { name: tab.label }),
+        ...(across && tab.id === keyOf(across.location) ? keysOf("copy") : {}),
+        onClick: () => sendTo(entries, slot, refOf(tab.id)),
+      }));
+  };
+  const titleOf = (entries: Entry[]) =>
+    entries.length > 1 ? t("sftp.selected", { count: entries.length }) : entries[0]?.name;
+
   // ── context menus ────────────────────────────────────────────
   const rowMenu = (entry: Entry, slot: SlotCtl, x: number, y: number) => {
-    const entries = slot.selection.has(entry.name) && slot.selection.size > 1 ? slot.selectedEntries() : [entry];
+    const entries = actionTargets(entry, slot);
     const items: MenuItem[] = [];
+    const inApp = { icon: "note" as const, ...keysOf("edit"), onClick: () => void openEditor(slot, entry) };
     if (entry.isDir) items.push({ icon: "folderOpen", label: t("common.open"), onClick: () => slot.navigate(entry.name) });
     else if (isTouch || slot.location.kind !== "remote") {
       // A phone has no external editor to hand a copy to (and the receiving app
       // generally can't write it back); a local file needs no copy at all.
-      items.push({ icon: "note", label: t("common.open"), onClick: () => void openEditor(slot, entry) });
+      items.push({ ...inApp, label: t("common.open") });
     } else if (externalEditDefault) {
       items.push({ icon: "link", label: t("common.open"), onClick: () => void openExternally(slot, entry) });
-      items.push({ icon: "note", label: t("sftp.menu.openInApp"), onClick: () => void openEditor(slot, entry) });
+      items.push({ ...inApp, label: t("sftp.menu.openInApp") });
     } else {
-      items.push({ icon: "note", label: t("common.open"), onClick: () => void openEditor(slot, entry) });
+      items.push({ ...inApp, label: t("common.open") });
       items.push({ icon: "link", label: t("sftp.menu.openExternal"), onClick: () => void openExternally(slot, entry) });
     }
-    for (const tab of tabs) {
-      if (tab.id === keyOf(slot.location)) continue;
-      items.push({
-        icon: tab.kind === "remote" ? "upload" : "download",
-        label: t("sftp.menu.sendTo", { name: tab.label }),
-        onClick: () => sendTo(entries, slot, refOf(tab.id)),
-      });
-    }
-    items.push({ icon: "pencil", label: t("sftp.menu.rename"), onClick: () => setDialog({ kind: "rename", slot, entry }) });
+    items.push(...sendItems(entries, slot));
+    items.push({ icon: "pencil", label: t("sftp.menu.rename"), ...keysOf("rename"), onClick: () => askRename(slot, entry) });
     if (slot.source?.chmod)
       items.push({ icon: "shield", label: t("sftp.menu.permissions"), onClick: () => setDialog({ kind: "chmod", slot, entry }) });
     items.push({ icon: "copy", label: t("sftp.menu.copyPath"), onClick: () => copyPath(slot, entry) });
-    items.push({ icon: "trash", label: t("sftp.menu.delete"), danger: true, onClick: () => setDialog({ kind: "delete", slot, entries }) });
-    setMenu({ items, title: entries.length > 1 ? t("sftp.selected", { count: entries.length }) : entry.name, x, y });
+    items.push({ icon: "trash", label: t("sftp.menu.delete"), danger: true, ...keysOf("delete"), onClick: () => askDelete(slot, entries) });
+    setMenu({ items, title: titleOf(entries), x, y });
   };
 
   const emptyMenu = (slot: SlotCtl, x: number, y: number) => {
     setMenu({
       items: [
-        { icon: "folders", label: t("sftp.menu.newFolder"), onClick: () => setDialog({ kind: "newfolder", slot }) },
+        { icon: "folders", label: t("sftp.menu.newFolder"), ...keysOf("newFolder"), onClick: () => askNewFolder(slot) },
         { icon: "file", label: t("sftp.menu.newFile"), onClick: () => setDialog({ kind: "newfile", slot }) },
         { icon: "refresh", label: t("common.refresh"), onClick: () => slot.refresh() },
       ],
@@ -486,6 +509,46 @@ export function ViewSftp() {
       y,
     });
   };
+
+  // ── keyboard (the `sftp` shortcut scope) ─────────────────────
+  // One handler per registry action; the registry decides which key means which.
+  const shortcutHandlers: Record<SftpAction, (slot: SlotCtl, cursor: ListCursor) => void | false> = {
+    switchPane: () => {
+      const lists = paneAreaRef.current?.querySelectorAll<HTMLElement>("[data-sftp-list]") ?? [];
+      const other = Array.from(lists).find((el) => el !== document.activeElement);
+      // Nothing to switch to: let Tab move on as it would anywhere else.
+      if (!other) return false;
+      other.focus();
+    },
+    parentDir: (slot) => {
+      slot.up();
+    },
+    selectAll: (slot) => slot.selectAll(),
+    pageUp: (_slot, cursor) => cursor.page(-1),
+    pageDown: (_slot, cursor) => cursor.page(1),
+    rename: (slot, { entry }) => {
+      if (entry) askRename(slot, entry);
+    },
+    edit: (slot, { entry }) => {
+      if (entry && !entry.isDir) void openEditor(slot, entry);
+    },
+    copy: (slot, cursor) => {
+      const entries = actionTargets(cursor.entry, slot);
+      if (!entries.length) return;
+      const across = paneAcross(slot);
+      if (across) return sendTo(entries, slot, across.location, across.cwd);
+      // No pane across to aim at: offer the same destinations the row menu does.
+      const items = sendItems(entries, slot);
+      if (items.length) setMenu({ items, title: titleOf(entries), x: cursor.x, y: cursor.y });
+    },
+    newFolder: (slot) => askNewFolder(slot),
+    delete: (slot, { entry }) => {
+      const entries = actionTargets(entry, slot);
+      if (entries.length) askDelete(slot, entries);
+    },
+  };
+  // A menu, a dialog or the editor owns the keyboard while it is up.
+  const keyboardBusy = !!(menu || dialog || conflict || editor);
 
   // ── tab actions ──────────────────────────────────────────────
   const pickHost = async (set: (l: LocationRef) => void, h: ConnectionProfile) => {
@@ -506,7 +569,8 @@ export function ViewSftp() {
     onSend: (entries: Entry[]) => sendTo(entries, slot, counterpart.location, counterpart.cwd),
     onRowContext: (entry: Entry, x: number, y: number) => rowMenu(entry, slot, x, y),
     onEmptyContext: (x: number, y: number) => emptyMenu(slot, x, y),
-    onNewFolder: () => setDialog({ kind: "newfolder", slot }),
+    onShortcut: keyboardBusy ? undefined : (action: SftpAction, cursor: ListCursor) => shortcutHandlers[action](slot, cursor),
+    onNewFolder: () => askNewFolder(slot),
     onNewFile: () => setDialog({ kind: "newfile", slot }),
     onImport: slot.location.kind === "local" ? () => void importFromFiles(slot) : undefined,
     onDropHere: () => void handleDrop(slot.location, slot.cwd),

@@ -1408,13 +1408,27 @@ export const en = {
       "global": "Application",
       "navigation": "Sections",
       "terminal": "Terminal",
-      "editor": "SFTP editor"
+      "editor": "SFTP editor",
+      "sftp": "SFTP file list"
     },
     "scopeHints": {
       "global": "Application commands. Foreground dialogs keep control of their inputs; Settings and Lock remain available.",
       "navigation": "Switch sections outside the terminal. In the terminal, the default number shortcuts switch tabs.",
       "terminal": "Available in the terminal. Copy, paste, find and prompt navigation act on the focused pane.",
-      "editor": "Available while editing a file in SFTP."
+      "editor": "Available while editing a file in SFTP.",
+      "sftp": "Available while a file list has focus. Actions apply to the row under the cursor, or to the whole selection when that row is part of it. Arrows, Home, End, Enter and Space keep their roles, and Shift+Tab always leaves the list."
+    },
+    "sftpActions": {
+      "switchPane": "Switch to the other pane",
+      "parentDir": "Go to the parent folder",
+      "selectAll": "Select all",
+      "pageUp": "Move one screen up",
+      "pageDown": "Move one screen down",
+      "rename": "Rename",
+      "edit": "Open in the built-in editor",
+      "copy": "Copy to the other pane",
+      "newFolder": "New folder",
+      "delete": "Delete"
     },
     "actions": {
       "device": "Switch desktop / mobile preview",

@@ -12,6 +12,8 @@ import type { Entry, SortKey, SortState } from "@/store/sftp-types";
 import { FileRow } from "./FileRow";
 import { displayEntries } from "./sortfilter";
 import { useVirtualRows } from "./useVirtualRows";
+import { pageRows } from "./virtualRows";
+import { fileListShortcut, type ListCursor, type ListShortcutHandler } from "./shortcuts";
 
 export function FileList({
   entries,
@@ -28,6 +30,7 @@ export function FileList({
   onSelect,
   onActivate,
   onContext,
+  onShortcut,
   onRetry,
   onRowDragStart,
 }: {
@@ -45,6 +48,9 @@ export function FileList({
   onSelect: (name: string, additive: boolean, range: boolean) => void;
   onActivate: (entry: Entry) => void;
   onContext: (entry: Entry | null, x: number, y: number) => void;
+  /** Runs an `sftp`-scope shortcut pressed in this list; absent while something
+   *  else (a menu, a dialog, the editor) owns the keyboard. */
+  onShortcut?: ListShortcutHandler;
   onRetry: () => void;
   onRowDragStart: (entry: Entry, e: React.DragEvent) => void;
 }) {
@@ -118,7 +124,25 @@ export function FileList({
   const activeVisible = (showUp && focusIdx === 0) ||
     (focusIdx - base >= rows.start && focusIdx - base < rows.end);
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
+  const cursorAt = (list: HTMLElement): ListCursor => {
+    const r = list.getBoundingClientRect();
+    const view = list.clientHeight - (rows.headerRef.current?.offsetHeight ?? 0);
+    return {
+      entry: showUp && focusIdx === 0 ? null : (display[focusIdx - base] ?? null),
+      x: r.left + 80,
+      y: Math.min(r.bottom - 40, r.top + 60),
+      page: (dir) => focusRow(focusIdx + dir * pageRows(view, rowHeight)),
+    };
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    // Rebindable actions go through the shortcut registry; the keys below are
+    // the list's fixed navigation.
+    const action = onShortcut ? fileListShortcut(e) : null;
+    if (action) {
+      if (onShortcut!(action, cursorAt(e.currentTarget)) !== false) e.preventDefault();
+      return;
+    }
     if (e.target !== e.currentTarget) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -142,16 +166,15 @@ export function FileList({
       }
     } else if (e.key === " ") {
       e.preventDefault();
-      const ent = showUp && focusIdx === 0 ? null : display[focusIdx - base];
+      const ent = cursorAt(e.currentTarget).entry;
       if (ent) onSelect(ent.name, true, false);
     } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
       // Keyboard access to the row actions (Send to…, open, rename, delete) — so a
       // keyboard-only operator can transfer folders / to a specific tab / a
       // multi-selection, not just Enter-send the focused file.
       e.preventDefault();
-      const ent = showUp && focusIdx === 0 ? null : display[focusIdx - base];
-      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      onContext(ent, r.left + 80, Math.min(r.bottom - 40, r.top + 60));
+      const at = cursorAt(e.currentTarget);
+      onContext(at.entry, at.x, at.y);
     }
   };
 
@@ -236,6 +259,7 @@ export function FileList({
         onScroll={rows.measure}
         tabIndex={0}
         role="listbox"
+        data-sftp-list=""
         aria-label={t("nav.sftp")}
         aria-multiselectable
         aria-activedescendant={activeVisible ? `${listId}-${focusIdx}` : undefined}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { visibleRows } from "./virtualRows";
+import { pageRows, visibleRows } from "./virtualRows";
 
 describe("file list window", () => {
   it("bounds the rendered rows in a 50,000-file directory", () => {
@@ -24,5 +24,11 @@ describe("file list window", () => {
 
   it("includes the last row and overscan at the end", () => {
     expect(visibleRows(50000, 30, 1499970, 800)).toEqual({ start: 49991, end: 50000 });
+  });
+
+  it("pages by the whole rows that fit, and by one row when none does", () => {
+    expect(pageRows(800, 30)).toBe(26);
+    expect(pageRows(20, 30)).toBe(1);
+    expect(pageRows(0, 30)).toBe(1);
   });
 });

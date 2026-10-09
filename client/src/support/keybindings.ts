@@ -7,7 +7,9 @@ export interface KeyBinding {
   shift: boolean;
   meta: boolean;
 }
-export type ShortcutScope = "global" | "navigation" | "terminal" | "editor";
+/** Display order of the scopes in Settings and on the shortcut sheet. */
+export const SHORTCUT_SCOPES = ["global", "navigation", "terminal", "editor", "sftp"] as const;
+export type ShortcutScope = typeof SHORTCUT_SCOPES[number];
 export interface ShortcutDefinition {
   id: string;
   labelKey: string;
@@ -25,6 +27,29 @@ const legacyApp = (code: string) => (mac: boolean) => mac
 const def = (id: string, labelKey: string, scope: ShortcutScope, defaults: ShortcutDefinition["defaults"]): ShortcutDefinition =>
   ({ id, labelKey, scope, defaults });
 const label = (name: string) => `feedback.shortcut.${name}`;
+// File-list actions, orthodox file manager style. Each F-key action also answers
+// to Alt+<the same digit>, because the F-row needs Fn on macOS and is often
+// remapped on laptops. An entry here is the whole registration: Settings, the
+// sheet and menu hints read it, and ViewSftp must supply a handler of the same name.
+const fkeys = (digits: number[], ...extra: KeyBinding[]) => () =>
+  [...digits.map((n) => binding(`F${n}`)), ...extra, ...digits.map((n) => binding(`Digit${n}`, { alt: true }))];
+const SFTP_DEFAULTS = {
+  switchPane: () => [binding("Tab")],
+  parentDir: () => [binding("Backspace")],
+  selectAll: (mac) => [binding("KeyA", mac ? { meta: true } : { ctrl: true })],
+  pageUp: () => [binding("PageUp")],
+  pageDown: () => [binding("PageDown")],
+  rename: fkeys([2], binding("F6", { shift: true })),
+  // View (F3) and edit (F4) are one action: the built-in editor has no read-only mode.
+  edit: fkeys([4, 3]),
+  copy: fkeys([5]),
+  newFolder: fkeys([7]),
+  // A Mac laptop has no Delete key without Fn either; ⌘⌫ is what Finder uses.
+  delete: (mac) => [...fkeys([8], binding("Delete"))(), ...(mac ? [binding("Backspace", { meta: true })] : [])],
+} satisfies Record<string, ShortcutDefinition["defaults"]>;
+export type SftpAction = keyof typeof SFTP_DEFAULTS;
+export const SFTP_ACTIONS = Object.keys(SFTP_DEFAULTS) as SftpAction[];
+export const sftpShortcutId = (action: SftpAction) => `sftp.${action}`;
 export const SHORTCUTS: ShortcutDefinition[] = [
   def("palette", label("commandPalette"), "global", legacyApp("KeyK")),
   def("newHost", label("newHost"), "global", legacyApp("KeyN")),
@@ -54,6 +79,7 @@ export const SHORTCUTS: ShortcutDefinition[] = [
   def("copySelection", "keybindings.actions.copySelection", "terminal", (mac) => mac ? [] : [binding("KeyC", { ctrl: true })]),
   def("paste", label("paste"), "terminal", (mac) => mac ? [binding("KeyV", { meta: true })] : [binding("KeyV", { ctrl: true }), binding("KeyV", { ctrl: true, shift: true })]),
   def("editorSave", "keybindings.actions.editorSave", "editor", (mac) => [binding("KeyS", mac ? { meta: true } : { ctrl: true })]),
+  ...SFTP_ACTIONS.map((action) => def(sftpShortcutId(action), `keybindings.sftpActions.${action}`, "sftp", SFTP_DEFAULTS[action])),
 ];
 export const shortcutDefinition = (id: string) => SHORTCUTS.find((s) => s.id === id)!;
 export function bindingsFor(id: string, overrides: ShortcutOverrides, mac: boolean): KeyBinding[] {
@@ -71,8 +97,15 @@ export function eventBinding(e: Pick<KeyboardEvent, "code" | "key" | "ctrlKey" |
 export function matchesBinding(e: KeyboardEvent, b: KeyBinding): boolean {
   return !e.isComposing && !e.getModifierState?.("AltGraph") && sameBinding(eventBinding(e), b);
 }
+/** The file-list action a key event is bound to, if any. */
+export function sftpActionFor(e: KeyboardEvent, overrides: ShortcutOverrides, mac: boolean): SftpAction | null {
+  return SFTP_ACTIONS.find((action) => bindingsFor(sftpShortcutId(action), overrides, mac).some((b) => matchesBinding(e, b))) ?? null;
+}
+// Two scopes conflict only if both can be live at once. The terminal owns its
+// route, and the SFTP editor covers the file lists it was opened from.
 export function scopesOverlap(a: ShortcutScope, b: ShortcutScope): boolean {
-  return a === b || a === "global" || b === "global" || (a !== "terminal" && b !== "terminal");
+  if (a === b || a === "global" || b === "global") return true;
+  return a !== "terminal" && b !== "terminal" && (a === "navigation" || b === "navigation");
 }
 export function conflictsFor(id: string, proposed: KeyBinding[], overrides: ShortcutOverrides, mac: boolean): ShortcutDefinition[] {
   const own = shortcutDefinition(id);
@@ -80,17 +113,21 @@ export function conflictsFor(id: string, proposed: KeyBinding[], overrides: Shor
     && bindingsFor(other.id, overrides, mac).some((b) => proposed.some((p) => sameBinding(b, p))));
 }
 const validCode = /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4])|Arrow(Up|Down|Left|Right)|Comma|Period|Slash|Backslash|Semicolon|Quote|BracketLeft|BracketRight|Minus|Equal|Backquote|Space|Tab|Enter|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Numpad[0-9]|Numpad(Add|Subtract|Multiply|Divide|Decimal|Enter))$/;
-export function validBinding(b: KeyBinding): boolean {
-  return validCode.test(b.code) && (b.ctrl || b.alt || b.meta || /^F\d+$/.test(b.code));
+// A focused file list takes no text, so there these keys may stand alone. Tab
+// only unshifted: Shift+Tab is the keyboard's way back out of the list.
+const bareListKey = /^(Tab|Backspace|Delete|Insert|PageUp|PageDown)$/;
+export function validBinding(b: KeyBinding, scope?: ShortcutScope): boolean {
+  return validCode.test(b.code) && (b.ctrl || b.alt || b.meta || /^F\d+$/.test(b.code)
+    || (scope === "sftp" && bareListKey.test(b.code) && !(b.code === "Tab" && b.shift)));
 }
 export function sanitizeOverrides(value: unknown): ShortcutOverrides {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const out: ShortcutOverrides = {};
-  for (const { id } of SHORTCUTS) {
+  for (const { id, scope } of SHORTCUTS) {
     const list = (value as Record<string, unknown>)[id];
     if (!Array.isArray(list)) continue;
     if (!list.every((v) => v && typeof v === "object" && typeof v.code === "string"
-      && [v.ctrl, v.alt, v.shift, v.meta].every((m) => typeof m === "boolean") && validBinding(v))) continue;
+      && [v.ctrl, v.alt, v.shift, v.meta].every((m) => typeof m === "boolean") && validBinding(v, scope))) continue;
     out[id] = list.map((v) => binding(v.code, { ctrl: v.ctrl, alt: v.alt, shift: v.shift, meta: v.meta }))
       .filter((v, i, all) => all.findIndex((b) => sameBinding(v, b)) === i);
   }

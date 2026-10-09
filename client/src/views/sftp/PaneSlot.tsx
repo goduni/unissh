@@ -20,6 +20,7 @@ import { useVolumes, VolumePicker } from "./volumes";
 import { Breadcrumb } from "./Breadcrumb";
 import { FileList } from "./FileList";
 import { dragCtx } from "./drag";
+import type { ListShortcutHandler } from "./shortcuts";
 
 export function PaneSlot({
   slot,
@@ -34,6 +35,7 @@ export function PaneSlot({
   onSend,
   onRowContext,
   onEmptyContext,
+  onShortcut,
   onNewFolder,
   onNewFile,
   onImport,
@@ -55,6 +57,7 @@ export function PaneSlot({
   onSend: (entries: Entry[]) => void;
   onRowContext: (entry: Entry, x: number, y: number) => void;
   onEmptyContext: (x: number, y: number) => void;
+  onShortcut?: ListShortcutHandler;
   onNewFolder: () => void;
   onNewFile: () => void;
   onImport?: () => void;
@@ -304,6 +307,7 @@ export function PaneSlot({
           onSelect={slot.select}
           onActivate={(e) => onSend([e])}
           onContext={(entry, x, y) => entry && onRowContext(entry, x, y)}
+          onShortcut={onShortcut}
           onRetry={slot.refresh}
           onRowDragStart={(entry, e) => beginDrag(entry, e)}
         />

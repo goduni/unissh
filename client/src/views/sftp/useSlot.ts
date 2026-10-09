@@ -29,6 +29,7 @@ export interface SlotCtl {
   goTo: (path: string) => void;
   refresh: () => void;
   select: (name: string, additive: boolean, range: boolean) => void;
+  selectAll: () => void;
   clearSelection: () => void;
   selectedEntries: () => Entry[];
 }
@@ -172,6 +173,11 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
     },
     [filter, sort],
   );
+  // Only what the filter shows: an operation must never reach a hidden entry.
+  const selectAll = useCallback(
+    () => setSelection(new Set(displayEntries(entriesRef.current, filter, sort).map((e) => e.name))),
+    [filter, sort],
+  );
   const clearSelection = useCallback(() => setSelection(new Set()), []);
   const selectedEntries = useCallback(
     () => entriesRef.current.filter((e) => selection.has(e.name)),
@@ -195,6 +201,7 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
     goTo,
     refresh,
     select,
+    selectAll,
     clearSelection,
     selectedEntries,
   };

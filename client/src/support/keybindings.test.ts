@@ -63,10 +63,16 @@ describe("binding catalog", () => {
       .toEqual({ lock: [], palette: [binding("F8")] });
     expect(sanitizeOverrides({ palette: [binding("Escape", { ctrl: true })], lock: [binding("KeyL")] })).toEqual({});
   });
+  it("keeps bare navigation keys for file-list actions only", () => {
+    const bare = [binding("Delete"), binding("Insert")];
+    expect(sanitizeOverrides({ "sftp.delete": bare, palette: bare, "sftp.rename": [binding("KeyR")] })).toEqual({ "sftp.delete": bare });
+  });
   it("allows the same keys only in mutually exclusive scopes", () => {
     const keys = [binding("KeyF", { ctrl: true, shift: true })];
     expect(conflictsFor("editorSave", keys, {}, false)).toEqual([]);
     expect(conflictsFor("palette", keys, {}, false).map((s) => s.id)).toEqual(["find"]);
+    // A file list is live beside the section shortcuts, never beside the terminal or the editor.
+    expect(conflictsFor("sftp.copy", [binding("Digit1", { ctrl: true, shift: true }), binding("KeyS", { ctrl: true })], {}, false).map((s) => s.id)).toEqual(["nav.hosts"]);
   });
 });
 
@@ -85,7 +91,7 @@ describe("editing and persistence", () => {
     useShortcuts.getState().assign("lock", null);
     expect(useShortcuts.getState().overrides).toEqual({});
     vi.mocked(localStorage.setItem).mockImplementation(() => { throw new Error("quota"); });
-    useShortcuts.getState().assign("palette", [binding("F8")]);
+    useShortcuts.getState().assign("palette", [binding("F9")]);
     expect(useShortcuts.getState().storageError).toBe(true);
     useShortcuts.getState().resetAll();
     expect(useShortcuts.getState().overrides).toEqual({});
@@ -99,10 +105,10 @@ describe("editing and persistence", () => {
 
 describe("live dispatch", () => {
   it("applies remaps immediately and releases the old key", () => {
-    useShortcuts.getState().assign("lock", [binding("F8")]);
+    useShortcuts.getState().assign("lock", [binding("F9")]);
     handleAppShortcut(event("KeyL", ctrlShift), ctx);
     expect(ctx.onLock).not.toHaveBeenCalled();
-    handleAppShortcut(event("F8"), ctx);
+    handleAppShortcut(event("F9"), ctx);
     expect(ctx.onLock).toHaveBeenCalledOnce();
   });
   it("does not execute commands while recording, locked or composing", () => {
