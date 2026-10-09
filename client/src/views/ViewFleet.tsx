@@ -24,13 +24,14 @@ import {
   splitFleetParams,
   type FleetTarget,
 } from "@/support/snippetParams";
-import { useApp, HOST_FILTER_ALL } from "@/store/app";
+import { useApp, HOST_FILTER_ALL, HOST_FILTER_UNGROUPED } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useTranslation } from "@/i18n";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import { useFmt } from "@/i18n/format";
 import * as api from "@/bridge/api";
 import { EXEC_CONCURRENCY, EXEC_TIMEOUT_SECS } from "@/support/execLimits";
+import { effectiveHostFilter, indexHostGroups, isUngrouped } from "@/support/hostGroups";
 import { apiErrorMessage, mismatchFromError } from "@/bridge/types";
 import type { PendingMismatch } from "@/store/app";
 import type { ConnectionProfile, MultiExecResult, MultiExecTarget } from "@/bridge/types";
@@ -281,7 +282,10 @@ export function ViewFleet() {
   const gutter = narrow ? SPACE.gutterNarrow : SPACE.gutter;
   const hosts = useApp((s) => s.hosts);
   const groups = useApp((s) => s.groups);
-  const hostFilter = useApp((s) => s.hostFilter);
+  const hostFilter = effectiveHostFilter(
+    useApp((s) => s.hostFilter),
+    groups,
+  );
   const vaultId = useApp((s) => s.vaultId);
   const fleetSelection = useApp((s) => s.fleetSelection);
   const setFleetSelection = useApp((s) => s.setFleetSelection);
@@ -392,6 +396,10 @@ export function ViewFleet() {
   const filtered = useMemo(() => {
     if (hostFilter === HOST_FILTER_ALL) return hosts;
     if (hostFilter === "__untagged") return hosts.filter((x) => x.tags.length === 0);
+    if (hostFilter === HOST_FILTER_UNGROUPED) {
+      const index = indexHostGroups(groups);
+      return hosts.filter((x) => isUngrouped(index, x.profileId));
+    }
     const group = groups.find((g) => g.groupId === hostFilter);
     return hosts.filter(
       (x) => x.tags.includes(hostFilter) || (group?.memberIds.includes(x.profileId) ?? false),
@@ -457,7 +465,9 @@ export function ViewFleet() {
       ? t("common.all")
       : hostFilter === "__untagged"
         ? t("fleet.untagged")
-        : `#${hostFilter}`;
+        : hostFilter === HOST_FILTER_UNGROUPED
+          ? t("fleet.ungrouped")
+          : `#${hostFilter}`;
 
   const okCount = Object.values(results).filter((r) => !r.timedOut && r.exitStatus === 0).length;
   const failCount = Object.values(results).filter((r) => r.timedOut || r.exitStatus !== 0).length;

@@ -12,6 +12,10 @@ import { i18n, refineLangFromSystem } from "@/i18n";
 /** Sentinel for the "all hosts" filter — decoupled from its display label so the
  *  label can be localized without breaking filter comparisons. */
 export const HOST_FILTER_ALL = "__all";
+/** `hostFilter` sentinel: hosts no group lists. Like `"__untagged"` it shares the
+ *  field with real tags and group ids, so every reader has to rule it out before
+ *  treating the value as either. */
+export const HOST_FILTER_UNGROUPED = "__ungrouped";
 import type {
   ConnectionProfile,
   ItemInfo,
@@ -334,7 +338,7 @@ interface AppStore {
   loading: boolean;
 
   // hosts view helpers
-  hostFilter: string; // HOST_FILTER_ALL | tag | groupId | "__untagged"
+  hostFilter: string; // HOST_FILTER_ALL | tag | groupId | "__untagged" | HOST_FILTER_UNGROUPED
 
   /** Fleet/Broadcast selection (profile ids). Empty = nothing picked: Fleet runs
    *  on nothing (Run disabled until the user checks hosts), Broadcast falls back

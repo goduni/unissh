@@ -734,6 +734,7 @@ export const en = {
   },
   fleet: {
     "untagged": "untagged",
+    "ungrouped": "ungrouped",
     "skipped": "{{count}} skipped (password)",
     "skippedTitle": "Hosts with ask-on-connect passwords can't be run in a batch",
     "okCount": "✔ {{count}} succeeded",
@@ -817,13 +818,16 @@ export const en = {
     "sort": {
       "name": "Name",
       "connected": "Date connected",
-      "recent": "Date added"
+      "recent": "Date added",
+      "group": "Group"
     },
     "viewCards": "Card view",
     "viewList": "List view",
     "clearSelection": "Clear selection",
     "selectHostLabel": "Select {{label}}",
     "untagged": "untagged",
+    "ungrouped": "Ungrouped",
+    "allHostsGrouped": "Every host is in a group",
     "selectWholeGroup": "Select whole group",
     "allHostsTagged": "All hosts are tagged",
     "noHostsForTag": "No hosts for filter #{{tag}}",

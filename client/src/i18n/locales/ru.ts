@@ -771,6 +771,7 @@ export const ru = {
   },
   fleet: {
     "untagged": "без тегов",
+    "ungrouped": "без группы",
     "skipped": "{{count}} пропущено (пароль)",
     "skippedTitle": "Хосты со спросить-при-коннекте паролем нельзя выполнить в пакете",
     "okCount": "✔ {{count}} успешно",
@@ -855,13 +856,16 @@ export const ru = {
     "sort": {
       "name": "Имя",
       "connected": "Дата подключения",
-      "recent": "Дата добавления"
+      "recent": "Дата добавления",
+      "group": "Группа"
     },
     "viewCards": "Карточки",
     "viewList": "Список",
     "clearSelection": "Снять выделение",
     "selectHostLabel": "Выбрать {{label}}",
     "untagged": "без тегов",
+    "ungrouped": "Без группы",
+    "allHostsGrouped": "Все хосты в группах",
     "selectWholeGroup": "Выбрать всю группу",
     "allHostsTagged": "Все хосты с тегами",
     "noHostsForTag": "Нет хостов по фильтру #{{tag}}",
