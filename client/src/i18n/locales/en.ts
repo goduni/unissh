@@ -1774,6 +1774,30 @@ export const en = {
       "announceDone": "{{name}}: {{size}}",
       "announceFailed": "{{name}}: couldn’t calculate the size"
     },
+    "search": {
+      "title": "Find files",
+      "placeholder": "Name, or a pattern like *.log",
+      "hint": "Searches this folder and everything below it, by name. * stands for any characters, ? for exactly one.",
+      "results": "Search results",
+      "none": "Nothing found",
+      "scanned": "Folders scanned: {{n}}",
+      "matches": "Matches: {{n}}",
+      "skipped_one": "{{count}} folder could not be read",
+      "skipped_other": "{{count}} folders could not be read",
+      "stop": "Stop",
+      "again": "Search again",
+      "goTo": "Go to",
+      "keys": "↑ ↓ choose · Enter go to · Esc close",
+      "state": {
+        "searching": "Searching…",
+        "done": "Search finished",
+        "cancelled": "Search stopped",
+        "limitScanned": "Stopped at the limit of {{n}} entries scanned",
+        "limitMatches": "Stopped at the limit of {{n}} matches",
+        "lost": "Connection lost — the search did not finish",
+        "failed": "Search failed: {{reason}}"
+      }
+    },
     "chmod": {
       "title": "Permissions",
       "owner": "Owner",

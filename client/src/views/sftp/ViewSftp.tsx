@@ -29,6 +29,7 @@ import { ExternalEdits } from "./ExternalEdits";
 import { startExternalEdit } from "@/sftp/external-edit";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConfirmMoveDialog, ConflictDialog, ChmodDialog } from "./dialogs";
+import { SearchDialog } from "./SearchDialog";
 import { TextEditor } from "./TextEditor";
 import { openSession } from "./session";
 import { dragCtx } from "./drag";
@@ -63,6 +64,9 @@ type Dialog =
   | { kind: "delete"; slot: SlotCtl; entries: Entry[] }
   | { kind: "move"; entries: Entry[]; fromLoc: LocationRef; fromCwd: string; toLoc: LocationRef; toCwd: string }
   | { kind: "chmod"; slot: SlotCtl; entry: Entry }
+  // By pane rather than by slot: the dialog outlives renders, and has to see
+  // the pane as it is now, not as it was when it opened.
+  | { kind: "search"; pane: "left" | "right"; loc: string; root: string }
   | null;
 
 interface ConflictReq {
@@ -499,6 +503,15 @@ export function ViewSftp() {
   const askRename = (slot: SlotCtl, entry: Entry) => setDialog({ kind: "rename", slot, entry });
   const askDelete = (slot: SlotCtl, entries: Entry[]) => setDialog({ kind: "delete", slot, entries });
   const askNewFolder = (slot: SlotCtl) => setDialog({ kind: "newfolder", slot });
+  /** Find files below the pane's current folder. */
+  const openSearch = (slot: SlotCtl) => {
+    if (!slot.source || !slot.cwd) return;
+    const pane = slot === left ? "left" : "right";
+    // The dialog gives focus back to whatever had it; make that the pane's
+    // list, also when the search was opened from the toolbar.
+    paneAreaRef.current?.querySelector<HTMLElement>(`[data-sftp-pane="${pane}"] [data-sftp-list]`)?.focus();
+    setDialog({ kind: "search", pane, loc: keyOf(slot.location), root: slot.cwd });
+  };
   /** The pane a "copy to the other pane" lands in — none when only one pane is
    *  shown, or the other one has no location yet. */
   const paneAcross = (slot: SlotCtl): SlotCtl | null => {
@@ -572,6 +585,7 @@ export function ViewSftp() {
       items: [
         { icon: "folders", label: t("sftp.menu.newFolder"), ...keysOf("newFolder"), onClick: () => askNewFolder(slot) },
         { icon: "file", label: t("sftp.menu.newFile"), onClick: () => setDialog({ kind: "newfile", slot }) },
+        { icon: "search", label: t("sftp.search.title"), ...keysOf("search"), onClick: () => openSearch(slot) },
         { icon: "refresh", label: t("common.refresh"), onClick: () => slot.refresh() },
       ],
       x,
@@ -622,6 +636,7 @@ export function ViewSftp() {
       if (entries.length) askDelete(slot, entries);
     },
     folderSize: (slot, { entry }) => folderSizeAction(actionTargets(entry, slot), slot)?.run(),
+    search: (slot) => openSearch(slot),
   };
   // A menu, a dialog or the editor owns the keyboard while it is up.
   const keyboardBusy = !!(menu || dialog || conflict || editor);
@@ -648,6 +663,8 @@ export function ViewSftp() {
     onShortcut: keyboardBusy ? undefined : (action: SftpAction, cursor: ListCursor) => shortcutHandlers[action](slot, cursor),
     onNewFolder: () => askNewFolder(slot),
     onNewFile: () => setDialog({ kind: "newfile", slot }),
+    onSearch: () => openSearch(slot),
+    searchKeys: keysOf("search").keys,
     onImport: slot.location.kind === "local" ? () => void importFromFiles(slot) : undefined,
     onDropHere: () => void handleDrop(slot.location, slot.cwd),
     onTabDrop: (id: string) => handleTabDrop(slotKey, id),
@@ -659,6 +676,7 @@ export function ViewSftp() {
   /** A location and folder as the move question names them: "prod: /var/www". */
   const placeOf = (loc: LocationRef, cwd: string) => `${tabs.find((tab) => tab.id === keyOf(loc))?.label ?? ""}: ${cwd}`;
   const dialogExisting = (slot: SlotCtl) => slot.entries.map((e) => e.name);
+  const searchPane = dialog?.kind === "search" ? (dialog.pane === "left" ? left : right) : null;
 
   // A live external edit outlives the pane that started it, so the watcher can't
   // hold a source: it asks for one each time it needs to push. This copy feeds
@@ -756,6 +774,25 @@ export function ViewSftp() {
           name={dialog.entry.name}
           mode={dialog.entry.mode ?? 0o644}
           onSubmit={(mode) => doChmod(dialog.slot, dialog.entry, mode)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === "search" && searchPane && (
+        <SearchDialog
+          root={dialog.root}
+          search={searchPane.search}
+          // Another location, a lost session, another folder, or a pane the
+          // narrow layout no longer shows.
+          gone={
+            !searchPane.source ||
+            keyOf(searchPane.location) !== dialog.loc ||
+            searchPane.cwd !== dialog.root ||
+            (dialog.pane === "right" && oneCol)
+          }
+          onGoTo={(hit) => {
+            setDialog(null);
+            searchPane.reveal(hit.dir, hit.entry.name);
+          }}
           onClose={() => setDialog(null)}
         />
       )}

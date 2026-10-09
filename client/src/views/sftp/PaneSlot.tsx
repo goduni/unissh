@@ -38,6 +38,8 @@ export function PaneSlot({
   onShortcut,
   onNewFolder,
   onNewFile,
+  onSearch,
+  searchKeys,
   onImport,
   onDropHere,
   onTabDrop,
@@ -60,6 +62,10 @@ export function PaneSlot({
   onShortcut?: ListShortcutHandler;
   onNewFolder: () => void;
   onNewFile: () => void;
+  /** Opens the recursive search below this pane's folder. */
+  onSearch: () => void;
+  /** The key bound to it, for the button's tooltip; "" when unbound. */
+  searchKeys?: string;
   onImport?: () => void;
   onDropHere: () => void;
   onTabDrop: (tabId: string) => void;
@@ -114,6 +120,7 @@ export function PaneSlot({
 
   return (
     <div
+      data-sftp-pane={slotKey}
       style={{
         flex: "1 1 0",
         minWidth: isMobile ? 0 : rem(240),
@@ -219,6 +226,14 @@ export function PaneSlot({
             }}
           />
         </div>
+        {/* Next to the filter it widens: the filter narrows this folder, this
+            looks through everything below it. Key hints are for a keyboard. */}
+        <IconBtn
+          icon="layers"
+          size={isMobile ? 40 : 26}
+          title={searchKeys && !isMobile ? `${t("sftp.search.title")} (${searchKeys})` : t("sftp.search.title")}
+          onClick={onSearch}
+        />
         {slot.location.kind === "remote" && (
           <MetaChip icon="shield" tone="good">
             {t("sftp.verified")}
@@ -301,6 +316,7 @@ export function PaneSlot({
           folderSizes={slot.folderSizes}
           sort={slot.sort}
           filter={slot.filter}
+          cursorOn={slot.cursorOn}
           actionIcon={actionIcon}
           onSort={slot.toggleSort}
           onOpenUp={slot.up}

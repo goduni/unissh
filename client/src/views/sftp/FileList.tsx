@@ -12,6 +12,7 @@ import { useFmt } from "@/i18n/format";
 import type { Entry, SortKey, SortState } from "@/store/sftp-types";
 import { FileRow } from "./FileRow";
 import type { FolderSizes } from "./folderSizes";
+import type { CursorRequest } from "./useSlot";
 import { displayEntries } from "./sortfilter";
 import { useVirtualRows } from "./useVirtualRows";
 import { pageRows } from "./virtualRows";
@@ -26,6 +27,7 @@ export function FileList({
   folderSizes,
   sort,
   filter,
+  cursorOn,
   actionIcon,
   onSort,
   onOpenUp,
@@ -45,6 +47,8 @@ export function FileList({
   folderSizes: FolderSizes;
   sort: SortState;
   filter: string;
+  /** Put the cursor on this entry, and scroll to it, once it is listed. */
+  cursorOn?: CursorRequest | null;
   actionIcon?: IconName;
   onSort: (key: SortKey) => void;
   onOpenUp: () => void;
@@ -147,6 +151,18 @@ export function FileList({
     setFocusIdx(next);
     rows.reveal(next - base);
   };
+  // After the reset above, so that a listing which arrives with a request for
+  // its cursor ends up on that entry rather than at the top. Each request is
+  // honoured once: sorting or filtering later must not drag the cursor back.
+  const cursorDone = useRef(0);
+  useEffect(() => {
+    if (!cursorOn || cursorDone.current === cursorOn.seq) return;
+    const index = display.findIndex((e) => e.name === cursorOn.name);
+    if (index < 0) return;
+    cursorDone.current = cursorOn.seq;
+    focusRow(base + index);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [display, cursorOn]);
   // Keep a drag source mounted if autoscrolling takes it outside the window.
   // Removing that DOM node ends a native HTML drag in some WebViews.
   const visibleIndices = Array.from({ length: rows.end - rows.start }, (_, i) => rows.start + i);
