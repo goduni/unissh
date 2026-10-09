@@ -58,7 +58,7 @@ export interface FileSource {
   createNew(path: string): Promise<void>;
   /** Remove a file. */
   remove(path: string): Promise<void>;
-  /** Remove a directory (local: recursive; remote: empty-only until Phase 2). */
+  /** Remove a directory and everything inside it — recursive on both kinds. */
   rmdir(path: string): Promise<void>;
   /** Remove a directory only if it is empty; never recursive. */
   removeEmptyDir(path: string): Promise<void>;
@@ -288,6 +288,10 @@ class LocalSource implements FileSource {
     await api.localRemove(path, true);
   }
   async removeEmptyDir(path: string): Promise<void> {
+    // The native non-recursive remove also deletes a file or a link, so a
+    // directory swapped for one since it was scanned must be refused here.
+    const entry = await this.lstat(path);
+    if (!entry?.isDir || entry.isSymlink) throw new Error("Not a directory");
     await api.localRemove(path, false);
   }
   async rename(from: string, to: string): Promise<void> {
