@@ -11,7 +11,8 @@ import { apiErrorMessage } from "@/bridge/types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
 import type { Entry, LocationRef, SftpSession, SortKey, SortState } from "@/store/sftp-types";
 import { displayEntries, shownNames } from "./sortfilter";
-import { useFolderSizes, type FolderSizes } from "./useFolderSizes";
+import type { FolderSizes } from "./folderSizes";
+import { useFolderSizes } from "./useFolderSizes";
 
 export interface SlotCtl {
   location: LocationRef;
@@ -88,6 +89,10 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
         // once), so a plain list() already recovers here — and so does Retry.
         const list = await source.list(dir);
         if (my !== gen.current) return; // a newer navigation superseded this load
+        // The rows stayed usable while this was in flight, so a total may have
+        // been asked for on them since the reset above. It belongs to the old
+        // listing: this one starts clean, as a new generation.
+        resetFolderSizes();
         setEntries(list);
         setCwd(dir);
         setSelection(new Set());

@@ -11,7 +11,7 @@ import { useTranslation } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import type { Entry, SortKey, SortState } from "@/store/sftp-types";
 import { FileRow } from "./FileRow";
-import type { FolderSizes } from "./useFolderSizes";
+import type { FolderSizes } from "./folderSizes";
 import { displayEntries } from "./sortfilter";
 import { useVirtualRows } from "./useVirtualRows";
 import { pageRows } from "./virtualRows";
@@ -291,7 +291,6 @@ export function FileList({
       {/* Off-screen rather than display:none — a hidden node is not announced. */}
       <span
         role="status"
-        aria-live="polite"
         style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", clipPath: "inset(50%)", whiteSpace: "nowrap" }}
       >
         {sizeNews}

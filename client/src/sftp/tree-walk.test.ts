@@ -15,18 +15,19 @@ function fakeSource(tree: Record<string, Entry[]>, onList?: (path: string) => Pr
     return [...tree[path]];
   });
   const join = async (base: string, name: string) => `${base}/${name}`;
-  return { src: { list, join } as unknown as FileSource, list };
+  return { src: { kind: "remote", list, join } as unknown as FileSource, list };
 }
 
 describe("folder size", () => {
   it("sums the files of a nested tree", async () => {
     const { src } = fakeSource({
       "/r": [file("a.txt", 10), dir("sub"), dir("empty")],
-      "/r/sub": [file("b.txt", 20), dir("deep")],
+      // Only regular files with a real size count: not a pipe, not a bogus size.
+      "/r/sub": [file("b.txt", 20), dir("deep"), { ...file("pipe", 500), fileKind: "unsupported" }, file("bogus", -7)],
       "/r/sub/deep": [file("c.txt", 30)],
       "/r/empty": [],
     });
-    expect(await folderSize(src, "/r", { sem: new Semaphore(2) })).toEqual({ bytes: 60, entries: 6, skipped: 0, partial: false });
+    expect(await folderSize(src, "/r", { sem: new Semaphore(2) })).toEqual({ bytes: 60, entries: 8, skipped: 0, partial: false });
   });
 
   it("does not follow links: a link loop ends and adds nothing", async () => {
@@ -45,6 +46,17 @@ describe("folder size", () => {
       "/r/open": [file("b.txt", 5)],
     });
     expect(await folderSize(src, "/r", { sem: new Semaphore(2) })).toMatchObject({ bytes: 15, skipped: 1, partial: true });
+  });
+
+  it("rejects when the folder itself cannot be read", async () => {
+    const { src } = fakeSource({});
+    await expect(folderSize(src, "/r", { sem: new Semaphore(2) })).rejects.toThrow("Permission denied: /r");
+  });
+
+  it("fails on a lost connection instead of counting around it", async () => {
+    const lost = { kind: "ssh", msg: "channel closed" };
+    const { src } = fakeSource({ "/r": [file("a.txt", 10), dir("sub")], "/r/sub": [] }, (path) => { if (path === "/r/sub") throw lost; });
+    await expect(folderSize(src, "/r", { sem: new Semaphore(2) })).rejects.toBe(lost);
   });
 
   it("stops listing once aborted and rejects with the abort reason", async () => {

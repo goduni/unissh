@@ -2,6 +2,8 @@
 // regardless of the desktop OS — these operate on the remote side. Local-side
 // path math goes through @tauri-apps/api/path in the LocalSource adapter.
 
+import type { Entry } from "@/store/sftp-types";
+
 /** Join a remote base dir with a child name, handling ".." (one level up) and
  *  the root edge cases. Port of the original ViewSftp.remoteJoin. */
 export function remoteJoin(base: string, name: string): string {
@@ -15,6 +17,12 @@ export function remoteParent(path: string): string {
   const cut = path.replace(/\/+$/, "");
   const i = cut.lastIndexOf("/");
   return i <= 0 ? "/" : cut.slice(0, i);
+}
+
+/** Whether a tree walk goes into an entry. A link is never followed, whatever
+ *  it points at: that is what keeps a link loop finite and a tree counted once. */
+export function isWalkableDir(e: Pick<Entry, "isDir" | "isSymlink">): boolean {
+  return e.isDir && !e.isSymlink;
 }
 
 /** Reject directory-entry names that could self-recurse or escape the tree:

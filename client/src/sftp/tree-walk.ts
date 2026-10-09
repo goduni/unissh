@@ -6,11 +6,13 @@
 //
 // Unlike the transfer scan (`collectTree`), which must fail as a whole so a copy
 // never starts from a partial plan, a walk here survives a directory it cannot
-// read and keeps nothing in memory but the level it is on.
+// read, and holds only the paths of the level it is listing and of the next one
+// it is collecting — never the tree.
 
 import type { Entry } from "@/store/sftp-types";
-import type { FileSource } from "@/bridge/sources";
-import { isSafeName } from "@/sftp/paths";
+import { apiErrorMessage } from "@/bridge/types";
+import { isSftpDisconnect, type FileSource } from "@/bridge/sources";
+import { isSafeName, isWalkableDir } from "@/sftp/paths";
 import { abortable, mapWorkers, type Semaphore } from "@/sftp/transfer-engine";
 
 /** One listed directory of the walk. */
@@ -34,14 +36,11 @@ export interface WalkOptions {
    *  within a level; a parent always comes before its children. */
   onDir: (batch: DirBatch) => void;
   /** Called for a subdirectory (`rel`, relative to the root) that could not be
-   *  listed; the walk goes on without it. The root is not covered: failing to
-   *  list it fails the walk. */
+   *  listed; the walk goes on without it. Two failures are not covered and fail
+   *  the walk: the root's, and a remote one that means the session is gone —
+   *  nothing below would be readable either. */
   onSkip?: (rel: string, error: unknown) => void;
 }
-
-/** Whether the walk goes into an entry. A link is never followed, whatever it
- *  points at: that is what keeps a link loop finite and a tree counted once. */
-export const isWalkableDir = (e: Entry): boolean => e.isDir && !e.isSymlink;
 
 /** List `root` and every directory below it on `src`, level by level. */
 export async function walkTree(src: FileSource, root: string, { sem, signal, onDir, onSkip }: WalkOptions): Promise<void> {
@@ -56,6 +55,9 @@ export async function walkTree(src: FileSource, root: string, { sem, signal, onD
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
         if (rel === "") throw error;
+        // Only a remote source has a session to lose; a local error text can
+        // carry a path, which must not be read as one.
+        if (src.kind === "remote" && isSftpDisconnect(apiErrorMessage(error))) throw error;
         onSkip?.(rel, error);
         return;
       }
@@ -100,8 +102,18 @@ export interface FolderSizeOptions {
   now?: () => number;
 }
 
-/** Total size of the files under `root`. Links count as nothing (the target is
- *  either elsewhere or already counted) and so do directories themselves. */
+/** Whether an entry's size counts towards a total: a regular file — an entry
+ *  whose listing carries no type is read as one, as the transfer scan does —
+ *  with a size the source vouches for. */
+function countedSize(e: Entry): number {
+  const kind = e.fileKind ?? "unknown";
+  const regular = !e.isDir && !e.isSymlink && (kind === "file" || kind === "unknown");
+  return regular && e.sizeKnown !== false && Number.isFinite(e.size) && e.size >= 0 ? e.size : 0;
+}
+
+/** Total size of the regular files under `root`. Links count as nothing (the
+ *  target is either elsewhere or already counted) and so do directories
+ *  themselves, devices, sockets and pipes. */
 export async function folderSize(
   src: FileSource,
   root: string,
@@ -117,9 +129,7 @@ export async function folderSize(
     onSkip: () => { skipped += 1; },
     onDir: (batch) => {
       entries += batch.entries.length;
-      for (const e of batch.entries) {
-        if (!e.isDir && !e.isSymlink && e.sizeKnown !== false) bytes += e.size;
-      }
+      for (const e of batch.entries) bytes += countedSize(e);
       const at = now();
       if (!onProgress || at - reported < throttleMs) return;
       reported = at;

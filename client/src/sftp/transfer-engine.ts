@@ -4,7 +4,7 @@
 
 import type { Entry } from "@/store/sftp-types";
 import type { FileSource } from "@/bridge/sources";
-import { isSafeName } from "@/sftp/paths";
+import { isSafeName, isWalkableDir } from "@/sftp/paths";
 
 /** A name collision exists at the destination. */
 export function hasConflict(target: Entry | null): boolean {
@@ -189,7 +189,7 @@ export async function collectTree(
         if (e.name === "." || e.name === "..") continue;
         if (!isSafeName(e.name)) throw new Error(`Invalid filename: ${e.name}`);
         const childRel = rel ? `${rel}/${e.name}` : e.name;
-        if (e.isDir && !e.isSymlink) {
+        if (isWalkableDir(e)) {
           dirs.push(childRel);
           directoryMetadata.set(childRel, e);
           next.push({ abs: await src.join(abs, e.name), rel: childRel });
@@ -215,7 +215,7 @@ export async function* walk(src: FileSource, root: string, rel = ""): AsyncGener
     // server triggering infinite recursion or a path-traversal write.
     if (!isSafeName(e.name)) continue;
     const childRel = rel ? `${rel}/${e.name}` : e.name;
-    if (e.isDir && !e.isSymlink) {
+    if (isWalkableDir(e)) {
       const childAbs = await src.join(root, e.name);
       yield { relPath: childRel, isDir: true, size: 0 };
       yield* walk(src, childAbs, childRel);

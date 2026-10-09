@@ -35,7 +35,7 @@ import { dragCtx } from "./drag";
 import { shortcutAria, shortcutLabel, useShortcuts } from "@/store/shortcuts";
 import { sftpShortcutId, type SftpAction } from "@/support/keybindings";
 import { actionTargets, type ListCursor } from "./shortcuts";
-import { isWalkableDir } from "@/sftp/tree-walk";
+import { isWalkableDir } from "@/sftp/paths";
 import {
   makeTransferSemaphore,
   serializeResolver,

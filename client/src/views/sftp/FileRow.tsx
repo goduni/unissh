@@ -11,7 +11,7 @@ import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import type { Entry } from "@/store/sftp-types";
-import type { FolderSizeState } from "./useFolderSizes";
+import type { FolderSizeState } from "./folderSizes";
 
 /** Unix mode bits → "rwxr-xr-x" (only the low 9 permission bits). */
 export function modeString(mode?: number): string {
@@ -265,27 +265,36 @@ function FolderSizeCell({ size }: { size: FolderSizeState }) {
   return (
     <span
       title={label}
+      // A bare span's aria-label is not reliably read; as an image it is, and
+      // the figure inside stops being read a second time.
+      role={label ? "img" : undefined}
       aria-label={label}
       aria-busy={size.state === "pending" || undefined}
       style={{
         display: "flex",
         alignItems: "center",
-        // The figure may run a few pixels wider than the column ("≥ 1,023.9 MB");
-        // it grows towards the name instead of wrapping in a fixed-height row.
         justifyContent: "flex-end",
         gap: rem(5),
         width: rem(70),
-        whiteSpace: "nowrap",
+        // The column is fixed: a figure wider than it ("≥ 1,023.9 MB" next to
+        // the spinner) is cut with an ellipsis, never drawn over its neighbour.
+        overflow: "hidden",
         fontFamily: MONO,
         fontSize: TEXT.micro,
         color: p.txt2,
       }}
     >
-      {size.state === "pending" && <Spinner size={8} color={p.txt3} />}
+      {size.state === "pending" && (
+        <span style={{ display: "flex", flexShrink: 0 }}>
+          <Spinner size={8} color={p.txt3} />
+        </span>
+      )}
       {size.state === "failed" ? (
         <Icon name="alert" size={12} color={p.red} />
       ) : (
-        `${size.state === "done" && size.partial ? "≥ " : ""}${fmtSize(size.bytes)}`
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {`${size.state === "done" && size.partial ? "≥ " : ""}${fmtSize(size.bytes)}`}
+        </span>
       )}
     </span>
   );
