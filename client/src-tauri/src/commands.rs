@@ -1870,17 +1870,23 @@ pub async fn sftp_set_metadata(
     .await
 }
 
+/// Create a new owner-only file for writing. Fails if anything already exists
+/// at `path`, a symbolic link included: the link is never followed.
+fn create_private(path: &str) -> ApiResult<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path).map_err(ApiError::other)
+}
+
 #[tauri::command]
 pub async fn local_create_private(path: String) -> ApiResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        options.open(path).map_err(ApiError::other)?;
+        create_private(&path)?;
         Ok(())
     })
     .await?
@@ -1924,10 +1930,17 @@ fn open_prepared(path: &str) -> ApiResult<std::fs::File> {
     Ok(file)
 }
 
+/// Stream `source` into `target` from the target's current position.
+fn copy_contents(source: &mut std::fs::File, target: &mut std::fs::File) -> ApiResult<u64> {
+    use std::io::Write;
+    let bytes = std::io::copy(source, target).map_err(ApiError::other)?;
+    target.flush().map_err(ApiError::other)?;
+    Ok(bytes)
+}
+
 #[tauri::command]
 pub async fn local_copy_prepared(from: String, to: String) -> ApiResult<u64> {
     tauri::async_runtime::spawn_blocking(move || {
-        use std::io::Write;
         let mut source = open_regular(&from)?;
         let mut target = open_prepared(&to)?;
         let source_identity =
@@ -1940,9 +1953,7 @@ pub async fn local_copy_prepared(from: String, to: String) -> ApiResult<u64> {
             return Err(ApiError::other("Cannot copy a file onto itself"));
         }
         target.set_len(0).map_err(ApiError::other)?;
-        let bytes = std::io::copy(&mut source, &mut target).map_err(ApiError::other)?;
-        target.flush().map_err(ApiError::other)?;
-        Ok(bytes)
+        copy_contents(&mut source, &mut target)
     })
     .await?
 }
@@ -2103,14 +2114,47 @@ pub async fn local_write_text(path: String, text: String) -> ApiResult<()> {
     .await?
 }
 
+/// Give `target` the permission bits of `source`. Unix only; other platforms
+/// leave the new file with their defaults.
+fn carry_permissions(source: &std::fs::File, target: &std::fs::File) -> ApiResult<()> {
+    #[cfg(unix)]
+    {
+        let permissions = source.metadata().map_err(ApiError::other)?.permissions();
+        target.set_permissions(permissions).map_err(ApiError::other)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (source, target);
+        Ok(())
+    }
+}
+
 /// Copy a file the OS picker returned into the local pane. The picker hands
 /// back a `file://` URL on iOS and a plain path on desktop, hence `FilePath`.
+/// On iOS this relies on the dialog picker's default copy mode; a
+/// security-scoped pick would need `startAccessingSecurityScopedResource`.
+///
+/// The source must be a regular file. The destination is created exclusively:
+/// an existing entry is never replaced and a link there is never followed. A
+/// failed copy removes the file it created. An exclusive create starts
+/// owner-only, so on Unix the source's permission bits are applied afterwards;
+/// elsewhere the new file keeps the platform's defaults.
 #[tauri::command]
 pub async fn local_copy_file(from: tauri_plugin_fs::FilePath, to: String) -> ApiResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let from = from.into_path().map_err(ApiError::other)?;
-        std::fs::copy(from, to).map_err(ApiError::other)?;
-        Ok(())
+        let from = from
+            .to_str()
+            .ok_or_else(|| ApiError::other("Path is not valid UTF-8"))?;
+        let mut source = open_regular(from)?;
+        let mut target = create_private(&to)?;
+        let copied = copy_contents(&mut source, &mut target)
+            .and_then(|_| carry_permissions(&source, &target));
+        drop(target);
+        if copied.is_err() {
+            let _ = std::fs::remove_file(&to);
+        }
+        copied
     })
     .await?
 }
@@ -2273,16 +2317,24 @@ pub async fn local_remove(path: String, recursive: bool) -> ApiResult<()> {
             }
             .map_err(ApiError::other);
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::FileTypeExt;
-            if md.file_type().is_symlink_dir() {
-                return std::fs::remove_dir(path).map_err(ApiError::other);
-            }
-        }
-        std::fs::remove_file(path).map_err(ApiError::other)
+        remove_entry(&path, &md)
     })
     .await?
+}
+
+/// Remove a file or a symbolic link itself, given its non-following metadata.
+/// Windows removes a directory link as a directory; the referent stays.
+fn remove_entry(path: &str, md: &std::fs::Metadata) -> ApiResult<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if md.file_type().is_symlink_dir() {
+            return std::fs::remove_dir(path).map_err(ApiError::other);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = md;
+    std::fs::remove_file(path).map_err(ApiError::other)
 }
 
 #[tauri::command]
@@ -2328,14 +2380,7 @@ pub async fn local_unlink(path: String) -> ApiResult<()> {
         if !md.is_symlink() {
             return Err(ApiError::other("Expected a symbolic link"));
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::FileTypeExt;
-            if md.file_type().is_symlink_dir() {
-                return std::fs::remove_dir(path).map_err(ApiError::other);
-            }
-        }
-        std::fs::remove_file(path).map_err(ApiError::other)
+        remove_entry(&path, &md)
     })
     .await?
 }
@@ -2882,22 +2927,68 @@ mod local_symlink_tests {
     }
 
     #[test]
-    fn copy_file_accepts_picker_paths_and_file_urls() {
+    fn copy_file_copies_a_picked_path_or_file_url_with_its_permissions() {
         tauri::async_runtime::block_on(async {
             let dir = tempfile::tempdir().unwrap();
             let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
             std::fs::write(path("picked"), b"picked").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path("picked"), std::fs::Permissions::from_mode(0o640))
+                    .unwrap();
+            }
             super::local_copy_file(path("picked").parse().unwrap(), path("copy"))
                 .await
                 .unwrap();
             assert_eq!(std::fs::read(path("copy")).unwrap(), b"picked");
             #[cfg(unix)]
             {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(path("copy"))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o640
+                );
                 let url = format!("file://{}", path("picked"));
                 super::local_copy_file(url.parse().unwrap(), path("from-url"))
                     .await
                     .unwrap();
                 assert_eq!(std::fs::read(path("from-url")).unwrap(), b"picked");
+            }
+        });
+    }
+
+    #[test]
+    fn copy_file_never_clobbers_an_existing_destination() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
+            std::fs::write(path("picked"), b"picked").unwrap();
+            std::fs::write(path("taken"), b"taken").unwrap();
+            assert!(
+                super::local_copy_file(path("picked").parse().unwrap(), path("taken"))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(std::fs::read(path("taken")).unwrap(), b"taken");
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink("taken", path("link")).unwrap();
+                std::os::unix::fs::symlink("absent", path("dangling")).unwrap();
+                for name in ["link", "dangling"] {
+                    assert!(
+                        super::local_copy_file(path("picked").parse().unwrap(), path(name))
+                            .await
+                            .is_err()
+                    );
+                    assert!(std::fs::symlink_metadata(path(name)).unwrap().is_symlink());
+                }
+                assert_eq!(std::fs::read(path("taken")).unwrap(), b"taken");
+                assert!(!dir.path().join("absent").exists());
             }
         });
     }
