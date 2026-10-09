@@ -6,11 +6,12 @@
 import { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT, UI } from "@/theme/tokens";
-import { Icon, type IconName } from "@/components/primitives";
+import { Icon, Spinner, type IconName } from "@/components/primitives";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import type { Entry } from "@/store/sftp-types";
+import type { FolderSizeState } from "./folderSizes";
 
 /** Unix mode bits → "rwxr-xr-x" (only the low 9 permission bits). */
 export function modeString(mode?: number): string {
@@ -29,6 +30,7 @@ export function FileRow({
   focused,
   showModified,
   showPerms,
+  folderSize,
   actionIcon,
   onClick,
   onDoubleClick,
@@ -45,6 +47,8 @@ export function FileRow({
   focused?: boolean;
   showModified?: boolean;
   showPerms?: boolean;
+  /** The folder's on-demand total, once one was asked for. */
+  folderSize?: FolderSizeState;
   actionIcon?: IconName;
   onClick?: (e: React.MouseEvent) => void;
   onDoubleClick?: () => void;
@@ -187,11 +191,12 @@ export function FileRow({
           {entry.mtime ? fmtDate(entry.mtime) : ""}
         </span>
       )}
-      {!isUp && (
+      {!isUp && !(isDir && folderSize) && (
         <span style={{ fontFamily: MONO, fontSize: TEXT.micro, color: p.txt2, width: rem(70), textAlign: "right" }}>
           {isDir ? "—" : fmtSize(entry.size)}
         </span>
       )}
+      {!isUp && isDir && folderSize && <FolderSizeCell size={folderSize} />}
       {showSend && actionIcon && (
         <button
           onClick={(e) => {
@@ -238,5 +243,59 @@ export function FileRow({
         </button>
       )}
     </div>
+  );
+}
+
+/** A folder's size cell once a total was asked for: the running figure while
+ *  the walk is on, then the total — marked when it is only a lower bound — or
+ *  what went wrong. The label is what a screen reader reads with the row; the
+ *  figure changing under it is deliberately not a live region. */
+function FolderSizeCell({ size }: { size: FolderSizeState }) {
+  const p = usePalette();
+  const { t } = useTranslation();
+  const { fmtSize } = useFmt();
+  const label =
+    size.state === "pending"
+      ? t("sftp.size.pending", { size: fmtSize(size.bytes) })
+      : size.state === "failed"
+        ? t("sftp.size.failed", { reason: size.error })
+        : size.partial
+          ? t("sftp.size.partial", { size: fmtSize(size.bytes) })
+          : undefined;
+  return (
+    <span
+      title={label}
+      // A bare span's aria-label is not reliably read; as an image it is, and
+      // the figure inside stops being read a second time.
+      role={label ? "img" : undefined}
+      aria-label={label}
+      aria-busy={size.state === "pending" || undefined}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        gap: rem(5),
+        width: rem(70),
+        // The column is fixed: a figure wider than it ("≥ 1,023.9 MB" next to
+        // the spinner) is cut with an ellipsis, never drawn over its neighbour.
+        overflow: "hidden",
+        fontFamily: MONO,
+        fontSize: TEXT.micro,
+        color: p.txt2,
+      }}
+    >
+      {size.state === "pending" && (
+        <span style={{ display: "flex", flexShrink: 0 }}>
+          <Spinner size={8} color={p.txt3} />
+        </span>
+      )}
+      {size.state === "failed" ? (
+        <Icon name="alert" size={12} color={p.red} />
+      ) : (
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {`${size.state === "done" && size.partial ? "≥ " : ""}${fmtSize(size.bytes)}`}
+        </span>
+      )}
+    </span>
   );
 }

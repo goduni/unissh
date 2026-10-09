@@ -35,6 +35,7 @@ import { dragCtx } from "./drag";
 import { shortcutAria, shortcutLabel, useShortcuts } from "@/store/shortcuts";
 import { sftpShortcutId, type SftpAction } from "@/support/keybindings";
 import { actionTargets, type ListCursor } from "./shortcuts";
+import { isWalkableDir } from "@/sftp/paths";
 import {
   makeTransferSemaphore,
   serializeResolver,
@@ -169,6 +170,12 @@ export function ViewSftp() {
     },
     [],
   );
+
+  // The right pane keeps its listing while a narrow layout hides it, but a walk
+  // nobody can see or stop should not keep querying a server.
+  useEffect(() => {
+    if (oneCol) rightRef.current.cancelFolderSizes();
+  }, [oneCol]);
 
   // If a slot points at a session that was closed elsewhere, fall back to local.
   useEffect(() => {
@@ -514,6 +521,15 @@ export function ViewSftp() {
         onClick: () => (move ? void askMove(entries, slot, refOf(tab.id)) : sendTo(entries, slot, refOf(tab.id))),
       }));
   };
+  /** The folder-size action over `entries`: a total for each folder among them
+   *  — or, while any of those is still being counted, stopping the count. Null
+   *  when there is no folder to total. */
+  const folderSizeAction = (entries: Entry[], slot: SlotCtl): { cancels: boolean; run: () => void } | null => {
+    const names = entries.filter(isWalkableDir).map((e) => e.name);
+    if (!names.length) return null;
+    const cancels = names.some((name) => slot.folderSizes.get(name)?.state === "pending");
+    return { cancels, run: () => (cancels ? slot.cancelFolderSizes(names) : slot.startFolderSizes(names)) };
+  };
   const titleOf = (entries: Entry[]) =>
     entries.length > 1 ? t("sftp.selected", { count: entries.length }) : entries[0]?.name;
 
@@ -539,6 +555,14 @@ export function ViewSftp() {
     if (slot.source?.chmod)
       items.push({ icon: "shield", label: t("sftp.menu.permissions"), onClick: () => setDialog({ kind: "chmod", slot, entry }) });
     items.push({ icon: "copy", label: t("sftp.menu.copyPath"), onClick: () => copyPath(slot, entry) });
+    const sizing = folderSizeAction(entries, slot);
+    if (sizing)
+      items.push({
+        icon: sizing.cancels ? "x" : "database",
+        label: t(sizing.cancels ? "sftp.menu.folderSizeCancel" : "sftp.menu.folderSize"),
+        ...keysOf("folderSize"),
+        onClick: sizing.run,
+      });
     items.push({ icon: "trash", label: t("sftp.menu.delete"), danger: true, ...keysOf("delete"), onClick: () => askDelete(slot, entries) });
     setMenu({ items, title: titleOf(entries), x, y });
   };
@@ -597,6 +621,7 @@ export function ViewSftp() {
       const entries = actionTargets(entry, slot);
       if (entries.length) askDelete(slot, entries);
     },
+    folderSize: (slot, { entry }) => folderSizeAction(actionTargets(entry, slot), slot)?.run(),
   };
   // A menu, a dialog or the editor owns the keyboard while it is up.
   const keyboardBusy = !!(menu || dialog || conflict || editor);

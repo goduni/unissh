@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SftpSession } from "@/store/sftp-types";
 
 const { api } = vi.hoisted(() => ({
-  api: { sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), localRemove: vi.fn(), sftpReopen: vi.fn() },
+  api: { sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), localRemove: vi.fn(), sftpReopen: vi.fn(), sftpListDirCancel: vi.fn(), cancelNew: vi.fn(), cancelTrigger: vi.fn(), cancelDispose: vi.fn() },
 }));
 vi.mock("@/bridge/api", () => api);
 import { sourceFor } from "./sources";
@@ -28,6 +28,16 @@ describe("conflict metadata failures", () => {
   });
 });
 
+describe("a reaped channel", () => {
+  it("is reopened once under a cancellable listing, which then succeeds on its own token", async () => {
+    api.cancelNew.mockResolvedValue("token");
+    api.sftpListDirCancel.mockRejectedValueOnce({ kind: "ssh", msg: "channel closed" }).mockResolvedValueOnce([{ filename: "f", isDir: false, size: 1, mode: 0o100644 }]);
+    expect(await remote().list("/dir", new AbortController().signal)).toEqual([expect.objectContaining({ name: "f" })]);
+    expect(api.sftpReopen).toHaveBeenCalledExactlyOnceWith("s");
+    expect(api.sftpListDirCancel.mock.calls).toEqual([["s", "/dir", "token"], ["s", "/dir", "token"]]);
+    expect(api.cancelDispose).toHaveBeenCalledExactlyOnceWith("token");
+  });
+});
 
 describe("link metadata", () => {
   it("recognizes remote links from READDIR permissions", async () => {

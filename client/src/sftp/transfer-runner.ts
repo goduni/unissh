@@ -680,6 +680,7 @@ async function runDir(
  *  fresh semaphore sized to the current setting. */
 let sharedSemaphore: Semaphore | undefined;
 let sharedCapacity = 0;
+/** The one budget for everything that uses the session's SFTP channels: transfers and read-only walks alike. */
 export function makeTransferSemaphore(): Semaphore {
   const capacity = useApp.getState().sftpParallelism;
   if (!sharedSemaphore || (controls.size === 0 && capacity !== sharedCapacity)) {

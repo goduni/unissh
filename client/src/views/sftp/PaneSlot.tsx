@@ -298,6 +298,7 @@ export function PaneSlot({
           error={slot.error}
           showUp
           selection={slot.selection}
+          folderSizes={slot.folderSizes}
           sort={slot.sort}
           filter={slot.filter}
           actionIcon={actionIcon}

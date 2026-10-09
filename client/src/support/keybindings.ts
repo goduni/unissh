@@ -49,6 +49,9 @@ const SFTP_SHORTCUTS = {
   newFolder: ["sftp.menu.newFolder", fkeys([7])],
   // A Mac laptop has no Delete key without Fn either; ⌘⌫ is what Finder uses.
   delete: ["sftp.menu.delete", (mac) => [...fkeys([8], binding("Delete"))(), ...(mac ? [binding("Backspace", { meta: true })] : [])]],
+  // Alt+Enter is "properties" in every desktop file manager, and the size of a
+  // folder is the property this answers. Never Space: that key selects.
+  folderSize: ["sftp.menu.folderSize", (mac) => [binding("Enter", { alt: true }), binding("Enter", mac ? { meta: true, shift: true } : { ctrl: true, shift: true })]],
 } satisfies Record<string, [labelKey: string, defaults: ShortcutDefinition["defaults"]]>;
 export type SftpAction = keyof typeof SFTP_SHORTCUTS;
 export const SFTP_ACTIONS = Object.keys(SFTP_SHORTCUTS) as SftpAction[];

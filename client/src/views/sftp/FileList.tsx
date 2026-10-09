@@ -8,8 +8,10 @@ import { designPx, rem, TEXT, UI } from "@/theme/tokens";
 import { Icon, type IconName } from "@/components/primitives";
 import { useIsMobile } from "@/store/responsive";
 import { useTranslation } from "@/i18n";
+import { useFmt } from "@/i18n/format";
 import type { Entry, SortKey, SortState } from "@/store/sftp-types";
 import { FileRow } from "./FileRow";
+import type { FolderSizes } from "./folderSizes";
 import { displayEntries } from "./sortfilter";
 import { useVirtualRows } from "./useVirtualRows";
 import { pageRows } from "./virtualRows";
@@ -21,6 +23,7 @@ export function FileList({
   error,
   showUp,
   selection,
+  folderSizes,
   sort,
   filter,
   actionIcon,
@@ -39,6 +42,7 @@ export function FileList({
   error: string | null;
   showUp: boolean;
   selection: Set<string>;
+  folderSizes: FolderSizes;
   sort: SortState;
   filter: string;
   actionIcon?: IconName;
@@ -57,6 +61,32 @@ export function FileList({
   const p = usePalette();
   const isMobile = useIsMobile();
   const { t } = useTranslation();
+  const { fmtSize } = useFmt();
+
+  // A finished folder total is spoken once. The running figure never is: it
+  // changes several times a second, and the row's own label carries it.
+  const [sizeNews, setSizeNews] = useState("");
+  const sizesBefore = useRef(folderSizes);
+  useEffect(() => {
+    const before = sizesBefore.current;
+    sizesBefore.current = folderSizes;
+    const news: string[] = [];
+    let started = false;
+    for (const [name, size] of folderSizes) {
+      const wasPending = before.get(name)?.state === "pending";
+      if (size.state === "pending") started ||= !wasPending;
+      else if (!wasPending) continue;
+      else if (size.state === "failed") news.push(t("sftp.size.announceFailed", { name }));
+      else {
+        const total = fmtSize(size.bytes);
+        news.push(t("sftp.size.announceDone", { name, size: size.partial ? t("sftp.size.partial", { size: total }) : total }));
+      }
+    }
+    // Emptied when a walk starts, so the same total can be spoken again later.
+    if (news.length) setSizeNews(news.join(". "));
+    else if (started) setSizeNews("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folderSizes]);
 
   // Per-pane width: side-by-side panes get narrow independently of the window, so
   // drop the fixed metadata columns before they crowd the name / overflow the row —
@@ -258,6 +288,13 @@ export function FileList({
 
   return (
     <div ref={rootRef} style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {/* Off-screen rather than display:none — a hidden node is not announced. */}
+      <span
+        role="status"
+        style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", clipPath: "inset(50%)", whiteSpace: "nowrap" }}
+      >
+        {sizeNews}
+      </span>
       <div
         ref={rows.scrollRef}
         onScroll={rows.measure}
@@ -344,6 +381,7 @@ export function FileList({
                       total={navCount}
                       entry={entry}
                       selected={selection.has(entry.name)}
+                      folderSize={folderSizes.get(entry.name)}
                       focused={hasFocus && focusIdx === base + idx}
                       showModified={showModified}
                       showPerms={showPerms}

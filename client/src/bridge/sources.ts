@@ -104,25 +104,33 @@ class RemoteSource implements FileSource {
    *  server (e.g. "channel closed" on an idle session), reopen the channel once
    *  on the still-live SSH connection and retry. So a random mid-session drop
    *  self-heals instead of erroring, and Retry actually recovers. */
-  private async withReopen<T>(fn: () => Promise<T>): Promise<T> {
+  private async withReopen<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     try {
       return await fn();
     } catch (e) {
       if (/cancelled|session closed|generation changed/i.test(apiErrorMessage(e)) || !isSftpDisconnect(apiErrorMessage(e))) throw e;
+      // An aborted caller gets its own failure back: no reopen, no second try.
+      if (signal?.aborted) throw e;
       await api.sftpReopen(this.id);
+      if (signal?.aborted) throw e;
       return await fn(); // single retry — a truly dead SSH connection still throws
     }
   }
   async list(path: string, signal?: AbortSignal): Promise<Entry[]> {
     let list: SftpEntry[];
-    if (this.cancelId) list = await api.sftpListDirCancel(this.id, path, this.cancelId);
-    else if (signal) {
+    // A cancellable listing heals a reaped channel exactly like a plain one. The
+    // token outlives the retry: it is the caller's (or disposed below), and
+    // only an abort triggers it.
+    if (this.cancelId) {
+      const token = this.cancelId;
+      list = await this.withReopen(() => api.sftpListDirCancel(this.id, path, token), signal);
+    } else if (signal) {
       const token = await api.cancelNew();
       const cancel = () => { void api.cancelTrigger(token); };
       signal.addEventListener("abort", cancel, { once: true });
       try {
         signal.throwIfAborted();
-        list = await api.sftpListDirCancel(this.id, path, token);
+        list = await this.withReopen(() => api.sftpListDirCancel(this.id, path, token), signal);
       } finally {
         signal.removeEventListener("abort", cancel);
         await api.cancelDispose(token);

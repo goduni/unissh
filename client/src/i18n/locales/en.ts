@@ -1767,7 +1767,16 @@ export const en = {
       "permissions": "Permissions…",
       "import": "Import from Files",
       "sendTo": "Send to {{name}}",
-      "moveTo": "Move to {{name}}"
+      "moveTo": "Move to {{name}}",
+      "folderSize": "Calculate size",
+      "folderSizeCancel": "Cancel size calculation"
+    },
+    "size": {
+      "pending": "Calculating size, {{size}} so far",
+      "partial": "At least {{size}}: some folders could not be read",
+      "failed": "Couldn’t calculate the size: {{reason}}",
+      "announceDone": "{{name}}: {{size}}",
+      "announceFailed": "{{name}}: couldn’t calculate the size"
     },
     "chmod": {
       "title": "Permissions",
