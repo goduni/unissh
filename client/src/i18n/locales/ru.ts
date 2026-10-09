@@ -1802,7 +1802,16 @@ export const ru = {
       "permissions": "Права…",
       "import": "Импорт из Files",
       "sendTo": "Отправить в «{{name}}»",
-      "moveTo": "Переместить в «{{name}}»"
+      "moveTo": "Переместить в «{{name}}»",
+      "folderSize": "Посчитать размер",
+      "folderSizeCancel": "Отменить подсчёт размера"
+    },
+    "size": {
+      "pending": "Размер считается, пока {{size}}",
+      "partial": "Не меньше {{size}}: часть папок не удалось прочитать",
+      "failed": "Не удалось посчитать размер: {{reason}}",
+      "announceDone": "{{name}}: {{size}}",
+      "announceFailed": "{{name}}: не удалось посчитать размер"
     },
     "chmod": {
       "title": "Права доступа",

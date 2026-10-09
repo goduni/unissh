@@ -11,6 +11,7 @@ import { apiErrorMessage } from "@/bridge/types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
 import type { Entry, LocationRef, SftpSession, SortKey, SortState } from "@/store/sftp-types";
 import { displayEntries, shownNames } from "./sortfilter";
+import { useFolderSizes, type FolderSizes } from "./useFolderSizes";
 
 export interface SlotCtl {
   location: LocationRef;
@@ -32,6 +33,11 @@ export interface SlotCtl {
   selectAll: () => void;
   clearSelection: () => void;
   selectedEntries: () => Entry[];
+  /** On-demand totals of this listing's folders, by entry name. */
+  folderSizes: FolderSizes;
+  startFolderSizes: (names: string[]) => void;
+  /** Stops the named pending totals, or all of them. */
+  cancelFolderSizes: (names?: string[]) => void;
 }
 
 export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl {
@@ -60,11 +66,21 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
   const entriesRef = useRef<Entry[]>(entries);
   entriesRef.current = entries;
 
+  const { sizes: folderSizes, start: startFolderSizes, cancel: cancelFolderSizes, reset: resetFolderSizes } = useFolderSizes(source, cwd);
+  // The totals belong to what the pane is showing. Leaving the location, or
+  // losing the session behind it, ends them; `load` covers every other way the
+  // listing can change. Keyed on the location rather than on `source`, which is
+  // rebuilt whenever any session opens or closes.
+  const hasSource = source != null;
+  useEffect(() => resetFolderSizes, [locKey, hasSource, resetFolderSizes]);
+
   const load = useCallback(
     async (dir: string) => {
       if (!source) return;
       lastAttempt.current = dir; // remembered even on failure, so Retry re-attempts it
       const my = ++gen.current;
+      // Totals are a snapshot of the listing being replaced (or re-read).
+      resetFolderSizes();
       setLoading(true);
       setError(null);
       try {
@@ -83,7 +99,7 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
         if (my === gen.current) setLoading(false);
       }
     },
-    [source, locKey],
+    [source, locKey, resetFolderSizes],
   );
 
   // (re)initialise the cwd whenever the slot's location changes
@@ -201,5 +217,8 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
     selectAll,
     clearSelection,
     selectedEntries,
+    folderSizes,
+    startFolderSizes,
+    cancelFolderSizes,
   };
 }
