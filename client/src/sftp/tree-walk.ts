@@ -10,6 +10,7 @@
 // it is collecting — never the tree.
 
 import type { Entry } from "@/store/sftp-types";
+import * as api from "@/bridge/api";
 import { apiErrorMessage } from "@/bridge/types";
 import { isSftpDisconnect, type FileSource } from "@/bridge/sources";
 import { isSafeName, isWalkableDir } from "@/sftp/paths";
@@ -75,6 +76,28 @@ export async function walkTree(src: FileSource, root: string, { sem, signal, onD
       }
     }, signal);
     level = next;
+  }
+}
+
+/** Run a walk over `source` under one cancel token for all of it, the way a
+ *  transfer runs: the token is triggered when `signal` aborts, which stops the
+ *  listings in flight on either kind of source, and is disposed when `run`
+ *  ends. A source that takes no token is handed to `run` as it is. */
+export async function underCancelToken<T>(source: FileSource, signal: AbortSignal, run: (src: FileSource) => Promise<T>): Promise<T> {
+  let token: string | undefined;
+  const trigger = () => { if (token) api.cancelTrigger(token).catch(() => {}); };
+  signal.addEventListener("abort", trigger, { once: true });
+  try {
+    let src = source;
+    if (source.withCancelToken) {
+      token = await api.cancelNew();
+      signal.throwIfAborted();
+      src = source.withCancelToken(token);
+    }
+    return await run(src);
+  } finally {
+    signal.removeEventListener("abort", trigger);
+    if (token) await api.cancelDispose(token).catch(() => {});
   }
 }
 

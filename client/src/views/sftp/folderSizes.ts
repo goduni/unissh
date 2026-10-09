@@ -8,11 +8,11 @@
 // walk, a restarted one, or one begun on rows that have since been replaced —
 // harmless.
 
-import * as api from "@/bridge/api";
 import { apiErrorMessage } from "@/bridge/types";
 import type { FileSource } from "@/bridge/sources";
 import type { Semaphore } from "@/sftp/transfer-engine";
-import { folderSize, type FolderSizeResult } from "@/sftp/tree-walk";
+import { folderSize, underCancelToken, type FolderSizeResult } from "@/sftp/tree-walk";
+import { FlushTimer } from "./flushTimer";
 
 /** What a folder's size cell shows once a total was asked for. */
 export type FolderSizeState =
@@ -41,12 +41,14 @@ export class FolderSizeRegistry {
   private readonly walks = new Map<string, AbortController>();
   /** Running figures not on screen yet; one timer commits them all. */
   private readonly running = new Map<string, number>();
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly timer: FlushTimer;
 
   constructor(
     private readonly onChange: (snapshot: FolderSizeSnapshot) => void,
-    private readonly flushMs = 250,
-  ) {}
+    flushMs?: number,
+  ) {
+    this.timer = new FlushTimer(() => this.flush(), flushMs);
+  }
 
   /** Start (or start over) the walk for each named folder. `generation` is the
    *  one of the listing the caller was looking at: a request made from rows
@@ -70,7 +72,7 @@ export class FolderSizeRegistry {
       measure(name, walk.signal, (bytes) => {
         if (!owns()) return;
         this.running.set(name, bytes);
-        this.timer ??= setTimeout(() => this.flush(), this.flushMs);
+        this.timer.arm();
       }).then(
         (total) => finish({ state: "done", bytes: total.bytes, partial: total.partial }),
         (error) => finish({ state: "failed", error: apiErrorMessage(error) }),
@@ -107,7 +109,6 @@ export class FolderSizeRegistry {
   /** Put the running figures on screen. Only folders still being counted are
    *  in `running`, so this can never overwrite a total, a failure or a stop. */
   private flush(): void {
-    this.timer = undefined;
     if (!this.running.size) return;
     const next = new Map(this.sizes);
     for (const [name, bytes] of this.running) next.set(name, { state: "pending", bytes });
@@ -118,19 +119,14 @@ export class FolderSizeRegistry {
   private commit(sizes: FolderSizes): void {
     this.sizes = sizes;
     // No timer is left behind once nothing is waiting for it.
-    if (!this.running.size && this.timer !== undefined) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
-    }
+    if (!this.running.size) this.timer.disarm();
     this.onChange({ generation: this.generation, sizes });
   }
 }
 
-/** Total the folder `name` of `cwd` on `source` under one cancel token for the
- *  whole walk, the way a transfer runs: the token is triggered when `signal`
- *  aborts, which stops the listings in flight on either kind of source, and is
- *  disposed when the walk ends. */
-export async function measureFolder(
+/** Total the folder `name` of `cwd` on `source`, under one cancel token for the
+ *  whole walk. */
+export function measureFolder(
   source: FileSource,
   cwd: string,
   name: string,
@@ -138,26 +134,13 @@ export async function measureFolder(
   signal: AbortSignal,
   onProgress: (bytes: number) => void,
 ): Promise<FolderSizeResult> {
-  let token: string | undefined;
-  const trigger = () => { if (token) api.cancelTrigger(token).catch(() => {}); };
-  signal.addEventListener("abort", trigger, { once: true });
-  try {
-    let src = source;
-    if (source.withCancelToken) {
-      token = await api.cancelNew();
-      signal.throwIfAborted();
-      src = source.withCancelToken(token);
-    }
-    return await folderSize(src, await src.join(cwd, name), {
+  return underCancelToken(source, signal, async (src) =>
+    folderSize(src, await src.join(cwd, name), {
       sem,
       signal,
       // The registry paces what reaches the screen; a second throttle here
       // would only add delay.
       throttleMs: 0,
       onProgress: ({ bytes }) => onProgress(bytes),
-    });
-  } finally {
-    signal.removeEventListener("abort", trigger);
-    if (token) await api.cancelDispose(token).catch(() => {});
-  }
+    }));
 }
