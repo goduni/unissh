@@ -10,7 +10,7 @@ import { useIsMobile } from "@/store/responsive";
 import { apiErrorMessage } from "@/bridge/types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
 import type { Entry, LocationRef, SftpSession, SortKey, SortState } from "@/store/sftp-types";
-import { displayEntries } from "./sortfilter";
+import { displayEntries, shownNames } from "./sortfilter";
 
 export interface SlotCtl {
   location: LocationRef;
@@ -29,6 +29,7 @@ export interface SlotCtl {
   goTo: (path: string) => void;
   refresh: () => void;
   select: (name: string, additive: boolean, range: boolean) => void;
+  selectAll: () => void;
   clearSelection: () => void;
   selectedEntries: () => Entry[];
 }
@@ -172,6 +173,8 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
     },
     [filter, sort],
   );
+  // Only what the filter shows: an operation must never reach a hidden entry.
+  const selectAll = useCallback(() => setSelection(shownNames(entriesRef.current, filter)), [filter]);
   const clearSelection = useCallback(() => setSelection(new Set()), []);
   const selectedEntries = useCallback(
     () => entriesRef.current.filter((e) => selection.has(e.name)),
@@ -195,6 +198,7 @@ export function useSlot(location: LocationRef, sessions: SftpSession[]): SlotCtl
     goTo,
     refresh,
     select,
+    selectAll,
     clearSelection,
     selectedEntries,
   };

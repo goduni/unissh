@@ -1412,13 +1412,15 @@ export const en = {
       "global": "Application",
       "navigation": "Sections",
       "terminal": "Terminal",
-      "editor": "SFTP editor"
+      "editor": "SFTP editor",
+      "sftp": "SFTP file list"
     },
     "scopeHints": {
       "global": "Application commands. Foreground dialogs keep control of their inputs; Settings and Lock remain available.",
       "navigation": "Switch sections outside the terminal. In the terminal, the default number shortcuts switch tabs.",
       "terminal": "Available in the terminal. Copy, paste, find and prompt navigation act on the focused pane.",
-      "editor": "Available while editing a file in SFTP."
+      "editor": "Available while editing a file in SFTP.",
+      "sftp": "Available while a file list has focus. Actions apply to the row under the cursor, or to the whole selection when that row is part of it; on “..”, to the selected entries the filter shows. Arrows, Home, End, Enter and Space keep their roles, and Shift+Tab always leaves the list."
     },
     "actions": {
       "device": "Switch desktop / mobile preview",
@@ -1433,6 +1435,11 @@ export const en = {
       "promptNext": "Next prompt (OSC 133)",
       "copySelection": "Copy selection, otherwise interrupt",
       "editorSave": "Save file",
+      "sftpSwitchPane": "Switch to the other pane",
+      "sftpParentDir": "Go to the parent folder",
+      "sftpSelectAll": "Select all",
+      "sftpPageUp": "Move one screen up",
+      "sftpPageDown": "Move one screen down",
       "tab9": "Last terminal tab",
       "tab1": "Terminal tab 1",
       "tab2": "Terminal tab 2",

@@ -7,13 +7,17 @@ import { usePalette } from "@/theme/ThemeProvider";
 import { useIsMobile } from "@/store/responsive";
 import { Icon, type IconName } from "@/components/primitives";
 import { BottomSheet } from "@/components/Modal";
-import { rem, TEXT } from "@/theme/tokens";
+import { MONO, rem, TEXT } from "@/theme/tokens";
 
 export interface MenuItem {
   icon?: IconName;
   label: string;
   danger?: boolean;
   disabled?: boolean;
+  /** The item's keyboard shortcut, as printed; pointer layouts only. */
+  keys?: string;
+  /** The same shortcut(s) in aria-keyshortcuts syntax. */
+  ariaKeys?: string;
   onClick: () => void;
 }
 
@@ -67,6 +71,7 @@ export function ContextMenu({
       onClick={() => run(it)}
       disabled={it.disabled}
       role="menuitem"
+      aria-keyshortcuts={isMobile ? undefined : it.ariaKeys}
       style={{
         display: "flex",
         alignItems: "center",
@@ -92,6 +97,11 @@ export function ContextMenu({
     >
       {it.icon && <Icon name={it.icon} size={isMobile ? 17 : 14} color={it.danger ? p.red : p.txt3} />}
       <span style={{ flex: 1 }}>{it.label}</span>
+      {it.keys && !isMobile && (
+        <span aria-hidden style={{ fontFamily: MONO, fontSize: TEXT.small, color: p.txt3, marginLeft: rem(14), whiteSpace: "nowrap" }}>
+          {it.keys}
+        </span>
+      )}
     </button>
   );
 

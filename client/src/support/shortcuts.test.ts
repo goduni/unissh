@@ -67,5 +67,11 @@ describe("shortcut cheat-sheet", () => {
     expect(flat(true)).not.toContain("Ctrl+Shift+");
     expect(flat(false)).toContain("Ctrl+Shift+");
     expect(flat(false)).not.toContain("⌘");
+    // Editing keys follow the platform too, instead of printing raw key codes.
+    expect(flat(true)).toContain("⌦ / ⌥8 / ⌘⌫");
+    expect(flat(true)).toContain("⇞");
+    expect(flat(false)).toContain("Delete / Alt+8");
+    expect(flat(false)).toContain("PgUp");
+    expect(flat(false)).not.toContain("PageUp");
   });
 });

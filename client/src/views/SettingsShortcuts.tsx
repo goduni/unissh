@@ -6,9 +6,7 @@ import { useTranslation, tDyn } from "@/i18n";
 import { isMac } from "@/bridge/platform";
 import { useNarrow } from "@/store/responsive";
 import { useShortcuts } from "@/store/shortcuts";
-import { SHORTCUTS, bindingsFor, conflictsFor, eventBinding, formatBinding, sameBinding, shortcutDefinition, validBinding, type ShortcutScope } from "@/support/keybindings";
-
-const scopes: ShortcutScope[] = ["global", "navigation", "terminal", "editor"];
+import { SHORTCUTS, SHORTCUT_SCOPES, bindingsFor, conflictsFor, eventBinding, formatBinding, sameBinding, shortcutDefinition, validBinding } from "@/support/keybindings";
 
 function ShortcutEditor({ id, onClose, onDirtyChange, recordRef }: { id: string; onClose: (saved?: boolean) => void; onDirtyChange: (dirty: boolean) => void; recordRef: RefObject<HTMLButtonElement | null> }) {
   const p = usePalette();
@@ -41,7 +39,7 @@ function ShortcutEditor({ id, onClose, onDirtyChange, recordRef }: { id: string;
       if (e.key === "Escape") { stop(); return; }
       if (e.repeat || e.isComposing || ["Control", "Shift", "Alt", "Meta", "AltGraph"].includes(e.key)) return;
       const b = eventBinding(e);
-      if (e.getModifierState("AltGraph") || !validBinding(b)) { setInvalid(true); return; }
+      if (e.getModifierState("AltGraph") || !validBinding(b, shortcutDefinition(id).scope)) { setInvalid(true); return; }
       setDraft((list) => capture === "replace" ? [b] : list.some((old) => sameBinding(old, b)) ? list : [...list, b]);
       setInvalid(false);
       stop();
@@ -55,7 +53,7 @@ function ShortcutEditor({ id, onClose, onDirtyChange, recordRef }: { id: string;
       window.removeEventListener("blur", stop);
       document.removeEventListener("focusin", onFocus);
     };
-  }, [capture, setRecording, recordRef]);
+  }, [capture, setRecording, recordRef, id]);
   useEffect(() => {
     if (capture) return;
     const onKey = (e: KeyboardEvent) => {
@@ -170,7 +168,7 @@ export function SettingsShortcuts() {
       </div>}
       {storageError && <p role="alert" style={{ color: p.red }}>{t("keybindings.storageError")}</p>}
       {!filtered.length && <p role="status" style={{ color: p.txt2 }}>{t("keybindings.noResults")}</p>}
-      {scopes.map((scope) => {
+      {SHORTCUT_SCOPES.map((scope) => {
         const rows = filtered.filter((s) => s.scope === scope);
         if (!rows.length) return null;
         return <section key={scope} aria-labelledby={`shortcuts-${scope}`} style={{ marginBottom: rem(24) }}>

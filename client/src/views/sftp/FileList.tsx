@@ -12,6 +12,8 @@ import type { Entry, SortKey, SortState } from "@/store/sftp-types";
 import { FileRow } from "./FileRow";
 import { displayEntries } from "./sortfilter";
 import { useVirtualRows } from "./useVirtualRows";
+import { pageRows } from "./virtualRows";
+import { runFileListShortcut, type ListCursor, type ListShortcutHandler } from "./shortcuts";
 
 export function FileList({
   entries,
@@ -28,6 +30,7 @@ export function FileList({
   onSelect,
   onActivate,
   onContext,
+  onShortcut,
   onRetry,
   onRowDragStart,
 }: {
@@ -45,6 +48,9 @@ export function FileList({
   onSelect: (name: string, additive: boolean, range: boolean) => void;
   onActivate: (entry: Entry) => void;
   onContext: (entry: Entry | null, x: number, y: number) => void;
+  /** Runs an `sftp`-scope shortcut pressed in this list; absent while something
+   *  else (a menu, a dialog, the editor) owns the keyboard. */
+  onShortcut?: ListShortcutHandler;
   onRetry: () => void;
   onRowDragStart: (entry: Entry, e: React.DragEvent) => void;
 }) {
@@ -86,6 +92,10 @@ export function FileList({
 
   // Keyboard navigation: a focus cursor over [".." , ...display].
   const [focusIdx, setFocusIdx] = useState(0);
+  // The cursor ring marks the list the keys go to, so only the focused one draws it.
+  const [hasFocus, setHasFocus] = useState(false);
+  // The error state unmounts the list, and a removed element fires no blur.
+  useEffect(() => setHasFocus(false), [error]);
   const base = showUp ? 1 : 0;
   const navCount = base + display.length;
   const [dragged, setDragged] = useState<Entry | null>(null);
@@ -118,7 +128,22 @@ export function FileList({
   const activeVisible = (showUp && focusIdx === 0) ||
     (focusIdx - base >= rows.start && focusIdx - base < rows.end);
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
+  const cursorEntry = () => (showUp && focusIdx === 0 ? null : (display[focusIdx - base] ?? null));
+  const cursorAt = (list: HTMLElement): ListCursor => {
+    const r = list.getBoundingClientRect();
+    const view = list.clientHeight - (rows.headerRef.current?.offsetHeight ?? 0);
+    return {
+      entry: cursorEntry(),
+      x: r.left + 80,
+      y: Math.min(r.bottom - 40, r.top + 60),
+      page: (dir) => focusRow(focusIdx + dir * pageRows(view, rowHeight)),
+    };
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    // Rebindable actions go through the shortcut registry; the keys below are
+    // the list's fixed navigation.
+    if (onShortcut && runFileListShortcut(e, onShortcut, () => cursorAt(e.currentTarget))) return;
     if (e.target !== e.currentTarget) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -142,21 +167,23 @@ export function FileList({
       }
     } else if (e.key === " ") {
       e.preventDefault();
-      const ent = showUp && focusIdx === 0 ? null : display[focusIdx - base];
+      const ent = cursorEntry();
       if (ent) onSelect(ent.name, true, false);
     } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
       // Keyboard access to the row actions (Send to…, open, rename, delete) — so a
       // keyboard-only operator can transfer folders / to a specific tab / a
       // multi-selection, not just Enter-send the focused file.
       e.preventDefault();
-      const ent = showUp && focusIdx === 0 ? null : display[focusIdx - base];
-      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      onContext(ent, r.left + 80, Math.min(r.bottom - 40, r.top + 60));
+      const at = cursorAt(e.currentTarget);
+      onContext(at.entry, at.x, at.y);
     }
   };
 
   const rowClick = (entry: Entry, e: React.MouseEvent) => {
     setFocusIdx(base + display.indexOf(entry));
+    // A click lands on a row, not on the list; make sure the list — and so the
+    // cursor ring and the keys — follows the mouse in every WebView.
+    rows.scrollRef.current?.focus({ preventScroll: true });
     const additive = e.metaKey || e.ctrlKey;
     const range = e.shiftKey;
     if (entry.isDir && !additive && !range) {
@@ -236,10 +263,17 @@ export function FileList({
         onScroll={rows.measure}
         tabIndex={0}
         role="listbox"
+        data-sftp-list=""
         aria-label={t("nav.sftp")}
         aria-multiselectable
         aria-activedescendant={activeVisible ? `${listId}-${focusIdx}` : undefined}
         onKeyDown={onKeyDown}
+        onFocus={(e) => {
+          if (e.target === e.currentTarget) setHasFocus(true);
+        }}
+        onBlur={(e) => {
+          if (e.target === e.currentTarget) setHasFocus(false);
+        }}
         style={{ flex: 1, overflow: "auto", padding: rem(6), outline: "none" }}
       >
         {/* Header lives INSIDE the scroll body (sticky) so it shares the rows'
@@ -273,7 +307,7 @@ export function FileList({
             id={`${listId}-0`}
             position={1}
             total={navCount}
-            focused={focusIdx === 0}
+            focused={hasFocus && focusIdx === 0}
             onClick={onOpenUp}
           />
         )}
@@ -310,7 +344,7 @@ export function FileList({
                       total={navCount}
                       entry={entry}
                       selected={selection.has(entry.name)}
-                      focused={focusIdx === base + idx}
+                      focused={hasFocus && focusIdx === base + idx}
                       showModified={showModified}
                       showPerms={showPerms}
                       actionIcon={actionIcon}

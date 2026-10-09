@@ -7,3 +7,8 @@ export function visibleRows(count: number, rowHeight: number, top: number, heigh
   const end = Math.min(count, Math.max(first + 1, Math.ceil((top + height) / rowHeight)) + overscan);
   return { start, end };
 }
+
+/** How many rows PgUp/PgDn move the cursor: the whole rows that fit, at least one. */
+export function pageRows(height: number, rowHeight: number): number {
+  return Math.max(1, Math.floor(height / rowHeight));
+}

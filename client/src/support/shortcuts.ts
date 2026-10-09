@@ -1,5 +1,5 @@
 // The sheet and Settings share the same live binding catalog.
-import { SHORTCUTS, bindingsFor, formatBinding, type ShortcutOverrides, type ShortcutScope } from "./keybindings";
+import { SHORTCUTS, SHORTCUT_SCOPES, bindingsFor, formatBinding, type ShortcutOverrides } from "./keybindings";
 
 /** One printed line: a keycap and what it does.
  *
@@ -20,9 +20,8 @@ export interface ShortcutGroup {
 }
 
 export function shortcutGroups(mac: boolean, overrides: ShortcutOverrides = {}): ShortcutGroup[] {
-  const scopes: ShortcutScope[] = ["global", "navigation", "terminal", "editor"];
   return [
-    ...scopes.map((scope) => ({
+    ...SHORTCUT_SCOPES.map((scope) => ({
       titleKey: `keybindings.scopes.${scope}`,
       rows: SHORTCUTS.filter((s) => s.scope === scope).map((s) => {
         const bindings = bindingsFor(s.id, overrides, mac);
