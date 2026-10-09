@@ -1,4 +1,4 @@
-import { mapWorkers } from "@/sftp/transfer-engine";
+import { isWithin, mapWorkers } from "@/sftp/transfer-engine";
 // SFTP — drag-first, multi-location file manager. Desktop: two pane slots, each
 // with its own location tabs; drag between them (or onto a tab) to transfer.
 // Narrow/mobile: a single slot whose tab strip holds every location. This file
@@ -28,7 +28,7 @@ import { TransferQueue } from "./TransferQueue";
 import { ExternalEdits } from "./ExternalEdits";
 import { startExternalEdit } from "@/sftp/external-edit";
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
-import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConflictDialog, ChmodDialog } from "./dialogs";
+import { NewEntryDialog, RenameDialog, ConfirmDeleteDialog, ConfirmMoveDialog, ConflictDialog, ChmodDialog } from "./dialogs";
 import { TextEditor } from "./TextEditor";
 import { openSession } from "./session";
 import { dragCtx } from "./drag";
@@ -60,6 +60,7 @@ type Dialog =
   | { kind: "newfile"; slot: SlotCtl }
   | { kind: "rename"; slot: SlotCtl; entry: Entry }
   | { kind: "delete"; slot: SlotCtl; entries: Entry[] }
+  | { kind: "move"; entries: Entry[]; fromLoc: LocationRef; fromCwd: string; toLoc: LocationRef; toCwd: string }
   | { kind: "chmod"; slot: SlotCtl; entry: Entry }
   | null;
 
@@ -203,6 +204,7 @@ export function ViewSftp() {
     fromCwd: string,
     toLoc: LocationRef,
     toCwd: string,
+    move = false,
   ) {
     const gen = teardownGeneration();
     let fromSource, toSource;
@@ -251,6 +253,7 @@ export function ViewSftp() {
         fromPath,
         kind: entry.isDir && !entry.isSymlink ? "dir" : "file",
         isSymlink: entry.isSymlink,
+        ...(move ? { move } : {}),
         bytesDone: 0,
         bytesTotal: entry.isDir || entry.isSymlink ? 0 : entry.size,
         filesDone: 0,
@@ -284,13 +287,46 @@ export function ViewSftp() {
         await startTransfer(tr, fromSource, toSource, serialized, sem);
       });
     refreshShowing(toLoc);
+    // A move empties the source too. One location is refreshed once: the call
+    // above already reached every pane showing it.
+    if (move && keyOf(fromLoc) !== keyOf(toLoc)) refreshShowing(fromLoc);
   }
 
-  const sendTo = (entries: Entry[], fromSlot: SlotCtl, toLoc: LocationRef, toCwd?: string) => {
+  /** Where a transfer out of `fromSlot` lands in `toLoc`: the other pane's
+   *  folder when it shows that location, else wherever the location is rooted. */
+  const landingCwd = (fromSlot: SlotCtl, toLoc: LocationRef): string => {
     const other = fromSlot === left ? right : left;
-    toCwd ??= keyOf(other.location) === keyOf(toLoc) ? other.cwd : cwdOf(toLoc);
+    return keyOf(other.location) === keyOf(toLoc) ? other.cwd : cwdOf(toLoc);
+  };
+
+  const sendTo = (entries: Entry[], fromSlot: SlotCtl, toLoc: LocationRef, toCwd?: string) => {
+    toCwd ??= landingCwd(fromSlot, toLoc);
     if (!entries.length || toLoc.kind === "none") return;
     runTransfers(entries, fromSlot.location, fromSlot.cwd, toLoc, toCwd);
+  };
+
+  /** A move removes its sources, so nothing starts before the user has seen
+   *  what goes where. What can never work is refused here, before the question. */
+  const askMove = async (entries: Entry[], fromSlot: SlotCtl, toLoc: LocationRef, toCwd?: string) => {
+    toCwd ??= landingCwd(fromSlot, toLoc);
+    if (!entries.length || toLoc.kind === "none" || !fromSlot.source) return;
+    if (keyOf(fromSlot.location) === keyOf(toLoc)) {
+      if (fromSlot.cwd === toCwd) {
+        toast(t("sftp.toast.moveSameFolder"), "err");
+        return;
+      }
+      try {
+        for (const e of entries) {
+          if (!e.isDir || e.isSymlink || !isWithin(await fromSlot.source.join(fromSlot.cwd, e.name), toCwd, true)) continue;
+          toast(t("sftp.toast.moveIntoItself", { name: e.name }), "err");
+          return;
+        }
+      } catch (e) {
+        toast(apiErrorMessage(e), "err");
+        return;
+      }
+    }
+    setDialog({ kind: "move", entries, fromLoc: fromSlot.location, fromCwd: fromSlot.cwd, toLoc, toCwd });
   };
 
   const handleDrop = async (toLoc: LocationRef, toCwd: string) => {
@@ -313,7 +349,7 @@ export function ViewSftp() {
       for (const e of entries) {
         if (e.isDir) {
           const abs = await src.join(pl.cwd, e.name);
-          if (toCwd === abs || toCwd.startsWith(`${abs}/`) || toCwd.startsWith(`${abs}\\`)) continue;
+          if (isWithin(abs, toCwd, true)) continue;
         }
         kept.push(e);
       }
@@ -462,7 +498,8 @@ export function ViewSftp() {
     const other = slot === left ? right : left;
     return oneCol || other.location.kind === "none" ? null : other;
   };
-  const sendItems = (entries: Entry[], slot: SlotCtl): MenuItem[] => {
+  /** One menu item per destination, for copying ("Send to …") or moving. */
+  const sendItems = (entries: Entry[], slot: SlotCtl, move = false): MenuItem[] => {
     const here = keyOf(slot.location);
     const across = paneAcross(slot);
     const acrossId = across && keyOf(across.location);
@@ -471,10 +508,10 @@ export function ViewSftp() {
       // copy key sends, so the item is there to carry the hint.
       .filter((tab) => tab.id !== here || tab.id === acrossId)
       .map((tab) => ({
-        icon: tab.kind === "remote" ? "upload" : "download",
-        label: t("sftp.menu.sendTo", { name: tab.label }),
-        ...(tab.id === acrossId ? keysOf("copy") : {}),
-        onClick: () => sendTo(entries, slot, refOf(tab.id)),
+        icon: move ? "arrows" : tab.kind === "remote" ? "upload" : "download",
+        label: t(move ? "sftp.menu.moveTo" : "sftp.menu.sendTo", { name: tab.label }),
+        ...(tab.id === acrossId ? keysOf(move ? "move" : "copy") : {}),
+        onClick: () => (move ? void askMove(entries, slot, refOf(tab.id)) : sendTo(entries, slot, refOf(tab.id))),
       }));
   };
   const titleOf = (entries: Entry[]) =>
@@ -497,7 +534,7 @@ export function ViewSftp() {
       items.push({ ...inApp, label: t("common.open") });
       items.push({ icon: "link", label: t("sftp.menu.openExternal"), onClick: () => void openExternally(slot, entry) });
     }
-    items.push(...sendItems(entries, slot));
+    items.push(...sendItems(entries, slot), ...sendItems(entries, slot, true));
     items.push({ icon: "pencil", label: t("sftp.menu.rename"), ...keysOf("rename"), onClick: () => askRename(slot, entry) });
     if (slot.source?.chmod)
       items.push({ icon: "shield", label: t("sftp.menu.permissions"), onClick: () => setDialog({ kind: "chmod", slot, entry }) });
@@ -520,6 +557,16 @@ export function ViewSftp() {
 
   // ── keyboard (the `sftp` shortcut scope) ─────────────────────
   // One handler per registry action; the registry decides which key means which.
+  /** F5 and F6 differ only in what happens to the source. */
+  const transferShortcut = (move: boolean) => (slot: SlotCtl, cursor: ListCursor): void => {
+    const entries = actionTargets(cursor.entry, slot);
+    if (!entries.length) return;
+    const across = paneAcross(slot);
+    if (across) return move ? void askMove(entries, slot, across.location, across.cwd) : sendTo(entries, slot, across.location, across.cwd);
+    // No pane across to aim at: offer the same destinations the row menu does.
+    const items = sendItems(entries, slot, move);
+    if (items.length) setMenu({ items, title: titleOf(entries), x: cursor.x, y: cursor.y });
+  };
   const shortcutHandlers: Record<SftpAction, (slot: SlotCtl, cursor: ListCursor) => void | false> = {
     switchPane: () => {
       const lists = paneAreaRef.current?.querySelectorAll<HTMLElement>("[data-sftp-list]") ?? [];
@@ -543,15 +590,8 @@ export function ViewSftp() {
     edit: (slot, { entry }) => {
       if (entry && !entry.isDir) void openEditor(slot, entry);
     },
-    copy: (slot, cursor) => {
-      const entries = actionTargets(cursor.entry, slot);
-      if (!entries.length) return;
-      const across = paneAcross(slot);
-      if (across) return sendTo(entries, slot, across.location, across.cwd);
-      // No pane across to aim at: offer the same destinations the row menu does.
-      const items = sendItems(entries, slot);
-      if (items.length) setMenu({ items, title: titleOf(entries), x: cursor.x, y: cursor.y });
-    },
+    copy: transferShortcut(false),
+    move: transferShortcut(true),
     newFolder: (slot) => askNewFolder(slot),
     delete: (slot, { entry }) => {
       const entries = actionTargets(entry, slot);
@@ -591,6 +631,8 @@ export function ViewSftp() {
     onTabDragLeave: (id: string) => setDropTab((d) => (d?.slot === slotKey && d.id === id ? null : d)),
   });
 
+  /** A location and folder as the move question names them: "prod: /var/www". */
+  const placeOf = (loc: LocationRef, cwd: string) => `${tabs.find((tab) => tab.id === keyOf(loc))?.label ?? ""}: ${cwd}`;
   const dialogExisting = (slot: SlotCtl) => slot.entries.map((e) => e.name);
 
   // A live external edit outlives the pane that started it, so the watcher can't
@@ -672,6 +714,15 @@ export function ViewSftp() {
           names={dialog.entries.map((e) => e.name)}
           hasDir={dialog.entries.some((e) => e.isDir)}
           onConfirm={() => doDelete(dialog.slot, dialog.entries)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === "move" && (
+        <ConfirmMoveDialog
+          names={dialog.entries.map((e) => e.name)}
+          from={placeOf(dialog.fromLoc, dialog.fromCwd)}
+          to={placeOf(dialog.toLoc, dialog.toCwd)}
+          onConfirm={() => void runTransfers(dialog.entries, dialog.fromLoc, dialog.fromCwd, dialog.toLoc, dialog.toCwd, true)}
           onClose={() => setDialog(null)}
         />
       )}

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SftpSession } from "@/store/sftp-types";
 
 const { api } = vi.hoisted(() => ({
-  api: { sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), sftpReopen: vi.fn() },
+  api: { sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), localRemove: vi.fn(), sftpReopen: vi.fn() },
 }));
 vi.mock("@/bridge/api", () => api);
 import { sourceFor } from "./sources";
@@ -52,5 +52,13 @@ describe("link metadata", () => {
     expect(await local.list("/venv")).toEqual([expect.objectContaining({ isDir: false, isSymlink: true })]);
     expect(await local.lstat("/venv/lib64")).toMatchObject({ isDir: false, isSymlink: true });
     expect(api.localStat).not.toHaveBeenCalled();
+  });
+});
+
+describe("removing an emptied local folder", () => {
+  it("refuses a path that is no longer a real directory", async () => {
+    api.localLstat.mockResolvedValue({ name: "moved", isDir: true, isSymlink: true, size: 3, mtime: 0 });
+    await expect(sourceFor({ kind: "local" }, []).removeEmptyDir("/src/moved")).rejects.toThrow("Not a directory");
+    expect(api.localRemove).not.toHaveBeenCalled();
   });
 });

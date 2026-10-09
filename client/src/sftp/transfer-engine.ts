@@ -129,6 +129,24 @@ export async function mapWorkers<T, R>(items: readonly T[], concurrency: number,
   return results;
 }
 
+/** Whether `path` is `dir` itself or lies inside it. Both must be normalized
+ *  the same way and carry no trailing separator. `nativeSeparators` also takes
+ *  a backslash as a separator, for local Windows paths that were not normalized. */
+export function isWithin(dir: string, path: string, nativeSeparators = false): boolean {
+  return path === dir || path.startsWith(`${dir}/`) || (nativeSeparators && path.startsWith(`${dir}\\`));
+}
+
+/** After a folder move: the source directories that may be removed, deepest
+ *  first, as paths relative to the moved root ("" is the root itself). A
+ *  directory stays if anything listed in `stayed` (a file that was not moved, or
+ *  a directory that could not be removed) is inside it. */
+export function emptiedDirs(dirs: readonly string[], stayed: readonly string[]): string[] {
+  const depth = (rel: string): number => rel === "" ? 0 : rel.split("/").length;
+  return ["", ...dirs]
+    .filter((dir) => !stayed.some((rel) => dir === "" || isWithin(dir, rel)))
+    .sort((a, b) => depth(b) - depth(a));
+}
+
 export interface WalkItem {
   relPath: string; // path relative to the walk root, joined with "/"
   isDir: boolean;

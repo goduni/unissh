@@ -45,6 +45,7 @@ const SFTP_SHORTCUTS = {
   // View (F3) and edit (F4) are one action: the built-in editor has no read-only mode.
   edit: ["sftp.menu.openInApp", fkeys([4, 3])],
   copy: ["sftp.send", fkeys([5])],
+  move: ["sftp.move", fkeys([6])],
   newFolder: ["sftp.menu.newFolder", fkeys([7])],
   // A Mac laptop has no Delete key without Fn either; ⌘⌫ is what Finder uses.
   delete: ["sftp.menu.delete", (mac) => [...fkeys([8], binding("Delete"))(), ...(mac ? [binding("Backspace", { meta: true })] : [])]],

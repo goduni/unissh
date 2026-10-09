@@ -8,8 +8,9 @@ import { apiErrorMessage } from "@/bridge/types";
 import { useApp } from "@/store/app";
 import type { Entry, Transfer } from "@/store/sftp-types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
-import { abortable, collectTree, mapWorkers, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
+import { abortable, collectTree, emptiedDirs, isWithin, mapWorkers, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
 import { dedupeName } from "@/sftp/paths";
+import { i18n } from "@/i18n";
 
 export interface ConflictResolution {
   choice: "overwrite" | "skip" | "keepboth" | "resume";
@@ -29,6 +30,11 @@ interface PlannedLeaf {
   completed: boolean;
   skipped?: boolean;
   source?: Entry;
+  /** Move only: the source is gone, so there is nothing left to verify or redo. */
+  removed?: boolean;
+  /** Move only: the destination that was replaced could not be told apart from
+   *  the source, so the two paths may name one file. The source is never removed. */
+  aliased?: boolean;
 }
 const manifests = new Map<string, Map<string, PlannedLeaf>>();
 const reservedPaths = new Map<string, string>();
@@ -45,6 +51,11 @@ interface Control {
   patch: (patch: Partial<Transfer>) => void;
   paused: boolean;
   cancelled: boolean;
+  /** Remove each source once its copy is committed at the destination. */
+  move: boolean;
+  /** Move only: sources that arrived but could not be removed. They are
+   *  reported when the transfer settles; none of them stops the others. */
+  kept: string[];
   /** One native flag covers every file in this transfer. Keep it alive until
    * all writes settle; creating/discarding a token per file adds two IPCs. */
   cancelId?: string;
@@ -148,9 +159,82 @@ async function validateTarget(t: Transfer, from: FileSource, to: FileSource): Pr
   const target = await to.join(parent, t.label);
   const normalized = (p: string) => (windows ? p.replace(/\\/g, "/").toLowerCase() : p).replace(/\/+$/, "");
   const a = normalized(source), b = normalized(target);
-  if (a === b || (t.kind === "dir" && b.startsWith(`${a}/`))) throw new Error("Cannot copy a path into itself");
+  const verb = t.move ? "move" : "copy";
+  if (a === b || (t.kind === "dir" && isWithin(a, b))) throw new Error(t.move ? i18n.t("sftp.moveError.intoItself") : "Cannot copy a path into itself");
   const existing = await to.lstat(target);
-  if (existing && !t.isSymlink && !existing.isSymlink && (await to.realpath(target) === source || await from.sameFile?.(t.fromPath, target))) throw new Error("Cannot copy a file onto itself");
+  if (existing && !t.isSymlink && !existing.isSymlink && (await to.realpath(target) === source || await from.sameFile?.(t.fromPath, target))) throw new Error(`Cannot ${verb} a file onto itself`);
+}
+
+/** The second half of a move, for one file. Its only callers are the two places
+ *  in transferLeaf where `plan.completed` is known to be true — the copy has been
+ *  committed at the destination — so nothing that failed, was cancelled before
+ *  its commit, or was skipped can reach it. `plan.completed` is only a memory of
+ *  that commit, and a retry may come much later, so the copy is looked at again
+ *  here. Never throws: a source that cannot be removed is a copy, which is
+ *  reported but must not stop the other files. */
+async function removeMovedSource(from: FileSource, to: FileSource, path: string, plan: PlannedLeaf, isSymlink: boolean, ctrl: Control): Promise<void> {
+  // After pause/cancel nothing more is deleted; a resume picks this file up again.
+  if (!ctrl.move || ctrl.abort.signal.aborted) return;
+  try {
+    // Removing a source that is the destination under another name removes the only copy.
+    if (plan.aliased) throw new Error(i18n.t("sftp.moveError.sameFile"));
+    // Whatever was written to the source after it was read exists nowhere else.
+    if (!unchanged(plan.source ?? null, await from.lstat(path))) throw new Error(i18n.t("sftp.moveError.sourceChanged"));
+    const landed = await to.lstat(plan.path);
+    const intact = landed !== null && (isSymlink
+      ? !!landed.isSymlink
+      : !landed.isDir && !landed.isSymlink && landed.sizeKnown !== false && landed.size === plan.source?.size);
+    if (!intact) throw new Error(i18n.t("sftp.moveError.destinationMissing"));
+    await (isSymlink ? from.unlink(path) : from.remove(path));
+    plan.removed = true;
+  } catch (error) {
+    ctrl.kept.push(`${path}: ${apiErrorMessage(error)}`);
+  }
+}
+
+/** A move inside one session needs no copy: rename the entry into place. Returns
+ *  false when that is not possible, and the caller moves it the long way (copy,
+ *  then remove the source) — a rename across filesystems fails on every platform,
+ *  and a folder landing on an existing folder is a per-file merge. Never replaces
+ *  a destination the user was not asked about. */
+async function renameInPlace(t: Transfer, src: FileSource, resolver: ConflictResolver, ctrl: Control): Promise<boolean> {
+  ctrl.patch({ state: "active" });
+  let target = await src.join(t.toDir, t.label);
+  const existing = await abortable(src.lstat(target), ctrl.abort.signal);
+  if (existing && (t.kind === "dir" || existing.isDir)) return false;
+  let replace = false;
+  if (existing) {
+    const res = await resolveConflict(resolver, {
+      name: t.label, targetSize: existing.size, sourceSize: t.bytesTotal, resumable: false,
+      sameSize: !t.isSymlink && !existing.isSymlink && existing.size === t.bytesTotal,
+    }, ctrl);
+    if (res.choice === "skip") {
+      ctrl.patch({ filesDone: 1, bytesDone: t.bytesTotal });
+      return true;
+    }
+    if (res.choice === "keepboth") {
+      const listing = await abortable(src.list(t.toDir), ctrl.abort.signal);
+      t.label = await availableName(src, t.toDir, t.label, listing.map((e) => e.name), ctrl);
+      target = await src.join(t.toDir, t.label);
+    } else replace = true;
+  }
+  ctrl.abort.signal.throwIfAborted();
+  reserve(src, target, ctrl);
+  if (replace && !unchanged(existing, await abortable(src.lstat(target), ctrl.abort.signal))) throw new Error("Destination changed after the conflict decision");
+  try {
+    // commit(…, false) publishes only onto a free name. A directory cannot be
+    // hard-linked locally, so it takes the plain rename after the check above.
+    if (t.kind === "dir") await src.rename(t.fromPath, target);
+    else await src.commit(t.fromPath, target, replace);
+  } catch (error) {
+    // A pause or cancel is not a refused rename: nothing more may start.
+    if (ctrl.abort.signal.aborted) throw error;
+    // Carry the decision over, so the copy path does not ask a second time.
+    if (t.kind === "file") ctrl.manifest.set(t.fromPath, { path: target, existing: replace ? existing : null, completed: false });
+    return false;
+  }
+  ctrl.patch({ label: t.label, filesDone: 1, bytesDone: t.bytesTotal });
+  return true;
 }
 
 /** Stream one file between two sources. Returns true if it completed, false if a
@@ -210,10 +294,13 @@ async function transferLeaf(
   isSymlink: boolean, size: number, ctrl: Control,
   progress: (done: number, total: number) => void,
 ): Promise<boolean> {
+  if (plan.removed) return true;
   const source = await from.lstat(fromPath);
   if (!source) throw new Error("Source no longer exists");
   if (plan.completed) {
     if (!plan.skipped && plan.source && !unchanged(plan.source, source)) throw new Error("Source changed since the previous attempt");
+    // A retry of a move whose copy landed but whose source was left behind.
+    if (!plan.skipped) await removeMovedSource(from, to, fromPath, plan, isSymlink, ctrl);
     return true;
   }
   if (!isSymlink && (source.fileKind === "unknown" || source.fileKind === "unsupported" || source.isDir || (source.mode && (source.mode & 0o170000) !== 0o100000))) throw new Error("Source is not a regular file");
@@ -238,10 +325,16 @@ async function transferLeaf(
     }
     ctrl.abort.signal.throwIfAborted();
     if (plan.existing && !unchanged(plan.existing, await to.lstat(plan.path))) throw new Error("Destination changed after the conflict decision");
+    // Two remote sessions can reach one file by two paths (the same host under
+    // another name or user, a bind mount, a case-insensitive filesystem), and
+    // nothing remote can prove they do not. Decided here, before the commit:
+    // afterwards an aliased source IS the new file and passes every check.
+    if (ctrl.move && plan.existing && from.kind === "remote" && to.kind === "remote" && unchanged(plan.existing, source)) plan.aliased = true;
     await to.commit(stage, plan.path, plan.existing !== null);
     created = false;
     plan.completed = true;
     plan.source = source;
+    await removeMovedSource(from, to, fromPath, plan, isSymlink, ctrl);
     return true;
   } finally {
     if (created) await (isSymlink ? to.unlink(stage) : to.remove(stage)).catch(() => {});
@@ -560,6 +653,24 @@ async function runDir(
     }, ctrl.abort.signal), ctrl.abort.signal);
   }
   if (rootMetadata) await to.setMetadata(targetRoot, rootMetadata.mode, rootMetadata.mtime);
+
+  // 4. Move only: drop the source directories that are now empty, children
+  //    before parents. Each removal is non-recursive, so a directory that still
+  //    holds anything — a skipped file, one that could not be removed, or one
+  //    that appeared meanwhile — refuses and stays, along with its parents.
+  if (ctrl.move) {
+    const stayed = files.filter((file) => !ctrl.manifest.get(file.relPath)?.removed).map((file) => file.relPath);
+    const stuck: string[] = [];
+    for (const rel of emptiedDirs(dirs, stayed)) {
+      if (ctrl.abort.signal.aborted) break;
+      if (stuck.some((child) => rel === "" || isWithin(rel, child))) continue;
+      const path = await sourcePath(rel);
+      await from.removeEmptyDir(path).catch((error: unknown) => {
+        stuck.push(rel);
+        ctrl.kept.push(`${path}: ${apiErrorMessage(error)}`);
+      });
+    }
+  }
   ctrl.patch({ filesDone, bytesDone, bytesTotal: bytesDone });
 }
 
@@ -604,7 +715,7 @@ export async function startTransfer(
   const ctrl: Control = {
     id: t.id, manifest: manifests.get(t.id) ?? new Map(),
     paused: false, cancelled: false, abort: new AbortController(),
-    moved: 0, pendingConflicts: 0, lastProgressAt: now(),
+    moved: 0, pendingConflicts: 0, lastProgressAt: now(), move: !!t.move, kept: [],
     patch: (patch) => {
       if (controls.get(t.id) === ctrl && !ctrl.abort.signal.aborted) patchTransfer(t.id, patch);
     },
@@ -642,8 +753,19 @@ export async function startTransfer(
       from = from.withCancelToken?.(token) ?? from;
       to = to.withCancelToken?.(token) ?? to;
     }
-    if (t.kind === "file") await runFile(t, from, to, resolver, ctrl, sem);
+    // A saved plan means the copy path already started: finish it that way.
+    // Keyed on the session `id`, not `identity`: a rename is one request on one
+    // SFTP channel, and two sessions to the same host are still two channels.
+    const renamed = ctrl.move && ctrl.manifest.size === 0 && from.kind === to.kind && from.id === to.id
+      && await renameInPlace(t, from, resolver, ctrl);
+    if (renamed) { /* moved without copying */ }
+    else if (t.kind === "file") await runFile(t, from, to, resolver, ctrl, sem);
     else await runDir(t, from, to, resolver, ctrl, sem);
+    if (ctrl.kept.length) {
+      failure = ctrl.kept.length > 1
+        ? i18n.t("sftp.moveError.keptMore", { detail: ctrl.kept[0], more: ctrl.kept.length - 1 })
+        : i18n.t("sftp.moveError.kept", { detail: ctrl.kept[0] });
+    }
   } catch (e) {
     if (!ctrl.cancelled && !ctrl.paused) failure = apiErrorMessage(e);
     triggerAll(ctrl);

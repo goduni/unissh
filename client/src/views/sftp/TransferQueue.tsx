@@ -59,6 +59,7 @@ function QueueRow({ transfer: item }: { transfer: Transfer }) {
         </button>)}
       </div>
       <div className="transfer-metrics">
+        {item.move && <span>{t("sftp.queue.move")}</span>}
         {(item.state !== "active" || item.stalled) && <span className="transfer-state">{item.stalled ? t("sftp.queue.stalled") : t(`sftp.queue.state.${item.state}`)}</span>}
         {item.bytesTotal > 0 && <span>{t("sftp.queue.progress", { done: fmtSize(item.bytesDone), total: fmtSize(item.bytesTotal) })}</span>}
         {(item.state === "active" || (item.state === "waiting" && item.speedBps > 0)) && <>

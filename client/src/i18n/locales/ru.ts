@@ -1780,6 +1780,7 @@ export const ru = {
     "retry": "Повторить",
     "selected": "Выбрано: {{count}}",
     "send": "Отправить",
+    "move": "Переместить",
     "rowActions": "Действия",
     "noLocations": "Нет открытых вкладок",
     "addFirstHint": "Добавьте хост, чтобы просматривать и передавать файлы",
@@ -1804,7 +1805,8 @@ export const ru = {
       "properties": "Свойства",
       "permissions": "Права…",
       "import": "Импорт из Files",
-      "sendTo": "Отправить в «{{name}}»"
+      "sendTo": "Отправить в «{{name}}»",
+      "moveTo": "Переместить в «{{name}}»"
     },
     "chmod": {
       "title": "Права доступа",
@@ -1828,6 +1830,11 @@ export const ru = {
       "deleteMany": "Удалить объектов: {{count}}?",
       "deleteRecursive": "Папки удаляются со всем содержимым.",
       "delete": "Удалить",
+      "moveTitle": "Переместить",
+      "moveOne": "Переместить «{{name}}» в {{to}}?",
+      "moveMany": "Переместить объекты ({{count}}) в {{to}}?",
+      "moveRemoves": "Каждый объект удаляется из {{from}}, как только он доставлен. Всё, что не удалось передать, было пропущено или отменено, остаётся на месте.",
+      "move": "Переместить",
       "conflictTitle": "Файл уже существует",
       "conflictBody": "В назначении: {{there}} · загружается: {{incoming}}",
       "overwrite": "Перезаписать",
@@ -1847,6 +1854,7 @@ export const ru = {
     },
     "queue": {
       "speed": "{{speed}}/с",
+      "move": "перемещение",
       "resumeAll": "Продолжить все",
       "files": "Файлы: {{done}} / {{total}}",
       "progress": "{{done}} / {{total}}",
@@ -1880,6 +1888,14 @@ export const ru = {
         "error": "ошибка",
         "cancelled": "отменено"
       }
+    },
+    "moveError": {
+      "kept": "Скопировано, но исходный объект не удалён: {{detail}}",
+      "keptMore": "Скопировано, но исходный объект не удалён: {{detail}} (и ещё {{more}})",
+      "sameFile": "объект в месте назначения выглядел как тот же самый файл",
+      "destinationMissing": "копия в месте назначения отсутствует или изменилась",
+      "sourceChanged": "изменён после копирования",
+      "intoItself": "Нельзя переместить путь в самого себя"
     },
     "extEdit": {
       "section": "Правится снаружи",
@@ -1935,6 +1951,8 @@ export const ru = {
       "copied": "Путь скопирован",
       "chmodDone": "Права изменены",
       "sessionFailed": "Не удалось открыть SFTP-сессию",
+      "moveSameFolder": "Уже в этой папке — перемещать нечего",
+      "moveIntoItself": "Нельзя переместить «{{name}}» в саму себя",
       "transferStarted": "Передача начата"
     }
   },
