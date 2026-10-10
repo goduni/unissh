@@ -1,6 +1,10 @@
 //! Password authentication and the fallback to keyboard-interactive — against an
 //! in-process russh server (hermetic: sshd without PAM cannot do kbd-interactive,
 //! and the password of a system user must not be changed in tests).
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::sync::Arc;
 
@@ -114,7 +118,9 @@ async fn start_server(allow_password: bool, kbd: Kbd) -> u16 {
             };
             tokio::spawn(async move {
                 if let Ok(session) = server::run_stream::<_, _>(config, stream, handler).await {
-                    let _ = session.await;
+                    if session.await.is_err() {
+                        // How the client ended the session is not under test.
+                    }
                 }
             });
         }
@@ -143,7 +149,7 @@ async fn try_connect(port: u16, password: &str) -> Result<SshClient, TransportEr
 async fn password_auth_success() {
     let port = start_server(true, Kbd::Off).await;
     let client = try_connect(port, PASSWORD).await.unwrap();
-    let _ = client.disconnect().await;
+    let _disconnected = client.disconnect().await;
 }
 
 #[tokio::test]
@@ -160,14 +166,14 @@ async fn keyboard_interactive_only_server_falls_back() {
     // The server does not accept the "password" method — only keyboard-interactive.
     let port = start_server(false, Kbd::Prompts(1)).await;
     let client = try_connect(port, PASSWORD).await.unwrap();
-    let _ = client.disconnect().await;
+    let _disconnected = client.disconnect().await;
 }
 
 #[tokio::test]
 async fn keyboard_interactive_multiple_prompts() {
     let port = start_server(false, Kbd::Prompts(3)).await;
     let client = try_connect(port, PASSWORD).await.unwrap();
-    let _ = client.disconnect().await;
+    let _disconnected = client.disconnect().await;
 }
 
 #[tokio::test]

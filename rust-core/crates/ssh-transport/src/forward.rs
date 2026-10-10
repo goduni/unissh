@@ -268,33 +268,31 @@ fn take_u32(input: &mut &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes(*head))
 }
 
-fn put_string(out: &mut Vec<u8>, s: &[u8]) {
-    out.extend_from_slice(&(s.len() as u32).to_be_bytes());
+/// Appends an SSH `string`. `None` only for a field longer than `u32::MAX`,
+/// which the wire format cannot express.
+fn put_string(out: &mut Vec<u8>, s: &[u8]) -> Option<()> {
+    out.extend_from_slice(&u32::try_from(s.len()).ok()?.to_be_bytes());
     out.extend_from_slice(s);
+    Some(())
 }
 
 fn take_string<'a>(input: &mut &'a [u8]) -> Option<&'a [u8]> {
-    if input.len() < 4 {
-        return None;
-    }
-    let len = u32::from_be_bytes([input[0], input[1], input[2], input[3]]) as usize;
-    if input.len() < 4 + len {
-        return None;
-    }
-    let (s, rest) = input[4..].split_at(len);
+    let (head, body) = input.split_first_chunk::<4>()?;
+    let len = usize::try_from(u32::from_be_bytes(*head)).ok()?;
+    let (s, rest) = body.split_at_checked(len)?;
     *input = rest;
     Some(s)
 }
 
-fn framed(payload: Vec<u8>) -> Vec<u8> {
+fn framed(payload: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(4 + payload.len());
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(&payload);
-    out
+    put_string(&mut out, payload)?;
+    Some(out)
 }
 
 fn failure() -> Vec<u8> {
-    framed(vec![msg::FAILURE])
+    // `framed(&[msg::FAILURE])`, spelled out so it cannot fail.
+    vec![0, 0, 0, 1, msg::FAILURE]
 }
 
 /// Answers one agent request. Returns the reply frame.
@@ -302,9 +300,13 @@ fn failure() -> Vec<u8> {
 /// Split out from the I/O so it can be tested without a channel: this is where
 /// the protocol rules live, and they are what has to be right.
 pub fn answer<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Vec<u8> {
-    let Some((&kind, mut body)) = request.split_first() else {
-        return failure();
-    };
+    reply(agent, request).unwrap_or_else(failure)
+}
+
+/// The reply frame for one request, or `None` for every refusal and every
+/// malformed request — [`answer`] turns all of those into `SSH_AGENT_FAILURE`.
+fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
+    let (&kind, mut body) = request.split_first()?;
 
     match kind {
         msg::REQUEST_IDENTITIES => {
@@ -316,17 +318,17 @@ pub fn answer<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Vec<u8> {
                 .filter_map(|key| Some((key.blob()?, key.comment)))
                 .collect();
             let mut out = vec![msg::IDENTITIES_ANSWER];
-            out.extend_from_slice(&(identities.len() as u32).to_be_bytes());
+            out.extend_from_slice(&u32::try_from(identities.len()).ok()?.to_be_bytes());
             for (blob, comment) in &identities {
-                put_string(&mut out, blob);
-                put_string(&mut out, comment.as_bytes());
+                put_string(&mut out, blob)?;
+                put_string(&mut out, comment.as_bytes())?;
             }
-            framed(out)
+            framed(&out)
         }
         msg::SIGN_REQUEST => {
             let (Some(want_blob), Some(data)) = (take_string(&mut body), take_string(&mut body))
             else {
-                return failure();
+                return None;
             };
             // A client that leaves the flags out asked for none.
             let flags = take_u32(&mut body).unwrap_or(0);
@@ -337,7 +339,7 @@ pub fn answer<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Vec<u8> {
             else {
                 // A key we do not offer. Refused rather than substituted.
                 log::warn!("agent: signature requested for a key we do not offer");
-                return failure();
+                return None;
             };
             let rsa = if flags & flag::RSA_SHA2_256 != 0 {
                 RsaHash::Sha256
@@ -348,27 +350,23 @@ pub fn answer<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Vec<u8> {
                 // answering with another hash would hand the client a signature
                 // of a type it did not ask for. Refused before any prompt.
                 log::info!("agent: refusing an ssh-rsa (SHA-1) signature request");
-                return failure();
+                return None;
             } else {
                 RsaHash::default() // not an RSA key: no hash to choose
             };
-            match agent.sign(&key, data, rsa) {
-                Some((algorithm, signature)) => {
-                    let mut inner = Vec::new();
-                    put_string(&mut inner, algorithm.as_bytes());
-                    put_string(&mut inner, &signature);
-                    let mut out = vec![msg::SIGN_RESPONSE];
-                    put_string(&mut out, &inner);
-                    framed(out)
-                }
-                None => failure(),
-            }
+            let (algorithm, signature) = agent.sign(&key, data, rsa)?;
+            let mut inner = Vec::new();
+            put_string(&mut inner, algorithm.as_bytes())?;
+            put_string(&mut inner, &signature)?;
+            let mut out = vec![msg::SIGN_RESPONSE];
+            put_string(&mut out, &inner)?;
+            framed(&out)
         }
         // Everything else — add, remove, lock, unlock, extensions. Whoever can
         // reach the socket does not get to reshape what the agent holds.
         other => {
             log::warn!("agent: refusing request type {other}");
-            failure()
+            None
         }
     }
 }
@@ -392,7 +390,11 @@ where
         if fill(&mut stream, &mut inbox, 4).await.is_err() {
             return; // the far end closed
         }
-        let len = u32::from_be_bytes([inbox[0], inbox[1], inbox[2], inbox[3]]) as usize;
+        // `fill` returned Ok, so the 4-byte length prefix is there.
+        let Some(&head) = inbox.first_chunk::<4>() else {
+            return;
+        };
+        let len = u32::from_be_bytes(head) as usize;
         if len == 0 || len > MAX_FRAME {
             log::warn!("agent: refusing a {len}-byte frame");
             return;
@@ -412,7 +414,8 @@ where
                         agent.hang_up();
                         return;
                     }
-                    Ok(n) => inbox.extend_from_slice(&chunk[..n]),
+                    // `read` never reports more than the buffer it was given.
+                    Ok(n) => inbox.extend_from_slice(chunk.get(..n).unwrap_or_default()),
                 },
             }
         };
@@ -422,7 +425,9 @@ where
         if stream.write_all(&reply).await.is_err() {
             return;
         }
-        let _ = stream.flush().await;
+        if stream.flush().await.is_err() {
+            // A dead stream ends the loop at the next read.
+        }
     }
 }
 
@@ -438,7 +443,8 @@ async fn fill<S: tokio::io::AsyncRead + Unpin>(
         if n == 0 {
             return Err(std::io::ErrorKind::UnexpectedEof.into());
         }
-        inbox.extend_from_slice(&chunk[..n]);
+        // `read` never reports more than the buffer it was given.
+        inbox.extend_from_slice(chunk.get(..n).unwrap_or_default());
     }
     Ok(())
 }
@@ -465,7 +471,10 @@ mod tests {
             data: &[u8],
             _rsa: RsaHash,
         ) -> Result<(String, Vec<u8>), TransportError> {
-            self.signed.lock().unwrap().push(data.to_vec());
+            self.signed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(data.to_vec());
             Ok(("ssh-ed25519".to_owned(), vec![0xAA; 64]))
         }
     }
@@ -512,10 +521,33 @@ mod tests {
 
     fn sign_request_flagged(blob: &[u8], data: &[u8], flags: u32) -> Vec<u8> {
         let mut req = vec![msg::SIGN_REQUEST];
-        put_string(&mut req, blob);
-        put_string(&mut req, data);
+        put_string(&mut req, blob).unwrap();
+        put_string(&mut req, data).unwrap();
         req.extend_from_slice(&flags.to_be_bytes());
         req
+    }
+
+    #[test]
+    fn truncated_sign_request_is_refused() {
+        let (a, keys) = agent(true);
+        let blob = key_blob(&a.public_openssh).unwrap();
+        let full = sign_request(&blob, b"to-sign");
+        // Every cut inside the two strings (the flags are optional, so cuts in
+        // them still parse) must come back as a plain FAILURE frame.
+        let strings_end = 1 + 4 + blob.len() + 4 + b"to-sign".len();
+        for cut in 0..strings_end {
+            let reply = answer(&a, &full[..cut]);
+            assert_eq!(reply, failure(), "cut at {cut}");
+        }
+        assert!(
+            keys.signed.lock().unwrap().is_empty(),
+            "a truncated request must never reach the signer"
+        );
+    }
+
+    #[test]
+    fn failure_frame_matches_the_framed_encoding() {
+        assert_eq!(Some(failure()), framed(&[msg::FAILURE]));
     }
 
     /// The `(algorithm, signature)` of a SIGN_RESPONSE frame, checked against
@@ -691,13 +723,13 @@ mod tests {
         assert_eq!(reply[4], msg::IDENTITIES_ANSWER);
         let mut body = &reply[9..];
         let count = u32::from_be_bytes([reply[5], reply[6], reply[7], reply[8]]);
-        (0..count)
-            .map(|_| {
-                let blob = take_string(&mut body).unwrap().to_vec();
-                let comment = String::from_utf8(take_string(&mut body).unwrap().to_vec()).unwrap();
-                (blob, comment)
-            })
-            .collect()
+        std::iter::repeat_with(|| {
+            let blob = take_string(&mut body).unwrap().to_vec();
+            let comment = String::from_utf8(take_string(&mut body).unwrap().to_vec()).unwrap();
+            (blob, comment)
+        })
+        .take(usize::try_from(count).unwrap())
+        .collect()
     }
 
     #[test]
@@ -763,7 +795,7 @@ mod tests {
         });
         let prompt = Arc::new(Prompt {
             answer: true,
-            asked: Default::default(),
+            asked: std::sync::Mutex::default(),
         });
         let agent = LocalAgent {
             keys: keys.clone(),
@@ -811,7 +843,7 @@ mod tests {
             keys: Listed {
                 keys: vec![rsa.clone()],
                 signer: signer.into(),
-                signed_with: Default::default(),
+                signed_with: std::sync::Mutex::default(),
             },
             approval: prompt.clone(),
             caller: caller(),
@@ -896,10 +928,12 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
             self.asked.store(true, std::sync::atomic::Ordering::SeqCst);
             let abandoned = self.abandoned.lock().unwrap();
             // Bounded, so a regression fails the test instead of hanging it.
-            let _ = self
-                .wake
-                .wait_timeout_while(abandoned, std::time::Duration::from_secs(10), |a| !*a)
-                .unwrap();
+            // Released right away: the answer is `false` whether abandoned or timed out.
+            drop(
+                self.wake
+                    .wait_timeout_while(abandoned, std::time::Duration::from_secs(10), |a| !*a)
+                    .unwrap(),
+            );
             false
         }
         fn abandon(&self) {
@@ -922,7 +956,7 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let served = tokio::spawn(serve(agent, server));
         let request = sign_request(&keys.keys[0].blob().unwrap(), b"to-sign");
-        client.write_all(&framed(request)).await.unwrap();
+        client.write_all(&framed(&request).unwrap()).await.unwrap();
         while !prompt.asked.load(std::sync::atomic::Ordering::SeqCst) {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
