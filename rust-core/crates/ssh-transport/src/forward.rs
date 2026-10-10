@@ -349,7 +349,14 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
                 // A SHA-1 `ssh-rsa` signature. The core never makes one, and
                 // answering with another hash would hand the client a signature
                 // of a type it did not ask for. Refused before any prompt.
-                log::info!("agent: refusing an ssh-rsa (SHA-1) signature request");
+                // Said loudly and precisely: all the client reports is "agent
+                // refused operation", and this line is the only place that says
+                // why. No key, caller or payload in it.
+                log::warn!(
+                    "agent: signature refused: the client asked for a SHA-1 (ssh-rsa) signature \
+                     with an RSA key, which is never made; it must request rsa-sha2-256 or \
+                     rsa-sha2-512 (an old client, or one forced to ssh-rsa)"
+                );
                 return None;
             } else {
                 RsaHash::default() // not an RSA key: no hash to choose
@@ -380,33 +387,76 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
 /// it runs the stream is still read, so a client that hangs up is noticed at
 /// once ([`AgentKeys::hang_up`]) rather than after the prompt times out. Bytes
 /// a client sends ahead are kept for the next request.
-pub async fn serve<A, S>(agent: std::sync::Arc<A>, mut stream: S)
+pub async fn serve<A, S>(agent: std::sync::Arc<A>, stream: S)
 where
+    A: AgentKeys + ?Sized + 'static,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    serve_inner(agent, stream, None).await;
+}
+
+/// [`serve`], for an endpoint any local program can connect to: a client that
+/// does not deliver a complete request within `idle` of connecting, or of its
+/// last reply, is hung up on, so connections left open cannot pile up. The time
+/// a request takes to answer (a person deciding) does not count. Needs the
+/// runtime's time driver.
+pub async fn serve_until_idle<A, S>(agent: std::sync::Arc<A>, stream: S, idle: std::time::Duration)
+where
+    A: AgentKeys + ?Sized + 'static,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    serve_inner(agent, stream, Some(idle)).await;
+}
+
+/// Reads until `inbox` starts with one whole frame and returns its length,
+/// prefix included. `None` when the far end closed or declared a frame that is
+/// refused.
+async fn next_frame<S: tokio::io::AsyncRead + Unpin>(
+    stream: &mut S,
+    inbox: &mut Vec<u8>,
+) -> Option<usize> {
+    fill(stream, inbox, 4).await.ok()?;
+    // `fill` returned Ok, so the 4-byte length prefix is there.
+    let head = *inbox.first_chunk::<4>()?;
+    let len = u32::from_be_bytes(head) as usize;
+    if len == 0 || len > MAX_FRAME {
+        log::warn!("agent: refusing a {len}-byte frame");
+        return None;
+    }
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "len <= MAX_FRAME (256 KiB) is checked just above, so 4 + len cannot overflow"
+    )]
+    let frame_len = 4 + len;
+    fill(stream, inbox, frame_len).await.ok()?;
+    Some(frame_len)
+}
+
+async fn serve_inner<A, S>(
+    agent: std::sync::Arc<A>,
+    mut stream: S,
+    idle: Option<std::time::Duration>,
+) where
     A: AgentKeys + ?Sized + 'static,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let mut inbox: Vec<u8> = Vec::new();
     loop {
-        if fill(&mut stream, &mut inbox, 4).await.is_err() {
-            return; // the far end closed
-        }
-        // `fill` returned Ok, so the 4-byte length prefix is there.
-        let Some(&head) = inbox.first_chunk::<4>() else {
-            return;
+        let frame = match idle {
+            Some(limit) => {
+                match tokio::time::timeout(limit, next_frame(&mut stream, &mut inbox)).await {
+                    Ok(frame) => frame,
+                    Err(_) => {
+                        log::debug!("agent: closing an idle connection");
+                        None
+                    }
+                }
+            }
+            None => next_frame(&mut stream, &mut inbox).await,
         };
-        let len = u32::from_be_bytes(head) as usize;
-        if len == 0 || len > MAX_FRAME {
-            log::warn!("agent: refusing a {len}-byte frame");
-            return;
-        }
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "len <= MAX_FRAME (256 KiB) is checked just above, so 4 + len cannot overflow"
-        )]
-        let frame_len = 4 + len;
-        if fill(&mut stream, &mut inbox, frame_len).await.is_err() {
-            return;
-        }
+        let Some(frame_len) = frame else {
+            return; // the far end closed, or was hung up on
+        };
         let body: Vec<u8> = inbox.drain(..frame_len).skip(4).collect();
         let policy = agent.clone();
         let mut job = tokio::task::spawn_blocking(move || answer(&*policy, &body));
@@ -933,6 +983,24 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
             prompt.asked.lock().unwrap().is_empty() && keys.signed_with.lock().unwrap().is_empty(),
             "the key check must come before the prompt and the signature"
         );
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_sends_no_request_is_closed_once_idle() {
+        use tokio::io::AsyncReadExt;
+
+        let (agent, _keys, _prompt) = local(true);
+        let (mut client, server) = tokio::io::duplex(1024);
+        let idle = std::time::Duration::from_millis(50);
+        let served = tokio::spawn(serve_until_idle(Arc::new(agent), server, idle));
+
+        // The client keeps its end open and stays silent; the server leaves.
+        let mut byte = [0_u8; 1];
+        let read = tokio::time::timeout(std::time::Duration::from_secs(5), client.read(&mut byte))
+            .await
+            .expect("the idle connection is closed");
+        assert_eq!(read.unwrap(), 0, "end of stream");
+        served.await.unwrap();
     }
 
     /// Keeps the prompt open until the connection is abandoned, then refuses.

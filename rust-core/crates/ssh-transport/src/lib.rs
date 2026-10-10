@@ -65,8 +65,8 @@ pub use config::{
 };
 pub use error::TransportError;
 pub use forward::{
-    serve as serve_agent, AgentApproval, AgentCaller, AgentKeys, ForwardedAgent, LocalAgent,
-    LocalApproval, OfferedKey,
+    serve as serve_agent, serve_until_idle as serve_agent_until_idle, AgentApproval, AgentCaller,
+    AgentKeys, ForwardedAgent, LocalAgent, LocalApproval, OfferedKey,
 };
 pub use proxy::{ProxyKind, ProxyOptions};
 pub use sftp::{DirEntry, FileStat, Sftp, SftpCancel, SftpProgress, TransferOutcome};
