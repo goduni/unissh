@@ -318,6 +318,10 @@ fn platform_store() -> Option<Box<dyn DeviceSecretStore>> {
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BiometricStatus {
+    /// A sealed password is on disk, usable or not. Whatever else is true,
+    /// Settings offers to forget it: this is what says there is something to
+    /// forget (a vault whose password was removed has no other use for it).
+    pub stored: bool,
     /// This device can do biometric unlock right now (macOS: sensor present, a
     /// finger enrolled, and a build that may use the protected Keychain;
     /// Windows: Windows Hello set up for this user).
@@ -517,6 +521,7 @@ fn status_from(
 ) -> BiometricStatus {
     let supported = secret != SecretState::Unsupported;
     BiometricStatus {
+        stored,
         supported,
         enabled: stored && matches!(secret, SecretState::Present | SecretState::Unknown),
         // Only on an explicit "dead": a closed lid (Unsupported) or an
@@ -534,14 +539,24 @@ fn status_from(
 /// unlock screen of a device without biometric unlock never waits on a
 /// keychain read (on macOS one that may show a Keychain dialog). The answer is
 /// cached per process anyway (`keychain::secret_key_remembered_now`).
+///
+/// That same question — the password unlock screen's, asked on every launch by
+/// every user — does not reach the platform at all when nothing is stored: the
+/// only thing the screen wants to know is whether there is a prompt to show,
+/// and without a blob there is none. The platform probe is a Keychain query or
+/// three WinRT round trips, and the screen waits on it. Everything but
+/// `stored` is then reported as "no", unprobed.
 fn status_now(
     store: Option<&dyn DeviceSecretStore>,
     blob: &Path,
     with_secret_key: bool,
 ) -> BiometricStatus {
+    let stored = blob.exists();
+    if !stored && !with_secret_key {
+        return status_from(SecretState::Unsupported, false, false, false);
+    }
     let secret = store.map_or(SecretState::Unsupported, DeviceSecretStore::state);
     let presence = store.is_some_and(DeviceSecretStore::presence_available);
-    let stored = blob.exists();
     let usable = secret != SecretState::Unsupported;
     let ask = (stored && usable) || (with_secret_key && (usable || presence));
     status_from(secret, stored, presence, ask && secret_key_remembered_now())
@@ -829,6 +844,54 @@ mod tests {
         let gate = status_from(Unsupported, false, true, true);
         assert!(gate.presence_supported && gate.secret_key_remembered);
         assert!(!status_from(Unsupported, false, false, true).secret_key_remembered);
+    }
+
+    /// A platform that records being asked anything at all.
+    #[derive(Default)]
+    struct Watched(std::sync::atomic::AtomicBool);
+
+    impl Watched {
+        fn touch(&self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl DeviceSecretStore for Watched {
+        fn state(&self) -> SecretState {
+            self.touch();
+            SecretState::Present
+        }
+        fn create(&self) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+            self.touch();
+            Err(SecretError::Unsupported)
+        }
+        fn read(&self, _: &str, _: &Prompt<'_>) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+            self.touch();
+            Err(SecretError::Unsupported)
+        }
+        fn delete(&self) -> Result<(), SecretError> {
+            self.touch();
+            Ok(())
+        }
+        fn presence_available(&self) -> bool {
+            self.touch();
+            true
+        }
+        fn confirm_presence(&self, _: &str, _: &Prompt<'_>) -> Result<(), SecretError> {
+            self.touch();
+            Err(SecretError::Unsupported)
+        }
+    }
+
+    // The password unlock screen asks on every launch; a device that never
+    // turned the feature on must get its answer without a platform round trip.
+    #[test]
+    fn unlock_screen_status_without_material_never_reaches_the_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        let platform = Watched::default();
+        let status = status_now(Some(&platform), &dir.path().join(BLOB_FILE), false);
+        assert!(!platform.0.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!status.stored && !status.enabled && !status.secret_key_remembered);
     }
 
     // Ending an attempt takes its prompt down and makes its answer worthless;
