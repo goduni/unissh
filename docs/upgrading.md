@@ -81,10 +81,24 @@ if it was the account's Personal vault it remains the Personal vault. A referenc
 re-pointed inside another Cloud vault is an ordinary edit to that vault and
 reaches your other devices when that vault syncs. It is a
 re-keyed copy under a new vault id, made in one transaction: the local copy is
-replaced, item version history starts fresh on the server, and the first sync
-pushes the vault. If that push fails, the move is kept: a vault moved into the
-server's primary space uploads on the next sync; one moved into another space is
-not covered by automatic sync and stays on this device until it is uploaded.
+replaced, item version history starts fresh on the server (items keep their
+created and changed dates), and the vault is pushed right away. Keys shared with
+the system SSH agent, a key rotation in progress and recordings of sessions still
+open follow the vault to its new id; hosts selected for a local MCP integration
+stay selected, but that access is paused until you confirm it again, as after any
+vault change.
+
+When you administer a space on the server, the vault is registered in the space
+shown in the confirmation; otherwise it becomes a personal vault of your account.
+
+If the first push fails, the move is kept: a vault moved into the server's
+primary space is retried by every sync until it is uploaded; one moved into
+another space is not covered by automatic sync and stays on this device until it
+is uploaded. An item the server refuses as too large (a long session recording
+against a server older than 0.6, or one whose `limits.max_object_bytes` is set
+low) does not hold the rest back: everything else uploads and the client names
+the item, which stays on the device until the limit is raised and you press
+**Sync now**.
 Vault format and server protocol are unchanged; the server receives it like any
 new Cloud vault.
 
