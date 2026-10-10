@@ -73,7 +73,13 @@ const BLOB_FILE: &str = "biometric-unlock.bin";
 /// prompt.
 // Absent/Present/Unknown are constructed only by a platform adapter; on a
 // target without one (Linux) they exist for the shared code alone.
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    all(not(any(target_os = "macos", target_os = "windows")), not(test)),
+    expect(
+        dead_code,
+        reason = "Absent/Present/Unknown come only from the macOS/Windows adapters; the tests build them too"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SecretState {
     /// This device or build cannot do biometric unlock right now (no sensor,
@@ -91,7 +97,13 @@ pub(crate) enum SecretState {
 }
 
 /// Why the device secret could not be produced.
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows")),
+    expect(
+        dead_code,
+        reason = "only the macOS/Windows adapters construct a SecretError; elsewhere the shared code just matches on it"
+    )
+)]
 #[derive(Debug)]
 pub(crate) enum SecretError {
     /// The user dismissed the prompt, the biometric did not match, or it is

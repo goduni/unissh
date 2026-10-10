@@ -37,7 +37,10 @@ impl Store {
     /// Explicit claim of vault_id (§5.4/§8.2): reject-if-exists-different-owner.
     /// Returns true if the namespace was created, false if it already belongs to the
     /// author. `space_id` NULL → personal vault (owner_account_id set).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per column bound into the vaults row; a params struct would only restate the SQL bind list"
+    )]
     pub async fn claim_vault(
         &self,
         vault_id: &[u8],

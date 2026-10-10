@@ -26,7 +26,10 @@ fn put_opt(buf: &mut Vec<u8>, b: Option<&[u8]>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per field of the frozen unissh-audit-chain-v2 record encoding that feeds the hash chain"
+)]
 fn audit_record_bytes(
     seq: i64,
     source: &str,
@@ -73,7 +76,6 @@ impl Store {
 
     /// Client-signed audit record (via push tag 5 or /v1/audit). author and
     /// signature are mandatory (the author==owner check is at the endpoint level).
-    #[allow(clippy::too_many_arguments)]
     pub async fn append_audit_client_signed(
         &self,
         entry_blob: &[u8],
@@ -95,7 +97,10 @@ impl Store {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per column bound into the audit_log row; a params struct would only restate the SQL bind list"
+    )]
     async fn append_audit_row(
         &self,
         source: &str,

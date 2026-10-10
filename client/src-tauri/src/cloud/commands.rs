@@ -1530,7 +1530,10 @@ pub async fn server_onboard_complete(
 /// (New device) Join via a pairing payload: run the responder PAKE, install the
 /// sealed keyset (opens the instance), persist a new cloud link (active), sign in.
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 pub async fn server_onboard_join(
     base_url: String,
     instance_id: String,

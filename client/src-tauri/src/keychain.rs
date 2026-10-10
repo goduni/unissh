@@ -116,7 +116,13 @@ const UNKNOWN: u8 = 0;
 const NO: u8 = 1;
 const YES: u8 = 2;
 
-#[cfg_attr(not(native_keychain), allow(dead_code))]
+#[cfg_attr(
+    not(native_keychain),
+    expect(
+        dead_code,
+        reason = "only the native keychain paths record an answer; Android's no-op stubs never call it"
+    )
+)]
 fn note_remembered(answer: Option<bool>) {
     let v = match answer {
         None => UNKNOWN,

@@ -8,7 +8,10 @@ const SEL: &str = "SELECT invite_id, token_hash, space_intents, vault_intents, e
                    state, redeemed_by, redeemed_at, created_by, created_at FROM invites";
 
 impl Store {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per column bound into the invites row; a params struct would only restate the SQL bind list"
+    )]
     pub async fn create_invite_v2(
         &self,
         invite_id: &[u8],

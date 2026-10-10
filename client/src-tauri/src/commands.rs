@@ -1237,7 +1237,10 @@ pub async fn dry_run_group(
 
 // ---------- exec (one-shot / fleet) ----------
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 #[tauri::command]
 pub async fn ssh_exec(
     host: String,
@@ -1316,7 +1319,10 @@ pub async fn ssh_exec_group(
 
 // ---------- streaming exec ----------
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 #[tauri::command]
 pub async fn exec_stream_open(
     host: String,
@@ -1366,7 +1372,10 @@ pub async fn exec_stream_close(id: String, state: State<'_, AppState>) -> ApiRes
 
 // ---------- interactive PTY sessions ----------
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 #[tauri::command]
 pub async fn session_open(
     host: String,
@@ -1413,7 +1422,10 @@ pub async fn session_open(
     Ok(id)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 #[tauri::command]
 pub async fn session_open_reconnecting(
     host: String,
@@ -1606,7 +1618,10 @@ pub async fn broadcast_close(id: String, state: State<'_, AppState>) -> ApiResul
 
 // ---------- tunnels (port forwarding) ----------
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 #[tauri::command]
 pub async fn tunnel_open_local(
     host: String,
@@ -1644,7 +1659,10 @@ pub async fn tunnel_open_local(
     Ok(dto::OpenedTunnel { id, bind_address })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 #[tauri::command]
 pub async fn tunnel_open_dynamic(
     host: String,
@@ -1670,7 +1688,10 @@ pub async fn tunnel_open_dynamic(
     Ok(dto::OpenedTunnel { id, bind_address })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 #[tauri::command]
 pub async fn tunnel_open_remote(
     host: String,
@@ -1720,7 +1741,10 @@ pub async fn tunnel_close(id: String, state: State<'_, AppState>) -> ApiResult<(
 
 // ---------- SFTP ----------
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 #[tauri::command]
 pub async fn sftp_open(
     host: String,
@@ -2673,7 +2697,10 @@ pub async fn sftp_write_file(
     blocking(move || s.write_file(path, data)).await
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 #[tauri::command]
 pub async fn sftp_download(
     id: String,
@@ -2702,7 +2729,6 @@ pub async fn sftp_download(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn sftp_upload(
     id: String,

@@ -9,7 +9,10 @@ const SEL: &str = "SELECT action_id, kind, vault_id, account_id, crypto_role, so
                    state, created_at, done_at, done_epoch FROM pending_actions";
 
 impl Store {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the caller's transaction plus one argument per column bound into the pending_actions row; a params struct would only restate the SQL bind list"
+    )]
     pub async fn pending_enqueue(
         &self,
         tx: &mut Tx<'_>,

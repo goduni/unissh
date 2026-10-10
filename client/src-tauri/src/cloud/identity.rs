@@ -138,7 +138,6 @@ fn join_outcome(v: &Value) -> ApiResult<JoinOutcome> {
 /// `POST /v1/claim` — single-winner claim of an unclaimed instance. The `setup_code`
 /// (printed by the server on first boot) authorizes it; the claimer becomes the
 /// instance owner and is given a first space. A claimed instance returns 409.
-#[allow(clippy::too_many_arguments)]
 pub fn claim(
     http: &Client,
     base_url: &str,
@@ -166,7 +165,6 @@ pub fn claim(
 /// an already-registered keyset reuses the account and mints a new device (reattach).
 /// `binding_mac` is an optional invite-binding proof (pass `None` — the server
 /// accepts a join without it; wiring the MAC is a later concern).
-#[allow(clippy::too_many_arguments)]
 pub fn join(
     http: &Client,
     base_url: &str,

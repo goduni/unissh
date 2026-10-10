@@ -2,7 +2,10 @@
 //! (sqlite :memory:, controllable clock, fixed setup code), a reqwest client, and
 //! helpers to claim the instance / seed accounts / log in.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each integration-test binary compiles this module but uses only some helpers; which ones go unused differs per binary, so an expect would be unfulfilled in some"
+)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -196,7 +196,10 @@ fn domain_hash(ctx: &LAContext) -> Option<Vec<u8>> {
         (TAG_DOMAIN_STATE, hash?)
     } else {
         // SAFETY: plain property read; the replacement above is not available.
-        #[allow(deprecated)]
+        #[expect(
+            deprecated,
+            reason = "evaluatedPolicyDomainState is the only domain-state API before macOS 15; the domainState branch above handles 15+"
+        )]
         let hash = unsafe { ctx.evaluatedPolicyDomainState() };
         (TAG_LEGACY, hash?)
     };
