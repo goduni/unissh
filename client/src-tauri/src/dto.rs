@@ -690,6 +690,8 @@ pub struct SyncReport {
     pub conflicts: u32,
     pub rejected: u32,
     pub pushed: u64,
+    /// Items the server refuses as too large: not uploaded, everything else was.
+    pub too_large: Vec<TooLargeItem>,
 }
 impl From<ffi::FfiSyncReport> for SyncReport {
     fn from(r: ffi::FfiSyncReport) -> Self {
@@ -699,13 +701,37 @@ impl From<ffi::FfiSyncReport> for SyncReport {
             conflicts: r.conflicts,
             rejected: r.rejected,
             pushed: r.pushed,
+            too_large: r.too_large.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// An item the sync server refuses as too large (mirror of `FfiTooLargeItem`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TooLargeItem {
+    pub vault_id: String,
+    pub vault_name: String,
+    pub item_id: String,
+    /// Size of the refused sync object, in bytes.
+    pub bytes: u64,
+}
+impl From<ffi::FfiTooLargeItem> for TooLargeItem {
+    fn from(t: ffi::FfiTooLargeItem) -> Self {
+        Self {
+            vault_id: t.vault_id,
+            vault_name: t.vault_name,
+            item_id: t.item_id,
+            bytes: t.bytes,
         }
     }
 }
 
 /// Result of moving a local vault to a server: the new cloud vault id (hex) and
 /// the outcome of the first push — exactly one of `push` / `push_error` is set. A
-/// push error leaves the move in place (the vault syncs on the next pass).
+/// push error leaves the move in place (the vault stays bound and dirty, so a
+/// later sync of its space uploads it). A `push` report can still name items
+/// the server refused as too large (`too_large`).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MovedVault {

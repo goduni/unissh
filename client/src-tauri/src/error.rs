@@ -77,6 +77,12 @@ impl From<FfiError> for ApiError {
                 port,
                 fingerprint,
             },
+            // Reaches the UI only for an object a push cannot continue
+            // without; an item that is too large comes back in the sync report.
+            FfiError::PayloadTooLarge { msg } => Self::Server {
+                code: "payload_too_large".into(),
+                message: msg,
+            },
             FfiError::RotationInProgress { candidate_id } => {
                 Self::RotationInProgress { candidate_id }
             }

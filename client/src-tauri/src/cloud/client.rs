@@ -112,6 +112,18 @@ pub fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
+/// Decodes hex (the core's form of a cloud vault id) into bytes; `None` when the
+/// input is not hex.
+pub fn from_hex(s: &str) -> Option<Vec<u8>> {
+    s.as_bytes()
+        .chunks(2)
+        .map(|pair| match pair {
+            [_, _] => u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok(),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Percent-encode a query-string value (RFC 3986 unreserved set kept verbatim).
 /// Needed because base64 STANDARD contains `+`/`/`/`=`, which corrupt a raw query.
 pub fn enc_query(s: &str) -> String {

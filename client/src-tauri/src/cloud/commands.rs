@@ -619,12 +619,18 @@ pub async fn server_account_profile(
 // ---------- cloud vaults + sync ----------
 
 /// Create a cloud (server-synced) vault, BOUND 1:1 to a server (defaults to the
-/// active server) by a `space_id`. This is a LOCAL operation — the vault is marked
-/// Cloud in local storage, bound to the chosen space, and propagates to THAT server
-/// on the next `server_sync_now`. `space_id` selects the bound space (an existing
-/// space the caller admins, or one just created); when `None` it defaults to the
-/// link's primary space. Requires a linked server: with none, `require_config` errors
+/// active server) by a space label, and propagated to THAT server on the next
+/// `server_sync_now`. Requires a linked server: with none, `require_config` errors
 /// (the UI also gates the Cloud option behind a session). Returns the vault id (hex).
+///
+/// - `space_id: None` — a LOCAL operation: the vault is created bound to the
+///   link's primary space label, and its first push makes it a personal vault of
+///   the account on the server.
+/// - `space_id: Some(space)` — the vault is to live IN that space (one the caller
+///   admins, or just created): its id is claimed there on the server first (see
+///   [`claim_in_space`]), which needs a live session, and only then is the vault
+///   created locally, bound to that space's label. A refused or failed claim
+///   creates nothing.
 #[tauri::command]
 pub async fn server_create_cloud_vault(
     server_id: Option<String>,
@@ -634,11 +640,33 @@ pub async fn server_create_cloud_vault(
 ) -> ApiResult<String> {
     let cfg = require_config(&state, server_id.as_deref())?;
     let core = state.core.clone();
-    // Bind to the caller-chosen space when supplied; otherwise the link's primary.
-    // The binding is a local label — the server enforces space authority at sync time
-    // via the Bearer + space membership, so a stale/foreign pick can't leak the vault.
-    let space = space_id.unwrap_or(cfg.space_id);
-    blocking_api(move || core.create_cloud_vault(name, space).map_err(ApiError::from)).await
+    let Some(space) = space_id else {
+        return blocking_api(move || {
+            core.create_cloud_vault(name, cfg.space_id)
+                .map_err(ApiError::from)
+        })
+        .await;
+    };
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let new_id = claim_in_space(&cfg.base_url, &access, &space)?;
+        core.create_cloud_vault_as(name, space, new_id)
+            .map_err(ApiError::from)
+    })
+    .await
+}
+
+/// Mints a cloud vault id and claims it in `space` on the server
+/// (`POST /v1/vaults/claim`), so the vault's first push lands in that space
+/// instead of becoming a personal vault of the account. Done BEFORE the vault
+/// exists locally: a refusal (not a member of the space) or a network failure
+/// then leaves nothing behind on this device. Returns the id (hex) for
+/// `create_cloud_vault_as` / `convert_vault_to_cloud_as`.
+fn claim_in_space(base_url: &str, access: &str, space: &str) -> ApiResult<String> {
+    let new_id = unissh_ffi::new_cloud_vault_id();
+    let raw = client::from_hex(&new_id).ok_or_else(|| ApiError::other("invalid vault id"))?;
+    identity::claim_vault(client::http(), base_url, access, &client::b64(&raw), space)?;
+    Ok(new_id)
 }
 
 /// Bind every still-unbound (legacy) cloud vault to a server's `space_id`
@@ -694,11 +722,19 @@ pub async fn server_unbind_cloud_vault(
 }
 
 /// Run a full sync against a linked server (defaults to active): push local cloud
-/// objects, then pull + verify the delta. Requires an active session. Returns a
-/// report of what changed.
+/// objects, then pull + verify the delta (the pull runs even when the push
+/// failed; the push failure is then the error). Requires an active session.
+/// Returns a report of what changed, including the items the server refused as
+/// too large.
+///
+/// `retry_refused` (a sync the user asked for by hand) offers those refused
+/// items to the server again — the way to upload them once its limit was raised.
+/// Background syncs leave it unset, so a refused item is not re-uploaded on
+/// every pass.
 #[tauri::command]
 pub async fn server_sync_now(
     server_id: Option<String>,
+    retry_refused: Option<bool>,
     state: State<'_, AppState>,
 ) -> ApiResult<dto::SyncReport> {
     let cfg = require_config(&state, server_id.as_deref())?;
@@ -709,6 +745,10 @@ pub async fn server_sync_now(
         // space. Sync scopes to base_url + Bearer on the wire; the space is the
         // local binding label selecting which vaults participate.
         let space = cfg.space_id.clone();
+        if retry_refused == Some(true) {
+            core.retry_refused_uploads(space.clone())
+                .map_err(ApiError::from)?;
+        }
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
             Arc::new(HttpSyncTransport::new(cfg.base_url, access));
         core.sync_now(transport, space).map_err(ApiError::from)
@@ -864,14 +904,24 @@ pub async fn server_bind_and_push_vault(
 }
 
 /// **Move a LOCAL vault to a server** (the "Move to server…" action; the server
-/// defaults to the active one). Converts the vault in the core
-/// (`convert_vault_to_cloud`: a re-keyed copy into a new cloud vault bound to
-/// `space_id` — or the link's primary space when `None` — with the local vault
-/// tombstoned, all in one transaction), then runs the first push (`sync_now` for
-/// that space). Requires a live session up front, so a signed-out server refuses
-/// before anything changes. A failed push does NOT undo the conversion: the vault
-/// stays bound and dirty, the next sync uploads it, and the failure comes back in
-/// `push_error` next to the new vault id.
+/// defaults to the active one). Requires a live session up front, so a signed-out
+/// server refuses before anything changes.
+///
+/// 1. With `space_id: Some(space)` the vault is to live IN that space: a fresh
+///    vault id is claimed there on the server first (see [`claim_in_space`]). A
+///    refused or failed claim stops here with nothing changed. With `None` there
+///    is no claim: the vault is bound to the link's primary space label and its
+///    first push makes it a personal vault of the account, like a cloud vault
+///    created without a space.
+/// 2. The core converts the vault (`convert_vault_to_cloud_as`: a re-keyed copy
+///    into the new cloud vault, the local vault tombstoned, all in one
+///    transaction).
+/// 3. The first push runs — a push only (`sync_push_now`), not a full sync: a
+///    pull under a space label this device does not otherwise sync would start
+///    from an empty cursor and bind every unbound cloud vault it meets to that
+///    space. A failed push does NOT undo the conversion: the vault stays bound and
+///    dirty, a later sync of its space uploads it, and the failure comes back in
+///    `push_error` next to the new vault id.
 #[tauri::command]
 pub async fn server_move_vault_to_server(
     vault_id: String,
@@ -883,13 +933,30 @@ pub async fn server_move_vault_to_server(
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
     blocking_api(move || {
+        let new_id = match space_id.as_deref() {
+            Some(space) => {
+                // The claim cannot be taken back, so what the conversion would
+                // refuse anyway is refused before it: a locked core, a vault
+                // that is gone, a vault that is already a cloud vault.
+                let vaults = core.list_vaults().map_err(ApiError::from)?;
+                let vault = vaults
+                    .iter()
+                    .find(|v| v.vault_id == vault_id)
+                    .ok_or(ApiError::NotFound)?;
+                if vault.sync_target == unissh_ffi::FfiSyncTarget::Cloud {
+                    return Err(ApiError::AlreadyCloud);
+                }
+                claim_in_space(&cfg.base_url, &access, space)?
+            }
+            None => unissh_ffi::new_cloud_vault_id(),
+        };
         let space = space_id.unwrap_or(cfg.space_id);
         let new_id = core
-            .convert_vault_to_cloud(vault_id, space.clone())
+            .convert_vault_to_cloud_as(vault_id, space.clone(), new_id)
             .map_err(ApiError::from)?;
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
             Arc::new(HttpSyncTransport::new(cfg.base_url, access));
-        let (push, push_error) = match core.sync_now(transport, space) {
+        let (push, push_error) = match core.sync_push_now(transport, space) {
             Ok(report) => (Some(report.into()), None),
             Err(e) => (None, Some(ApiError::from(e))),
         };

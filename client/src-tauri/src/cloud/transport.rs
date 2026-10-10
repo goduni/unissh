@@ -137,6 +137,8 @@ impl FfiSyncTransport for HttpSyncTransport {
         // server-side (no duplicate rows, no audit double-apply on a lost
         // response); a genuinely different set gets a fresh key. The server keys
         // replay on (idempotency-key, request body), so the key must track content.
+        // The core cuts a large push into several calls of this function: each
+        // call is one request with the key of exactly its own objects.
         let idem = idempotency_key(&objects);
         let resp = client::headers(
             http.post(client::url(&self.base_url, "/v1/sync/push")),
@@ -153,6 +155,15 @@ impl FfiSyncTransport for HttpSyncTransport {
         let bytes = resp.bytes().map_err(|e| FfiError::Other {
             msg: format!("sync push: {e}"),
         })?;
+        // 413 is the server's `payload_too_large` (an object over its
+        // `limits.max_object_bytes`, too many objects) or a body limit — its own
+        // or a reverse proxy's, which answers without the JSON error body. The
+        // core splits the request on it and singles out an item that cannot fit.
+        if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            return Err(FfiError::PayloadTooLarge {
+                msg: push_error_message(status, &bytes),
+            });
+        }
         if !status.is_success() {
             return Err(FfiError::Other {
                 msg: push_error_message(status, &bytes),

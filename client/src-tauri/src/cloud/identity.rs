@@ -724,6 +724,31 @@ pub fn list_spaces(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec
     Ok(out)
 }
 
+/// `POST /v1/vaults/claim` (Bearer, space member) — reserves the vault id
+/// `vault_id_b64` (base64 of the raw id) for the caller in space `space_id`
+/// BEFORE the vault's first push. The push then lands in a vault of that space
+/// (selective access: other members get in only through grants the owner
+/// publishes); without the claim the server materialises a pushed vault as a
+/// personal vault of the pushing account. Repeating it for the same owner is a
+/// no-op. Nothing secret is sent: the id is a random UUID.
+pub fn claim_vault(
+    http: &Client,
+    base_url: &str,
+    access: &str,
+    vault_id_b64: &str,
+    space_id: &str,
+) -> ApiResult<()> {
+    let body = json!({ "vault_id": vault_id_b64, "space_id": space_id });
+    client::send_json(
+        client::headers(
+            http.post(client::url(base_url, "/v1/vaults/claim")),
+            Some(access),
+        )
+        .json(&body),
+    )?;
+    Ok(())
+}
+
 /// `POST /v1/spaces` (Bearer, owner) — create a space; the creator becomes its admin.
 /// Returns the new space id (base64).
 pub fn create_space(http: &Client, base_url: &str, access: &str, name: &str) -> ApiResult<String> {
