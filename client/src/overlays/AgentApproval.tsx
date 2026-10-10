@@ -19,7 +19,7 @@ import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Modal } from "@/components/Modal";
 import { Btn } from "@/components/primitives";
 
-interface ApprovalRequest {
+export interface ApprovalRequest {
   id: number;
   origin: "forwarded" | "system";
   /** Forwarded: the session's host. */
@@ -73,7 +73,7 @@ export function AgentApproval() {
   if (!req) return null;
 
   return (
-    <Dialog
+    <ApprovalDialog
       key={req.id}
       req={req}
       onDone={() => setQueue((q) => q.filter((r) => r.id !== req.id))}
@@ -81,14 +81,27 @@ export function AgentApproval() {
   );
 }
 
-function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
+/** How long a prompt that has just appeared ignores every answer. */
+const ARM_DELAY_MS = 500;
+
+export function ApprovalDialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
   const { t } = useTranslation();
   const p = usePalette();
   const [busy, setBusy] = useState(false);
+  // A queued prompt takes the place of the one just answered, button under the
+  // same pointer: the second click of a double-click (or a held Enter) would
+  // approve a request nobody has read. So a fresh prompt starts disarmed, and
+  // that covers Escape and the backdrop too, which would otherwise dismiss it
+  // unseen.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setArmed(true), ARM_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
   const system = req.origin === "system";
 
   const finish = (approved: boolean) => {
-    if (busy) return;
+    if (busy || !armed) return;
     setBusy(true);
     void answer(req.id, approved).then(onDone);
   };
@@ -104,10 +117,10 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
       zIndex={500}
       footer={
         <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
-          <Btn variant="ghost" onClick={() => finish(false)} disabled={busy}>
+          <Btn variant="ghost" onClick={() => finish(false)} disabled={busy || !armed}>
             {t("agentApproval.deny")}
           </Btn>
-          <Btn onClick={() => finish(true)} disabled={busy}>
+          <Btn onClick={() => finish(true)} disabled={busy || !armed}>
             {t("agentApproval.allow")}
           </Btn>
         </div>
