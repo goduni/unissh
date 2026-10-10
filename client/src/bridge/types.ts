@@ -219,7 +219,9 @@ export type PresenceCheck = "confirmed" | "cancelled" | "unavailable";
  *  more and goes at the next biometric attempt). */
 export type KeysetWipe = "nothing" | "erased" | "failed";
 
-/** How `biometric_unlock` ended. Anything but "unlocked" shows the password. */
+/** How `biometric_unlock` ended. Anything but "unlocked" shows the password.
+ *  "cancelled" is also what an attempt that was superseded (the password was
+ *  chosen, the vault was locked, a newer prompt was asked for) reports. */
 export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated" | "noSecretKey";
 
 export type DbConsistencyKind =

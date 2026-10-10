@@ -778,8 +778,9 @@ export const keychainDeleteSecretKey = () => invoke<void>("keychain_delete_secre
 // it). It never comes back out: the biometric unlock reads, unseals and uses it
 // entirely in Rust.
 /** `withSecretKey`: also say whether the Secret Key is remembered when nothing
- *  is stored (Settings, the presence gate). Without it the password unlock
- *  screen never waits on a keychain read it does not need. */
+ *  is stored (Settings, the presence gate). Without it — the password unlock
+ *  screen's question — nothing stored is answered without asking the platform
+ *  or the keychain at all, and everything but `stored` then reads false. */
 export const biometricStatus = (withSecretKey: boolean) =>
   invoke<BiometricStatus>("biometric_status", { withSecretKey });
 export const biometricEnable = (password: string) => invoke<void>("biometric_enable", { password });
@@ -787,6 +788,9 @@ export const biometricDisable = () => invoke<void>("biometric_disable");
 /** `reason` is the localised line the system prompt shows under the app name. */
 export const biometricUnlock = (reason: string) =>
   invoke<BiometricUnlockOutcome>("biometric_unlock", { reason });
+/** End the biometric attempt whose prompt is up ("use the password instead"):
+ *  its result is dropped in Rust and the prompt is closed where the OS can. */
+export const biometricCancel = () => invoke<void>("biometric_cancel");
 /** The Secret-Key-only startup gate: the presence prompt, then the remembered-
  *  key unlock, both in Rust. Nothing is stored behind the prompt. */
 export const biometricPresenceUnlock = (reason: string) =>

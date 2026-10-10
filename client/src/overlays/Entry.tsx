@@ -10,7 +10,11 @@ import { MONO, rem, rgba, TEXT, UI } from "@/theme/tokens";
 import { Btn, Checkbox, Field, Icon, Input, Logo, NO_AUTOCORRECT, Spinner, Toggle } from "@/components/primitives";
 import { useApp } from "@/store/app";
 import { recoverInstance } from "@/store/recovery";
-import { biometricUnlockReducer, initialBiometricUnlock } from "@/store/biometricUnlock";
+import {
+  BIOMETRIC_CHECK_GRACE_MS,
+  biometricUnlockReducer,
+  initialBiometricUnlock,
+} from "@/store/biometricUnlock";
 import { biometricMethod, isDesktopOs, isWindows, presenceGateApplies } from "@/bridge/platform";
 import { WindowControls } from "@/shell/Shell";
 import { useWindowControls } from "@/shell/WindowChrome";
@@ -750,6 +754,13 @@ function Unlock() {
       .catch(() => {});
   }, [gateMode]);
 
+  // The answer below never holds the password path back for long: past the
+  // grace the fields are there, and a later answer only offers the prompt.
+  useEffect(() => {
+    const timer = setTimeout(() => dispatchBio({ type: "timeout" }), BIOMETRIC_CHECK_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
   // Is biometric unlock enabled here? Only a password vault has anything stored
   // behind it; anywhere without an adapter the answer is simply "no".
   useEffect(() => {
@@ -772,8 +783,9 @@ function Unlock() {
       dispatchBio(none);
       return;
     }
-    // Without stored material Rust does not touch the keychain for this, so a
-    // device without biometric unlock shows the password field at once.
+    // Without stored material Rust touches neither the platform's biometric
+    // store nor the keychain for this, so a device without biometric unlock
+    // shows the password field at once.
     api
       .biometricStatus(false)
       .then((s) => dispatchBio({ type: "status", enabled: s.enabled, secretKeyRemembered: s.secretKeyRemembered }))
@@ -796,6 +808,9 @@ function Unlock() {
       if (prompted.current) return;
       prompted.current = true;
       waitForReturn.current = false;
+      // Results name the prompt they belong to: one that was given up on must
+      // not, when it finally answers, end the prompt that replaced it.
+      const attempt = bio.attempt;
       // The presence gate's Windows prompt shows the reason on its own, as a
       // sentence; Touch ID puts it after "UniSSH is trying to".
       const prompt = bio.gate
@@ -805,7 +820,7 @@ function Unlock() {
         : api.biometricUnlock(t("onboarding.biometricReason"));
       prompt
         .then((outcome) => {
-          dispatchBio({ type: "outcome", outcome });
+          dispatchBio({ type: "outcome", outcome, attempt });
           if (outcome === "unlocked") {
             afterUnlock().catch((e) => {
               logWarn(`post-unlock steps failed: ${apiErrorMessage(e)}`);
@@ -815,7 +830,7 @@ function Unlock() {
         })
         .catch((e) => {
           logWarn(`biometric unlock failed: ${apiErrorMessage(e)}`);
-          dispatchBio({ type: "error" });
+          dispatchBio({ type: "error", attempt });
         });
     };
     const osLock = waitForReturn.current;
@@ -838,6 +853,15 @@ function Unlock() {
     return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one prompt per phase entry
   }, [bio.phase]);
+
+  // "Use the password instead": back to the fields at once, and the attempt
+  // is ended in Rust too — the prompt is taken down where the platform can,
+  // and whatever it answers later is dropped there, so it cannot unlock a
+  // vault the user has since opened and locked again by hand.
+  const skipPrompt = () => {
+    dispatchBio({ type: "skip" });
+    api.biometricCancel().catch((e) => logWarn(`biometric cancel failed: ${apiErrorMessage(e)}`));
+  };
 
   // Everything after the core said yes, whichever way it was asked.
   const afterUnlock = async () => {
@@ -956,7 +980,7 @@ function Unlock() {
         {bio.phase === "prompting" && (
           // The way out of a prompt that never answers (a dialog behind the
           // window, a hung check): the manual unlock, at once.
-          <Btn type="button" variant="ghost" full onClick={() => dispatchBio({ type: "skip" })}>
+          <Btn type="button" variant="ghost" full onClick={skipPrompt}>
             {t(bio.gate ? "onboarding.presenceSkip" : "onboarding.biometricSkip")}
           </Btn>
         )}
@@ -983,7 +1007,8 @@ function Unlock() {
           </div>
         )}
         {/* Hidden while the biometric status is pending as well, so an enabled
-            Touch ID does not flash the password field before the prompt. */}
+            Touch ID does not flash the password field before the prompt — for
+            BIOMETRIC_CHECK_GRACE_MS at most; "checking" ends by itself. */}
         {requiresPassword !== false && bio.phase !== "prompting" && bio.phase !== "checking" && (
           <Field label={t("onboarding.masterPassword")} labelGap={7}>
             <Input
