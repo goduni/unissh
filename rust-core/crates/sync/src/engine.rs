@@ -172,7 +172,7 @@ pub fn sync_pull(
         if seq <= last {
             report.rejected.push(Rejected {
                 server_seq: seq,
-                vault_id: obj.vault_id().map(|v| v.to_vec()),
+                vault_id: obj.vault_id().map(<[u8]>::to_vec),
                 reason: RejectReason::BelowCursor,
             });
             continue; // below-cursor does NOT move the cursor
@@ -268,7 +268,7 @@ fn process_object(
 fn reject(report: &mut SyncReport, seq: u64, vault_id: Option<&[u8]>, reason: RejectReason) {
     report.rejected.push(Rejected {
         server_seq: seq,
-        vault_id: vault_id.map(|v| v.to_vec()),
+        vault_id: vault_id.map(<[u8]>::to_vec),
         reason,
     });
 }
@@ -326,6 +326,9 @@ fn process_vault(
                 );
                 return Ok(());
             }
+            IntegrityFailure::AuthorMismatch | IntegrityFailure::NotAuthorized => {}
+            // `IntegrityFailure` is `#[non_exhaustive]` in another crate: a future variant
+            // falls through to the authority check below, as before.
             _ => {}
         }
     }
@@ -473,6 +476,7 @@ fn process_manifest(
     seq: u64,
     report: &mut SyncReport,
 ) -> Result<(), SyncError> {
+    use unissh_vault::verify_chain_to_epoch;
     // (0) epoch-floor reject — symmetric with process_vault/item/grant/keyset
     // (defense-in-depth, anti-rollback §1.1). A manifest below the trusted vault epoch
     // floor is an attempt to roll membership back to a stale epoch; we reject BEFORE
@@ -511,7 +515,6 @@ fn process_manifest(
     // No manifest@epoch yet: verify-before-apply. verify_chain_to_epoch
     // reads from storage, so we put it inside a check-transaction and on an authority
     // failure we roll back (a broken/forged manifest does not remain in storage).
-    use unissh_vault::verify_chain_to_epoch;
     let epoch = m.key_epoch;
     let anchor = vault_anchor(storage, &m.vault_id, ctx)?;
     let res: Result<bool, SyncError> = storage.transaction(|| {
@@ -583,17 +586,14 @@ fn process_grant(
     }
     // The verified member-set of the grant's epoch (requires an already-applied manifest@epoch).
     let anchor = vault_anchor(storage, &g.vault_id, ctx)?;
-    let members = match verify_chain_to_epoch(storage, &g.vault_id, g.key_epoch, &anchor) {
-        Ok(v) => v,
-        Err(_) => {
-            reject(
-                report,
-                seq,
-                Some(&g.vault_id),
-                RejectReason::AuthorityFailed,
-            );
-            return Ok(());
-        }
+    let Ok(members) = verify_chain_to_epoch(storage, &g.vault_id, g.key_epoch, &anchor) else {
+        reject(
+            report,
+            seq,
+            Some(&g.vault_id),
+            RejectReason::AuthorityFailed,
+        );
+        return Ok(());
     };
     if verify_grant(g, &g.vault_id, &members).is_err() {
         reject(
@@ -630,12 +630,9 @@ fn process_audit(
     // the author must authorize through the vault's membership@epoch (admin view), not
     // only through the instance owner; the exact signature domain/AAD is also defined by `audit`.
     use unissh_crypto::{verify_version, AssociatedData, Ed25519VerifyingKey, VersionedObject};
-    let author = match Ed25519VerifyingKey::from_bytes(&a.author_pubkey) {
-        Ok(k) => k,
-        Err(_) => {
-            reject(report, seq, Some(&a.vault_id), RejectReason::Malformed);
-            return Ok(());
-        }
+    let Ok(author) = Ed25519VerifyingKey::from_bytes(&a.author_pubkey) else {
+        reject(report, seq, Some(&a.vault_id), RejectReason::Malformed);
+        return Ok(());
     };
     // Author authority: only the trusted instance owner may write audit in v1.
     if a.author_pubkey != ctx.genesis_owner {
@@ -684,17 +681,14 @@ fn process_keyset(
     // Therefore the engine does NOT raise the floor here. The floor is raised ONLY after real
     // keyset authentication with credentials (`unlock_account_checked` / password change) —
     // outside the sync engine, on the trusted unlock path.
-    let record = match EncryptedKeyset::from_bytes(blob) {
-        Ok(r) => r,
-        Err(_) => {
-            reject(report, seq, None, RejectReason::Malformed);
-            return Ok(());
-        }
+    let Ok(record) = EncryptedKeyset::from_bytes(blob) else {
+        reject(report, seq, None, RejectReason::Malformed);
+        return Ok(());
     };
     // Anti-rollback gate (safe, monotonically-down): a keyset feed with a generation
     // BELOW the trusted floor is discarded as a rollback. Only credentials move the floor.
     let floor = keyset_gen_floor(storage)?.unwrap_or(0);
-    if (record.generation as u64) < floor {
+    if u64::from(record.generation) < floor {
         reject(report, seq, None, RejectReason::GenerationBelowFloor);
         return Ok(());
     }
@@ -894,24 +888,23 @@ pub fn sync_push(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::{AuditObject, SyncObject};
-    use crate::transport::{InMemoryTransport, SyncTransport};
-    use unissh_storage::Storage;
+    use crate::object::AuditObject;
+    use crate::transport::InMemoryTransport;
 
     fn st() -> Storage {
-        Storage::open_in_memory(&[7u8; 32]).unwrap()
+        Storage::open_in_memory(&[7_u8; 32]).unwrap()
     }
     fn audit(n: u8) -> SyncObject {
         SyncObject::Audit(AuditObject {
             vault_id: vec![n],
             entry_blob: vec![n],
-            signature: vec![1u8; 67],
-            author_pubkey: vec![2u8; 32],
+            signature: vec![1_u8; 67],
+            author_pubkey: vec![2_u8; 32],
         })
     }
     fn ctx() -> SyncContext {
         SyncContext {
-            genesis_owner: vec![2u8; 32],
+            genesis_owner: vec![2_u8; 32],
             tenant: b"test-tenant".to_vec(),
         }
     }
@@ -922,12 +915,11 @@ mod tests {
         let mut t = InMemoryTransport::new();
         t.push_objects(&[audit(1), audit(2)]).unwrap();
         // the first pull advances the cursor to 2
-        let r = sync_pull(&mut t, &s, &ctx()).unwrap();
+        sync_pull(&mut t, &s, &ctx()).unwrap();
         assert_eq!(
             s.get_sync_cursor(&pull_cursor_key(b"test-tenant")).unwrap(),
             Some(2)
         );
-        let _ = r;
         // the server lies: it lowers report_version below the cursor → TransportRollback
         t.force_report_version(0);
         let err = sync_pull(&mut t, &s, &ctx()).unwrap_err();
@@ -946,7 +938,7 @@ mod tests {
         let mut ta = InMemoryTransport::new();
         ta.push_objects(&[audit(1), audit(2)]).unwrap();
         let ctx_a = SyncContext {
-            genesis_owner: vec![2u8; 32],
+            genesis_owner: vec![2_u8; 32],
             tenant: b"tenant-A".to_vec(),
         };
         sync_pull(&mut ta, &s, &ctx_a).unwrap();
@@ -960,7 +952,7 @@ mod tests {
         let mut tb = InMemoryTransport::new();
         tb.push_objects(&[audit(1)]).unwrap();
         let ctx_b = SyncContext {
-            genesis_owner: vec![2u8; 32],
+            genesis_owner: vec![2_u8; 32],
             tenant: b"tenant-B".to_vec(),
         };
         sync_pull(&mut tb, &s, &ctx_b).expect("tenant B must not see tenant A's cursor");
@@ -980,7 +972,8 @@ mod tests {
         // One audit entry (seq 1). A push to tenant A moves cursor A; cursor B
         // stays empty → B will still hand off the same audit entry.
         let s = st();
-        s.append_audit(&[9u8; 1], &[1u8; 67], &[2u8; 32]).unwrap();
+        s.append_audit(&[9_u8; 1], &[1_u8; 67], &[2_u8; 32])
+            .unwrap();
 
         let mut ta = InMemoryTransport::new();
         sync_push(&mut ta, &s, b"tenant-A").unwrap();

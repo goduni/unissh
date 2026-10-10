@@ -1,4 +1,8 @@
 //! P3 tests: membership, grants, access verification, member-pubkey pinning.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_crypto::{Ed25519Keypair, X25519Keypair};
 use unissh_keychain::{create_account, KdfParams, UnlockedKeyset};
@@ -9,12 +13,10 @@ use unissh_vault::{
     seal_account_payload, verify_grant, verify_manifest, Member, Vault, VaultError,
 };
 
-#[allow(dead_code)]
 fn keyset() -> UnlockedKeyset {
     let (_sk, _rec, unlocked) = create_account(None, KdfParams::recommended()).unwrap();
     unlocked
 }
-#[allow(dead_code)]
 fn storage() -> Storage {
     Storage::open_in_memory(&[7_u8; 32]).unwrap()
 }
@@ -126,7 +128,7 @@ fn next_epoch_manifest_signed_by_prior_admin_verifies() {
         &vid,
         2,
         &[Member {
-            ed25519_pub: bob_ed.clone(),
+            ed25519_pub: bob_ed,
             role: MemberRole::Admin,
         }],
     )
@@ -411,7 +413,7 @@ fn grant_signed_by_non_admin_rejected() {
                 role: MemberRole::Admin,
             },
             Member {
-                ed25519_pub: editor_ed.clone(),
+                ed25519_pub: editor_ed,
                 role: MemberRole::Editor,
             },
         ],
@@ -712,7 +714,7 @@ fn add_member_persists_verified_manifest_and_grants() {
             role: MemberRole::Editor,
         },
     ];
-    let grants = vec![(recip_x.clone(), recip_ed.clone(), MemberRole::Editor)];
+    let grants = vec![(recip_x, recip_ed.clone(), MemberRole::Editor)];
     add_member(
         &st, &admin, &vid, 1, None, &admin_ed, &members, &grants, &vk,
     )
@@ -739,7 +741,7 @@ fn add_member_rejects_unauthorized_admin() {
     let vk = unissh_crypto::SymmetricKey::generate();
     // the attacker tries to issue genesis, making themselves admin, but genesis_owner=creator
     let members = vec![Member {
-        ed25519_pub: attacker_ed.clone(),
+        ed25519_pub: attacker_ed,
         role: MemberRole::Admin,
     }];
     let err = add_member(
@@ -1130,9 +1132,9 @@ fn establish_membership_via_vault_method_and_extend() {
         },
     ];
     let xkeys2 = vec![
-        (owner_ed.clone(), owner_x.clone()),
-        (bob_ed.clone(), bob_x.clone()),
-        (carol_ed.clone(), carol_x.clone()),
+        (owner_ed.clone(), owner_x),
+        (bob_ed, bob_x),
+        (carol_ed.clone(), carol_x),
     ];
     let epoch2 = v
         .establish_or_extend_membership(&owner, &members2, &xkeys2)
@@ -1211,7 +1213,7 @@ fn member_opens_shared_vault_and_decrypts_item() {
             role: MemberRole::Editor,
         },
     ];
-    let x_by_ed = vec![(member_ed.clone(), member_x.clone())];
+    let x_by_ed = vec![(member_ed, member_x)];
     v.establish_or_extend_membership(&owner, &members, &x_by_ed)
         .unwrap();
     v.put_item(b"db-pw", 1, b"s3cr3t").unwrap();
@@ -1248,7 +1250,7 @@ fn revoked_member_cannot_open_after_rotation() {
             role: MemberRole::Editor,
         },
     ];
-    let x_by_ed = vec![(member_ed.clone(), member_x.clone())];
+    let x_by_ed = vec![(member_ed, member_x)];
     v.establish_or_extend_membership(&owner, &members, &x_by_ed)
         .unwrap();
     v.put_item(b"db-pw", 1, b"s3cr3t").unwrap();
@@ -1259,7 +1261,7 @@ fn revoked_member_cannot_open_after_rotation() {
 
     // Owner rotates the VK, keeping ONLY themselves (member revoked → no grant@latest).
     let remaining = vec![Member {
-        ed25519_pub: owner_ed.clone(),
+        ed25519_pub: owner_ed,
         role: MemberRole::Admin,
     }];
     v.rotate_vk(&owner, &remaining, &[]).unwrap();
@@ -1297,7 +1299,7 @@ fn member_cannot_rewrite_owner_record() {
             role: MemberRole::Editor,
         },
     ];
-    let x_by_ed = vec![(member_ed.clone(), member_x.clone())];
+    let x_by_ed = vec![(member_ed, member_x)];
     v.establish_or_extend_membership(&owner, &members, &x_by_ed)
         .unwrap();
     pin_and_verify_vault_anchor(&st, &vid, &owner_ed).unwrap();

@@ -1,5 +1,9 @@
 //! Local vault tests: item round-trip through the VK, isolation, wrong keyset,
 //! signature, tombstone.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_crypto::X25519Keypair;
 use unissh_keychain::{create_account, KdfParams, UnlockedKeyset};

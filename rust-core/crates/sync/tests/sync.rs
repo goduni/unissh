@@ -1,5 +1,9 @@
 //! Integration tests for the sync engine: happy-path + mandatory negatives.
 //! The transport is forced to lie (forged/stale/below-cursor/equal-version).
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_crypto::KdfParams;
 use unissh_keychain::{create_account, UnlockedKeyset};
@@ -556,9 +560,9 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 /// servers, and check that `sync_push(tenant)` hands off exactly "its own" vault.
 #[test]
 fn cloud_vault_pushed_only_to_its_bound_tenant() {
-    let (sa, ka) = account(&[20_u8; 32]);
     const TENANT_A: &[u8] = b"tenant-A";
     const TENANT_B: &[u8] = b"tenant-B";
+    let (sa, ka) = account(&[20_u8; 32]);
 
     // Vault A → bound to server A.
     Vault::create_with_target(&sa, &ka, b"vault-A".to_vec(), b"a", SyncTarget::Cloud).unwrap();
@@ -603,9 +607,12 @@ fn cloud_vault_pushed_only_to_its_bound_tenant() {
 fn pushed_vault_ids(t: &InMemoryTransport) -> Vec<Vec<u8>> {
     t.delta_since(0)
         .into_iter()
-        .filter_map(|(_, o)| match o {
-            SyncObject::Vault(v) => Some(v.vault_id),
-            _ => None,
+        .filter_map(|(_, o)| {
+            if let SyncObject::Vault(v) = o {
+                Some(v.vault_id)
+            } else {
+                None
+            }
         })
         .collect()
 }

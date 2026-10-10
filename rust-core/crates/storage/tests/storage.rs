@@ -1,8 +1,12 @@
 //! Storage tests: instance isolation, round-trip, tombstone, monotonicity.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_storage::{CachePolicy, ItemRecord, Storage, SyncTarget, VaultRecord};
 
-fn key(seed: u8) -> [u8; 32] {
+const fn key(seed: u8) -> [u8; 32] {
     [seed; 32]
 }
 
@@ -575,7 +579,7 @@ fn membership_manifest_roundtrip_and_upsert() {
     assert!(s.get_membership_manifest(b"v", 2).unwrap().is_none());
 
     // UPSERT on (vault_id, key_epoch): a repeated put of the same epoch overwrites.
-    let mut m2 = m.clone();
+    let mut m2 = m;
     m2.manifest_blob = b"updated".to_vec();
     s.put_membership_manifest(&m2).unwrap();
     assert_eq!(
@@ -626,7 +630,7 @@ fn membership_grants_list_and_upsert_and_remove() {
     assert!(s.list_membership_grants(b"v", 2).unwrap().is_empty());
 
     // UPSERT on (vault_id, member_pubkey, key_epoch).
-    let mut g1b = g1.clone();
+    let mut g1b = g1;
     g1b.role = MemberRole::Admin;
     g1b.wrapped_vk = b"wvk-alice-2".to_vec();
     s.put_membership_grant(&g1b).unwrap();
@@ -879,7 +883,7 @@ fn upgrade_v3_to_v5_preserves_data_and_adds_tables() {
     ] {
         let sql = format!("SELECT {col} FROM {table} LIMIT 1");
         // Does not fail on a missing column.
-        let _ = conn.query_row(&sql, [], |r| r.get::<_, Option<i64>>(0));
+        drop(conn.query_row(&sql, [], |r| r.get::<_, Option<i64>>(0)));
         assert!(
             conn.prepare(&sql).is_ok(),
             "column {table}.{col} should exist"

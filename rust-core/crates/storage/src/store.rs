@@ -65,6 +65,7 @@ impl Storage {
     }
 
     fn init(conn: Connection, db_key: &[u8]) -> Result<Self, StorageError> {
+        static NEXT_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         if db_key.len() != DB_KEY_LEN {
             return Err(StorageError::BadKeyLength);
         }
@@ -87,7 +88,6 @@ impl Storage {
         // `check_consistency`, NOT the engine.
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
-        static NEXT_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let storage = Self {
             conn,
             automation_epoch: NEXT_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -126,6 +126,10 @@ impl Storage {
     /// Process-local authorization snapshot. Changes to vault/trust/identity data
     /// invalidate automation grants conservatively; reads, audit and sync cursors do not.
     /// Reopening the database always changes the epoch, including lock/unlock.
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "revision and data_version are opaque counters only compared for equality, so reinterpreting their bits as u64 loses nothing"
+    )]
     pub fn automation_revision(&self) -> Result<[u64; 2], StorageError> {
         let revision: i64 =
             self.conn
@@ -162,6 +166,10 @@ impl Storage {
     /// Versioned local access binding, stable across reopen and sync bookkeeping.
     /// Hash ciphertext and trust records, never recording payloads. This is not a
     /// wire/AAD encoding or a substitute for the vault's signature verification.
+    #[expect(
+        clippy::little_endian_bytes,
+        reason = "fingerprint layout has been LE since v1 and outstanding automation grants are compared against it across reopen"
+    )]
     pub fn automation_fingerprint(&self) -> Result<Vec<u8>, StorageError> {
         use rusqlite::types::ValueRef;
         use sha2::{Digest, Sha256};
@@ -191,9 +199,13 @@ impl Storage {
                         ValueRef::Null => digest.update([0]),
                         ValueRef::Integer(n) => { digest.update([1]); digest.update(n.to_le_bytes()); }
                         ValueRef::Real(n) => { digest.update([2]); digest.update(n.to_bits().to_le_bytes()); }
-                        value @ (ValueRef::Text(_) | ValueRef::Blob(_)) => {
-                            let (kind, bytes) = match value { ValueRef::Text(b) => (3,b), ValueRef::Blob(b) => (4,b), _ => unreachable!() };
-                            digest.update([kind]);
+                        ValueRef::Text(bytes) => {
+                            digest.update([3]);
+                            digest.update((bytes.len() as u64).to_le_bytes());
+                            digest.update(bytes);
+                        }
+                        ValueRef::Blob(bytes) => {
+                            digest.update([4]);
                             digest.update((bytes.len() as u64).to_le_bytes());
                             digest.update(bytes);
                         }
@@ -225,7 +237,7 @@ impl Storage {
     }
 
     /// Schema version of the open DB.
-    pub fn schema_version(&self) -> i64 {
+    pub const fn schema_version(&self) -> i64 {
         SCHEMA_VERSION
     }
 
@@ -320,13 +332,13 @@ impl Storage {
         )?;
         if changed == 0 {
             // PK conflict and the WHERE rejected the update → version rollback.
-            let cur: i64 = self.conn.query_row(
+            let cur = self.conn.query_row(
                 "SELECT version FROM vaults WHERE vault_id = ?1",
                 params![v.vault_id],
-                |r| r.get(0),
+                |r| get_u64(r, 0),
             )?;
             return Err(StorageError::VersionRollback {
-                current: cur as u64,
+                current: cur,
                 attempted: v.version,
             });
         }
@@ -519,13 +531,13 @@ impl Storage {
             ],
         )?;
         if changed == 0 {
-            let cur: i64 = self.conn.query_row(
+            let cur = self.conn.query_row(
                 "SELECT version FROM items WHERE vault_id = ?1 AND item_id = ?2",
                 params![it.vault_id, it.item_id],
-                |r| r.get(0),
+                |r| get_u64(r, 0),
             )?;
             return Err(StorageError::VersionRollback {
-                current: cur as u64,
+                current: cur,
                 attempted: it.version,
             });
         }
@@ -773,7 +785,7 @@ impl Storage {
             .query_map([], |r| {
                 Ok(KnownHost {
                     host: r.get(0)?,
-                    port: r.get::<_, i64>(1)? as u16,
+                    port: r.get::<_, u16>(1)?,
                     host_key: r.get(2)?,
                     added_at: r.get(3)?,
                 })
@@ -845,7 +857,7 @@ impl Storage {
             "SELECT MAX(key_epoch) FROM membership_manifests WHERE vault_id = ?1",
         )?;
         let epoch: Option<i64> = stmt.query_row(params![vault_id], |r| r.get(0))?;
-        Ok(epoch.map(|e| e as u64))
+        Ok(epoch.map(|e| stored_u64(0, e)).transpose()?)
     }
 
     /// Inserts or updates an access grant (UPSERT on
@@ -1133,7 +1145,7 @@ impl Storage {
              VALUES (?1, ?2, ?3, ?4)",
             params![entry_blob, signature, author_pubkey, recorded_at],
         )?;
-        Ok(self.conn.last_insert_rowid() as u64)
+        Ok(stored_u64(0, self.conn.last_insert_rowid())?)
     }
 
     /// Audit records with `seq > since_seq`, in ascending `seq` order. A
@@ -1141,9 +1153,8 @@ impl Storage {
     pub fn list_audit(&self, since_seq: u64) -> Result<Vec<AuditEntry>, StorageError> {
         // seq is an autoincrement rowid (i64). A since_seq beyond i64 → empty
         // (no seq can be larger), without overflow when binding.
-        let since = match i64::try_from(since_seq) {
-            Ok(v) => v,
-            Err(_) => return Ok(Vec::new()),
+        let Ok(since) = i64::try_from(since_seq) else {
+            return Ok(Vec::new());
         };
         let mut stmt = self.conn.prepare_cached(
             "SELECT seq, entry_blob, signature, author_pubkey, recorded_at
@@ -1177,10 +1188,9 @@ impl Storage {
         Ok(self
             .conn
             .query_row("SELECT v FROM sync_state WHERE k = ?1", params![key], |r| {
-                r.get::<_, i64>(0)
+                get_u64(r, 0)
             })
-            .optional()?
-            .map(|v| v as u64))
+            .optional()?)
     }
 
     /// Writes the vault epoch floor (the minimum acceptable epoch, anti-rollback)
@@ -1202,10 +1212,9 @@ impl Storage {
             .query_row(
                 "SELECT key_epoch FROM vault_epoch_floor WHERE vault_id = ?1",
                 params![vault_id],
-                |r| r.get::<_, i64>(0),
+                |r| get_u64(r, 0),
             )
-            .optional()?
-            .map(|v| v as u64))
+            .optional()?)
     }
 
     // --- per-vault trust anchor (genesis-owner, A0) ---
@@ -1305,103 +1314,15 @@ impl Storage {
         let integrity_ok = self.integrity_ok()?;
 
         // Orphans: an item whose vault_id is absent from the vaults table.
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT i.vault_id, i.item_id FROM items i
-                 LEFT JOIN vaults v ON i.vault_id = v.vault_id
-                 WHERE v.vault_id IS NULL",
-            )?;
-            let rows = stmt.query_map([], |r| {
-                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
-            })?;
-            for row in rows {
-                let (vid, iid) = row?;
-                issues.push(ConsistencyIssue {
-                    kind: ConsistencyKind::OrphanItem,
-                    vault_id_hex: to_hex(&vid),
-                    item_id_hex: to_hex(&iid),
-                    detail: "item references no vault row".to_owned(),
-                });
-            }
-        }
+        self.check_orphan_items(&mut issues)?;
 
         // Domain invariants — lengths/versions only, without selecting blobs.
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT vault_id, item_id, version, tombstone,
-                        length(content_blob), length(signature), length(author_pubkey)
-                 FROM items",
-            )?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, Vec<u8>>(0)?,
-                    r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                    r.get::<_, i64>(4)?,
-                    r.get::<_, i64>(5)?,
-                    r.get::<_, i64>(6)?,
-                ))
-            })?;
-            for row in rows {
-                let (vid, iid, version, tombstone, clen, slen, alen) = row?;
-                let vhex = to_hex(&vid);
-                let ihex = to_hex(&iid);
-                let mut push = |kind, detail: String| {
-                    issues.push(ConsistencyIssue {
-                        kind,
-                        vault_id_hex: vhex.clone(),
-                        item_id_hex: ihex.clone(),
-                        detail,
-                    });
-                };
-                if version < 1 {
-                    push(ConsistencyKind::BadVersion, format!("version={version}"));
-                }
-                if alen != ED25519_PUBKEY_LEN {
-                    push(
-                        ConsistencyKind::BadAuthorLen,
-                        format!("author_pubkey length={alen}"),
-                    );
-                }
-                if slen < MIN_SIG_LEN {
-                    push(
-                        ConsistencyKind::BadSignatureLen,
-                        format!("signature length={slen}"),
-                    );
-                }
-                if tombstone != 0 && clen != 0 {
-                    push(
-                        ConsistencyKind::TombstoneNotEmpty,
-                        format!("tombstone with content length={clen}"),
-                    );
-                }
-            }
-        }
+        self.check_item_invariants(&mut issues)?;
 
         // Stale history: a version archive exists while the item itself is
         // deleted (tombstone) or absent — the old plaintext must not outlive the
         // deletion of the secret.
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT h.vault_id, h.item_id FROM item_history h
-                 LEFT JOIN items i ON h.vault_id = i.vault_id AND h.item_id = i.item_id
-                 WHERE i.vault_id IS NULL OR i.tombstone = 1
-                 GROUP BY h.vault_id, h.item_id",
-            )?;
-            let rows = stmt.query_map([], |r| {
-                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
-            })?;
-            for row in rows {
-                let (vid, iid) = row?;
-                issues.push(ConsistencyIssue {
-                    kind: ConsistencyKind::StaleHistory,
-                    vault_id_hex: to_hex(&vid),
-                    item_id_hex: to_hex(&iid),
-                    detail: "version history for a deleted/absent item".to_owned(),
-                });
-            }
-        }
+        self.check_stale_history(&mut issues)?;
 
         // The same length() invariants (author_pubkey/signature, version/epoch)
         // for the remaining signed tables — previously the structural audit
@@ -1409,114 +1330,224 @@ impl Storage {
         // passed it unnoticed (the signature is verified in the vault layer
         // anyway; this is just structural-audit completeness). Without selecting
         // blobs — lengths only.
-        {
-            let mut push_lens = |table: &str,
-                                 vid: &[u8],
-                                 id: &[u8],
-                                 ver_or_epoch: i64,
-                                 ver_label: &str,
-                                 slen: i64,
-                                 alen: i64| {
-                let vhex = to_hex(vid);
-                let ihex = if id.is_empty() {
-                    String::new()
-                } else {
-                    to_hex(id)
-                };
-                if ver_or_epoch < 1 {
-                    issues.push(ConsistencyIssue {
-                        kind: ConsistencyKind::BadVersion,
-                        vault_id_hex: vhex.clone(),
-                        item_id_hex: ihex.clone(),
-                        detail: format!("{table} {ver_label}={ver_or_epoch}"),
-                    });
-                }
-                if alen != ED25519_PUBKEY_LEN {
-                    issues.push(ConsistencyIssue {
-                        kind: ConsistencyKind::BadAuthorLen,
-                        vault_id_hex: vhex.clone(),
-                        item_id_hex: ihex.clone(),
-                        detail: format!("{table} author_pubkey length={alen}"),
-                    });
-                }
-                if slen < MIN_SIG_LEN {
-                    issues.push(ConsistencyIssue {
-                        kind: ConsistencyKind::BadSignatureLen,
-                        vault_id_hex: vhex,
-                        item_id_hex: ihex,
-                        detail: format!("{table} signature length={slen}"),
-                    });
-                }
-            };
-            // vaults (item_id empty): version >= 1
-            let mut s = self.conn.prepare(
-                "SELECT vault_id, version, length(signature), length(author_pubkey) FROM vaults",
-            )?;
-            for row in s.query_map([], |r| {
-                Ok((
-                    r.get::<_, Vec<u8>>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                ))
-            })? {
-                let (vid, ver, slen, alen) = row?;
-                push_lens("vault", &vid, &[], ver, "version", slen, alen);
-            }
-            // item_history: version >= 1
-            let mut s = self.conn.prepare(
-                "SELECT vault_id, item_id, version, length(signature), length(author_pubkey) FROM item_history",
-            )?;
-            for row in s.query_map([], |r| {
-                Ok((
-                    r.get::<_, Vec<u8>>(0)?,
-                    r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                    r.get::<_, i64>(4)?,
-                ))
-            })? {
-                let (vid, iid, ver, slen, alen) = row?;
-                push_lens("history", &vid, &iid, ver, "version", slen, alen);
-            }
-            // membership_manifests: key_epoch >= 1
-            let mut s = self.conn.prepare(
-                "SELECT vault_id, key_epoch, length(signature), length(author_pubkey) FROM membership_manifests",
-            )?;
-            for row in s.query_map([], |r| {
-                Ok((
-                    r.get::<_, Vec<u8>>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                ))
-            })? {
-                let (vid, epoch, slen, alen) = row?;
-                push_lens("manifest", &vid, &[], epoch, "key_epoch", slen, alen);
-            }
-            // membership_grants: key_epoch >= 1 (member_pubkey acts as item_id)
-            let mut s = self.conn.prepare(
-                "SELECT vault_id, member_pubkey, key_epoch, length(signature), length(author_pubkey) FROM membership_grants",
-            )?;
-            for row in s.query_map([], |r| {
-                Ok((
-                    r.get::<_, Vec<u8>>(0)?,
-                    r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                    r.get::<_, i64>(4)?,
-                ))
-            })? {
-                let (vid, member, epoch, slen, alen) = row?;
-                push_lens("grant", &vid, &member, epoch, "key_epoch", slen, alen);
-            }
-        }
+        self.check_signed_table_lens(&mut issues)?;
 
         Ok(ConsistencyReport {
             ok: integrity_ok && issues.is_empty(),
             integrity_ok,
             issues,
         })
+    }
+
+    /// Orphans: items whose `vault_id` has no row in `vaults`.
+    fn check_orphan_items(&self, issues: &mut Vec<ConsistencyIssue>) -> Result<(), StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT i.vault_id, i.item_id FROM items i
+             LEFT JOIN vaults v ON i.vault_id = v.vault_id
+             WHERE v.vault_id IS NULL",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (vid, iid) = row?;
+            issues.push(ConsistencyIssue {
+                kind: ConsistencyKind::OrphanItem,
+                vault_id_hex: to_hex(&vid),
+                item_id_hex: to_hex(&iid),
+                detail: "item references no vault row".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Domain invariants of `items` (lengths/versions only, no blobs).
+    fn check_item_invariants(
+        &self,
+        issues: &mut Vec<ConsistencyIssue>,
+    ) -> Result<(), StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT vault_id, item_id, version, tombstone,
+                    length(content_blob), length(signature), length(author_pubkey)
+             FROM items",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+            ))
+        })?;
+        for row in rows {
+            let (vid, iid, version, tombstone, clen, slen, alen) = row?;
+            let vhex = to_hex(&vid);
+            let ihex = to_hex(&iid);
+            let mut push = |kind, detail: String| {
+                issues.push(ConsistencyIssue {
+                    kind,
+                    vault_id_hex: vhex.clone(),
+                    item_id_hex: ihex.clone(),
+                    detail,
+                });
+            };
+            if version < 1 {
+                push(ConsistencyKind::BadVersion, format!("version={version}"));
+            }
+            if alen != ED25519_PUBKEY_LEN {
+                push(
+                    ConsistencyKind::BadAuthorLen,
+                    format!("author_pubkey length={alen}"),
+                );
+            }
+            if slen < MIN_SIG_LEN {
+                push(
+                    ConsistencyKind::BadSignatureLen,
+                    format!("signature length={slen}"),
+                );
+            }
+            if tombstone != 0 && clen != 0 {
+                push(
+                    ConsistencyKind::TombstoneNotEmpty,
+                    format!("tombstone with content length={clen}"),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Version history that outlived its item (tombstoned or absent).
+    fn check_stale_history(&self, issues: &mut Vec<ConsistencyIssue>) -> Result<(), StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT h.vault_id, h.item_id FROM item_history h
+             LEFT JOIN items i ON h.vault_id = i.vault_id AND h.item_id = i.item_id
+             WHERE i.vault_id IS NULL OR i.tombstone = 1
+             GROUP BY h.vault_id, h.item_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (vid, iid) = row?;
+            issues.push(ConsistencyIssue {
+                kind: ConsistencyKind::StaleHistory,
+                vault_id_hex: to_hex(&vid),
+                item_id_hex: to_hex(&iid),
+                detail: "version history for a deleted/absent item".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Length/version invariants of the other signed tables (lengths only, no blobs).
+    fn check_signed_table_lens(
+        &self,
+        issues: &mut Vec<ConsistencyIssue>,
+    ) -> Result<(), StorageError> {
+        let mut push_lens = |table: &str,
+                             vid: &[u8],
+                             id: &[u8],
+                             ver_or_epoch: i64,
+                             ver_label: &str,
+                             slen: i64,
+                             alen: i64| {
+            let vhex = to_hex(vid);
+            let ihex = if id.is_empty() {
+                String::new()
+            } else {
+                to_hex(id)
+            };
+            if ver_or_epoch < 1 {
+                issues.push(ConsistencyIssue {
+                    kind: ConsistencyKind::BadVersion,
+                    vault_id_hex: vhex.clone(),
+                    item_id_hex: ihex.clone(),
+                    detail: format!("{table} {ver_label}={ver_or_epoch}"),
+                });
+            }
+            if alen != ED25519_PUBKEY_LEN {
+                issues.push(ConsistencyIssue {
+                    kind: ConsistencyKind::BadAuthorLen,
+                    vault_id_hex: vhex.clone(),
+                    item_id_hex: ihex.clone(),
+                    detail: format!("{table} author_pubkey length={alen}"),
+                });
+            }
+            if slen < MIN_SIG_LEN {
+                issues.push(ConsistencyIssue {
+                    kind: ConsistencyKind::BadSignatureLen,
+                    vault_id_hex: vhex,
+                    item_id_hex: ihex,
+                    detail: format!("{table} signature length={slen}"),
+                });
+            }
+        };
+        // vaults (item_id empty): version >= 1
+        let mut s = self.conn.prepare(
+            "SELECT vault_id, version, length(signature), length(author_pubkey) FROM vaults",
+        )?;
+        for row in s.query_map([], |r| {
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })? {
+            let (vid, ver, slen, alen) = row?;
+            push_lens("vault", &vid, &[], ver, "version", slen, alen);
+        }
+        // item_history: version >= 1
+        let mut s = self.conn.prepare(
+            "SELECT vault_id, item_id, version, length(signature), length(author_pubkey) FROM item_history",
+        )?;
+        for row in s.query_map([], |r| {
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        })? {
+            let (vid, iid, ver, slen, alen) = row?;
+            push_lens("history", &vid, &iid, ver, "version", slen, alen);
+        }
+        // membership_manifests: key_epoch >= 1
+        let mut s = self.conn.prepare(
+            "SELECT vault_id, key_epoch, length(signature), length(author_pubkey) FROM membership_manifests",
+        )?;
+        for row in s.query_map([], |r| {
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })? {
+            let (vid, epoch, slen, alen) = row?;
+            push_lens("manifest", &vid, &[], epoch, "key_epoch", slen, alen);
+        }
+        // membership_grants: key_epoch >= 1 (member_pubkey acts as item_id)
+        let mut s = self.conn.prepare(
+            "SELECT vault_id, member_pubkey, key_epoch, length(signature), length(author_pubkey) FROM membership_grants",
+        )?;
+        for row in s.query_map([], |r| {
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        })? {
+            let (vid, member, epoch, slen, alen) = row?;
+            push_lens("grant", &vid, &member, epoch, "key_epoch", slen, alen);
+        }
+        Ok(())
     }
 
     /// Structural DB check via `PRAGMA integrity_check` (works for both the
@@ -1534,8 +1565,28 @@ impl Storage {
 
 /// Versions are stored as SQLite INTEGER (i64). We reject out-of-range values
 /// so as not to break monotonicity via sign overflow.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "TryFromIntError carries no data and VersionOutOfRange has no source field to keep it in"
+)]
 fn checked_version(v: u64) -> Result<i64, StorageError> {
     i64::try_from(v).map_err(|_| StorageError::VersionOutOfRange)
+}
+
+/// Converts a u64 read back from SQLite INTEGER. Every writer goes through
+/// [`checked_version`], so a negative value means a corrupt row and is reported
+/// as rusqlite's out-of-range error for `column`.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "TryFromIntError carries no data; the offending value is kept in IntegralValueOutOfRange"
+)]
+fn stored_u64(column: usize, v: i64) -> rusqlite::Result<u64> {
+    u64::try_from(v).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(column, v))
+}
+
+/// Reads column `idx` as a u64 stored in SQLite INTEGER (see [`stored_u64`]).
+fn get_u64(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<u64> {
+    stored_u64(idx, row.get(idx)?)
 }
 
 /// Encodes bytes as hex (ids are open metadata; the report holds no secrets).
@@ -1547,7 +1598,8 @@ fn to_hex(bytes: &[u8]) -> String {
 fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
         .unwrap_or(0)
 }
 
@@ -1572,11 +1624,11 @@ fn map_vault_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VaultRecord> {
         sync_target,
         name_blob: row.get(2)?,
         wrapped_vk: row.get(3)?,
-        version: row.get::<_, i64>(4)? as u64,
+        version: get_u64(row, 4)?,
         tombstone: row.get::<_, i64>(5)? != 0,
         signature: row.get(6)?,
         author_pubkey: row.get(7)?,
-        key_epoch: row.get::<_, i64>(8)? as u64,
+        key_epoch: get_u64(row, 8)?,
         cache_policy,
         sync_tenant: row.get(10)?,
     })
@@ -1584,7 +1636,7 @@ fn map_vault_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VaultRecord> {
 
 fn map_audit_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEntry> {
     Ok(AuditEntry {
-        seq: row.get::<_, i64>(0)? as u64,
+        seq: get_u64(row, 0)?,
         entry_blob: row.get(1)?,
         signature: row.get(2)?,
         author_pubkey: row.get(3)?,
@@ -1612,7 +1664,7 @@ fn map_vault_trust_anchor_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Vault
 fn map_account_state_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AccountStateRecord> {
     Ok(AccountStateRecord {
         author_pubkey: row.get(0)?,
-        version: row.get::<_, i64>(1)? as u64,
+        version: get_u64(row, 1)?,
         payload: row.get(2)?,
         signature: row.get(3)?,
         updated_at: row.get(4)?,
@@ -1622,7 +1674,7 @@ fn map_account_state_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AccountSta
 fn map_manifest_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MembershipManifest> {
     Ok(MembershipManifest {
         vault_id: row.get(0)?,
-        key_epoch: row.get::<_, i64>(1)? as u64,
+        key_epoch: get_u64(row, 1)?,
         manifest_blob: row.get(2)?,
         signature: row.get(3)?,
         author_pubkey: row.get(4)?,
@@ -1636,7 +1688,7 @@ fn map_grant_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MembershipGrant> {
     Ok(MembershipGrant {
         vault_id: row.get(0)?,
         member_pubkey: row.get(1)?,
-        key_epoch: row.get::<_, i64>(2)? as u64,
+        key_epoch: get_u64(row, 2)?,
         role,
         not_after: row.get(4)?,
         wrapped_vk: row.get(5)?,
@@ -1649,26 +1701,22 @@ fn map_item_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ItemRecord> {
     Ok(ItemRecord {
         vault_id: row.get(0)?,
         item_id: row.get(1)?,
-        item_type: row.get::<_, i64>(2)? as u32,
+        item_type: row.get::<_, u32>(2)?,
         content_blob: row.get(3)?,
         wrapped_item_key: row.get(4)?,
-        version: row.get::<_, i64>(5)? as u64,
+        version: get_u64(row, 5)?,
         tombstone: row.get::<_, i64>(6)? != 0,
         signature: row.get(7)?,
         author_pubkey: row.get(8)?,
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
-        key_epoch: row.get::<_, i64>(11)? as u64,
+        key_epoch: get_u64(row, 11)?,
     })
 }
 
 #[cfg(test)]
 mod purge_tests {
     use super::*;
-    use crate::records::{
-        CachePolicy, ItemRecord, MemberRole, MembershipGrant, MembershipManifest, SyncTarget,
-        VaultRecord,
-    };
 
     fn st() -> Storage {
         Storage::open_in_memory(&[9_u8; 32]).unwrap()

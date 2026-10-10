@@ -1,4 +1,8 @@
 //! P4 tests: eager VK rotation, revocation re-wrap, purge_vault, member-aware verify_chain.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_keychain::{create_account, KdfParams, UnlockedKeyset};
 use unissh_storage::{ItemRecord, MemberRole, Storage};
@@ -25,7 +29,6 @@ fn x_of(ks: &UnlockedKeyset) -> Vec<u8> {
 /// Turns a freshly created Vault into a membership vault: puts a genesis manifest@1
 /// over the `members` set into storage. The Vault is created by admin (owner==admin_ed).
 /// The vault VK is not needed for the manifest — the manifest is only about members/roles.
-#[allow(dead_code)]
 fn put_genesis_manifest(st: &Storage, admin: &UnlockedKeyset, vault_id: &[u8], members: &[Member]) {
     let m = build_manifest(admin, vault_id, 1, members).unwrap();
     // self-check the chain before persisting (genesis_owner == admin_ed)
@@ -80,7 +83,7 @@ fn rotate_vk_reissues_to_remaining_members_only() {
         },
     ];
     let grants = vec![
-        (x_of(&admin), admin_ed.clone(), MemberRole::Admin),
+        (x_of(&admin), admin_ed, MemberRole::Admin),
         (x_of(&bob), bob_ed.clone(), MemberRole::Editor),
     ];
     let new_epoch = v.rotate_vk(&admin, &remaining, &grants).unwrap();
@@ -134,7 +137,7 @@ fn rotate_vk_by_non_admin_rejected() {
         v.vault_id(),
         &[
             Member {
-                ed25519_pub: admin_ed.clone(),
+                ed25519_pub: admin_ed,
                 role: MemberRole::Admin,
             },
             Member {
@@ -148,7 +151,7 @@ fn rotate_vk_by_non_admin_rejected() {
         ed25519_pub: mallory_ed.clone(),
         role: MemberRole::Admin,
     }];
-    let grants = vec![(x_of(&mallory), mallory_ed.clone(), MemberRole::Admin)];
+    let grants = vec![(x_of(&mallory), mallory_ed, MemberRole::Admin)];
     assert!(matches!(
         v.rotate_vk(&mallory, &remaining, &grants).unwrap_err(),
         VaultError::AuthorityInvalid
@@ -173,7 +176,7 @@ fn rotate_vk_on_local_vault_without_manifest_rejected() {
         ed25519_pub: owner_ed.clone(),
         role: MemberRole::Admin,
     }];
-    let grants = vec![(x_of(&owner), owner_ed.clone(), MemberRole::Admin)];
+    let grants = vec![(x_of(&owner), owner_ed, MemberRole::Admin)];
     assert!(matches!(
         v.rotate_vk(&owner, &remaining, &grants).unwrap_err(),
         VaultError::NotAMember
@@ -219,7 +222,7 @@ fn rotated_item_decrypts_under_new_vk_for_remaining_member() {
         },
     ];
     let grants = vec![
-        (x_of(&admin), admin_ed.clone(), MemberRole::Admin),
+        (x_of(&admin), admin_ed, MemberRole::Admin),
         (x_of(&bob), bob_ed.clone(), MemberRole::Editor),
     ];
     v.rotate_vk(&admin, &remaining, &grants).unwrap();
@@ -257,7 +260,7 @@ fn rotated_item_key_not_unwrappable_with_old_vk() {
     v.put_item(b"secret", 1, b"data").unwrap();
     // save the OLD wrapped_item_key before rotation
     let old_rec = st.get_item(v.vault_id(), b"secret").unwrap().unwrap();
-    let old_wik = old_rec.wrapped_item_key.clone();
+    let old_wik = old_rec.wrapped_item_key;
 
     put_genesis_manifest(
         &st,
@@ -274,7 +277,7 @@ fn rotated_item_key_not_unwrappable_with_old_vk() {
             ed25519_pub: admin_ed.clone(),
             role: MemberRole::Admin,
         }],
-        &[(x_of(&admin), admin_ed.clone(), MemberRole::Admin)],
+        &[(x_of(&admin), admin_ed, MemberRole::Admin)],
     )
     .unwrap();
 
@@ -325,7 +328,7 @@ fn rotate_vk_is_atomic_on_midway_failure() {
                 ed25519_pub: admin_ed.clone(),
                 role: MemberRole::Admin,
             }],
-            &[(x_of(&admin), admin_ed.clone(), MemberRole::Admin)],
+            &[(x_of(&admin), admin_ed, MemberRole::Admin)],
         )
         .unwrap_err();
     assert!(matches!(err, VaultError::Storage(_)), "actual err: {err:?}");
@@ -362,7 +365,7 @@ fn purge_vault_leaves_no_rows() {
         &admin,
         v.vault_id(),
         &[Member {
-            ed25519_pub: admin_ed.clone(),
+            ed25519_pub: admin_ed,
             role: MemberRole::Admin,
         }],
     );
@@ -409,7 +412,7 @@ fn purge_vault_after_rotation_clears_all_epochs() {
             ed25519_pub: admin_ed.clone(),
             role: MemberRole::Admin,
         }],
-        &[(x_of(&admin), admin_ed.clone(), MemberRole::Admin)],
+        &[(x_of(&admin), admin_ed, MemberRole::Admin)],
     )
     .unwrap();
     let vid = v.vault_id().to_vec();
@@ -445,7 +448,7 @@ fn verify_chain_ok_after_rotation() {
             ed25519_pub: admin_ed.clone(),
             role: MemberRole::Admin,
         }],
-        &[(x_of(&admin), admin_ed.clone(), MemberRole::Admin)],
+        &[(x_of(&admin), admin_ed, MemberRole::Admin)],
     )
     .unwrap();
 
@@ -519,8 +522,8 @@ fn rotate_vk_rejects_omitting_owner_from_remaining_members() {
             },
         ],
         &[
-            (x_of(&owner), owner_ed.clone(), MemberRole::Admin),
-            (x_of(&admin2), admin2_ed.clone(), MemberRole::Admin),
+            (x_of(&owner), owner_ed, MemberRole::Admin),
+            (x_of(&admin2), admin2_ed, MemberRole::Admin),
         ],
     )
     .unwrap();
@@ -529,6 +532,9 @@ fn rotate_vk_rejects_omitting_owner_from_remaining_members() {
 
 #[test]
 fn verify_chain_flags_record_below_epoch_floor() {
+    use unissh_crypto::{
+        aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
+    };
     // After rotation (floor=2) we maliciously inject an item record at epoch 1
     // (manifest@1 is still in storage, but the epoch is below the floor). verify_chain
     // must flag it as NotAuthorized (anti-rollback, §1.1).
@@ -556,9 +562,6 @@ fn verify_chain_flags_record_below_epoch_floor() {
     )
     .unwrap();
     // after rotation item "a" is at epoch 2, floor=2. Inject a NEW item at epoch 1.
-    use unissh_crypto::{
-        aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
-    };
     let item_key = SymmetricKey::generate();
     let aad = AssociatedData::new(v.vault_id().to_vec(), b"injected".to_vec(), 1_u64);
     let content_blob = aead_encrypt(&item_key, b"old", &aad).unwrap();
@@ -573,7 +576,7 @@ fn verify_chain_flags_record_below_epoch_floor() {
         version: 1,
         tombstone: false,
         signature,
-        author_pubkey: admin_ed.clone(),
+        author_pubkey: admin_ed,
         created_at: 0,
         updated_at: 0,
         key_epoch: 1, // below the floor (2)
@@ -590,6 +593,9 @@ fn verify_chain_flags_record_below_epoch_floor() {
 
 #[test]
 fn verify_chain_flags_record_with_epoch_having_no_manifest() {
+    use unissh_crypto::{
+        aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
+    };
     // ANTI-ROLLBACK BYPASS (high): post-rotation an attacker from an untrusted DB
     // stamps key_epoch=0 (an epoch WITHOUT a manifest) onto a VALIDLY-owner-signed
     // record. Before the fix the mode was computed PER-RECORD from its own key_epoch:
@@ -620,9 +626,6 @@ fn verify_chain_flags_record_with_epoch_having_no_manifest() {
     )
     .unwrap();
     // Injection: a record at key_epoch=0 (NO manifest@0), signed by owner (validly).
-    use unissh_crypto::{
-        aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
-    };
     let item_key = SymmetricKey::generate();
     let aad = AssociatedData::new(v.vault_id().to_vec(), b"injected".to_vec(), 1_u64);
     let content_blob = aead_encrypt(&item_key, b"old", &aad).unwrap();
@@ -637,7 +640,7 @@ fn verify_chain_flags_record_with_epoch_having_no_manifest() {
         version: 1,
         tombstone: false,
         signature,
-        author_pubkey: admin_ed.clone(),
+        author_pubkey: admin_ed,
         created_at: 0,
         updated_at: 0,
         key_epoch: 0, // an epoch WITHOUT a manifest — mode downgrade
@@ -654,6 +657,9 @@ fn verify_chain_flags_record_with_epoch_having_no_manifest() {
 
 #[test]
 fn get_item_refuses_downgraded_epoch_record() {
+    use unissh_crypto::{
+        aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
+    };
     // The same downgrade on the LIVE read path (decrypt_record): after rotation (floor=2)
     // an untrusted DB puts a VALIDLY-owner-signed record at key_epoch=0 (an epoch
     // WITHOUT a manifest). Before the fix decrypt_record chose the mode by
@@ -687,9 +693,6 @@ fn get_item_refuses_downgraded_epoch_record() {
     let v2 = Vault::open(&st, &admin, v.vault_id()).unwrap();
 
     // Injection: a new record at key_epoch=0, validly signed by owner.
-    use unissh_crypto::{
-        aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
-    };
     let item_key = SymmetricKey::generate();
     let aad = AssociatedData::new(v.vault_id().to_vec(), b"injected".to_vec(), 1_u64);
     let content_blob = aead_encrypt(&item_key, b"old", &aad).unwrap();
@@ -704,7 +707,7 @@ fn get_item_refuses_downgraded_epoch_record() {
         version: 1,
         tombstone: false,
         signature,
-        author_pubkey: admin_ed.clone(),
+        author_pubkey: admin_ed,
         created_at: 0,
         updated_at: 0,
         key_epoch: 0, // an epoch WITHOUT a manifest — mode downgrade
@@ -721,6 +724,9 @@ fn get_item_refuses_downgraded_epoch_record() {
 
 #[test]
 fn verify_chain_rejects_self_consistent_old_epoch_record() {
+    use unissh_crypto::{
+        aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
+    };
     // After rotation the server serves a record whose author is NOT a member of the
     // verified chain at its epoch. verify_chain catches this.
     let st = storage();
@@ -745,13 +751,10 @@ fn verify_chain_rejects_self_consistent_old_epoch_record() {
             ed25519_pub: admin_ed.clone(),
             role: MemberRole::Admin,
         }],
-        &[(x_of(&admin), admin_ed.clone(), MemberRole::Admin)],
+        &[(x_of(&admin), admin_ed, MemberRole::Admin)],
     )
     .unwrap();
     // attacker injects a record at epoch 2, signed by themselves (not a member@2).
-    use unissh_crypto::{
-        aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
-    };
     let item_key = SymmetricKey::generate();
     let aad = AssociatedData::new(v.vault_id().to_vec(), b"evil".to_vec(), 1_u64);
     let content_blob = aead_encrypt(&item_key, b"x", &aad).unwrap();
@@ -766,7 +769,7 @@ fn verify_chain_rejects_self_consistent_old_epoch_record() {
         version: 1,
         tombstone: false,
         signature,
-        author_pubkey: attacker_ed.clone(),
+        author_pubkey: attacker_ed,
         created_at: 0,
         updated_at: 0,
         key_epoch: 2, // at epoch 2 the attacker is NOT a member

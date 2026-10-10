@@ -273,7 +273,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), StorageError> {
 fn run_step(conn: &Connection, ddl: &str, version: i64) -> Result<(), StorageError> {
     let batch = format!("BEGIN;\n{ddl}\nPRAGMA user_version = {version};\nCOMMIT;");
     conn.execute_batch(&batch).map_err(|e| {
-        let _ = conn.execute_batch("ROLLBACK");
+        drop(conn.execute_batch("ROLLBACK"));
         StorageError::from(e)
     })?;
     Ok(())

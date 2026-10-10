@@ -36,7 +36,7 @@ pub enum ObjectTag {
 }
 
 impl ObjectTag {
-    pub(crate) fn to_u8(self) -> u8 {
+    pub(crate) const fn to_u8(self) -> u8 {
         match self {
             Self::Vault => 1,
             Self::Item => 2,
@@ -47,7 +47,7 @@ impl ObjectTag {
             Self::AccountState => 7,
         }
     }
-    pub(crate) fn from_u8(v: u8) -> Option<Self> {
+    pub(crate) const fn from_u8(v: u8) -> Option<Self> {
         match v {
             1 => Some(Self::Vault),
             2 => Some(Self::Item),
@@ -115,7 +115,7 @@ pub enum SyncObject {
 
 impl SyncObject {
     /// The object's type tag.
-    pub fn tag(&self) -> ObjectTag {
+    pub const fn tag(&self) -> ObjectTag {
         match self {
             Self::Vault(_) => ObjectTag::Vault,
             Self::Item(_) => ObjectTag::Item,
@@ -143,7 +143,7 @@ impl SyncObject {
 
     /// The object's `key_epoch` (open metadata), if applicable. `Item`/`Vault`/
     /// `MembershipGrant`/`MembershipManifest` carry an epoch; `Audit`/`Keyset` do not.
-    pub fn key_epoch(&self) -> Option<u64> {
+    pub const fn key_epoch(&self) -> Option<u64> {
         match self {
             Self::Vault(v) => Some(v.key_epoch),
             Self::Item(i) => Some(i.key_epoch),
@@ -155,6 +155,10 @@ impl SyncObject {
 }
 
 /// Length-prefixed write of a slice: `len:u32 be || bytes`.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "TryFromIntError carries no data and SyncError::Format has no source field"
+)]
 fn put_bytes(out: &mut Vec<u8>, b: &[u8]) -> Result<(), SyncError> {
     let len = u32::try_from(b.len()).map_err(|_| SyncError::Format)?;
     out.extend_from_slice(&len.to_be_bytes());
@@ -167,7 +171,7 @@ struct Reader<'a> {
     b: &'a [u8],
 }
 impl<'a> Reader<'a> {
-    fn new(b: &'a [u8]) -> Self {
+    const fn new(b: &'a [u8]) -> Self {
         Reader { b }
     }
     fn u8(&mut self) -> Result<u8, SyncError> {
@@ -175,7 +179,7 @@ impl<'a> Reader<'a> {
         self.b = t;
         Ok(*h)
     }
-    fn take(&mut self, n: usize) -> Result<&'a [u8], SyncError> {
+    const fn take(&mut self, n: usize) -> Result<&'a [u8], SyncError> {
         if self.b.len() < n {
             return Err(SyncError::Format);
         }
@@ -185,7 +189,9 @@ impl<'a> Reader<'a> {
     }
     fn u32(&mut self) -> Result<u32, SyncError> {
         let s = self.take(4)?;
-        Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+        let mut a = [0_u8; 4];
+        a.copy_from_slice(s);
+        Ok(u32::from_be_bytes(a))
     }
     fn u64(&mut self) -> Result<u64, SyncError> {
         let s = self.take(8)?;
@@ -193,11 +199,17 @@ impl<'a> Reader<'a> {
         a.copy_from_slice(s);
         Ok(u64::from_be_bytes(a))
     }
+    fn i64(&mut self) -> Result<i64, SyncError> {
+        let s = self.take(8)?;
+        let mut a = [0_u8; 8];
+        a.copy_from_slice(s);
+        Ok(i64::from_be_bytes(a))
+    }
     fn bytes(&mut self) -> Result<Vec<u8>, SyncError> {
         let n = self.u32()? as usize;
         Ok(self.take(n)?.to_vec())
     }
-    fn finish(self) -> Result<(), SyncError> {
+    const fn finish(self) -> Result<(), SyncError> {
         if self.b.is_empty() {
             Ok(())
         } else {
@@ -206,35 +218,35 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn sync_target_u8(t: SyncTarget) -> u8 {
+const fn sync_target_u8(t: SyncTarget) -> u8 {
     match t {
         SyncTarget::Local => 0,
         SyncTarget::Cloud => 1,
         _ => 0,
     }
 }
-fn sync_target_from(v: u8) -> Result<SyncTarget, SyncError> {
+const fn sync_target_from(v: u8) -> Result<SyncTarget, SyncError> {
     match v {
         0 => Ok(SyncTarget::Local),
         1 => Ok(SyncTarget::Cloud),
         _ => Err(SyncError::Format),
     }
 }
-fn cache_policy_u8(c: CachePolicy) -> u8 {
+const fn cache_policy_u8(c: CachePolicy) -> u8 {
     match c {
         CachePolicy::OfflineAllowed => 0,
         CachePolicy::OnlineOnly => 1,
         _ => 0,
     }
 }
-fn cache_policy_from(v: u8) -> Result<CachePolicy, SyncError> {
+const fn cache_policy_from(v: u8) -> Result<CachePolicy, SyncError> {
     match v {
         0 => Ok(CachePolicy::OfflineAllowed),
         1 => Ok(CachePolicy::OnlineOnly),
         _ => Err(SyncError::Format),
     }
 }
-fn role_u8(r: MemberRole) -> u8 {
+const fn role_u8(r: MemberRole) -> u8 {
     match r {
         MemberRole::Viewer => 0,
         MemberRole::Editor => 1,
@@ -401,7 +413,7 @@ impl SyncObject {
                 let member_pubkey = r.bytes()?;
                 let key_epoch = r.u64()?;
                 let role = role_from(r.u8()?)?;
-                let not_after = r.u64()? as i64; // 8 BE bytes (see serialize)
+                let not_after = r.i64()?; // 8 BE bytes (see serialize)
                 let wrapped_vk = r.bytes()?;
                 let signature = r.bytes()?;
                 let author_pubkey = r.bytes()?;
@@ -450,7 +462,6 @@ impl SyncObject {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unissh_storage::{CachePolicy, SyncTarget, VaultRecord};
 
     fn vrec() -> VaultRecord {
         VaultRecord {
@@ -540,5 +551,29 @@ mod tests {
         let mut good = SyncObject::Keyset(vec![1, 2, 3]).to_bytes().unwrap();
         good.truncate(good.len() - 1);
         assert!(SyncObject::from_bytes(&good).is_err());
+    }
+
+    /// Every strict prefix of a valid item / grant (covers the u32 `item_type`
+    /// and the i64 `not_after` reads) is a `Format` error, never a panic.
+    #[test]
+    fn truncated_object_is_format_error() {
+        let grant = SyncObject::MembershipGrant(MembershipGrant {
+            vault_id: b"v1".to_vec(),
+            member_pubkey: vec![3_u8; 32],
+            key_epoch: 4,
+            role: MemberRole::Editor,
+            not_after: -5,
+            wrapped_vk: vec![6, 7],
+            signature: vec![8_u8; 67],
+            author_pubkey: vec![9_u8; 32],
+        });
+        for obj in [SyncObject::Item(irec()), grant] {
+            let full = obj.to_bytes().unwrap();
+            assert_eq!(SyncObject::from_bytes(&full).unwrap(), obj);
+            for cut in 0..full.len() {
+                let err = SyncObject::from_bytes(&full[..cut]).unwrap_err();
+                assert!(matches!(err, SyncError::Format), "cut at {cut}: {err:?}");
+            }
+        }
     }
 }

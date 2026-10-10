@@ -6,6 +6,10 @@
 //!    the already-trusted one (anti-equivocation → Conflict, not a silent UPSERT);
 //! 3. manifest happy-path + forged/broken-chain (previously uncovered);
 //! 4. grant happy-path + author-not-admin / recipient-not-member.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_crypto::{KdfParams, SymmetricKey};
 use unissh_keychain::{create_account, keyset_gen_floor, UnlockedKeyset};
@@ -115,7 +119,7 @@ fn equivocating_manifest_does_not_overwrite_trusted() {
                 role: MemberRole::Admin,
             },
             Member {
-                ed25519_pub: member_pub.clone(),
+                ed25519_pub: member_pub,
                 role: MemberRole::Editor,
             },
         ],
@@ -140,7 +144,7 @@ fn equivocating_manifest_does_not_overwrite_trusted() {
         &vid,
         1,
         &[Member {
-            ed25519_pub: gen.clone(),
+            ed25519_pub: gen,
             role: MemberRole::Admin,
         }],
     )
@@ -149,7 +153,7 @@ fn equivocating_manifest_does_not_overwrite_trusted() {
 
     // The same transport t: the new object gets seq > cursor B → it is actually
     // delivered in the next pull's delta.
-    t.push_objects(&[SyncObject::MembershipManifest(equivocating.clone())])
+    t.push_objects(&[SyncObject::MembershipManifest(equivocating)])
         .unwrap();
     let r2 = sync_pull(&mut t, &sb, &ctx(&owner)).unwrap();
 
@@ -183,14 +187,14 @@ fn manifest_happy_path_applied() {
         &vid,
         1,
         &[Member {
-            ed25519_pub: gen.clone(),
+            ed25519_pub: gen,
             role: MemberRole::Admin,
         }],
     )
     .unwrap();
 
     let mut t = InMemoryTransport::new();
-    t.push_objects(&[SyncObject::MembershipManifest(m.clone())])
+    t.push_objects(&[SyncObject::MembershipManifest(m)])
         .unwrap();
     let r = sync_pull(&mut t, &sb, &ctx(&owner)).unwrap();
     assert_eq!(r.applied, 1, "report={:?}", r);
@@ -467,7 +471,7 @@ fn grant_happy_path_applied() {
         1,
         &[
             Member {
-                ed25519_pub: gen.clone(),
+                ed25519_pub: gen,
                 role: MemberRole::Admin,
             },
             Member {
@@ -524,7 +528,7 @@ fn grant_author_not_admin_rejected() {
         1,
         &[
             Member {
-                ed25519_pub: gen.clone(),
+                ed25519_pub: gen,
                 role: MemberRole::Admin,
             },
             Member {
@@ -585,7 +589,7 @@ fn grant_recipient_not_member_rejected() {
         &vid,
         1,
         &[Member {
-            ed25519_pub: gen.clone(),
+            ed25519_pub: gen,
             role: MemberRole::Admin,
         }],
     )
@@ -722,20 +726,16 @@ fn account_state_equal_version_tiebreak_converges() {
     let obj_a = AccountStateObject {
         author_pubkey: author.clone(),
         version: 5,
-        payload: pa.clone(),
+        payload: pa,
         signature: sig_a.clone(),
     };
     let obj_b = AccountStateObject {
         author_pubkey: author.clone(),
         version: 5,
-        payload: pb.clone(),
+        payload: pb,
         signature: sig_b.clone(),
     };
-    let winner_sig = if sig_a > sig_b {
-        sig_a.clone()
-    } else {
-        sig_b.clone()
-    };
+    let winner_sig = if sig_a > sig_b { sig_a } else { sig_b };
 
     // Apply both in the given order on FRESH storage (the same keyset kb).
     let apply_both = |first: &AccountStateObject, second: &AccountStateObject| -> Vec<u8> {

@@ -1,3 +1,5 @@
+//! Automation revision: trust mutations bump it, reads and sync metadata do not.
+
 use unissh_storage::Storage;
 
 #[test]
