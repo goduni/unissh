@@ -72,6 +72,10 @@ impl InMemoryTransport {
 }
 
 impl SyncTransport for InMemoryTransport {
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "next_seq starts at 0 and is incremented only here, once per element pushed into self.objects, so it never exceeds objects.len() <= isize::MAX < u64::MAX"
+    )]
     fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError> {
         let mut assigned = Vec::with_capacity(objects.len());
         for o in objects {

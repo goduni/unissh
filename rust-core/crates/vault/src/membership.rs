@@ -41,6 +41,8 @@ const MANIFEST_DOMAIN: &[u8] = b"unissh-manifest-v1";
 const MANIFEST_AAD_MARKER: &[u8] = b"__manifest__";
 /// Domain separator for the grant payload.
 const GRANT_DOMAIN: &[u8] = b"unissh-grant-v1";
+/// Fixed-size prefix of the grant signed content: `GRANT_DOMAIN || role:u8 || not_after:i64be`.
+const GRANT_HEADER_LEN: usize = GRANT_DOMAIN.len() + 1 + 8;
 
 /// One-byte role codec (storage keeps the role as `i64`, but the canonical
 /// manifest payload needs a compact deterministic byte). `MemberRole` is
@@ -155,9 +157,11 @@ fn canonical_member_payload(key_epoch: u64, members: &[Member]) -> Result<Vec<u8
 
 /// Parses the canonical payload back into a member set (for verification).
 fn parse_member_payload(key_epoch: u64, payload: &[u8]) -> Result<Vec<Member>, VaultError> {
+    // domain || key_epoch:u64be || count:u32be
+    const HEADER_LEN: usize = MANIFEST_DOMAIN.len() + 8 + 4;
     let mut p = payload;
     let dom_len = MANIFEST_DOMAIN.len();
-    if p.len() < dom_len + 8 + 4 || p.get(..dom_len) != Some(MANIFEST_DOMAIN) {
+    if p.len() < HEADER_LEN || p.get(..dom_len) != Some(MANIFEST_DOMAIN) {
         return Err(VaultError::Format);
     }
     p = p.get(dom_len..).ok_or(VaultError::Format)?;
@@ -171,7 +175,9 @@ fn parse_member_payload(key_epoch: u64, payload: &[u8]) -> Result<Vec<Member>, V
     cnt_bytes.copy_from_slice(p.get(..4).ok_or(VaultError::Format)?);
     let count = u32::from_be_bytes(cnt_bytes) as usize;
     p = p.get(4..).ok_or(VaultError::Format)?;
-    let mut members = Vec::with_capacity(count);
+    // `count` is untrusted: every member takes at least one byte of the remaining body,
+    // so capping by `p.len()` bounds the allocation without changing what is parsed.
+    let mut members = Vec::with_capacity(count.min(p.len()));
     for _ in 0..count {
         if p.is_empty() {
             return Err(VaultError::Format);
@@ -290,7 +296,7 @@ fn grant_aad(vault_id: &[u8], member_ed25519_pub: &[u8], key_epoch: u64) -> Asso
 /// signature → the validity period is authenticated, the server cannot forge it.
 /// The width is fixed because `wrapped_vk` has no length prefix.
 fn grant_signed_content(role: MemberRole, not_after: i64, wrapped_vk: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(GRANT_DOMAIN.len() + 1 + 8 + wrapped_vk.len());
+    let mut out = Vec::with_capacity(GRANT_HEADER_LEN.saturating_add(wrapped_vk.len()));
     out.extend_from_slice(GRANT_DOMAIN);
     out.push(role.to_u8());
     out.extend_from_slice(&not_after.to_be_bytes());
@@ -532,7 +538,11 @@ pub fn seal_account_payload(
         .map_err(|_| VaultError::Format)?;
     let aad = AssociatedData::new(Vec::new(), ACCOUNT_SEAL_INFO.to_vec(), 0);
     let ct = aead_encrypt(&symkey, plaintext, &aad).map_err(|_| VaultError::Format)?;
-    let mut out = Vec::with_capacity(8 + wrapped.len() + ct.len());
+    let mut out = Vec::with_capacity(
+        8_usize
+            .saturating_add(wrapped.len())
+            .saturating_add(ct.len()),
+    );
     put_len_prefixed(&mut out, &wrapped)?;
     put_len_prefixed(&mut out, &ct)?;
     Ok(out)
@@ -693,6 +703,19 @@ mod tests {
             let err = parse_member_payload(3, &full[..cut]).unwrap_err();
             assert!(matches!(err, VaultError::Format), "cut at {cut}: {err:?}");
         }
+    }
+
+    /// An untrusted `count` of `u32::MAX` over a short body is `Format`; the member vector is
+    /// sized by the remaining bytes, not by the count, so this does not try to allocate
+    /// billions of members (the test completing is the proof).
+    #[test]
+    fn huge_member_count_is_format_error_without_allocation() {
+        let mut payload = MANIFEST_DOMAIN.to_vec();
+        payload.extend_from_slice(&3_u64.to_be_bytes());
+        payload.extend_from_slice(&u32::MAX.to_be_bytes());
+        payload.extend_from_slice(&[0_u8; 5]);
+        let err = parse_member_payload(3, &payload).unwrap_err();
+        assert!(matches!(err, VaultError::Format), "{err:?}");
     }
 
     /// Every strict prefix of a length-prefixed field is `Format`, never a panic.

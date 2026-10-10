@@ -17,7 +17,9 @@ use unissh_crypto::{
     AssociatedData, Ed25519VerifyingKey, SymmetricKey, VersionedObject, X25519PublicKey,
 };
 use unissh_keychain::UnlockedKeyset;
-use unissh_storage::{CachePolicy, ItemRecord, MemberRole, Storage, SyncTarget, VaultRecord};
+use unissh_storage::{
+    CachePolicy, ItemRecord, MemberRole, Storage, StorageError, SyncTarget, VaultRecord,
+};
 
 use crate::error::VaultError;
 use crate::membership::{
@@ -296,7 +298,7 @@ impl<'a> Vault<'a> {
     /// Deletes the vault (tombstone with a bumped version). Owner-only (see `require_owner`).
     pub fn delete(self) -> Result<(), VaultError> {
         self.require_owner()?;
-        let version = self.version + 1;
+        let version = next_version(self.version)?;
         let name_blob = aead_encrypt(
             &self.vk,
             self.name.as_slice(),
@@ -380,7 +382,7 @@ impl<'a> Vault<'a> {
     /// an unreadable vault record, as items did before the fix).
     pub fn set_name(&mut self, new_name: &[u8]) -> Result<(), VaultError> {
         self.require_owner()?;
-        let version = self.version + 1;
+        let version = next_version(self.version)?;
         let name_blob = aead_encrypt(&self.vk, new_name, &name_aad(&self.vault_id, version))?;
         let cur = self
             .storage
@@ -424,7 +426,7 @@ impl<'a> Vault<'a> {
     ) -> Result<u64, VaultError> {
         let item_id = item_id.as_ref();
         let existing = self.storage.get_item(&self.vault_id, item_id)?;
-        let version = existing.map(|r| r.version + 1).unwrap_or(1);
+        let version = existing.map_or(Ok(1), |r| next_version(r.version))?;
 
         let item_key = SymmetricKey::generate();
         let wrapped_item_key = wrap_key(&self.vk, &item_key, item_id)?;
@@ -522,7 +524,7 @@ impl<'a> Vault<'a> {
     ) -> Result<u64, VaultError> {
         let item_id = item_id.as_ref();
         let existing = self.storage.get_item(&self.vault_id, item_id)?;
-        let version = existing.map(|r| r.version + 1).unwrap_or(1);
+        let version = existing.map_or(Ok(1), |r| next_version(r.version))?;
 
         let item_key = SymmetricKey::generate();
         let wrapped_item_key = wrap_key(&self.vk, &item_key, item_id)?;
@@ -641,7 +643,8 @@ impl<'a> Vault<'a> {
             .storage
             .get_item(&self.vault_id, item_id)?
             .ok_or(VaultError::NotFound)?;
-        let record = self.tombstone_record(item_id, existing.item_type, existing.version + 1)?;
+        let record =
+            self.tombstone_record(item_id, existing.item_type, next_version(existing.version)?)?;
         self.storage.put_item_and_clear_history(&record)?;
         self.storage.mark_item_dirty(&self.vault_id, item_id)?; // tombstone → push
         Ok(())
@@ -668,7 +671,8 @@ impl<'a> Vault<'a> {
         // delete_item (a nested transaction would also work: it runs under a savepoint).
         self.storage.transaction(|| {
             self.put_item(new_id, item.item_type, item.content.as_slice())?;
-            let tomb = self.tombstone_record(old_id, item.item_type, item.version + 1)?;
+            let tomb =
+                self.tombstone_record(old_id, item.item_type, next_version(item.version)?)?;
             self.storage.put_item(&tomb)?;
             self.storage.mark_item_dirty(&self.vault_id, old_id)?; // old-id tombstone → push
             self.storage.clear_item_history(&self.vault_id, old_id)?;
@@ -784,7 +788,7 @@ impl<'a> Vault<'a> {
     /// content), but the record is re-signed with a new version anyway (LWW).
     pub fn set_cache_policy(&mut self, policy: CachePolicy) -> Result<(), VaultError> {
         self.require_owner()?;
-        let version = self.version + 1;
+        let version = next_version(self.version)?;
         let name_blob = aead_encrypt(
             &self.vk,
             self.name.as_slice(),
@@ -1069,7 +1073,7 @@ impl<'a> Vault<'a> {
         let mut checked = 0_u64;
 
         if let Some(vrec) = self.storage.get_vault(&self.vault_id)? {
-            checked += 1;
+            checked = checked.saturating_add(1);
             let failure = vault_sig_failure(&vrec).or_else(|| {
                 check_record_authority(
                     self.storage,
@@ -1111,13 +1115,13 @@ impl<'a> Vault<'a> {
             .storage
             .list_items_including_tombstones(&self.vault_id)?
         {
-            checked += 1;
+            checked = checked.saturating_add(1);
             audit(&rec, &mut issues);
         }
         // Archived versions (secret history) are also signed — we audit them too, otherwise
         // swapping an old version in item_history would go unnoticed until reveal.
         for rec in self.storage.list_all_history(&self.vault_id)? {
-            checked += 1;
+            checked = checked.saturating_add(1);
             audit(&rec, &mut issues);
         }
         Ok(IntegrityReport {
@@ -1194,10 +1198,22 @@ fn unwrap_key_compat(
     unwrap_key_pre_agility(kek, blob, aad).map_err(|_| VaultError::Decrypt)
 }
 
+/// The version that supersedes `version` (signed-version LWW: always `cur + 1`).
+///
+/// Stored versions are `<= i64::MAX` (storage rejects anything larger with
+/// `VersionOutOfRange`), so this cannot fail for a record read back from storage;
+/// a `u64::MAX` input reports the same error storage would give for an
+/// unrepresentable version instead of wrapping to 0.
+fn next_version(version: u64) -> Result<u64, VaultError> {
+    version
+        .checked_add(1)
+        .ok_or(VaultError::Storage(StorageError::VersionOutOfRange))
+}
+
 // --- signing/verification of the vault record ---
 
 fn vault_signed_content(wrapped_vk: &[u8], name_blob: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(wrapped_vk.len() + name_blob.len());
+    let mut out = Vec::with_capacity(wrapped_vk.len().saturating_add(name_blob.len()));
     out.extend_from_slice(wrapped_vk);
     out.extend_from_slice(name_blob);
     out
@@ -1615,5 +1631,20 @@ mod legacy_read_tests {
             v2.get_item(b"i").unwrap().unwrap().content.as_slice(),
             b"new-secret"
         );
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    /// The successor of `u64::MAX` is a typed out-of-range error, never a wrap to 0.
+    #[test]
+    fn next_version_overflow_is_out_of_range() {
+        assert_eq!(next_version(41).unwrap(), 42);
+        assert!(matches!(
+            next_version(u64::MAX),
+            Err(VaultError::Storage(StorageError::VersionOutOfRange))
+        ));
     }
 }
