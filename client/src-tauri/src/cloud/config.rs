@@ -460,7 +460,7 @@ impl CloudState {
         let _gate = self
             .refresh_gate
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if let Some(cur) = locked(&self.access_tokens, "session-token")?.get(&sid) {
             if cur != stale {
                 return Ok(Some(cur.clone()));
