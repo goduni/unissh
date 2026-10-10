@@ -121,7 +121,7 @@ impl HttpSyncTransport {
                     .filter_map(|obj_b64| client::unb64(obj_b64).ok()),
             );
             match next_page(&v) {
-                Some(next) => cur = next.unwrap_or(cur),
+                Some(next) => cur = next,
                 None => break,
             }
         }
@@ -204,7 +204,7 @@ impl FfiSyncTransport for HttpSyncTransport {
                 })
             }));
             match next_page(&v) {
-                Some(next) => cur = next.unwrap_or(cur),
+                Some(next) => cur = next,
                 None => break,
             }
         }
@@ -248,13 +248,25 @@ fn items_of(page: &Value) -> impl Iterator<Item = &Value> {
         .flatten()
 }
 
-/// Paging of a delta page: `None` when this is the last page, otherwise the
-/// server's `next_cursor` (itself `None` when absent or not a `u64`).
-fn next_page(page: &Value) -> Option<Option<u64>> {
-    page.get("has_more")
+/// Paging of a delta page: the cursor to request next, or `None` to stop.
+///
+/// A page that says `has_more` but carries no usable `next_cursor` (absent or not
+/// a `u64`) counts as the LAST page: re-requesting the same cursor would loop
+/// forever and append the same items every round. Stopping is safe — the engine
+/// verifies what it has and the next sync resumes from the persisted cursor.
+fn next_page(page: &Value) -> Option<u64> {
+    let has_more = page
+        .get("has_more")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-        .then(|| page.get("next_cursor").and_then(Value::as_u64))
+        .unwrap_or(false);
+    if !has_more {
+        return None;
+    }
+    let next = page.get("next_cursor").and_then(Value::as_u64);
+    if next.is_none() {
+        log::warn!("cloud: delta page has more items but no usable next_cursor; stopping");
+    }
+    next
 }
 
 /// Extract the server error code/message for a failed push (best-effort).
@@ -267,4 +279,30 @@ fn push_error_message(status: reqwest::StatusCode, body: &[u8]) -> String {
         }
     }
     format!("sync push http {}", status.as_u16())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::next_page;
+
+    #[test]
+    fn next_page_stops_unless_more_pages_come_with_a_cursor() {
+        assert_eq!(
+            next_page(&json!({ "has_more": true, "next_cursor": 7 })),
+            Some(7),
+            "more pages with a cursor continue from it"
+        );
+        assert_eq!(
+            next_page(&json!({ "has_more": true })),
+            None,
+            "more pages without a cursor stop instead of re-requesting forever"
+        );
+        assert_eq!(
+            next_page(&json!({ "has_more": false, "next_cursor": 7 })),
+            None,
+            "the last page stops"
+        );
+    }
 }
