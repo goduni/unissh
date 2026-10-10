@@ -8,7 +8,7 @@ import { apiErrorMessage } from "@/bridge/types";
 import { useApp } from "@/store/app";
 import type { Entry, Transfer } from "@/store/sftp-types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
-import { abortable, collectTree, emptiedDirs, isWithin, mapWorkers, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
+import { abortable, collectTree, emptiedDirs, isWithin, mapWorkers, renameNeedsCopy, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
 import { dedupeName } from "@/sftp/paths";
 import { i18n } from "@/i18n";
 
@@ -32,8 +32,9 @@ interface PlannedLeaf {
   source?: Entry;
   /** Move only: the source is gone, so there is nothing left to verify or redo. */
   removed?: boolean;
-  /** Move only: the destination that was replaced could not be told apart from
-   *  the source, so the two paths may name one file. The source is never removed. */
+  /** Move only: nothing proved that the destination that was replaced is another
+   *  file than the source, so the two paths may name one file. The source is
+   *  never removed. */
   aliased?: boolean;
 }
 const manifests = new Map<string, Map<string, PlannedLeaf>>();
@@ -53,6 +54,9 @@ interface Control {
   cancelled: boolean;
   /** Remove each source once its copy is committed at the destination. */
   move: boolean;
+  /** Network legs per byte of file: a relay between two servers downloads and
+   *  then uploads. The queue shows file bytes; only speed and ETA count legs. */
+  legs: number;
   /** Move only: sources that arrived but could not be removed. They are
    *  reported when the transfer settles; none of them stops the others. */
   kept: string[];
@@ -147,10 +151,46 @@ function unchanged(a: Entry | null, b: Entry | null): boolean {
     && !!a.isSymlink === !!b.isSymlink && a.isDir === b.isDir;
 }
 
+/** A local Windows path: a drive letter or a backslash. */
+const isWindowsPath = (src: FileSource, path: string): boolean => src.kind === "local" && /^[a-z]:|\\/i.test(path);
+
+/** Move only, asked just before a staged copy replaces `plan.existing`: can the
+ *  file about to be replaced be the source itself, under another path? The two
+ *  panes may show one directory — a bind mount or a network share of the server
+ *  in the local pane, two sessions to one host, a case-insensitive filesystem —
+ *  and no path comparison sees that. Once the commit has happened an aliased
+ *  source IS the new file and passes every later check, so its removal would
+ *  delete the only copy. Anything but a proof of two files answers true:
+ *
+ *  1. A differing size or modification time is the only evidence the listings
+ *     give. Equal ones prove nothing either way (mtime is whole seconds), so
+ *     they count as "may be the same". Mode is deliberately not consulted: a
+ *     local Windows mode is synthetic and never equals the remote one.
+ *  2. Two local paths are compared by file identity.
+ *  3. The staged copy sits in the destination's directory under a random name.
+ *     If that name also shows up beside the source, the two directories are one,
+ *     whatever the listings said (two views of one file may disagree on its
+ *     times). This holds for every pair of sources.
+ *
+ *  Two hard links to one inode are two directory entries: replacing one leaves
+ *  the other intact, so they need no protection and (1) and (3) do not flag them. */
+async function mayBeSameFile(from: FileSource, to: FileSource, fromPath: string, source: Entry, plan: PlannedLeaf, stageName: string): Promise<boolean> {
+  const existing = plan.existing;
+  if (!existing) return false;
+  const sizesDiffer = source.sizeKnown !== false && existing.sizeKnown !== false && source.size !== existing.size;
+  const timesDiffer = source.mtime !== undefined && existing.mtime !== undefined && source.mtime !== existing.mtime;
+  if (!sizesDiffer && !timesDiffer) return true;
+  // Identity needs both files opened, which blocks on a FIFO and follows a link.
+  const regular = (e: Entry): boolean => !e.isDir && !e.isSymlink && (e.mode === undefined || (e.mode & 0o170000) === 0o100000);
+  if (from.kind === to.kind && from.sameFile && regular(source) && regular(existing)
+    && await from.sameFile(fromPath, plan.path).catch(() => false)) return true;
+  return await from.lstat(await from.join(await from.parent(fromPath), stageName)) !== null;
+}
+
 /** Reject same-object and descendant copies at the shared entry point. */
 async function validateTarget(t: Transfer, from: FileSource, to: FileSource): Promise<void> {
   if (from.kind !== to.kind || (from.identity ?? from.id) !== (to.identity ?? to.id)) return;
-  const windows = from.kind === "local" && /^[a-z]:|\\/i.test(t.fromPath);
+  const windows = isWindowsPath(from, t.fromPath);
   const name = t.fromPath.split(windows ? /[\\/]/ : /\//).pop()!;
   const source = t.isSymlink
     ? await from.join(await from.realpath(await from.parent(t.fromPath)), name)
@@ -195,8 +235,9 @@ async function removeMovedSource(from: FileSource, to: FileSource, path: string,
 /** A move inside one session needs no copy: rename the entry into place. Returns
  *  false when that is not possible, and the caller moves it the long way (copy,
  *  then remove the source) — a rename across filesystems fails on every platform,
- *  and a folder landing on an existing folder is a per-file merge. Never replaces
- *  a destination the user was not asked about. */
+ *  and a folder landing on an existing folder is a per-file merge. A rename that
+ *  failed for any other reason fails the move: see renameNeedsCopy. Never
+ *  replaces a destination the user was not asked about. */
 async function renameInPlace(t: Transfer, src: FileSource, resolver: ConflictResolver, ctrl: Control): Promise<boolean> {
   ctrl.patch({ state: "active" });
   let target = await src.join(t.toDir, t.label);
@@ -229,6 +270,7 @@ async function renameInPlace(t: Transfer, src: FileSource, resolver: ConflictRes
   } catch (error) {
     // A pause or cancel is not a refused rename: nothing more may start.
     if (ctrl.abort.signal.aborted) throw error;
+    if (!renameNeedsCopy(apiErrorMessage(error), src.kind, isWindowsPath(src, t.fromPath))) throw error;
     // Carry the decision over, so the copy path does not ask a second time.
     if (t.kind === "file") ctrl.manifest.set(t.fromPath, { path: target, existing: replace ? existing : null, completed: false });
     return false;
@@ -306,7 +348,8 @@ async function transferLeaf(
   if (!isSymlink && (source.fileKind === "unknown" || source.fileKind === "unsupported" || source.isDir || (source.mode && (source.mode & 0o170000) !== 0o100000))) throw new Error("Source is not a regular file");
   reserve(to, plan.path, ctrl);
   const parent = await to.parent(plan.path);
-  const stage = await to.join(parent, `.unissh-${crypto.randomUUID()}.part`);
+  const stageName = `.unissh-${crypto.randomUUID()}.part`;
+  const stage = await to.join(parent, stageName);
   let created = false;
   try {
     ctrl.abort.signal.throwIfAborted();
@@ -323,13 +366,10 @@ async function transferLeaf(
       if (!unchanged(source, after)) throw new Error("Source changed during transfer");
       await to.setMetadata(stage, source.mode, source.mtime);
     }
+    // Decided here, while the staged copy still sits beside the destination.
+    if (ctrl.move && await mayBeSameFile(from, to, fromPath, source, plan, stageName)) plan.aliased = true;
     ctrl.abort.signal.throwIfAborted();
     if (plan.existing && !unchanged(plan.existing, await to.lstat(plan.path))) throw new Error("Destination changed after the conflict decision");
-    // Two remote sessions can reach one file by two paths (the same host under
-    // another name or user, a bind mount, a case-insensitive filesystem), and
-    // nothing remote can prove they do not. Decided here, before the commit:
-    // afterwards an aliased source IS the new file and passes every check.
-    if (ctrl.move && plan.existing && from.kind === "remote" && to.kind === "remote" && unchanged(plan.existing, source)) plan.aliased = true;
     await to.commit(stage, plan.path, plan.existing !== null);
     created = false;
     plan.completed = true;
@@ -341,12 +381,15 @@ async function transferLeaf(
   }
 }
 
-async function ensureDir(src: FileSource, path: string): Promise<void> {
-  await src.mkdir(path).catch(async (error: unknown) => {
+/** Make sure `path` is a directory. Resolves true when this call created it,
+ *  false when it was already there. */
+async function ensureDir(src: FileSource, path: string): Promise<boolean> {
+  return src.mkdir(path).then(() => true, async (error: unknown) => {
     // Only an existing directory is harmless. A swallowed mkdir failure made
     // later file writes fail with an unrelated, context-free SFTP status 4.
     const existing = await src.lstat(path).catch(() => null);
     if (!existing?.isDir || existing.isSymlink) throw new Error(`${path}: ${apiErrorMessage(error)}`);
+    return false;
   });
 }
 
@@ -419,13 +462,14 @@ async function runFile(
     ctrl.manifest.set(t.fromPath, saved);
     await sem.run(async () => {
     let previous = offset;
-    let finalTotal = from.kind === "remote" && to.kind === "remote" ? t.bytesTotal * 2 : t.bytesTotal;
+    let finalTotal = t.bytesTotal;
     ctrl.patch({ bytesDone: offset, bytesTotal: finalTotal });
     let lastPatch = 0;
     // Source size is known from the listing (remote → skip a per-file stat in core).
     const ok = await transferLeaf(from, to, t.fromPath, saved!, !!t.isSymlink, t.bytesTotal, ctrl,
       (transferred, total) => {
-        finalTotal = total;
+        // A relay reports both of its legs; the row shows the file once.
+        finalTotal = Math.floor(total / ctrl.legs);
         const done = transferred; // core reports the absolute position (incl. offset)
         if (ctrl.abort.signal.aborted) return;
         ctrl.moved += Math.max(0, done - previous);
@@ -435,7 +479,7 @@ async function runFile(
         if (ts - lastPatch < PATCH_MS) return;
         lastPatch = ts;
         ctrl.patch({
-          bytesDone: done,
+          bytesDone: Math.floor(done / ctrl.legs),
           bytesTotal: finalTotal,
         });
       },
@@ -459,8 +503,8 @@ async function runDir(
   if (ctrl.cancelled || ctrl.paused) return;
   const { dirs, files, directoryMetadata } = await collectTree(from, t.fromPath, sem, ctrl.abort.signal);
   if (ctrl.cancelled || ctrl.paused) return;
-  const legs = from.kind === "remote" && to.kind === "remote" ? 2 : 1;
-  const bytesTotal = files.reduce((a, f) => a + f.size * legs, 0);
+  const legs = ctrl.legs;
+  const bytesTotal = files.reduce((a, f) => a + f.size, 0);
   ctrl.patch({ state: "active", filesTotal: files.length, bytesTotal });
 
   // 2. Mirror the directory tree, parents before children. Each mkdir waits only
@@ -477,7 +521,10 @@ async function runDir(
   const sourcePath = treePaths(from, t.fromPath);
   const targetPath = treePaths(to, targetRoot);
   ctrl.abort.signal.throwIfAborted();
-  await ensureDir(to, targetRoot);
+  // Move only: a destination directory this run created is a new directory, so
+  // it cannot be the source directory under another path. Step 4 relies on it.
+  const fresh = new Set<string>();
+  if (await ensureDir(to, targetRoot)) fresh.add("");
   const byDepth = new Map<number, string[]>();
   for (const rel of dirs) {
     const depth = rel.split("/").length;
@@ -488,21 +535,24 @@ async function runDir(
     await mapWorkers(group, sem.capacity, (rel) => sem.run(async () => {
       const path = await targetPath(rel);
       ctrl.abort.signal.throwIfAborted();
-      await ensureDir(to, path);
+      if (await ensureDir(to, path)) fresh.add(rel);
     }, ctrl.abort.signal), ctrl.abort.signal);
   }
   if (ctrl.cancelled || ctrl.paused) return;
 
   // 3. Prepare destinations, resolve conflicts, then transfer files. Aggregate
   //    progress across concurrent legs, coalescing byte updates to ~10/s.
+  //    `bytesDone` counts network legs, as the core reports them; the row shows
+  //    file bytes, so a relayed folder is not twice its size.
   let bytesDone = 0;
   let filesDone = 0;
   let lastPatch = 0;
+  const shown = (): number => Math.floor(bytesDone / legs);
   const publishProgress = (): void => {
     const ts = now();
     if (ts - lastPatch < PATCH_MS) return;
     lastPatch = ts;
-    ctrl.patch({ bytesDone, filesDone });
+    ctrl.patch({ bytesDone: shown(), filesDone });
   };
   const bump = (delta: number, transferred = true): void => {
     if (delta <= 0 || ctrl.abort.signal.aborted) return;
@@ -620,7 +670,7 @@ async function runDir(
     ctrl.manifest.set(it.relPath, { path: absTo, existing: replaceTarget, completed: false });
     plan.push({ it, absTo, offset, replaceTarget });
   }
-  ctrl.patch({ state: "active", bytesDone, filesDone });
+  ctrl.patch({ state: "active", bytesDone: shown(), filesDone });
 
   const transferOne = async ({ it }: typeof plan[number]): Promise<boolean> => {
     if (ctrl.abort.signal.aborted) return false;
@@ -646,6 +696,36 @@ async function runDir(
     triggerAll(ctrl);
     throw new Error(`${file.it.relPath}: ${apiErrorMessage(error)}`);
   }), ctrl.abort.signal), ctrl.abort.signal);
+  // 4. Move only: drop the source directories that are now empty, children
+  //    before parents — unless one may BE its destination directory (see
+  //    mayBeSameFile for how that happens). Files are guarded one by one in
+  //    transferLeaf and an aliased file keeps its folder, but a folder without
+  //    files has no such guard, and removing it would remove the very folder
+  //    that was just "moved" into place. So a source directory goes only when
+  //    its destination is proved to be another directory: one this run created
+  //    is new; one that already existed is probed the way a file is — an entry
+  //    made in it under a random name must not show up in the source directory.
+  //    A probe that fails proves nothing, and the directory stays. Probed
+  //    before the metadata pass, which restores the times a probe disturbs.
+  const stayed = files.filter((file) => !ctrl.manifest.get(file.relPath)?.removed).map((file) => file.relPath);
+  const unproven = new Map<string, string>();
+  if (ctrl.move) {
+    const merged = emptiedDirs(dirs, stayed).filter((rel) => !fresh.has(rel));
+    await mapWorkers(merged, sem.capacity, (rel) => sem.run(async () => {
+      try {
+        const name = `.unissh-${crypto.randomUUID()}.part`;
+        const probe = await to.join(await targetPath(rel), name);
+        await to.createNew(probe);
+        try {
+          if (await from.lstat(await from.join(await sourcePath(rel), name))) unproven.set(rel, i18n.t("sftp.moveError.sameFolder"));
+        } finally {
+          await to.remove(probe);
+        }
+      } catch (error) {
+        unproven.set(rel, apiErrorMessage(error));
+      }
+    }, ctrl.abort.signal), ctrl.abort.signal);
+  }
   for (const group of [...byDepth.values()].reverse()) {
     await mapWorkers(group, sem.capacity, (rel) => sem.run(async () => {
       const metadata = directoryMetadata.get(rel)!;
@@ -654,14 +734,13 @@ async function runDir(
   }
   if (rootMetadata) await to.setMetadata(targetRoot, rootMetadata.mode, rootMetadata.mtime);
 
-  // 4. Move only: drop the source directories that are now empty, children
-  //    before parents. Each removal is non-recursive, so a directory that still
-  //    holds anything — a skipped file, one that could not be removed, or one
-  //    that appeared meanwhile — refuses and stays, along with its parents.
+  // Each removal is non-recursive, so a directory that still holds anything —
+  // a skipped file, one that could not be removed, or one that appeared
+  // meanwhile — refuses and stays, along with its parents.
   if (ctrl.move) {
-    const stayed = files.filter((file) => !ctrl.manifest.get(file.relPath)?.removed).map((file) => file.relPath);
+    for (const [rel, why] of unproven) ctrl.kept.push(`${await sourcePath(rel)}: ${why}`);
     const stuck: string[] = [];
-    for (const rel of emptiedDirs(dirs, stayed)) {
+    for (const rel of emptiedDirs(dirs, [...stayed, ...unproven.keys()])) {
       if (ctrl.abort.signal.aborted) break;
       if (stuck.some((child) => rel === "" || isWithin(rel, child))) continue;
       const path = await sourcePath(rel);
@@ -671,7 +750,7 @@ async function runDir(
       });
     }
   }
-  ctrl.patch({ filesDone, bytesDone, bytesTotal: bytesDone });
+  ctrl.patch({ filesDone, bytesDone: shown(), bytesTotal: shown() });
 }
 
 /** How many files this transfer may move at once. A folder transfer draws its
@@ -717,14 +796,15 @@ export async function startTransfer(
     id: t.id, manifest: manifests.get(t.id) ?? new Map(),
     paused: false, cancelled: false, abort: new AbortController(),
     moved: 0, pendingConflicts: 0, lastProgressAt: now(), move: !!t.move, kept: [],
+    legs: from.kind === "remote" && to.kind === "remote" ? 2 : 1,
     patch: (patch) => {
       if (controls.get(t.id) === ctrl && !ctrl.abort.signal.aborted) patchTransfer(t.id, patch);
     },
   };
   controls.set(t.id, ctrl);
   manifests.set(t.id, ctrl.manifest);
-  // A remote relay counts two network legs; preserve the original source size
-  // so retry never mistakes that work total for the file size.
+  // The total in the store follows what the core reports while a file runs;
+  // a retry starts again from the size the listing gave.
   t = { ...t, bytesTotal: t.isSymlink ? 0 : t.sourceSize ?? t.bytesTotal };
   ctrl.patch({ state: t.kind === "dir" ? "scanning" : "queued", error: undefined,
     sourceSize: t.bytesTotal, bytesDone: 0, filesDone: 0, speedBps: 0, etaSec: Infinity, stalled: false });
@@ -739,7 +819,7 @@ export async function startTransfer(
     }
     spd.sample(ctrl.moved, now());
     return {
-      speedBps: spd.speed(), etaSec: spd.eta(current.bytesTotal - current.bytesDone),
+      speedBps: spd.speed(), etaSec: spd.eta((current.bytesTotal - current.bytesDone) * ctrl.legs),
       stalled: current.state === "active" && now() - ctrl.lastProgressAt >= 5000,
     };
   };

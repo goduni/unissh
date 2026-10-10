@@ -136,6 +136,27 @@ export function isWithin(dir: string, path: string, nativeSeparators = false): b
   return path === dir || path.startsWith(`${dir}/`) || (nativeSeparators && path.startsWith(`${dir}\\`));
 }
 
+/** Whether a refused in-place rename means "these two paths cannot be joined by
+ *  a rename", so the move has to copy and then remove — as opposed to a rename
+ *  that was simply not allowed, or never reached the other end.
+ *
+ *  Locally only a rename across filesystems qualifies: EXDEV, which is errno 18
+ *  on Linux, macOS, Android and iOS, and ERROR_NOT_SAME_DEVICE (17) on Windows.
+ *  The number is read from the suffix the OS error carries, because the text in
+ *  front of it is localised. The same two numbers mean other things on the other
+ *  family (17 is EEXIST on unix), hence `windows`.
+ *
+ *  An SFTP server has no status for it: OpenSSH reports EXDEV as the generic
+ *  SSH_FX_FAILURE (4), which cannot be narrowed further, and a server without
+ *  the operation answers SSH_FX_OP_UNSUPPORTED (8) or is refused by the core
+ *  before the request is sent. Permission denied (3), no such file (2) and a
+ *  dropped channel are none of these, and copying would only hide them — and
+ *  re-create the file under the user's own owner and group. */
+export function renameNeedsCopy(message: string, kind: "local" | "remote", windows: boolean): boolean {
+  if (kind === "remote") return /\bstatus (4|8)\b/.test(message) || message.includes("does not support atomic replacement");
+  return message.includes(`(os error ${windows ? 17 : 18})`);
+}
+
 /** After a folder move: the source directories that may be removed, deepest
  *  first, as paths relative to the moved root ("" is the root itself). A
  *  directory stays if anything listed in `stayed` (a file that was not moved, or

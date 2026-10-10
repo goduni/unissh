@@ -1887,6 +1887,7 @@ export const en = {
       "kept": "Copied, but the source was not removed: {{detail}}",
       "keptMore": "Copied, but the source was not removed: {{detail}} (and {{more}} more)",
       "sameFile": "the destination looked like the same file",
+      "sameFolder": "the destination is the same folder",
       "destinationMissing": "the copy at the destination is missing or has changed",
       "sourceChanged": "changed after it was copied",
       "intoItself": "Cannot move a path into itself"
