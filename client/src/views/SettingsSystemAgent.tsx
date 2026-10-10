@@ -1,7 +1,8 @@
 // Settings → Security → System agent (desktop only).
 //
-// The switch, what state the listener is actually in, and the two lines a shell
-// (PowerShell on Windows) or ssh_config needs to reach its socket or pipe.
+// The switch, what state the listener is actually in, and the lines a shell or
+// ssh_config needs to reach its socket or pipe (on Windows also the one that
+// saves the variable for the account, and the one Git for Windows needs).
 // Which keys it offers is chosen per key in Secrets; nothing here lists or
 // changes keys.
 
@@ -144,7 +145,11 @@ export function SettingsSystemAgent() {
             label={t(windows ? "systemAgent.shellLabelWindows" : "systemAgent.shellLabel")}
             value={setup.shell}
           />
+          {setup.persist && (
+            <CopyLine label={t("systemAgent.persistLabelWindows")} value={setup.persist} />
+          )}
           <CopyLine label={t("systemAgent.sshConfigLabel")} value={setup.sshConfig} />
+          {setup.git && <CopyLine label={t("systemAgent.gitLabelWindows")} value={setup.git} />}
         </div>
       )}
       <div style={{ fontSize: TEXT.small, color: p.txt3, marginTop: rem(12) }}>
