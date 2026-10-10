@@ -311,7 +311,7 @@ async fn default_limits_admit_the_largest_client_object_and_nothing_bigger() {
 
     // Size is checked before the object is parsed: zeros of a permitted size
     // get as far as the parser, which rejects them as malformed (400).
-    for (len, expected) in [(largest, 400), (largest + 1, 413)] {
+    for (len, expected) in [(largest, 400_u16), (largest + 1, 413)] {
         let status = app
             .client
             .post(format!("{}/v1/sync/push", app.base))

@@ -5830,7 +5830,7 @@ impl Core {
         // as a local-to-cloud move re-points them (see [`rehome_reference`]); a
         // reference to any other vault is left alone.
         let orig_label = String::from_utf8_lossy(orig_vault_id).into_owned();
-        let profile_uids = items
+        let profile_uids: std::collections::HashSet<String> = items
             .iter()
             .filter(|(_, item_type, _)| *item_type == ITEM_TYPE_CONNECTION)
             .map(|(item_id, _, content)| profile_uid_in(content, &orig_label, item_id))
@@ -5842,14 +5842,16 @@ impl Core {
         };
         let items = items
             .into_iter()
-            .map(|(item_id, item_type, content)| {
-                Ok(
-                    match rehome_reference(item_type, &item_id, &content, &restored, true)? {
-                        Some((item_id, content)) => (item_id, item_type, content),
-                        None => (item_id, item_type, content),
-                    },
-                )
-            })
+            .map(
+                |(item_id, item_type, content)| -> Result<CopiedItem, FfiError> {
+                    Ok(
+                        match rehome_reference(item_type, &item_id, &content, &restored, true)? {
+                            Some((item_id, content)) => (item_id, item_type, content),
+                            None => (item_id, item_type, content),
+                        },
+                    )
+                },
+            )
             .collect::<Result<Vec<CopiedItem>, FfiError>>()?;
 
         self.with_state_mut(|state| {

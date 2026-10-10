@@ -1732,6 +1732,7 @@ fn sync_pulls_even_when_the_push_fails() {
 #[test]
 fn sync_report_names_the_item_the_server_refuses_as_too_large() {
     use picky_backend::{PickyTransport, Push};
+    use unissh_sync::{SyncObject, SyncTransport};
 
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
@@ -1755,7 +1756,21 @@ fn sync_report_names_the_item_the_server_refuses_as_too_large() {
         )
         .unwrap();
 
-    assert_eq!(report.pushed, 2, "the vault record and the password");
+    let uploaded: Vec<String> = server
+        .inner
+        .lock()
+        .unwrap()
+        .delta_since(0)
+        .into_iter()
+        .filter_map(|(_, object)| {
+            if let SyncObject::Item(item) = object {
+                Some(String::from_utf8(item.item_id).unwrap())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(uploaded, ["db-pw"], "everything else was uploaded");
     assert_eq!(report.too_large.len(), 1);
     let refused = &report.too_large[0];
     assert_eq!(
