@@ -139,14 +139,16 @@ pub fn start(app: &AppHandle) {
         return;
     }
 
-    // SAFETY: the selectors are the ones this class implements (just checked),
-    // and the observer outlives every notification (it is leaked at the end).
-    unsafe {
-        let distributed = NSDistributedNotificationCenter::defaultCenter();
-        for (name, selector) in [
-            ("com.apple.screenIsLocked", selectors[0]),
-            ("com.apple.screenIsUnlocked", selectors[1]),
-        ] {
+    // Every registration below is sound for the same two reasons: the selectors
+    // are the ones this class implements (just checked), and the observer
+    // outlives every notification (it is leaked at the end).
+    let distributed = NSDistributedNotificationCenter::defaultCenter();
+    for (name, selector) in [
+        ("com.apple.screenIsLocked", selectors[0]),
+        ("com.apple.screenIsUnlocked", selectors[1]),
+    ] {
+        // SAFETY: `selector` is implemented by the observer, which is never freed.
+        unsafe {
             distributed.addObserver_selector_name_object_suspensionBehavior(
                 &observer,
                 selector,
@@ -155,25 +157,26 @@ pub fn start(app: &AppHandle) {
                 NSNotificationSuspensionBehavior::DeliverImmediately,
             );
         }
+    }
 
-        // The workspace centre is a plain in-process one: no suspension, and no
-        // string to spell — AppKit exports the name.
+    // The workspace centre is a plain in-process one: no suspension, and no
+    // string to spell — AppKit exports the name.
+    // SAFETY: an immutable `&'static NSString` exported by AppKit; reading it is a
+    // plain load, and AppKit is linked, so the symbol is always defined.
+    let will_sleep = unsafe { NSWorkspaceWillSleepNotification };
+    // SAFETY: as above, for the did-wake name.
+    let did_wake = unsafe { NSWorkspaceDidWakeNotification };
+    // SAFETY: `selectors[2]` is implemented by the observer, which is never freed.
+    unsafe {
         NSWorkspace::sharedWorkspace()
             .notificationCenter()
-            .addObserver_selector_name_object(
-                &observer,
-                selectors[2],
-                Some(NSWorkspaceWillSleepNotification),
-                None,
-            );
+            .addObserver_selector_name_object(&observer, selectors[2], Some(will_sleep), None);
+    }
+    // SAFETY: `selectors[3]` is implemented by the observer, which is never freed.
+    unsafe {
         NSWorkspace::sharedWorkspace()
             .notificationCenter()
-            .addObserver_selector_name_object(
-                &observer,
-                selectors[3],
-                Some(NSWorkspaceDidWakeNotification),
-                None,
-            );
+            .addObserver_selector_name_object(&observer, selectors[3], Some(did_wake), None);
     }
 
     // Registered, and never unregistered: see the module docs.

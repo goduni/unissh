@@ -25,6 +25,8 @@
     clippy::map_err_ignore,
     reason = "error causes are erased on purpose: a decrypt or parse failure must not become an oracle"
 )]
+// Hostile input is parsed here: every +,-,*,<< must say what happens on overflow.
+#![warn(clippy::arithmetic_side_effects)]
 
 mod account;
 pub mod device_wrap;

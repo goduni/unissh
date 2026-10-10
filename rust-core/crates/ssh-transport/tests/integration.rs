@@ -112,12 +112,12 @@ impl TestSshd {
             .spawn()
             .expect("spawn sshd");
 
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let started = Instant::now();
         loop {
             if StdTcp::connect(("127.0.0.1", port)).is_ok() {
                 break;
             }
-            if Instant::now() > deadline {
+            if started.elapsed() > Duration::from_secs(8) {
                 panic!("sshd did not become ready on port {port}");
             }
             std::thread::sleep(Duration::from_millis(50));

@@ -42,6 +42,8 @@
 //! The relay/bastion service and CA are not implemented (spec 11).
 
 #![forbid(unsafe_code)]
+// Hostile input is parsed here: every +,-,*,<< must say what happens on overflow.
+#![warn(clippy::arithmetic_side_effects)]
 
 mod client;
 mod config;

@@ -62,7 +62,11 @@ impl AssociatedData {
             u16::try_from(self.vault_id.len()).map_err(|_| CryptoError::InvalidLength)?;
         let item_id_len =
             u16::try_from(self.item_id.len()).map_err(|_| CryptoError::InvalidLength)?;
-        let mut out = Vec::with_capacity(2 + self.vault_id.len() + 2 + self.item_id.len() + 8);
+        let mut out = Vec::with_capacity(
+            (2 + 2 + 8_usize)
+                .saturating_add(self.vault_id.len())
+                .saturating_add(self.item_id.len()),
+        );
         out.extend_from_slice(&vault_id_len.to_be_bytes());
         out.extend_from_slice(&self.vault_id);
         out.extend_from_slice(&item_id_len.to_be_bytes());
@@ -190,7 +194,9 @@ fn seal_xchacha_inner(
         )
         .map_err(|_| CryptoError::Decrypt)?;
 
-    let mut out = Vec::with_capacity(crate::version::HEADER_LEN + NONCE_LEN + ciphertext.len());
+    let mut out = Vec::with_capacity(
+        (crate::version::HEADER_LEN + NONCE_LEN).saturating_add(ciphertext.len()),
+    );
     write_header(&mut out, AlgId::XChaCha20Poly1305);
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ciphertext);
@@ -233,7 +239,7 @@ fn open_xchacha_inner(
 /// so the prefix is unambiguous without a separate length prefix.
 fn with_header(alg: AlgId, aad: &[u8]) -> Vec<u8> {
     let header = header_bytes(alg);
-    let mut out = Vec::with_capacity(header.len() + aad.len());
+    let mut out = Vec::with_capacity(header.len().saturating_add(aad.len()));
     out.extend_from_slice(&header);
     out.extend_from_slice(aad);
     out

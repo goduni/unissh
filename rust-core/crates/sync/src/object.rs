@@ -549,7 +549,7 @@ mod tests {
         assert!(SyncObject::from_bytes(&[]).is_err());
         assert!(SyncObject::from_bytes(&[99, 0, 0]).is_err()); // unknown tag
         let mut good = SyncObject::Keyset(vec![1, 2, 3]).to_bytes().unwrap();
-        good.truncate(good.len() - 1);
+        good.pop();
         assert!(SyncObject::from_bytes(&good).is_err());
     }
 

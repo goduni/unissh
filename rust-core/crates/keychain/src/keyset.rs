@@ -454,7 +454,11 @@ impl EncryptedKeyset {
             return Err(KeychainError::Format);
         }
 
-        let mut out = Vec::with_capacity(8 + kdf_blob.len() + 64 + self.wrapped_keyset.len());
+        let mut out = Vec::with_capacity(
+            (8 + 64_usize)
+                .saturating_add(kdf_blob.len())
+                .saturating_add(self.wrapped_keyset.len()),
+        );
         // Write the record's actual recipe version, not the constant: a legacy record
         // re-serialized without re-wrapping stays legacy (the version byte must match
         // the real `wrapped_keyset` scheme). A record is raised to
@@ -497,7 +501,8 @@ impl EncryptedKeyset {
         let mut pos: usize = 8;
         let kdf_params = if kdf_len > 0 {
             let end = pos.checked_add(kdf_len).ok_or(KeychainError::Format)?;
-            if bytes.len() < end + 64 {
+            // The KDF params must still leave room for both 32-byte public keys.
+            if bytes.len().saturating_sub(end) < 64 {
                 return Err(KeychainError::Format);
             }
             let p = KdfParams::from_blob(bytes.get(pos..end).ok_or(KeychainError::Format)?)?;
@@ -513,16 +518,19 @@ impl EncryptedKeyset {
             _ => return Err(KeychainError::Format),
         }
 
-        if bytes.len() < pos + 64 {
+        // Need both 32-byte public keys.
+        if bytes.len().saturating_sub(pos) < 64 {
             return Err(KeychainError::Format);
         }
-        let mut x25519_public = [0_u8; 32];
-        x25519_public.copy_from_slice(bytes.get(pos..pos + 32).ok_or(KeychainError::Format)?);
-        let mut ed25519_public = [0_u8; 32];
-        ed25519_public.copy_from_slice(bytes.get(pos + 32..pos + 64).ok_or(KeychainError::Format)?);
-        pos += 64;
+        let rest = bytes.get(pos..).ok_or(KeychainError::Format)?;
+        let (&x25519_public, rest) = rest
+            .split_first_chunk::<32>()
+            .ok_or(KeychainError::Format)?;
+        let (&ed25519_public, rest) = rest
+            .split_first_chunk::<32>()
+            .ok_or(KeychainError::Format)?;
 
-        let wrapped_keyset = bytes.get(pos..).ok_or(KeychainError::Format)?.to_vec();
+        let wrapped_keyset = rest.to_vec();
         if wrapped_keyset.is_empty() {
             return Err(KeychainError::Format);
         }

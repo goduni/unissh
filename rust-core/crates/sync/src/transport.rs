@@ -69,15 +69,25 @@ impl InMemoryTransport {
     pub const fn real_max_seq(&self) -> u64 {
         self.next_seq
     }
+
+    /// Advances to, and returns, the next real `server_seq`.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "next_seq starts at 0 and is incremented only here, once per element pushed into self.objects, so it never exceeds objects.len() <= isize::MAX < u64::MAX"
+    )]
+    const fn bump_seq(&mut self) -> u64 {
+        self.next_seq += 1;
+        self.next_seq
+    }
 }
 
 impl SyncTransport for InMemoryTransport {
     fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError> {
         let mut assigned = Vec::with_capacity(objects.len());
         for o in objects {
-            self.next_seq += 1;
-            self.objects.push((self.next_seq, o.clone()));
-            assigned.push(self.next_seq);
+            let seq = self.bump_seq();
+            self.objects.push((seq, o.clone()));
+            assigned.push(seq);
         }
         Ok(assigned)
     }

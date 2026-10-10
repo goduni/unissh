@@ -271,7 +271,7 @@ where
             let mut digest = Sha256::new();
             let mut offset = 0;
             while let Some(data) = self.read_chunk(&handle, offset, CHUNK_U32).await? {
-                offset += data.len() as u64;
+                offset = advance(offset, data.len() as u64)?;
                 if offset > 256 * 1024 * 1024 {
                     return Err(sftp_err("file exceeds editor size limit"));
                 }
@@ -294,7 +294,7 @@ where
             let mut offset: u64 = 0;
             for chunk in data.chunks(CHUNK) {
                 self.write_chunk(&handle, offset, chunk).await?;
-                offset += chunk.len() as u64;
+                offset = advance(offset, chunk.len() as u64)?;
             }
             self.close(&handle).await
         }
@@ -483,16 +483,16 @@ where
                     && next_req <= request_limit
                     && next_req.saturating_sub(write_offset) < (WINDOW * CHUNK) as u64
                 {
-                    let len = if next_req < request_limit {
+                    let len = match request_limit.checked_sub(next_req) {
                         // `min` bounds it by CHUNK, so the fallback is never taken.
-                        u32::try_from((request_limit - next_req).min(u64::from(CHUNK_U32)))
-                            .unwrap_or(CHUNK_U32)
-                    } else {
-                        CHUNK_U32
+                        Some(left) if left > 0 => {
+                            u32::try_from(left.min(u64::from(CHUNK_U32))).unwrap_or(CHUNK_U32)
+                        }
+                        _ => CHUNK_U32,
                     };
                     let id = self.send_read(&handle, next_req, len).await?;
                     in_flight.insert(id, (next_req, len));
-                    next_req += u64::from(len);
+                    next_req = advance(next_req, u64::from(len)).map_err(|e| self.poison(e))?;
                 }
                 if in_flight.is_empty() {
                     break; // nothing pending and nothing left to request
@@ -512,21 +512,23 @@ where
                             return Err(self.poison(sftp_err("invalid DATA chunk length")));
                         }
                         let got = data.len() as u64;
-                        request_limit = request_limit.max(off + got);
+                        let end = advance(off, got).map_err(|e| self.poison(e))?;
+                        request_limit = request_limit.max(end);
                         // Short read (legal): re-request the remaining sub-range.
-                        if got < u64::from(len) {
-                            #[expect(
-                                clippy::cast_possible_truncation,
-                                reason = "got < len (a u32) is checked on the line above"
-                            )]
-                            let rlen = len - got as u32;
-                            let id2 = self.send_read(&handle, off + got, rlen).await?;
-                            in_flight.insert(id2, (off + got, rlen));
+                        // `data.len() <= len` is checked above, so the fallback is never taken.
+                        let rlen = u32::try_from(got)
+                            .ok()
+                            .and_then(|g| len.checked_sub(g))
+                            .unwrap_or(0);
+                        if rlen > 0 {
+                            let id2 = self.send_read(&handle, end, rlen).await?;
+                            in_flight.insert(id2, (end, rlen));
                         }
                         reorder.insert(off, data);
                         while let Some(buf) = reorder.remove(&write_offset) {
                             f.write_all(&buf).await?;
-                            write_offset += buf.len() as u64;
+                            write_offset = advance(write_offset, buf.len() as u64)
+                                .map_err(|e| self.poison(e))?;
                         }
                         if let Some(p) = &progress {
                             p.on_progress(write_offset, total);
@@ -692,7 +694,7 @@ where
                 let len = u32::try_from(n).map_err(|e| sftp_err(&e.to_string()))?;
                 let id = self.send_write(&handle, next_offset, chunk).await?;
                 in_flight.insert(id, len);
-                next_offset += n as u64;
+                next_offset = advance(next_offset, n as u64).map_err(|e| self.poison(e))?;
             }
             if in_flight.is_empty() {
                 break;
@@ -713,7 +715,8 @@ where
                 let e = status_to_err(code, &mut r);
                 return Err(self.poison(e));
             }
-            acked += u64::from(len);
+            // A progress counter: clamping is harmless (next_offset is checked above).
+            acked = acked.saturating_add(u64::from(len));
             if let Some(p) = &progress {
                 p.on_progress(acked, total);
             }
@@ -1235,7 +1238,7 @@ where
     async fn send_raw(&mut self, body: &[u8]) -> Result<(), TransportError> {
         // Length and body — in a single buffer/write (otherwise two channel packets per one
         // SFTP packet). With a timeout, so that a hung channel does not block forever.
-        let mut framed = Vec::with_capacity(4 + body.len());
+        let mut framed = Vec::with_capacity(body.len().saturating_add(4));
         put_string(&mut framed, body)?;
         timeout(IO_TIMEOUT, self.stream.write_all(&framed))
             .await
@@ -1314,6 +1317,14 @@ fn put_string(out: &mut Vec<u8>, data: &[u8]) -> Result<(), TransportError> {
 
 const fn is_dir_perm(perms: u32) -> bool {
     perms & S_IFMT == S_IFDIR
+}
+
+/// Advances a file offset by `n` bytes. Reaching it takes a 16 EiB transfer, but a
+/// wrapped offset would silently re-read or overwrite earlier data, so it is an error.
+fn advance(offset: u64, n: u64) -> Result<u64, TransportError> {
+    offset
+        .checked_add(n)
+        .ok_or_else(|| sftp_err("file offset overflows u64"))
 }
 
 fn sftp_err(msg: &str) -> TransportError {
@@ -1431,6 +1442,12 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advance_refuses_to_wrap_a_file_offset() {
+        assert_eq!(advance(7, 5).unwrap(), 12);
+        assert!(advance(u64::MAX, 1).is_err());
+    }
 
     struct TestCancel(std::sync::atomic::AtomicBool);
     impl SftpCancel for TestCancel {
@@ -1786,7 +1803,7 @@ mod integrity_tests {
         unknown_size: bool,
         oversized: bool,
     ) -> usize {
-        let mut reads = 0;
+        let mut reads = 0_usize;
         while let Ok((typ, body)) = peer.read_packet().await {
             let mut r = Reader::new(&body);
             let id = r.u32().unwrap();
@@ -1808,7 +1825,7 @@ mod integrity_tests {
                     put_string(&mut response, b"h").unwrap();
                 }
                 FXP_READ => {
-                    reads += 1;
+                    reads = reads.saturating_add(1);
                     r.string().unwrap();
                     let offset = usize::try_from(r.u64().unwrap()).unwrap();
                     let len = r.u32().unwrap() as usize;
@@ -1817,13 +1834,11 @@ mod integrity_tests {
                         response.push(FXP_DATA);
                         response.extend_from_slice(&id.to_be_bytes());
                         if oversized {
-                            put_string(&mut response, &vec![0; len + 1]).unwrap();
+                            put_string(&mut response, &vec![0; len.checked_add(1).unwrap()])
+                                .unwrap();
                         } else {
-                            put_string(
-                                &mut response,
-                                &bytes[offset..(offset + len).min(bytes.len())],
-                            )
-                            .unwrap();
+                            let tail = &bytes[offset..];
+                            put_string(&mut response, &tail[..len.min(tail.len())]).unwrap();
                         }
                     } else {
                         response.push(FXP_STATUS);

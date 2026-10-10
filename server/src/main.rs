@@ -268,7 +268,12 @@ async fn setup_code(config: &Config, rotate: bool) -> anyhow::Result<()> {
     // `SETUP CODE:` line operators grep for. The default db url is RELATIVE, so
     // a wrong working directory silently creates an empty database and this
     // command would hand out a confident code for the wrong instance.
-    eprintln!("using {} database at {}", config.db.backend, config.db.url);
+    // The url is redacted: a Postgres url may carry `user:password@`.
+    eprintln!(
+        "using {} database at {}",
+        config.db.backend,
+        redact_db_url(&config.db.url)
+    );
     let pinned = config.setup.code.trim().to_owned();
     let pinned_hash = (!pinned.is_empty()).then(|| ids::sha256(pinned.as_bytes()));
     // `[u8; 32]` is not `Deref`, so `as_deref()` does not apply here.
@@ -384,6 +389,56 @@ async fn reclaim(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `url` with every password it carries replaced by `***`, for operator-facing
+/// output: the one in the `scheme://user:password@host` userinfo and the value of a
+/// `password=` query parameter (sqlx accepts both). Keys, other parameters and
+/// anything without a password (a sqlite path, `scheme://user@host`,
+/// `scheme://host/db?x=a@b`) come back as is.
+///
+/// The authority is cut at the first `/`, `?` or `#` after `://`, so an `@` in the
+/// path or query is never taken for the userinfo separator. Inside the authority
+/// the LAST `@` ends the userinfo, so a password with a stray unencoded `@` is
+/// still masked whole rather than partially echoed.
+fn redact_db_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let authority = authority
+        .rsplit_once('@')
+        .and_then(|(userinfo, host)| {
+            let (user, _password) = userinfo.split_once(':')?;
+            Some(format!("{user}:***@{host}"))
+        })
+        .unwrap_or_else(|| authority.to_owned());
+    format!("{scheme}://{authority}{}", redact_query_password(tail))
+}
+
+/// `tail` (path, query and fragment of a URL) with the value of every `password=`
+/// query pair replaced by `***`; the path and the fragment are left untouched.
+fn redact_query_password(tail: &str) -> String {
+    let Some((path, after)) = tail.split_once('?') else {
+        return tail.to_owned();
+    };
+    let (query, fragment) = after.find('#').map_or((after, ""), |i| after.split_at(i));
+    let query = query
+        .split('&')
+        .map(|pair| {
+            if pair
+                .split_once('=')
+                .is_some_and(|(key, _value)| key == "password")
+            {
+                "password=***"
+            } else {
+                pair
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{path}?{query}{fragment}")
+}
+
 /// Resolves on Ctrl-C or (unix) SIGTERM, which is what `docker stop` sends.
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -406,5 +461,54 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {}
         _ = term => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_db_url;
+
+    #[test]
+    fn redact_db_url_masks_userinfo_and_query_passwords() {
+        assert_eq!(
+            redact_db_url("postgres://unissh:s3cret@db:5432/unissh?sslmode=require"),
+            "postgres://unissh:***@db:5432/unissh?sslmode=require",
+            "a password in the userinfo is masked"
+        );
+        assert_eq!(
+            redact_db_url("postgres://unissh@db:5432/unissh"),
+            "postgres://unissh@db:5432/unissh",
+            "a user without a password is left alone"
+        );
+        assert_eq!(
+            redact_db_url("sqlite://data/unissh.db"),
+            "sqlite://data/unissh.db",
+            "a sqlite path is left alone"
+        );
+        assert_eq!(
+            redact_db_url("postgres://db:5432/unissh?application_name=a:b@c"),
+            "postgres://db:5432/unissh?application_name=a:b@c",
+            "an @ in the query is not userinfo"
+        );
+        assert_eq!(
+            redact_db_url("postgres://u:p@ss@h/db"),
+            "postgres://u:***@h/db",
+            "the LAST @ ends the userinfo, so a raw @ in the password is masked whole"
+        );
+        assert_eq!(
+            redact_db_url("postgres://unissh@db:5432/unissh?sslmode=require&password=s3cret#f"),
+            "postgres://unissh@db:5432/unissh?sslmode=require&password=***#f",
+            "a password query parameter is masked, other parameters are kept"
+        );
+        assert_eq!(
+            redact_db_url("data/unissh.db"),
+            "data/unissh.db",
+            "the default sqlite path is left alone"
+        );
+        assert_eq!(
+            redact_db_url("/app/data/unissh.db"),
+            "/app/data/unissh.db",
+            "the compose sqlite path is left alone"
+        );
     }
 }

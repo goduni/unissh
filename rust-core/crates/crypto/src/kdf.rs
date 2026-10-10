@@ -95,7 +95,9 @@ impl KdfParams {
         if self.salt.len() > u8::MAX as usize {
             return Err(CryptoError::InvalidLength);
         }
-        let mut out = Vec::with_capacity(crate::version::HEADER_LEN + 1 + 12 + 1 + self.salt.len());
+        let mut out = Vec::with_capacity(
+            (crate::version::HEADER_LEN + 1 + 12 + 1).saturating_add(self.salt.len()),
+        );
         write_header(&mut out, AlgId::Argon2idParams);
         out.push(KDF_ID_ARGON2ID);
         out.extend_from_slice(&self.mem_kib.to_be_bytes());

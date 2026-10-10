@@ -104,10 +104,9 @@ pub fn normalize_private_key_with_passphrase(
 /// Extracts the label from the first line `-----BEGIN <label>-----`.
 fn pem_label(pem: &str) -> Option<&str> {
     const BEGIN: &str = "-----BEGIN ";
-    let start = pem.find(BEGIN)? + BEGIN.len();
-    let rest = pem.get(start..)?;
-    let end = rest.find("-----")?;
-    Some(rest.get(..end)?.trim())
+    let (_, rest) = pem.split_once(BEGIN)?;
+    let (label, _) = rest.split_once("-----")?;
+    Some(label.trim())
 }
 
 /// Legacy OpenSSL encryption inside PKCS#1/SEC1: the `Proc-Type: 4,ENCRYPTED` /

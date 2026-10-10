@@ -53,11 +53,17 @@ fn acct_push_cursor_key(tenant: &[u8]) -> String {
     format!("{ACCT_PUSH_CURSOR_PREFIX}:{}", hex_lower(tenant))
 }
 
+/// Increments a report counter. Saturating: a count of objects can only reach
+/// `u64::MAX` in theory, and clamping is the right answer for a metric.
+const fn bump(counter: &mut u64) {
+    *counter = counter.saturating_add(1);
+}
+
 /// Lowercase hex of the opaque tenant bytes for the `sync_state` key (no external
 /// dependencies; the input may be arbitrary bytes).
 fn hex_lower(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
-    let mut s = String::with_capacity(bytes.len() * 2);
+    let mut s = String::with_capacity(bytes.len().saturating_mul(2));
     for b in bytes {
         let _ = write!(s, "{b:02x}");
     }
@@ -396,9 +402,9 @@ fn process_vault(
         ..v.clone()
     };
     if put_lww(|| storage.put_vault(&bound))? {
-        report.applied += 1;
+        bump(&mut report.applied);
     } else {
-        report.skipped_stale += 1;
+        bump(&mut report.skipped_stale);
     }
     Ok(())
 }
@@ -462,9 +468,9 @@ fn process_item(
         }
     }
     if put_lww(|| storage.put_item(i))? {
-        report.applied += 1;
+        bump(&mut report.applied);
     } else {
-        report.skipped_stale += 1;
+        bump(&mut report.skipped_stale);
     }
     Ok(())
 }
@@ -528,7 +534,7 @@ fn process_manifest(
     });
     match res {
         Ok(true) => {
-            report.applied += 1;
+            bump(&mut report.applied);
             // Anti-rollback (A0): raise the vault epoch floor to the applied
             // manifest's epoch (as rotate_vk does locally). A member's device does not
             // rotate itself, so without this its floor stays 0 and an untrusted
@@ -605,7 +611,7 @@ fn process_grant(
         return Ok(());
     }
     storage.put_membership_grant(g)?;
-    report.applied += 1;
+    bump(&mut report.applied);
     Ok(())
 }
 
@@ -659,7 +665,7 @@ fn process_audit(
         return Ok(());
     }
     storage.append_audit(&a.entry_blob, &a.signature, &a.author_pubkey)?;
-    report.applied += 1;
+    bump(&mut report.applied);
     Ok(())
 }
 
@@ -738,7 +744,7 @@ fn process_account_state(
     let existing = storage.get_account_state(&a.author_pubkey)?;
     let cur = existing.as_ref().map(|r| r.version).unwrap_or(0);
     if a.version < cur {
-        report.skipped_stale += 1;
+        bump(&mut report.skipped_stale);
         return Ok(());
     }
     if a.version == cur {
@@ -746,13 +752,13 @@ fn process_account_state(
             // Equal version: apply ONLY if the incoming signature is strictly
             // greater than the stored one; otherwise keep the current one (convergence).
             if a.signature.as_slice() <= r.signature.as_slice() {
-                report.skipped_stale += 1;
+                bump(&mut report.skipped_stale);
                 return Ok(());
             }
         }
     }
     storage.set_account_state(&a.author_pubkey, a.version, &a.payload, &a.signature)?;
-    report.applied += 1;
+    bump(&mut report.applied);
     Ok(())
 }
 

@@ -76,7 +76,7 @@ pub fn wrap(material: &[u8], device_secret: &[u8]) -> Result<Vec<u8>, DeviceWrap
     let key = derive_wrap_key(device_secret)?;
     let sealed = aead_encrypt(&key, material, &aad(DEVICE_WRAP_VERSION))
         .map_err(|_| DeviceWrapError::Seal)?;
-    let mut out = Vec::with_capacity(1 + sealed.len());
+    let mut out = Vec::with_capacity(sealed.len().saturating_add(1));
     out.push(DEVICE_WRAP_VERSION);
     out.extend_from_slice(&sealed);
     Ok(out)
