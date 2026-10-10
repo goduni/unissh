@@ -31,7 +31,7 @@ impl SecretKey {
     }
 
     /// Constructs from ready-made bytes.
-    pub fn from_bytes(bytes: [u8; SECRET_KEY_LEN]) -> Self {
+    pub const fn from_bytes(bytes: [u8; SECRET_KEY_LEN]) -> Self {
         Self(bytes)
     }
 
@@ -42,7 +42,7 @@ impl SecretKey {
     }
 
     /// Explicit access to the raw bytes. Do not log, do not store in the clear.
-    pub fn expose_bytes(&self) -> &[u8; SECRET_KEY_LEN] {
+    pub const fn expose_bytes(&self) -> &[u8; SECRET_KEY_LEN] {
         &self.0
     }
 }

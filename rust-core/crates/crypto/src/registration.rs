@@ -30,7 +30,11 @@ impl RegistrationPayload {
             return Err(CryptoError::InvalidLength);
         }
         let mut out = Vec::with_capacity(2 + self.account_id.len() + 64);
-        out.extend_from_slice(&(self.account_id.len() as u16).to_be_bytes());
+        out.extend_from_slice(
+            &u16::try_from(self.account_id.len())
+                .map_err(|_| CryptoError::InvalidLength)?
+                .to_be_bytes(),
+        );
         out.extend_from_slice(&self.account_id);
         out.extend_from_slice(&self.x25519_pub);
         out.extend_from_slice(&self.ed25519_pub);
@@ -87,7 +91,7 @@ mod tests {
         let k = Ed25519Keypair::generate();
         let p = payload();
         let sig = sign_registration(&k.signing, &p).unwrap();
-        let mut t = p.clone();
+        let mut t = p;
         t.account_id = b"acc-16-bytes-XXX".to_vec();
         assert_eq!(
             verify_registration(&k.verifying, &t, &sig).unwrap_err(),

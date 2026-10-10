@@ -1,5 +1,10 @@
 //! P5: identity (account-id, registration, server-auth, generation-floor, unlock-from-blob).
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
+
 use unissh_keychain::{
     generate_account_id, load_account_id, store_account_id, KeychainError, ACCOUNT_ID_LEN,
 };
@@ -158,7 +163,7 @@ fn server_challenge_tampered_rejected() {
     let (_sk, _rec, unlocked) = create_account(Some(b"pw"), fast_params()).unwrap();
     let c = challenge();
     let sig = sign_server_challenge(&unlocked, &c).unwrap();
-    let mut tampered = c.clone();
+    let mut tampered = c;
     tampered.nonce = b"nonce-xyz".to_vec();
     assert!(verify_server_auth(&unlocked.signing.verifying, &tampered, &sig).is_err());
 }

@@ -54,7 +54,7 @@ impl SymmetricKey {
     }
 
     /// Constructs a key from ready bytes.
-    pub fn from_bytes(bytes: [u8; SYMMETRIC_KEY_LEN]) -> Self {
+    pub const fn from_bytes(bytes: [u8; SYMMETRIC_KEY_LEN]) -> Self {
         Self(bytes)
     }
 
@@ -67,7 +67,7 @@ impl SymmetricKey {
 
     /// Explicit access to the key's raw bytes. Use with care: do not log,
     /// do not serialize in the clear.
-    pub fn expose_bytes(&self) -> &[u8; SYMMETRIC_KEY_LEN] {
+    pub const fn expose_bytes(&self) -> &[u8; SYMMETRIC_KEY_LEN] {
         &self.0
     }
 }

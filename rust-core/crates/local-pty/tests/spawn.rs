@@ -7,6 +7,13 @@
 //! name would be worse than admitting the gap).
 
 #![cfg(unix)]
+#![cfg_attr(
+    unix,
+    expect(
+        clippy::expect_used,
+        reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+    )
+)]
 
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -44,6 +51,7 @@ impl Collector {
             let (guard, _) = self.signal.wait_timeout(done, left).expect("wait");
             done = guard;
         }
+        drop(done);
         true
     }
 
@@ -94,7 +102,7 @@ fn output_and_exit_code_reach_the_sink() {
     let sink = Collector::new();
     let pty = LocalPty::spawn(
         spec("/bin/sh", &["-c", "echo hello-from-pty; exit 7"]),
-        Arc::clone(&sink) as Arc<dyn PtySink>,
+        sink.clone(),
     )
     .expect("spawn");
 
@@ -115,7 +123,7 @@ fn exit_code_is_never_negative_when_signalled() {
     let sink = Collector::new();
     let pty = LocalPty::spawn(
         spec("/bin/sh", &["-c", "kill -TERM $$; sleep 30"]),
-        Arc::clone(&sink) as Arc<dyn PtySink>,
+        sink.clone(),
     )
     .expect("spawn");
 
@@ -135,7 +143,7 @@ fn resize_reaches_the_child() {
             "/bin/sh",
             &["-c", "sleep 0.4; stty size; sleep 0.4; stty size"],
         ),
-        Arc::clone(&sink) as Arc<dyn PtySink>,
+        sink.clone(),
     )
     .expect("spawn");
 
@@ -154,7 +162,7 @@ fn initial_size_is_the_one_asked_for() {
     let mut s = spec("/bin/sh", &["-c", "stty size"]);
     s.cols = 100;
     s.rows = 37;
-    let _pty = LocalPty::spawn(s, Arc::clone(&sink) as Arc<dyn PtySink>).expect("spawn");
+    let _pty = LocalPty::spawn(s, sink.clone()).expect("spawn");
 
     assert!(sink.wait_closed(Duration::from_secs(10)), "never closed");
     assert!(
@@ -169,7 +177,7 @@ fn input_reaches_the_shell() {
     let sink = Collector::new();
     let pty = LocalPty::spawn(
         spec("/bin/sh", &["-c", "read line; echo got:$line"]),
-        Arc::clone(&sink) as Arc<dyn PtySink>,
+        sink.clone(),
     )
     .expect("spawn");
 
@@ -183,7 +191,7 @@ fn close_kills_the_child() {
     let sink = Collector::new();
     let pty = LocalPty::spawn(
         spec("/bin/sh", &["-c", "echo alive; sleep 120"]),
-        Arc::clone(&sink) as Arc<dyn PtySink>,
+        sink.clone(),
     )
     .expect("spawn");
     assert!(
@@ -209,11 +217,7 @@ fn close_kills_the_child() {
 #[test]
 fn close_is_idempotent() {
     let sink = Collector::new();
-    let pty = LocalPty::spawn(
-        spec("/bin/sh", &["-c", "sleep 120"]),
-        Arc::clone(&sink) as Arc<dyn PtySink>,
-    )
-    .expect("spawn");
+    let pty = LocalPty::spawn(spec("/bin/sh", &["-c", "sleep 120"]), sink.clone()).expect("spawn");
     pty.close();
     pty.close();
     drop(pty); // Drop calls close() a third time
@@ -223,11 +227,8 @@ fn close_is_idempotent() {
 #[test]
 fn a_missing_program_is_an_error_not_a_session() {
     let sink = Collector::new();
-    let err = LocalPty::spawn(
-        spec("/nonexistent/definitely-not-a-shell", &[]),
-        Arc::clone(&sink) as Arc<dyn PtySink>,
-    )
-    .expect_err("a missing program must not produce a session");
+    let err = LocalPty::spawn(spec("/nonexistent/definitely-not-a-shell", &[]), sink)
+        .expect_err("a missing program must not produce a session");
     assert!(
         matches!(err, LocalPtyError::Spawn { .. }),
         "unexpected error: {err}"
@@ -239,7 +240,7 @@ fn a_missing_cwd_is_reported_before_anything_starts() {
     let sink = Collector::new();
     let mut s = spec("/bin/sh", &["-c", "true"]);
     s.cwd = Some(std::path::PathBuf::from("/nonexistent/starting/directory"));
-    let err = LocalPty::spawn(s, Arc::clone(&sink) as Arc<dyn PtySink>)
+    let err = LocalPty::spawn(s, sink)
         .expect_err("a missing starting directory must not produce a session");
     assert!(matches!(err, LocalPtyError::Cwd(_)), "unexpected: {err}");
 }
@@ -253,7 +254,7 @@ fn cwd_is_where_the_shell_starts() {
     let sink = Collector::new();
     let mut s = spec("/bin/sh", &["-c", "pwd"]);
     s.cwd = Some(dir.path().to_path_buf());
-    let _pty = LocalPty::spawn(s, Arc::clone(&sink) as Arc<dyn PtySink>).expect("spawn");
+    let _pty = LocalPty::spawn(s, sink.clone()).expect("spawn");
 
     assert!(sink.wait_closed(Duration::from_secs(10)), "never closed");
     assert!(
@@ -269,7 +270,7 @@ fn the_terminal_describes_itself_to_the_child() {
     let sink = Collector::new();
     let _pty = LocalPty::spawn(
         spec("/bin/sh", &["-c", "echo term=$TERM colorterm=$COLORTERM"]),
-        Arc::clone(&sink) as Arc<dyn PtySink>,
+        sink.clone(),
     )
     .expect("spawn");
 

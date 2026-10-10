@@ -33,6 +33,10 @@ struct LockedKey {
 }
 
 impl LockedKey {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "ssh-key/rsa failures map to the fixed `AgentError::Parse` variant callers branch on; it carries no source and `Ssh(String)` would change the error callers see"
+    )]
     fn from_openssh(pem: &[u8]) -> Result<Self, AgentError> {
         let key = PrivateKey::from_openssh(pem).map_err(|_| AgentError::Parse)?;
         let public = key.public_key().clone();
@@ -44,6 +48,10 @@ impl LockedKey {
         // `key` is zeroized on Drop.
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "ssh-key/rsa failures map to the fixed `AgentError::Parse` variant callers branch on; it carries no source and `Ssh(String)` would change the error callers see"
+    )]
     fn sign(&self, data: &[u8], rsa_hash: RsaHash) -> Result<AgentSignature, AgentError> {
         let key = PrivateKey::from_openssh(self.pem.as_slice()).map_err(|_| AgentError::Parse)?;
         // We sign RSA ourselves (see `sign_rsa`): ssh-key 0.6.7 in its
@@ -86,6 +94,10 @@ pub enum RsaHash {
 /// works around the ssh-key 0.6.7 bug (its converter takes `p` twice instead of
 /// `p,q`). We return the "raw" signature blob: the transport puts it into
 /// `string(signature)`.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "ssh-key/rsa failures map to the fixed `AgentError::Parse` variant callers branch on; it carries no source and `Ssh(String)` would change the error callers see"
+)]
 fn sign_rsa(kp: &RsaKeypair, data: &[u8], hash: RsaHash) -> Result<AgentSignature, AgentError> {
     let to_uint = |m: &Mpint| rsa::BigUint::try_from(m).map_err(|_| AgentError::Parse);
     let private = rsa::RsaPrivateKey::from_components(
@@ -155,6 +167,10 @@ impl InMemoryAgent {
 
     /// Attaches an OpenSSH user certificate to an already-loaded key
     /// (for cert-based authentication). The certificate's key type must match.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "ssh-key/rsa failures map to the fixed `AgentError::Parse` variant callers branch on; it carries no source and `Ssh(String)` would change the error callers see"
+    )]
     pub fn attach_certificate(
         &mut self,
         key_id: &[u8],
@@ -193,7 +209,7 @@ impl InMemoryAgent {
 
     /// The attached certificate for `key_id`, if any.
     pub fn certificate(&self, key_id: &[u8]) -> Option<Certificate> {
-        self.keys.get(key_id).and_then(|k| k.certificate.clone())
+        self.keys.get(key_id)?.certificate.clone()
     }
 
     /// Removes a key from the agent (the secret is zeroized).

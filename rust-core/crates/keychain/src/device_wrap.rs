@@ -90,13 +90,23 @@ pub fn unwrap(blob: &[u8], device_secret: &[u8]) -> Result<Zeroizing<Vec<u8>>, D
         return Err(DeviceWrapError::UnsupportedVersion(version));
     }
     let key = derive_wrap_key(device_secret)?;
-    let material = aead_decrypt(&key, sealed, &aad(version)).map_err(|e| match e {
-        CryptoError::Decrypt => DeviceWrapError::Unwrap,
-        _ => DeviceWrapError::Malformed,
+    // Only `Decrypt` means "wrong secret or tampered"; every other `CryptoError`
+    // (including variants added later to the non-exhaustive enum) is a broken blob.
+    let material = aead_decrypt(&key, sealed, &aad(version)).map_err(|e| {
+        if e == CryptoError::Decrypt {
+            DeviceWrapError::Unwrap
+        } else {
+            DeviceWrapError::Malformed
+        }
     })?;
     Ok(Zeroizing::new(material))
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "HKDF-SHA256 expand fails only for outputs over 255*32 bytes; the output here is a fixed 32"
+)]
 fn derive_wrap_key(device_secret: &[u8]) -> Result<SymmetricKey, DeviceWrapError> {
     if device_secret.len() < DEVICE_SECRET_MIN_LEN {
         return Err(DeviceWrapError::ShortSecret);

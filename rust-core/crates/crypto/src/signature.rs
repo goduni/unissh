@@ -85,7 +85,7 @@ pub struct VersionedObject {
 
 impl VersionedObject {
     /// Constructs an object with a ready digest.
-    pub fn new(aad: AssociatedData, content_digest: [u8; 32]) -> Self {
+    pub const fn new(aad: AssociatedData, content_digest: [u8; 32]) -> Self {
         Self {
             aad,
             content_digest,

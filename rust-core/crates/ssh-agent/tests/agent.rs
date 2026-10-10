@@ -1,17 +1,22 @@
 //! Tests of the embedded agent: generation (Ed25519/ECDSA/RSA), sign/verify,
 //! key from the vault, certificate, removal.
 
+#![expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::missing_assert_message,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
+
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use unissh_ssh_agent::ssh_key::{Algorithm, EcdsaCurve};
-use unissh_ssh_agent::{
-    generate_ed25519_openssh, generate_openssh, ssh_key, AgentError, InMemoryAgent,
-};
+use unissh_ssh_agent::{generate_ed25519_openssh, generate_openssh, AgentError, InMemoryAgent};
 
 fn ed25519_public_bytes(pk: &ssh_key::PublicKey) -> [u8; 32] {
-    match pk.key_data() {
-        ssh_key::public::KeyData::Ed25519(p) => p.0,
-        _ => panic!("expected ed25519"),
-    }
+    let ssh_key::public::KeyData::Ed25519(p) = pk.key_data() else {
+        panic!("expected ed25519");
+    };
+    p.0
 }
 
 #[test]
@@ -31,7 +36,7 @@ fn ed25519_generate_add_sign_and_verify() {
     // raw Ed25519 verify with the public key from the agent
     let pk = agent.public_key(b"k1").unwrap();
     let vk = VerifyingKey::from_bytes(&ed25519_public_bytes(&pk)).unwrap();
-    let arr: [u8; 64] = sig.signature.clone().try_into().unwrap();
+    let arr: [u8; 64] = sig.signature.try_into().unwrap();
     assert!(vk.verify(data, &Signature::from_bytes(&arr)).is_ok());
     assert!(vk.verify(b"other", &Signature::from_bytes(&arr)).is_err());
 }
@@ -104,14 +109,14 @@ fn rsa_sign_and_verify() {
 
     // Cryptographic verification with the public key from the agent (rsa-sha2-512).
     let pk = agent.public_key(b"rsa").unwrap();
-    let rsa_pub = match pk.key_data() {
-        ssh_key::public::KeyData::Rsa(r) => rsa::RsaPublicKey::new(
-            rsa::BigUint::try_from(&r.n).unwrap(),
-            rsa::BigUint::try_from(&r.e).unwrap(),
-        )
-        .unwrap(),
-        _ => panic!("expected rsa"),
+    let ssh_key::public::KeyData::Rsa(r) = pk.key_data() else {
+        panic!("expected rsa");
     };
+    let rsa_pub = rsa::RsaPublicKey::new(
+        rsa::BigUint::try_from(&r.n).unwrap(),
+        rsa::BigUint::try_from(&r.e).unwrap(),
+    )
+    .unwrap();
     let vk = VerifyingKey::<Sha512>::new(rsa_pub);
     let signature = RsaSig::try_from(sig.signature.as_slice()).unwrap();
     assert!(vk.verify(data, &signature).is_ok());

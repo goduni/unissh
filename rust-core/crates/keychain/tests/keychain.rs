@@ -181,7 +181,7 @@ fn corrupted_record_fails() {
 fn tampered_generation_fails_unlock() {
     // generation is part of the AAD → tampering with the generation breaks the unlock.
     let (sk, record, _) = create_account(Some(b"pw"), fast_params()).unwrap();
-    let mut tampered = record.clone();
+    let mut tampered = record;
     tampered.generation = tampered.generation.wrapping_add(1);
     assert!(unlock_account(&tampered, Some(b"pw"), &sk).is_err());
 }
@@ -189,7 +189,7 @@ fn tampered_generation_fails_unlock() {
 #[test]
 fn tampered_wrapped_keyset_fails_unlock() {
     let (sk, record, _) = create_account(Some(b"pw"), fast_params()).unwrap();
-    let mut tampered = record.clone();
+    let mut tampered = record;
     let last = tampered.wrapped_keyset.len() - 1;
     tampered.wrapped_keyset[last] ^= 0x01;
     assert!(unlock_account(&tampered, Some(b"pw"), &sk).is_err());

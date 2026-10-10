@@ -58,10 +58,14 @@ impl AssociatedData {
         if self.vault_id.len() > u16::MAX as usize || self.item_id.len() > u16::MAX as usize {
             return Err(CryptoError::InvalidLength);
         }
+        let vault_id_len =
+            u16::try_from(self.vault_id.len()).map_err(|_| CryptoError::InvalidLength)?;
+        let item_id_len =
+            u16::try_from(self.item_id.len()).map_err(|_| CryptoError::InvalidLength)?;
         let mut out = Vec::with_capacity(2 + self.vault_id.len() + 2 + self.item_id.len() + 8);
-        out.extend_from_slice(&(self.vault_id.len() as u16).to_be_bytes());
+        out.extend_from_slice(&vault_id_len.to_be_bytes());
         out.extend_from_slice(&self.vault_id);
-        out.extend_from_slice(&(self.item_id.len() as u16).to_be_bytes());
+        out.extend_from_slice(&item_id_len.to_be_bytes());
         out.extend_from_slice(&self.item_id);
         out.extend_from_slice(&self.version.to_be_bytes());
         Ok(out)
@@ -233,4 +237,25 @@ fn with_header(alg: AlgId, aad: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&header);
     out.extend_from_slice(aad);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_id_is_rejected() {
+        let aad = AssociatedData::new(vec![0_u8; u16::MAX as usize + 1], b"item".to_vec(), 1);
+        assert!(
+            matches!(aad.canonical(), Err(CryptoError::InvalidLength)),
+            "a vault_id longer than u16::MAX must be rejected"
+        );
+        let max = AssociatedData::new(vec![0_u8; u16::MAX as usize], b"item".to_vec(), 1);
+        let bytes = max.canonical().unwrap();
+        assert_eq!(
+            &bytes[..2],
+            &u16::MAX.to_be_bytes(),
+            "length prefix of a max-size id"
+        );
+    }
 }

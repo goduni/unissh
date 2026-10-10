@@ -59,13 +59,13 @@ pub enum UnlockMode {
 }
 
 impl UnlockMode {
-    fn to_u8(self) -> u8 {
+    const fn to_u8(self) -> u8 {
         match self {
             Self::Password => 1,
             Self::SecretKeyOnly => 2,
         }
     }
-    fn from_u8(v: u8) -> Result<Self, KeychainError> {
+    const fn from_u8(v: u8) -> Result<Self, KeychainError> {
         match v {
             1 => Ok(Self::Password),
             2 => Ok(Self::SecretKeyOnly),
@@ -305,8 +305,10 @@ fn finish_unlock(
         return Err(KeychainError::Format);
     }
 
-    let x_secret = X25519SecretKey::from_bytes(&plaintext[..SK_LEN]);
-    let e_secret = Ed25519SigningKey::from_bytes(&plaintext[SK_LEN..]);
+    // The length was checked to be exactly `SK_LEN * 2` above, so the split is in bounds.
+    let (x_bytes, e_bytes) = plaintext.split_at(SK_LEN);
+    let x_secret = X25519SecretKey::from_bytes(x_bytes);
+    let e_secret = Ed25519SigningKey::from_bytes(e_bytes);
     plaintext.zeroize();
 
     let x_secret = x_secret.map_err(|_| KeychainError::Format)?;
@@ -460,7 +462,11 @@ impl EncryptedKeyset {
         out.push(self.format_version);
         out.push(self.mode.to_u8());
         out.extend_from_slice(&self.generation.to_be_bytes());
-        out.extend_from_slice(&(kdf_blob.len() as u16).to_be_bytes());
+        out.extend_from_slice(
+            &u16::try_from(kdf_blob.len())
+                .map_err(|_| KeychainError::Format)?
+                .to_be_bytes(),
+        );
         out.extend_from_slice(&kdf_blob);
         out.extend_from_slice(&self.x25519_public);
         out.extend_from_slice(&self.ed25519_public);
@@ -478,13 +484,15 @@ impl EncryptedKeyset {
         // trial of the schemes and migrated on the first unlock. A record from the
         // future (> current) is a loud rejection (you cannot "decrypt" an unknown
         // recipe), not a misparse.
-        let format_version = bytes[0];
+        let &[format_version, mode_byte, g0, g1, g2, g3, k0, k1, ..] = bytes else {
+            return Err(KeychainError::Format);
+        };
         if format_version != KEYSET_FORMAT_VERSION && format_version != KEYSET_FORMAT_LEGACY {
             return Err(KeychainError::Format);
         }
-        let mode = UnlockMode::from_u8(bytes[1])?;
-        let generation = u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
-        let kdf_len = u16::from_be_bytes([bytes[6], bytes[7]]) as usize;
+        let mode = UnlockMode::from_u8(mode_byte)?;
+        let generation = u32::from_be_bytes([g0, g1, g2, g3]);
+        let kdf_len = usize::from(u16::from_be_bytes([k0, k1]));
 
         let mut pos: usize = 8;
         let kdf_params = if kdf_len > 0 {
@@ -492,7 +500,7 @@ impl EncryptedKeyset {
             if bytes.len() < end + 64 {
                 return Err(KeychainError::Format);
             }
-            let p = KdfParams::from_blob(&bytes[pos..end])?;
+            let p = KdfParams::from_blob(bytes.get(pos..end).ok_or(KeychainError::Format)?)?;
             pos = end;
             Some(p)
         } else {
@@ -509,12 +517,12 @@ impl EncryptedKeyset {
             return Err(KeychainError::Format);
         }
         let mut x25519_public = [0_u8; 32];
-        x25519_public.copy_from_slice(&bytes[pos..pos + 32]);
+        x25519_public.copy_from_slice(bytes.get(pos..pos + 32).ok_or(KeychainError::Format)?);
         let mut ed25519_public = [0_u8; 32];
-        ed25519_public.copy_from_slice(&bytes[pos + 32..pos + 64]);
+        ed25519_public.copy_from_slice(bytes.get(pos + 32..pos + 64).ok_or(KeychainError::Format)?);
         pos += 64;
 
-        let wrapped_keyset = bytes[pos..].to_vec();
+        let wrapped_keyset = bytes.get(pos..).ok_or(KeychainError::Format)?.to_vec();
         if wrapped_keyset.is_empty() {
             return Err(KeychainError::Format);
         }
@@ -677,6 +685,26 @@ mod migration_tests {
             wrapped_keyset: wrapped,
         };
         (secret_key, record)
+    }
+
+    #[test]
+    fn truncated_record_is_format_error() {
+        let (_, record) = forge_legacy_record(Some(PW));
+        let full = record.to_bytes().unwrap();
+        let kdf_len = record.kdf_params.as_ref().unwrap().to_blob().unwrap().len();
+        // Every prefix that ends before the first byte of `wrapped_keyset` is structurally short.
+        let fixed_end = 8 + kdf_len + 64;
+        for cut in 0..=fixed_end {
+            let err = EncryptedKeyset::from_bytes(&full[..cut]).unwrap_err();
+            assert!(
+                matches!(err, KeychainError::Format),
+                "cut at {cut}: {err:?}"
+            );
+        }
+        assert!(
+            EncryptedKeyset::from_bytes(&full).is_ok(),
+            "the full record parses"
+        );
     }
 
     /// FROZEN: round-1 Unlock Key derivation for a fixed input (argon=[0x42;32],

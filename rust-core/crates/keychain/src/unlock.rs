@@ -27,6 +27,10 @@ const UNLOCK_HKDF_INFO: &[u8] = b"unissh-unlock-key-v1";
 ///
 /// IKM = `argon_key? || secret_key || device_secret?`. The order and the domain
 /// labels are fixed — they cannot change without bumping the keyset format version.
+#[expect(
+    clippy::expect_used,
+    reason = "HKDF-SHA256 expand fails only for outputs over 255*32 bytes; the output here is a fixed 32"
+)]
 pub(crate) fn derive_unlock_key(
     argon_key: Option<&SymmetricKey>,
     secret_key: &SecretKey,
@@ -36,6 +40,10 @@ pub(crate) fn derive_unlock_key(
     // Each component is length-framed: `present:u8 || len:u32be || data`. Without
     // framing, different input triples with the same concatenation would yield ONE
     // Unlock Key (ambiguous IKM) — critical before enabling the device_secret mode.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "fields are 32-byte keys, the 16-byte Secret Key or a device secret, all far below u32::MAX"
+    )]
     fn push_field(ikm: &mut Vec<u8>, present: bool, data: &[u8]) {
         ikm.push(u8::from(present));
         ikm.extend_from_slice(&(data.len() as u32).to_be_bytes());
@@ -72,10 +80,18 @@ const ESCROW_AUTH_HKDF_INFO: &[u8] = b"unissh-escrow-auth-v1";
 ///
 /// The IKM framing below deliberately duplicates [`derive_unlock_key`]'s framing
 /// instead of factoring it out, to keep that format-frozen function byte-untouched.
+#[expect(
+    clippy::expect_used,
+    reason = "HKDF-SHA256 expand fails only for outputs over 255*32 bytes; the output here is a fixed 32"
+)]
 pub fn derive_escrow_auth_key(
     argon_key: Option<&SymmetricKey>,
     secret_key: &SecretKey,
 ) -> SymmetricKey {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "fields are 32-byte keys, the 16-byte Secret Key or a device secret, all far below u32::MAX"
+    )]
     fn push_field(ikm: &mut Vec<u8>, present: bool, data: &[u8]) {
         ikm.push(u8::from(present));
         ikm.extend_from_slice(&(data.len() as u32).to_be_bytes());
@@ -106,6 +122,10 @@ pub fn derive_escrow_auth_key(
 /// `migrate-on-open` (the keyset is migrated to the current scheme right after a
 /// successful unlock). It cannot change: the bytes are pinned by a golden vector in
 /// `tests/`. See `SECURITY.md`, the "On-disk format changes" section.
+#[expect(
+    clippy::expect_used,
+    reason = "HKDF-SHA256 expand fails only for outputs over 255*32 bytes; the output here is a fixed 32"
+)]
 pub(crate) fn derive_unlock_key_legacy_v1(
     argon_key: Option<&SymmetricKey>,
     secret_key: &SecretKey,
@@ -151,15 +171,15 @@ mod tests {
     /// and a versioned migration, not an edit to these bytes.
     #[test]
     fn escrow_auth_key_golden() {
-        let argon = SymmetricKey::from_bytes([7_u8; 32]);
-        let sk = SecretKey::from_bytes([9_u8; 16]);
-        let got = derive_escrow_auth_key(Some(&argon), &sk);
         // Captured on first green run; frozen thereafter (info = b"unissh-escrow-auth-v1").
         const FROZEN_ESCROW_AUTH_KEY: [u8; 32] = [
             0xb9, 0xd6, 0xbf, 0x86, 0x91, 0xa8, 0x4d, 0x5b, 0x12, 0x90, 0x5f, 0xc6, 0xb5, 0xfa,
             0xd5, 0x9e, 0x7e, 0x9a, 0xdd, 0x07, 0xb4, 0xdb, 0xb6, 0x52, 0xaf, 0x9e, 0xf3, 0x27,
             0xfb, 0x4e, 0x47, 0xc2,
         ];
+        let argon = SymmetricKey::from_bytes([7_u8; 32]);
+        let sk = SecretKey::from_bytes([9_u8; 16]);
+        let got = derive_escrow_auth_key(Some(&argon), &sk);
         assert_eq!(got.expose_bytes(), &FROZEN_ESCROW_AUTH_KEY);
     }
 }

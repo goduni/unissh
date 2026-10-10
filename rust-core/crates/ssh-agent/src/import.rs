@@ -43,6 +43,10 @@ pub fn normalize_private_key_to_openssh(input: &str) -> Result<Zeroizing<String>
 /// [`AgentError::LegacyEncrypted`] — legacy OpenSSL PEM encryption;
 /// [`AgentError::Unsupported`] — unsupported type (DSA); [`AgentError::Parse`] —
 /// corrupt/unrecognized input.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "parse and decrypt failures map to the fixed `Parse`/`WrongPassphrase` variants the UI branches on; they carry no source and `Ssh(String)` would change the error callers see"
+)]
 pub fn normalize_private_key_with_passphrase(
     input: &str,
     passphrase: Option<&str>,
@@ -101,9 +105,9 @@ pub fn normalize_private_key_with_passphrase(
 fn pem_label(pem: &str) -> Option<&str> {
     const BEGIN: &str = "-----BEGIN ";
     let start = pem.find(BEGIN)? + BEGIN.len();
-    let rest = &pem[start..];
+    let rest = pem.get(start..)?;
     let end = rest.find("-----")?;
-    Some(rest[..end].trim())
+    Some(rest.get(..end)?.trim())
 }
 
 /// Legacy OpenSSL encryption inside PKCS#1/SEC1: the `Proc-Type: 4,ENCRYPTED` /
@@ -112,6 +116,10 @@ fn is_legacy_encrypted(pem: &str) -> bool {
     pem.contains("ENCRYPTED")
 }
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "ssh-key/rsa failures map to the fixed `AgentError::Parse` variant callers branch on; it carries no source and `Ssh(String)` would change the error callers see"
+)]
 fn rsa_to_private_key(rsa: rsa::RsaPrivateKey) -> Result<PrivateKey, AgentError> {
     let kp = RsaKeypair::try_from(rsa).map_err(|_| AgentError::Parse)?;
     PrivateKey::new(KeypairData::from(kp), "").map_err(AgentError::from)

@@ -157,7 +157,7 @@ fn default_args() -> Vec<String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn default_args() -> Vec<String> {
+const fn default_args() -> Vec<String> {
     Vec::new()
 }
 
@@ -174,11 +174,12 @@ pub fn program_label(program: &str) -> String {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(program);
-    let stem = if tail.len() > 4 && tail[tail.len() - 4..].eq_ignore_ascii_case(".exe") {
-        &tail[..tail.len() - 4]
-    } else {
-        tail
-    };
+    // `split_at_checked` rather than slicing: four bytes from the end can land
+    // inside a multi-byte character (`日本`), which a byte slice would panic on.
+    let stem = tail
+        .split_at_checked(tail.len().saturating_sub(4))
+        .filter(|(stem, ext)| !stem.is_empty() && ext.eq_ignore_ascii_case(".exe"))
+        .map_or(tail, |(stem, _)| stem);
     if stem.is_empty() {
         program.to_owned()
     } else {
@@ -217,6 +218,13 @@ mod tests {
         assert_eq!(program_label("/usr/bin/python3.11"), "python3.11");
         // Nothing sensible to shorten to; keep what we were given.
         assert_eq!(program_label("/"), "/");
+    }
+
+    #[test]
+    fn label_of_a_multibyte_name_does_not_panic() {
+        // Six bytes: the cut four bytes from the end falls inside the first character.
+        assert_eq!(program_label("/opt/日本"), "日本");
+        assert_eq!(program_label("日本.exe"), "日本");
     }
 
     #[test]
