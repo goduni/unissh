@@ -6,10 +6,11 @@
 //! result to the public decoder. The decoder may return `Ok` or `Err`, but it must never
 //! panic (tests run in debug, so integer overflow counts) and never request a single
 //! allocation above `ALLOC_CAP` (the capped global allocator refuses it, which aborts the
-//! binary with "memory allocation of N bytes failed"). This is not a coverage-guided fuzzer:
-//! the PRNG is a fixed-seed xorshift64*, so every run explores the same inputs and a failure
-//! reproduces exactly; it complements, not replaces, the hand-written truncation tests. To
-//! explore further locally, raise the iteration count or change the seed, e.g.
+//! binary with "memory allocation of N bytes failed"). This is not a coverage-guided fuzzer: the PRNG
+//! is a fixed-seed xorshift64*, so the MUTATION SCHEDULE is fixed, but the base fixtures use
+//! fresh random keys and nonces, so the bytes differ between runs; a failure therefore prints
+//! the full mutated input in hex for reproduction. It complements, not replaces, the
+//! hand-written truncation tests. To explore further locally, raise the iteration count or change the seed, e.g.
 //! `MUTATION_ITERATIONS=200000 MUTATION_SEED=7 cargo test -p unissh-keychain --test mutation`.
 
 #![expect(
@@ -25,12 +26,14 @@ const ITERATIONS: u64 = 2_000;
 /// Default PRNG seed (override: `MUTATION_SEED`).
 const SEED: u64 = 0x5EED_D3C0_DE25_0001;
 /// The largest single allocation any decoder here may request. Legitimate inputs are a few
-/// hundred bytes; a length field read as a capacity is what crosses this.
-const ALLOC_CAP: usize = 64 << 20;
+/// hundred bytes; a length field read as a capacity is what crosses this. Argon2id
+/// `recommended()` takes exactly 64 MiB; the cap is for runaway length fields, not real KDF
+/// memory.
+const ALLOC_CAP: usize = 128 << 20;
 
 /// Forwards to `System`, but refuses any single request above [`ALLOC_CAP`]. A refused
-/// request aborts the test binary with "memory allocation of N bytes failed", which turns
-/// an absurd length-driven allocation into a loud, deterministic failure on every machine.
+/// request aborts the test binary with "memory allocation of N bytes failed", which turns an
+/// absurd length-driven allocation into a loud, deterministic failure on every machine.
 struct CappedAlloc;
 
 #[expect(

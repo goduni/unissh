@@ -746,10 +746,7 @@ impl<'a> Vault<'a> {
                 .storage
                 .get_vault(&self.vault_id)?
                 .ok_or(VaultError::NotFound)?;
-            let v_version = vrec
-                .version
-                .checked_add(1)
-                .ok_or(VaultError::EpochInvalid)?;
+            let v_version = next_version(vrec.version)?;
             let name_blob = aead_encrypt(
                 &self.vk,
                 self.name.as_slice(),
@@ -938,10 +935,7 @@ impl<'a> Vault<'a> {
         }
 
         // 6) new vault record: the owner's wrapped_vk under VK', key_epoch=new, version+1.
-        let v_version = vrec
-            .version
-            .checked_add(1)
-            .ok_or(VaultError::EpochInvalid)?;
+        let v_version = next_version(vrec.version)?;
         let name_blob = aead_encrypt(
             &vk_prime,
             self.name.as_slice(),
@@ -1018,10 +1012,7 @@ impl<'a> Vault<'a> {
         let old_aad = item_aad(&self.vault_id, &record.item_id, record.version);
         let plaintext = aead_decrypt_compat(&item_key, &record.content_blob, &old_aad)?;
         // 3) bump the version; new AAD; re-encrypt with the same per-item key.
-        let new_version = record
-            .version
-            .checked_add(1)
-            .ok_or(VaultError::EpochInvalid)?;
+        let new_version = next_version(record.version)?;
         let new_aad = item_aad(&self.vault_id, &record.item_id, new_version);
         let content_blob = aead_encrypt(&item_key, &plaintext, &new_aad)?;
         // 4) re-wrap the per-item key under VK' (AAD = item_id).

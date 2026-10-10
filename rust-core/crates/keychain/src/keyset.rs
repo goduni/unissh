@@ -501,7 +501,7 @@ impl EncryptedKeyset {
         let mut pos: usize = 8;
         let kdf_params = if kdf_len > 0 {
             let end = pos.checked_add(kdf_len).ok_or(KeychainError::Format)?;
-            // `bytes.len() < end + 64` without the addition.
+            // The KDF params must still leave room for both 32-byte public keys.
             if bytes.len().saturating_sub(end) < 64 {
                 return Err(KeychainError::Format);
             }
@@ -518,7 +518,7 @@ impl EncryptedKeyset {
             _ => return Err(KeychainError::Format),
         }
 
-        // `bytes.len() < pos + 64` without the addition.
+        // Need both 32-byte public keys.
         if bytes.len().saturating_sub(pos) < 64 {
             return Err(KeychainError::Format);
         }

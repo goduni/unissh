@@ -110,13 +110,13 @@ pub fn vk_wrap_info(
     key_epoch: u64,
 ) -> Result<Vec<u8>, CryptoError> {
     const DOMAIN: &[u8] = b"unissh-vkwrap-v1";
+    /// Domain plus the two `u16` length prefixes and the `u64` epoch.
+    const FIXED_LEN: usize = DOMAIN.len() + 2 + 2 + 8;
     if vault_id.len() > u16::MAX as usize || member_pubkey.len() > u16::MAX as usize {
         return Err(CryptoError::InvalidLength);
     }
     let mut out = Vec::with_capacity(
-        DOMAIN
-            .len()
-            .saturating_add(2 + 2 + 8)
+        FIXED_LEN
             .saturating_add(vault_id.len())
             .saturating_add(member_pubkey.len()),
     );

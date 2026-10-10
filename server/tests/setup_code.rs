@@ -1,8 +1,8 @@
 //! Setup-code recovery: classification for the CLI + rotation while unclaimed.
 //!
-//! The generated code is printed once, to the boot log — only its sha256 is
+//! The generated code is printed once, to stdout at boot — only its sha256 is
 //! persisted. These cover the path that gives an operator a new one after that
-//! log line is gone, without dropping the database.
+//! output is gone, without dropping the database.
 #![expect(
     clippy::unwrap_used,
     reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
