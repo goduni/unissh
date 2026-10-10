@@ -9,8 +9,8 @@ use unissh_crypto::KdfParams;
 use unissh_keychain::{create_account, UnlockedKeyset};
 use unissh_storage::{Storage, SyncTarget};
 use unissh_sync::{
-    apply_pulled_objects, pull_cursor_key, reset_pull_cursor, sync_pull, sync_push,
-    InMemoryTransport, RejectReason, SyncContext, SyncObject, SyncTransport,
+    apply_pulled_objects, forget_push_refusals, pull_cursor_key, reset_pull_cursor, sync_pull,
+    sync_push, InMemoryTransport, RejectReason, SyncContext, SyncError, SyncObject, SyncTransport,
 };
 use unissh_vault::{sign_account_state, Vault};
 
@@ -481,10 +481,7 @@ fn transport_below_cursor_rejected_and_rollback() {
     // the transport understates report_version → TransportRollback
     t.force_report_version(0);
     let err = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap_err();
-    assert!(matches!(
-        err,
-        unissh_sync::SyncError::TransportRollback { .. }
-    ));
+    assert!(matches!(err, SyncError::TransportRollback { .. }));
     assert_eq!(
         sb.get_sync_cursor(&pull_cursor_key(b"oracle-tenant"))
             .unwrap(),
@@ -634,5 +631,237 @@ fn sync_push_emits_local_account_state() {
             .iter()
             .any(|(_, o)| matches!(o, SyncObject::AccountState(a) if a.version == 7)),
         "sync_push must hand off the local account-state"
+    );
+}
+
+/// A server with push limits: a request over them is refused whole with
+/// [`SyncError::PayloadTooLarge`], as `POST /v1/sync/push` does. Records the
+/// object count of every request it was sent, refused ones included.
+struct LimitedServer {
+    inner: InMemoryTransport,
+    max_objects: usize,
+    max_object_bytes: usize,
+    /// Fail the n-th request (1-based) with a transport error, once.
+    fail_request: Option<usize>,
+    requests: Vec<usize>,
+}
+
+impl LimitedServer {
+    fn new(max_objects: usize, max_object_bytes: usize) -> Self {
+        Self {
+            inner: InMemoryTransport::new(),
+            max_objects,
+            max_object_bytes,
+            fail_request: None,
+            requests: Vec::new(),
+        }
+    }
+
+    /// Ids of the items the server holds, in the order it accepted them.
+    fn item_ids(&self) -> Vec<Vec<u8>> {
+        self.inner
+            .delta_since(0)
+            .into_iter()
+            .filter_map(|(_, o)| {
+                if let SyncObject::Item(i) = o {
+                    Some(i.item_id)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+impl SyncTransport for LimitedServer {
+    fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError> {
+        self.requests.push(objects.len());
+        if self.fail_request == Some(self.requests.len()) {
+            self.fail_request = None;
+            return Err(SyncError::Format);
+        }
+        let too_big = objects
+            .iter()
+            .any(|o| o.to_bytes().unwrap().len() > self.max_object_bytes);
+        if objects.len() > self.max_objects || too_big {
+            return Err(SyncError::PayloadTooLarge);
+        }
+        self.inner.push_objects(objects)
+    }
+    fn delta_since(&self, cursor: u64) -> Vec<(u64, SyncObject)> {
+        self.inner.delta_since(cursor)
+    }
+    fn report_version(&self) -> u64 {
+        self.inner.report_version()
+    }
+}
+
+/// A bound cloud vault holding `small` (a few bytes) and `big` (64 KiB), next
+/// to a server that takes objects of up to 4 KiB.
+fn vault_with_an_oversize_item(db_key: &[u8; 32]) -> (Storage, UnlockedKeyset, LimitedServer) {
+    let (s, k) = account(db_key);
+    let v =
+        Vault::create_with_target(&s, &k, b"vault-1".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    v.put_item(b"big", 1, &vec![7_u8; 64 * 1024]).unwrap();
+    v.put_item(b"small", 1, b"secret").unwrap();
+    s.bind_unbound_cloud_vaults(TENANT).unwrap();
+    (s, k, LimitedServer::new(1000, 4 * 1024))
+}
+
+#[test]
+fn push_splits_a_vault_over_the_request_byte_budget() {
+    // Regression: a whole vault is dirty at once after a bind or a local-to-cloud
+    // move, and it all went out in ONE request, which the server refuses past its
+    // body limit. Three 400 KiB items do not fit one 1 MiB request.
+    let (s, k) = account(&[30_u8; 32]);
+    let v =
+        Vault::create_with_target(&s, &k, b"vault-1".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    for id in [b"a", b"b", b"c"] {
+        v.put_item(id, 1, &vec![1_u8; 400 * 1024]).unwrap();
+    }
+    s.bind_unbound_cloud_vaults(TENANT).unwrap();
+    let mut server = LimitedServer::new(1000, usize::MAX);
+
+    let report = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(report.pushed, 4, "the vault record and its three items");
+    assert_eq!(
+        server.requests,
+        vec![3, 1],
+        "two requests, none refused: the record with two items, then the third"
+    );
+    assert!(
+        matches!(
+            server.delta_since(0).first(),
+            Some((_, SyncObject::Vault(_)))
+        ),
+        "the vault record still reaches the server before its items"
+    );
+}
+
+#[test]
+fn push_splits_more_objects_than_one_request_carries() {
+    let (s, k) = account(&[31_u8; 32]);
+    let v =
+        Vault::create_with_target(&s, &k, b"vault-1".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    for n in 0..600_u32 {
+        v.put_item(format!("item-{n:03}"), 1, b"x").unwrap();
+    }
+    s.bind_unbound_cloud_vaults(TENANT).unwrap();
+    let mut server = LimitedServer::new(1000, usize::MAX);
+
+    let report = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(report.pushed, 601);
+    assert_eq!(server.requests, vec![500, 101]);
+}
+
+#[test]
+fn push_halves_a_request_the_server_refuses_as_too_many_objects() {
+    // The server's limits are its own: an operator may have lowered
+    // max_objects_per_push below what this client batches by default.
+    let (s, k) = account(&[32_u8; 32]);
+    let v =
+        Vault::create_with_target(&s, &k, b"vault-1".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    for id in [b"a", b"b", b"c"] {
+        v.put_item(id, 1, b"x").unwrap();
+    }
+    s.bind_unbound_cloud_vaults(TENANT).unwrap();
+    let mut server = LimitedServer::new(2, usize::MAX);
+
+    let report = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(report.pushed, 4);
+    assert!(report.too_large.is_empty());
+    assert_eq!(
+        server.item_ids(),
+        vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+        "everything arrived, in the original order"
+    );
+}
+
+#[test]
+fn item_too_large_for_the_server_is_reported_and_does_not_block_the_rest() {
+    // Regression: one object over the server's max_object_bytes failed the whole
+    // push, on every sync, so nothing else of the tenant ever uploaded.
+    let (s, _k, mut server) = vault_with_an_oversize_item(&[33_u8; 32]);
+
+    let report = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(report.pushed, 2, "the vault record and the small item");
+    assert_eq!(server.item_ids(), vec![b"small".to_vec()]);
+    assert_eq!(report.too_large.len(), 1);
+    let refused = &report.too_large[0];
+    assert_eq!(
+        (refused.vault_id.as_slice(), refused.item_id.as_slice()),
+        (b"vault-1".as_slice(), b"big".as_slice()),
+        "the refused item is named"
+    );
+    assert!(refused.bytes > 64 * 1024);
+}
+
+#[test]
+fn refused_item_is_not_uploaded_again_but_stays_reported() {
+    let (s, _k, mut server) = vault_with_an_oversize_item(&[34_u8; 32]);
+    sync_push(&mut server, &s, TENANT).unwrap();
+    let requests = server.requests.len();
+
+    let again = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(server.requests.len(), requests, "no request was sent");
+    assert_eq!(again.pushed, 0);
+    assert_eq!(again.too_large.len(), 1, "still reported as not uploaded");
+}
+
+#[test]
+fn refused_item_is_offered_again_once_the_refusal_is_forgotten() {
+    let (s, _k, mut server) = vault_with_an_oversize_item(&[35_u8; 32]);
+    sync_push(&mut server, &s, TENANT).unwrap();
+    // The operator raised the limit; the user asks for a retry.
+    server.max_object_bytes = usize::MAX;
+
+    forget_push_refusals(&s, TENANT).unwrap();
+    let report = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(report.pushed, 1);
+    assert!(report.too_large.is_empty());
+    assert_eq!(server.item_ids(), vec![b"small".to_vec(), b"big".to_vec()]);
+}
+
+#[test]
+fn refused_item_is_offered_again_after_it_changes() {
+    let (s, k, mut server) = vault_with_an_oversize_item(&[36_u8; 32]);
+    sync_push(&mut server, &s, TENANT).unwrap();
+
+    Vault::open(&s, &k, b"vault-1")
+        .unwrap()
+        .put_item(b"big", 1, b"now small")
+        .unwrap();
+    let report = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(report.pushed, 1);
+    assert!(report.too_large.is_empty());
+}
+
+#[test]
+fn failed_request_does_not_resend_what_was_already_delivered() {
+    let (s, k) = account(&[37_u8; 32]);
+    let v =
+        Vault::create_with_target(&s, &k, b"vault-1".to_vec(), b"name", SyncTarget::Cloud).unwrap();
+    for id in [b"a", b"b", b"c"] {
+        v.put_item(id, 1, &vec![1_u8; 400 * 1024]).unwrap();
+    }
+    s.bind_unbound_cloud_vaults(TENANT).unwrap();
+    let mut server = LimitedServer::new(1000, usize::MAX);
+    // The first request (record + two items) lands; the second fails.
+    server.fail_request = Some(2);
+
+    sync_push(&mut server, &s, TENANT).unwrap_err();
+    let retry = sync_push(&mut server, &s, TENANT).unwrap();
+
+    assert_eq!(retry.pushed, 1, "only the item of the failed request");
+    assert_eq!(
+        server.item_ids(),
+        vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
     );
 }

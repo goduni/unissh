@@ -159,7 +159,7 @@ impl SyncObject {
     clippy::map_err_ignore,
     reason = "TryFromIntError carries no data and SyncError::Format has no source field"
 )]
-fn put_bytes(out: &mut Vec<u8>, b: &[u8]) -> Result<(), SyncError> {
+pub(crate) fn put_bytes(out: &mut Vec<u8>, b: &[u8]) -> Result<(), SyncError> {
     let len = u32::try_from(b.len()).map_err(|_| SyncError::Format)?;
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(b);
@@ -167,12 +167,16 @@ fn put_bytes(out: &mut Vec<u8>, b: &[u8]) -> Result<(), SyncError> {
 }
 
 /// A cursor parser over a slice (does NOT panic on short input).
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     b: &'a [u8],
 }
 impl<'a> Reader<'a> {
-    const fn new(b: &'a [u8]) -> Self {
+    pub(crate) const fn new(b: &'a [u8]) -> Self {
         Reader { b }
+    }
+    /// Nothing is left to read.
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.b.is_empty()
     }
     fn u8(&mut self) -> Result<u8, SyncError> {
         let (h, t) = self.b.split_first().ok_or(SyncError::Format)?;
@@ -193,7 +197,7 @@ impl<'a> Reader<'a> {
         a.copy_from_slice(s);
         Ok(u32::from_be_bytes(a))
     }
-    fn u64(&mut self) -> Result<u64, SyncError> {
+    pub(crate) fn u64(&mut self) -> Result<u64, SyncError> {
         let s = self.take(8)?;
         let mut a = [0_u8; 8];
         a.copy_from_slice(s);
@@ -205,7 +209,7 @@ impl<'a> Reader<'a> {
         a.copy_from_slice(s);
         Ok(i64::from_be_bytes(a))
     }
-    fn bytes(&mut self) -> Result<Vec<u8>, SyncError> {
+    pub(crate) fn bytes(&mut self) -> Result<Vec<u8>, SyncError> {
         let n = self.u32()? as usize;
         Ok(self.take(n)?.to_vec())
     }

@@ -544,6 +544,25 @@ impl Storage {
         Ok(())
     }
 
+    /// Overwrites an item's storage-owned timestamps. They are local metadata
+    /// (not signed, not synced) that [`Self::put_item`] stamps with the current
+    /// time; a copy of an item into another vault uses this to keep the
+    /// original's, so the item does not look newly created. Returns whether the
+    /// item exists.
+    pub fn set_item_timestamps(
+        &self,
+        vault_id: &[u8],
+        item_id: &[u8],
+        created_at: i64,
+        updated_at: i64,
+    ) -> Result<bool, StorageError> {
+        let n = self.conn.execute(
+            "UPDATE items SET created_at = ?3, updated_at = ?4 WHERE vault_id = ?1 AND item_id = ?2",
+            params![vault_id, item_id, created_at, updated_at],
+        )?;
+        Ok(n > 0)
+    }
+
     /// Returns an item by (vault_id, item_id), including tombstoned ones.
     pub fn get_item(
         &self,
@@ -1049,6 +1068,54 @@ impl Storage {
                 params![tenant],
             )?;
         }
+        Ok(())
+    }
+
+    /// Clears the dirty flag of ONE vault record — after the transport accepted it.
+    /// `sync_push` clears batch by batch, so what a partly-failed push did deliver
+    /// is not sent again.
+    pub fn clear_vault_dirty(&self, vault_id: &[u8]) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE vaults SET dirty = 0 WHERE vault_id = ?1",
+            params![vault_id],
+        )?;
+        Ok(())
+    }
+
+    /// Clears the dirty flag of ONE item (see [`Self::clear_vault_dirty`]).
+    pub fn clear_item_dirty(&self, vault_id: &[u8], item_id: &[u8]) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE items SET dirty = 0 WHERE vault_id = ?1 AND item_id = ?2",
+            params![vault_id, item_id],
+        )?;
+        Ok(())
+    }
+
+    /// Clears the dirty flag of ONE membership manifest (see [`Self::clear_vault_dirty`]).
+    pub fn clear_manifest_dirty(
+        &self,
+        vault_id: &[u8],
+        key_epoch: u64,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE membership_manifests SET dirty = 0 WHERE vault_id = ?1 AND key_epoch = ?2",
+            params![vault_id, checked_version(key_epoch)?],
+        )?;
+        Ok(())
+    }
+
+    /// Clears the dirty flag of ONE membership grant (see [`Self::clear_vault_dirty`]).
+    pub fn clear_grant_dirty(
+        &self,
+        vault_id: &[u8],
+        member_pubkey: &[u8],
+        key_epoch: u64,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE membership_grants SET dirty = 0
+             WHERE vault_id = ?1 AND member_pubkey = ?2 AND key_epoch = ?3",
+            params![vault_id, member_pubkey, checked_version(key_epoch)?],
+        )?;
         Ok(())
     }
 

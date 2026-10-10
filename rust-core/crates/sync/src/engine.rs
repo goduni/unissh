@@ -11,7 +11,7 @@ use unissh_vault::{
 };
 
 use crate::error::SyncError;
-use crate::object::SyncObject;
+use crate::object::{put_bytes, Reader, SyncObject};
 use crate::transport::SyncTransport;
 
 /// Key prefix for the trusted pull cursor in `sync_state` (last-seen `server_seq`).
@@ -52,6 +52,38 @@ const ACCT_PUSH_CURSOR_PREFIX: &str = "sync:acctpush";
 fn acct_push_cursor_key(tenant: &[u8]) -> String {
     format!("{ACCT_PUSH_CURSOR_PREFIX}:{}", hex_lower(tenant))
 }
+
+/// Meta-key prefix for the items a tenant's server refused as too large (see
+/// [`sync_push`]).
+const PUSH_REFUSED_PREFIX: &str = "sync:pushrefused";
+fn push_refused_key(tenant: &[u8]) -> String {
+    format!("{PUSH_REFUSED_PREFIX}:{}", hex_lower(tenant))
+}
+
+/// How many objects one push request carries at most. The server default
+/// (`limits.max_objects_per_push`) is 1000; half of it leaves room for an
+/// operator who lowered it, and a request the server still refuses is halved.
+const PUSH_BATCH_MAX_OBJECTS: usize = 500;
+
+/// How many encoded object bytes one push request carries at most. Objects are
+/// sent base64-encoded in JSON (4/3 the size), so 1 MiB of objects is a request
+/// of about 1.4 MiB. That is under the 2 MiB a server up to 0.5 really accepts:
+/// its configured 16 MiB `limits.max_body_bytes` was never reached, because the
+/// HTTP framework's own 2 MiB default applied first. An object that is larger on
+/// its own travels alone.
+const PUSH_BATCH_MAX_BYTES: usize = 1024 * 1024;
+
+/// The size of the largest object a client legitimately pushes — the bound a
+/// server's default `limits.max_object_bytes` is set to, so that every client
+/// object is accepted.
+///
+/// That object is a session recording: its asciicast body is capped at 8 MiB by
+/// the client (`RECORDING_MAX_BYTES` in `unissh-ffi`) and is stored inside the
+/// item as a JSON string, where escaping at most doubles it (a body of nothing
+/// but `"` and `\`). The remaining 1 MiB is headroom for the recording's
+/// metadata and for what the vault and the sync framing add (AEAD tag and
+/// nonce, the wrapped item key, the signature, the ids) — a few hundred bytes.
+pub const LARGEST_CLIENT_OBJECT_BYTES: usize = 2 * 8 * 1024 * 1024 + 1024 * 1024;
 
 /// Increments a report counter. Saturating: a count of objects can only reach
 /// `u64::MAX` in theory, and clamping is the right answer for a metric.
@@ -136,11 +168,29 @@ pub struct SyncReport {
     pub rejected: Vec<Rejected>,
 }
 
+/// An item the server refuses as too large, so it stays on this device only.
+/// Open metadata, no content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TooLarge {
+    /// The item's vault_id.
+    pub vault_id: Vec<u8>,
+    /// The item's id.
+    pub item_id: Vec<u8>,
+    /// The refused version of the item.
+    pub version: u64,
+    /// Size of the encoded sync object, in bytes.
+    pub bytes: u64,
+}
+
 /// Push report.
 #[derive(Debug, Clone, Default)]
 pub struct PushReport {
-    /// How many objects were handed to the transport.
+    /// How many objects the transport accepted.
     pub pushed: u64,
+    /// Items the server refused as too large — in this push, or in an earlier
+    /// one and unchanged since (those are not sent again, see [`sync_push`]).
+    /// They are NOT on the server; everything else was pushed.
+    pub too_large: Vec<TooLarge>,
 }
 
 /// Pulls the delta from the untrusted transport and applies verify-before-apply.
@@ -790,105 +840,360 @@ fn item_content_eq(a: &ItemRecord, b: &ItemRecord) -> bool {
 /// vault's ciphertext to the wrong server. `target_tenant` must be non-empty (the
 /// ffi passes it from the transport's tenant); an empty one → nothing is pushed (safeguard).
 ///
-/// **v1 model (D-PUSH, honestly):** for the selected vaults it collects the vault record,
-/// items with tombstones (`list_items_including_tombstones`), membership manifests
-/// and grants by epoch, and audit newer than `PUSH_CURSOR` (`list_audit`). The transport
-/// assigns them server_seq (the server dedups by version-LWW). `PUSH_CURSOR`
-/// advances to the last handed-off `audit.seq` (the only one with a stable
-/// local monotonic seq). Per-object dirty-tracking is ⏳ LATER.
+/// **v1 model (D-PUSH, honestly):** for the selected vaults it collects the dirty
+/// vault records, items (tombstones included), membership manifests and grants,
+/// the account states and the audit entries newer than their per-tenant cursors.
+/// The transport assigns them server_seq (the server dedups by version-LWW).
+///
+/// **Requests:** the objects go out in dependency order, cut into requests of at
+/// most `PUSH_BATCH_MAX_OBJECTS` objects and `PUSH_BATCH_MAX_BYTES` bytes —
+/// a whole vault is dirty at once after a bind or a local-to-cloud move, and one
+/// request for all of it would exceed the server's limits. Each accepted request
+/// is settled at once (dirty flags cleared, cursors advanced), so a failure
+/// later in the push returns the error without re-sending what was delivered.
+///
+/// **Too large for the server** ([`SyncError::PayloadTooLarge`] from the
+/// transport): the request is halved until the object that does not fit is
+/// alone. If that is an item, it is left out, the rest of the push continues and
+/// the item is returned in [`PushReport::too_large`] — by this push and by every
+/// later one, without being sent again, until the item changes or
+/// [`forget_push_refusals`] is called. Any other object too large for the server
+/// fails the push.
 pub fn sync_push(
     transport: &mut dyn SyncTransport,
     storage: &Storage,
     target_tenant: &[u8],
 ) -> Result<PushReport, SyncError> {
-    let mut objects: Vec<SyncObject> = Vec::new();
+    let mut push = Push {
+        storage,
+        refused_key: push_refused_key(target_tenant),
+        acct_key: acct_push_cursor_key(target_tenant),
+        audit_key: push_cursor_key(target_tenant),
+        out: Outgoing::default(),
+        too_large: Vec::new(),
+        acct_left: 0,
+        acct_version: None,
+    };
+    push.queue(target_tenant)?;
+    let pushed = push.send(transport)?;
 
-    // Only DIRTY objects of vaults bound to target_tenant (the 1:1 binding is already in
-    // the query: `sync_tenant = target_tenant`). Local/foreign vaults do not get in.
-    // An empty target_tenant will not match anything → no-op (safeguard).
-    //
-    // DEPENDENCY ORDER (critical): the receiver verifies each object's authority against
-    // the membership manifest chain, and a rejected object ADVANCES THE CURSOR (a
-    // dependency arriving later is never retried). So a dependency MUST be pushed before
-    // its dependents, in the same batch — the server assigns server_seq in push order and
-    // the pull processes in that order. Manifests first (an item/record authored at epoch
-    // N needs the epoch-N manifest to verify), then the vault record, then grants (each
-    // references its epoch's manifest), then items. Previously items preceded manifests, so
-    // a cross-account member's items were rejected on first pull and silently dropped.
-    for m in storage.list_dirty_bound_manifests(target_tenant)? {
-        objects.push(SyncObject::MembershipManifest(m));
+    // Counts only — the pushed objects are encrypted blobs; never log their content.
+    let too_large = push.too_large;
+    if !too_large.is_empty() {
+        log::warn!(
+            "sync push: pushed {pushed} object(s); {} item(s) are too large for the server",
+            too_large.len()
+        );
+    } else if pushed > 0 {
+        log::info!("sync push: pushed {pushed} object(s)");
     }
-    for v in storage.list_dirty_bound_vaults(target_tenant)? {
-        objects.push(SyncObject::Vault(v));
-    }
-    for g in storage.list_dirty_bound_grants(target_tenant)? {
-        objects.push(SyncObject::MembershipGrant(g));
-    }
-    for it in storage.list_dirty_bound_items(target_tenant)? {
-        objects.push(SyncObject::Item(it));
-    }
+    Ok(PushReport { pushed, too_large })
+}
 
-    // A3: account-state is broadcast to EVERY server, so it is not covered by
-    // the dirty flag (which is single-server-bound) — we track it per-tenant by the version cursor.
-    let acct_key = acct_push_cursor_key(target_tenant);
-    let last_acct = storage.get_sync_cursor(&acct_key)?.unwrap_or(0);
-    let mut max_acct = last_acct;
-    for st in storage.list_account_states()? {
-        if st.version > last_acct {
-            objects.push(SyncObject::AccountState(
-                crate::object::AccountStateObject {
-                    author_pubkey: st.author_pubkey,
-                    version: st.version,
-                    payload: st.payload,
-                    signature: st.signature,
-                },
-            ));
-            if st.version > max_acct {
-                max_acct = st.version;
+/// One [`sync_push`] in progress.
+struct Push<'a> {
+    storage: &'a Storage,
+    /// Meta key of the tenant's remembered refusals.
+    refused_key: String,
+    /// Cursor key of the tenant's pushed account-state version.
+    acct_key: String,
+    /// Cursor key of the tenant's pushed audit seq.
+    audit_key: String,
+    out: Outgoing,
+    /// Refused items: remembered ones first, then this push's.
+    too_large: Vec<TooLarge>,
+    /// Queued account states the server has not accepted yet.
+    acct_left: usize,
+    /// The highest queued account-state version, until the cursor moved to it.
+    acct_version: Option<u64>,
+}
+
+impl Push<'_> {
+    /// Collects what the tenant's server is missing, in the order it must
+    /// receive it.
+    fn queue(&mut self, target_tenant: &[u8]) -> Result<(), SyncError> {
+        let storage = self.storage;
+        // Only DIRTY objects of vaults bound to target_tenant (the 1:1 binding is already in
+        // the query: `sync_tenant = target_tenant`). Local/foreign vaults do not get in.
+        // An empty target_tenant will not match anything → no-op (safeguard).
+        //
+        // DEPENDENCY ORDER (critical): the receiver verifies each object's authority against
+        // the membership manifest chain, and a rejected object ADVANCES THE CURSOR (a
+        // dependency arriving later is never retried). So a dependency MUST reach the server
+        // before its dependents — the server assigns server_seq in push order and the pull
+        // processes in that order. Manifests first (an item/record authored at epoch
+        // N needs the epoch-N manifest to verify), then the vault record, then grants (each
+        // references its epoch's manifest), then items. Previously items preceded manifests, so
+        // a cross-account member's items were rejected on first pull and silently dropped.
+        // The queue is cut into requests in this order and they are sent one after
+        // another, so the order holds across requests too.
+        for m in storage.list_dirty_bound_manifests(target_tenant)? {
+            self.out
+                .add(SyncObject::MembershipManifest(m), Sent::Dirty)?;
+        }
+        for v in storage.list_dirty_bound_vaults(target_tenant)? {
+            self.out.add(SyncObject::Vault(v), Sent::Dirty)?;
+        }
+        for g in storage.list_dirty_bound_grants(target_tenant)? {
+            self.out.add(SyncObject::MembershipGrant(g), Sent::Dirty)?;
+        }
+        // An item the server already refused as too large is not sent again while
+        // it is unchanged: it would be refused again, at the cost of uploading it
+        // on every sync. It stays dirty and is reported every time instead.
+        let remembered = load_refused(storage, &self.refused_key)?;
+        for it in storage.list_dirty_bound_items(target_tenant)? {
+            let known = remembered.iter().find(|r| {
+                r.vault_id == it.vault_id && r.item_id == it.item_id && r.version == it.version
+            });
+            match known {
+                Some(r) => self.too_large.push(r.clone()),
+                None => self.out.add(SyncObject::Item(it), Sent::Dirty)?,
             }
         }
+        // Entries whose item was edited, deleted or pushed since are dropped.
+        if self.too_large != remembered {
+            save_refused(storage, &self.refused_key, &self.too_large)?;
+        }
+
+        // A3: account-state is broadcast to EVERY server, so it is not covered by
+        // the dirty flag (which is single-server-bound) — we track it per-tenant by the version cursor.
+        let last_acct = storage.get_sync_cursor(&self.acct_key)?.unwrap_or(0);
+        for st in storage.list_account_states()? {
+            if st.version > last_acct {
+                self.acct_version = self.acct_version.max(Some(st.version));
+                self.acct_left = self.acct_left.saturating_add(1);
+                self.out.add(
+                    SyncObject::AccountState(crate::object::AccountStateObject {
+                        author_pubkey: st.author_pubkey,
+                        version: st.version,
+                        payload: st.payload,
+                        signature: st.signature,
+                    }),
+                    Sent::Account,
+                )?;
+            }
+        }
+
+        // Audit newer than the push cursor (per-tenant: audit goes to each server independently).
+        let push_cursor = storage.get_sync_cursor(&self.audit_key)?.unwrap_or(0);
+        for entry in storage.list_audit(push_cursor)? {
+            // The audit's vault_id is open metadata; the storage AuditEntry carries no
+            // vault_id field → in v1 we send an empty vault_id (audit is instance-level).
+            // When the audit crate adds vault-scoping, extend this.
+            self.out.add(
+                SyncObject::Audit(crate::object::AuditObject {
+                    vault_id: Vec::new(),
+                    entry_blob: entry.entry_blob,
+                    signature: entry.signature,
+                    author_pubkey: entry.author_pubkey,
+                }),
+                Sent::Audit(entry.seq),
+            )?;
+        }
+        Ok(())
     }
 
-    // Audit newer than the push cursor (per-tenant: audit goes to each server independently).
-    let push_key = push_cursor_key(target_tenant);
-    let push_cursor = storage.get_sync_cursor(&push_key)?.unwrap_or(0);
-    let audit = storage.list_audit(push_cursor)?;
-    let mut max_audit_seq = push_cursor;
-    for entry in &audit {
-        // The audit's vault_id is open metadata; the storage AuditEntry carries no
-        // vault_id field → in v1 we send an empty vault_id (audit is instance-level).
-        // When the audit crate adds vault-scoping, extend this.
-        objects.push(SyncObject::Audit(crate::object::AuditObject {
-            vault_id: Vec::new(),
-            entry_blob: entry.entry_blob.clone(),
-            signature: entry.signature.clone(),
-            author_pubkey: entry.author_pubkey.clone(),
-        }));
-        if entry.seq > max_audit_seq {
-            max_audit_seq = entry.seq;
+    /// Sends the queue, request by request; returns how many objects the
+    /// transport accepted. Nothing queued → no request (the point of
+    /// dirty-tracking: a run with no edits makes no round-trip).
+    fn send(&mut self, transport: &mut dyn SyncTransport) -> Result<u64, SyncError> {
+        let mut pushed = 0_u64;
+        // Requests still to send, last first (popped from the end): the initial
+        // batches in order, then the halves of a batch the server refused.
+        let mut pending = self.out.batches();
+        pending.reverse();
+        while let Some(batch) = pending.pop() {
+            let Some(objects) = self.out.objects.get(batch.clone()) else {
+                continue;
+            };
+            match transport.push_objects(objects) {
+                Ok(_) => {
+                    self.settle(&batch)?;
+                    pushed = pushed.saturating_add(batch.len() as u64);
+                }
+                // The server's limits are its own (and an older server's are
+                // lower than these batches assume): a refused batch is halved
+                // until the object that does not fit is alone.
+                Err(SyncError::PayloadTooLarge) if batch.len() > 1 => {
+                    let mid = batch.start.saturating_add(batch.len() / 2);
+                    pending.push(mid..batch.end);
+                    pending.push(batch.start..mid);
+                }
+                Err(SyncError::PayloadTooLarge) => self.refuse(batch.start)?,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(pushed)
+    }
+
+    /// The server will not take the object at `index` even alone. An item
+    /// depends on nothing that follows it, so the push goes on without it; it is
+    /// remembered (see [`Self::queue`]) and reported, never dropped quietly. Any
+    /// other object is a dependency of later ones: the push stops.
+    fn refuse(&mut self, index: usize) -> Result<(), SyncError> {
+        let (Some(SyncObject::Item(it)), Some(bytes)) =
+            (self.out.objects.get(index), self.out.sizes.get(index))
+        else {
+            return Err(SyncError::PayloadTooLarge);
+        };
+        self.too_large.push(TooLarge {
+            vault_id: it.vault_id.clone(),
+            item_id: it.item_id.clone(),
+            version: it.version,
+            bytes: *bytes as u64,
+        });
+        save_refused(self.storage, &self.refused_key, &self.too_large)
+    }
+
+    /// The transport accepted `batch`: clears its dirty flags and advances the
+    /// cursors now, so a failure later in the push does not send it again.
+    fn settle(&mut self, batch: &std::ops::Range<usize>) -> Result<(), SyncError> {
+        let storage = self.storage;
+        let (Some(objects), Some(sent)) = (
+            self.out.objects.get(batch.clone()),
+            self.out.sent.get(batch.clone()),
+        ) else {
+            return Ok(());
+        };
+        let mut accounts = 0_usize;
+        let mut audit_seq = None;
+        storage.transaction(|| -> Result<(), SyncError> {
+            for (obj, sent) in objects.iter().zip(sent) {
+                match sent {
+                    Sent::Dirty => clear_dirty(storage, obj)?,
+                    Sent::Account => accounts = accounts.saturating_add(1),
+                    // Audit entries are queued in seq order, so the last one
+                    // of a batch is its highest.
+                    Sent::Audit(seq) => audit_seq = Some(*seq),
+                }
+            }
+            Ok(())
+        })?;
+        if let Some(seq) = audit_seq {
+            storage.set_sync_cursor(&self.audit_key, seq)?;
+        }
+        // One version cursor covers every account state, so it moves only once
+        // all of them are on the server.
+        self.acct_left = self.acct_left.saturating_sub(accounts);
+        if self.acct_left == 0 {
+            if let Some(version) = self.acct_version.take() {
+                storage.set_sync_cursor(&self.acct_key, version)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Makes the next [`sync_push`] to `tenant` send again the items its server
+/// refused as too large — for when the server's limit was raised.
+pub fn forget_push_refusals(storage: &Storage, tenant: &[u8]) -> Result<(), SyncError> {
+    save_refused(storage, &push_refused_key(tenant), &[])
+}
+
+/// What settles an object once the transport accepted it.
+enum Sent {
+    /// A dirty-flagged row: the flag is cleared.
+    Dirty,
+    /// An account state: the per-tenant version cursor moves once all are sent.
+    Account,
+    /// An audit entry with this local seq: the per-tenant push cursor moves to it.
+    Audit(u64),
+}
+
+/// The objects of one push, in dependency order, with their encoded sizes.
+#[derive(Default)]
+struct Outgoing {
+    objects: Vec<SyncObject>,
+    sent: Vec<Sent>,
+    sizes: Vec<usize>,
+}
+
+impl Outgoing {
+    fn add(&mut self, object: SyncObject, sent: Sent) -> Result<(), SyncError> {
+        self.sizes.push(object.to_bytes()?.len());
+        self.objects.push(object);
+        self.sent.push(sent);
+        Ok(())
+    }
+
+    /// Cuts the list, in order, into runs of at most [`PUSH_BATCH_MAX_OBJECTS`]
+    /// objects and [`PUSH_BATCH_MAX_BYTES`] encoded bytes; an object over the
+    /// byte budget is a run of its own.
+    fn batches(&self) -> Vec<std::ops::Range<usize>> {
+        let mut batches = Vec::new();
+        let mut start = 0_usize;
+        let mut bytes = 0_usize;
+        for (i, size) in self.sizes.iter().enumerate() {
+            let full = i.saturating_sub(start) >= PUSH_BATCH_MAX_OBJECTS
+                || bytes.saturating_add(*size) > PUSH_BATCH_MAX_BYTES;
+            if full && i > start {
+                batches.push(start..i);
+                start = i;
+                bytes = 0;
+            }
+            bytes = bytes.saturating_add(*size);
+        }
+        if start < self.sizes.len() {
+            batches.push(start..self.sizes.len());
+        }
+        batches
+    }
+}
+
+/// Clears the dirty flag of one pushed object.
+fn clear_dirty(storage: &Storage, obj: &SyncObject) -> Result<(), SyncError> {
+    match obj {
+        SyncObject::Vault(v) => storage.clear_vault_dirty(&v.vault_id)?,
+        SyncObject::Item(i) => storage.clear_item_dirty(&i.vault_id, &i.item_id)?,
+        SyncObject::MembershipManifest(m) => {
+            storage.clear_manifest_dirty(&m.vault_id, m.key_epoch)?;
+        }
+        SyncObject::MembershipGrant(g) => {
+            storage.clear_grant_dirty(&g.vault_id, &g.member_pubkey, g.key_epoch)?;
+        }
+        // Tracked by cursors, not by a dirty flag.
+        SyncObject::Audit(_) | SyncObject::Keyset(_) | SyncObject::AccountState(_) => {}
+    }
+    Ok(())
+}
+
+/// The items remembered as refused for a tenant. Device-local bookkeeping in
+/// the `meta` table; a value that does not parse counts as empty (the items are
+/// then simply offered to the server again).
+fn load_refused(storage: &Storage, key: &str) -> Result<Vec<TooLarge>, SyncError> {
+    let Some(bytes) = storage.get_meta(key)? else {
+        return Ok(Vec::new());
+    };
+    let mut r = Reader::new(&bytes);
+    let mut out = Vec::new();
+    while !r.is_empty() {
+        match read_refused(&mut r) {
+            Ok(e) => out.push(e),
+            Err(_) => return Ok(Vec::new()),
         }
     }
+    Ok(out)
+}
 
-    let pushed = objects.len() as u64;
-    // Nothing changed → no round-trip (this is exactly the point of dirty-tracking: a run
-    // with no edits no longer re-uploads the whole vault).
-    if pushed == 0 {
-        return Ok(PushReport { pushed: 0 });
-    }
-    transport.push_objects(&objects)?;
+fn read_refused(r: &mut Reader<'_>) -> Result<TooLarge, SyncError> {
+    Ok(TooLarge {
+        vault_id: r.bytes()?,
+        item_id: r.bytes()?,
+        version: r.u64()?,
+        bytes: r.u64()?,
+    })
+}
 
-    // Success → clear dirty on the pushed items and advance the cursors (account/audit) forward.
-    storage.clear_dirty_for_tenant(target_tenant)?;
-    if max_acct > last_acct {
-        storage.set_sync_cursor(&acct_key, max_acct)?;
+fn save_refused(storage: &Storage, key: &str, refused: &[TooLarge]) -> Result<(), SyncError> {
+    let mut out = Vec::new();
+    for r in refused {
+        put_bytes(&mut out, &r.vault_id)?;
+        put_bytes(&mut out, &r.item_id)?;
+        out.extend_from_slice(&r.version.to_be_bytes());
+        out.extend_from_slice(&r.bytes.to_be_bytes());
     }
-    if max_audit_seq > push_cursor {
-        storage.set_sync_cursor(&push_key, max_audit_seq)?;
-    }
-
-    // Count only — the pushed objects are encrypted blobs; never log their content.
-    log::info!("sync push: pushed {pushed} object(s)");
-    Ok(PushReport { pushed })
+    storage.set_meta(key, &out)?;
+    Ok(())
 }
 
 #[cfg(test)]
