@@ -29,7 +29,7 @@ impl RegistrationPayload {
         if self.account_id.len() > u16::MAX as usize {
             return Err(CryptoError::InvalidLength);
         }
-        let mut out = Vec::with_capacity(2 + self.account_id.len() + 64);
+        let mut out = Vec::with_capacity((2 + 64_usize).saturating_add(self.account_id.len()));
         out.extend_from_slice(
             &u16::try_from(self.account_id.len())
                 .map_err(|_| CryptoError::InvalidLength)?

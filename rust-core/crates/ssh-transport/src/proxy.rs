@@ -239,7 +239,7 @@ fn base64_encode(data: &[u8]) -> String {
             .copied()
             .map_or('=', char::from)
     };
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3).saturating_mul(4));
     for chunk in data.chunks(3) {
         let byte = |i: usize| chunk.get(i).copied().unwrap_or(0);
         let n = u32::from_be_bytes([0, byte(0), byte(1), byte(2)]);
@@ -417,8 +417,11 @@ where
         }
         a => return Err(proxy_err(format!("socks5 proxy: bad address type {a}"))),
     };
-    let mut rest = vec![0_u8; addr_len + 2];
-    stream.read_exact(&mut rest).await?;
+    // The bound address, then its 2-byte port: consumed and discarded.
+    let mut addr = vec![0_u8; addr_len];
+    stream.read_exact(&mut addr).await?;
+    let mut port = [0_u8; 2];
+    stream.read_exact(&mut port).await?;
     Ok(())
 }
 

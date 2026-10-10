@@ -70,7 +70,7 @@ pub async fn build_state(
 /// Publish (or keep) the first-run setup code of an unclaimed instance.
 #[expect(
     clippy::print_stdout,
-    reason = "operator-facing first-boot output: the freshly minted setup code is shown on stdout, not only in the log"
+    reason = "operator-facing first-boot output: stdout is the only channel the freshly minted setup code is shown on; the log never carries it"
 )]
 async fn announce_setup_code(
     store: &Store,
@@ -78,7 +78,7 @@ async fn announce_setup_code(
     instance_row: &store::models::InstanceRow,
 ) -> AppResult<()> {
     // Unclaimed: publish a setup code so a client can claim this instance. We store
-    // only sha256(code); the human code is printed to logs (never persisted).
+    // only sha256(code); the human code is printed to stdout (never persisted).
     //
     // Stability across restarts (docker-restart model): a fresh code was previously
     // minted on EVERY unclaimed boot, silently invalidating a code an operator may
@@ -88,11 +88,14 @@ async fn announce_setup_code(
     //     regenerate — we only have its hash, not the plaintext).
     //   * empty + no hash yet (first-ever boot) → mint one and print it exactly once.
     //
-    // The log carries the plaintext ONLY when we minted it, because then the log is
-    // the sole channel it exists on. An operator-pinned code is already in their
-    // hands (env/config/IaC secret store), so printing it would only copy a live
-    // credential into `docker compose logs`, journald and every log shipper
-    // downstream — a leak that buys nothing.
+    // The plaintext goes to stdout ONLY, and ONLY when we minted it: then stdout is
+    // the sole channel it exists on. It never goes through `tracing` — structured
+    // logs carry metadata only (SECURITY.md, "Logging and redaction"), and with
+    // `log_format = json` a field there lands in every log shipper downstream. The
+    // tracing line only points the operator at the `SETUP CODE:` stdout line. An
+    // operator-pinned code is already in their hands (env/config/IaC secret store),
+    // so printing it at all would only copy a live credential into `docker compose
+    // logs`, journald and the like — a leak that buys nothing.
     if instance_row.claimed == 0 {
         if !config.setup.code.is_empty() {
             store
@@ -115,7 +118,9 @@ async fn announce_setup_code(
             );
         } else {
             let code = rotate_setup_code(store).await?;
-            tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
+            tracing::warn!(
+                "server unclaimed — a setup code was issued; see the `SETUP CODE:` line on stdout"
+            );
             println!("SETUP CODE: {code}");
         }
     }
@@ -302,5 +307,66 @@ mod rollback_guard_tests {
     fn at_or_above_floor_ok() {
         assert!(rollback_guard(10, 10).is_ok());
         assert!(rollback_guard(11, 10).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod announce_setup_code_tests {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    use super::announce_setup_code;
+    use crate::{Config, Store, ids};
+
+    /// A `tracing` writer that keeps everything written to it.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_poisoned| io::Error::other("log capture poisoned"))?
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_minted_setup_code_never_reaches_the_log() {
+        let store = Store::connect_sqlite(":memory:", 1).await.unwrap();
+        store.migrate().await.unwrap();
+        store.ensure_instance(1000).await.unwrap();
+        let row = store.instance().await.unwrap();
+
+        let log = Captured::default();
+        let sink = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || sink.clone())
+            .with_ansi(false)
+            .finish();
+        // `#[tokio::test]` runs on one thread, so a thread-local default sees the event.
+        let guard = tracing::subscriber::set_default(subscriber);
+        announce_setup_code(&store, &Config::default(), &row)
+            .await
+            .unwrap();
+        drop(guard);
+
+        // The plaintext exists only on stdout, so look for it the only way the test
+        // can: hash every code-shaped token of the log against the stored hash.
+        let hash = store.instance().await.unwrap().setup_code_hash.unwrap();
+        let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            text.contains("SETUP CODE:"),
+            "the log points the operator at stdout: {text}"
+        );
+        let leaked = text
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .any(|token| ids::sha256(token.as_bytes()).as_slice() == hash.as_slice());
+        assert!(!leaked, "the minted setup code must not appear in the log");
     }
 }

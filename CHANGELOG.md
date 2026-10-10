@@ -87,6 +87,17 @@ starts with `0.`:
   Secret Key unlocks at startup. See THREAT_MODEL.md for what it does and does
   not protect against.
 
+### Fixed
+
+- Cloud sync no longer loops forever when a server reports more pages without a
+  usable or advancing cursor; it stops and resumes on the next sync.
+
+### Security
+
+- Server: the first-boot setup code is printed once on stdout (`SETUP CODE:`)
+  and no longer repeated in the structured log, and `unissh-server setup-code`
+  masks the password of the database URL it reports.
+
 ### Compatibility
 
 **Vault format and server protocol are unchanged** — the conversion writes an

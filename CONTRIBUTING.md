@@ -101,6 +101,14 @@ sync; it differs only where its header comment says (`unsafe_code`,
 - Complexity thresholds (`too-many-lines`, `cognitive-complexity`,
   `excessive-nesting` in `clippy.toml`) are ratcheted down release by release;
   do not raise them to fit new code.
+- Crates that parse hostile bytes (`crypto`, `keychain`, `vault`, `sync`,
+  `ssh-agent`, `ssh-transport`) also enable `clippy::arithmetic_side_effects`
+  at crate root. Walk a buffer with `get()`/`split_*_checked` rather than
+  adding offsets; use `checked_*` on decoded numbers and `saturating_*` only
+  for counters and capacity hints, never for a length you then index with.
+- A new decoder gets a case in its crate's `tests/mutation.rs`: a fixed-seed
+  mutation schedule over a valid encoding that asserts the decoder never
+  panics and never requests an absurd allocation.
 
 ### Changelog entries
 

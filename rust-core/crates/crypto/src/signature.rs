@@ -34,11 +34,14 @@ const SIG_LEN: usize = 64;
 /// `verify_record_sig` tag7 byte-for-byte.
 pub const ACCOUNT_STATE_SIG_DOMAIN: &[u8] = b"unissh-account-state-v1";
 
+/// Length of the account-state signature message: domain, `u64` version, SHA-256 digest.
+const ACCOUNT_STATE_MSG_LEN: usize = ACCOUNT_STATE_SIG_DOMAIN.len() + 8 + 32;
+
 /// Canonical account-state signature message: `domain || version:u64be ||
 /// sha256(payload)`.
 fn account_state_message(version: u64, payload: &[u8]) -> Vec<u8> {
     let digest = VersionedObject::digest_content(payload);
-    let mut out = Vec::with_capacity(ACCOUNT_STATE_SIG_DOMAIN.len() + 8 + 32);
+    let mut out = Vec::with_capacity(ACCOUNT_STATE_MSG_LEN);
     out.extend_from_slice(ACCOUNT_STATE_SIG_DOMAIN);
     out.extend_from_slice(&version.to_be_bytes());
     out.extend_from_slice(&digest);
@@ -110,7 +113,12 @@ impl VersionedObject {
     /// The canonical message for signing.
     fn signing_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         let aad = self.aad.canonical()?;
-        let mut out = Vec::with_capacity(SIG_DOMAIN.len() + aad.len() + 32);
+        let mut out = Vec::with_capacity(
+            SIG_DOMAIN
+                .len()
+                .saturating_add(aad.len())
+                .saturating_add(32),
+        );
         out.extend_from_slice(SIG_DOMAIN);
         out.extend_from_slice(&aad);
         out.extend_from_slice(&self.content_digest);
