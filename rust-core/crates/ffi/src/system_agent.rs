@@ -208,6 +208,10 @@ struct SharedKeys {
 }
 
 impl AgentKeys for SharedKeys {
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the unlocked check and the shared-key resolution atomically"
+    )]
     fn offered(&self) -> Vec<OfferedKey> {
         let shared = {
             let mut guard = lock_recover(&self.state);

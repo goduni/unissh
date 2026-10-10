@@ -266,13 +266,14 @@ impl Core {
                 };
                 if !valid {
                     connection.policy.cancel.cancel();
-                    if tokio::time::timeout(Duration::from_secs(2), connection.client.disconnect())
-                        .await
-                        .is_err()
-                    {
-                        // Best effort: the cancel above already fences the connection,
-                        // so a disconnect that fails or times out changes nothing.
-                    }
+                    // The cancel above already fences the connection.
+                    best_effort(
+                        tokio::time::timeout(
+                            Duration::from_secs(2),
+                            connection.client.disconnect(),
+                        )
+                        .await,
+                    );
                     break;
                 }
             }
@@ -373,16 +374,10 @@ impl ManagedConnection {
     pub fn close(&self) {
         self.policy.cancel.cancel();
         let _admission = lock_recover(&self.admission);
-        if self
-            .rt
-            .block_on(async {
-                tokio::time::timeout(Duration::from_secs(2), self.client.disconnect()).await
-            })
-            .is_err()
-        {
-            // Best effort: the cancel above already fences the connection, so a
-            // disconnect that fails or times out changes nothing.
-        }
+        // The cancel above already fences the connection.
+        best_effort(self.rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), self.client.disconnect()).await
+        }));
     }
 }
 
@@ -391,12 +386,8 @@ impl Drop for ManagedConnection {
         self.policy.cancel.cancel();
         let client = self.client.clone();
         self.rt.spawn(async move {
-            if tokio::time::timeout(Duration::from_secs(2), client.disconnect())
-                .await
-                .is_err()
-            {
-                // Best effort while dropping: the connection is already cancelled.
-            }
+            // Dropping: the connection is already cancelled.
+            best_effort(tokio::time::timeout(Duration::from_secs(2), client.disconnect()).await);
         });
     }
 }
@@ -413,15 +404,9 @@ impl ManagedExec {
     }
     /// Closes the command's channel, waiting at most two seconds.
     pub fn close(&self) {
-        if self
-            .rt
-            .block_on(async {
-                tokio::time::timeout(Duration::from_secs(2), self.handle.close()).await
-            })
-            .is_err()
-        {
-            // Best effort: a close that times out leaves the channel to the
-            // connection's own teardown.
-        }
+        // A close that times out leaves the channel to the connection's own teardown.
+        best_effort(self.rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), self.handle.close()).await
+        }));
     }
 }

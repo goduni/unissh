@@ -75,7 +75,7 @@ pub struct TargetInfo {
     pub profile_id: String,
     /// Vault display name.
     pub vault: String,
-    /// Group names the profile belongs to.
+    /// Labels of the groups (and their ancestors) the profile belongs to.
     pub groups: Vec<String>,
     /// Profile tags.
     pub tags: Vec<String>,
@@ -1036,6 +1036,10 @@ impl Broker {
     }
 
     /// Snapshot of saved consents, live grants, sessions and runs for the native review UI.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover grants, sessions and runs so the review snapshot is one consistent state"
+    )]
     pub fn review(&self) -> Value {
         self.sweep();
         let saved_access = self.saved_access_review();
@@ -1169,6 +1173,10 @@ impl Broker {
 
     /// Trusted desktop inspector. Reads the same bounded buffer as MCP without
     /// opening SSH or depending on optional persistent session recording.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the grant check and the run read atomically"
+    )]
     pub fn inspect_command(
         &self,
         owner: &str,
@@ -1473,6 +1481,10 @@ impl Backend for Broker {
     #[expect(
         clippy::map_err_ignore,
         reason = "ToolError is the fixed MCP wire error set and carries no source by design"
+    )]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "`broker` is the owning handle every poll uses until the wait ends; it is not a lock guard"
     )]
     fn call(&self, integration: IntegrationId, request: ToolRequest) -> BackendResult<'_> {
         let broker = self.weak.upgrade();

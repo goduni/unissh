@@ -546,6 +546,10 @@ struct UnlockArgs {
     clippy::too_many_lines,
     reason = "one short, independent match arm per subcommand; splitting would only move the dispatch table"
 )]
+#[expect(
+    clippy::infinite_loop,
+    reason = "the local-forward subcommand serves until the user presses Ctrl-C, which ends the process"
+)]
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     let core = Core::new(cli.db.clone(), cli.keyset.clone());
@@ -996,10 +1000,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 remote_port,
             )?;
             println!("listening on {} (Ctrl-C to stop)", tunnel.bind_address());
-            #[expect(
-                clippy::infinite_loop,
-                reason = "the tunnel serves until the user presses Ctrl-C, which ends the process"
-            )]
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(3600));
             }

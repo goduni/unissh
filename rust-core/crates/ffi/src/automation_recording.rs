@@ -9,8 +9,7 @@ use zeroize::Zeroize;
 
 // Raw bytes plus JSON/base64 and a readable preview stay below the existing
 // recording envelope's 8 MiB budget. Event count also bounds tiny-packet overhead.
-const MAX_BYTES_U32: u32 = 512 * 1024;
-const MAX_BYTES: usize = MAX_BYTES_U32 as usize;
+const MAX_BYTES: u32 = 512 * 1024;
 const MAX_EVENTS: usize = 8192;
 
 /// Device-local native preferences. No MCP tool may change capture or retention.
@@ -25,7 +24,7 @@ pub struct RecordingPreferences {
 impl Default for RecordingPreferences {
     fn default() -> Self {
         Self {
-            max_bytes: MAX_BYTES_U32,
+            max_bytes: MAX_BYTES,
             retention_days: None,
         }
     }
@@ -51,7 +50,7 @@ impl Core {
         &self,
         value: RecordingPreferences,
     ) -> Result<(), FfiError> {
-        if !(16 * 1024..=MAX_BYTES_U32).contains(&value.max_bytes)
+        if !(16 * 1024..=MAX_BYTES).contains(&value.max_bytes)
             || value
                 .retention_days
                 .is_some_and(|days| !(1..=3650).contains(&days))
@@ -537,7 +536,7 @@ mod tests {
             Some("legacy command")
         );
         core.set_mcp_recording_preferences(RecordingPreferences {
-            max_bytes: MAX_BYTES_U32,
+            max_bytes: MAX_BYTES,
             retention_days: Some(30),
         })
         .unwrap();
@@ -559,7 +558,7 @@ mod tests {
         core.create_account(None).unwrap();
         core.create_vault("v".into(), "Vault".into()).unwrap();
         core.set_mcp_recording_preferences(RecordingPreferences {
-            max_bytes: MAX_BYTES_U32,
+            max_bytes: MAX_BYTES,
             retention_days: Some(30),
         })
         .unwrap();

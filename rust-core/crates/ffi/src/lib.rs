@@ -857,13 +857,9 @@ fn legacy_mcp_command(content: &[u8]) -> Option<String> {
         command: Option<String>,
     }
     let legacy = serde_json::from_slice::<StoredRecording>(content).ok()?;
-    legacy
-        .asciicast
-        .lines()
-        .next()
-        .and_then(|line| serde_json::from_str::<CommandHeader>(line).ok())
-        .and_then(|header| header.unissh_mcp)
-        .and_then(|m| m.command)
+    let line = legacy.asciicast.lines().next()?;
+    let header = serde_json::from_str::<CommandHeader>(line).ok()?;
+    header.unissh_mcp?.command
 }
 
 /// Serializable body of a host-chain reference (B2.2).
@@ -4666,14 +4662,15 @@ impl Core {
 
     /// Opens an SFTP session to a host (optionally through ProxyJump). The session lives as
     /// long as the returned object lives (or until `close`).
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "signature mirrors the UI contract; a params struct would be a binding change"
-    )]
+    ///
     /// `parallelism` — how many SFTP channels to keep over a single connection for
     /// parallel transfers (K from settings). Clamped to [1, 16]; 1 = the previous strictly
     /// sequential behavior. The first channel opens immediately, the rest —
     /// lazily on demand (see [`SftpFfi`]).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     #[expect(
         clippy::significant_drop_tightening,
         reason = "the core guard must stay held from the epoch check until the session is registered, or a concurrent lock could miss it"
@@ -6438,7 +6435,7 @@ impl Core {
     /// on the remote host can sign, and only a shell asks.
     #[expect(
         clippy::too_many_arguments,
-        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+        reason = "internal connect plumbing threads each transport input through; a params struct would only move them"
     )]
     fn connect_session_forwarding(
         &self,
@@ -6685,6 +6682,10 @@ struct StateKeySource {
 }
 
 impl unissh_ssh_transport::KeySource for StateKeySource {
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the connection-policy check and the agent lookup atomically"
+    )]
     fn public_key_openssh(&self, key_id: &[u8]) -> Option<String> {
         let key = {
             let guard = lock_recover(&self.state);
@@ -6697,6 +6698,10 @@ impl unissh_ssh_transport::KeySource for StateKeySource {
         key.to_openssh().ok()
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the connection-policy check and the agent lookup atomically"
+    )]
     fn certificate_openssh(&self, key_id: &[u8]) -> Option<String> {
         let certificate = {
             let guard = lock_recover(&self.state);
@@ -6751,7 +6756,7 @@ const fn locked_mid_connect() -> unissh_ssh_transport::TransportError {
 /// so moving the network out from under the lock would require Sync storage.
 #[expect(
     clippy::too_many_arguments,
-    reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    reason = "internal connect plumbing threads each transport input through; a params struct would only move them"
 )]
 fn connect_with_state(
     state: &Arc<Mutex<Option<CoreState>>>,
@@ -6786,7 +6791,7 @@ fn connect_with_state(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    reason = "internal connect plumbing threads each transport input through; a params struct would only move them"
 )]
 fn connect_with_policy(
     state: &Arc<Mutex<Option<CoreState>>>,
@@ -6825,7 +6830,7 @@ fn connect_with_policy(
 /// [`MultiExecTarget::publickey_only`]).
 #[expect(
     clippy::too_many_arguments,
-    reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    reason = "internal connect plumbing threads each transport input through; a params struct would only move them"
 )]
 fn connect_with_options(
     state: &Arc<Mutex<Option<CoreState>>>,
@@ -10611,13 +10616,15 @@ mod sftp_pool_tests {
         }
     }
 
-    /// One download or upload on `session` that only `token` can end.
+    /// One download or upload on `session` that only `token` can end; the
+    /// outcome goes to `tx`.
     fn cancellable_transfer(
         session: &SftpFfi,
         download: bool,
         token: Arc<CancelToken>,
-    ) -> Result<bool, FfiError> {
-        if download {
+        tx: &std::sync::mpsc::Sender<Result<bool, FfiError>>,
+    ) {
+        let result = if download {
             session.sftp_download(
                 "/remote".into(),
                 "/unused".into(),
@@ -10628,6 +10635,9 @@ mod sftp_pool_tests {
             )
         } else {
             session.sftp_upload("/unused".into(), "/remote".into(), 0, None, Some(token))
+        };
+        if tx.send(result).is_err() {
+            // Receiver gone: the test has already failed on its own.
         }
     }
 
@@ -10649,10 +10659,7 @@ mod sftp_pool_tests {
                     let session_ref = &session;
                     let token_for_worker = token.clone();
                     let worker = scope.spawn(move || {
-                        let result = cancellable_transfer(session_ref, download, token_for_worker);
-                        if tx.send(result).is_err() {
-                            // Receiver gone: the test has already failed on its own.
-                        }
+                        cancellable_transfer(session_ref, download, token_for_worker, &tx);
                     });
                     assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
                     if shared {
