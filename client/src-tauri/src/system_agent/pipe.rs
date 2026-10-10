@@ -1,9 +1,14 @@
 //! Windows: the system agent's named pipe, who may open it, and who did.
 //!
-//! The pipe is `\\.\pipe\unissh-agent`. The default OpenSSH pipe
-//! (`\\.\pipe\openssh-ssh-agent`) is deliberately left alone: UniSSH's own
-//! "system agent" host auth dials that one, so it keeps reaching the real
-//! OpenSSH agent and can never loop back here.
+//! The pipe is `\\.\pipe\unissh-agent-<SID>`, the SID being the current
+//! user's ([`name`]). Pipe names are machine-wide, so a fixed one could be
+//! held by one Windows account at a time and every other account's UniSSH
+//! would report it in use for as long as the first was running. The SID is
+//! unique per account on the machine, stable across restarts, and plain
+//! ASCII, so the name needs no quoting beyond what a pipe path needs anyway.
+//! The default OpenSSH pipe (`\\.\pipe\openssh-ssh-agent`) is deliberately
+//! left alone: UniSSH's own "system agent" host auth dials that one, so it
+//! keeps reaching the real OpenSSH agent and can never loop back here.
 //!
 //! Access control is the pipe's DACL, the Windows counterpart of the Unix
 //! socket's `0700` directory and `0600` mode. It is protected (nothing
@@ -49,9 +54,16 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-/// The pipe the system agent listens on. Pipe names are case-insensitive; this
-/// one must stay distinct from `openssh-ssh-agent` (see the module docs).
-pub const NAME: &str = r"\\.\pipe\unissh-agent";
+/// The fixed part of the pipe's name; the user's SID follows. Pipe names are
+/// case-insensitive; this one must stay distinct from `openssh-ssh-agent` (see
+/// the module docs).
+const NAME_PREFIX: &str = r"\\.\pipe\unissh-agent-";
+
+/// The pipe this user's system agent listens on:
+/// `\\.\pipe\unissh-agent-S-1-5-21-…`. The same on every run.
+pub fn name() -> io::Result<String> {
+    Ok(format!("{NAME_PREFIX}{}", current_user_sid()?))
+}
 
 /// A self-relative security descriptor granting the current user, and no one
 /// else, access to the pipe. Owned; freed on drop.
