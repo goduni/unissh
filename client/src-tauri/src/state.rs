@@ -33,25 +33,29 @@ pub enum LiveSession {
 impl LiveSession {
     pub fn write(&self, data: Vec<u8>) -> Result<(), FfiError> {
         match self {
-            LiveSession::Plain(s) => s.write(data),
-            LiveSession::Reconnecting(s) => s.write(data),
-            LiveSession::Local(s) => s.write(data),
+            Self::Plain(s) => s.write(data),
+            Self::Reconnecting(s) => s.write(data),
+            Self::Local(s) => s.write(data),
         }
     }
     pub fn resize(&self, cols: u32, rows: u32) -> Result<(), FfiError> {
         match self {
-            LiveSession::Plain(s) => s.resize(cols, rows),
-            LiveSession::Reconnecting(s) => s.resize(cols, rows),
-            LiveSession::Local(s) => s.resize(cols, rows),
+            Self::Plain(s) => s.resize(cols, rows),
+            Self::Reconnecting(s) => s.resize(cols, rows),
+            Self::Local(s) => s.resize(cols, rows),
         }
     }
     pub fn close(&self) {
         match self {
-            LiveSession::Plain(s) => {
-                let _ = s.close();
+            Self::Plain(s) => {
+                // Closing is the end state the caller wants either way; a
+                // transport error here (peer already gone) has no one to inform.
+                if let Err(e) = s.close() {
+                    log::debug!("session close reported: {e}");
+                }
             }
-            LiveSession::Reconnecting(s) => s.close(),
-            LiveSession::Local(s) => s.close(),
+            Self::Reconnecting(s) => s.close(),
+            Self::Local(s) => s.close(),
         }
     }
 }
@@ -83,7 +87,7 @@ impl AppState {
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .join("cloud.json");
-        AppState {
+        Self {
             core,
             db_path,
             keyset_path,

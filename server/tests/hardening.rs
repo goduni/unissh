@@ -1,5 +1,9 @@
 //! Regressions for fixes from the adversarial review: structural invariants on push,
 //! self-revoke guard, host-binding auth.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -18,7 +22,7 @@ fn vault(target: SyncTarget) -> String {
         wrapped_vk: vec![2],
         version: 1,
         tombstone: false,
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
         author_pubkey: vec![0xAA; 32],
         key_epoch: 1,
         cache_policy: CachePolicy::OfflineAllowed,
@@ -64,7 +68,7 @@ async fn grants_publish_self_revoke_rejected() {
     // so the test must pass the signature check to reach the self-revoke 409.
     let admin_kp = Ed25519Keypair::generate();
     let admin = admin_kp.verifying.to_bytes().to_vec();
-    let (_a, _d, bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
+    let (_a, _d, bearer) = app.seed_device(&admin, &[1_u8; 32], "org", true).await;
     app.state
         .store
         .claim_vault(
@@ -82,18 +86,18 @@ async fn grants_publish_self_revoke_rejected() {
 
     // manifest@5; revoke_epoch == new_epoch == 5 → conflict
     let mut blob = b"unissh-manifest-v1".to_vec();
-    blob.extend_from_slice(&5u64.to_be_bytes());
-    blob.extend_from_slice(&1u32.to_be_bytes());
+    blob.extend_from_slice(&5_u64.to_be_bytes());
+    blob.extend_from_slice(&1_u32.to_be_bytes());
     blob.push(2);
-    blob.extend_from_slice(&(admin.len() as u16).to_be_bytes());
+    blob.extend_from_slice(&u16::try_from(admin.len()).unwrap().to_be_bytes());
     blob.extend_from_slice(&admin);
-    let mut mobj = vec![3u8];
+    let mut mobj = vec![3_u8];
     let put = |o: &mut Vec<u8>, b: &[u8]| {
-        o.extend_from_slice(&(b.len() as u32).to_be_bytes());
+        o.extend_from_slice(&u32::try_from(b.len()).unwrap().to_be_bytes());
         o.extend_from_slice(b);
     };
     put(&mut mobj, b"v-harden");
-    mobj.extend_from_slice(&5u64.to_be_bytes());
+    mobj.extend_from_slice(&5_u64.to_be_bytes());
     put(&mut mobj, &blob);
     let sig = sign_version(
         &admin_kp.signing,
@@ -166,7 +170,7 @@ async fn escrow_fetch_is_rate_limited() {
         c.limits.rate_limit_burst = 2;
     })
     .await;
-    let body = json!({ "handle": "ghost", "k_auth": b64(&[0u8; 32]) });
+    let body = json!({ "handle": "ghost", "k_auth": b64(&[0_u8; 32]) });
     let hit = || {
         app.client
             .post(format!("{}/v1/escrow/fetch", app.base))

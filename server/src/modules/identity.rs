@@ -146,10 +146,12 @@ async fn auth_challenge(
 
     let nonce = ids::random_bytes32();
     let now = state.now();
-    let expiry = (now + state.config.session.nonce_ttl_seconds) as u64;
+    let expires_at = now + state.config.session.nonce_ttl_seconds;
+    let expiry = u64::try_from(expires_at)
+        .map_err(|e| AppError::internal(format!("challenge expiry out of range: {e}")))?;
     state
         .store
-        .insert_nonce(&nonce, Some(&device_id), expiry as i64)
+        .insert_nonce(&nonce, Some(&device_id), expires_at)
         .await?;
 
     Ok(Json(ChallengeJson {
@@ -175,7 +177,8 @@ async fn auth_verify(
     let c = &req.challenge;
     let now = state.now();
 
-    if c.expiry <= now as u64 {
+    // A clock before the epoch cannot vouch for any expiry: treat as expired.
+    if u64::try_from(now).ok().is_none_or(|n| c.expiry <= n) {
         return Err(AppError::unauthenticated("challenge expired"));
     }
     let account_id = ids::unb64(&c.account_id)?;
@@ -251,7 +254,9 @@ async fn session_refresh(
     if raw.len() != 16 + 32 {
         return Err(AppError::unauthenticated("invalid refresh token"));
     }
-    let session_id = &raw[..16];
+    let session_id = raw
+        .get(..16)
+        .ok_or_else(|| AppError::unauthenticated("invalid refresh token"))?;
     let refresh_hash = ids::sha256(&raw);
     let session = match state.store.find_session_by_id(session_id).await? {
         Some(s) if s.revoked == 0 => s,
@@ -419,7 +424,7 @@ async fn keyset_put(
 ) -> AppResult<Json<KeysetPutResp>> {
     let blob = ids::unb64(&req.keyset_blob)?;
     let header = crypto::parse_keyset_header(&blob)?;
-    let generation = header.generation as i64;
+    let generation = i64::from(header.generation);
     let acc = auth.account_id();
     // No-downgrade: generation > max of the existing one (§6.4).
     if let Some(maxg) = state.store.keyset_max_generation(acc).await? {
@@ -537,7 +542,7 @@ async fn relay_put_slot(
     state: &AppState,
     req: &RelayMsgReq,
     slot: &str,
-    msg_b64: &Option<String>,
+    msg_b64: Option<&str>,
 ) -> AppResult<StatusCode> {
     let channel_id = ids::unb64(&req.channel_id)?;
     let row = state
@@ -548,11 +553,7 @@ async fn relay_put_slot(
     if row.expires_at <= state.now() {
         return Err(AppError::gone("relay channel expired"));
     }
-    let msg = ids::unb64(
-        msg_b64
-            .as_deref()
-            .ok_or_else(|| AppError::malformed("missing message"))?,
-    )?;
+    let msg = ids::unb64(msg_b64.ok_or_else(|| AppError::malformed("missing message"))?)?;
     state.store.relay_put(&channel_id, slot, &msg).await?;
     Ok(StatusCode::OK)
 }
@@ -561,19 +562,19 @@ async fn relay_msg1(
     State(state): State<AppState>,
     Json(req): Json<RelayMsgReq>,
 ) -> AppResult<StatusCode> {
-    relay_put_slot(&state, &req, "msg1", &req.msg1).await
+    relay_put_slot(&state, &req, "msg1", req.msg1.as_deref()).await
 }
 async fn relay_msg2(
     State(state): State<AppState>,
     Json(req): Json<RelayMsgReq>,
 ) -> AppResult<StatusCode> {
-    relay_put_slot(&state, &req, "msg2", &req.msg2).await
+    relay_put_slot(&state, &req, "msg2", req.msg2.as_deref()).await
 }
 async fn relay_msg3(
     State(state): State<AppState>,
     Json(req): Json<RelayMsgReq>,
 ) -> AppResult<StatusCode> {
-    relay_put_slot(&state, &req, "msg3", &req.msg3).await
+    relay_put_slot(&state, &req, "msg3", req.msg3.as_deref()).await
 }
 
 #[derive(Deserialize)]
@@ -863,11 +864,7 @@ async fn device_self_enroll(
     //    expire (expires_at = NULL).
     let now = state.now();
     let device_id = ids::random_id16().to_vec();
-    let expires_at = if kind == "web" {
-        Some(now + WEB_DEVICE_TTL_SECONDS)
-    } else {
-        None
-    };
+    let expires_at = (kind == "web").then(|| now + WEB_DEVICE_TTL_SECONDS);
     state
         .store
         .create_device(
@@ -985,9 +982,9 @@ async fn invite_issue_v2(
     }
 
     let space_json = serde_json::to_string(&req.space_intents)
-        .map_err(|_| AppError::internal("serialize space intents"))?;
+        .map_err(|e| AppError::internal(format!("serialize space intents: {e}")))?;
     let vault_json = serde_json::to_string(&req.vault_intents)
-        .map_err(|_| AppError::internal("serialize vault intents"))?;
+        .map_err(|e| AppError::internal(format!("serialize vault intents: {e}")))?;
 
     let ttl = req
         .ttl_seconds
@@ -1072,7 +1069,7 @@ async fn invite_revoke_v2(
     // link is cancellable by exactly the principals who could have created it.
     if !state.store.account_is_owner(auth.account_id()).await? {
         let space_intents: Vec<SpaceIntent> = serde_json::from_str(&invite.space_intents)
-            .map_err(|_| AppError::internal("corrupt space intents"))?;
+            .map_err(|e| AppError::internal(format!("corrupt space intents: {e}")))?;
         for si in &space_intents {
             let space_id = ids::unb64(&si.space_id)?;
             if !state
@@ -1084,7 +1081,7 @@ async fn invite_revoke_v2(
             }
         }
         let vault_intents: Vec<VaultIntent> = serde_json::from_str(&invite.vault_intents)
-            .map_err(|_| AppError::internal("corrupt vault intents"))?;
+            .map_err(|e| AppError::internal(format!("corrupt vault intents: {e}")))?;
         for vi in &vault_intents {
             let vault_id = ids::unb64(&vi.vault_id)?;
             if !state
@@ -1151,7 +1148,7 @@ async fn join_preview(
     }
 
     let intents: Vec<SpaceIntent> = serde_json::from_str(&invite.space_intents)
-        .map_err(|_| AppError::internal("corrupt space intents"))?;
+        .map_err(|e| AppError::internal(format!("corrupt space intents: {e}")))?;
     let mut spaces = Vec::with_capacity(intents.len());
     for si in intents {
         let space_id = ids::unb64(&si.space_id)?;
@@ -1241,13 +1238,12 @@ async fn join(
     // 2. ONE transaction. If the single-use CAS is lost, `?` drops the tx and the
     //    whole join (account/device/memberships/pending) rolls back.
     let mut tx = state.store.begin().await?;
-    let invite = match state
+    let Some(invite) = state
         .store
         .redeem_invite_v2_cas(&mut tx, &token_hash, &account_id, now)
         .await?
-    {
-        Some(inv) => inv,
-        None => return Err(AppError::gone("invite already redeemed or expired")),
+    else {
+        return Err(AppError::gone("invite already redeemed or expired"));
     };
 
     // 3. Account (new only) + device (always).
@@ -1281,9 +1277,9 @@ async fn join(
 
     let added_by = invite.created_by.as_deref();
     let space_intents: Vec<SpaceIntent> = serde_json::from_str(&invite.space_intents)
-        .map_err(|_| AppError::internal("corrupt space intents"))?;
+        .map_err(|e| AppError::internal(format!("corrupt space intents: {e}")))?;
     let vault_intents: Vec<VaultIntent> = serde_json::from_str(&invite.vault_intents)
-        .map_err(|_| AppError::internal("corrupt vault intents"))?;
+        .map_err(|e| AppError::internal(format!("corrupt vault intents: {e}")))?;
 
     // 4. Memberships per space intent.
     let mut joined_bytes: Vec<Vec<u8>> = Vec::with_capacity(space_intents.len());

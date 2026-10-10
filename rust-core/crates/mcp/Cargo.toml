@@ -32,3 +32,6 @@ tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "te
 # The native log bridge must suppress SDK payloads even at maximum verbosity.
 tracing = { version = "0.1", features = ["log-always"] }
 log = "0.4"
+
+[lints]
+workspace = true

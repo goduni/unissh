@@ -1,3 +1,5 @@
+//! v2 configuration defaults: setup code, OIDC and public URL start empty.
+
 use unissh_server::Config;
 
 #[test]

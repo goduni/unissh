@@ -1,6 +1,8 @@
 //! Saved native consent, separate from live grants and SSH execution.
 use super::*;
 
+/// A user's saved consent for one integration, persisted by the executor and
+/// restored into a live grant after unlock when its targets are unchanged.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SavedAccess {
@@ -19,7 +21,10 @@ fn now() -> u64 {
         .as_secs()
 }
 impl Broker {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per persisted consent attribute; a params struct would duplicate SavedAccess"
+    )]
     pub(super) fn save_grant(
         &self,
         owner: &str,
@@ -49,7 +54,10 @@ impl Broker {
 
     /// Explicit native revocation must remove consent before reporting success.
     pub fn forget_access(&self, owner: Option<&str>) -> Result<()> {
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.revocation_epoch.fetch_add(1, Ordering::SeqCst);
         self.revoke_inner(owner);
         let mut saved = self.executor.load_access()?;
@@ -59,7 +67,10 @@ impl Broker {
 
     /// Native lock/sleep/exit stops execution without deleting the user's choices.
     pub fn suspend(&self) {
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.suspended.store(true, Ordering::SeqCst);
         self.revocation_epoch.fetch_add(1, Ordering::SeqCst);
         self.revoke_inner(None);
@@ -69,12 +80,16 @@ impl Broker {
     pub fn resume(&self) {
         self.resume_if_current(self.lifecycle_epoch());
     }
+    /// Current lock/revocation generation, to pass to [`Self::resume_if_current`].
     pub fn lifecycle_epoch(&self) -> u64 {
         self.revocation_epoch.load(Ordering::SeqCst)
     }
     /// A queued native wake/unlock cannot undo a newer lock or revocation.
     pub fn resume_if_current(&self, epoch: u64) {
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.lifecycle_epoch() != epoch {
             return;
         }
@@ -92,7 +107,10 @@ impl Broker {
         if *lock(&self.access_revision) == Some(revision) {
             return;
         }
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.suspended.load(Ordering::SeqCst) {
             return;
         }
@@ -148,23 +166,25 @@ impl Broker {
             grants.push((
                 consent.integration_id,
                 Grant {
-                    label: consent.label,
-                    approval_mode: consent.approval_mode,
                     max_timeout_ms: consent.max_timeout_ms,
+                    approval_mode: consent.approval_mode,
+                    slots: Arc::new(Semaphore::new(4)),
+                    epoch: id(),
+                    label: consent.label,
+                    revision,
                     until,
                     targets,
-                    revision,
-                    epoch: id(),
-                    slots: Arc::new(Semaphore::new(4)),
                 },
             ));
         }
         if self.executor.revision().ok() != Some(revision) {
             return;
         }
-        let mut state = lock(&self.state);
-        for (owner, grant) in grants.into_iter().take(GRANTS_TOTAL) {
-            state.grants.entry(owner).or_insert(grant);
+        {
+            let mut state = lock(&self.state);
+            for (owner, grant) in grants.into_iter().take(GRANTS_TOTAL) {
+                state.grants.entry(owner).or_insert(grant);
+            }
         }
         *restored = Some(revision);
     }

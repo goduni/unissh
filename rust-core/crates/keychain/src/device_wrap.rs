@@ -90,19 +90,29 @@ pub fn unwrap(blob: &[u8], device_secret: &[u8]) -> Result<Zeroizing<Vec<u8>>, D
         return Err(DeviceWrapError::UnsupportedVersion(version));
     }
     let key = derive_wrap_key(device_secret)?;
-    let material = aead_decrypt(&key, sealed, &aad(version)).map_err(|e| match e {
-        CryptoError::Decrypt => DeviceWrapError::Unwrap,
-        _ => DeviceWrapError::Malformed,
+    // Only `Decrypt` means "wrong secret or tampered"; every other `CryptoError`
+    // (including variants added later to the non-exhaustive enum) is a broken blob.
+    let material = aead_decrypt(&key, sealed, &aad(version)).map_err(|e| {
+        if e == CryptoError::Decrypt {
+            DeviceWrapError::Unwrap
+        } else {
+            DeviceWrapError::Malformed
+        }
     })?;
     Ok(Zeroizing::new(material))
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_in_result,
+    reason = "HKDF-SHA256 expand fails only for outputs over 255*32 bytes; the output here is a fixed 32"
+)]
 fn derive_wrap_key(device_secret: &[u8]) -> Result<SymmetricKey, DeviceWrapError> {
     if device_secret.len() < DEVICE_SECRET_MIN_LEN {
         return Err(DeviceWrapError::ShortSecret);
     }
     let hk = Hkdf::<Sha256>::new(None, device_secret);
-    let mut okm = Zeroizing::new([0u8; 32]);
+    let mut okm = Zeroizing::new([0_u8; 32]);
     hk.expand(DEVICE_WRAP_HKDF_INFO, okm.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
     Ok(SymmetricKey::from_bytes(*okm))
@@ -116,7 +126,7 @@ fn aad(version: u8) -> AssociatedData {
 mod tests {
     use super::*;
 
-    const SECRET: [u8; 32] = [7u8; 32];
+    const SECRET: [u8; 32] = [7_u8; 32];
     const PASSWORD: &[u8] = b"correct horse battery staple";
 
     #[test]
@@ -129,7 +139,7 @@ mod tests {
     fn wrong_device_secret_fails() {
         let blob = wrap(PASSWORD, &SECRET).unwrap();
         assert_eq!(
-            unwrap(&blob, &[8u8; 32]).unwrap_err(),
+            unwrap(&blob, &[8_u8; 32]).unwrap_err(),
             DeviceWrapError::Unwrap
         );
     }

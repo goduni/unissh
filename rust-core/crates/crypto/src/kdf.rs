@@ -80,7 +80,7 @@ impl KdfParams {
         parallelism: u32,
         salt_len: usize,
     ) -> Self {
-        let mut salt = vec![0u8; salt_len];
+        let mut salt = vec![0_u8; salt_len];
         OsRng.fill_bytes(&mut salt);
         Self {
             mem_kib,
@@ -101,28 +101,28 @@ impl KdfParams {
         out.extend_from_slice(&self.mem_kib.to_be_bytes());
         out.extend_from_slice(&self.iterations.to_be_bytes());
         out.extend_from_slice(&self.parallelism.to_be_bytes());
-        out.push(self.salt.len() as u8);
+        out.push(u8::try_from(self.salt.len()).map_err(|_| CryptoError::InvalidLength)?);
         out.extend_from_slice(&self.salt);
         Ok(out)
     }
 
     /// Parses the parameter blob.
     pub fn from_blob(blob: &[u8]) -> Result<Self, CryptoError> {
-        let body = parse_expecting(blob, AlgId::Argon2idParams)?;
         // kdf_id(1) + mem(4) + iter(4) + par(4) + salt_len(1) = 14
         const FIXED: usize = 1 + 4 + 4 + 4 + 1;
+        let body = parse_expecting(blob, AlgId::Argon2idParams)?;
         if body.len() < FIXED {
             return Err(CryptoError::Format);
         }
-        if body[0] != KDF_ID_ARGON2ID {
+        if body.first() != Some(&KDF_ID_ARGON2ID) {
             return Err(CryptoError::UnsupportedAlgorithm(
                 AlgId::Argon2idParams.to_u16(),
             ));
         }
-        let mem_kib = read_u32_be(&body[1..5])?;
-        let iterations = read_u32_be(&body[5..9])?;
-        let parallelism = read_u32_be(&body[9..13])?;
-        let salt_len = body[13] as usize;
+        let mem_kib = read_u32_be(body.get(1..5).ok_or(CryptoError::Format)?)?;
+        let iterations = read_u32_be(body.get(5..9).ok_or(CryptoError::Format)?)?;
+        let parallelism = read_u32_be(body.get(9..13).ok_or(CryptoError::Format)?)?;
+        let salt_len = usize::from(*body.get(13).ok_or(CryptoError::Format)?);
         if body.len() != FIXED + salt_len {
             return Err(CryptoError::Format);
         }
@@ -137,7 +137,7 @@ impl KdfParams {
             mem_kib,
             iterations,
             parallelism,
-            salt: body[FIXED..].to_vec(),
+            salt: body.get(FIXED..).ok_or(CryptoError::Format)?.to_vec(),
         };
         // We do NOT apply the hard strength floor (`meets_minimum`) here: this is a READ path
         // (unlock/import of a foreign keyset or backup). Refusing to parse a blob with weak but
@@ -162,11 +162,26 @@ pub fn derive_key(password: &[u8], params: &KdfParams) -> Result<SymmetricKey, C
     .map_err(|_| CryptoError::Kdf)?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, p);
 
-    let mut out = [0u8; SYMMETRIC_KEY_LEN];
+    let mut out = [0_u8; SYMMETRIC_KEY_LEN];
     argon
         .hash_password_into(password, &params.salt, &mut out)
         .map_err(|_| CryptoError::Kdf)?;
     let key = SymmetricKey::from_bytes(out);
     out.zeroize();
     Ok(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncated_blob_is_format_error() {
+        let full = KdfParams::recommended().to_blob().unwrap();
+        for cut in 0..full.len() {
+            let err = KdfParams::from_blob(&full[..cut]).unwrap_err();
+            assert!(matches!(err, CryptoError::Format), "cut at {cut}: {err:?}");
+        }
+        assert!(KdfParams::from_blob(&full).is_ok(), "the full blob parses");
+    }
 }

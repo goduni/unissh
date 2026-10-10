@@ -41,7 +41,7 @@ async fn author_role(
         // predicate reasons under — otherwise a manifest could be indexed at one
         // epoch while its signed body claims another (defense-in-depth; the blob
         // is admin-signed, so this only tightens, never forges).
-        if ms.key_epoch != epoch as u64 {
+        if u64::try_from(epoch).ok() != Some(ms.key_epoch) {
             return Err(AppError::malformed("manifest epoch mismatch"));
         }
         if let Some(r) = ms.role_of(author) {
@@ -77,13 +77,13 @@ pub async fn write_accept(
             // ACL objects (manifest/grant) — their integrity is mandatory, since
             // the delta visibility filter trusts them; other tiers are skipped (the
             // client re-verifies them on read, server-side RBAC is under the toggle).
-            Some(ObjectTag::Vault) | Some(ObjectTag::Item) if acl_only => {}
-            Some(ObjectTag::Vault) | Some(ObjectTag::Item) => {
+            Some(ObjectTag::Vault | ObjectTag::Item) if acl_only => {}
+            Some(ObjectTag::Vault | ObjectTag::Item) => {
                 let vault_id = p
                     .vault_id
                     .as_deref()
                     .ok_or_else(|| AppError::malformed("missing vault_id"))?;
-                let epoch = p.key_epoch.map(|e| e as i64).unwrap_or(0);
+                let epoch = epoch_i64(p.key_epoch)?.unwrap_or(0);
                 // The record's author is taken from the object itself (also the
                 // signer); it must match the authenticated device (anti-spoofing).
                 let obj_author = p.author_pubkey.as_deref().unwrap_or(author_ed25519);
@@ -99,12 +99,12 @@ pub async fn write_accept(
                     }
                 }
             }
-            Some(ObjectTag::MembershipManifest) | Some(ObjectTag::MembershipGrant) => {
+            Some(ObjectTag::MembershipManifest | ObjectTag::MembershipGrant) => {
                 let vault_id = p
                     .vault_id
                     .as_deref()
                     .ok_or_else(|| AppError::malformed("missing vault_id"))?;
-                let epoch = p.key_epoch.map(|e| e as i64).unwrap_or(0);
+                let epoch = epoch_i64(p.key_epoch)?.unwrap_or(0);
                 let obj_author = p.author_pubkey.as_deref().unwrap_or(author_ed25519);
                 if author_role(state, vault_id, epoch, obj_author).await? != Some(Role::Admin) {
                     return Err(AppError::forbidden(
@@ -180,12 +180,13 @@ async fn grants_publish(
         .vault_id
         .clone()
         .ok_or_else(|| AppError::malformed("manifest missing vault_id"))?;
+    let parsed_epoch = epoch_i64(m_parsed.key_epoch)?;
     let new_epoch = req
         .new_epoch
-        .or(m_parsed.key_epoch.map(|e| e as i64))
+        .or(parsed_epoch)
         .ok_or_else(|| AppError::malformed("missing new_epoch"))?;
     // The manifest must carry exactly the new epoch.
-    if m_parsed.key_epoch.map(|e| e as i64) != Some(new_epoch) {
+    if parsed_epoch != Some(new_epoch) {
         return Err(AppError::malformed(
             "manifest key_epoch must equal new_epoch",
         ));
@@ -347,12 +348,12 @@ async fn grants_get(
         .ok_or_else(|| AppError::not_found("manifest@epoch"))?;
 
     // Reconstruct the manifest object's bytes for the response (as SyncObject::Manifest).
-    let manifest_b64 = ids::b64(&manifest_object_bytes(&manifest));
+    let manifest_b64 = ids::b64(&manifest_object_bytes(&manifest)?);
     let grants = state.store.list_grants(&vault_id, epoch, true).await?;
     let grant_b64 = grants
         .iter()
-        .map(|g| ids::b64(&grant_object_bytes(g)))
-        .collect();
+        .map(|g| grant_object_bytes(g).map(|b| ids::b64(&b)))
+        .collect::<AppResult<_>>()?;
 
     Ok(Json(GrantsResp {
         manifest: manifest_b64,
@@ -362,44 +363,61 @@ async fn grants_get(
 }
 
 /// Reconstruct the bytes of `SyncObject::MembershipManifest` (§5.2 tag 3).
-fn manifest_object_bytes(m: &crate::store::models::ManifestRow) -> Vec<u8> {
-    let mut out = vec![3u8];
-    put(&mut out, &m.vault_id);
-    out.extend_from_slice(&(m.key_epoch as u64).to_be_bytes());
-    put(&mut out, &m.manifest_blob);
-    put(&mut out, &m.signature);
-    put(&mut out, &m.author_pubkey);
-    out
+fn manifest_object_bytes(m: &crate::store::models::ManifestRow) -> AppResult<Vec<u8>> {
+    let mut out = vec![3_u8];
+    put(&mut out, &m.vault_id)?;
+    // The column is the u64 epoch stored as i64: its BE bytes are the wire bytes.
+    out.extend_from_slice(&m.key_epoch.to_be_bytes());
+    put(&mut out, &m.manifest_blob)?;
+    put(&mut out, &m.signature)?;
+    put(&mut out, &m.author_pubkey)?;
+    Ok(out)
 }
 
 /// Reconstruct the bytes of `SyncObject::MembershipGrant` (§5.2 tag 4).
-fn grant_object_bytes(g: &crate::store::models::GrantRow) -> Vec<u8> {
-    let mut out = vec![4u8];
-    put(&mut out, &g.vault_id);
-    put(&mut out, &g.member_pubkey);
-    out.extend_from_slice(&(g.key_epoch as u64).to_be_bytes());
-    out.push(g.role.clamp(0, 2) as u8);
+fn grant_object_bytes(g: &crate::store::models::GrantRow) -> AppResult<Vec<u8>> {
+    let mut out = vec![4_u8];
+    put(&mut out, &g.vault_id)?;
+    put(&mut out, &g.member_pubkey)?;
+    // The column is the u64 epoch stored as i64: its BE bytes are the wire bytes.
+    out.extend_from_slice(&g.key_epoch.to_be_bytes());
+    // Same as clamping the role column to 0..=2.
+    out.push(match g.role {
+        ..=0 => 0,
+        1 => 1,
+        _ => 2,
+    });
     // not_after:i64be(8) — exactly the position in the grant's signed content
     // (tag 4) that both canonical deserializers expect (server `codec.rs`, native
     // `sync/object.rs`). Without it, a native client would read the first 8 bytes of
     // the wrapped_vk length as not_after and desync the entire grant. sentinel:
     // NULL/<=0 = "no expiry" = 0.
     out.extend_from_slice(&g.not_after.unwrap_or(0).max(0).to_be_bytes());
-    put(&mut out, &g.wrapped_vk);
-    put(&mut out, &g.signature);
-    put(&mut out, &g.author_pubkey);
-    out
+    put(&mut out, &g.wrapped_vk)?;
+    put(&mut out, &g.signature)?;
+    put(&mut out, &g.author_pubkey)?;
+    Ok(out)
 }
 
-fn put(out: &mut Vec<u8>, b: &[u8]) {
-    out.extend_from_slice(&(b.len() as u32).to_be_bytes());
+fn put(out: &mut Vec<u8>, b: &[u8]) -> AppResult<()> {
+    let len = u32::try_from(b.len())
+        .map_err(|e| AppError::internal(format!("stored ACL field too long to encode: {e}")))?;
+    out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(b);
+    Ok(())
+}
+
+/// A record's `key_epoch` as the i64 the store indexes by. Out of range is
+/// malformed, as the store itself rejects it on write.
+fn epoch_i64(e: Option<u64>) -> AppResult<Option<i64>> {
+    e.map(i64::try_from)
+        .transpose()
+        .map_err(|e| AppError::malformed(format!("key_epoch exceeds i64: {e}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{ObjectTag, parse_open};
     use crate::store::models::GrantRow;
 
     fn grant_row(not_after: Option<i64>) -> GrantRow {
@@ -422,15 +440,15 @@ mod tests {
     /// client misparses the grant in the field.
     #[test]
     fn grant_object_bytes_roundtrips_through_canonical_reader() {
-        for (na, want) in [(Some(1_900_000_000i64), 1_900_000_000i64), (None, 0)] {
+        for (na, want) in [(Some(1_900_000_000_i64), 1_900_000_000_i64), (None, 0)] {
             let g = grant_row(na);
-            let bytes = grant_object_bytes(&g);
+            let bytes = grant_object_bytes(&g).unwrap();
             let p = parse_open(&bytes).expect("canonical reader must parse our own bytes");
             assert_eq!(p.tag(), Some(ObjectTag::MembershipGrant));
             assert_eq!(p.vault_id.as_deref(), Some(g.vault_id.as_slice()));
             assert_eq!(p.member_pubkey.as_deref(), Some(g.member_pubkey.as_slice()));
-            assert_eq!(p.key_epoch, Some(g.key_epoch as u64));
-            assert_eq!(p.role, Some(g.role as u8));
+            assert_eq!(p.key_epoch, Some(u64::try_from(g.key_epoch).unwrap()));
+            assert_eq!(p.role, Some(u8::try_from(g.role).unwrap()));
             // The crux: not_after lands where the reader expects it, so wrapped_vk /
             // sig / author are NOT shifted.
             assert_eq!(p.not_after, Some(want));

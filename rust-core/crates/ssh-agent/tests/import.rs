@@ -5,8 +5,14 @@
 //! conversion matches the reference and that the normalized private key is
 //! accepted by the agent.
 
+#![expect(
+    clippy::expect_used,
+    clippy::missing_assert_message,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
+
 use ed25519_dalek::pkcs8::DecodePrivateKey;
-use unissh_ssh_agent::ssh_key::{self, PrivateKey};
+use unissh_ssh_agent::ssh_key::PrivateKey;
 use unissh_ssh_agent::{
     normalize_private_key_to_openssh, normalize_private_key_with_passphrase, AgentError,
     InMemoryAgent,
@@ -194,10 +200,10 @@ fn ed25519_pkcs8_imports_and_matches_pub() {
 
     let out = normalize_private_key_to_openssh(ED_PKCS8).expect("PKCS#8 Ed25519 must import");
     let key = PrivateKey::from_openssh(&*out).unwrap();
-    let got = match key.public_key().key_data() {
-        ssh_key::public::KeyData::Ed25519(p) => p.0,
-        _ => panic!("expected ed25519"),
+    let ssh_key::public::KeyData::Ed25519(p) = key.public_key().key_data() else {
+        panic!("expected ed25519");
     };
+    let got = p.0;
     assert_eq!(got, want);
 }
 
@@ -332,10 +338,10 @@ fn build_sk_ed25519_openssh() -> String {
     use unissh_ssh_agent::ssh_key::public;
     use unissh_ssh_agent::ssh_key::LineEnding;
 
-    let ed = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let ed = ed25519_dalek::SigningKey::from_bytes(&[7_u8; 32]);
     let public = public::SkEd25519::new(
         public::Ed25519PublicKey(ed.verifying_key().to_bytes()),
-        "ssh:".to_string(),
+        "ssh:".to_owned(),
     );
     let kp = SkEd25519::new(public, 0x01, vec![0xAB; 32]).expect("sk keypair");
     PrivateKey::new(KeypairData::SkEd25519(kp), "test sk key")

@@ -3,6 +3,10 @@
 //! otherwise `verify_record_authority` rejects them as a downgrade (`EpochInvalid`)
 //! and the item is permanently unreadable. Before the fix, `put_item`/
 //! `put_item_keep_history`/`tombstone_record` hard-stamped `key_epoch=0`.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_keychain::{create_account, KdfParams, UnlockedKeyset};
 use unissh_storage::{MemberRole, Storage};
@@ -13,7 +17,7 @@ fn keyset() -> UnlockedKeyset {
     unlocked
 }
 fn storage() -> Storage {
-    Storage::open_in_memory(&[7u8; 32]).unwrap()
+    Storage::open_in_memory(&[7_u8; 32]).unwrap()
 }
 fn ed_of(ks: &UnlockedKeyset) -> Vec<u8> {
     ks.signing.verifying.to_bytes().to_vec()
@@ -39,7 +43,7 @@ fn put_item_after_membership_roundtrips() {
         ed25519_pub: owner_ed.clone(),
         role: MemberRole::Admin,
     }];
-    let xkeys = vec![(owner_ed.clone(), owner_x.clone())];
+    let xkeys = vec![(owner_ed, owner_x)];
     let epoch = v
         .establish_or_extend_membership(&owner, &members, &xkeys)
         .unwrap();
@@ -87,7 +91,7 @@ fn put_item_after_rotate_vk_roundtrips() {
     v.establish_or_extend_membership(&owner, &members, &xkeys)
         .unwrap();
 
-    let grants = vec![(owner_x.clone(), owner_ed.clone(), MemberRole::Admin)];
+    let grants = vec![(owner_x, owner_ed, MemberRole::Admin)];
     let new_epoch = v.rotate_vk(&owner, &members, &grants).unwrap();
     assert_eq!(new_epoch, 2);
     drop(v);

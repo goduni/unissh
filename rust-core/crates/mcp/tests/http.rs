@@ -1,3 +1,10 @@
+//! HTTP transport, authentication and request-limit behaviour of the MCP adapter.
+#![expect(
+    clippy::unwrap_used,
+    clippy::missing_assert_message,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -337,7 +344,7 @@ async fn claude_cli_http_interoperability() {
     let fixture = Fixture::start(Arc::new(NoGrants)).await;
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("config");
-    std::fs::create_dir(&config).unwrap();
+    std::fs::create_dir_all(&config).unwrap();
     let configure = std::process::Command::new("claude")
         .current_dir(temp.path())
         .env("CLAUDE_CONFIG_DIR", &config)

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use russh::client::{
     AuthResult, ChannelOpenHandle, Config, Handle, Handler, KeyboardInteractiveAuthResponse, Msg,
@@ -17,6 +17,7 @@ use russh::{Channel, ChannelMsg, ChannelOpenFailure, Signer};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::error::Elapsed;
 use tokio::time::{timeout, Duration};
 use zeroize::Zeroizing;
 
@@ -71,13 +72,13 @@ pub enum Auth {
 impl core::fmt::Debug for Auth {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Auth::Agent { key_id } => f.debug_struct("Agent").field("key_id", key_id).finish(),
+            Self::Agent { key_id } => f.debug_struct("Agent").field("key_id", key_id).finish(),
             // Do not print the password.
-            Auth::Password { .. } => f
+            Self::Password { .. } => f
                 .debug_struct("Password")
                 .field("password", &"<redacted>")
                 .finish(),
-            Auth::SystemAgent { public_key } => f
+            Self::SystemAgent { public_key } => f
                 .debug_struct("SystemAgent")
                 .field("public_key", public_key)
                 .finish(),
@@ -267,10 +268,10 @@ impl KnownHosts for unissh_storage::Storage {
 /// the CLI) needs no wrapper of its own.
 impl KeySource for InMemoryAgent {
     fn public_key_openssh(&self, key_id: &[u8]) -> Option<String> {
-        self.public_key(key_id).and_then(|k| k.to_openssh().ok())
+        self.public_key(key_id)?.to_openssh().ok()
     }
     fn certificate_openssh(&self, key_id: &[u8]) -> Option<String> {
-        self.certificate(key_id).and_then(|c| c.to_openssh().ok())
+        self.certificate(key_id)?.to_openssh().ok()
     }
     fn sign(
         &self,
@@ -308,10 +309,10 @@ pub enum AlgorithmPolicy {
 }
 
 impl AlgorithmPolicy {
-    fn preferred(self) -> russh::Preferred {
+    const fn preferred(self) -> russh::Preferred {
         match self {
-            AlgorithmPolicy::Balanced => russh::Preferred::DEFAULT,
-            AlgorithmPolicy::Modern => russh::Preferred {
+            Self::Balanced => russh::Preferred::DEFAULT,
+            Self::Modern => russh::Preferred {
                 // No classical fallback: the point of this mode is that a
                 // downgrade is a failure, not a silent success.
                 kex: std::borrow::Cow::Borrowed(&[
@@ -448,7 +449,12 @@ impl Handler for ClientHandler {
             .to_openssh()
             .map_err(|e| TransportError::KeyEncoding(e.to_string()))?
             .into_bytes();
-        *self.observed_host_key.lock().expect("mutex") = Some(bytes.clone());
+        // Poison recovery: the guarded value is replaced in one assignment, so a
+        // panic elsewhere cannot leave it half-written.
+        *self
+            .observed_host_key
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(bytes.clone());
         Ok(match &self.expected_host_key {
             // Pinning: the key must match the pinned one (constant-time comparison).
             Some(pinned) => bool::from(pinned.as_slice().ct_eq(bytes.as_slice())),
@@ -474,8 +480,8 @@ impl Handler for ClientHandler {
         let target = self
             .remote_forwards
             .lock()
-            .expect("mutex")
-            .get(&(connected_address.to_string(), connected_port))
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&(connected_address.to_owned(), connected_port))
             .cloned();
         match target {
             Some((host, port)) => {
@@ -485,7 +491,13 @@ impl Handler for ClientHandler {
                 tokio::spawn(async move {
                     if let Ok(mut tcp) = TcpStream::connect((host.as_str(), port)).await {
                         let mut stream = channel.into_stream();
-                        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                        if tokio::io::copy_bidirectional(&mut tcp, &mut stream)
+                            .await
+                            .is_err()
+                        {
+                            // A reset on either side just ends this one tunnelled
+                            // connection; there is no caller left to tell.
+                        }
                     }
                 });
             }
@@ -497,7 +509,7 @@ impl Handler for ClientHandler {
                      forward is registered for (registered: {:?})",
                     self.remote_forwards
                         .lock()
-                        .expect("mutex")
+                        .unwrap_or_else(PoisonError::into_inner)
                         .keys()
                         .collect::<Vec<_>>()
                 );
@@ -514,7 +526,7 @@ impl Handler for ClientHandler {
 pub struct SshClient {
     handle: Arc<Handle<ClientHandler>>,
     /// Intermediate jump hosts — kept alive (their tunnels are needed by the connection).
-    _hops: Vec<Arc<Handle<ClientHandler>>>,
+    hops: Vec<Arc<Handle<ClientHandler>>>,
     remote_forwards: RemoteForwards,
     /// Whether this connection asked the server for agent forwarding. Only the
     /// **target** ever does — a bastion is exactly the machine the ProxyJump
@@ -533,9 +545,9 @@ impl SshClient {
         let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
         let mut handle = establish_first(opts, known_hosts, remote_forwards.clone()).await?;
         authenticate(&mut handle, opts, agent).await?;
-        Ok(SshClient {
+        Ok(Self {
             handle: Arc::new(handle),
-            _hops: Vec::new(),
+            hops: Vec::new(),
             remote_forwards,
             agent_forward_requested: opts.agent_forward.is_some(),
         })
@@ -549,9 +561,9 @@ impl SshClient {
         agent: &dyn KeySource,
         known_hosts: &dyn KnownHosts,
     ) -> Result<Self, TransportError> {
-        if chain.is_empty() {
+        let Some((first_hop, later_hops)) = chain.split_first() else {
             return Self::connect(target, agent, known_hosts).await;
-        }
+        };
 
         log::info!(
             "ssh connect {}@{}:{} via {} jump(s)",
@@ -561,29 +573,27 @@ impl SshClient {
             chain.len()
         );
         let remote_forwards: RemoteForwards = Arc::new(Mutex::new(HashMap::new()));
-        let mut handles: Vec<Handle<ClientHandler>> = Vec::new();
+        // The jumps already passed, in order; `current` is the last one reached.
+        let mut hops: Vec<Handle<ClientHandler>> = Vec::new();
 
         // The first jump — over TCP (possibly through a proxy).
-        let mut first =
-            establish_first(&chain[0], known_hosts, Arc::new(Mutex::new(HashMap::new()))).await?;
-        authenticate(&mut first, &chain[0], agent).await?;
-        handles.push(first);
+        let mut current =
+            establish_first(first_hop, known_hosts, Arc::new(Mutex::new(HashMap::new()))).await?;
+        authenticate(&mut current, first_hop, agent).await?;
 
         // The remaining jumps and the final host — tunneled through the previous one.
-        let rest: Vec<&ConnectOptions> = chain[1..].iter().chain(std::iter::once(target)).collect();
+        let rest: Vec<&ConnectOptions> = later_hops.iter().chain(std::iter::once(target)).collect();
         for (idx, hop) in rest.iter().enumerate() {
-            let is_target = idx == rest.len() - 1;
-            let stream = {
-                let via = handles.last().expect("at least one hop");
-                via.channel_open_direct_tcpip(
+            let is_target = idx + 1 == rest.len();
+            let stream = current
+                .channel_open_direct_tcpip(
                     hop.host.clone(),
-                    hop.port as u32,
-                    "127.0.0.1".to_string(),
+                    u32::from(hop.port),
+                    "127.0.0.1".to_owned(),
                     0,
                 )
                 .await?
-                .into_stream()
-            };
+                .into_stream();
             let rf = if is_target {
                 remote_forwards.clone()
             } else {
@@ -591,13 +601,13 @@ impl SshClient {
             };
             let mut next = establish_stream(stream, hop, known_hosts, rf).await?;
             authenticate(&mut next, hop, agent).await?;
-            handles.push(next);
+            hops.push(std::mem::replace(&mut current, next));
         }
 
-        let target_handle = handles.pop().expect("target handle");
-        Ok(SshClient {
-            handle: Arc::new(target_handle),
-            _hops: handles.into_iter().map(Arc::new).collect(),
+        // After the loop `current` is the target (`rest` always ends with it).
+        Ok(Self {
+            handle: Arc::new(current),
+            hops: hops.into_iter().map(Arc::new).collect(),
             remote_forwards,
             // The target's setting, not a hop's: a bastion is precisely the
             // machine ProxyJump exists to keep the key away from, so forwarding
@@ -607,6 +617,10 @@ impl SshClient {
     }
 
     /// Runs a command, collects stdout/stderr/exit status.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "ChannelMsg is a non-exhaustive stream of channel events; only data and exit status are collected, the rest is ignored by design"
+    )]
     pub async fn exec(&self, command: &str) -> Result<CommandOutput, TransportError> {
         let mut channel = self.handle.channel_open_session().await?;
         channel.exec(true, command).await?;
@@ -633,6 +647,10 @@ impl SshClient {
     /// separately by a background task, the exit status via `on_exit`. Returns an
     /// [`ExecHandle`] for (optional) stdin and closing. The connection must stay alive
     /// while the handle is open (keep `SshClient` alive).
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "ChannelMsg is a non-exhaustive stream of channel events; only stdout, stderr and exit status are forwarded, the rest is ignored by design"
+    )]
     pub async fn exec_stream(
         &self,
         command: &str,
@@ -659,7 +677,7 @@ impl SshClient {
             }
             sink.on_exit(exit);
             // set exited AFTER on_exit → wait_exit()==true guarantees delivery.
-            exited2.store(true, std::sync::atomic::Ordering::SeqCst);
+            exited2.store(true, Ordering::SeqCst);
         });
         Ok(ExecHandle {
             write,
@@ -687,7 +705,7 @@ impl SshClient {
         let listener = tokio::net::TcpListener::bind(bind_addr).await?;
         let local_addr = listener.local_addr()?;
         let handle = self.handle.clone();
-        let target_host = target_host.to_string();
+        let target_host = target_host.to_owned();
 
         let task = tokio::spawn(async move {
             while let Ok((mut socket, _peer)) = listener.accept().await {
@@ -697,14 +715,15 @@ impl SshClient {
                     if let Ok(channel) = handle
                         .channel_open_direct_tcpip(
                             target_host,
-                            target_port as u32,
-                            "127.0.0.1".to_string(),
+                            u32::from(target_port),
+                            "127.0.0.1".to_owned(),
                             0,
                         )
                         .await
                     {
-                        let mut stream = channel.into_stream();
-                        let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
+                        // A reset on either side just ends this one tunnelled
+                        // connection; the listener keeps serving the rest.
+                        pump_tunnel(&mut socket, channel).await;
                     }
                 });
             }
@@ -730,16 +749,16 @@ impl SshClient {
             while let Ok((mut socket, _peer)) = listener.accept().await {
                 let handle = handle.clone();
                 tokio::spawn(async move {
-                    let (host, port) = match socks5_handshake(&mut socket).await {
-                        Ok(t) => t,
-                        Err(_) => return,
+                    let Ok((host, port)) = socks5_handshake(&mut socket).await else {
+                        return;
                     };
                     if let Ok(channel) = handle
-                        .channel_open_direct_tcpip(host, port as u32, "127.0.0.1".to_string(), 0)
+                        .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1".to_owned(), 0)
                         .await
                     {
-                        let mut stream = channel.into_stream();
-                        let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
+                        // A reset on either side just ends this one SOCKS
+                        // connection; the listener keeps serving the rest.
+                        pump_tunnel(&mut socket, channel).await;
                     }
                 });
             }
@@ -770,13 +789,23 @@ impl SshClient {
         // carries nothing.
         let reply = self
             .handle
-            .tcpip_forward(remote_bind.to_string(), remote_port as u32)
-            .await? as u16;
-        let assigned = if remote_port == 0 { reply } else { remote_port };
-        self.remote_forwards.lock().expect("mutex").insert(
-            (remote_bind.to_string(), assigned as u32),
-            (local_host.to_string(), local_port),
-        );
+            .tcpip_forward(remote_bind.to_owned(), u32::from(remote_port))
+            .await?;
+        let assigned = if remote_port == 0 {
+            // A port outside u16 is a server bug; truncating it would register
+            // delivery under a port the server never opens.
+            u16::try_from(reply)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+        } else {
+            remote_port
+        };
+        self.remote_forwards
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                (remote_bind.to_owned(), u32::from(assigned)),
+                (local_host.to_owned(), local_port),
+            );
         Ok(assigned)
     }
 
@@ -786,23 +815,32 @@ impl SshClient {
             .handle
             .disconnect(russh::Disconnect::ByApplication, "", "")
             .await;
-        for hop in self._hops.iter().rev() {
-            let _ = hop
+        for hop in self.hops.iter().rev() {
+            if hop
                 .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
+                .await
+                .is_err()
+            {
+                // A hop that is already gone needs no goodbye; the target's
+                // result is the one reported.
+            }
         }
         result.map_err(TransportError::from)
     }
 
     /// Whether the target or an owned jump connection has closed. Never reconnects.
     pub fn is_closed(&self) -> bool {
-        self.handle.is_closed() || self._hops.iter().any(|h| h.is_closed())
+        self.handle.is_closed() || self.hops.iter().any(|h| h.is_closed())
     }
 
     /// Opens an interactive shell session with a PTY. The output (PTY stdout/stderr)
     /// is streamed into `sink` by a background task; input/resize/close via the
     /// returned [`ShellHandle`]. The connection must stay alive while the session is
     /// open (keep `SshClient` alive at the caller).
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "ChannelMsg is a non-exhaustive stream of channel events; only output and exit are forwarded to the terminal, the rest is ignored by design"
+    )]
     pub async fn open_shell(
         &self,
         term: &str,
@@ -888,11 +926,14 @@ impl SshClient {
                 }
                 Err(error) => Err(error),
             };
-            let _ = tx.send(result);
+            if tx.send(result).is_err() {
+                // The caller gave up: the returned stream is dropped here, which
+                // closes the late channel.
+            }
         });
         let stream = rx
             .await
-            .map_err(|_| TransportError::Sftp("channel opener stopped".into()))??;
+            .map_err(|e| TransportError::Sftp(format!("channel opener stopped: {e}")))??;
         crate::sftp::Sftp::start(stream).await
     }
 }
@@ -930,7 +971,7 @@ pub struct ExecHandle {
 impl ExecHandle {
     /// Whether the command has finished (whether `on_exit` was delivered).
     pub fn has_exited(&self) -> bool {
-        self.exited.load(std::sync::atomic::Ordering::SeqCst)
+        self.exited.load(Ordering::SeqCst)
     }
 
     /// Writes to the command's stdin.
@@ -948,7 +989,9 @@ impl ExecHandle {
 
     /// Closes the channel (EOF stdin + close).
     pub async fn close(&self) -> Result<(), TransportError> {
-        let _ = self.write.eof().await;
+        if self.write.eof().await.is_err() {
+            // The channel is already going away; `close` below reports it.
+        }
         self.write.close().await?;
         Ok(())
     }
@@ -987,7 +1030,9 @@ impl ShellHandle {
     /// only *sends* a close, and the peer's answer may never arrive (or arrives
     /// after the handle is gone). `on_close` has to run either way.
     pub async fn close(&self) -> Result<(), TransportError> {
-        let _ = self.write.eof().await;
+        if self.write.eof().await.is_err() {
+            // The channel is already going away; `close` below reports it.
+        }
         let res = self.write.close().await;
         self.shutdown.notify_one();
         res?;
@@ -1017,7 +1062,7 @@ pub struct ForwardGuard {
 
 impl ForwardGuard {
     /// The address the forward is listening on.
-    pub fn local_addr(&self) -> SocketAddr {
+    pub const fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 }
@@ -1062,6 +1107,19 @@ pub fn algorithm_policy() -> AlgorithmPolicy {
     match ALGORITHM_POLICY.load(Ordering::Relaxed) {
         0 => AlgorithmPolicy::Balanced,
         _ => AlgorithmPolicy::Modern,
+    }
+}
+
+/// Pipes an accepted local socket through an opened direct-tcpip channel until
+/// either side closes. An I/O error (a reset on either side) ends only this one
+/// connection, so it is deliberately not reported.
+async fn pump_tunnel(socket: &mut TcpStream, channel: Channel<Msg>) {
+    let mut stream = channel.into_stream();
+    if tokio::io::copy_bidirectional(socket, &mut stream)
+        .await
+        .is_err()
+    {
+        // Nothing to recover: the caller's listener keeps serving other connections.
     }
 }
 
@@ -1131,14 +1189,24 @@ async fn establish_tcp(
         ),
     )
     .await
-    .map_err(|_| TransportError::HandshakeTimeout)?;
+    .map_err(handshake_timed_out)?;
     match connected {
         Ok(handle) => {
-            pin_tofu(known_hosts, &opts.host, opts.port, &expected, &observed)?;
+            pin_tofu(
+                known_hosts,
+                &opts.host,
+                opts.port,
+                expected.as_deref(),
+                &observed,
+            )?;
             Ok(handle)
         }
         Err(e) => Err(classify_connect_error(
-            e, &opts.host, opts.port, &expected, &observed,
+            e,
+            &opts.host,
+            opts.port,
+            expected.as_deref(),
+            &observed,
         )),
     }
 }
@@ -1168,27 +1236,50 @@ where
         russh::client::connect_stream(client_config(algorithm_policy()), stream, handler),
     )
     .await
-    .map_err(|_| TransportError::HandshakeTimeout)?;
+    .map_err(handshake_timed_out)?;
     match connected {
         Ok(handle) => {
-            pin_tofu(known_hosts, &opts.host, opts.port, &expected, &observed)?;
+            pin_tofu(
+                known_hosts,
+                &opts.host,
+                opts.port,
+                expected.as_deref(),
+                &observed,
+            )?;
             Ok(handle)
         }
         Err(e) => Err(classify_connect_error(
-            e, &opts.host, opts.port, &expected, &observed,
+            e,
+            &opts.host,
+            opts.port,
+            expected.as_deref(),
+            &observed,
         )),
     }
+}
+
+/// Maps an elapsed handshake/auth deadline to [`TransportError::HandshakeTimeout`].
+/// `Elapsed` carries nothing beyond "the deadline passed", which the variant
+/// already says, so there is no cause to keep.
+const fn handshake_timed_out(_: Elapsed) -> TransportError {
+    TransportError::HandshakeTimeout
 }
 
 fn pin_tofu(
     known_hosts: &dyn KnownHosts,
     host: &str,
     port: u16,
-    expected: &Option<Vec<u8>>,
+    expected: Option<&[u8]>,
     observed: &Arc<Mutex<Option<Vec<u8>>>>,
 ) -> Result<(), TransportError> {
     if expected.is_none() {
-        if let Some(key) = observed.lock().expect("mutex").clone() {
+        // Poison recovery: the guarded value is replaced in one assignment, so a
+        // panic elsewhere cannot leave it half-written.
+        let observed = observed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(key) = observed {
             known_hosts.put(host, port, &key)?;
         }
     }
@@ -1199,15 +1290,19 @@ fn classify_connect_error(
     e: TransportError,
     host: &str,
     port: u16,
-    expected: &Option<Vec<u8>>,
+    expected: Option<&[u8]>,
     observed: &Arc<Mutex<Option<Vec<u8>>>>,
 ) -> TransportError {
     // If a key was pinned and the observed one differs — this is a mismatch (MITM).
     if let Some(pinned) = expected {
-        if let Some(obs) = observed.lock().expect("mutex").clone() {
-            if !bool::from(obs.as_slice().ct_eq(pinned.as_slice())) {
+        let observed = observed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(obs) = observed {
+            if !bool::from(obs.as_slice().ct_eq(pinned)) {
                 return TransportError::HostKeyMismatch {
-                    host: host.to_string(),
+                    host: host.to_owned(),
                     port,
                     fingerprint: fingerprint_openssh(&obs),
                 };
@@ -1222,7 +1317,7 @@ fn classify_connect_error(
 pub(crate) fn require_loopback(bind_addr: &str) -> Result<(), TransportError> {
     match bind_addr.parse::<SocketAddr>() {
         Ok(sa) if sa.ip().is_loopback() => Ok(()),
-        _ => Err(TransportError::NonLoopbackBind(bind_addr.to_string())),
+        _ => Err(TransportError::NonLoopbackBind(bind_addr.to_owned())),
     }
 }
 
@@ -1250,7 +1345,7 @@ pub fn fingerprint_openssh(openssh: &[u8]) -> String {
     let s = String::from_utf8_lossy(openssh);
     match PublicKey::from_openssh(s.trim()) {
         Ok(pk) => pk.fingerprint(HashAlg::Sha256).to_string(),
-        Err(_) => "unknown".to_string(),
+        Err(_) => "unknown".to_owned(),
     }
 }
 
@@ -1295,22 +1390,26 @@ pub async fn trust_host_key(
         ),
     )
     .await
-    .map_err(|_| TransportError::HandshakeTimeout)??;
+    .map_err(handshake_timed_out)??;
     let key = observed
         .lock()
-        .expect("mutex")
+        .unwrap_or_else(PoisonError::into_inner)
         .clone()
         .ok_or_else(|| TransportError::KeyEncoding("no host key observed".into()))?;
-    let _ = handle
+    if handle
         .disconnect(russh::Disconnect::ByApplication, "", "")
-        .await;
+        .await
+        .is_err()
+    {
+        // The key is already in hand; a failed goodbye on a probe changes nothing.
+    }
 
     // Verify the actually presented key against the confirmed fingerprint
     // (constant-time) — pin only on a match.
     let got = fingerprint_openssh(&key);
     if !bool::from(got.as_bytes().ct_eq(expected_fingerprint.as_bytes())) {
         return Err(TransportError::FingerprintMismatch {
-            expected: expected_fingerprint.to_string(),
+            expected: expected_fingerprint.to_owned(),
             got,
         });
     }
@@ -1352,11 +1451,7 @@ async fn authenticate(
                     .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
 
                 // RSA is signed with rsa-sha2-512 (as ssh-key does); everything else — without a hash.
-                let hash_alg = if russh_public.algorithm().is_rsa() {
-                    Some(HashAlg::Sha512)
-                } else {
-                    None
-                };
+                let hash_alg = russh_public.algorithm().is_rsa().then_some(HashAlg::Sha512);
 
                 let mut signer = AgentSigner {
                     agent,
@@ -1397,11 +1492,7 @@ async fn authenticate(
                 // hardware token reachable at all.
                 let public = PublicKey::from_openssh(public_key.trim())
                     .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
-                let hash_alg = if public.algorithm().is_rsa() {
-                    Some(HashAlg::Sha512)
-                } else {
-                    None
-                };
+                let hash_alg = public.algorithm().is_rsa().then_some(HashAlg::Sha512);
                 let mut agent = SystemAgent::connect(opts.own_system_agent.as_deref()).await?;
                 // Refuse early and clearly when the agent does not hold the key.
                 // Otherwise the server sees a signature it cannot verify and
@@ -1429,7 +1520,7 @@ async fn authenticate(
                 // eliminated only by patching russh; our side (Auth::Password) keeps
                 // the password in Zeroizing.
                 handle
-                    .authenticate_password(opts.user.clone(), password.as_str().to_string())
+                    .authenticate_password(opts.user.clone(), password.as_str().to_owned())
                     .await?
             }
         };
@@ -1456,7 +1547,7 @@ async fn authenticate(
         })
     })
     .await
-    .map_err(|_| TransportError::HandshakeTimeout)??;
+    .map_err(handshake_timed_out)??;
     match result {
         AuthResult::Success => {
             log::debug!("ssh auth ok for user {}", opts.user);
@@ -1517,7 +1608,7 @@ async fn keyboard_interactive(
     prompter: Option<&Arc<dyn AuthPrompter>>,
 ) -> Result<AuthResult, TransportError> {
     let mut response = handle
-        .authenticate_keyboard_interactive_start(user.to_string(), None::<String>)
+        .authenticate_keyboard_interactive_start(user.to_owned(), None::<String>)
         .await?;
     for round in 0..MAX_KBD_INTERACTIVE_ROUNDS {
         match response {
@@ -1586,7 +1677,7 @@ fn answer_from_password(
     Some(
         fields
             .iter()
-            .map(|_| password.as_str().to_string())
+            .map(|_| password.as_str().to_owned())
             .collect(),
     )
 }
@@ -1601,6 +1692,10 @@ async fn ask_user(
 ) -> Result<Vec<String>, TransportError> {
     let prompter = Arc::clone(prompter);
     let expected = fields.len();
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a JoinError means the prompter panicked or the runtime is shutting down; either way the prompt went unanswered, which AuthCancelled names"
+    )]
     let answers =
         tokio::task::spawn_blocking(move || prompter.prompt(&name, &instruction, &fields))
             .await
@@ -1670,7 +1765,7 @@ impl SystemAgent {
     async fn identities(&mut self) -> Result<Vec<AgentIdentity>, TransportError> {
         let r = match self {
             #[cfg(unix)]
-            SystemAgent::Uds(c) => c.request_identities().await,
+            Self::Uds(c) => c.request_identities().await,
             #[cfg(windows)]
             SystemAgent::Pipe(c) => c.request_identities().await,
         };
@@ -1753,7 +1848,7 @@ pub async fn system_agent_keys(
             out.push(SystemAgentKey {
                 public_key: line,
                 comment,
-                algorithm: key.algorithm().as_str().to_string(),
+                algorithm: key.algorithm().as_str().to_owned(),
             });
         }
     }
@@ -1816,12 +1911,14 @@ impl Signer for AgentSigner<'_> {
         let raw = &raw;
 
         // russh expects: to_sign ++ string( string(alg) || string(sig) ).
+        let wire_len =
+            |len: usize| u32::try_from(len).map_err(|e| TransportError::KeyEncoding(e.to_string()));
         let inner_len = 4 + name.len() + 4 + raw.len();
         let mut out = to_sign;
-        out.extend_from_slice(&(inner_len as u32).to_be_bytes());
-        out.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        out.extend_from_slice(&wire_len(inner_len)?.to_be_bytes());
+        out.extend_from_slice(&wire_len(name.len())?.to_be_bytes());
         out.extend_from_slice(name);
-        out.extend_from_slice(&(raw.len() as u32).to_be_bytes());
+        out.extend_from_slice(&wire_len(raw.len())?.to_be_bytes());
         out.extend_from_slice(raw);
         Ok(out)
     }
@@ -1833,7 +1930,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     // Greeting: VER NMETHODS METHODS...
-    let mut head = [0u8; 2];
+    let mut head = [0_u8; 2];
     socket.read_exact(&mut head).await?;
     if head[0] != 0x05 {
         return Err(TransportError::Socks);
@@ -1842,17 +1939,19 @@ where
     if n == 0 {
         return Err(TransportError::Socks);
     }
-    let mut methods = vec![0u8; n];
+    let mut methods = vec![0_u8; n];
     socket.read_exact(&mut methods).await?;
     // We support only method 0 (without authentication); otherwise 0xFF and disconnect.
     if !methods.contains(&0x00) {
-        let _ = socket.write_all(&[0x05, 0xff]).await;
+        if socket.write_all(&[0x05, 0xff]).await.is_err() {
+            // Best-effort refusal: the handshake fails with Socks either way.
+        }
         return Err(TransportError::Socks);
     }
     socket.write_all(&[0x05, 0x00]).await?;
 
     // Request: VER CMD RSV ATYP DST.ADDR DST.PORT
-    let mut req = [0u8; 4];
+    let mut req = [0_u8; 4];
     socket.read_exact(&mut req).await?;
     if req[0] != 0x05 || req[1] != 0x01 {
         // we support only CONNECT
@@ -1861,34 +1960,41 @@ where
             .await?;
         return Err(TransportError::Socks);
     }
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "Socks is a unit variant: a non-UTF-8 domain from the local SOCKS client is only reported as a protocol error"
+    )]
     let host = match req[3] {
         0x01 => {
-            let mut a = [0u8; 4];
+            let mut a = [0_u8; 4];
             socket.read_exact(&mut a).await?;
             format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3])
         }
         0x03 => {
-            let mut len = [0u8; 1];
+            let mut len = [0_u8; 1];
             socket.read_exact(&mut len).await?;
             if len[0] == 0 {
                 return Err(TransportError::Socks);
             }
-            let mut dn = vec![0u8; len[0] as usize];
+            let mut dn = vec![0_u8; len[0] as usize];
             socket.read_exact(&mut dn).await?;
             String::from_utf8(dn).map_err(|_| TransportError::Socks)?
         }
         0x04 => {
-            let mut a = [0u8; 16];
+            let mut a = [0_u8; 16];
             socket.read_exact(&mut a).await?;
-            let segments: Vec<String> = a
-                .chunks(2)
-                .map(|c| format!("{:x}", u16::from_be_bytes([c[0], c[1]])))
+            // Same uncompressed `x:x:x:x:x:x:x:x` text as before; `segments()`
+            // reads the octets big-endian in pairs.
+            let segments: Vec<String> = std::net::Ipv6Addr::from(a)
+                .segments()
+                .iter()
+                .map(|segment| format!("{segment:x}"))
                 .collect();
             segments.join(":")
         }
         _ => return Err(TransportError::Socks),
     };
-    let mut port = [0u8; 2];
+    let mut port = [0_u8; 2];
     socket.read_exact(&mut port).await?;
     let port = u16::from_be_bytes(port);
 
@@ -2025,20 +2131,20 @@ mod tests {
 
     fn hidden(prompt: &str) -> PromptField {
         PromptField {
-            prompt: prompt.to_string(),
+            prompt: prompt.to_owned(),
             echo: false,
         }
     }
 
     fn visible(prompt: &str) -> PromptField {
         PromptField {
-            prompt: prompt.to_string(),
+            prompt: prompt.to_owned(),
             echo: true,
         }
     }
 
     fn pw() -> Zeroizing<String> {
-        Zeroizing::new("correct horse".to_string())
+        Zeroizing::new("correct horse".to_owned())
     }
 
     #[test]
@@ -2048,7 +2154,7 @@ mod tests {
         // prompted for something the client already knows.
         let answers = answer_from_password(0, Some(&pw()), &[hidden("Password: ")])
             .expect("first hidden-only round is answerable from the stored password");
-        assert_eq!(answers, vec!["correct horse".to_string()]);
+        assert_eq!(answers, vec!["correct horse".to_owned()]);
     }
 
     #[test]

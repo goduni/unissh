@@ -129,7 +129,7 @@ impl SshConfig {
     /// Parses the config text. `Include` paths are collected but not read — use
     /// [`Self::parse_with_includes`] when they should be followed.
     pub fn parse(text: &str) -> Result<Self, TransportError> {
-        let mut cfg = SshConfig::default();
+        let mut cfg = Self::default();
         // No loader: includes are recorded in `includes` and left alone.
         cfg.parse_into::<fn(&str, Option<&str>) -> Vec<IncludedFile>>(text, None, &mut None, 0)?;
         Ok(cfg)
@@ -154,7 +154,7 @@ impl SshConfig {
     where
         F: FnMut(&str, Option<&str>) -> Vec<IncludedFile>,
     {
-        let mut cfg = SshConfig::default();
+        let mut cfg = Self::default();
         cfg.parse_into(text, None, &mut Some(&mut load), 0)?;
         Ok(cfg)
     }
@@ -166,6 +166,10 @@ impl SshConfig {
     /// the meaning: a config that opens with `Include conf.d/*` and then has a
     /// catch-all `Host *` expects the included hosts to win, and appending them
     /// would hand every host the catch-all's user instead.
+    #[expect(
+        clippy::excessive_nesting,
+        reason = "frozen OpenSSH-semantics parser: the per-path Include handling nests by design and is not restructured for a style lint"
+    )]
     fn parse_into<F>(
         &mut self,
         text: &str,
@@ -188,7 +192,7 @@ impl SshConfig {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let line_no = (idx as u32).saturating_add(1);
+            let line_no = u32::try_from(idx).unwrap_or(u32::MAX).saturating_add(1);
             let (keyword, rest) = split_keyword(line);
             let key = keyword.to_ascii_lowercase();
 
@@ -197,11 +201,11 @@ impl SshConfig {
                     self.blocks.push(b);
                 }
                 in_match = false;
-                let patterns = rest.split_whitespace().map(|s| s.to_string()).collect();
+                let patterns = rest.split_whitespace().map(str::to_owned).collect();
                 current = Some(HostBlock {
                     patterns,
                     settings: HostSettings::default(),
-                    origin: origin.map(str::to_string),
+                    origin: origin.map(str::to_owned),
                 });
                 continue;
             }
@@ -213,9 +217,9 @@ impl SshConfig {
                 in_match = true;
                 self.skipped.push(SkippedDirective {
                     line: line_no,
-                    keyword: keyword.to_string(),
+                    keyword: keyword.to_owned(),
                     reason: SkipReason::InsideMatch,
-                    origin: origin.map(str::to_string),
+                    origin: origin.map(str::to_owned),
                 });
                 continue;
             }
@@ -231,9 +235,9 @@ impl SshConfig {
                 if in_match {
                     self.skipped.push(SkippedDirective {
                         line: line_no,
-                        keyword: keyword.to_string(),
+                        keyword: keyword.to_owned(),
                         reason: SkipReason::InsideMatch,
-                        origin: origin.map(str::to_string),
+                        origin: origin.map(str::to_owned),
                     });
                     continue;
                 }
@@ -242,16 +246,16 @@ impl SshConfig {
                     self.includes
                         .extend(paths.into_iter().map(|path| PendingInclude {
                             path,
-                            origin: origin.map(str::to_string),
+                            origin: origin.map(str::to_owned),
                         }));
                 } else if depth >= MAX_INCLUDE_DEPTH {
                     // A cycle (a includes b includes a) has to stop somewhere;
                     // OpenSSH's own limit is 16. Reported, not silently cut.
                     self.skipped.push(SkippedDirective {
                         line: line_no,
-                        keyword: keyword.to_string(),
+                        keyword: keyword.to_owned(),
                         reason: SkipReason::Unsupported,
-                        origin: origin.map(str::to_string),
+                        origin: origin.map(str::to_owned),
                     });
                 } else {
                     // Close the open Host block so included blocks land after
@@ -275,7 +279,7 @@ impl SshConfig {
                         if files.is_empty() {
                             self.includes.push(PendingInclude {
                                 path: spec,
-                                origin: origin.map(str::to_string),
+                                origin: origin.map(str::to_owned),
                             });
                             continue;
                         }
@@ -289,7 +293,7 @@ impl SshConfig {
                     current = reopen.map(|patterns| HostBlock {
                         patterns,
                         settings: HostSettings::default(),
-                        origin: origin.map(str::to_string),
+                        origin: origin.map(str::to_owned),
                     });
                 }
                 continue;
@@ -298,54 +302,54 @@ impl SshConfig {
             if in_match {
                 self.skipped.push(SkippedDirective {
                     line: line_no,
-                    keyword: keyword.to_string(),
+                    keyword: keyword.to_owned(),
                     reason: SkipReason::InsideMatch,
-                    origin: origin.map(str::to_string),
+                    origin: origin.map(str::to_owned),
                 });
                 continue;
             }
 
-            let block = match current.as_mut() {
-                Some(b) => b,
-                // A directive before any Host block is a global default in
-                // OpenSSH. We do not model globals, so it is reported rather
-                // than dropped.
-                None => {
-                    self.skipped.push(SkippedDirective {
-                        line: line_no,
-                        keyword: keyword.to_string(),
-                        reason: SkipReason::Unsupported,
-                        origin: origin.map(str::to_string),
-                    });
-                    continue;
-                }
+            // A directive before any Host block is a global default in
+            // OpenSSH. We do not model globals, so it is reported rather
+            // than dropped.
+            let Some(block) = current.as_mut() else {
+                self.skipped.push(SkippedDirective {
+                    line: line_no,
+                    keyword: keyword.to_owned(),
+                    reason: SkipReason::Unsupported,
+                    origin: origin.map(str::to_owned),
+                });
+                continue;
             };
             let value = rest.trim();
             let s = &mut block.settings;
             match key.as_str() {
-                "hostname" => s.hostname = Some(value.to_string()),
+                "hostname" => s.hostname = Some(value.to_owned()),
                 "port" => {
-                    s.port = Some(
-                        value
-                            .parse()
-                            .map_err(|_| TransportError::Config(format!("bad port: {value}")))?,
-                    )
+                    #[expect(
+                        clippy::map_err_ignore,
+                        reason = "the ParseIntError text adds nothing to the quoted value, and this message is frozen parser behaviour"
+                    )]
+                    let port = value
+                        .parse::<u16>()
+                        .map_err(|_| TransportError::Config(format!("bad port: {value}")))?;
+                    s.port = Some(port);
                 }
-                "user" => s.user = Some(value.to_string()),
-                "identityfile" => s.identity_file = Some(value.to_string()),
-                "proxyjump" => s.proxy_jump = Some(value.to_string()),
-                "localforward" => s.local_forwards.push(value.to_string()),
-                "remoteforward" => s.remote_forwards.push(value.to_string()),
-                "dynamicforward" => s.dynamic_forwards.push(value.to_string()),
-                "setenv" => s.set_env.push(value.to_string()),
+                "user" => s.user = Some(value.to_owned()),
+                "identityfile" => s.identity_file = Some(value.to_owned()),
+                "proxyjump" => s.proxy_jump = Some(value.to_owned()),
+                "localforward" => s.local_forwards.push(value.to_owned()),
+                "remoteforward" => s.remote_forwards.push(value.to_owned()),
+                "dynamicforward" => s.dynamic_forwards.push(value.to_owned()),
+                "setenv" => s.set_env.push(value.to_owned()),
                 "serveraliveinterval" => s.server_alive_interval = value.parse().ok(),
                 "connecttimeout" => s.connect_timeout = value.parse().ok(),
                 "compression" => s.compression = Some(value.eq_ignore_ascii_case("yes")),
                 _ => self.skipped.push(SkippedDirective {
                     line: line_no,
-                    keyword: keyword.to_string(),
+                    keyword: keyword.to_owned(),
                     reason: SkipReason::Unsupported,
-                    origin: origin.map(str::to_string),
+                    origin: origin.map(str::to_owned),
                 }),
             }
         }
@@ -462,7 +466,14 @@ fn split_keyword(line: &str) -> (&str, &str) {
     // support `Key value` and `Key=value`
     if let Some(idx) = line.find(['=', ' ', '\t']) {
         let (k, v) = line.split_at(idx);
-        (k.trim(), v[1..].trim_start_matches(['=', ' ', '\t']))
+        // `v` starts with the one-byte ASCII separator found above, so `get(1..)`
+        // is always `Some`; the fallback only keeps this panic-free.
+        (
+            k.trim(),
+            v.get(1..)
+                .unwrap_or_default()
+                .trim_start_matches(['=', ' ', '\t']),
+        )
     } else {
         (line, "")
     }
@@ -513,15 +524,16 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
 
-    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut pi, mut ti) = (0_usize, 0_usize);
     let mut star: Option<usize> = None; // position of the last '*' in the pattern
-    let mut star_ti = 0usize; // position in the text at the moment of that '*'
+    let mut star_ti = 0_usize; // position in the text at the moment of that '*'
 
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+    while let Some(&tc) = t.get(ti) {
+        let pc = p.get(pi).copied();
+        if pc.is_some_and(|c| c == '?' || c == tc) {
             pi += 1;
             ti += 1;
-        } else if pi < p.len() && p[pi] == '*' {
+        } else if pc == Some('*') {
             star = Some(pi);
             star_ti = ti;
             pi += 1;
@@ -535,7 +547,7 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
         }
     }
     // the remaining tail of the pattern must consist only of '*'
-    while pi < p.len() && p[pi] == '*' {
+    while p.get(pi) == Some(&'*') {
         pi += 1;
     }
     pi == p.len()

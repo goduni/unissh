@@ -55,3 +55,6 @@ unissh-local-pty = { path = "../local-pty" }
 # In-process SSH server for password-authentication tests (hermetic).
 russh = "0.63"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util"] }
+
+[lints]
+workspace = true

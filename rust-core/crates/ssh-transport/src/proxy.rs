@@ -74,6 +74,10 @@ impl core::fmt::Debug for ProxyOptions {
 /// Connects to the proxy and asks it for a tunnel to `dest_host:dest_port`.
 /// The returned stream carries the destination's bytes (for us: the SSH
 /// banner) from the first read.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "tokio's Elapsed carries nothing beyond the timeout, which the Proxy message already states"
+)]
 pub async fn dial(
     proxy: &ProxyOptions,
     dest_host: &str,
@@ -117,16 +121,24 @@ async fn dial_inner(
         ProxyKind::Socks4 => socks4_handshake(&mut stream, proxy, dest_host, dest_port).await,
         ProxyKind::Socks5 => socks5_handshake(&mut stream, proxy, dest_host, dest_port).await,
     };
-    // A bare `?` inside a handshake yields an io error that reads like the
-    // destination's; relabel it here so every proxy-phase failure says so.
-    handshake.map_err(|e| match e {
+    handshake.map_err(|e| relabel_handshake_error(e, proxy))?;
+    Ok(stream)
+}
+
+/// A bare `?` inside a handshake yields an io error that reads like the
+/// destination's; this relabels it so every proxy-phase failure says so.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only Io is relabelled; every other variant already names its cause and passes through unchanged, future ones included"
+)]
+fn relabel_handshake_error(e: TransportError, proxy: &ProxyOptions) -> TransportError {
+    match e {
         TransportError::Io(io) => proxy_err(format!(
             "proxy {}:{} broke off the handshake: {io}",
             proxy.host, proxy.port
         )),
         other => other,
-    })?;
-    Ok(stream)
+    }
 }
 
 fn proxy_err(msg: impl Into<String>) -> TransportError {
@@ -164,8 +176,10 @@ where
         if reply.len() >= HTTP_REPLY_LIMIT {
             return Err(proxy_err("http proxy: oversized response"));
         }
-        let byte = stream.read_u8().await.map_err(|_| {
-            proxy_err("http proxy: connection closed before a full CONNECT response")
+        let byte = stream.read_u8().await.map_err(|e| {
+            proxy_err(format!(
+                "http proxy: connection closed before a full CONNECT response: {e}"
+            ))
         })?;
         reply.push(byte);
     }
@@ -217,26 +231,22 @@ fn http_status_code(status_line: &str) -> Option<u16> {
 /// rather than pulling a crate into the transport for it.
 fn base64_encode(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    // `& 63` keeps the index inside the 64-entry alphabet, so the `'='`
+    // fallback is never taken; it only keeps the lookup panic-free.
+    let sextet = |n: u32, shift: u32| {
+        ALPHABET
+            .get(((n >> shift) & 63) as usize)
+            .copied()
+            .map_or('=', char::from)
+    };
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
-        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
-        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHABET[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHABET[n as usize & 63] as char
-        } else {
-            '='
-        });
+        let byte = |i: usize| chunk.get(i).copied().unwrap_or(0);
+        let n = u32::from_be_bytes([0, byte(0), byte(1), byte(2)]);
+        out.push(sextet(n, 18));
+        out.push(sextet(n, 12));
+        out.push(if chunk.len() > 1 { sextet(n, 6) } else { '=' });
+        out.push(if chunk.len() > 2 { sextet(n, 0) } else { '=' });
     }
     out
 }
@@ -260,11 +270,12 @@ where
     stream.write_all(&request).await?;
 
     // Reply: VN(0) CD DSTPORT(2) DSTIP(4).
-    let mut reply = [0u8; 8];
-    stream
-        .read_exact(&mut reply)
-        .await
-        .map_err(|_| proxy_err("socks4 proxy: connection closed during handshake"))?;
+    let mut reply = [0_u8; 8];
+    stream.read_exact(&mut reply).await.map_err(|e| {
+        proxy_err(format!(
+            "socks4 proxy: connection closed during handshake: {e}"
+        ))
+    })?;
     match reply[1] {
         90 => Ok(()),
         91 => Err(proxy_err("socks4 proxy rejected the request")),
@@ -288,7 +299,7 @@ fn socks4_request(
             "socks4 cannot reach an IPv6 destination; use socks5",
         ));
     }
-    let mut req = vec![4u8, 1u8];
+    let mut req = vec![4_u8, 1_u8];
     req.extend_from_slice(&dest_port.to_be_bytes());
     let hostname = match dest_host.parse::<Ipv4Addr>() {
         Ok(ip) => {
@@ -335,11 +346,12 @@ where
     };
     stream.write_all(greeting).await?;
 
-    let mut choice = [0u8; 2];
-    stream
-        .read_exact(&mut choice)
-        .await
-        .map_err(|_| proxy_err("socks5 proxy: connection closed during handshake"))?;
+    let mut choice = [0_u8; 2];
+    stream.read_exact(&mut choice).await.map_err(|e| {
+        proxy_err(format!(
+            "socks5 proxy: connection closed during handshake: {e}"
+        ))
+    })?;
     if choice[0] != 5 {
         return Err(proxy_err("socks5 proxy: not a SOCKS5 server"));
     }
@@ -350,11 +362,10 @@ where
             let pass = proxy.password.as_deref().map_or("", |p| p.as_str());
             let auth = socks5_auth_request(user, pass)?;
             stream.write_all(&auth).await?;
-            let mut status = [0u8; 2];
-            stream
-                .read_exact(&mut status)
-                .await
-                .map_err(|_| proxy_err("socks5 proxy: connection closed during auth"))?;
+            let mut status = [0_u8; 2];
+            stream.read_exact(&mut status).await.map_err(|e| {
+                proxy_err(format!("socks5 proxy: connection closed during auth: {e}"))
+            })?;
             if status[1] != 0 {
                 return Err(proxy_err("socks5 proxy rejected the credentials"));
             }
@@ -375,11 +386,12 @@ where
 
     // Reply: VER REP RSV ATYP BND.ADDR BND.PORT — the bound address is
     // variable-length and must be consumed so the SSH banner starts the stream.
-    let mut head = [0u8; 4];
-    stream
-        .read_exact(&mut head)
-        .await
-        .map_err(|_| proxy_err("socks5 proxy: connection closed during connect"))?;
+    let mut head = [0_u8; 4];
+    stream.read_exact(&mut head).await.map_err(|e| {
+        proxy_err(format!(
+            "socks5 proxy: connection closed during connect: {e}"
+        ))
+    })?;
     if head[0] != 5 {
         return Err(proxy_err("socks5 proxy: bad reply version"));
     }
@@ -399,13 +411,13 @@ where
         0x01 => 4,
         0x04 => 16,
         0x03 => {
-            let mut len = [0u8; 1];
+            let mut len = [0_u8; 1];
             stream.read_exact(&mut len).await?;
             len[0] as usize
         }
         a => return Err(proxy_err(format!("socks5 proxy: bad address type {a}"))),
     };
-    let mut rest = vec![0u8; addr_len + 2];
+    let mut rest = vec![0_u8; addr_len + 2];
     stream.read_exact(&mut rest).await?;
     Ok(())
 }
@@ -413,12 +425,12 @@ where
 /// Builds the RFC 1929 username/password auth request. Both fields ride a
 /// one-byte length.
 fn socks5_auth_request(user: &str, pass: &str) -> Result<Vec<u8>, TransportError> {
-    if user.len() > 255 || pass.len() > 255 {
+    let (Ok(user_len), Ok(pass_len)) = (u8::try_from(user.len()), u8::try_from(pass.len())) else {
         return Err(proxy_err("socks5 username/password longer than 255 bytes"));
-    }
-    let mut req = vec![1u8, user.len() as u8];
+    };
+    let mut req = vec![1_u8, user_len];
     req.extend_from_slice(user.as_bytes());
-    req.push(pass.len() as u8);
+    req.push(pass_len);
     req.extend_from_slice(pass.as_bytes());
     Ok(req)
 }
@@ -426,7 +438,7 @@ fn socks5_auth_request(user: &str, pass: &str) -> Result<Vec<u8>, TransportError
 /// Builds the SOCKS5 CONNECT request; a hostname destination is sent as-is
 /// (ATYP 3) for the proxy to resolve.
 fn socks5_connect_request(dest_host: &str, dest_port: u16) -> Result<Vec<u8>, TransportError> {
-    let mut req = vec![5u8, 1u8, 0u8];
+    let mut req = vec![5_u8, 1_u8, 0_u8];
     if let Ok(ip) = dest_host.parse::<Ipv4Addr>() {
         req.push(0x01);
         req.extend_from_slice(&ip.octets());
@@ -434,20 +446,20 @@ fn socks5_connect_request(dest_host: &str, dest_port: u16) -> Result<Vec<u8>, Tr
         req.push(0x04);
         req.extend_from_slice(&ip.octets());
     } else {
-        if dest_host.len() > 255 {
+        let Ok(host_len) = u8::try_from(dest_host.len()) else {
             return Err(proxy_err(
                 "socks5 destination hostname longer than 255 bytes",
             ));
-        }
+        };
         req.push(0x03);
-        req.push(dest_host.len() as u8);
+        req.push(host_len);
         req.extend_from_slice(dest_host.as_bytes());
     }
     req.extend_from_slice(&dest_port.to_be_bytes());
     Ok(req)
 }
 
-fn socks5_reply_text(code: u8) -> &'static str {
+const fn socks5_reply_text(code: u8) -> &'static str {
     match code {
         0x01 => "general failure",
         0x02 => "connection not allowed by ruleset",
@@ -538,7 +550,7 @@ mod tests {
             [
                 &[5, 1, 0, 3, 11][..],
                 b"example.com",
-                &(2222u16).to_be_bytes()
+                &(2222_u16).to_be_bytes()
             ]
             .concat()
         );

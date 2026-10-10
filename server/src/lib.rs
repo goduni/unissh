@@ -3,6 +3,10 @@
 //! An untrusted ciphertext store + device/member sync + membership/sharing/
 //! revocation + audit. SSH traffic does NOT pass through the server. The server sees only
 //! encrypted blobs and open metadata (spec §1, ARCH §2).
+#![expect(
+    missing_docs,
+    reason = "public API docs are a documentation follow-up; the HTTP contract is documented in server/README.md and CLIENT.md"
+)]
 
 pub mod audit_sinks;
 pub mod codec;
@@ -35,7 +39,7 @@ pub async fn build_state(
     let store = Store::connect(&config.db).await?;
     store.migrate().await?;
     // v2 boot order (Task-2 review finding): the singleton `instance` row MUST
-    // exist before anything reads it — `Store::instance()` panics otherwise.
+    // exist before anything reads it — `Store::instance()` errors otherwise.
     let now = clock.now_unix();
     let instance_row = store.ensure_instance(now).await?;
     // Load the server-PRIVATE escrow-decoy secret (set once by `ensure_instance`,
@@ -43,6 +47,36 @@ pub async fn build_state(
     // read instance row — the decoy in `GET /v1/escrow/params` is keyed from THIS,
     // never from the PUBLIC `instance_id`.
     let escrow_decoy_secret = store.escrow_decoy_secret().await?;
+    announce_setup_code(&store, &config, &instance_row).await?;
+    // Whole-DB-snapshot anti-rollback (§16): refuse to come up if
+    // the instance-generation (instance.next_seq) has fallen below the
+    // operator-anchored floor. Checked HERE (not only in `main`) so that
+    // in-process/embedded deployments also get a fatal refusal when a stale
+    // snapshot is restored — otherwise anti-rollback degrades to "not checked".
+    let generation = store.instance_generation().await?;
+    let floor = config.sync.min_instance_generation;
+    rollback_guard(generation, floor)?;
+    tracing::info!(generation, floor, "anti-rollback check passed");
+    Ok(AppStateInner::new(
+        store,
+        config,
+        instance_row.instance_id,
+        escrow_decoy_secret,
+        clock,
+        metrics,
+    ))
+}
+
+/// Publish (or keep) the first-run setup code of an unclaimed instance.
+#[expect(
+    clippy::print_stdout,
+    reason = "operator-facing first-boot output: the freshly minted setup code is shown on stdout, not only in the log"
+)]
+async fn announce_setup_code(
+    store: &Store,
+    config: &Config,
+    instance_row: &store::models::InstanceRow,
+) -> AppResult<()> {
     // Unclaimed: publish a setup code so a client can claim this instance. We store
     // only sha256(code); the human code is printed to logs (never persisted).
     //
@@ -80,28 +114,12 @@ pub async fn build_state(
                  /app/config.toml`) — no data is touched"
             );
         } else {
-            let code = rotate_setup_code(&store).await?;
+            let code = rotate_setup_code(store).await?;
             tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
             println!("SETUP CODE: {code}");
         }
     }
-    // Whole-DB-snapshot anti-rollback (§16): refuse to come up if
-    // the instance-generation (instance.next_seq) has fallen below the
-    // operator-anchored floor. Checked HERE (not only in `main`) so that
-    // in-process/embedded deployments also get a fatal refusal when a stale
-    // snapshot is restored — otherwise anti-rollback degrades to "not checked".
-    let generation = store.instance_generation().await?;
-    let floor = config.sync.min_instance_generation;
-    rollback_guard(generation, floor)?;
-    tracing::info!(generation, floor, "anti-rollback check passed");
-    Ok(AppStateInner::new(
-        store,
-        config,
-        instance_row.instance_id,
-        escrow_decoy_secret,
-        clock,
-        metrics,
-    ))
+    Ok(())
 }
 
 /// Build the router from a ready state.
@@ -178,7 +196,7 @@ async fn put_setup_code_hash(store: &Store, want: &[u8]) -> AppResult<()> {
 /// effect immediately: the claim handler reads the hash per request, so a running
 /// server needs no restart. Refuses on a claimed instance.
 pub async fn rotate_setup_code(store: &Store) -> AppResult<String> {
-    let mut rnd = [0u8; 6];
+    let mut rnd = [0_u8; 6];
     ids::fill_random(&mut rnd);
     let code = ids::generate_setup_code(&rnd);
     put_setup_code_hash(store, &ids::sha256(code.as_bytes())).await?;
@@ -221,7 +239,7 @@ pub fn tls_plan(server: &config::ServerConfig) -> Result<TlsPlan, String> {
         return Err(
             "server.acme=true: in-process ACME is not built in — terminate TLS at a \
              reverse proxy (Caddy/nginx/Traefik) or set server.tls_cert + server.tls_key"
-                .to_string(),
+                .to_owned(),
         );
     }
     if !server.tls_cert.is_empty() && !server.tls_key.is_empty() {

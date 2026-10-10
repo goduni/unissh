@@ -31,7 +31,11 @@ fn domain_signing_bytes(domain: &[u8], payload: &[u8]) -> Result<Vec<u8>, Crypto
         return Err(CryptoError::InvalidLength);
     }
     let mut out = Vec::with_capacity(2 + domain.len() + payload.len());
-    out.extend_from_slice(&(domain.len() as u16).to_be_bytes());
+    out.extend_from_slice(
+        &u16::try_from(domain.len())
+            .map_err(|_| CryptoError::InvalidLength)?
+            .to_be_bytes(),
+    );
     out.extend_from_slice(domain);
     out.extend_from_slice(payload);
     Ok(out)

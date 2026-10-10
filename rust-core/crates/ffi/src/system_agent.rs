@@ -208,17 +208,24 @@ struct SharedKeys {
 }
 
 impl AgentKeys for SharedKeys {
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the unlocked check and the shared-key resolution atomically"
+    )]
     fn offered(&self) -> Vec<OfferedKey> {
-        let mut guard = lock_recover(&self.state);
-        let Some(state) = guard.as_mut() else {
-            return Vec::new();
+        let shared = {
+            let mut guard = lock_recover(&self.state);
+            let Some(state) = guard.as_mut() else {
+                return Vec::new();
+            };
+            resolve(state)
         };
         let mut offered = Vec::new();
         for Resolved {
             entry,
             public,
             certificate,
-        } in resolve(state)
+        } in shared
         {
             let key_id = agent_key_id(&entry.vault_id, &entry.item_id);
             offered.push(OfferedKey {
@@ -242,6 +249,10 @@ impl AgentKeys for SharedKeys {
     /// checked again here, after the approval wait. Only ever reached through
     /// [`LocalAgent`], which asks first. A certificate identity signs with its
     /// key.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the re-check that the key is still shared, its load and the signature atomically"
+    )]
     fn sign(&self, key: &OfferedKey, data: &[u8], rsa: RsaHash) -> Option<(String, Vec<u8>)> {
         let mut guard = lock_recover(&self.state);
         let Some(state) = guard.as_mut() else {
@@ -331,6 +342,7 @@ impl SystemApproval {
         };
         let name = String::from_utf8_lossy(vault.name()).to_string();
         state.vault_names.insert(vid, name.clone());
+        drop(guard);
         name
     }
 }

@@ -25,13 +25,13 @@ pub struct SecretKey([u8; SECRET_KEY_LEN]);
 impl SecretKey {
     /// Generates a new Secret Key from the system CSPRNG.
     pub fn generate() -> Self {
-        let mut bytes = [0u8; SECRET_KEY_LEN];
+        let mut bytes = [0_u8; SECRET_KEY_LEN];
         OsRng.fill_bytes(&mut bytes);
         Self(bytes)
     }
 
     /// Constructs from ready-made bytes.
-    pub fn from_bytes(bytes: [u8; SECRET_KEY_LEN]) -> Self {
+    pub const fn from_bytes(bytes: [u8; SECRET_KEY_LEN]) -> Self {
         Self(bytes)
     }
 
@@ -42,7 +42,7 @@ impl SecretKey {
     }
 
     /// Explicit access to the raw bytes. Do not log, do not store in the clear.
-    pub fn expose_bytes(&self) -> &[u8; SECRET_KEY_LEN] {
+    pub const fn expose_bytes(&self) -> &[u8; SECRET_KEY_LEN] {
         &self.0
     }
 }

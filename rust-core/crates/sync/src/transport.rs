@@ -51,12 +51,12 @@ impl InMemoryTransport {
     }
 
     /// Force it to hand off all objects with a fixed seq (misbehave).
-    pub fn force_seq_floor(&mut self, seq: u64) {
+    pub const fn force_seq_floor(&mut self, seq: u64) {
         self.forced_seq_floor = Some(seq);
     }
 
     /// Force `report_version` to return the given value (misbehave).
-    pub fn force_report_version(&mut self, v: u64) {
+    pub const fn force_report_version(&mut self, v: u64) {
         self.forced_report_version = Some(v);
     }
 
@@ -66,7 +66,7 @@ impl InMemoryTransport {
     }
 
     /// Direct access for tests: the real max seq.
-    pub fn real_max_seq(&self) -> u64 {
+    pub const fn real_max_seq(&self) -> u64 {
         self.next_seq
     }
 }
@@ -115,14 +115,14 @@ impl SyncTransport for InMemoryTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::{AuditObject, SyncObject};
+    use crate::object::AuditObject;
 
     fn audit(tag: u8) -> SyncObject {
         SyncObject::Audit(AuditObject {
             vault_id: vec![tag],
             entry_blob: vec![tag],
-            signature: vec![1u8; 67],
-            author_pubkey: vec![2u8; 32],
+            signature: vec![1_u8; 67],
+            author_pubkey: vec![2_u8; 32],
         })
     }
 

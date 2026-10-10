@@ -46,6 +46,10 @@ pub struct Credentials {
     config: Mutex<Config>,
 }
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "every failure maps to the one fixed, content-free configuration error; serde messages could quote the file"
+)]
 impl Credentials {
     pub fn load(path: PathBuf) -> io::Result<Self> {
         let config = match fs::metadata(&path) {
@@ -72,6 +76,10 @@ impl Credentials {
             config: Mutex::new(config),
         })
     }
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the read, the file write and the in-memory swap atomically so concurrent edits are not lost"
+    )]
     fn mutate<T>(&self, f: impl FnOnce(&mut Config) -> io::Result<T>) -> io::Result<T> {
         let mut guard = self.config.lock().map_err(|_| invalid())?;
         let mut config = guard.clone();
@@ -86,7 +94,10 @@ impl Credentials {
         Ok(result)
     }
     pub fn settings(&self) -> (bool, u16) {
-        let c = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let c = self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         (c.enabled, c.port)
     }
     pub fn set_enabled(&self, enabled: bool, port: u16) -> io::Result<()> {
@@ -99,7 +110,7 @@ impl Credentials {
     pub fn list(&self) -> Vec<Integration> {
         self.config
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .integrations
             .iter()
             .map(|r| Integration {
@@ -113,7 +124,7 @@ impl Credentials {
         if label.trim().is_empty() || label.len() > 120 {
             return Err(invalid());
         }
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0_u8; 32];
         getrandom::fill(&mut bytes).map_err(|_| invalid())?;
         let token = format!("unissh_mcp_{}", URL_SAFE_NO_PAD.encode(bytes));
         let digest = Sha256::digest(token.as_bytes()).into();
@@ -147,7 +158,7 @@ impl Credentials {
             .find(|r| r.id == id)
             .ok_or_else(invalid)?
             .label;
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0_u8; 32];
         getrandom::fill(&mut bytes).map_err(|_| invalid())?;
         let token = format!("unissh_mcp_{}", URL_SAFE_NO_PAD.encode(bytes));
         let digest = Sha256::digest(token.as_bytes()).into();

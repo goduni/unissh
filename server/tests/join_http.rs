@@ -12,14 +12,18 @@ use serde_json::{Value, json};
 use unissh_server::ids::b64;
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end join scenario; the steps share state and read in order"
+)]
 async fn join_new_then_existing_keyset_and_admin_gate() {
     let app = spawn().await;
 
     // --- Owner claims + logs in. ---
     let owner = make_identity();
     let claimed = claim_owner(&app, &owner.payload_b64, &owner.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
-    let owner_dev = claimed["device_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
+    let owner_dev = claimed["device_id"].as_str().unwrap().to_owned();
     let owner_tok = common::login_v2(&app, &owner, &owner_acct, &owner_dev).await;
 
     // --- Owner creates space "Backend" (creator is auto-admin). ---
@@ -35,7 +39,7 @@ async fn join_new_then_existing_keyset_and_admin_gate() {
     let backend_id = r.json::<Value>().await.unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     // --- Owner mints an invite for Backend(member). ---
     let r = app
@@ -48,7 +52,7 @@ async fn join_new_then_existing_keyset_and_admin_gate() {
         .unwrap();
     assert_eq!(r.status(), 201, "owner mints invite for a space it admins");
     let inv: Value = r.json().await.unwrap();
-    let token = inv["token"].as_str().unwrap().to_string();
+    let token = inv["token"].as_str().unwrap().to_owned();
     assert!(inv["invite_id"].is_string());
     // public_url empty by default → url is JSON null.
     assert!(inv["url"].is_null(), "url null when public_url unset");
@@ -78,7 +82,7 @@ async fn join_new_then_existing_keyset_and_admin_gate() {
             "invite_token": token,
             "registration_payload": joiner.payload_b64,
             "registration_signature": joiner.sig_b64,
-            "binding_mac": b64(&[9u8, 8, 7, 6]),
+            "binding_mac": b64(&[9_u8, 8, 7, 6]),
             "handle": "joiner",
         }))
         .send()
@@ -86,8 +90,8 @@ async fn join_new_then_existing_keyset_and_admin_gate() {
         .unwrap();
     assert_eq!(r.status(), 201, "join creates a new account");
     let jr: Value = r.json().await.unwrap();
-    let joiner_acct = jr["account_id"].as_str().unwrap().to_string();
-    let joiner_dev = jr["device_id"].as_str().unwrap().to_string();
+    let joiner_acct = jr["account_id"].as_str().unwrap().to_owned();
+    let joiner_dev = jr["device_id"].as_str().unwrap().to_owned();
     let jspaces = jr["spaces"].as_array().unwrap();
     assert_eq!(jspaces.len(), 1);
     assert_eq!(jspaces[0], backend_id);
@@ -136,7 +140,7 @@ async fn join_new_then_existing_keyset_and_admin_gate() {
     let frontend_id = r.json::<Value>().await.unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     let r = app
         .client
@@ -149,7 +153,7 @@ async fn join_new_then_existing_keyset_and_admin_gate() {
     let token2 = r.json::<Value>().await.unwrap()["token"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     let r = app
         .client
@@ -221,8 +225,8 @@ async fn invite_vault_intent_admin_gate() {
     // Owner claims + logs in, creates "Backend" (creator is auto-admin).
     let owner = make_identity();
     let claimed = claim_owner(&app, &owner.payload_b64, &owner.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
-    let owner_dev = claimed["device_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
+    let owner_dev = claimed["device_id"].as_str().unwrap().to_owned();
     let owner_tok = common::login_v2(&app, &owner, &owner_acct, &owner_dev).await;
 
     let backend_id = app
@@ -238,10 +242,10 @@ async fn invite_vault_intent_admin_gate() {
         .unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     // Owner claims a SPACE vault in Backend → owner admins it (admin of its space).
-    let vault_ok = b64(&[1u8; 16]);
+    let vault_ok = b64(&[1_u8; 16]);
     let r = app
         .client
         .post(format!("{}/v1/vaults/claim", app.base))
@@ -279,7 +283,7 @@ async fn invite_vault_intent_admin_gate() {
     // over it. (seed_session is the store seam the other spaces tests use for a second
     // principal; a personal claim needs only an authenticated session.)
     let other = app.seed_session("").await;
-    let personal = b64(&[2u8; 16]);
+    let personal = b64(&[2_u8; 16]);
     let r = app
         .client
         .post(format!("{}/v1/vaults/claim", app.base))
@@ -320,7 +324,7 @@ async fn invite_vault_intent_admin_gate() {
         .bearer_auth(&owner_tok)
         .json(&json!({
             "space_intents": [{ "space_id": backend_id, "role": "member" }],
-            "vault_intents": [{ "vault_id": b64(&[9u8; 16]), "role": 0 }],
+            "vault_intents": [{ "vault_id": b64(&[9_u8; 16]), "role": 0 }],
         }))
         .send()
         .await
@@ -336,8 +340,8 @@ async fn invite_revoke_blocks_redeem() {
     let app = spawn().await;
     let owner = make_identity();
     let claimed = claim_owner(&app, &owner.payload_b64, &owner.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
-    let owner_dev = claimed["device_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
+    let owner_dev = claimed["device_id"].as_str().unwrap().to_owned();
     let owner_tok = common::login_v2(&app, &owner, &owner_acct, &owner_dev).await;
 
     // Owner creates "Backend" and mints an invite for it.
@@ -354,7 +358,7 @@ async fn invite_revoke_blocks_redeem() {
         .unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
     let inv: Value = app
         .client
         .post(format!("{}/v1/invite", app.base))
@@ -366,8 +370,8 @@ async fn invite_revoke_blocks_redeem() {
         .json()
         .await
         .unwrap();
-    let invite_id = inv["invite_id"].as_str().unwrap().to_string();
-    let token = inv["token"].as_str().unwrap().to_string();
+    let invite_id = inv["invite_id"].as_str().unwrap().to_owned();
+    let token = inv["token"].as_str().unwrap().to_owned();
 
     let revoke = |bearer: &str, id: String| {
         app.client
@@ -379,7 +383,7 @@ async fn invite_revoke_blocks_redeem() {
 
     // Unknown invite id → 404 (even for the owner).
     assert_eq!(
-        revoke(&owner_tok, b64(&[9u8; 16])).await.unwrap().status(),
+        revoke(&owner_tok, b64(&[9_u8; 16])).await.unwrap().status(),
         404,
         "unknown invite id → 404"
     );
@@ -455,10 +459,7 @@ async fn invite_url_rendered_when_public_url_set() {
         .json()
         .await
         .unwrap();
-    let main_id = spaces["spaces"][0]["space_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let main_id = spaces["spaces"][0]["space_id"].as_str().unwrap().to_owned();
 
     let r = app
         .client

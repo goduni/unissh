@@ -15,6 +15,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
+
+use crate::error::{ApiError, ApiResult};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 #[cfg(desktop)]
@@ -23,6 +25,30 @@ use unissh_ffi::{
     AgentApprover, AgentSignOrigin, AgentSignRequest, AuthPromptRequest, AuthPrompter,
     BroadcastObserver, ExecObserver, SessionObserver, SftpProgressObserver,
 };
+
+/// Push one event into the channel of the originating `invoke`. A failed send
+/// means the webview side is gone (window closed, page reloaded); the core
+/// session ends through its own close path, so the event is simply dropped.
+fn push<T: tauri::ipc::IpcResponse>(chan: &Channel<T>, event: T) {
+    if let Err(e) = chan.send(event) {
+        log::trace!("observer: event dropped, the webview channel is gone: {e}");
+    }
+}
+
+/// Lock a prompt/approval map from a core callback, which cannot return an
+/// error. The maps hold only reply senders keyed by id; a poisoned one is still
+/// a valid map, and every prompt it holds ends by answer, cancel or timeout.
+fn lock_map<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Tell the window about a prompt that ended without an answer. If the event
+/// cannot be delivered the window is gone, and so is the dialog it would close.
+fn emit_cancelled(app: &AppHandle, event: &str, id: u64) {
+    if let Err(e) = app.emit(event, id) {
+        log::debug!("observer: {event} for prompt {id} not delivered: {e}");
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -36,10 +62,10 @@ pub struct ChannelSessionObserver {
 }
 impl SessionObserver for ChannelSessionObserver {
     fn on_data(&self, data: Vec<u8>) {
-        let _ = self.chan.send(TermEvent::Data { bytes: data });
+        push(&self.chan, TermEvent::Data { bytes: data });
     }
     fn on_close(&self, exit_status: i32) {
-        let _ = self.chan.send(TermEvent::Close { exit: exit_status });
+        push(&self.chan, TermEvent::Close { exit: exit_status });
     }
 }
 
@@ -56,13 +82,13 @@ pub struct ChannelExecObserver {
 }
 impl ExecObserver for ChannelExecObserver {
     fn on_stdout(&self, data: Vec<u8>) {
-        let _ = self.chan.send(ExecEvent::Stdout { bytes: data });
+        push(&self.chan, ExecEvent::Stdout { bytes: data });
     }
     fn on_stderr(&self, data: Vec<u8>) {
-        let _ = self.chan.send(ExecEvent::Stderr { bytes: data });
+        push(&self.chan, ExecEvent::Stderr { bytes: data });
     }
     fn on_exit(&self, exit_status: i32) {
-        let _ = self.chan.send(ExecEvent::Exit { exit: exit_status });
+        push(&self.chan, ExecEvent::Exit { exit: exit_status });
     }
 }
 
@@ -78,16 +104,22 @@ pub struct ChannelBroadcastObserver {
 }
 impl BroadcastObserver for ChannelBroadcastObserver {
     fn on_data(&self, host_index: u32, data: Vec<u8>) {
-        let _ = self.chan.send(BroadcastEvent::Data {
-            index: host_index,
-            bytes: data,
-        });
+        push(
+            &self.chan,
+            BroadcastEvent::Data {
+                index: host_index,
+                bytes: data,
+            },
+        );
     }
     fn on_close(&self, host_index: u32, exit_status: i32) {
-        let _ = self.chan.send(BroadcastEvent::Close {
-            index: host_index,
-            exit: exit_status,
-        });
+        push(
+            &self.chan,
+            BroadcastEvent::Close {
+                index: host_index,
+                exit: exit_status,
+            },
+        );
     }
 }
 
@@ -100,26 +132,32 @@ pub struct ProgressEvent {
 
 pub struct ChannelSftpProgress {
     pub chan: Channel<ProgressEvent>,
-    last: std::sync::Mutex<Option<std::time::Instant>>,
+    last: Mutex<Option<std::time::Instant>>,
 }
 impl ChannelSftpProgress {
-    pub fn new(chan: Channel<ProgressEvent>) -> Self {
+    pub const fn new(chan: Channel<ProgressEvent>) -> Self {
         Self {
             chan,
-            last: std::sync::Mutex::new(None),
+            last: Mutex::new(None),
         }
     }
 }
 impl SftpProgressObserver for ChannelSftpProgress {
     fn on_progress(&self, transferred: u64, total: u64) {
-        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
-        if transferred != total
-            && last.is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(100))
         {
-            return;
+            // A throttle timestamp only; a poisoned lock just resets the throttle.
+            let mut last = self
+                .last
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if transferred != total
+                && last.is_some_and(|t| t.elapsed() < Duration::from_millis(100))
+            {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
         }
-        *last = Some(std::time::Instant::now());
-        let _ = self.chan.send(ProgressEvent { transferred, total });
+        push(&self.chan, ProgressEvent { transferred, total });
     }
 }
 
@@ -172,9 +210,10 @@ impl AppPrompter {
     /// Unknown ids are ignored: a prompt that already timed out is gone, and a
     /// late answer must not resurrect it.
     pub fn answer(&self, id: u64, answers: Option<Vec<String>>) {
-        let tx = self.pending.lock().expect("prompt map").remove(&id);
-        if let Some(tx) = tx {
-            let _ = tx.send(answers);
+        let tx = lock_map(&self.pending).remove(&id);
+        // The payload holds the user's answers: never log it, only the fact.
+        if tx.is_some_and(|tx| tx.send(answers).is_err()) {
+            log::debug!("auth prompt {id}: answered after the waiter gave up");
         }
     }
 }
@@ -191,7 +230,7 @@ impl AppPrompter {
         // and should hand the answer over and return, not block until the core
         // thread happens to be back at recv.
         let (tx, rx) = sync_channel(1);
-        self.pending.lock().expect("prompt map").insert(id, tx);
+        lock_map(&self.pending).insert(id, tx);
 
         let event = AuthPromptEvent {
             id,
@@ -214,7 +253,7 @@ impl AppPrompter {
             // No window to ask (the app is shutting down, or the webview died).
             // Abort rather than hold the connection open against a UI that will
             // never answer.
-            self.pending.lock().expect("prompt map").remove(&id);
+            lock_map(&self.pending).remove(&id);
             return None;
         }
 
@@ -232,13 +271,13 @@ impl AppPrompter {
                     answered = true;
                     break answer;
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(_) => break None,
             }
         };
-        self.pending.lock().expect("prompt map").remove(&id);
+        lock_map(&self.pending).remove(&id);
         if !answered {
-            let _ = self.app.emit("auth-prompt-cancelled", id);
+            emit_cancelled(&self.app, "auth-prompt-cancelled", id);
         }
         answers
     }
@@ -315,17 +354,29 @@ impl AppApprover {
         }
     }
 
-    pub fn answer(&self, id: u64, approved: bool) {
-        let pending = self.state.lock().expect("approval map").pending.remove(&id);
-        if let Some(pending) = pending {
-            let _ = pending.answer.send(approved);
+    /// Called by the `submit_agent_approval` command. A poisoned map is an
+    /// error the UI sees; the waiting request then times out and is refused.
+    pub fn answer(&self, id: u64, approved: bool) -> ApiResult<()> {
+        let pending = self
+            .state
+            .lock()
+            .map_err(|e| {
+                ApiError::other(format!(
+                    "internal error: the agent approval registry is unavailable ({e}); restart UniSSH"
+                ))
+            })?
+            .pending
+            .remove(&id);
+        if pending.is_some_and(|p| p.answer.send(approved).is_err()) {
+            log::debug!("agent approval {id}: answered after the waiter gave up");
         }
+        Ok(())
     }
 
     /// Refuses `id` if it is still waiting, and tells the window to drop it.
     /// Returns whether it was waiting.
     fn withdraw(&self, id: u64) -> bool {
-        let pending = self.state.lock().expect("approval map").pending.remove(&id);
+        let pending = lock_map(&self.state).pending.remove(&id);
         self.refuse(id, pending)
     }
 
@@ -334,18 +385,18 @@ impl AppApprover {
         let Some(pending) = pending else {
             return false;
         };
-        let _ = pending.answer.send(false);
-        let _ = self.app.emit("agent-approval-cancelled", id);
+        // The waiter may already have timed out; refusing is then a no-op.
+        if pending.answer.send(false).is_err() {
+            log::debug!("agent approval {id}: refused after the waiter gave up");
+        }
+        emit_cancelled(&self.app, "agent-approval-cancelled", id);
         true
     }
 
     /// Withdraws every system-agent prompt: its listener stopped (vault or
     /// screen lock, sleep, exit), so no answer could reach the caller anyway.
     pub fn cancel_system(&self) {
-        let ids: Vec<u64> = self
-            .state
-            .lock()
-            .expect("approval map")
+        let ids: Vec<u64> = lock_map(&self.state)
             .pending
             .iter()
             .filter(|(_, p)| p.system)
@@ -367,7 +418,7 @@ impl AgentApprover for AppApprover {
         let system = origin == "system";
         let (tx, rx) = sync_channel(1);
         {
-            let mut state = self.state.lock().expect("approval map");
+            let mut state = lock_map(&self.state);
             if state.cancelled_early.remove(&id) {
                 return false;
             }
@@ -388,7 +439,7 @@ impl AgentApprover for AppApprover {
             target: request.target,
         };
         if self.app.emit("agent-approval", event).is_err() {
-            self.state.lock().expect("approval map").pending.remove(&id);
+            lock_map(&self.state).pending.remove(&id);
             return false;
         }
         // The system agent's caller types in another terminal, so UniSSH may
@@ -398,7 +449,12 @@ impl AgentApprover for AppApprover {
         #[cfg(desktop)]
         if system {
             if let Some(window) = self.app.get_webview_window("main") {
-                let _ = window.request_user_attention(Some(UserAttentionType::Informational));
+                // Cosmetic: the dialog is already up in the window either way.
+                if let Err(e) =
+                    window.request_user_attention(Some(UserAttentionType::Informational))
+                {
+                    log::debug!("agent approval {id}: attention request failed: {e}");
+                }
             }
         }
 
@@ -415,7 +471,7 @@ impl AgentApprover for AppApprover {
 
     fn cancel(&self, id: u64) {
         let pending = {
-            let mut state = self.state.lock().expect("approval map");
+            let mut state = lock_map(&self.state);
             let pending = state.pending.remove(&id);
             if pending.is_none() {
                 // Not registered yet (or already over). Remember it so a late

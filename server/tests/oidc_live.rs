@@ -3,9 +3,17 @@
 //!
 //! Unlike `oidc_http.rs` (which drives an in-process app), this spawns the shipped binary,
 //! so it also exercises TOML `[oidc]` config loading, migrations, the real HTTP stack, and
-//! a genuine outbound JWKS fetch from the server process to the mock IdP process. Run with:
-//!   cargo build -p unissh-server && \
+//! a genuine outbound JWKS fetch from the server process to the mock IdP process. Run it
+//! with the commands below.
+//!
+//! ```text
+//! cargo build -p unissh-server && \
 //!   cargo test -p unissh-server --test oidc_live -- --ignored --nocapture
+//! ```
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -89,7 +97,9 @@ fn real_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_secs() as i64
+        .as_secs()
+        .try_into()
+        .unwrap()
 }
 
 /// A second local HTTP server serving the JWKS (one RSA JWK, `kid = KID`) that the REAL
@@ -123,7 +133,7 @@ fn nonce_for(id: &common::Identity) -> String {
 
 fn sign_token(pem: &str, claims: &serde_json::Value) -> String {
     let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some(KID.to_string());
+    header.kid = Some(KID.to_owned());
     let key = EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap();
     encode(&header, claims, &key).unwrap()
 }
@@ -156,12 +166,17 @@ struct ServerProc {
 }
 impl Drop for ServerProc {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Best effort: the child may already have exited.
+        drop(self.child.kill());
+        drop(self.child.wait());
     }
 }
 
 /// Spawn the real binary with an `[oidc]` config pointing at `jwks_url`; wait for `/readyz`.
+#[expect(
+    clippy::print_stderr,
+    reason = "live diagnostic test: tells the operator why it skipped when the binary is not built"
+)]
 async fn spawn_server(jwks_url: &str) -> Option<ServerProc> {
     let bin = server_binary();
     if !bin.exists() {
@@ -239,9 +254,8 @@ async fn spawn_server(jwks_url: &str) -> Option<ServerProc> {
 #[ignore = "needs `cargo build -p unissh-server` + free TCP ports"]
 async fn live_oidc_callback_against_real_binary_with_mock_idp() {
     let jwks_url = spawn_jwks().await;
-    let srv = match spawn_server(&jwks_url).await {
-        Some(s) => s,
-        None => return, // skipped (binary not built)
+    let Some(srv) = spawn_server(&jwks_url).await else {
+        return; // skipped (binary not built)
     };
     let http = reqwest::Client::new();
 

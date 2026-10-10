@@ -95,7 +95,9 @@ fn delete_account(user: &str) -> Result<(), String> {
 fn migrate_legacy(server_id: &str) -> Option<String> {
     let token = read_account(LEGACY_ACCOUNT)?;
     if save_refresh(server_id, &token).is_ok() {
-        let _ = delete_account(LEGACY_ACCOUNT);
+        if let Err(e) = delete_account(LEGACY_ACCOUNT) {
+            log::warn!("cloud: legacy refresh-token entry not deleted after migration: {e}");
+        }
     }
     Some(token)
 }

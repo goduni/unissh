@@ -4,6 +4,14 @@
 //!
 //! Require `/usr/sbin/sshd` and `ssh-keygen` (run as root in an isolated
 //! environment). If sshd is unavailable, the tests fail at harness startup.
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::missing_assert_message,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::net::TcpStream as StdTcp;
 use std::process::{Child, Command, Stdio};
@@ -51,7 +59,7 @@ fn free_port() -> u16 {
 }
 
 impl TestSshd {
-    fn start(authorized_pubkey: &str) -> TestSshd {
+    fn start(authorized_pubkey: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
 
@@ -68,7 +76,9 @@ impl TestSshd {
         std::fs::write(&authkeys, format!("{authorized_pubkey}\n")).unwrap();
 
         // privileged privsep directory of sshd
-        let _ = std::fs::create_dir_all("/run/sshd");
+        if std::fs::create_dir_all("/run/sshd").is_err() {
+            // sshd names the missing privsep directory itself if this mattered.
+        }
 
         let port = free_port();
         let cfg = p.join("sshd_config");
@@ -112,7 +122,7 @@ impl TestSshd {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        TestSshd {
+        Self {
             child,
             port,
             _dir: dir,
@@ -122,8 +132,9 @@ impl TestSshd {
 
 impl Drop for TestSshd {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Best effort: a child that already exited cannot be killed again.
+        let _killed = self.child.kill();
+        let _reaped = self.child.wait();
     }
 }
 
@@ -234,7 +245,7 @@ async fn connect_exec_and_tofu_pinning() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[5u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[5_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -259,7 +270,7 @@ async fn connect_exec_and_tofu_pinning() {
     // a repeat connect is verified against the pinned key — success
     let client2 = SshClient::connect(&opts, &agent, &storage).await.unwrap();
     assert_eq!(client2.exec("true").await.unwrap().exit_status, Some(0));
-    let _ = client.disconnect().await;
+    let _disconnected = client.disconnect().await;
 }
 
 #[tokio::test]
@@ -267,7 +278,7 @@ async fn wrong_user_auth_fails() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[7u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[7_u8; 32]).unwrap();
 
     // this user's key is not in another user's authorized_keys;
     // we use a nonexistent user → authentication will not pass
@@ -288,7 +299,7 @@ async fn proxy_jump_chain() {
     let jump = TestSshd::start(&pub_ssh);
     let target = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[6u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[6_u8; 32]).unwrap();
 
     let jump_opts = ConnectOptions::new(
         "127.0.0.1",
@@ -317,34 +328,12 @@ async fn proxy_jump_chain() {
 #[tokio::test]
 async fn local_forward_pipes_data() {
     // echo server inside the test process
-    let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let echo_port = echo.local_addr().unwrap().port();
-    tokio::spawn(async move {
-        loop {
-            let (mut s, _) = match echo.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            tokio::spawn(async move {
-                let mut buf = vec![0u8; 1024];
-                loop {
-                    match s.read(&mut buf).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            if s.write_all(&buf[..n]).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    });
+    let echo_port = spawn_echo().await;
 
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[8u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[8_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -365,7 +354,7 @@ async fn local_forward_pipes_data() {
 
     let mut conn = tokio::net::TcpStream::connect(local).await.unwrap();
     conn.write_all(b"ping-through-tunnel").await.unwrap();
-    let mut buf = vec![0u8; b"ping-through-tunnel".len()];
+    let mut buf = vec![0_u8; b"ping-through-tunnel".len()];
     conn.read_exact(&mut buf).await.unwrap();
     assert_eq!(&buf, b"ping-through-tunnel");
 }
@@ -375,23 +364,21 @@ async fn spawn_echo() -> u16 {
     let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = echo.local_addr().unwrap().port();
     tokio::spawn(async move {
-        while let Ok((mut s, _)) = echo.accept().await {
-            tokio::spawn(async move {
-                let mut buf = vec![0u8; 1024];
-                loop {
-                    match s.read(&mut buf).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            if s.write_all(&buf[..n]).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
+        while let Ok((s, _)) = echo.accept().await {
+            tokio::spawn(echo_connection(s));
         }
     });
     port
+}
+
+/// Echoes everything read from `s` back until EOF or an I/O error.
+async fn echo_connection(mut s: tokio::net::TcpStream) {
+    let mut buf = vec![0_u8; 1024];
+    while let Ok(n @ 1..) = s.read(&mut buf).await {
+        if s.write_all(&buf[..n]).await.is_err() {
+            break;
+        }
+    }
 }
 
 #[tokio::test]
@@ -400,7 +387,7 @@ async fn dynamic_socks5_forward() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[10u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[10_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -419,21 +406,21 @@ async fn dynamic_socks5_forward() {
         .unwrap();
     // greeting: ver=5, 1 method, method 0 (no-auth)
     conn.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
-    let mut reply = [0u8; 2];
+    let mut reply = [0_u8; 2];
     conn.read_exact(&mut reply).await.unwrap();
     assert_eq!(reply, [0x05, 0x00]);
     // request: CONNECT 127.0.0.1:echo_port (ATYP=1 IPv4)
     let mut req = vec![0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1];
     req.extend_from_slice(&echo_port.to_be_bytes());
     conn.write_all(&req).await.unwrap();
-    let mut resp = [0u8; 10];
+    let mut resp = [0_u8; 10];
     conn.read_exact(&mut resp).await.unwrap();
     assert_eq!(resp[0], 0x05);
     assert_eq!(resp[1], 0x00); // success
 
     // now the stream flows through to echo
     conn.write_all(b"socks-echo").await.unwrap();
-    let mut buf = vec![0u8; b"socks-echo".len()];
+    let mut buf = vec![0_u8; b"socks-echo".len()];
     conn.read_exact(&mut buf).await.unwrap();
     assert_eq!(&buf, b"socks-echo");
 }
@@ -444,7 +431,7 @@ async fn remote_forward_delivers_to_local() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[11u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[11_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -468,7 +455,7 @@ async fn remote_forward_delivers_to_local() {
         .await
         .unwrap();
     conn.write_all(b"remote-fwd").await.unwrap();
-    let mut buf = vec![0u8; b"remote-fwd".len()];
+    let mut buf = vec![0_u8; b"remote-fwd".len()];
     conn.read_exact(&mut buf).await.unwrap();
     assert_eq!(&buf, b"remote-fwd");
 }
@@ -484,7 +471,7 @@ async fn remote_forward_on_a_wildcard_bind_delivers() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[13u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[13_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -506,7 +493,7 @@ async fn remote_forward_on_a_wildcard_bind_delivers() {
         .await
         .unwrap();
     conn.write_all(b"wildcard-fwd").await.unwrap();
-    let mut buf = vec![0u8; b"wildcard-fwd".len()];
+    let mut buf = vec![0_u8; b"wildcard-fwd".len()];
     conn.read_exact(&mut buf)
         .await
         .expect("the forwarded connection delivered nothing");
@@ -559,7 +546,7 @@ async fn remote_forward_on_an_explicit_port_delivers() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[14u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[14_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -585,7 +572,7 @@ async fn remote_forward_on_an_explicit_port_delivers() {
         .await
         .unwrap();
     conn.write_all(b"explicit-port").await.unwrap();
-    let mut buf = vec![0u8; b"explicit-port".len()];
+    let mut buf = vec![0_u8; b"explicit-port".len()];
     conn.read_exact(&mut buf)
         .await
         .expect("the forwarded connection delivered nothing");
@@ -604,7 +591,7 @@ async fn ecdsa_key_auth() {
     .unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[12u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[12_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -624,7 +611,7 @@ async fn sftp_roundtrip_write_read_list_stat_rename_remove() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[21u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[21_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -639,10 +626,10 @@ async fn sftp_roundtrip_write_read_list_stat_rename_remove() {
 
     // working directory
     let base = format!("/tmp/unissh-sftp-{}", sshd.port);
-    let _ = sftp.rmdir(&format!("{base}/sub")).await;
-    let _ = sftp.remove(&format!("{base}/a.txt")).await;
-    let _ = sftp.remove(&format!("{base}/b.txt")).await;
-    let _ = sftp.rmdir(&base).await;
+    let _cleanup = sftp.rmdir(&format!("{base}/sub")).await;
+    let _cleanup = sftp.remove(&format!("{base}/a.txt")).await;
+    let _cleanup = sftp.remove(&format!("{base}/b.txt")).await;
+    let _cleanup = sftp.rmdir(&base).await;
     sftp.mkdir(&base).await.unwrap();
 
     // write + read
@@ -660,8 +647,7 @@ async fn sftp_roundtrip_write_read_list_stat_rename_remove() {
     // subdirectory + listing
     sftp.mkdir(&format!("{base}/sub")).await.unwrap();
     let entries = sftp.list_dir(&base).await.unwrap();
-    let names: Vec<&str> = entries.iter().map(|e| e.filename.as_str()).collect();
-    assert!(names.contains(&"a.txt"));
+    assert!(entries.iter().any(|e| e.filename == "a.txt"));
     let sub = entries.iter().find(|e| e.filename == "sub").unwrap();
     assert!(sub.is_dir);
 
@@ -680,8 +666,8 @@ async fn sftp_roundtrip_write_read_list_stat_rename_remove() {
     assert!(sftp.read_file(&fa).await.is_err());
 
     // cleanup
-    let _ = sftp.rmdir(&format!("{base}/sub")).await;
-    let _ = sftp.rmdir(&base).await;
+    let _cleanup = sftp.rmdir(&format!("{base}/sub")).await;
+    let _cleanup = sftp.rmdir(&base).await;
 }
 
 #[tokio::test]
@@ -689,7 +675,7 @@ async fn sftp_create_new_refuses_an_existing_path() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[23u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[23_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -703,8 +689,8 @@ async fn sftp_create_new_refuses_an_existing_path() {
     let mut sftp = client.open_sftp().await.unwrap();
 
     let base = format!("/tmp/unissh-sftp-excl-{}", sshd.port);
-    let _ = sftp.remove(&format!("{base}/f.txt")).await;
-    let _ = sftp.rmdir(&base).await;
+    let _cleanup = sftp.remove(&format!("{base}/f.txt")).await;
+    let _cleanup = sftp.rmdir(&base).await;
     sftp.mkdir(&base).await.unwrap();
     let f = format!("{base}/f.txt");
 
@@ -725,9 +711,9 @@ async fn sftp_create_new_refuses_an_existing_path() {
     assert!(sftp.create_new(&d).await.is_err());
 
     // cleanup
-    let _ = sftp.remove(&f).await;
-    let _ = sftp.rmdir(&d).await;
-    let _ = sftp.rmdir(&base).await;
+    let _cleanup = sftp.remove(&f).await;
+    let _cleanup = sftp.rmdir(&d).await;
+    let _cleanup = sftp.rmdir(&base).await;
 }
 
 #[tokio::test]
@@ -735,7 +721,7 @@ async fn sftp_remove_tree_deletes_recursively() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[22u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[22_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -749,7 +735,7 @@ async fn sftp_remove_tree_deletes_recursively() {
     let mut sftp = client.open_sftp().await.unwrap();
 
     let base = format!("/tmp/unissh-sftp-tree-{}", sshd.port);
-    let _ = sftp.remove_tree(&base).await; // clean start
+    let _cleanup = sftp.remove_tree(&base).await; // clean start
 
     // tree: base/{f1.txt, sub/{f2.txt, deep/f3.txt}}
     sftp.mkdir(&base).await.unwrap();
@@ -788,7 +774,7 @@ async fn trust_host_key_repins_after_mismatch() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[31u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[31_u8; 32]).unwrap();
 
     // Pin a KNOWINGLY WRONG key → simulate a mismatch.
     storage
@@ -838,7 +824,7 @@ async fn rsa_pubkey_auth_end_to_end() {
     let (priv_pem, pub_ssh) = generate_openssh(Algorithm::Rsa { hash: None }).unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[6u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[6_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -853,7 +839,7 @@ async fn rsa_pubkey_auth_end_to_end() {
     let out = client.exec("echo rsa-ok").await.unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "rsa-ok");
     assert_eq!(out.exit_status, Some(0));
-    let _ = client.disconnect().await;
+    let _disconnected = client.disconnect().await;
 }
 
 #[tokio::test]
@@ -863,7 +849,7 @@ async fn imported_pkcs1_rsa_key_authenticates() {
     let normalized = normalize_private_key_to_openssh(RSA_PKCS1).unwrap();
     let sshd = TestSshd::start(RSA_PUB);
     let agent = agent_with_key(&normalized);
-    let storage = Storage::open_in_memory(&[7u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[7_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -877,7 +863,7 @@ async fn imported_pkcs1_rsa_key_authenticates() {
     let client = SshClient::connect(&opts, &agent, &storage).await.unwrap();
     let out = client.exec("echo pkcs1-ok").await.unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "pkcs1-ok");
-    let _ = client.disconnect().await;
+    let _disconnected = client.disconnect().await;
 }
 
 /// A classic RSA-2048 in PKCS#1 (`BEGIN RSA PRIVATE KEY`) and its OpenSSH public key.
@@ -940,7 +926,12 @@ fn proxy_opts(kind: ProxyKind, port: u16) -> ProxyOptions {
 
 async fn relay(mut inbound: tokio::net::TcpStream, dest: (String, u16)) {
     let mut outbound = tokio::net::TcpStream::connect(dest).await.unwrap();
-    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+    if tokio::io::copy_bidirectional(&mut inbound, &mut outbound)
+        .await
+        .is_err()
+    {
+        // Either side hanging up just ends this relayed connection.
+    }
 }
 
 /// A SOCKS5 proxy: optionally demands RFC 1929 credentials, refuses when
@@ -951,27 +942,23 @@ fn fake_socks5(creds: Option<(&'static str, &'static str)>, refuse: bool) -> u16
     listener.set_nonblocking(true).unwrap();
     let listener = tokio::net::TcpListener::from_std(listener).unwrap();
     tokio::spawn(async move {
-        loop {
-            let (mut s, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
+        while let Ok((mut s, _)) = listener.accept().await {
             tokio::spawn(async move {
-                let mut head = [0u8; 2];
+                let mut head = [0_u8; 2];
                 s.read_exact(&mut head).await.unwrap();
                 assert_eq!(head[0], 5);
-                let mut methods = vec![0u8; head[1] as usize];
+                let mut methods = vec![0_u8; head[1] as usize];
                 s.read_exact(&mut methods).await.unwrap();
                 if let Some((user, pass)) = creds {
                     assert!(methods.contains(&0x02), "client must offer user/pass");
                     s.write_all(&[5, 0x02]).await.unwrap();
-                    let mut ver_ulen = [0u8; 2];
+                    let mut ver_ulen = [0_u8; 2];
                     s.read_exact(&mut ver_ulen).await.unwrap();
-                    let mut u = vec![0u8; ver_ulen[1] as usize];
+                    let mut u = vec![0_u8; ver_ulen[1] as usize];
                     s.read_exact(&mut u).await.unwrap();
-                    let mut plen = [0u8; 1];
+                    let mut plen = [0_u8; 1];
                     s.read_exact(&mut plen).await.unwrap();
-                    let mut p = vec![0u8; plen[0] as usize];
+                    let mut p = vec![0_u8; plen[0] as usize];
                     s.read_exact(&mut p).await.unwrap();
                     if u != user.as_bytes() || p != pass.as_bytes() {
                         s.write_all(&[1, 1]).await.unwrap();
@@ -982,25 +969,25 @@ fn fake_socks5(creds: Option<(&'static str, &'static str)>, refuse: bool) -> u16
                     assert!(methods.contains(&0x00));
                     s.write_all(&[5, 0x00]).await.unwrap();
                 }
-                let mut req = [0u8; 4];
+                let mut req = [0_u8; 4];
                 s.read_exact(&mut req).await.unwrap();
                 assert_eq!(&req[..3], &[5, 1, 0]);
                 let host = match req[3] {
                     0x01 => {
-                        let mut a = [0u8; 4];
+                        let mut a = [0_u8; 4];
                         s.read_exact(&mut a).await.unwrap();
                         format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3])
                     }
                     0x03 => {
-                        let mut len = [0u8; 1];
+                        let mut len = [0_u8; 1];
                         s.read_exact(&mut len).await.unwrap();
-                        let mut dn = vec![0u8; len[0] as usize];
+                        let mut dn = vec![0_u8; len[0] as usize];
                         s.read_exact(&mut dn).await.unwrap();
                         String::from_utf8(dn).unwrap()
                     }
                     other => panic!("unexpected atyp {other}"),
                 };
-                let mut port = [0u8; 2];
+                let mut port = [0_u8; 2];
                 s.read_exact(&mut port).await.unwrap();
                 let port = u16::from_be_bytes(port);
                 if refuse {
@@ -1017,6 +1004,19 @@ fn fake_socks5(creds: Option<(&'static str, &'static str)>, refuse: bool) -> u16
     port
 }
 
+/// Reads a NUL-terminated SOCKS4 field (userid or 4a hostname), without the NUL.
+async fn read_until_nul(s: &mut tokio::net::TcpStream) -> Vec<u8> {
+    let mut field = Vec::new();
+    loop {
+        let mut b = [0_u8; 1];
+        s.read_exact(&mut b).await.unwrap();
+        if b[0] == 0 {
+            return field;
+        }
+        field.push(b[0]);
+    }
+}
+
 /// A SOCKS4/4a proxy that records nothing and tunnels; asserts the userid.
 fn fake_socks4(expect_userid: &'static str) -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1024,40 +1024,19 @@ fn fake_socks4(expect_userid: &'static str) -> u16 {
     listener.set_nonblocking(true).unwrap();
     let listener = tokio::net::TcpListener::from_std(listener).unwrap();
     tokio::spawn(async move {
-        loop {
-            let (mut s, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
+        while let Ok((mut s, _)) = listener.accept().await {
             tokio::spawn(async move {
-                let mut head = [0u8; 8];
+                let mut head = [0_u8; 8];
                 s.read_exact(&mut head).await.unwrap();
                 assert_eq!(head[0], 4);
                 assert_eq!(head[1], 1);
                 let port = u16::from_be_bytes([head[2], head[3]]);
                 let ip = [head[4], head[5], head[6], head[7]];
-                let mut userid = Vec::new();
-                loop {
-                    let mut b = [0u8; 1];
-                    s.read_exact(&mut b).await.unwrap();
-                    if b[0] == 0 {
-                        break;
-                    }
-                    userid.push(b[0]);
-                }
+                let userid = read_until_nul(&mut s).await;
                 assert_eq!(userid, expect_userid.as_bytes());
                 let host = if ip[..3] == [0, 0, 0] && ip[3] != 0 {
                     // SOCKS4a: hostname follows.
-                    let mut name = Vec::new();
-                    loop {
-                        let mut b = [0u8; 1];
-                        s.read_exact(&mut b).await.unwrap();
-                        if b[0] == 0 {
-                            break;
-                        }
-                        name.push(b[0]);
-                    }
-                    String::from_utf8(name).unwrap()
+                    String::from_utf8(read_until_nul(&mut s).await).unwrap()
                 } else {
                     format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3])
                 };
@@ -1077,15 +1056,11 @@ fn fake_http_proxy(require_basic: Option<&'static str>) -> u16 {
     listener.set_nonblocking(true).unwrap();
     let listener = tokio::net::TcpListener::from_std(listener).unwrap();
     tokio::spawn(async move {
-        loop {
-            let (mut s, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
+        while let Ok((mut s, _)) = listener.accept().await {
             tokio::spawn(async move {
                 let mut req = Vec::new();
                 while !req.ends_with(b"\r\n\r\n") {
-                    let mut b = [0u8; 1];
+                    let mut b = [0_u8; 1];
                     s.read_exact(&mut b).await.unwrap();
                     req.push(b[0]);
                 }
@@ -1107,7 +1082,7 @@ fn fake_http_proxy(require_basic: Option<&'static str>) -> u16 {
                 s.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
                     .await
                     .unwrap();
-                relay(s, (host.to_string(), port)).await;
+                relay(s, (host.to_owned(), port)).await;
             });
         }
     });
@@ -1119,7 +1094,7 @@ async fn connect_via_socks5_proxy() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[8u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[8_u8; 32]).unwrap();
     let proxy_port = fake_socks5(None, false);
 
     let opts = key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, proxy_port));
@@ -1138,7 +1113,7 @@ async fn connect_via_socks5_proxy_with_auth() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[9u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[9_u8; 32]).unwrap();
     let proxy_port = fake_socks5(Some(("joe", "sekret")), false);
 
     let mut proxy = proxy_opts(ProxyKind::Socks5, proxy_port);
@@ -1152,10 +1127,9 @@ async fn connect_via_socks5_proxy_with_auth() {
     let mut bad = proxy_opts(ProxyKind::Socks5, proxy_port);
     bad.username = Some("joe".into());
     bad.password = Some(zeroize::Zeroizing::new("wrong".into()));
-    let err = match SshClient::connect(&key_opts(sshd.port).with_proxy(bad), &agent, &storage).await
-    {
-        Err(e) => e,
-        Ok(_) => panic!("connect with wrong proxy password unexpectedly succeeded"),
+    let Err(err) = SshClient::connect(&key_opts(sshd.port).with_proxy(bad), &agent, &storage).await
+    else {
+        panic!("connect with wrong proxy password unexpectedly succeeded");
     };
     assert!(err.to_string().contains("proxy"), "unexpected error: {err}");
 }
@@ -1167,7 +1141,7 @@ async fn connect_via_socks5_proxy_password_only() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[15u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[15_u8; 32]).unwrap();
     let proxy_port = fake_socks5(Some(("", "sekret")), false);
 
     let mut proxy = proxy_opts(ProxyKind::Socks5, proxy_port);
@@ -1183,7 +1157,7 @@ async fn connect_via_socks4_proxy() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[10u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[10_u8; 32]).unwrap();
     let proxy_port = fake_socks4("ident-user");
 
     let mut proxy = proxy_opts(ProxyKind::Socks4, proxy_port);
@@ -1199,7 +1173,7 @@ async fn connect_via_http_proxy() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[11u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[11_u8; 32]).unwrap();
     let proxy_port = fake_http_proxy(None);
 
     let opts = key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Http, proxy_port));
@@ -1213,7 +1187,7 @@ async fn connect_via_http_proxy_with_basic_auth() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[12u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[12_u8; 32]).unwrap();
     // base64("aladdin:opensesame")
     let proxy_port = fake_http_proxy(Some("YWxhZGRpbjpvcGVuc2VzYW1l"));
 
@@ -1226,15 +1200,14 @@ async fn connect_via_http_proxy_with_basic_auth() {
     assert_eq!(client.exec("true").await.unwrap().exit_status, Some(0));
 
     // No credentials → 407 → a proxy error naming authentication.
-    let err = match SshClient::connect(
+    let Err(err) = SshClient::connect(
         &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Http, proxy_port)),
         &agent,
         &storage,
     )
     .await
-    {
-        Err(e) => e,
-        Ok(_) => panic!("connect without proxy credentials unexpectedly succeeded"),
+    else {
+        panic!("connect without proxy credentials unexpectedly succeeded");
     };
     assert!(
         err.to_string().contains("authentication"),
@@ -1247,18 +1220,17 @@ async fn socks5_refusal_is_a_proxy_error() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[13u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[13_u8; 32]).unwrap();
     let proxy_port = fake_socks5(None, true);
 
-    let err = match SshClient::connect(
+    let Err(err) = SshClient::connect(
         &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, proxy_port)),
         &agent,
         &storage,
     )
     .await
-    {
-        Err(e) => e,
-        Ok(_) => panic!("connect through a refusing proxy unexpectedly succeeded"),
+    else {
+        panic!("connect through a refusing proxy unexpectedly succeeded");
     };
     let text = err.to_string();
     assert!(
@@ -1277,20 +1249,23 @@ async fn socks5_minimal_refusal_is_reported_as_a_refusal() {
     tokio::spawn(async move {
         while let Ok((mut s, _)) = listener.accept().await {
             tokio::spawn(async move {
-                let mut head = [0u8; 2];
+                let mut head = [0_u8; 2];
                 s.read_exact(&mut head).await.unwrap();
-                let mut methods = vec![0u8; head[1] as usize];
+                let mut methods = vec![0_u8; head[1] as usize];
                 s.read_exact(&mut methods).await.unwrap();
                 s.write_all(&[5, 0]).await.unwrap();
-                let mut req = [0u8; 4];
+                let mut req = [0_u8; 4];
                 s.read_exact(&mut req).await.unwrap();
-                let mut rest = vec![0u8; if req[3] == 3 { 0 } else { 6 }];
-                if req[3] == 3 {
-                    let mut len = [0u8; 1];
+                let mut rest = if req[3] == 3 {
+                    let mut len = [0_u8; 1];
                     s.read_exact(&mut len).await.unwrap();
-                    rest = vec![0u8; len[0] as usize + 2];
+                    vec![0_u8; len[0] as usize + 2]
+                } else {
+                    vec![0_u8; 6]
+                };
+                if s.read_exact(&mut rest).await.is_err() {
+                    // The client may hang up early; the refusal is sent regardless.
                 }
-                let _ = s.read_exact(&mut rest).await;
                 // Refusal with no bound address at all, then hang up.
                 s.write_all(&[5, 0x05, 0x00, 0x00]).await.unwrap();
             });
@@ -1300,16 +1275,15 @@ async fn socks5_minimal_refusal_is_reported_as_a_refusal() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[16u8; 32]).unwrap();
-    let err = match SshClient::connect(
+    let storage = Storage::open_in_memory(&[16_u8; 32]).unwrap();
+    let Err(err) = SshClient::connect(
         &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, proxy_port)),
         &agent,
         &storage,
     )
     .await
-    {
-        Err(e) => e,
-        Ok(_) => panic!("a refused connection unexpectedly succeeded"),
+    else {
+        panic!("a refused connection unexpectedly succeeded");
     };
     let text = err.to_string();
     assert!(
@@ -1326,16 +1300,15 @@ async fn unreachable_proxy_names_the_proxy() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[17u8; 32]).unwrap();
-    let err = match SshClient::connect(
+    let storage = Storage::open_in_memory(&[17_u8; 32]).unwrap();
+    let Err(err) = SshClient::connect(
         &key_opts(sshd.port).with_proxy(proxy_opts(ProxyKind::Socks5, dead)),
         &agent,
         &storage,
     )
     .await
-    {
-        Err(e) => e,
-        Ok(_) => panic!("connect through a dead proxy unexpectedly succeeded"),
+    else {
+        panic!("connect through a dead proxy unexpectedly succeeded");
     };
     let text = err.to_string();
     assert!(
@@ -1351,7 +1324,7 @@ async fn proxy_then_jump_chain() {
     let jump = TestSshd::start(&pub_ssh);
     let target = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[14u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[14_u8; 32]).unwrap();
     let proxy_port = fake_socks5(None, false);
 
     let jump_opts = key_opts(jump.port).with_proxy(proxy_opts(ProxyKind::Socks5, proxy_port));
@@ -1371,7 +1344,7 @@ async fn sftp_preserves_relative_absolute_dangling_and_cyclic_links() {
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
     let agent = agent_with_key(&priv_pem);
-    let storage = Storage::open_in_memory(&[21u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[21_u8; 32]).unwrap();
 
     let opts = ConnectOptions::new(
         "127.0.0.1",
@@ -1394,11 +1367,11 @@ async fn sftp_preserves_relative_absolute_dangling_and_cyclic_links() {
     .await
     .unwrap();
     for (name, target) in [
-        ("lib64", "lib".to_string()),
-        ("python", "lib/data".to_string()),
+        ("lib64", "lib".to_owned()),
+        ("python", "lib/data".to_owned()),
         ("absolute", format!("{base}/lib/data")),
-        ("broken", "../missing-target".to_string()),
-        ("loop", "loop".to_string()),
+        ("broken", "../missing-target".to_owned()),
+        ("loop", "loop".to_owned()),
     ] {
         let path = format!("{base}/{name}");
         sftp.symlink(&target, &path).await.unwrap();

@@ -2,6 +2,10 @@
 //! identity `(external_issuer, external_subject)`, and sessions record how they
 //! were authenticated (`auth_source`) plus, for OIDC, a reassertion deadline
 //! (`reassert_expires`). These tests round-trip both through the store.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_server::Store;
 use unissh_server::ids;

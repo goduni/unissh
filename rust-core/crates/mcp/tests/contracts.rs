@@ -1,3 +1,9 @@
+//! Tool-argument parsing and discovery contracts of the MCP adapter.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
+
 use serde_json::{json, Value};
 use unissh_mcp::contract::{parse, tools, InvalidRequest, RunCommand, ToolRequest};
 
@@ -69,7 +75,7 @@ fn runtime_rejects_credentials_identity_overrides_and_invalid_limits() {
     )
     .is_err());
     assert!(matches!(
-        parse("reveal_password", Default::default()),
+        parse("reveal_password", serde_json::Map::default()),
         Err(InvalidRequest::UnknownTool)
     ));
 }

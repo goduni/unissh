@@ -29,12 +29,15 @@ const MANIFEST_MARKER: &[u8] = b"__manifest__";
 const ACCOUNT_STATE_SIG_DOMAIN: &[u8] = b"unissh-account-state-v1";
 
 /// Canonical domain message: `len(domain):u16BE || domain || payload`.
-fn domain_message(domain: &[u8], payload: &[u8]) -> Vec<u8> {
+/// Domains are short constants; one over `u16::MAX` is a programming error.
+fn domain_message(domain: &[u8], payload: &[u8]) -> Result<Vec<u8>, AppError> {
+    let dlen = u16::try_from(domain.len())
+        .map_err(|e| AppError::internal(format!("signature domain too long: {e}")))?;
     let mut out = Vec::with_capacity(2 + domain.len() + payload.len());
-    out.extend_from_slice(&(domain.len() as u16).to_be_bytes());
+    out.extend_from_slice(&dlen.to_be_bytes());
     out.extend_from_slice(domain);
     out.extend_from_slice(payload);
-    out
+    Ok(out)
 }
 
 /// Extract the 64-byte Ed25519 signature from the 67-byte `header || sig` blob.
@@ -42,26 +45,38 @@ fn parse_sig_blob(blob: &[u8]) -> Result<[u8; 64], AppError> {
     if blob.len() != SIG_BLOB_LEN {
         return Err(AppError::malformed("signature blob: wrong length"));
     }
-    if blob[0] != FORMAT_VERSION {
+    let &[version, alg_hi, alg_lo, ref raw @ ..] = blob else {
+        return Err(AppError::malformed("signature blob: wrong length"));
+    };
+    if version != FORMAT_VERSION {
         return Err(AppError::malformed("signature blob: bad format version"));
     }
-    let alg = u16::from_be_bytes([blob[1], blob[2]]);
+    let alg = u16::from_be_bytes([alg_hi, alg_lo]);
     if alg != ALG_ED25519 {
         return Err(AppError::malformed("signature blob: not Ed25519"));
     }
-    let mut sig = [0u8; 64];
-    sig.copy_from_slice(&blob[3..]);
+    let Ok(sig) = <[u8; 64]>::try_from(raw) else {
+        return Err(AppError::malformed("signature blob: wrong length"));
+    };
     Ok(sig)
 }
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "ed25519 errors are opaque by design; the fixed client-facing message is the whole contract"
+)]
 fn verifying_key(vk_bytes: &[u8]) -> Result<VerifyingKey, AppError> {
-    let arr: [u8; 32] = vk_bytes
-        .try_into()
-        .map_err(|_| AppError::malformed("pubkey: expected 32 bytes"))?;
+    let Ok(arr) = <[u8; 32]>::try_from(vk_bytes) else {
+        return Err(AppError::malformed("pubkey: expected 32 bytes"));
+    };
     VerifyingKey::from_bytes(&arr).map_err(|_| AppError::malformed("pubkey: invalid Ed25519 point"))
 }
 
 /// Basic domain verification (`verify_strict`). Failure → `unauthenticated`.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the client must not learn why signature verification failed"
+)]
 pub fn domain_verify(
     vk_bytes: &[u8],
     domain: &[u8],
@@ -71,7 +86,7 @@ pub fn domain_verify(
     let vk = verifying_key(vk_bytes)?;
     let sig_bytes = parse_sig_blob(sig_blob)?;
     let sig = Signature::from_bytes(&sig_bytes);
-    let msg = domain_message(domain, payload);
+    let msg = domain_message(domain, payload)?;
     vk.verify_strict(&msg, &sig)
         .map_err(|_| AppError::unauthenticated("signature verification failed"))
 }
@@ -87,19 +102,21 @@ pub struct RegistrationPayload {
 impl RegistrationPayload {
     /// Parse the canonical payload (as sent by the client) into the triple.
     pub fn parse_canonical(bytes: &[u8]) -> Result<Self, AppError> {
-        if bytes.len() < 2 {
+        let &[l0, l1, ref rest @ ..] = bytes else {
             return Err(AppError::malformed("registration payload too short"));
-        }
-        let alen = u16::from_be_bytes([bytes[0], bytes[1]]) as usize;
+        };
+        let alen = usize::from(u16::from_be_bytes([l0, l1]));
         let need = 2 + alen + 64;
         if bytes.len() != need {
             return Err(AppError::malformed("registration payload length mismatch"));
         }
-        let account_id = bytes[2..2 + alen].to_vec();
-        let mut x25519_pub = [0u8; 32];
-        x25519_pub.copy_from_slice(&bytes[2 + alen..2 + alen + 32]);
-        let mut ed25519_pub = [0u8; 32];
-        ed25519_pub.copy_from_slice(&bytes[2 + alen + 32..2 + alen + 64]);
+        let mismatch = || AppError::malformed("registration payload length mismatch");
+        let (account_id, keys) = rest.split_at_checked(alen).ok_or_else(mismatch)?;
+        let account_id = account_id.to_vec();
+        let (x25519_pub, ed25519_pub) = keys
+            .split_first_chunk::<32>()
+            .and_then(|(x, e)| Some((*x, <[u8; 32]>::try_from(e).ok()?)))
+            .ok_or_else(mismatch)?;
         Ok(Self {
             account_id,
             x25519_pub,
@@ -109,11 +126,11 @@ impl RegistrationPayload {
 
     /// `len(account_id):u16BE || account_id || x25519_pub(32) || ed25519_pub(32)`.
     pub fn canonical(&self) -> Result<Vec<u8>, AppError> {
-        if self.account_id.len() > u16::MAX as usize {
+        let Ok(alen) = u16::try_from(self.account_id.len()) else {
             return Err(AppError::malformed("registration: account_id too long"));
-        }
+        };
         let mut out = Vec::with_capacity(2 + self.account_id.len() + 64);
-        out.extend_from_slice(&(self.account_id.len() as u16).to_be_bytes());
+        out.extend_from_slice(&alen.to_be_bytes());
         out.extend_from_slice(&self.account_id);
         out.extend_from_slice(&self.x25519_pub);
         out.extend_from_slice(&self.ed25519_pub);
@@ -148,10 +165,10 @@ impl ServerAuthChallenge {
     /// then `expiry:u64BE`.
     pub fn canonical(&self) -> Result<Vec<u8>, AppError> {
         fn put(out: &mut Vec<u8>, f: &[u8]) -> Result<(), AppError> {
-            if f.len() > u16::MAX as usize {
+            let Ok(flen) = u16::try_from(f.len()) else {
                 return Err(AppError::malformed("server-auth: field too long"));
-            }
-            out.extend_from_slice(&(f.len() as u16).to_be_bytes());
+            };
+            out.extend_from_slice(&flen.to_be_bytes());
             out.extend_from_slice(f);
             Ok(())
         }
@@ -201,18 +218,20 @@ pub fn parse_keyset_header(blob: &[u8]) -> Result<KeysetHeader, AppError> {
     // (the version marks the key-derivation "recipe", not the offsets of the open fields
     // the server reads: mode/generation/pubkeys). Mirror of keychain
     // `KEYSET_FORMAT_VERSION=3` / `KEYSET_FORMAT_LEGACY=2`; other versions — reject.
-    if blob[0] != 2 && blob[0] != 3 {
+    let &[version, mode, g0, g1, g2, g3, k0, k1, ..] = blob else {
+        return Err(AppError::malformed("keyset: too short"));
+    };
+    if version != 2 && version != 3 {
         return Err(AppError::malformed(
             "keyset: bad format version (expected 2 or 3)",
         ));
     }
-    let mode = blob[1];
     if mode != 1 && mode != 2 {
         return Err(AppError::malformed("keyset: bad mode"));
     }
-    let generation = u32::from_be_bytes([blob[2], blob[3], blob[4], blob[5]]);
-    let kdf_len = u16::from_be_bytes([blob[6], blob[7]]) as usize;
-    let mut pos = 8usize;
+    let generation = u32::from_be_bytes([g0, g1, g2, g3]);
+    let kdf_len = usize::from(u16::from_be_bytes([k0, k1]));
+    let mut pos = 8_usize;
     if kdf_len > 0 {
         let end = pos
             .checked_add(kdf_len)
@@ -230,10 +249,13 @@ pub fn parse_keyset_header(blob: &[u8]) -> Result<KeysetHeader, AppError> {
     if blob.len() < pos + 64 + 1 {
         return Err(AppError::malformed("keyset: missing pubkeys/wrapped"));
     }
-    let mut x25519_pub = [0u8; 32];
-    x25519_pub.copy_from_slice(&blob[pos..pos + 32]);
-    let mut ed25519_pub = [0u8; 32];
-    ed25519_pub.copy_from_slice(&blob[pos + 32..pos + 64]);
+    let pubkey = |at: usize| {
+        blob.get(at..at + 32)
+            .and_then(|s| <[u8; 32]>::try_from(s).ok())
+            .ok_or_else(|| AppError::malformed("keyset: missing pubkeys/wrapped"))
+    };
+    let x25519_pub = pubkey(pos)?;
+    let ed25519_pub = pubkey(pos + 32)?;
     // wrapped_keyset = the remainder, must be non-empty.
     if blob.len() <= pos + 64 {
         return Err(AppError::malformed("keyset: empty wrapped_keyset"));
@@ -258,7 +280,7 @@ struct Cursor<'a> {
     b: &'a [u8],
 }
 impl<'a> Cursor<'a> {
-    fn new(b: &'a [u8]) -> Self {
+    const fn new(b: &'a [u8]) -> Self {
         Cursor { b }
     }
     fn u8(&mut self) -> Result<u8, AppError> {
@@ -276,11 +298,13 @@ impl<'a> Cursor<'a> {
     }
     fn u32(&mut self) -> Result<u32, AppError> {
         let s = self.take(4)?;
-        Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+        let mut a = [0_u8; 4];
+        a.copy_from_slice(s);
+        Ok(u32::from_be_bytes(a))
     }
     fn u64(&mut self) -> Result<u64, AppError> {
         let s = self.take(8)?;
-        let mut a = [0u8; 8];
+        let mut a = [0_u8; 8];
         a.copy_from_slice(s);
         Ok(u64::from_be_bytes(a))
     }
@@ -296,19 +320,23 @@ fn rec_fmt() -> AppError {
 
 /// AAD.canonical: `len(vault_id):u16BE || vault_id || len(item_id):u16BE || item_id || version:u64BE`.
 fn aad_canonical(vault_id: &[u8], item_id: &[u8], version: u64) -> Result<Vec<u8>, AppError> {
-    if vault_id.len() > u16::MAX as usize || item_id.len() > u16::MAX as usize {
+    let (Ok(vlen), Ok(ilen)) = (u16::try_from(vault_id.len()), u16::try_from(item_id.len())) else {
         return Err(rec_fmt());
-    }
+    };
     let mut out = Vec::with_capacity(2 + vault_id.len() + 2 + item_id.len() + 8);
-    out.extend_from_slice(&(vault_id.len() as u16).to_be_bytes());
+    out.extend_from_slice(&vlen.to_be_bytes());
     out.extend_from_slice(vault_id);
-    out.extend_from_slice(&(item_id.len() as u16).to_be_bytes());
+    out.extend_from_slice(&ilen.to_be_bytes());
     out.extend_from_slice(item_id);
     out.extend_from_slice(&version.to_be_bytes());
     Ok(out)
 }
 
 /// Verify the signature of a versioned record (`verify_strict`).
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the client must not learn why signature verification failed"
+)]
 fn verify_versioned(
     author: &[u8],
     vault_id: &[u8],
@@ -334,6 +362,10 @@ fn verify_versioned(
 /// verification; Audit (design-time payload, §11) and Keyset (AEAD-authenticated)
 /// — sig is NOT checked here (audit is gated by author==genesis separately).
 /// `bytes` — verbatim `SyncObject::to_bytes()`.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the client must not learn why signature verification failed"
+)]
 pub fn verify_record_sig(bytes: &[u8]) -> Result<(), AppError> {
     let mut r = Cursor::new(bytes);
     let tag = r.u8()?;
@@ -392,7 +424,7 @@ pub fn verify_record_sig(bytes: &[u8]) -> Result<(), AppError> {
             let key_epoch = r.u64()?;
             let role = r.u8()?;
             // not_after:i64be(8) — in the signed content AND the wire (after role).
-            let not_after = r.u64()? as i64;
+            let not_after = i64::from_be_bytes(r.u64()?.to_be_bytes());
             let wrapped_vk = r.bytes()?;
             let sig = r.bytes()?;
             let author = r.bytes()?;
@@ -425,5 +457,99 @@ pub fn verify_record_sig(bytes: &[u8]) -> Result<(), AppError> {
                 .map_err(|_| AppError::malformed("account state signature verification failed"))
         }
         _ => Err(AppError::malformed("unknown object tag")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::ErrorCode;
+
+    fn put(b: &mut Vec<u8>, v: &[u8]) {
+        b.extend_from_slice(&u32::try_from(v.len()).unwrap().to_be_bytes());
+        b.extend_from_slice(v);
+    }
+
+    fn sig_blob() -> Vec<u8> {
+        let mut b = vec![FORMAT_VERSION];
+        b.extend_from_slice(&ALG_ED25519.to_be_bytes());
+        b.extend_from_slice(&[7_u8; 64]);
+        b
+    }
+
+    #[test]
+    fn truncated_sig_blob_is_format_error() {
+        let full = sig_blob();
+        assert_eq!(
+            parse_sig_blob(&full).unwrap(),
+            [7_u8; 64],
+            "raw sig follows the header"
+        );
+        for cut in 0..full.len() {
+            let err = parse_sig_blob(&full[..cut]).unwrap_err();
+            assert_eq!(err.code, ErrorCode::Malformed, "cut at {cut}: {err}");
+        }
+    }
+
+    #[test]
+    fn truncated_registration_payload_is_format_error() {
+        let p = RegistrationPayload {
+            account_id: vec![1, 2, 3, 4, 5],
+            x25519_pub: [8; 32],
+            ed25519_pub: [9; 32],
+        };
+        let full = p.canonical().unwrap();
+        let back = RegistrationPayload::parse_canonical(&full).unwrap();
+        assert_eq!(back.account_id, p.account_id, "account_id round-trips");
+        assert_eq!(back.x25519_pub, p.x25519_pub, "x25519_pub round-trips");
+        assert_eq!(back.ed25519_pub, p.ed25519_pub, "ed25519_pub round-trips");
+        for cut in 0..full.len() {
+            let err = RegistrationPayload::parse_canonical(&full[..cut]).unwrap_err();
+            assert_eq!(err.code, ErrorCode::Malformed, "cut at {cut}: {err}");
+        }
+    }
+
+    /// v3 keyset header in Password mode (with a kdf block) and a 1-byte wrapped keyset.
+    fn keyset_blob() -> Vec<u8> {
+        let mut b = vec![3_u8, 1];
+        b.extend_from_slice(&5_u32.to_be_bytes()); // generation
+        b.extend_from_slice(&4_u16.to_be_bytes()); // kdf_len
+        b.extend_from_slice(&[0xaa; 4]); // kdf params
+        b.extend_from_slice(&[0x11; 32]); // x25519_pub
+        b.extend_from_slice(&[0x22; 32]); // ed25519_pub
+        b.push(0x33); // wrapped_keyset
+        b
+    }
+
+    #[test]
+    fn truncated_keyset_header_is_format_error() {
+        let full = keyset_blob();
+        let h = parse_keyset_header(&full).unwrap();
+        assert_eq!(h.generation, 5, "generation is read big-endian");
+        assert_eq!(h.mode, 1, "mode is byte 1");
+        assert_eq!(h.x25519_pub, [0x11; 32], "x25519_pub follows the kdf block");
+        assert_eq!(h.ed25519_pub, [0x22; 32], "ed25519_pub follows x25519_pub");
+        for cut in 0..full.len() {
+            let err = parse_keyset_header(&full[..cut]).unwrap_err();
+            assert_eq!(err.code, ErrorCode::Malformed, "cut at {cut}: {err}");
+        }
+    }
+
+    #[test]
+    fn truncated_record_is_format_error() {
+        // Grant (tag 4): every field is read before any signature check.
+        let mut full = vec![4_u8];
+        put(&mut full, &[0xaa; 16]); // vault_id
+        put(&mut full, &[0xbb; 32]); // member_pubkey
+        full.extend_from_slice(&3_u64.to_be_bytes()); // key_epoch
+        full.push(1); // role
+        full.extend_from_slice(&(-1_i64).to_be_bytes()); // not_after
+        put(&mut full, &[0xcc; 8]); // wrapped_vk
+        put(&mut full, &sig_blob()); // sig
+        put(&mut full, &[0xee; 32]); // author
+        for cut in 0..full.len() {
+            let err = verify_record_sig(&full[..cut]).unwrap_err();
+            assert_eq!(err.code, ErrorCode::Malformed, "cut at {cut}: {err}");
+        }
     }
 }

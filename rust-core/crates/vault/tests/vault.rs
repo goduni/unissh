@@ -1,5 +1,9 @@
 //! Local vault tests: item round-trip through the VK, isolation, wrong keyset,
 //! signature, tombstone.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_crypto::X25519Keypair;
 use unissh_keychain::{create_account, KdfParams, UnlockedKeyset};
@@ -13,7 +17,7 @@ fn keyset() -> UnlockedKeyset {
 }
 
 fn storage() -> Storage {
-    Storage::open_in_memory(&[7u8; 32]).unwrap()
+    Storage::open_in_memory(&[7_u8; 32]).unwrap()
 }
 
 #[test]
@@ -151,8 +155,8 @@ fn manual_record_bad_signature_rejected() {
         wrapped_item_key: b"junk".to_vec(),
         version: 1,
         tombstone: false,
-        signature: vec![0u8; 67],
-        author_pubkey: vec![0u8; 32],
+        signature: vec![0_u8; 67],
+        author_pubkey: vec![0_u8; 32],
         created_at: 0,
         updated_at: 0,
         // TODO(P3/P4): vault key epoch under VK rotation; only one for now (0).
@@ -192,12 +196,12 @@ fn rename_item_rejects_existing_target() {
     v.put_item(b"b", 1, b"bb").unwrap();
     assert!(matches!(
         v.rename_item(b"a", b"b"),
-        Err(unissh_vault::VaultError::AlreadyExists)
+        Err(VaultError::AlreadyExists)
     ));
     // renaming a missing item — NotFound
     assert!(matches!(
         v.rename_item(b"missing", b"z"),
-        Err(unissh_vault::VaultError::NotFound)
+        Err(VaultError::NotFound)
     ));
 }
 
@@ -208,7 +212,7 @@ fn seal_vk_to_recipient_extension_point() {
     let v = Vault::create(&st, &ks, b"v".to_vec(), b"n").unwrap();
 
     let recipient = X25519Keypair::generate();
-    let recipient_ed = [9u8; 32];
+    let recipient_ed = [9_u8; 32];
     let wrapped = v
         .seal_vk_to_recipient(&recipient.public.to_bytes(), &recipient_ed)
         .unwrap();
@@ -291,8 +295,8 @@ fn check_item_record_detects_malformed_author() {
         wrapped_item_key: vec![],
         version: 1,
         tombstone: false,
-        signature: vec![0u8; 67],
-        author_pubkey: vec![0u8; 5], // not 32 bytes
+        signature: vec![0_u8; 67],
+        author_pubkey: vec![0_u8; 5], // not 32 bytes
         created_at: 0,
         updated_at: 0,
         // TODO(P3/P4): vault key epoch under VK rotation; only one for now (0).

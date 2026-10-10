@@ -56,7 +56,9 @@ pub fn start(app: &AppHandle) {
         return; // already started
     }
     let spawned = std::thread::Builder::new()
-        .name("system-lock".to_string())
+        .name("system-lock".to_owned())
+        // SAFETY: `run` only requires its own thread, which this spawn creates;
+        // it touches only the window it creates itself.
         .spawn(|| unsafe { run() });
     if let Err(e) = spawned {
         log::warn!("system-lock: could not start the listener thread ({e})");

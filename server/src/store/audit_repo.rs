@@ -11,6 +11,10 @@ use crate::error::AppResult;
 //   chain[n] = SHA-256( chain[n-1] ‖ record_bytes(n) ),  chain[-1] = 32 zeros.
 // Verify recomputes the chain and catches any edit to the body/order/deletion.
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "frozen chain encoding; every field arrives in a request capped by limits.max_body_bytes, far below 4 GiB"
+)]
 fn put_lp(buf: &mut Vec<u8>, b: &[u8]) {
     buf.extend_from_slice(&(b.len() as u32).to_be_bytes());
     buf.extend_from_slice(b);
@@ -26,7 +30,10 @@ fn put_opt(buf: &mut Vec<u8>, b: Option<&[u8]>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per field of the frozen unissh-audit-chain-v2 record encoding that feeds the hash chain"
+)]
 fn audit_record_bytes(
     seq: i64,
     source: &str,
@@ -73,7 +80,6 @@ impl Store {
 
     /// Client-signed audit record (via push tag 5 or /v1/audit). author and
     /// signature are mandatory (the author==owner check is at the endpoint level).
-    #[allow(clippy::too_many_arguments)]
     pub async fn append_audit_client_signed(
         &self,
         entry_blob: &[u8],
@@ -95,7 +101,10 @@ impl Store {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per column bound into the audit_log row; a params struct would only restate the SQL bind list"
+    )]
     async fn append_audit_row(
         &self,
         source: &str,
@@ -140,7 +149,7 @@ impl Store {
             )
             .await?
             .map(|r| r.b)
-            .unwrap_or_else(|| vec![0u8; 32]);
+            .unwrap_or_else(|| vec![0_u8; 32]);
         let record = audit_record_bytes(
             seq,
             source,
@@ -161,9 +170,9 @@ impl Store {
                 Val::I(seq),
                 Val::t(source),
                 Val::b(entry_blob),
-                Val::OptB(signature.map(|s| s.to_vec())),
-                Val::OptB(author_pubkey.map(|a| a.to_vec())),
-                Val::OptB(vault_id.map(|v| v.to_vec())),
+                Val::OptB(signature.map(<[u8]>::to_vec)),
+                Val::OptB(author_pubkey.map(<[u8]>::to_vec)),
+                Val::OptB(vault_id.map(<[u8]>::to_vec)),
                 Val::I(now),
                 Val::OptI(server_seq),
                 Val::B(chain),
@@ -249,8 +258,8 @@ impl Store {
                 vec![],
             )
             .await?;
-        let mut expected = vec![0u8; 32];
-        let mut count = 0i64;
+        let mut expected = vec![0_u8; 32];
+        let mut count = 0_i64;
         let mut head: Option<Vec<u8>> = None;
         for r in &rows {
             count += 1;

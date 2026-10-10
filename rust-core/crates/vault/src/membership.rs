@@ -52,17 +52,17 @@ trait RoleByte {
 impl RoleByte for MemberRole {
     fn to_u8(self) -> u8 {
         match self {
-            MemberRole::Viewer => 0,
-            MemberRole::Editor => 1,
-            MemberRole::Admin => 2,
+            Self::Viewer => 0,
+            Self::Editor => 1,
+            Self::Admin => 2,
             _ => 0,
         }
     }
     fn from_u8(v: u8) -> Option<MemberRole> {
         match v {
-            0 => Some(MemberRole::Viewer),
-            1 => Some(MemberRole::Editor),
-            2 => Some(MemberRole::Admin),
+            0 => Some(Self::Viewer),
+            1 => Some(Self::Editor),
+            2 => Some(Self::Admin),
             _ => None,
         }
     }
@@ -81,7 +81,6 @@ pub struct Member {
 /// The authority is already confirmed — it can be relied on when checking records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedMembers {
-    #[allow(dead_code)]
     vault_id: Vec<u8>,
     key_epoch: u64,
     members: Vec<Member>,
@@ -89,7 +88,7 @@ pub struct VerifiedMembers {
 
 impl VerifiedMembers {
     /// The epoch of this set.
-    pub fn epoch(&self) -> u64 {
+    pub const fn epoch(&self) -> u64 {
         self.key_epoch
     }
     /// Whether the set contains a member with the given Ed25519 pubkey.
@@ -107,7 +106,7 @@ impl VerifiedMembers {
     pub fn can_write(&self, ed25519_pub: &[u8]) -> bool {
         matches!(
             self.role_of(ed25519_pub),
-            Some(MemberRole::Editor) | Some(MemberRole::Admin)
+            Some(MemberRole::Editor | MemberRole::Admin)
         )
     }
     /// The role of the member with the given Ed25519 pubkey (`None` if not a member).
@@ -135,24 +134,20 @@ fn canonical_member_payload(key_epoch: u64, members: &[Member]) -> Result<Vec<u8
     let mut sorted = members.to_vec();
     sorted.sort_by(|a, b| a.ed25519_pub.cmp(&b.ed25519_pub));
     // forbid duplicate member-ids (otherwise the role is ambiguous)
-    for w in sorted.windows(2) {
-        if w[0].ed25519_pub == w[1].ed25519_pub {
+    for (a, b) in sorted.iter().zip(sorted.iter().skip(1)) {
+        if a.ed25519_pub == b.ed25519_pub {
             return Err(VaultError::Format);
         }
     }
-    if sorted.len() > u32::MAX as usize {
-        return Err(VaultError::Format);
-    }
+    let count = u32::try_from(sorted.len()).map_err(|_| VaultError::Format)?;
     let mut out = Vec::new();
     out.extend_from_slice(MANIFEST_DOMAIN);
     out.extend_from_slice(&key_epoch.to_be_bytes());
-    out.extend_from_slice(&(sorted.len() as u32).to_be_bytes());
+    out.extend_from_slice(&count.to_be_bytes());
     for m in &sorted {
-        if m.ed25519_pub.len() > u16::MAX as usize {
-            return Err(VaultError::Format);
-        }
+        let pub_len = u16::try_from(m.ed25519_pub.len()).map_err(|_| VaultError::Format)?;
         out.push(m.role.to_u8());
-        out.extend_from_slice(&(m.ed25519_pub.len() as u16).to_be_bytes());
+        out.extend_from_slice(&pub_len.to_be_bytes());
         out.extend_from_slice(&m.ed25519_pub);
     }
     Ok(out)
@@ -162,42 +157,43 @@ fn canonical_member_payload(key_epoch: u64, members: &[Member]) -> Result<Vec<u8
 fn parse_member_payload(key_epoch: u64, payload: &[u8]) -> Result<Vec<Member>, VaultError> {
     let mut p = payload;
     let dom_len = MANIFEST_DOMAIN.len();
-    if p.len() < dom_len + 8 + 4 || &p[..dom_len] != MANIFEST_DOMAIN {
+    if p.len() < dom_len + 8 + 4 || p.get(..dom_len) != Some(MANIFEST_DOMAIN) {
         return Err(VaultError::Format);
     }
-    p = &p[dom_len..];
-    let mut epoch_bytes = [0u8; 8];
-    epoch_bytes.copy_from_slice(&p[..8]);
+    p = p.get(dom_len..).ok_or(VaultError::Format)?;
+    let mut epoch_bytes = [0_u8; 8];
+    epoch_bytes.copy_from_slice(p.get(..8).ok_or(VaultError::Format)?);
     if u64::from_be_bytes(epoch_bytes) != key_epoch {
         return Err(VaultError::Format);
     }
-    p = &p[8..];
-    let mut cnt_bytes = [0u8; 4];
-    cnt_bytes.copy_from_slice(&p[..4]);
+    p = p.get(8..).ok_or(VaultError::Format)?;
+    let mut cnt_bytes = [0_u8; 4];
+    cnt_bytes.copy_from_slice(p.get(..4).ok_or(VaultError::Format)?);
     let count = u32::from_be_bytes(cnt_bytes) as usize;
-    p = &p[4..];
+    p = p.get(4..).ok_or(VaultError::Format)?;
     let mut members = Vec::with_capacity(count);
     for _ in 0..count {
         if p.is_empty() {
             return Err(VaultError::Format);
         }
-        let role = MemberRole::from_u8(p[0]).ok_or(VaultError::Format)?;
-        p = &p[1..];
+        let role =
+            MemberRole::from_u8(*p.first().ok_or(VaultError::Format)?).ok_or(VaultError::Format)?;
+        p = p.get(1..).ok_or(VaultError::Format)?;
         if p.len() < 2 {
             return Err(VaultError::Format);
         }
-        let mut len_bytes = [0u8; 2];
-        len_bytes.copy_from_slice(&p[..2]);
-        let len = u16::from_be_bytes(len_bytes) as usize;
-        p = &p[2..];
+        let mut len_bytes = [0_u8; 2];
+        len_bytes.copy_from_slice(p.get(..2).ok_or(VaultError::Format)?);
+        let len = usize::from(u16::from_be_bytes(len_bytes));
+        p = p.get(2..).ok_or(VaultError::Format)?;
         if p.len() < len {
             return Err(VaultError::Format);
         }
         members.push(Member {
-            ed25519_pub: p[..len].to_vec(),
+            ed25519_pub: p.get(..len).ok_or(VaultError::Format)?.to_vec(),
             role,
         });
-        p = &p[len..];
+        p = p.get(len..).ok_or(VaultError::Format)?;
     }
     if !p.is_empty() {
         return Err(VaultError::Format);
@@ -305,7 +301,6 @@ fn grant_signed_content(role: MemberRole, not_after: i64, wrapped_vk: &[u8]) -> 
 /// Builds a signed per-member grant: wraps `vk` under the recipient's X25519
 /// pubkey with the binding `vk_wrap_info(vault_id, member_ed25519_pub, key_epoch)`
 /// (D3), then signs `(role || wrapped_vk)` under the grant AAD.
-#[allow(clippy::too_many_arguments)]
 pub fn build_grant(
     admin_keyset: &UnlockedKeyset,
     vault_id: &[u8],
@@ -323,7 +318,7 @@ pub fn build_grant(
     // build_grant issues a grant WITHOUT expiry (not_after=0). Per-grant expiry
     // is set by a separate path (e.g. the admin panel via wasm) by constructing
     // a grant with not_after != 0; the format and the server-side read-enforce support it.
-    let not_after = 0i64;
+    let not_after = 0_i64;
     let content = grant_signed_content(role, not_after, &wrapped_vk);
     let vo =
         VersionedObject::from_content(grant_aad(vault_id, member_ed25519_pub, key_epoch), &content);
@@ -567,12 +562,12 @@ fn take_len_prefixed(b: &[u8]) -> Result<(&[u8], &[u8]), VaultError> {
     if b.len() < 4 {
         return Err(VaultError::Format);
     }
-    let len = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
-    let rest = &b[4..];
+    let (len_bytes, rest) = b.split_first_chunk::<4>().ok_or(VaultError::Format)?;
+    let len = u32::from_be_bytes(*len_bytes) as usize;
     if rest.len() < len {
         return Err(VaultError::Format);
     }
-    Ok((&rest[..len], &rest[len..]))
+    rest.split_at_checked(len).ok_or(VaultError::Format)
 }
 
 /// Pins a per-vault trust anchor (the genesis-owner of a vault created by a teammate),
@@ -624,7 +619,10 @@ pub fn pin_and_verify_vault_anchor(
 ///
 /// VK rotation / epoch transition (generating a new VK, re-wrapping item keys,
 /// raising the epoch floor) is **P4**, not done here.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public API taking each manifest/grant input separately; bundling them is a breaking change"
+)]
 pub fn add_member(
     storage: &Storage,
     admin_keyset: &UnlockedKeyset,
@@ -670,4 +668,44 @@ pub fn add_member(
     })?;
 
     Ok(verified)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every strict prefix of a valid canonical member payload is `Format`, never a panic.
+    #[test]
+    fn truncated_member_payload_is_format_error() {
+        let members = [
+            Member {
+                ed25519_pub: vec![1_u8; 32],
+                role: MemberRole::Admin,
+            },
+            Member {
+                ed25519_pub: vec![2_u8; 32],
+                role: MemberRole::Viewer,
+            },
+        ];
+        let full = canonical_member_payload(3, &members).unwrap();
+        assert_eq!(parse_member_payload(3, &full).unwrap(), members.to_vec());
+        for cut in 0..full.len() {
+            let err = parse_member_payload(3, &full[..cut]).unwrap_err();
+            assert!(matches!(err, VaultError::Format), "cut at {cut}: {err:?}");
+        }
+    }
+
+    /// Every strict prefix of a length-prefixed field is `Format`, never a panic.
+    #[test]
+    fn truncated_len_prefixed_is_format_error() {
+        let mut full = Vec::new();
+        put_len_prefixed(&mut full, b"wrapped-key").unwrap();
+        let (field, rest) = take_len_prefixed(&full).unwrap();
+        assert_eq!(field, b"wrapped-key");
+        assert!(rest.is_empty());
+        for cut in 0..full.len() {
+            let err = take_len_prefixed(&full[..cut]).unwrap_err();
+            assert!(matches!(err, VaultError::Format), "cut at {cut}: {err:?}");
+        }
+    }
 }

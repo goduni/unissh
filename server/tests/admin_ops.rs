@@ -2,6 +2,13 @@
 //! anti-lockout), devices/sessions/vaults/objects/relay/keysets listings, read-only
 //! config (masked), seq-bump, migrations, audit chain. All require the instance
 //! owner (OwnerCtx). ZK: metadata, not content. Instance-scoped (v2).
+#![expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::missing_assert_message,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -20,7 +27,7 @@ struct Owner {
 async fn claim_admin(app: &TestApp) -> Owner {
     let id = make_identity();
     let c = claim_owner(app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
     let bearer = app
         .login(&id, &account_id, c["device_id"].as_str().unwrap())
         .await;
@@ -57,7 +64,7 @@ fn pe(s: &str) -> String {
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                o.push(b as char)
+                o.push(b as char);
             }
             _ => o.push_str(&format!("%{b:02X}")),
         }
@@ -91,7 +98,7 @@ fn audit_obj(tag: u8, author: &[u8]) -> String {
     b64(&SyncObject::Audit(AuditObject {
         vault_id: vec![],
         entry_blob: vec![tag],
-        signature: vec![1u8; 67],
+        signature: vec![1_u8; 67],
         author_pubkey: author.to_vec(),
     })
     .to_bytes()
@@ -106,7 +113,7 @@ fn vault_b64(owner: u8, version: u64) -> String {
         wrapped_vk: vec![4, 5, 6],
         version,
         tombstone: false,
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
         author_pubkey: vec![owner; 32],
         key_epoch: 1,
         cache_policy: CachePolicy::OfflineAllowed,
@@ -196,7 +203,7 @@ async fn devices_sessions_list_and_revoke() {
     let sess = get_json(&app, "/v1/admin/sessions", &a.bearer).await;
     let sarr = sess["sessions"].as_array().unwrap();
     assert_eq!(sarr.len(), 1);
-    let sid = sarr[0]["session_id"].as_str().unwrap().to_string();
+    let sid = sarr[0]["session_id"].as_str().unwrap().to_owned();
 
     // revoke that session
     let r = app
@@ -328,7 +335,7 @@ async fn relay_and_keysets_observation() {
     let st = resp.status();
     let open: Value = resp.json().await.unwrap();
     assert_eq!(st, 200, "relay/open failed: {open}");
-    let chan = open["channel_id"].as_str().unwrap().to_string();
+    let chan = open["channel_id"].as_str().unwrap().to_owned();
 
     let relay = get_json(&app, "/v1/admin/relay", &a.bearer).await;
     let chans = relay["channels"].as_array().unwrap();
@@ -469,7 +476,7 @@ async fn audit_chain_verifies_and_detects_tampering() {
 /// client-signed rows, so both `entry` encodings are exported.
 async fn admin_with_audit(app: &TestApp) -> Owner {
     let a = claim_admin(app).await;
-    for tag in [7u8, 8] {
+    for tag in [7_u8, 8] {
         let r = app
             .client
             .post(format!("{}/v1/audit", app.base))
@@ -529,7 +536,7 @@ async fn audit_export_honours_seq_range() {
 /// fed only from the exported fields.
 fn exported_record_bytes(l: &Value) -> Vec<u8> {
     fn lp(b: &mut Vec<u8>, x: &[u8]) {
-        b.extend_from_slice(&(x.len() as u32).to_be_bytes());
+        b.extend_from_slice(&u32::try_from(x.len()).unwrap().to_be_bytes());
         b.extend_from_slice(x);
     }
     fn opt(b: &mut Vec<u8>, v: &Value) {
@@ -563,7 +570,7 @@ async fn audit_export_is_json_lines_that_verify_offline() {
     assert_eq!(r.status(), 200);
     let lines = jsonl(&r.text().await.unwrap());
 
-    let mut head = vec![0u8; 32];
+    let mut head = vec![0_u8; 32];
     for l in &lines {
         for k in ["space_id", "server_seq"] {
             assert!(l.get(k).is_some(), "chain field {k} present");
@@ -679,7 +686,7 @@ async fn instance_generation_tracks_writes() {
 #[derive(Clone)]
 struct HookReceiver {
     status: std::sync::Arc<std::sync::atomic::AtomicU16>,
-    seen: std::sync::Arc<std::sync::Mutex<Vec<(axum::http::HeaderMap, axum::body::Bytes)>>>,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<(http::HeaderMap, axum::body::Bytes)>>>,
 }
 
 /// An axum receiver at `/hook` that records each request and answers `status`.
@@ -687,18 +694,18 @@ async fn spawn_hook_receiver(status: u16) -> (HookReceiver, String) {
     use axum::extract::State;
     let rx = HookReceiver {
         status: std::sync::Arc::new(std::sync::atomic::AtomicU16::new(status)),
-        seen: Default::default(),
+        seen: std::sync::Arc::default(),
     };
     let router = axum::Router::new()
         .route(
             "/hook",
             axum::routing::post(
                 |State(rx): State<HookReceiver>,
-                 headers: axum::http::HeaderMap,
+                 headers: http::HeaderMap,
                  body: axum::body::Bytes| async move {
                     rx.seen.lock().unwrap().push((headers, body));
                     let code = rx.status.load(std::sync::atomic::Ordering::SeqCst);
-                    axum::http::StatusCode::from_u16(code).unwrap()
+                    http::StatusCode::from_u16(code).unwrap()
                 },
             ),
         )
@@ -752,7 +759,7 @@ async fn audit_webhook_posts_signed_batches_and_advances_only_on_2xx() {
     assert_eq!(delivery.step().await, Step::Delivered { first, last });
     assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), last);
 
-    let seen = rx.seen.lock().unwrap();
+    let seen = rx.seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 2);
     let (headers, body) = &seen[1];
     // The signature verifies with the shared secret over the exact body bytes.
@@ -814,7 +821,7 @@ async fn read_frame(conn: &mut tokio::net::TcpStream) -> String {
         len.push(b);
     }
     let n: usize = std::str::from_utf8(&len).unwrap().parse().unwrap();
-    let mut msg = vec![0u8; n];
+    let mut msg = vec![0_u8; n];
     conn.read_exact(&mut msg).await.unwrap();
     String::from_utf8(msg).unwrap()
 }
@@ -828,7 +835,7 @@ async fn audit_syslog_tcp_sends_octet_counted_rfc5424_and_advances_the_cursor() 
     let app = spawn().await;
     let store = &app.state.store;
     let base = store.max_audit_seq().await.unwrap();
-    let vault = [7u8; 16];
+    let vault = [7_u8; 16];
     store
         .append_audit_server_observed(&json!({ "event": "login" }), None, app.now())
         .await
@@ -964,9 +971,10 @@ async fn audit_sink_status_reflects_a_delivered_batch_and_a_failing_sink() {
 
     let mut steps = Vec::new();
     let mut statuses = Vec::new();
-    for sink in [Arc::new(webhook) as Arc<dyn Sink>, Arc::new(syslog)] {
+    let sinks: [Arc<dyn Sink>; 2] = [Arc::new(webhook), Arc::new(syslog)];
+    for sink in sinks {
         let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
-            sink: sink.name().to_string(),
+            sink: sink.name().to_owned(),
             ..Default::default()
         }));
         let mut d = Delivery::new(

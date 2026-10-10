@@ -7,6 +7,10 @@
 //! unreadable — belong to the parser and are covered in the `ssh-transport`
 //! config tests; what is exercised here is the loader that turns a path into
 //! files, and the wiring that carries the result into a vault.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,11 +20,11 @@ use unissh_ffi::Core;
 /// A vault at `dir`, unlocked, ready to import into.
 fn vault(dir: &Path) -> std::sync::Arc<Core> {
     let core = Core::new(
-        dir.join("inst.db").to_str().unwrap().to_string(),
-        dir.join("keyset.bin").to_str().unwrap().to_string(),
+        dir.join("inst.db").to_str().unwrap().to_owned(),
+        dir.join("keyset.bin").to_str().unwrap().to_owned(),
     );
-    core.create_account(Some("pw".to_string())).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_account(Some("pw".to_owned())).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     core
 }
 
@@ -33,7 +37,7 @@ fn write(dir: &Path, rel: &str, text: &str) -> PathBuf {
 }
 
 fn path(p: &Path) -> String {
-    p.to_str().unwrap().to_string()
+    p.to_str().unwrap().to_owned()
 }
 
 /// The `Include`s a report saw but did not follow, as `path` strings.
@@ -90,7 +94,7 @@ fn a_relative_include_is_resolved_against_the_configs_own_directory() {
     );
 
     let created = core
-        .import_ssh_config_at_path("v".to_string(), path(&cfg), None)
+        .import_ssh_config_at_path("v".to_owned(), path(&cfg), None)
         .unwrap();
     assert_eq!(created.len(), 1);
     assert_eq!(created[0].alias, "p1");
@@ -99,7 +103,7 @@ fn a_relative_include_is_resolved_against_the_configs_own_directory() {
         Some(path(&ssh.join("project1/config")).as_str())
     );
     let prof = core
-        .get_connection("v".to_string(), "p1".to_string())
+        .get_connection("v".to_owned(), "p1".to_owned())
         .unwrap();
     assert_eq!(prof.host, "p1.example.com");
 }
@@ -244,10 +248,10 @@ fn an_included_host_still_beats_a_catch_all_written_after_the_include() {
     );
 
     let core = vault(dir.path());
-    core.import_ssh_config_at_path("v".to_string(), path(&cfg), None)
+    core.import_ssh_config_at_path("v".to_owned(), path(&cfg), None)
         .unwrap();
     let prof = core
-        .get_connection("v".to_string(), "prod".to_string())
+        .get_connection("v".to_owned(), "prod".to_owned())
         .unwrap();
     assert_eq!(
         prof.user, "deploy",
@@ -300,12 +304,12 @@ fn only_the_named_aliases_are_imported() {
 
     let core = vault(dir.path());
     let created = core
-        .import_ssh_config_at_path("v".to_string(), path(&cfg), Some(vec!["keep".to_string()]))
+        .import_ssh_config_at_path("v".to_owned(), path(&cfg), Some(vec!["keep".to_owned()]))
         .unwrap();
     assert_eq!(created.len(), 1);
     assert_eq!(created[0].alias, "keep");
     assert!(core
-        .get_connection("v".to_string(), "drop".to_string())
+        .get_connection("v".to_owned(), "drop".to_owned())
         .is_err());
 }
 
@@ -324,10 +328,10 @@ fn re_importing_the_same_config_updates_rather_than_duplicates() {
     let cfg = write(&ssh, "config", "Include conf.d/hosts\n");
 
     let core = vault(dir.path());
-    core.import_ssh_config_at_path("v".to_string(), path(&cfg), None)
+    core.import_ssh_config_at_path("v".to_owned(), path(&cfg), None)
         .unwrap();
     let uid = core
-        .get_connection("v".to_string(), "web".to_string())
+        .get_connection("v".to_owned(), "web".to_owned())
         .unwrap()
         .uid;
 
@@ -336,17 +340,17 @@ fn re_importing_the_same_config_updates_rather_than_duplicates() {
         "conf.d/hosts",
         "Host web\n  HostName two.example.com\n",
     );
-    core.import_ssh_config_at_path("v".to_string(), path(&cfg), None)
+    core.import_ssh_config_at_path("v".to_owned(), path(&cfg), None)
         .unwrap();
     let again = core
-        .get_connection("v".to_string(), "web".to_string())
+        .get_connection("v".to_owned(), "web".to_owned())
         .unwrap();
     assert_eq!(again.host, "two.example.com", "a re-import updates");
     assert_eq!(
         again.uid, uid,
         "and keeps the uid everything else points at"
     );
-    assert_eq!(core.list_connections("v".to_string()).unwrap().len(), 1);
+    assert_eq!(core.list_connections("v".to_owned()).unwrap().len(), 1);
 }
 
 #[test]
@@ -372,7 +376,7 @@ fn config_text_still_reports_includes_as_unfollowed() {
     let dir = tempfile::tempdir().unwrap();
     let core = vault(dir.path());
     let report = core
-        .ssh_config_report("Include conf.d/*\nHost a\n".to_string())
+        .ssh_config_report("Include conf.d/*\nHost a\n".to_owned())
         .unwrap();
     assert_eq!(aliases(&report), ["a"]);
     assert_eq!(pending(&report), ["conf.d/*"]);
@@ -415,8 +419,8 @@ fn an_unfollowed_include_names_the_file_it_was_written_in() {
     assert_eq!(
         got,
         [
-            ("local".to_string(), None),
-            ("local".to_string(), Some(path(&ssh.join("a/config")))),
+            ("local".to_owned(), None),
+            ("local".to_owned(), Some(path(&ssh.join("a/config")))),
         ]
     );
 }

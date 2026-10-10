@@ -45,9 +45,17 @@ impl Batch {
     pub fn rows(&self) -> &[AuditExportRow] {
         &self.rows
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "a Batch is only built from a non-empty page (see Delivery::next_batch)"
+    )]
     pub fn first_seq(&self) -> i64 {
         self.rows[0].seq
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "a Batch is only built from a non-empty page (see Delivery::next_batch)"
+    )]
     pub fn last_seq(&self) -> i64 {
         self.rows[self.rows.len() - 1].seq
     }
@@ -102,11 +110,11 @@ pub enum Step {
 
 impl Step {
     /// How long the loop waits before the next step.
-    pub fn wait(&self) -> Duration {
+    pub const fn wait(&self) -> Duration {
         match self {
-            Step::Delivered { .. } => Duration::ZERO,
-            Step::Idle => IDLE_POLL,
-            Step::Failed { delay, .. } => *delay,
+            Self::Delivered { .. } => Duration::ZERO,
+            Self::Idle => IDLE_POLL,
+            Self::Failed { delay, .. } => *delay,
         }
     }
 }
@@ -162,7 +170,7 @@ impl Delivery {
                     tracing::warn!(
                         sink = self.sink.name(),
                         error = e.code.as_str(),
-                        retry_in_ms = delay.as_millis() as u64,
+                        retry_in_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
                         "audit sink could not read the log"
                     );
                     let error = SinkError(format!("log_read_{}", e.code.as_str()));
@@ -193,7 +201,7 @@ impl Delivery {
             first_seq = first,
             last_seq = last,
             error = %error,
-            retry_in_ms = delay.as_millis() as u64,
+            retry_in_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
             "audit sink delivery failed; the same batch will be retried"
         );
         Step::Failed {
@@ -214,7 +222,7 @@ impl Delivery {
     /// Record a failure and return the delay before the retry.
     fn fail(&mut self) -> Duration {
         let base = BACKOFF_MIN
-            .saturating_mul(1u32 << self.failures.min(16))
+            .saturating_mul(1_u32 << self.failures.min(16))
             .min(BACKOFF_MAX);
         self.failures = self.failures.saturating_add(1);
         (self.jitter)(base)
@@ -227,7 +235,7 @@ impl Delivery {
         // error only leaves the gauge at its previous value.
         let head = match step {
             Step::Delivered { .. } => self.entries.max_audit_seq().await.ok(),
-            _ => None,
+            Step::Idle | Step::Failed { .. } => None,
         };
         record(status, &step, head, self.clock.now_unix());
         step
@@ -236,7 +244,7 @@ impl Delivery {
     /// Step until `shutdown` turns true (or its sender is dropped), recording
     /// each outcome in `status`.
     pub async fn run(mut self, status: SharedSinkStatus, mut shutdown: watch::Receiver<bool>) {
-        let name = self.sink.name().to_string();
+        let name = self.sink.name().to_owned();
         tracing::info!(sink = %name, "audit sink started");
         let cursor = self.cursor.load(&name).await.ok();
         let head = self.entries.max_audit_seq().await.ok();
@@ -309,56 +317,71 @@ pub type SharedSinkStatus = Arc<Mutex<SinkStatus>>;
 /// from the cursor and the log head (when both could be read), the counter at 0.
 fn seed_metrics(sink: &str, cursor: Option<i64>, head: Option<i64>) {
     if let Some(seq) = cursor {
-        metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => sink.to_string()).set(seq as f64);
+        metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => sink.to_owned()).set(seq as f64);
         if let Some(head) = head {
             set_lag(sink, head - seq);
         }
     }
-    metrics::counter!(METRIC_FAILURES_TOTAL, "sink" => sink.to_string()).increment(0);
+    metrics::counter!(METRIC_FAILURES_TOTAL, "sink" => sink.to_owned()).increment(0);
 }
 
 fn set_lag(sink: &str, lag: i64) {
-    metrics::gauge!(METRIC_LAG, "sink" => sink.to_string()).set(lag.max(0) as f64);
+    metrics::gauge!(METRIC_LAG, "sink" => sink.to_owned()).set(lag.max(0) as f64);
 }
 
 /// `head` is the log's max seq when the caller read it (after a delivery).
 fn record(status: &SharedSinkStatus, step: &Step, head: Option<i64>, now: i64) {
-    let mut s = status.lock().unwrap_or_else(|p| p.into_inner());
-    match step {
-        Step::Delivered { last, .. } => {
-            s.last_delivered_seq = Some(*last);
-            s.last_success_at = Some(now);
-            metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => s.sink.clone()).set(*last as f64);
-            if let Some(head) = head {
-                set_lag(&s.sink, head - last);
+    // The status lock is held only for the field writes; metrics run after it.
+    let sink = {
+        let mut s = status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match step {
+            Step::Delivered { last, .. } => {
+                s.last_delivered_seq = Some(*last);
+                s.last_success_at = Some(now);
+            }
+            // Caught up: the log read worked and nothing is pending, so a sink that
+            // recovered from a failure reads as healthy before its next delivery.
+            Step::Idle => s.last_success_at = Some(now),
+            Step::Failed { error, .. } => {
+                s.last_error = Some(error.0.clone());
+                s.last_error_at = Some(now);
             }
         }
-        // Caught up: the log read worked and nothing is pending, so a sink that
-        // recovered from a failure reads as healthy before its next delivery.
-        Step::Idle => {
-            s.last_success_at = Some(now);
-            set_lag(&s.sink, 0);
+        s.sink.clone()
+    };
+    match step {
+        Step::Delivered { last, .. } => {
+            metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => sink.clone()).set(*last as f64);
+            if let Some(head) = head {
+                set_lag(&sink, head - last);
+            }
         }
-        Step::Failed { error, .. } => {
-            s.last_error = Some(error.0.clone());
-            s.last_error_at = Some(now);
-            metrics::counter!(METRIC_FAILURES_TOTAL, "sink" => s.sink.clone()).increment(1);
+        Step::Idle => set_lag(&sink, 0),
+        Step::Failed { .. } => {
+            metrics::counter!(METRIC_FAILURES_TOTAL, "sink" => sink).increment(1);
         }
     }
 }
 
 /// A random point in `[0.75·base, base]`, so retries from a fleet (including
 /// those sitting at the 5-minute cap) do not arrive in lockstep.
+#[expect(
+    clippy::little_endian_bytes,
+    reason = "random jitter source; byte order is irrelevant"
+)]
 fn random_jitter(base: Duration) -> Duration {
-    let mut b = [0u8; 8];
+    let mut b = [0_u8; 8];
     crate::ids::fill_random(&mut b);
-    let quarter = (base.as_millis() / 4) as u64;
+    let quarter = u64::try_from(base.as_millis() / 4).unwrap_or(u64::MAX);
     let less = if quarter == 0 {
         0
     } else {
         u64::from_le_bytes(b) % (quarter + 1)
     };
-    base - Duration::from_millis(less)
+    // `less <= base/4`, so this never actually saturates.
+    base.saturating_sub(Duration::from_millis(less))
 }
 
 /// Start one delivery task per sink configured in `[audit]`, and publish their
@@ -373,7 +396,7 @@ pub fn spawn_configured(
     // Each sink has its own task, cursor row (keyed by `Sink::name`) and status.
     let mut start = |sink: Arc<dyn Sink>, batch_size: u32| {
         let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
-            sink: sink.name().to_string(),
+            sink: sink.name().to_owned(),
             ..Default::default()
         }));
         statuses.push(status.clone());
@@ -409,7 +432,8 @@ pub fn spawn_configured(
         }
         start(Arc::new(sink), syslog::BATCH_SIZE);
     }
-    let _ = state.audit_sinks.set(statuses);
+    // Set once per process; a repeated call keeps the first set of handles.
+    drop(state.audit_sinks.set(statuses));
     Ok(tasks)
 }
 
@@ -577,7 +601,9 @@ mod tests {
         let mut d = delivery(&sink, &store, cursor.clone());
         match d.step().await {
             Step::Failed { error, .. } => assert!(error.0.starts_with("cursor_write_"), "{error}"),
-            other => panic!("expected a failure, got {other:?}"),
+            other @ (Step::Delivered { .. } | Step::Idle) => {
+                panic!("expected a failure, got {other:?}")
+            }
         }
         cursor.fail_save.store(false, Ordering::SeqCst);
         assert_eq!(d.step().await, Step::Delivered { first: 1, last: 2 });

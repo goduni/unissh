@@ -53,7 +53,7 @@ pub fn init() -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn init_once() -> Result<(), String> {
+const fn init_once() -> Result<(), String> {
     Ok(())
 }
 
@@ -83,6 +83,8 @@ fn init_once() -> Result<(), String> {
     // are the JavaVM and the MainActivity jobject for this process.
     let vm = unsafe { JavaVM::from_raw(ctx.java_vm.cast()) };
     vm.attach_current_thread(|env: &mut Env| -> Result<(), jni::errors::Error> {
+        // SAFETY: `context_jobject` is tao's global reference to the live
+        // MainActivity, valid for the process; `env` is this attached thread's.
         let context = unsafe { JObject::from_raw(env, ctx.context_jobject.cast()) };
         rustls_platform_verifier::android::init_with_env(env, context)
     })
@@ -94,7 +96,9 @@ fn init_once() -> Result<(), String> {
 /// branch, no allocation, no behaviour to review; the desktop and iOS clients
 /// are the ones `reqwest` builds for itself, byte for byte.
 #[cfg(not(target_os = "android"))]
-pub fn configure(builder: reqwest::blocking::ClientBuilder) -> reqwest::blocking::ClientBuilder {
+pub const fn configure(
+    builder: reqwest::blocking::ClientBuilder,
+) -> reqwest::blocking::ClientBuilder {
     builder
 }
 
@@ -166,7 +170,7 @@ pub(crate) fn revocation_was_unanswered(ocsp_response: &[u8], end_entity: &[u8])
 /// never asks a revocation question about an intermediate or an anchor in the
 /// first place. A `Revoked` verdict is therefore always *about the leaf*, and the
 /// leaf is what we scan. Widening the scan to `intermediates` could only cost the
-/// fix and never buy safety: that slice is "everything else the server sent",
+/// fix and never make it safer, because that slice is "everything else the server sent",
 /// routinely including the root, and roots very often *do* publish a responder
 /// while the leaf below them does not (GTS Root R1 is the everyday example,
 /// shipped in Google's own chains) — so counting those bytes would refuse the

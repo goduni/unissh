@@ -38,7 +38,10 @@
 //! the PQ hybrid are only reserved in the registry, not implemented.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#![expect(
+    clippy::map_err_ignore,
+    reason = "error causes are erased on purpose: a decrypt or parse failure must not become an oracle"
+)]
 
 mod error;
 

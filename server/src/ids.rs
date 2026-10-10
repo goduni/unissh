@@ -9,27 +9,31 @@ use sha2::{Digest, Sha256};
 
 /// Fill the buffer with cryptographically-random bytes from OsRng. An OS-RNG
 /// failure is an unrecoverable process condition.
+#[expect(
+    clippy::expect_used,
+    reason = "without an OS RNG no id, token or nonce can be minted safely; aborting is the only sound outcome"
+)]
 pub fn fill_random(buf: &mut [u8]) {
     getrandom::fill(buf).expect("OS RNG failure");
 }
 
 /// 16 random bytes (account-id, space-id, device-id, invite-id, channel-id …).
 pub fn random_id16() -> [u8; 16] {
-    let mut b = [0u8; 16];
+    let mut b = [0_u8; 16];
     fill_random(&mut b);
     b
 }
 
 /// 32 random bytes (session access/refresh, nonce, invite random part).
 pub fn random_bytes32() -> [u8; 32] {
-    let mut b = [0u8; 32];
+    let mut b = [0_u8; 32];
     fill_random(&mut b);
     b
 }
 
 /// N random bytes.
 pub fn random_vec(n: usize) -> Vec<u8> {
-    let mut v = vec![0u8; n];
+    let mut v = vec![0_u8; n];
     fill_random(&mut v);
     v
 }
@@ -47,6 +51,10 @@ pub fn b64(data: &[u8]) -> String {
 }
 
 /// Decode base64 STANDARD; error → 400 malformed.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the input is often a token; the message stays fixed so nothing about it is echoed back"
+)]
 pub fn unb64(s: &str) -> Result<Vec<u8>, AppError> {
     STANDARD
         .decode(s.as_bytes())
@@ -67,6 +75,6 @@ pub fn unb64_exact(s: &str, len: usize, what: &str) -> Result<Vec<u8>, AppError>
 
 /// Human setup code from 6 random bytes: "XXXX-XXXX-XXXX" (uppercase hex).
 pub fn generate_setup_code(bytes: &[u8; 6]) -> String {
-    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
-    format!("{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
+    let [a, b, c, d, e, f] = *bytes;
+    format!("{a:02X}{b:02X}-{c:02X}{d:02X}-{e:02X}{f:02X}")
 }

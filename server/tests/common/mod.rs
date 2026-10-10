@@ -2,7 +2,15 @@
 //! (sqlite :memory:, controllable clock, fixed setup code), a reqwest client, and
 //! helpers to claim the instance / seed accounts / log in.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each integration-test binary compiles this module but uses only some helpers; which ones go unused differs per binary, so an expect would be unfulfilled in some"
+)]
+#![expect(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -172,13 +180,14 @@ impl TestApp {
             .await
             .unwrap();
         if make_owner {
-            let _ = s
-                .exec(
+            drop(
+                s.exec(
                     "UPDATE instance SET claimed = 1, owner_account_id = ? \
                      WHERE id = 1 AND owner_account_id IS NULL",
-                    vec![Val::b(&account_id[..])],
+                    vec![Val::b(&*account_id)],
                 )
-                .await;
+                .await,
+            );
         }
         let raw = ids::random_bytes32();
         let session_id = ids::random_id16();
@@ -221,7 +230,7 @@ pub fn make_identity() -> Identity {
     let xk = X25519Keypair::generate();
     let ed = kp.verifying.to_bytes();
     let x = xk.public.to_bytes();
-    let candidate = vec![0u8; 16];
+    let candidate = vec![0_u8; 16];
     let core = CoreReg {
         account_id: candidate.clone(),
         x25519_pub: x,
@@ -311,7 +320,7 @@ pub async fn login_v2(app: &TestApp, id: &Identity, account_id: &str, device_id:
     login_tokens_v2(app, id, account_id, device_id).await["access_token"]
         .as_str()
         .unwrap()
-        .to_string()
+        .to_owned()
 }
 
 impl TestApp {
@@ -333,7 +342,7 @@ use unissh_sync::SyncObject;
 
 /// Length-prefixed (u32 BE) blob append, the codec's `put` framing.
 pub fn put(out: &mut Vec<u8>, b: &[u8]) {
-    out.extend_from_slice(&(b.len() as u32).to_be_bytes());
+    out.extend_from_slice(&u32::try_from(b.len()).unwrap().to_be_bytes());
     out.extend_from_slice(b);
 }
 
@@ -358,10 +367,10 @@ pub fn manifest_blob(epoch: u64, members: &[(Vec<u8>, u8)]) -> Vec<u8> {
     ms.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = b"unissh-manifest-v1".to_vec();
     out.extend_from_slice(&epoch.to_be_bytes());
-    out.extend_from_slice(&(ms.len() as u32).to_be_bytes());
+    out.extend_from_slice(&u32::try_from(ms.len()).unwrap().to_be_bytes());
     for (ed, role) in &ms {
         out.push(*role);
-        out.extend_from_slice(&(ed.len() as u16).to_be_bytes());
+        out.extend_from_slice(&u16::try_from(ed.len()).unwrap().to_be_bytes());
         out.extend_from_slice(ed);
     }
     out
@@ -370,7 +379,7 @@ pub fn manifest_blob(epoch: u64, members: &[(Vec<u8>, u8)]) -> Vec<u8> {
 /// A genuinely signed manifest object (tag 3), author = `kp`.
 pub fn manifest_signed(kp: &Ed25519Keypair, vault: &[u8], epoch: u64, blob: &[u8]) -> Vec<u8> {
     let sig = sig_over(kp, vault, b"__manifest__", epoch, blob);
-    let mut out = vec![3u8];
+    let mut out = vec![3_u8];
     put(&mut out, vault);
     out.extend_from_slice(&epoch.to_be_bytes());
     put(&mut out, blob);
@@ -387,18 +396,18 @@ pub fn grant_signed(
     epoch: u64,
     role: u8,
 ) -> Vec<u8> {
-    let wrapped_vk = vec![9u8; 48];
+    let wrapped_vk = vec![9_u8; 48];
     let mut content = b"unissh-grant-v1".to_vec();
     content.push(role);
-    content.extend_from_slice(&0i64.to_be_bytes()); // not_after = 0 (no expiry)
+    content.extend_from_slice(&0_i64.to_be_bytes()); // not_after = 0 (no expiry)
     content.extend_from_slice(&wrapped_vk);
     let sig = sig_over(kp, vault, member, epoch, &content);
-    let mut out = vec![4u8];
+    let mut out = vec![4_u8];
     put(&mut out, vault);
     put(&mut out, member);
     out.extend_from_slice(&epoch.to_be_bytes());
     out.push(role);
-    out.extend_from_slice(&0i64.to_be_bytes());
+    out.extend_from_slice(&0_i64.to_be_bytes());
     put(&mut out, &wrapped_vk);
     put(&mut out, &sig);
     put(&mut out, &kp.verifying.to_bytes());
@@ -416,7 +425,7 @@ pub fn vault_object(author: &[u8], vault: &[u8], epoch: u64, version: u64) -> Ve
         wrapped_vk: vec![0xDD; 16],
         version,
         tombstone: false,
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
         author_pubkey: author.to_vec(),
         key_epoch: epoch,
         cache_policy: CachePolicy::OfflineAllowed,

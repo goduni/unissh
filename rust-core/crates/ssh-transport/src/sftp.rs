@@ -87,7 +87,11 @@ const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;
 
 /// Conservative SFTP v3 payload size; SSH packet limits do not imply SFTP limits.
-const CHUNK: usize = 32 * 1024;
+/// Kept as `u32` for the wire `len` field; [`CHUNK`] is the same value as `usize`.
+const CHUNK_U32: u32 = 32 * 1024;
+/// [`CHUNK_U32`] for buffer sizes (`u32` → `usize` is lossless on every target
+/// UniSSH builds for).
+const CHUNK: usize = CHUNK_U32 as usize;
 /// Outstanding READ/WRITE requests kept in flight during a streaming transfer.
 /// Throughput scales as WINDOW*CHUNK/RTT, so this lifts the per-RTT ceiling that
 /// a single-request-at-a-time protocol imposes. Reorder buffer is WINDOW*CHUNK.
@@ -163,7 +167,7 @@ where
 {
     /// Starts the session: sends INIT(v3), awaits VERSION.
     pub(crate) async fn start(stream: S) -> Result<Self, TransportError> {
-        let mut s = Sftp {
+        let mut s = Self {
             stream,
             next_id: 0,
             poisoned: false,
@@ -173,7 +177,7 @@ where
         };
         let mut init = Vec::with_capacity(5);
         init.push(FXP_INIT);
-        init.extend_from_slice(&3u32.to_be_bytes());
+        init.extend_from_slice(&3_u32.to_be_bytes());
         s.send(&init).await?;
         let (typ, body) = s.read_packet().await?;
         if typ != FXP_VERSION {
@@ -241,7 +245,7 @@ where
         let result = async {
             let mut out = Vec::with_capacity(CHUNK.min(limit));
             while let Some(data) = self
-                .read_chunk(&handle, out.len() as u64, CHUNK as u32)
+                .read_chunk(&handle, out.len() as u64, CHUNK_U32)
                 .await?
             {
                 if out.len().saturating_add(data.len()) > limit {
@@ -266,7 +270,7 @@ where
         let result = async {
             let mut digest = Sha256::new();
             let mut offset = 0;
-            while let Some(data) = self.read_chunk(&handle, offset, CHUNK as u32).await? {
+            while let Some(data) = self.read_chunk(&handle, offset, CHUNK_U32).await? {
                 offset += data.len() as u64;
                 if offset > 256 * 1024 * 1024 {
                     return Err(sftp_err("file exceeds editor size limit"));
@@ -349,7 +353,10 @@ where
             .await
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "private plumbing between the public download entry points; the arguments are the transfer's independent knobs"
+    )]
     async fn download_with_file(
         &mut self,
         remote: &str,
@@ -389,7 +396,10 @@ where
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "private plumbing between the public download entry points; the arguments are the transfer's independent knobs"
+    )]
     async fn download_to_inner(
         &mut self,
         remote: &str,
@@ -474,13 +484,15 @@ where
                     && next_req.saturating_sub(write_offset) < (WINDOW * CHUNK) as u64
                 {
                     let len = if next_req < request_limit {
-                        (request_limit - next_req).min(CHUNK as u64) as u32
+                        // `min` bounds it by CHUNK, so the fallback is never taken.
+                        u32::try_from((request_limit - next_req).min(u64::from(CHUNK_U32)))
+                            .unwrap_or(CHUNK_U32)
                     } else {
-                        CHUNK as u32
+                        CHUNK_U32
                     };
                     let id = self.send_read(&handle, next_req, len).await?;
                     in_flight.insert(id, (next_req, len));
-                    next_req += len as u64;
+                    next_req += u64::from(len);
                 }
                 if in_flight.is_empty() {
                     break; // nothing pending and nothing left to request
@@ -502,7 +514,11 @@ where
                         let got = data.len() as u64;
                         request_limit = request_limit.max(off + got);
                         // Short read (legal): re-request the remaining sub-range.
-                        if got < len as u64 {
+                        if got < u64::from(len) {
+                            #[expect(
+                                clippy::cast_possible_truncation,
+                                reason = "got < len (a u32) is checked on the line above"
+                            )]
                             let rlen = len - got as u32;
                             let id2 = self.send_read(&handle, off + got, rlen).await?;
                             in_flight.insert(id2, (off + got, rlen));
@@ -657,7 +673,7 @@ where
         let mut next_offset = start_offset;
         let mut eof = false;
         let mut outcome = TransferOutcome::Completed;
-        let mut buf = vec![0u8; CHUNK];
+        let mut buf = vec![0_u8; CHUNK];
         loop {
             if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
                 outcome = TransferOutcome::Cancelled;
@@ -669,8 +685,13 @@ where
                     eof = true;
                     break;
                 }
-                let id = self.send_write(&handle, next_offset, &buf[..n]).await?;
-                in_flight.insert(id, n as u32);
+                // `read` never reports more than the CHUNK-sized buffer it was given.
+                let chunk = buf
+                    .get(..n)
+                    .ok_or_else(|| sftp_err("local read overran its buffer"))?;
+                let len = u32::try_from(n).map_err(|e| sftp_err(&e.to_string()))?;
+                let id = self.send_write(&handle, next_offset, chunk).await?;
+                in_flight.insert(id, len);
                 next_offset += n as u64;
             }
             if in_flight.is_empty() {
@@ -692,7 +713,7 @@ where
                 let e = status_to_err(code, &mut r);
                 return Err(self.poison(e));
             }
-            acked += len as u64;
+            acked += u64::from(len);
             if let Some(p) = &progress {
                 p.on_progress(acked, total);
             }
@@ -733,11 +754,11 @@ where
         let id = self.alloc_id();
         let mut b = vec![request];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, path.as_bytes());
+        put_string(&mut b, path.as_bytes())?;
         self.send(&b).await?;
         let (typ, body) = self.read_for(id).await?;
         if typ != FXP_ATTRS {
-            return Err(self.as_status_err(typ, &body));
+            return Err(Self::as_status_err(typ, &body));
         }
         let mut r = Reader::new(&body);
         r.u32()?; // id
@@ -756,19 +777,20 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_READLINK];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, path.as_bytes());
+        put_string(&mut b, path.as_bytes())?;
         self.send(&b).await?;
         let (typ, body) = self.read_for(id).await?;
         if typ != FXP_NAME {
-            return Err(self.as_status_err(typ, &body));
+            return Err(Self::as_status_err(typ, &body));
         }
         let mut r = Reader::new(&body);
         r.u32()?;
         if r.u32()? != 1 {
             return Err(sftp_err("invalid readlink name count"));
         }
-        String::from_utf8(r.string()?)
-            .map_err(|_| sftp_err("symbolic link target is not valid UTF-8"))
+        String::from_utf8(r.string()?).map_err(|e| {
+            TransportError::Sftp(format!("symbolic link target is not valid UTF-8: {e}"))
+        })
     }
 
     /// Create a link. OpenSSH v3 uses target then link path on the wire.
@@ -776,8 +798,8 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_SYMLINK];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, target.as_bytes());
-        put_string(&mut b, path.as_bytes());
+        put_string(&mut b, target.as_bytes())?;
+        put_string(&mut b, path.as_bytes())?;
         self.send(&b).await?;
         self.expect_ok(id).await
     }
@@ -787,8 +809,8 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_MKDIR];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, path.as_bytes());
-        b.extend_from_slice(&0u32.to_be_bytes()); // ATTRS flags = 0
+        put_string(&mut b, path.as_bytes())?;
+        b.extend_from_slice(&0_u32.to_be_bytes()); // ATTRS flags = 0
         self.send(&b).await?;
         self.expect_ok(id).await
     }
@@ -831,8 +853,8 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_RENAME];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, from.as_bytes());
-        put_string(&mut b, to.as_bytes());
+        put_string(&mut b, from.as_bytes())?;
+        put_string(&mut b, to.as_bytes())?;
         self.send(&b).await?;
         self.expect_ok(id).await
     }
@@ -856,9 +878,9 @@ where
         let id = self.alloc_id();
         let mut b = vec![200]; // SSH_FXP_EXTENDED
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, b"posix-rename@openssh.com");
-        put_string(&mut b, from.as_bytes());
-        put_string(&mut b, to.as_bytes());
+        put_string(&mut b, b"posix-rename@openssh.com")?;
+        put_string(&mut b, from.as_bytes())?;
+        put_string(&mut b, to.as_bytes())?;
         self.send(&b).await?;
         self.expect_ok(id).await
     }
@@ -873,7 +895,7 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_SETSTAT];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, path.as_bytes());
+        put_string(&mut b, path.as_bytes())?;
         let flags = if mode.is_some() { ATTR_PERMISSIONS } else { 0 }
             | if mtime.is_some() { ATTR_ACMODTIME } else { 0 };
         b.extend_from_slice(&flags.to_be_bytes());
@@ -895,7 +917,7 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_SETSTAT];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, path.as_bytes());
+        put_string(&mut b, path.as_bytes())?;
         b.extend_from_slice(&ATTR_PERMISSIONS.to_be_bytes()); // flags = 0x4
         b.extend_from_slice(&(mode & 0o7777).to_be_bytes());
         self.send(&b).await?;
@@ -907,11 +929,11 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_REALPATH];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, path.as_bytes());
+        put_string(&mut b, path.as_bytes())?;
         self.send(&b).await?;
         let (typ, body) = self.read_for(id).await?;
         if typ != FXP_NAME {
-            return Err(self.as_status_err(typ, &body));
+            return Err(Self::as_status_err(typ, &body));
         }
         let mut r = Reader::new(&body);
         r.u32()?; // id
@@ -929,10 +951,10 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_OPEN];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, path.as_bytes());
+        put_string(&mut b, path.as_bytes())?;
         b.extend_from_slice(&pflags.to_be_bytes());
         b.extend_from_slice(&ATTR_PERMISSIONS.to_be_bytes());
-        b.extend_from_slice(&0o600u32.to_be_bytes());
+        b.extend_from_slice(&0o600_u32.to_be_bytes());
         self.send(&b).await?;
         self.expect_handle(id).await
     }
@@ -941,7 +963,7 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_OPENDIR];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, path.as_bytes());
+        put_string(&mut b, path.as_bytes())?;
         self.send(&b).await?;
         self.expect_handle(id).await
     }
@@ -950,7 +972,7 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_CLOSE];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, handle);
+        put_string(&mut b, handle)?;
         self.send(&b).await?;
         self.expect_ok(id).await
     }
@@ -964,7 +986,7 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_READ];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, handle);
+        put_string(&mut b, handle)?;
         b.extend_from_slice(&offset.to_be_bytes());
         b.extend_from_slice(&len.to_be_bytes());
         self.send(&b).await?;
@@ -1004,9 +1026,9 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_WRITE];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, handle);
+        put_string(&mut b, handle)?;
         b.extend_from_slice(&offset.to_be_bytes());
-        put_string(&mut b, data);
+        put_string(&mut b, data)?;
         self.send(&b).await?;
         self.expect_ok(id).await
     }
@@ -1022,7 +1044,7 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_READ];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, handle);
+        put_string(&mut b, handle)?;
         b.extend_from_slice(&offset.to_be_bytes());
         b.extend_from_slice(&len.to_be_bytes());
         self.send(&b).await?;
@@ -1040,9 +1062,9 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_WRITE];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, handle);
+        put_string(&mut b, handle)?;
         b.extend_from_slice(&offset.to_be_bytes());
-        put_string(&mut b, data);
+        put_string(&mut b, data)?;
         self.send(&b).await?;
         Ok(id)
     }
@@ -1051,10 +1073,10 @@ where
     /// transfers with multiple requests in flight).
     async fn recv_any(&mut self) -> Result<(u8, u32, Vec<u8>), TransportError> {
         let (typ, body) = self.read_packet().await?;
-        if body.len() < 4 {
+        let Some(&head) = body.first_chunk::<4>() else {
             return Err(self.poison(sftp_err("short SFTP reply")));
-        }
-        let id = u32::from_be_bytes([body[0], body[1], body[2], body[3]]);
+        };
+        let id = u32::from_be_bytes(head);
         Ok((typ, id, body))
     }
 
@@ -1062,7 +1084,7 @@ where
         let id = self.alloc_id();
         let mut b = vec![FXP_READDIR];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, handle);
+        put_string(&mut b, handle)?;
         self.send(&b).await?;
         let (typ, body) = self.read_for(id).await?;
         match typ {
@@ -1111,7 +1133,7 @@ where
         let id = self.alloc_id();
         let mut b = vec![typ];
         b.extend_from_slice(&id.to_be_bytes());
-        put_string(&mut b, path.as_bytes());
+        put_string(&mut b, path.as_bytes())?;
         self.send(&b).await?;
         self.expect_ok(id).await
     }
@@ -1121,7 +1143,7 @@ where
     async fn expect_handle(&mut self, id: u32) -> Result<Vec<u8>, TransportError> {
         let (typ, body) = self.read_for(id).await?;
         if typ != FXP_HANDLE {
-            return Err(self.as_status_err(typ, &body));
+            return Err(Self::as_status_err(typ, &body));
         }
         let mut r = Reader::new(&body);
         r.u32()?; // id
@@ -1145,7 +1167,7 @@ where
 
     /// Turns an unexpected reply (not the one awaited) into a meaningful error:
     /// if it is a STATUS — extracts the code/message.
-    fn as_status_err(&self, typ: u8, body: &[u8]) -> TransportError {
+    fn as_status_err(typ: u8, body: &[u8]) -> TransportError {
         if typ == FXP_STATUS {
             let mut r = Reader::new(body);
             if r.u32().is_ok() {
@@ -1161,17 +1183,17 @@ where
     /// the reply id must match).
     async fn read_for(&mut self, want_id: u32) -> Result<(u8, Vec<u8>), TransportError> {
         let (typ, body) = self.read_packet().await?;
-        if body.len() < 4 {
+        let Some(&head) = body.first_chunk::<4>() else {
             return Err(self.poison(sftp_err("short SFTP reply")));
-        }
-        let id = u32::from_be_bytes([body[0], body[1], body[2], body[3]]);
+        };
+        let id = u32::from_be_bytes(head);
         if id != want_id {
             return Err(self.poison(sftp_err("SFTP response id mismatch")));
         }
         Ok((typ, body))
     }
 
-    fn alloc_id(&mut self) -> u32 {
+    const fn alloc_id(&mut self) -> u32 {
         self.next_id = self.next_id.wrapping_add(1);
         self.next_id
     }
@@ -1179,13 +1201,13 @@ where
     /// Whether the channel is poisoned (see [`Sftp::poisoned`]). The pool owner checks this
     /// before returning the channel to the pool: a poisoned one is discarded, a usable one
     /// is reused even after an operation error.
-    pub fn is_poisoned(&self) -> bool {
+    pub const fn is_poisoned(&self) -> bool {
         self.poisoned
     }
 
     /// Marks the channel poisoned and returns the passed error — for concise
     /// `return self.poison(err)` on paths where the stream is desynchronized.
-    fn poison(&mut self, e: TransportError) -> TransportError {
+    const fn poison(&mut self, e: TransportError) -> TransportError {
         self.poisoned = true;
         e
     }
@@ -1206,12 +1228,15 @@ where
         r
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "tokio's Elapsed carries nothing beyond the timeout, which the message names"
+    )]
     async fn send_raw(&mut self, body: &[u8]) -> Result<(), TransportError> {
         // Length and body — in a single buffer/write (otherwise two channel packets per one
         // SFTP packet). With a timeout, so that a hung channel does not block forever.
         let mut framed = Vec::with_capacity(4 + body.len());
-        framed.extend_from_slice(&(body.len() as u32).to_be_bytes());
-        framed.extend_from_slice(body);
+        put_string(&mut framed, body)?;
         timeout(IO_TIMEOUT, self.stream.write_all(&framed))
             .await
             .map_err(|_| sftp_err("write timeout"))??;
@@ -1237,8 +1262,12 @@ where
         r
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "tokio's Elapsed carries nothing beyond the timeout, which the message names"
+    )]
     async fn read_packet_raw(&mut self) -> Result<(u8, Vec<u8>), TransportError> {
-        let mut len_buf = [0u8; 4];
+        let mut len_buf = [0_u8; 4];
         timeout(IO_TIMEOUT, self.stream.read_exact(&mut len_buf))
             .await
             .map_err(|_| sftp_err("read timeout"))??;
@@ -1246,11 +1275,14 @@ where
         if len == 0 || len > MAX_PACKET {
             return Err(sftp_err("invalid SFTP packet length"));
         }
-        let mut buf = vec![0u8; len];
+        let mut buf = vec![0_u8; len];
         timeout(IO_TIMEOUT, self.stream.read_exact(&mut buf))
             .await
             .map_err(|_| sftp_err("read timeout"))??;
-        let typ = buf[0];
+        // `len == 0` was rejected above, so the type byte is there.
+        let typ = *buf
+            .first()
+            .ok_or_else(|| sftp_err("invalid SFTP packet length"))?;
         Ok((typ, buf.split_off(1)))
     }
 }
@@ -1271,17 +1303,21 @@ async fn wait_cancelled(cancel: Option<Arc<dyn SftpCancel>>) {
 
 // --- encoding/decoding helpers ---
 
-fn put_string(out: &mut Vec<u8>, data: &[u8]) {
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+/// Appends an SSH `string`; errors only for a field the u32 length cannot express.
+fn put_string(out: &mut Vec<u8>, data: &[u8]) -> Result<(), TransportError> {
+    let len = u32::try_from(data.len())
+        .map_err(|e| TransportError::Sftp(format!("SFTP field too long: {e}")))?;
+    out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(data);
+    Ok(())
 }
 
-fn is_dir_perm(perms: u32) -> bool {
+const fn is_dir_perm(perms: u32) -> bool {
     perms & S_IFMT == S_IFDIR
 }
 
 fn sftp_err(msg: &str) -> TransportError {
-    TransportError::Sftp(msg.to_string())
+    TransportError::Sftp(msg.to_owned())
 }
 
 fn status_to_err(code: u32, r: &mut Reader<'_>) -> TransportError {
@@ -1341,7 +1377,7 @@ struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    fn new(data: &'a [u8]) -> Self {
+    const fn new(data: &'a [u8]) -> Self {
         Reader { data, pos: 0 }
     }
 
@@ -1350,22 +1386,25 @@ impl<'a> Reader<'a> {
             .pos
             .checked_add(n)
             .ok_or_else(|| sftp_err("length overflow"))?;
-        if end > self.data.len() {
-            return Err(sftp_err("truncated SFTP field"));
-        }
-        let s = &self.data[self.pos..end];
+        // `pos <= end`, so this fails exactly when `end > data.len()`.
+        let s = self
+            .data
+            .get(self.pos..end)
+            .ok_or_else(|| sftp_err("truncated SFTP field"))?;
         self.pos = end;
         Ok(s)
     }
 
     fn u32(&mut self) -> Result<u32, TransportError> {
         let b = self.take(4)?;
-        Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+        let mut a = [0_u8; 4];
+        a.copy_from_slice(b);
+        Ok(u32::from_be_bytes(a))
     }
 
     fn u64(&mut self) -> Result<u64, TransportError> {
         let b = self.take(8)?;
-        let mut a = [0u8; 8];
+        let mut a = [0_u8; 8];
         a.copy_from_slice(b);
         Ok(u64::from_be_bytes(a))
     }
@@ -1384,7 +1423,8 @@ impl<'a> Reader<'a> {
 
     fn string_utf8(&mut self) -> Result<String, TransportError> {
         let bytes = self.string()?;
-        String::from_utf8(bytes).map_err(|_| sftp_err("filename or text is not valid UTF-8"))
+        String::from_utf8(bytes)
+            .map_err(|e| TransportError::Sftp(format!("filename or text is not valid UTF-8: {e}")))
     }
 }
 
@@ -1412,6 +1452,52 @@ mod tests {
             cancel: None,
             posix_rename: false,
             lifetime_cancel: None,
+        }
+    }
+
+    #[test]
+    fn truncated_reader_fields_are_format_errors() {
+        let mut full = Vec::new();
+        put_string(&mut full, b"name").unwrap();
+        full.extend_from_slice(&7_u32.to_be_bytes());
+        for cut in 0..full.len() {
+            let mut r = Reader::new(&full[..cut]);
+            let err = r.string().and_then(|_| r.u32()).unwrap_err();
+            assert!(
+                matches!(&err, TransportError::Sftp(m) if m == "truncated SFTP field"),
+                "cut at {cut}: {err}"
+            );
+        }
+        let mut r = Reader::new(&full);
+        assert_eq!(r.string().unwrap(), b"name");
+        assert_eq!(r.u32().unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn reply_cut_inside_the_request_id_is_rejected_and_poisons() {
+        for body_len in 0..4 {
+            for pipelined in [false, true] {
+                let (client, server) = tokio::io::duplex(1024);
+                let mut client = test_session(client);
+                let mut peer = test_session(server);
+                let mut packet = vec![FXP_STATUS];
+                packet.extend_from_slice(&[0; 4][..body_len]);
+                peer.send(&packet).await.unwrap();
+                let result = if pipelined {
+                    client.recv_any().await.map(|_| ())
+                } else {
+                    client.read_for(1).await.map(|_| ())
+                };
+                let err = result.unwrap_err();
+                assert!(
+                    matches!(&err, TransportError::Sftp(m) if m == "short SFTP reply"),
+                    "body of {body_len} bytes (pipelined: {pipelined}): {err}"
+                );
+                assert!(
+                    client.is_poisoned(),
+                    "a short reply desynchronizes the stream"
+                );
+            }
         }
     }
 
@@ -1468,7 +1554,7 @@ mod tests {
             assert_eq!(typ, FXP_OPEN);
             let mut reply = vec![FXP_HANDLE];
             reply.extend_from_slice(&body[..4]);
-            put_string(&mut reply, b"handle");
+            put_string(&mut reply, b"handle").unwrap();
             peer.send(&reply).await.unwrap();
             // The upload fills the duplex buffer with a partial WRITE frame.
             let mut length = [0; 4];
@@ -1505,13 +1591,13 @@ mod tests {
             let (_, body) = peer.read_packet().await.unwrap();
             let mut reply = vec![FXP_HANDLE];
             reply.extend_from_slice(&body[..4]);
-            put_string(&mut reply, b"handle");
+            put_string(&mut reply, b"handle").unwrap();
             peer.send(&reply).await.unwrap();
             let (typ, body) = peer.read_packet().await.unwrap();
             assert_eq!(typ, FXP_READ);
             let mut reply = vec![FXP_DATA];
             reply.extend_from_slice(&body[..4]);
-            put_string(&mut reply, &vec![42; CHUNK]);
+            put_string(&mut reply, &vec![42; CHUNK]).unwrap();
             peer.send(&reply).await.unwrap();
             tokio::time::sleep(Duration::from_secs(2)).await;
         };
@@ -1545,10 +1631,10 @@ mod tests {
         let mut buf = Vec::new();
         let flags = ATTR_SIZE | ATTR_PERMISSIONS | ATTR_ACMODTIME;
         buf.extend_from_slice(&flags.to_be_bytes());
-        buf.extend_from_slice(&1234u64.to_be_bytes()); // size
-        buf.extend_from_slice(&0o100644u32.to_be_bytes()); // perms: regular file rw-r--r--
-        buf.extend_from_slice(&111u32.to_be_bytes()); // atime — discarded
-        buf.extend_from_slice(&1_700_000_000u32.to_be_bytes()); // mtime
+        buf.extend_from_slice(&1234_u64.to_be_bytes()); // size
+        buf.extend_from_slice(&0o100644_u32.to_be_bytes()); // perms: regular file rw-r--r--
+        buf.extend_from_slice(&111_u32.to_be_bytes()); // atime — discarded
+        buf.extend_from_slice(&1_700_000_000_u32.to_be_bytes()); // mtime
         let mut r = Reader::new(&buf);
         let (size, perms, mtime, _, _) = parse_attrs(&mut r).unwrap();
         assert_eq!(size, Some(1234));
@@ -1561,7 +1647,7 @@ mod tests {
     fn parse_attrs_handles_absent_mtime_and_perms() {
         let mut buf = Vec::new();
         buf.extend_from_slice(&ATTR_SIZE.to_be_bytes()); // size only
-        buf.extend_from_slice(&42u64.to_be_bytes());
+        buf.extend_from_slice(&42_u64.to_be_bytes());
         let mut r = Reader::new(&buf);
         let (size, perms, mtime, _, _) = parse_attrs(&mut r).unwrap();
         assert_eq!(size, Some(42));
@@ -1628,7 +1714,7 @@ mod download_flush_tests {
                 let (_, body) = peer.read_packet().await.unwrap();
                 let mut reply = vec![FXP_HANDLE];
                 reply.extend_from_slice(&body[..4]);
-                put_string(&mut reply, b"handle");
+                put_string(&mut reply, b"handle").unwrap();
                 peer.send(&reply).await.unwrap();
                 let (typ, body) = peer.read_packet().await.unwrap();
                 assert_eq!(typ, FXP_READ);
@@ -1642,7 +1728,7 @@ mod download_flush_tests {
                 started_rx.await.unwrap();
                 let mut reply = vec![FXP_DATA];
                 reply.extend_from_slice(&body[..4]);
-                put_string(&mut reply, &vec![42; CHUNK]);
+                put_string(&mut reply, &vec![42; CHUNK]).unwrap();
                 peer.send(&reply).await.unwrap();
                 progress_rx.await.unwrap();
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1719,24 +1805,25 @@ mod integrity_tests {
                 FXP_OPEN => {
                     response.push(FXP_HANDLE);
                     response.extend_from_slice(&id.to_be_bytes());
-                    put_string(&mut response, b"h");
+                    put_string(&mut response, b"h").unwrap();
                 }
                 FXP_READ => {
                     reads += 1;
                     r.string().unwrap();
-                    let offset = r.u64().unwrap() as usize;
+                    let offset = usize::try_from(r.u64().unwrap()).unwrap();
                     let len = r.u32().unwrap() as usize;
                     assert!(len <= 32768);
                     if oversized || offset < bytes.len() {
                         response.push(FXP_DATA);
                         response.extend_from_slice(&id.to_be_bytes());
                         if oversized {
-                            put_string(&mut response, &vec![0; len + 1]);
+                            put_string(&mut response, &vec![0; len + 1]).unwrap();
                         } else {
                             put_string(
                                 &mut response,
                                 &bytes[offset..(offset + len).min(bytes.len())],
-                            );
+                            )
+                            .unwrap();
                         }
                     } else {
                         response.push(FXP_STATUS);
@@ -1817,7 +1904,7 @@ mod integrity_tests {
             assert_eq!(typ, FXP_OPEN);
             let mut reply = vec![FXP_HANDLE];
             reply.extend_from_slice(&body[..4]);
-            put_string(&mut reply, b"h");
+            put_string(&mut reply, b"h").unwrap();
             remote.send(&reply).await.unwrap();
             let mut ids = Vec::new();
             for _ in 0..WINDOW {
@@ -1828,7 +1915,7 @@ mod integrity_tests {
             for id in ids.iter().skip(1).rev() {
                 let mut data = vec![FXP_DATA];
                 data.extend_from_slice(id);
-                put_string(&mut data, &vec![7; CHUNK]);
+                put_string(&mut data, &vec![7; CHUNK]).unwrap();
                 remote.send(&data).await.unwrap();
             }
             // No refill is allowed while all later DATA waits for offset zero.
@@ -1837,7 +1924,7 @@ mod integrity_tests {
                 .is_err());
             let mut data = vec![FXP_DATA];
             data.extend_from_slice(&ids[0]);
-            put_string(&mut data, &vec![7; CHUNK]);
+            put_string(&mut data, &vec![7; CHUNK]).unwrap();
             remote.send(&data).await.unwrap();
             peer(remote, vec![7; CHUNK * WINDOW], false, false).await;
         });

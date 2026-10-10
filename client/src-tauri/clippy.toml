@@ -1,0 +1,14 @@
+# Tests may panic and print.
+allow-dbg-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+allow-unwrap-in-tests = true
+
+# Complexity. Start where the code is and ratchet down (see Cargo.toml).
+too-many-lines-threshold = 150
+cognitive-complexity-threshold = 30
+excessive-nesting-threshold = 6
+
+check-inconsistent-struct-field-initializers = true

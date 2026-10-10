@@ -131,7 +131,7 @@ impl<'a> Vault<'a> {
     ) -> Result<Self, VaultError> {
         let vault_id = vault_id.into();
         let vk = SymmetricKey::generate();
-        let version = 1u64;
+        let version = 1_u64;
 
         let name_blob = aead_encrypt(&vk, name, &name_aad(&vault_id, version))?;
         // The owner VK wrapping is bound to (vault_id, owner_ed, key_epoch) — like
@@ -240,7 +240,8 @@ impl<'a> Vault<'a> {
             // grant expired; no-expiry grants (`not_after <= 0`) are unaffected.
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
+                .ok()
+                .and_then(|d| i64::try_from(d.as_secs()).ok())
                 .unwrap_or(i64::MAX);
             open_grant(
                 &grant,
@@ -324,7 +325,7 @@ impl<'a> Vault<'a> {
             stored_epoch,
             cur.sync_target,
             cur.cache_policy,
-            cur.sync_tenant.clone(),
+            cur.sync_tenant,
         )?;
         // Atomically: the vault tombstone + clearing the version history of all its items —
         // archived VK-encrypted versions of secrets must not survive deletion.
@@ -402,7 +403,7 @@ impl<'a> Vault<'a> {
             stored_epoch,
             cur.sync_target,
             cur.cache_policy,
-            cur.sync_tenant.clone(),
+            cur.sync_tenant,
         )?;
         self.storage.put_vault(&record)?;
         self.storage.mark_vault_dirty(&self.vault_id)?; // rename → needs push
@@ -704,7 +705,7 @@ impl<'a> Vault<'a> {
                     Some(prev),
                 )
             }
-            None => (1u64, None),
+            None => (1_u64, None),
         };
         // grants: (recipient_x25519, member_ed25519, role) for each member
         // whose x25519 is known.
@@ -766,7 +767,7 @@ impl<'a> Vault<'a> {
                 key_epoch,
                 vrec.sync_target,
                 vrec.cache_policy,
-                vrec.sync_tenant.clone(),
+                vrec.sync_tenant,
             )?;
             self.storage.put_vault(&new_vrec)?;
             self.storage.mark_vault_dirty(&self.vault_id)?; // re-anchored record → push
@@ -810,7 +811,7 @@ impl<'a> Vault<'a> {
             cur.key_epoch,
             cur.sync_target,
             policy,
-            cur.sync_tenant.clone(),
+            cur.sync_tenant,
         )?;
         self.storage.put_vault(&record)?;
         self.storage.mark_vault_dirty(&self.vault_id)?; // cache-policy edit → push
@@ -884,9 +885,8 @@ impl<'a> Vault<'a> {
         // vault carries key_epoch=0, while the genesis manifest is at epoch 1; they
         // synchronize only starting from the first rotation). No manifest →
         // a single-owner local vault → not rotated (D2 from P3).
-        let current_epoch = match self.storage.latest_membership_epoch(&self.vault_id)? {
-            Some(e) => e,
-            None => return Err(VaultError::NotAMember),
+        let Some(current_epoch) = self.storage.latest_membership_epoch(&self.vault_id)? else {
+            return Err(VaultError::NotAMember);
         };
         // verify the chain up to current_epoch and that the admin is Admin@current.
         let prev =
@@ -959,7 +959,7 @@ impl<'a> Vault<'a> {
             new_epoch,
             vrec.sync_target,
             vrec.cache_policy,
-            vrec.sync_tenant.clone(),
+            vrec.sync_tenant,
         )?;
 
         // 5) re-wrap live items under VK' (in advance, to keep the transaction short).
@@ -1066,7 +1066,7 @@ impl<'a> Vault<'a> {
         // OWN key and reject every owner-authored record.
         let trusted = self.genesis_owner.as_slice();
         let mut issues = Vec::new();
-        let mut checked = 0u64;
+        let mut checked = 0_u64;
 
         if let Some(vrec) = self.storage.get_vault(&self.vault_id)? {
             checked += 1;
@@ -1210,7 +1210,10 @@ fn vault_signed_content(wrapped_vk: &[u8], name_blob: &[u8]) -> Vec<u8> {
 /// (the epoch grows, target/policy/tenant are preserved). Epoch 0 in membership mode
 /// must not be written (downgrade). `sync_tenant` is an open routing label OUTSIDE
 /// the signature (the signature does not cover it): rebuilds carry it over 1:1 from the DB.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct signed or routing field of the vault record; a params struct would only rename them"
+)]
 fn build_vault_record_epoch(
     keyset: &UnlockedKeyset,
     vault_id: &[u8],
@@ -1333,8 +1336,7 @@ pub fn verify_record_authority(
     }
     // (a) Re-verify the D1 chain from genesis_owner to record_epoch —
     // self-sufficiently, without trusting storage. Returns the verified set@epoch.
-    let members =
-        crate::membership::verify_chain_to_epoch(storage, vault_id, record_epoch, genesis_owner)?;
+    let members = verify_chain_to_epoch(storage, vault_id, record_epoch, genesis_owner)?;
     // author ∈ the verified set@epoch.
     if !members.contains(author_pubkey) {
         return Err(VaultError::NotAMember);
@@ -1399,9 +1401,8 @@ pub struct IntegrityReport {
 /// `author_pubkey` with the trusted owner → `AuthorMismatch`. `None` == ok.
 /// Does not unwrap the VK and does not decrypt the content.
 pub fn check_item_record(record: &ItemRecord, trusted_owner: &[u8]) -> Option<IntegrityFailure> {
-    let author = match Ed25519VerifyingKey::from_bytes(&record.author_pubkey) {
-        Ok(a) => a,
-        Err(_) => return Some(IntegrityFailure::Malformed),
+    let Ok(author) = Ed25519VerifyingKey::from_bytes(&record.author_pubkey) else {
+        return Some(IntegrityFailure::Malformed);
     };
     let aad = item_aad(&record.vault_id, &record.item_id, record.version);
     let vo = VersionedObject::from_content(aad, &record.content_blob);
@@ -1456,9 +1457,8 @@ fn check_record_authority(
 /// Checks only the structure+signature of an item record (without comparing the author to the owner
 /// — the authority is checked by [`check_record_authority`]).
 fn item_sig_failure(record: &ItemRecord) -> Option<IntegrityFailure> {
-    let author = match Ed25519VerifyingKey::from_bytes(&record.author_pubkey) {
-        Ok(a) => a,
-        Err(_) => return Some(IntegrityFailure::Malformed),
+    let Ok(author) = Ed25519VerifyingKey::from_bytes(&record.author_pubkey) else {
+        return Some(IntegrityFailure::Malformed);
     };
     let aad = item_aad(&record.vault_id, &record.item_id, record.version);
     let vo = VersionedObject::from_content(aad, &record.content_blob);
@@ -1470,9 +1470,8 @@ fn item_sig_failure(record: &ItemRecord) -> Option<IntegrityFailure> {
 
 /// Analog of [`item_sig_failure`] for a vault record.
 fn vault_sig_failure(record: &VaultRecord) -> Option<IntegrityFailure> {
-    let author = match Ed25519VerifyingKey::from_bytes(&record.author_pubkey) {
-        Ok(a) => a,
-        Err(_) => return Some(IntegrityFailure::Malformed),
+    let Ok(author) = Ed25519VerifyingKey::from_bytes(&record.author_pubkey) else {
+        return Some(IntegrityFailure::Malformed);
     };
     let content = vault_signed_content(&record.wrapped_vk, &record.name_blob);
     let vo =
@@ -1486,9 +1485,8 @@ fn vault_sig_failure(record: &VaultRecord) -> Option<IntegrityFailure> {
 /// Analog of [`check_item_record`] for a vault record (the signature over
 /// `wrapped_vk || name_blob`).
 pub fn check_vault_record(record: &VaultRecord, trusted_owner: &[u8]) -> Option<IntegrityFailure> {
-    let author = match Ed25519VerifyingKey::from_bytes(&record.author_pubkey) {
-        Ok(a) => a,
-        Err(_) => return Some(IntegrityFailure::Malformed),
+    let Ok(author) = Ed25519VerifyingKey::from_bytes(&record.author_pubkey) else {
+        return Some(IntegrityFailure::Malformed);
     };
     let content = vault_signed_content(&record.wrapped_vk, &record.name_blob);
     let vo =
@@ -1506,8 +1504,7 @@ pub fn check_vault_record(record: &VaultRecord, trusted_owner: &[u8]) -> Option<
 mod legacy_read_tests {
     use super::*;
     use unissh_crypto::{aead_encrypt_pre_agility, wrap_key_pre_agility};
-    use unissh_keychain::{create_account, KdfParams, UnlockedKeyset};
-    use unissh_storage::{ItemRecord, Storage};
+    use unissh_keychain::{create_account, KdfParams};
 
     fn keyset() -> UnlockedKeyset {
         // SecretKeyOnly → without Argon2id, fast.
@@ -1528,7 +1525,7 @@ mod legacy_read_tests {
         content: &[u8],
     ) {
         let vk = SymmetricKey::generate();
-        let version = 1u64;
+        let version = 1_u64;
         let name_blob = aead_encrypt_pre_agility(&vk, name, &name_aad(vault_id, version)).unwrap();
         // the owner wrapping was bound to the raw vault_id (before round 2).
         let wrapped_vk = seal_key_to_public(&ks.encryption.public, &vk, vault_id).unwrap();
@@ -1572,7 +1569,7 @@ mod legacy_read_tests {
 
     #[test]
     fn legacy_vault_opens_and_item_decrypts_via_fallback() {
-        let st = Storage::open_in_memory(&[7u8; 32]).unwrap();
+        let st = Storage::open_in_memory(&[7_u8; 32]).unwrap();
         let ks = keyset();
         forge_legacy_vault(
             &st,
@@ -1596,7 +1593,7 @@ mod legacy_read_tests {
     #[test]
     fn wrong_keyset_still_fails_on_legacy_vault() {
         // the fallback must not open a legacy vault with ANOTHER keyset — both schemes fail.
-        let st = Storage::open_in_memory(&[7u8; 32]).unwrap();
+        let st = Storage::open_in_memory(&[7_u8; 32]).unwrap();
         let ks = keyset();
         forge_legacy_vault(&st, &ks, b"v", b"n", b"i", 1, b"c");
         let other = keyset();
@@ -1609,7 +1606,7 @@ mod legacy_read_tests {
     #[test]
     fn current_vault_unaffected_by_fallback() {
         // Regression: the current format opens on the first attempt, the fallback does not interfere.
-        let st = Storage::open_in_memory(&[7u8; 32]).unwrap();
+        let st = Storage::open_in_memory(&[7_u8; 32]).unwrap();
         let ks = keyset();
         let v = Vault::create(&st, &ks, b"v-cur".to_vec(), b"New").unwrap();
         v.put_item(b"i", 1, b"new-secret").unwrap();

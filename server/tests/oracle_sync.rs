@@ -3,6 +3,11 @@
 //! core `sync_pull` engine against a live server. The server must produce
 //! identical observable results (assigned seqs, delta seq>cursor,
 //! report_version=max) and round-trip bytes verbatim.
+#![expect(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -35,6 +40,10 @@ impl HttpTransport {
 }
 
 impl SyncTransport for HttpTransport {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "SyncError::Format carries no source; the oracle only needs pass or fail"
+    )]
     fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError> {
         let objs: Vec<String> = objects
             .iter()
@@ -99,7 +108,7 @@ fn audit(n: u8, author: u8) -> SyncObject {
     SyncObject::Audit(AuditObject {
         vault_id: vec![],
         entry_blob: vec![n],
-        signature: vec![1u8; 67],
+        signature: vec![1_u8; 67],
         author_pubkey: vec![author; 32],
     })
 }
@@ -112,7 +121,7 @@ fn vault(id: &[u8], owner: &[u8]) -> SyncObject {
         wrapped_vk: vec![4, 5, 6],
         version: 1,
         tombstone: false,
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
         // A1: delta filters by membership — the vault must be owned (claimed) by
         // the requesting device, otherwise its objects aren't visible in the delta.
         author_pubkey: owner.to_vec(),
@@ -131,7 +140,7 @@ fn item(vid: &[u8], iid: &[u8]) -> SyncObject {
         wrapped_item_key: vec![8, 8],
         version: 1,
         tombstone: false,
-        signature: vec![6u8; 67],
+        signature: vec![6_u8; 67],
         author_pubkey: vec![0xAA; 32],
         created_at: 0,
         updated_at: 0,
@@ -183,7 +192,7 @@ async fn http_transport_matches_inmemory_reference() {
         );
 
         // delta parity (seq>cursor), bytes verbatim
-        for cursor in [0u64, 2, 5] {
+        for cursor in [0_u64, 2, 5] {
             let mut md = seq_bytes(&mem.delta_since(cursor));
             let mut hd = seq_bytes(&http.delta_since(cursor));
             md.sort();
@@ -219,9 +228,9 @@ async fn core_sync_pull_against_live_server() {
         assert_eq!(seqs, vec![1, 2, 3]);
 
         // Fresh client storage; genesis_owner = [2;32].
-        let storage = Storage::open_in_memory(&[7u8; 32]).unwrap();
+        let storage = Storage::open_in_memory(&[7_u8; 32]).unwrap();
         let ctx = SyncContext {
-            genesis_owner: vec![2u8; 32],
+            genesis_owner: vec![2_u8; 32],
             tenant: b"oracle-tenant".to_vec(),
         };
 

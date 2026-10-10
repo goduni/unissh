@@ -55,7 +55,7 @@ pub fn start(app: &AppHandle) {
 
 fn spawn(name: &'static str, app: AppHandle, run: fn(&AppHandle) -> zbus::Result<()>) {
     let spawned = std::thread::Builder::new()
-        .name(name.to_string())
+        .name(name.to_owned())
         .spawn(move || {
             if let Err(e) = run(&app) {
                 // Info, not warn: a container, a bare X session or a desktop
@@ -189,7 +189,7 @@ fn session_path(bus: &Connection) -> zbus::Result<OwnedObjectPath> {
 fn watch_screensaver(app: &AppHandle) -> zbus::Result<()> {
     let bus = Connection::session()?;
     let dbus = DBusProxy::new(&bus)?;
-    let mut watching = 0usize;
+    let mut watching = 0_usize;
     for interface in SCREENSAVERS {
         let rule = MatchRule::builder()
             .msg_type(Type::Signal)

@@ -45,8 +45,8 @@ impl RateLimiter {
                 buckets: HashMap::new(),
                 last_sweep: i64::MIN,
             }),
-            rps: rps.max(1) as f64,
-            burst: burst.max(1) as f64,
+            rps: f64::from(rps.max(1)),
+            burst: f64::from(burst.max(1)),
             clock,
         }
     }
@@ -54,7 +54,11 @@ impl RateLimiter {
     /// Debit 1 token. `Ok(())` if allowed, `Err(retry_after_secs)` otherwise.
     pub fn check(&self, ip: IpAddr) -> Result<(), u64> {
         let now = self.clock.now_unix();
-        let mut inner = self.inner.lock().unwrap();
+        // A panic mid-update leaves at worst one stale bucket; keep limiting.
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Periodically evict idle buckets so the map doesn't grow
         // unboundedly (especially with a forgeable key under trust_proxy).
         if now.saturating_sub(inner.last_sweep) >= SWEEP_INTERVAL_SECS {
@@ -70,14 +74,22 @@ impl RateLimiter {
         let elapsed = (now - b.last).max(0) as f64;
         b.tokens = (b.tokens + elapsed * self.rps).min(self.burst);
         b.last = now;
-        if b.tokens >= 1.0 {
+        let verdict = if b.tokens >= 1.0 {
             b.tokens -= 1.0;
             Ok(())
         } else {
             // time until the next token
             let need = (1.0 - b.tokens) / self.rps;
-            Err(need.ceil().max(1.0) as u64)
-        }
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "the value is at least 1.0 and float-to-int `as` saturates; whole seconds are the intent"
+            )]
+            let secs = need.ceil().max(1.0) as u64;
+            Err(secs)
+        };
+        drop(inner);
+        verdict
     }
 }
 
@@ -87,7 +99,7 @@ impl RateLimiter {
 /// client-controlled and forgeable, so we can't take the first (otherwise the
 /// per-IP rate-limit is bypassed by XFF spoofing). Exactly one
 /// trusted hop is assumed (the documented topology: a single Caddy/nginx in front of the server).
-fn client_ip(state: &AppState, peer: SocketAddr, headers: &axum::http::HeaderMap) -> IpAddr {
+fn client_ip(state: &AppState, peer: SocketAddr, headers: &http::HeaderMap) -> IpAddr {
     if state.config.server.trust_proxy {
         if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
             if let Some(last) = xff.rsplit(',').next() {

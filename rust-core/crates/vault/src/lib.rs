@@ -40,7 +40,10 @@
 //! Cloud sync, the full sharing flow, SSH.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#![expect(
+    clippy::map_err_ignore,
+    reason = "error causes are erased on purpose: a decrypt or parse failure must not become an oracle"
+)]
 
 mod error;
 mod membership;

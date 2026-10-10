@@ -43,8 +43,8 @@ pub struct CatalogEntry {
 }
 
 impl HttpSyncTransport {
-    pub fn new(base_url: String, bearer: String) -> Self {
-        HttpSyncTransport { base_url, bearer }
+    pub const fn new(base_url: String, bearer: String) -> Self {
+        Self { base_url, bearer }
     }
 
     /// `GET /v1/vaults` — the member-facing catalog of vaults this caller can access.
@@ -69,15 +69,24 @@ impl HttpSyncTransport {
             msg: format!("list vaults: bad JSON: {e}"),
         })?;
         let mut out = Vec::new();
-        if let Some(arr) = v["vaults"].as_array() {
-            for it in arr {
-                if let Some(vid) = it["vault_id"].as_str() {
-                    out.push(CatalogEntry {
-                        vault_id: vid.to_string(),
-                        latest_version: it["latest_version"].as_i64().unwrap_or(0),
-                        tombstone: it["tombstone"].as_bool().unwrap_or(false),
-                    });
-                }
+        for it in v
+            .get("vaults")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(vid) = it.get("vault_id").and_then(Value::as_str) {
+                out.push(CatalogEntry {
+                    vault_id: vid.to_owned(),
+                    latest_version: it
+                        .get("latest_version")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
+                    tombstone: it
+                        .get("tombstone")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                });
             }
         }
         Ok(out)
@@ -106,19 +115,14 @@ impl HttpSyncTransport {
                 Ok(v) => v,
                 Err(_) => break,
             };
-            if let Some(items) = v["items"].as_array() {
-                for item in items {
-                    if let Some(obj_b64) = item["object"].as_str() {
-                        if let Ok(bytes) = client::unb64(obj_b64) {
-                            out.push(bytes);
-                        }
-                    }
-                }
-            }
-            if v["has_more"].as_bool().unwrap_or(false) {
-                cur = v["next_cursor"].as_u64().unwrap_or(cur);
-            } else {
-                break;
+            out.extend(
+                items_of(&v)
+                    .filter_map(|item| item.get("object").and_then(Value::as_str))
+                    .filter_map(|obj_b64| client::unb64(obj_b64).ok()),
+            );
+            match next_page(&v) {
+                Some(next) => cur = next.unwrap_or(cur),
+                None => break,
             }
         }
         out
@@ -157,13 +161,14 @@ impl FfiSyncTransport for HttpSyncTransport {
         let v: Value = serde_json::from_slice(&bytes).map_err(|e| FfiError::Other {
             msg: format!("sync push: bad JSON: {e}"),
         })?;
-        let seqs = v["server_seq"]
-            .as_array()
+        let seqs = v
+            .get("server_seq")
+            .and_then(Value::as_array)
             .ok_or_else(|| FfiError::Other {
                 msg: "sync push: response missing 'server_seq'".into(),
             })?
             .iter()
-            .filter_map(|x| x.as_u64())
+            .filter_map(Value::as_u64)
             .collect();
         Ok(seqs)
     }
@@ -189,24 +194,18 @@ impl FfiSyncTransport for HttpSyncTransport {
                 Ok(v) => v,
                 Err(_) => break,
             };
-            if let Some(items) = v["items"].as_array() {
-                for item in items {
-                    if let (Some(seq), Some(obj_b64)) =
-                        (item["server_seq"].as_u64(), item["object"].as_str())
-                    {
-                        if let Ok(bytes) = client::unb64(obj_b64) {
-                            out.push(SyncDeltaItem {
-                                server_seq: seq,
-                                object: bytes,
-                            });
-                        }
-                    }
-                }
-            }
-            if v["has_more"].as_bool().unwrap_or(false) {
-                cur = v["next_cursor"].as_u64().unwrap_or(cur);
-            } else {
-                break;
+            out.extend(items_of(&v).filter_map(|item| {
+                let seq = item.get("server_seq").and_then(Value::as_u64)?;
+                let obj_b64 = item.get("object").and_then(Value::as_str)?;
+                let object = client::unb64(obj_b64).ok()?;
+                Some(SyncDeltaItem {
+                    server_seq: seq,
+                    object,
+                })
+            }));
+            match next_page(&v) {
+                Some(next) => cur = next.unwrap_or(cur),
+                None => break,
             }
         }
         out
@@ -228,7 +227,7 @@ impl FfiSyncTransport for HttpSyncTransport {
                 if let Some(v) = r
                     .json::<Value>()
                     .ok()
-                    .and_then(|v| v["report_version"].as_u64())
+                    .and_then(|v| v.get("report_version").and_then(Value::as_u64))
                 {
                     return v;
                 }
@@ -239,6 +238,23 @@ impl FfiSyncTransport for HttpSyncTransport {
         }
         0
     }
+}
+
+/// The `items` array of a delta page; a missing or non-array field is empty.
+fn items_of(page: &Value) -> impl Iterator<Item = &Value> {
+    page.get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+/// Paging of a delta page: `None` when this is the last page, otherwise the
+/// server's `next_cursor` (itself `None` when absent or not a `u64`).
+fn next_page(page: &Value) -> Option<Option<u64>> {
+    page.get("has_more")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        .then(|| page.get("next_cursor").and_then(Value::as_u64))
 }
 
 /// Extract the server error code/message for a failed push (best-effort).

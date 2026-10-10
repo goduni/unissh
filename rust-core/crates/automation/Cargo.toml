@@ -26,3 +26,6 @@ log = "0.4"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

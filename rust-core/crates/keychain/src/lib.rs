@@ -21,7 +21,10 @@
 //! responsibility of `storage` (each instance stores its own keyset record separately).
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#![expect(
+    clippy::map_err_ignore,
+    reason = "error causes are erased on purpose: a decrypt or parse failure must not become an oracle"
+)]
 
 mod account;
 pub mod device_wrap;

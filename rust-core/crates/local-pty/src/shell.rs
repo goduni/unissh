@@ -43,13 +43,13 @@ pub fn os_username() -> String {
     let vars = ["USER", "LOGNAME"];
     for v in vars {
         if let Some(name) = std::env::var_os(v) {
-            let name = name.to_string_lossy().trim().to_string();
+            let name = name.to_string_lossy().trim().to_owned();
             if !name.is_empty() {
                 return name;
             }
         }
     }
-    "unknown".to_string()
+    "unknown".to_owned()
 }
 
 /// This machine's hostname — what tells a local pane apart from a remote one in
@@ -57,7 +57,7 @@ pub fn os_username() -> String {
 pub fn machine_name() -> String {
     let name = gethostname::gethostname().to_string_lossy().to_string();
     if name.trim().is_empty() {
-        "localhost".to_string()
+        "localhost".to_owned()
     } else {
         name
     }
@@ -98,7 +98,7 @@ fn default_program() -> String {
     if let Some(sh) = passwd_shell(&os_username()) {
         return sh;
     }
-    "/bin/sh".to_string()
+    "/bin/sh".to_owned()
 }
 
 /// The login shell recorded for `user` in `/etc/passwd`, if that file names one.
@@ -121,7 +121,7 @@ fn passwd_shell_in(passwd: &str, user: &str) -> Option<String> {
         // name:passwd:uid:gid:gecos:home:shell — five fields past the name.
         let shell = fields.nth(5)?;
         if Path::new(shell).is_absolute() {
-            return Some(shell.to_string());
+            return Some(shell.to_owned());
         }
     }
     None
@@ -157,7 +157,7 @@ fn default_args() -> Vec<String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn default_args() -> Vec<String> {
+const fn default_args() -> Vec<String> {
     Vec::new()
 }
 
@@ -174,15 +174,16 @@ pub fn program_label(program: &str) -> String {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(program);
-    let stem = if tail.len() > 4 && tail[tail.len() - 4..].eq_ignore_ascii_case(".exe") {
-        &tail[..tail.len() - 4]
-    } else {
-        tail
-    };
+    // `split_at_checked` rather than slicing: four bytes from the end can land
+    // inside a multi-byte character (`日本`), which a byte slice would panic on.
+    let stem = tail
+        .split_at_checked(tail.len().saturating_sub(4))
+        .filter(|(stem, ext)| !stem.is_empty() && ext.eq_ignore_ascii_case(".exe"))
+        .map_or(tail, |(stem, _)| stem);
     if stem.is_empty() {
-        program.to_string()
+        program.to_owned()
     } else {
-        stem.to_string()
+        stem.to_owned()
     }
 }
 
@@ -194,7 +195,7 @@ mod tests {
     fn splits_quoted_arguments() {
         assert_eq!(
             split_args(r#"-c "echo hi""#),
-            Some(vec!["-c".to_string(), "echo hi".to_string()])
+            Some(vec!["-c".to_owned(), "echo hi".to_owned()])
         );
         assert_eq!(split_args(""), Some(Vec::new()));
     }
@@ -220,6 +221,13 @@ mod tests {
     }
 
     #[test]
+    fn label_of_a_multibyte_name_does_not_panic() {
+        // Six bytes: the cut four bytes from the end falls inside the first character.
+        assert_eq!(program_label("/opt/日本"), "日本");
+        assert_eq!(program_label("日本.exe"), "日本");
+    }
+
+    #[test]
     fn a_resolved_shell_is_named() {
         let choice = resolve_default_shell();
         assert!(!choice.program.is_empty());
@@ -232,7 +240,7 @@ mod tests {
                       someone:x:1000:1000:Some One:/home/someone:/usr/bin/fish\n";
         assert_eq!(
             passwd_shell_in(passwd, "someone"),
-            Some("/usr/bin/fish".to_string())
+            Some("/usr/bin/fish".to_owned())
         );
         assert_eq!(passwd_shell_in(passwd, "nobody"), None);
         assert_eq!(passwd_shell_in(passwd, ""), None);

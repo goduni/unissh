@@ -93,7 +93,7 @@ impl IncludeLoader {
     /// result means nothing was readable behind it, which the parser records as
     /// an include seen but not followed.
     pub fn load(&mut self, spec: &str, including: Option<&str>) -> Vec<IncludedFile> {
-        let included_by = including.unwrap_or(&self.root).to_string();
+        let included_by = including.unwrap_or(&self.root).to_owned();
         let expanded = self.expand(spec);
         // A pattern that matched nothing is not a broken include: `Include
         // conf.d/*` is how a config says "whatever is in there", and an empty
@@ -102,7 +102,7 @@ impl IncludeLoader {
         // not there is a different claim, and stays reported.
         if expanded.is_empty() && spec.contains(['*', '?']) {
             return vec![IncludedFile {
-                path: spec.to_string(),
+                path: spec.to_owned(),
                 text: String::new(),
             }];
         }
@@ -146,7 +146,7 @@ impl IncludeLoader {
         if spec.is_empty() {
             return Vec::new();
         }
-        let resolved = match spec.strip_prefix("~/").or(spec.strip_prefix("~\\")) {
+        let resolved = match spec.strip_prefix("~/").or_else(|| spec.strip_prefix("~\\")) {
             // `~user/...` is not resolved: it needs the passwd database, and
             // guessing a sibling of $HOME would read the wrong person's files.
             Some(rest) => match &self.home {
