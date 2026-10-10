@@ -10455,15 +10455,21 @@ fn unload_vault_keys(agent: &mut InMemoryAgent, vault_id: &str) {
     }
 }
 
+/// Loads the key `key_item_id` of `vault_id` into the embedded agent for a
+/// connect — always from the vault item as it is now, replacing whatever the
+/// agent held under that id.
+///
+/// The agent is not trusted as a cache: a key's material changes under the same
+/// id without this device doing anything (a rotation finished elsewhere arrives
+/// in a sync pull), and a copy kept from before would go on signing with the
+/// old private key until the next lock. Reading the item on every connect makes
+/// the item the one source of truth, for the key and for its certificate alike.
 fn load_key_into_agent(
     state: &mut CoreState,
     vault_id: &str,
     key_item_id: &str,
 ) -> Result<(), FfiError> {
     let akid = agent_key_id(vault_id, key_item_id);
-    if state.agent.contains(&akid) {
-        return Ok(());
-    }
     // The vault borrows storage/keyset only; the agent is a separate field.
     let vault = Vault::open(
         &state.storage,
@@ -10471,10 +10477,14 @@ fn load_key_into_agent(
         &resolve_vid(&state.storage, vault_id),
     )
     .map_err(FfiError::other)?;
-    let key_item = vault
+    let Some(key_item) = vault
         .get_item(key_item_id.as_bytes())
         .map_err(FfiError::other)?
-        .ok_or(FfiError::NotFound)?;
+    else {
+        // Deleted (here or in a pull): nothing may sign under its id any more.
+        state.agent.remove(&akid);
+        return Err(FfiError::NotFound);
+    };
     state
         .agent
         .add_from_item(akid.clone(), &key_item)
