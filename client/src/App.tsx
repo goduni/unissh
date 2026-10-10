@@ -16,12 +16,13 @@ import { designPx, rem, ROOT_FONT_PX, rootFontPx, TEXT } from "@/theme/tokens";
 import * as api from "@/bridge/api";
 import { useApp, flushTerminalWorkspace } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import { useTranslation } from "@/i18n";
+import { toast } from "@/store/toast";
+import { i18n, useTranslation } from "@/i18n";
 import { Icon } from "@/components/primitives";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
 import { ResizeEdges, useWindowControls } from "@/shell/WindowChrome";
-import { isDesktopOs, osPlatform } from "@/bridge/platform";
+import { biometricMethod, isDesktopOs, osPlatform } from "@/bridge/platform";
 import { chromeBarHeight } from "@/shell/windowControls";
 import { handleAppShortcut } from "@/support/appShortcuts";
 import { createSystemLockWatcher, handleSystemLockEvent } from "@/support/systemLock";
@@ -372,6 +373,31 @@ export function App() {
   useEffect(() => {
     sysLockRef.current?.setGrace(osLockGrace);
   }, [osLockGrace]);
+
+  // Anything that changes this device's keyset (a password change, a recovery,
+  // a pairing, a new account) erases the password stored for biometric unlock.
+  // When that erase fails Rust says so with one event, whichever screen asked
+  // and whether or not the change itself went through — so it is heard here,
+  // once, rather than by each of those screens.
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let alive = true;
+    void (async () => {
+      try {
+        const un = await listen("biometric-wipe-failed", () =>
+          toast(i18n.t("settings.biometricWipeFailed", { method: biometricMethod() }), "warn"),
+        );
+        if (alive) dispose = un;
+        else un();
+      } catch {
+        /* no Tauri context */
+      }
+    })();
+    return () => {
+      alive = false;
+      dispose?.();
+    };
+  }, []);
 
   useEffect(() => {
     sysLockRef.current?.setUnlocked(unlocked);

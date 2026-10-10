@@ -188,6 +188,9 @@ export interface VaultIntegrityReport {
  *  Mac that cannot do Touch ID or whose build may not use the protected
  *  Keychain, and on Windows without Windows Hello set up. */
 export interface BiometricStatus {
+  /** A sealed password is on disk, usable or not: there is something Settings
+   *  can forget, whatever the vault's password state is now. */
+  stored: boolean;
   supported: boolean;
   /** The sealed password is stored and its biometric-gated device secret
    *  still exists (as far as the platform says without a prompt). */
@@ -215,8 +218,9 @@ export interface BiometricStatus {
 export type PresenceCheck = "confirmed" | "cancelled" | "unavailable";
 
 /** What a password change did to biometric unlock: nothing was stored, the
- *  stored password was erased, or erasing it failed (it opens nothing any
- *  more and goes at the next biometric attempt). */
+ *  stored password was erased, or erasing it failed. A failed wipe is not
+ *  announced through this value: Rust emits `biometric-wipe-failed` for every
+ *  keyset install alike, and the app shows it (see App.tsx). */
 export type KeysetWipe = "nothing" | "erased" | "failed";
 
 /** How `biometric_unlock` ended. Anything but "unlocked" shows the password.
