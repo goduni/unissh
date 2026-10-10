@@ -1776,10 +1776,7 @@ pub async fn sftp_open(
     parallelism: u32,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
-    let epoch = *state
-        .sftp_epoch
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let epoch = *sftp_epoch(&state)?;
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
@@ -1788,10 +1785,13 @@ pub async fn sftp_open(
         blocking(move || core.open_sftp(host, port, user, auth, jumps, proxy, parallelism)).await?;
     // Held across the insert on purpose: `invalidate_sftp` bumps the epoch under
     // this lock before clearing the map, so a stale session can never slip in.
-    let guard = state
-        .sftp_epoch
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let guard = match sftp_epoch(&state) {
+        Ok(guard) => guard,
+        Err(e) => {
+            sftp.close();
+            return Err(e);
+        }
+    };
     if *guard != epoch || !state.core.is_unlocked() {
         sftp.close();
         return Err(ApiError::other(
@@ -1801,6 +1801,16 @@ pub async fn sftp_open(
     let id = new_id();
     state.sftp.insert(id.clone(), sftp);
     Ok(id)
+}
+
+/// Locks the SFTP epoch for a command. A poisoned lock is an error the UI sees
+/// rather than a silently recovered epoch.
+fn sftp_epoch(state: &AppState) -> ApiResult<std::sync::MutexGuard<'_, u64>> {
+    state.sftp_epoch.lock().map_err(|e| {
+        ApiError::other(format!(
+            "internal error: the sftp epoch lock is poisoned ({e}); restart UniSSH"
+        ))
+    })
 }
 
 fn invalidate_sftp(state: &AppState) {

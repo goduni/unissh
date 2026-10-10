@@ -125,7 +125,7 @@ pub struct ParsedObject {
 }
 
 impl ParsedObject {
-    pub fn tag(&self) -> Option<ObjectTag> {
+    pub const fn tag(&self) -> Option<ObjectTag> {
         ObjectTag::from_u8(self.tag_u8)
     }
 }

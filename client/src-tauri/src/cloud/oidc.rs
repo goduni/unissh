@@ -363,7 +363,10 @@ fn url_decode(s: &str) -> String {
     while let Some(&byte) = bytes.get(i) {
         match byte {
             b'%' => {
-                let hex_digit = |at: usize| bytes.get(at).and_then(|&d| char::from(d).to_digit(16));
+                let hex_digit = |at: usize| {
+                    let &d = bytes.get(at)?;
+                    char::from(d).to_digit(16)
+                };
                 let decoded = hex_digit(i + 1)
                     .zip(hex_digit(i + 2))
                     .and_then(|(hi, lo)| u8::try_from(hi * 16 + lo).ok());

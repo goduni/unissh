@@ -721,14 +721,9 @@ impl SshClient {
                         )
                         .await
                     {
-                        let mut stream = channel.into_stream();
-                        if tokio::io::copy_bidirectional(&mut socket, &mut stream)
-                            .await
-                            .is_err()
-                        {
-                            // A reset on either side just ends this one tunnelled
-                            // connection; the listener keeps serving the rest.
-                        }
+                        // A reset on either side just ends this one tunnelled
+                        // connection; the listener keeps serving the rest.
+                        pump_tunnel(&mut socket, channel).await;
                     }
                 });
             }
@@ -761,14 +756,9 @@ impl SshClient {
                         .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1".to_owned(), 0)
                         .await
                     {
-                        let mut stream = channel.into_stream();
-                        if tokio::io::copy_bidirectional(&mut socket, &mut stream)
-                            .await
-                            .is_err()
-                        {
-                            // A reset on either side just ends this one SOCKS
-                            // connection; the listener keeps serving the rest.
-                        }
+                        // A reset on either side just ends this one SOCKS
+                        // connection; the listener keeps serving the rest.
+                        pump_tunnel(&mut socket, channel).await;
                     }
                 });
             }
@@ -1117,6 +1107,19 @@ pub fn algorithm_policy() -> AlgorithmPolicy {
     match ALGORITHM_POLICY.load(Ordering::Relaxed) {
         0 => AlgorithmPolicy::Balanced,
         _ => AlgorithmPolicy::Modern,
+    }
+}
+
+/// Pipes an accepted local socket through an opened direct-tcpip channel until
+/// either side closes. An I/O error (a reset on either side) ends only this one
+/// connection, so it is deliberately not reported.
+async fn pump_tunnel(socket: &mut TcpStream, channel: Channel<Msg>) {
+    let mut stream = channel.into_stream();
+    if tokio::io::copy_bidirectional(socket, &mut stream)
+        .await
+        .is_err()
+    {
+        // Nothing to recover: the caller's listener keeps serving other connections.
     }
 }
 

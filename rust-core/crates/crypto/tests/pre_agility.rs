@@ -11,7 +11,7 @@ use unissh_crypto::{
     unwrap_key_pre_agility, wrap_key, wrap_key_pre_agility, AssociatedData, SymmetricKey,
 };
 
-fn key() -> SymmetricKey {
+const fn key() -> SymmetricKey {
     SymmetricKey::from_bytes([0x42_u8; 32])
 }
 fn aad() -> AssociatedData {

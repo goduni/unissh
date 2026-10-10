@@ -497,13 +497,12 @@ impl CloudState {
         let Some(key) = self.key_or_active(id)? else {
             return Ok(());
         };
-        let mut toks = locked(&self.access_tokens, "session-token")?;
         match token {
             Some(t) => {
-                toks.insert(key, t);
+                locked(&self.access_tokens, "session-token")?.insert(key, t);
             }
             None => {
-                toks.remove(&key);
+                locked(&self.access_tokens, "session-token")?.remove(&key);
             }
         }
         Ok(())
@@ -520,13 +519,12 @@ impl CloudState {
         let Some(key) = self.key_or_active(id)? else {
             return Ok(());
         };
-        let mut map = locked(&self.spaces, "space")?;
         match spaces {
             Some(s) => {
-                map.insert(key, s);
+                locked(&self.spaces, "space")?.insert(key, s);
             }
             None => {
-                map.remove(&key);
+                locked(&self.spaces, "space")?.remove(&key);
             }
         }
         Ok(())

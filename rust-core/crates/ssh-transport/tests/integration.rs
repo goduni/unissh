@@ -328,23 +328,7 @@ async fn proxy_jump_chain() {
 #[tokio::test]
 async fn local_forward_pipes_data() {
     // echo server inside the test process
-    let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let echo_port = echo.local_addr().unwrap().port();
-    tokio::spawn(async move {
-        while let Ok((mut s, _)) = echo.accept().await {
-            tokio::spawn(async move {
-                let mut buf = vec![0_u8; 1024];
-                loop {
-                    let Ok(n @ 1..) = s.read(&mut buf).await else {
-                        break;
-                    };
-                    if s.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-    });
+    let echo_port = spawn_echo().await;
 
     let (priv_pem, pub_ssh) = generate_ed25519_openssh().unwrap();
     let sshd = TestSshd::start(&pub_ssh);
@@ -380,21 +364,21 @@ async fn spawn_echo() -> u16 {
     let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = echo.local_addr().unwrap().port();
     tokio::spawn(async move {
-        while let Ok((mut s, _)) = echo.accept().await {
-            tokio::spawn(async move {
-                let mut buf = vec![0_u8; 1024];
-                loop {
-                    let Ok(n @ 1..) = s.read(&mut buf).await else {
-                        break;
-                    };
-                    if s.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                }
-            });
+        while let Ok((s, _)) = echo.accept().await {
+            tokio::spawn(echo_connection(s));
         }
     });
     port
+}
+
+/// Echoes everything read from `s` back until EOF or an I/O error.
+async fn echo_connection(mut s: tokio::net::TcpStream) {
+    let mut buf = vec![0_u8; 1024];
+    while let Ok(n @ 1..) = s.read(&mut buf).await {
+        if s.write_all(&buf[..n]).await.is_err() {
+            break;
+        }
+    }
 }
 
 #[tokio::test]

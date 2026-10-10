@@ -369,10 +369,10 @@ impl SyslogConfig {
 
     /// The numeric facility (0..=23), or `None` for an unknown keyword.
     pub fn facility_code(&self) -> Option<u8> {
-        SYSLOG_FACILITIES
+        let i = SYSLOG_FACILITIES
             .iter()
-            .position(|f| f.eq_ignore_ascii_case(&self.facility))
-            .and_then(|i| u8::try_from(i).ok())
+            .position(|f| f.eq_ignore_ascii_case(&self.facility))?;
+        u8::try_from(i).ok()
     }
 
     /// Boot-time validation. The address is checked for shape only (`host:port`
