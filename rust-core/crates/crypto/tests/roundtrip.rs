@@ -15,7 +15,7 @@ fn fast_params() -> KdfParams {
         mem_kib: 8 * 1024,
         iterations: 1,
         parallelism: 1,
-        salt: vec![9u8; 16],
+        salt: vec![9_u8; 16],
     }
 }
 

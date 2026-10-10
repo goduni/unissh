@@ -92,8 +92,8 @@ async fn pending_grant_surfaces_on_join_and_auto_done_on_publish_and_revoke_on_r
     // --- Owner claims + logs in. ---
     let owner = make_identity();
     let claimed = claim_owner(&app, &owner.payload_b64, &owner.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
-    let owner_dev = claimed["device_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
+    let owner_dev = claimed["device_id"].as_str().unwrap().to_owned();
     let owner_tok = common::login_v2(&app, &owner, &owner_acct, &owner_dev).await;
 
     // --- Owner creates space "Backend" (creator is auto-admin). ---
@@ -110,7 +110,7 @@ async fn pending_grant_surfaces_on_join_and_auto_done_on_publish_and_revoke_on_r
         .unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     // --- Owner claims a CLOUD vault in Backend as space_wide (crypto role editor=1). ---
     let claim = app
@@ -159,7 +159,7 @@ async fn pending_grant_surfaces_on_join_and_auto_done_on_publish_and_revoke_on_r
         .unwrap()["token"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     // --- A DISTINCT joiner redeems the invite → joins Backend. ---
     let joiner = make_identity();
@@ -179,7 +179,7 @@ async fn pending_grant_surfaces_on_join_and_auto_done_on_publish_and_revoke_on_r
     let joiner_acct = jr.json::<Value>().await.unwrap()["account_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     // === Task-8 GAP: the join must surface a `grant` action to the vault admin. ===
     let pend = get_pending(&app, &owner_tok).await;

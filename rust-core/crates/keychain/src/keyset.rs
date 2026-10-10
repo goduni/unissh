@@ -61,14 +61,14 @@ pub enum UnlockMode {
 impl UnlockMode {
     fn to_u8(self) -> u8 {
         match self {
-            UnlockMode::Password => 1,
-            UnlockMode::SecretKeyOnly => 2,
+            Self::Password => 1,
+            Self::SecretKeyOnly => 2,
         }
     }
     fn from_u8(v: u8) -> Result<Self, KeychainError> {
         match v {
-            1 => Ok(UnlockMode::Password),
-            2 => Ok(UnlockMode::SecretKeyOnly),
+            1 => Ok(Self::Password),
+            2 => Ok(Self::SecretKeyOnly),
             _ => Err(KeychainError::Format),
         }
     }
@@ -122,7 +122,7 @@ fn keyset_aad(x25519_public: &[u8; 32], generation: u32) -> AssociatedData {
     AssociatedData::new(
         b"unissh-keyset".to_vec(),
         x25519_public.to_vec(),
-        generation as u64,
+        u64::from(generation),
     )
 }
 
@@ -508,9 +508,9 @@ impl EncryptedKeyset {
         if bytes.len() < pos + 64 {
             return Err(KeychainError::Format);
         }
-        let mut x25519_public = [0u8; 32];
+        let mut x25519_public = [0_u8; 32];
         x25519_public.copy_from_slice(&bytes[pos..pos + 32]);
-        let mut ed25519_public = [0u8; 32];
+        let mut ed25519_public = [0_u8; 32];
         ed25519_public.copy_from_slice(&bytes[pos + 32..pos + 64]);
         pos += 64;
 
@@ -628,11 +628,11 @@ mod migration_tests {
         }
     }
     fn fixed_secret_key() -> SecretKey {
-        SecretKey::from_bytes([0x11u8; crate::secret_key::SECRET_KEY_LEN])
+        SecretKey::from_bytes([0x11_u8; crate::secret_key::SECRET_KEY_LEN])
     }
     fn fixed_keypairs() -> (X25519Keypair, Ed25519Keypair) {
-        let x = X25519SecretKey::from_bytes(&[0x22u8; 32]).unwrap();
-        let e = Ed25519SigningKey::from_bytes(&[0x33u8; 32]).unwrap();
+        let x = X25519SecretKey::from_bytes(&[0x22_u8; 32]).unwrap();
+        let e = Ed25519SigningKey::from_bytes(&[0x33_u8; 32]).unwrap();
         (
             X25519Keypair {
                 public: x.public_key(),
@@ -655,7 +655,7 @@ mod migration_tests {
         let (encryption, signing) = fixed_keypairs();
         let x_pub = encryption.public.to_bytes();
         let ed_pub = signing.verifying.to_bytes();
-        let generation = 1u32;
+        let generation = 1_u32;
         let x_secret = Zeroizing::new(encryption.secret.expose_to_bytes());
         let e_secret = Zeroizing::new(signing.signing.expose_to_bytes());
         let mut pt = Zeroizing::new(Vec::new());
@@ -712,7 +712,7 @@ mod migration_tests {
 
     #[test]
     fn legacy_v1_unlock_key_is_frozen() {
-        let argon = SymmetricKey::from_bytes([0x42u8; 32]);
+        let argon = SymmetricKey::from_bytes([0x42_u8; 32]);
         let key = derive_unlock_key_legacy_v1(Some(&argon), &fixed_secret_key(), None);
         assert_eq!(key.expose_bytes(), &FROZEN_LEGACY_UNLOCK_KEY);
     }

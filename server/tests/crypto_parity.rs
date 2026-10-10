@@ -84,7 +84,7 @@ fn cross_domain_registration_sig_not_valid_as_server_auth() {
     let k = Ed25519Keypair::generate();
     let core_payload = CoreReg {
         account_id: b"acct-16-bytes!!!".to_vec(),
-        x25519_pub: [1u8; 32],
+        x25519_pub: [1_u8; 32],
         ed25519_pub: k.verifying.to_bytes(),
     };
     let reg_sig = sign_registration(&k.signing, &core_payload).unwrap();

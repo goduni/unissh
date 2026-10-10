@@ -1558,7 +1558,7 @@ async fn native_search_matches_full_commands_and_host_context_without_executing_
     let other = target(&b, "b").await;
     let command = format!("{} ПрИвЕт [prod]", "x".repeat(300));
     let run = call(&b, "a", "run_command", json!({"session_id":null,"target_id":t,"command":command,"cwd":"/srv/reports","stdin":"hidden-stdin","env":{"PRIVATE":"hidden-value"},"request_key":"search"})).await.unwrap();
-    let rid = run["run_id"].as_str().unwrap().to_string();
+    let rid = run["run_id"].as_str().unwrap().to_owned();
     call(&b, "b", "run_command", json!({"session_id":null,"target_id":other,"command":"other app only","request_key":"search"})).await.unwrap();
     for query in [
         "ПРИВЕТ",

@@ -14,8 +14,8 @@ fn audit_b64(tag: u8) -> String {
         &SyncObject::Audit(AuditObject {
             vault_id: vec![],
             entry_blob: vec![tag],
-            signature: vec![1u8; 67],
-            author_pubkey: vec![2u8; 32],
+            signature: vec![1_u8; 67],
+            author_pubkey: vec![2_u8; 32],
         })
         .to_bytes()
         .unwrap(),
@@ -31,7 +31,7 @@ fn vault_b64(owner: u8, version: u64) -> String {
             wrapped_vk: vec![4, 5, 6],
             version,
             tombstone: false,
-            signature: vec![9u8; 67],
+            signature: vec![9_u8; 67],
             author_pubkey: vec![owner; 32],
             key_epoch: 1,
             cache_policy: CachePolicy::OfflineAllowed,
@@ -170,7 +170,7 @@ fn owned_vault_b64(author: &[u8], vault_id: &[u8], version: u64) -> String {
             wrapped_vk: vec![4, 5, 6],
             version,
             tombstone: false,
-            signature: vec![9u8; 67],
+            signature: vec![9_u8; 67],
             author_pubkey: author.to_vec(),
             key_epoch: 1,
             cache_policy: CachePolicy::OfflineAllowed,

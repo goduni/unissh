@@ -11,7 +11,7 @@ fn keyset() -> UnlockedKeyset {
     unlocked
 }
 fn storage() -> Storage {
-    Storage::open_in_memory(&[7u8; 32]).unwrap()
+    Storage::open_in_memory(&[7_u8; 32]).unwrap()
 }
 
 /// a member's member-id = their Ed25519 pubkey; X25519 pub is for wrapping the VK.
@@ -560,7 +560,7 @@ fn verify_chain_flags_record_below_epoch_floor() {
         aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
     };
     let item_key = SymmetricKey::generate();
-    let aad = AssociatedData::new(v.vault_id().to_vec(), b"injected".to_vec(), 1u64);
+    let aad = AssociatedData::new(v.vault_id().to_vec(), b"injected".to_vec(), 1_u64);
     let content_blob = aead_encrypt(&item_key, b"old", &aad).unwrap();
     let vo = VersionedObject::from_content(aad, &content_blob);
     let signature = sign_version(&admin.signing.signing, &vo).unwrap();
@@ -624,7 +624,7 @@ fn verify_chain_flags_record_with_epoch_having_no_manifest() {
         aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
     };
     let item_key = SymmetricKey::generate();
-    let aad = AssociatedData::new(v.vault_id().to_vec(), b"injected".to_vec(), 1u64);
+    let aad = AssociatedData::new(v.vault_id().to_vec(), b"injected".to_vec(), 1_u64);
     let content_blob = aead_encrypt(&item_key, b"old", &aad).unwrap();
     let vo = VersionedObject::from_content(aad, &content_blob);
     let signature = sign_version(&admin.signing.signing, &vo).unwrap();
@@ -691,7 +691,7 @@ fn get_item_refuses_downgraded_epoch_record() {
         aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
     };
     let item_key = SymmetricKey::generate();
-    let aad = AssociatedData::new(v.vault_id().to_vec(), b"injected".to_vec(), 1u64);
+    let aad = AssociatedData::new(v.vault_id().to_vec(), b"injected".to_vec(), 1_u64);
     let content_blob = aead_encrypt(&item_key, b"old", &aad).unwrap();
     let vo = VersionedObject::from_content(aad, &content_blob);
     let signature = sign_version(&admin.signing.signing, &vo).unwrap();
@@ -753,7 +753,7 @@ fn verify_chain_rejects_self_consistent_old_epoch_record() {
         aead_encrypt, sign_version, wrap_key, AssociatedData, SymmetricKey, VersionedObject,
     };
     let item_key = SymmetricKey::generate();
-    let aad = AssociatedData::new(v.vault_id().to_vec(), b"evil".to_vec(), 1u64);
+    let aad = AssociatedData::new(v.vault_id().to_vec(), b"evil".to_vec(), 1_u64);
     let content_blob = aead_encrypt(&item_key, b"x", &aad).unwrap();
     let vo = VersionedObject::from_content(aad, &content_blob);
     let signature = sign_version(&attacker.signing.signing, &vo).unwrap();

@@ -167,7 +167,7 @@ fn seal_xchacha_inner(
     bind_header: bool,
 ) -> Result<Vec<u8>, CryptoError> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
-    let mut nonce = [0u8; NONCE_LEN];
+    let mut nonce = [0_u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce);
     let bound;
     let full_aad: &[u8] = if bind_header {

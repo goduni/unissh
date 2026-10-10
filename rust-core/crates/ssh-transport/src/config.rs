@@ -129,7 +129,7 @@ impl SshConfig {
     /// Parses the config text. `Include` paths are collected but not read — use
     /// [`Self::parse_with_includes`] when they should be followed.
     pub fn parse(text: &str) -> Result<Self, TransportError> {
-        let mut cfg = SshConfig::default();
+        let mut cfg = Self::default();
         // No loader: includes are recorded in `includes` and left alone.
         cfg.parse_into::<fn(&str, Option<&str>) -> Vec<IncludedFile>>(text, None, &mut None, 0)?;
         Ok(cfg)
@@ -154,7 +154,7 @@ impl SshConfig {
     where
         F: FnMut(&str, Option<&str>) -> Vec<IncludedFile>,
     {
-        let mut cfg = SshConfig::default();
+        let mut cfg = Self::default();
         cfg.parse_into(text, None, &mut Some(&mut load), 0)?;
         Ok(cfg)
     }
@@ -197,11 +197,11 @@ impl SshConfig {
                     self.blocks.push(b);
                 }
                 in_match = false;
-                let patterns = rest.split_whitespace().map(|s| s.to_string()).collect();
+                let patterns = rest.split_whitespace().map(|s| s.to_owned()).collect();
                 current = Some(HostBlock {
                     patterns,
                     settings: HostSettings::default(),
-                    origin: origin.map(str::to_string),
+                    origin: origin.map(str::to_owned),
                 });
                 continue;
             }
@@ -213,9 +213,9 @@ impl SshConfig {
                 in_match = true;
                 self.skipped.push(SkippedDirective {
                     line: line_no,
-                    keyword: keyword.to_string(),
+                    keyword: keyword.to_owned(),
                     reason: SkipReason::InsideMatch,
-                    origin: origin.map(str::to_string),
+                    origin: origin.map(str::to_owned),
                 });
                 continue;
             }
@@ -231,9 +231,9 @@ impl SshConfig {
                 if in_match {
                     self.skipped.push(SkippedDirective {
                         line: line_no,
-                        keyword: keyword.to_string(),
+                        keyword: keyword.to_owned(),
                         reason: SkipReason::InsideMatch,
-                        origin: origin.map(str::to_string),
+                        origin: origin.map(str::to_owned),
                     });
                     continue;
                 }
@@ -242,16 +242,16 @@ impl SshConfig {
                     self.includes
                         .extend(paths.into_iter().map(|path| PendingInclude {
                             path,
-                            origin: origin.map(str::to_string),
+                            origin: origin.map(str::to_owned),
                         }));
                 } else if depth >= MAX_INCLUDE_DEPTH {
                     // A cycle (a includes b includes a) has to stop somewhere;
                     // OpenSSH's own limit is 16. Reported, not silently cut.
                     self.skipped.push(SkippedDirective {
                         line: line_no,
-                        keyword: keyword.to_string(),
+                        keyword: keyword.to_owned(),
                         reason: SkipReason::Unsupported,
-                        origin: origin.map(str::to_string),
+                        origin: origin.map(str::to_owned),
                     });
                 } else {
                     // Close the open Host block so included blocks land after
@@ -275,7 +275,7 @@ impl SshConfig {
                         if files.is_empty() {
                             self.includes.push(PendingInclude {
                                 path: spec,
-                                origin: origin.map(str::to_string),
+                                origin: origin.map(str::to_owned),
                             });
                             continue;
                         }
@@ -289,7 +289,7 @@ impl SshConfig {
                     current = reopen.map(|patterns| HostBlock {
                         patterns,
                         settings: HostSettings::default(),
-                        origin: origin.map(str::to_string),
+                        origin: origin.map(str::to_owned),
                     });
                 }
                 continue;
@@ -298,9 +298,9 @@ impl SshConfig {
             if in_match {
                 self.skipped.push(SkippedDirective {
                     line: line_no,
-                    keyword: keyword.to_string(),
+                    keyword: keyword.to_owned(),
                     reason: SkipReason::InsideMatch,
-                    origin: origin.map(str::to_string),
+                    origin: origin.map(str::to_owned),
                 });
                 continue;
             }
@@ -313,9 +313,9 @@ impl SshConfig {
                 None => {
                     self.skipped.push(SkippedDirective {
                         line: line_no,
-                        keyword: keyword.to_string(),
+                        keyword: keyword.to_owned(),
                         reason: SkipReason::Unsupported,
-                        origin: origin.map(str::to_string),
+                        origin: origin.map(str::to_owned),
                     });
                     continue;
                 }
@@ -323,29 +323,29 @@ impl SshConfig {
             let value = rest.trim();
             let s = &mut block.settings;
             match key.as_str() {
-                "hostname" => s.hostname = Some(value.to_string()),
+                "hostname" => s.hostname = Some(value.to_owned()),
                 "port" => {
                     s.port = Some(
                         value
                             .parse()
                             .map_err(|_| TransportError::Config(format!("bad port: {value}")))?,
-                    )
+                    );
                 }
-                "user" => s.user = Some(value.to_string()),
-                "identityfile" => s.identity_file = Some(value.to_string()),
-                "proxyjump" => s.proxy_jump = Some(value.to_string()),
-                "localforward" => s.local_forwards.push(value.to_string()),
-                "remoteforward" => s.remote_forwards.push(value.to_string()),
-                "dynamicforward" => s.dynamic_forwards.push(value.to_string()),
-                "setenv" => s.set_env.push(value.to_string()),
+                "user" => s.user = Some(value.to_owned()),
+                "identityfile" => s.identity_file = Some(value.to_owned()),
+                "proxyjump" => s.proxy_jump = Some(value.to_owned()),
+                "localforward" => s.local_forwards.push(value.to_owned()),
+                "remoteforward" => s.remote_forwards.push(value.to_owned()),
+                "dynamicforward" => s.dynamic_forwards.push(value.to_owned()),
+                "setenv" => s.set_env.push(value.to_owned()),
                 "serveraliveinterval" => s.server_alive_interval = value.parse().ok(),
                 "connecttimeout" => s.connect_timeout = value.parse().ok(),
                 "compression" => s.compression = Some(value.eq_ignore_ascii_case("yes")),
                 _ => self.skipped.push(SkippedDirective {
                     line: line_no,
-                    keyword: keyword.to_string(),
+                    keyword: keyword.to_owned(),
                     reason: SkipReason::Unsupported,
-                    origin: origin.map(str::to_string),
+                    origin: origin.map(str::to_owned),
                 }),
             }
         }
@@ -513,9 +513,9 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
 
-    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut pi, mut ti) = (0_usize, 0_usize);
     let mut star: Option<usize> = None; // position of the last '*' in the pattern
-    let mut star_ti = 0usize; // position in the text at the moment of that '*'
+    let mut star_ti = 0_usize; // position in the text at the moment of that '*'
 
     while ti < t.len() {
         if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {

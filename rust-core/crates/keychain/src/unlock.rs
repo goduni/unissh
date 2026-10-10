@@ -37,7 +37,7 @@ pub(crate) fn derive_unlock_key(
     // framing, different input triples with the same concatenation would yield ONE
     // Unlock Key (ambiguous IKM) — critical before enabling the device_secret mode.
     fn push_field(ikm: &mut Vec<u8>, present: bool, data: &[u8]) {
-        ikm.push(present as u8);
+        ikm.push(u8::from(present));
         ikm.extend_from_slice(&(data.len() as u32).to_be_bytes());
         ikm.extend_from_slice(data);
     }
@@ -53,7 +53,7 @@ pub(crate) fn derive_unlock_key(
     }
 
     let hk = Hkdf::<Sha256>::new(Some(UNLOCK_HKDF_SALT), ikm.as_ref());
-    let mut okm = Zeroizing::new([0u8; 32]);
+    let mut okm = Zeroizing::new([0_u8; 32]);
     hk.expand(UNLOCK_HKDF_INFO, okm.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
 
@@ -77,7 +77,7 @@ pub fn derive_escrow_auth_key(
     secret_key: &SecretKey,
 ) -> SymmetricKey {
     fn push_field(ikm: &mut Vec<u8>, present: bool, data: &[u8]) {
-        ikm.push(present as u8);
+        ikm.push(u8::from(present));
         ikm.extend_from_slice(&(data.len() as u32).to_be_bytes());
         ikm.extend_from_slice(data);
     }
@@ -91,7 +91,7 @@ pub fn derive_escrow_auth_key(
     push_field(&mut ikm, false, &[]);
 
     let hk = Hkdf::<Sha256>::new(Some(UNLOCK_HKDF_SALT), ikm.as_ref());
-    let mut okm = Zeroizing::new([0u8; 32]);
+    let mut okm = Zeroizing::new([0_u8; 32]);
     hk.expand(ESCROW_AUTH_HKDF_INFO, okm.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
     SymmetricKey::from_bytes(*okm)
@@ -121,7 +121,7 @@ pub(crate) fn derive_unlock_key_legacy_v1(
     }
 
     let hk = Hkdf::<Sha256>::new(Some(UNLOCK_HKDF_SALT), ikm.as_ref());
-    let mut okm = Zeroizing::new([0u8; 32]);
+    let mut okm = Zeroizing::new([0_u8; 32]);
     hk.expand(UNLOCK_HKDF_INFO, okm.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
 
@@ -135,8 +135,8 @@ mod tests {
     // Fixed inputs → the K_auth bytes are pinned (frozen once established).
     #[test]
     fn escrow_auth_key_is_deterministic_and_independent_of_unlock() {
-        let argon = SymmetricKey::from_bytes([7u8; 32]);
-        let sk = SecretKey::from_bytes([9u8; 16]);
+        let argon = SymmetricKey::from_bytes([7_u8; 32]);
+        let sk = SecretKey::from_bytes([9_u8; 16]);
         let a1 = derive_escrow_auth_key(Some(&argon), &sk);
         let a2 = derive_escrow_auth_key(Some(&argon), &sk);
         assert_eq!(a1.expose_bytes(), a2.expose_bytes(), "deterministic");
@@ -151,8 +151,8 @@ mod tests {
     /// and a versioned migration, not an edit to these bytes.
     #[test]
     fn escrow_auth_key_golden() {
-        let argon = SymmetricKey::from_bytes([7u8; 32]);
-        let sk = SecretKey::from_bytes([9u8; 16]);
+        let argon = SymmetricKey::from_bytes([7_u8; 32]);
+        let sk = SecretKey::from_bytes([9_u8; 16]);
         let got = derive_escrow_auth_key(Some(&argon), &sk);
         // Captured on first green run; frozen thereafter (info = b"unissh-escrow-auth-v1").
         const FROZEN_ESCROW_AUTH_KEY: [u8; 32] = [

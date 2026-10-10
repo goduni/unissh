@@ -20,14 +20,14 @@ pub enum SyncTarget {
 impl SyncTarget {
     pub(crate) fn to_i64(self) -> i64 {
         match self {
-            SyncTarget::Local => 0,
-            SyncTarget::Cloud => 1,
+            Self::Local => 0,
+            Self::Cloud => 1,
         }
     }
     pub(crate) fn from_i64(v: i64) -> Option<Self> {
         match v {
-            0 => Some(SyncTarget::Local),
-            1 => Some(SyncTarget::Cloud),
+            0 => Some(Self::Local),
+            1 => Some(Self::Cloud),
             _ => None,
         }
     }
@@ -47,14 +47,14 @@ pub enum CachePolicy {
 impl CachePolicy {
     pub(crate) fn to_i64(self) -> i64 {
         match self {
-            CachePolicy::OfflineAllowed => 0,
-            CachePolicy::OnlineOnly => 1,
+            Self::OfflineAllowed => 0,
+            Self::OnlineOnly => 1,
         }
     }
     pub(crate) fn from_i64(v: i64) -> Option<Self> {
         match v {
-            0 => Some(CachePolicy::OfflineAllowed),
-            1 => Some(CachePolicy::OnlineOnly),
+            0 => Some(Self::OfflineAllowed),
+            1 => Some(Self::OnlineOnly),
             _ => None,
         }
     }
@@ -146,18 +146,18 @@ pub enum MemberRole {
 impl MemberRole {
     pub(crate) fn to_i64(self) -> i64 {
         match self {
-            MemberRole::Viewer => 0,
-            MemberRole::Editor => 1,
-            MemberRole::Admin => 2,
+            Self::Viewer => 0,
+            Self::Editor => 1,
+            Self::Admin => 2,
         }
     }
     /// Decodes the role from the DB integer representation. `None` = unknown
     /// value (rejected, not a panic).
     pub fn from_i64(v: i64) -> Option<Self> {
         match v {
-            0 => Some(MemberRole::Viewer),
-            1 => Some(MemberRole::Editor),
-            2 => Some(MemberRole::Admin),
+            0 => Some(Self::Viewer),
+            1 => Some(Self::Editor),
+            2 => Some(Self::Admin),
             _ => None,
         }
     }

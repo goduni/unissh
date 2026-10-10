@@ -89,8 +89,7 @@ pub fn normalize_private_key_with_passphrase(
     // a broken client rather than a key we cannot use yet.
     if matches!(
         key.key_data(),
-        ssh_key::private::KeypairData::SkEd25519(_)
-            | ssh_key::private::KeypairData::SkEcdsaSha2NistP256(_)
+        KeypairData::SkEd25519(_) | KeypairData::SkEcdsaSha2NistP256(_)
     ) {
         return Err(AgentError::SecurityKeyUnsupported);
     }

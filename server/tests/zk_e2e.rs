@@ -48,7 +48,7 @@ fn manifest_obj(kp: &Ed25519Keypair, vault: &[u8], epoch: u64, blob: &[u8]) -> S
         ),
     )
     .unwrap();
-    let mut out = vec![3u8];
+    let mut out = vec![3_u8];
     put(&mut out, vault);
     out.extend_from_slice(&epoch.to_be_bytes());
     put(&mut out, blob);
@@ -57,10 +57,10 @@ fn manifest_obj(kp: &Ed25519Keypair, vault: &[u8], epoch: u64, blob: &[u8]) -> S
     b64(&out)
 }
 fn grant_obj(kp: &Ed25519Keypair, vault: &[u8], member: &[u8], epoch: u64, role: u8) -> String {
-    let wrapped_vk = vec![9u8; 48];
+    let wrapped_vk = vec![9_u8; 48];
     let mut content = b"unissh-grant-v1".to_vec();
     content.push(role);
-    content.extend_from_slice(&0i64.to_be_bytes());
+    content.extend_from_slice(&0_i64.to_be_bytes());
     content.extend_from_slice(&wrapped_vk);
     let sig = sign_version(
         &kp.signing,
@@ -70,12 +70,12 @@ fn grant_obj(kp: &Ed25519Keypair, vault: &[u8], member: &[u8], epoch: u64, role:
         ),
     )
     .unwrap();
-    let mut out = vec![4u8];
+    let mut out = vec![4_u8];
     put(&mut out, vault);
     put(&mut out, member);
     out.extend_from_slice(&epoch.to_be_bytes());
     out.push(role);
-    out.extend_from_slice(&0i64.to_be_bytes()); // not_after (8 BE) — no expiry
+    out.extend_from_slice(&0_i64.to_be_bytes()); // not_after (8 BE) — no expiry
     put(&mut out, &wrapped_vk);
     put(&mut out, &sig);
     put(&mut out, &kp.verifying.to_bytes());
@@ -89,7 +89,7 @@ fn vault_obj(author: &[u8]) -> String {
         wrapped_vk: vec![0xDD; 16],
         version: 1,
         tombstone: false,
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
         author_pubkey: author.to_vec(),
         key_epoch: 1,
         cache_policy: CachePolicy::OfflineAllowed,
@@ -121,7 +121,7 @@ async fn zk_dump_contains_only_ciphertext() {
         wrapped_item_key: vec![1, 2, 3],
         version: 1,
         tombstone: false,
-        signature: vec![7u8; 67],
+        signature: vec![7_u8; 67],
         author_pubkey: s.ed25519_pub.clone(),
         created_at: 0,
         updated_at: 0,
@@ -154,9 +154,9 @@ async fn e2e_member_lifecycle_add_sync_revoke_rotate() {
     let app = spawn().await;
     let admin_kp = Ed25519Keypair::generate();
     let admin = admin_kp.verifying.to_bytes().to_vec();
-    let member = vec![0xB8u8; 32];
-    let (_a, _d, admin_bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
-    let (_a2, _d2, member_bearer) = app.seed_device(&member, &[2u8; 32], "org", false).await;
+    let member = vec![0xB8_u8; 32];
+    let (_a, _d, admin_bearer) = app.seed_device(&admin, &[1_u8; 32], "org", true).await;
+    let (_a2, _d2, member_bearer) = app.seed_device(&member, &[2_u8; 32], "org", false).await;
 
     let admin_auth = format!("Bearer {admin_bearer}");
     let member_auth = format!("Bearer {member_bearer}");
@@ -321,7 +321,7 @@ async fn delta_object_strings(app: &common::TestApp, tok: &str) -> Vec<String> {
         .as_array()
         .unwrap()
         .iter()
-        .map(|it| it["object"].as_str().unwrap().to_string())
+        .map(|it| it["object"].as_str().unwrap().to_owned())
         .collect()
 }
 
@@ -341,8 +341,8 @@ async fn e2e_v2_join_then_grant_flips_delta_visibility() {
     // --- Owner claims the instance + logs in. ---
     let owner = common::make_identity();
     let claimed = common::claim_owner(&app, &owner.payload_b64, &owner.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
-    let owner_dev = claimed["device_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
+    let owner_dev = claimed["device_id"].as_str().unwrap().to_owned();
     let owner_tok = common::login_v2(&app, &owner, &owner_acct, &owner_dev).await;
 
     // --- Owner creates a space "Backend" (creator is auto-admin). ---
@@ -359,7 +359,7 @@ async fn e2e_v2_join_then_grant_flips_delta_visibility() {
         .unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     // --- Owner mints a one-link invite; a DISTINCT joiner redeems it → NEW account. ---
     let token = app
@@ -375,7 +375,7 @@ async fn e2e_v2_join_then_grant_flips_delta_visibility() {
         .unwrap()["token"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     let joiner = common::make_identity();
     let jr = app
@@ -392,8 +392,8 @@ async fn e2e_v2_join_then_grant_flips_delta_visibility() {
         .unwrap();
     assert_eq!(jr.status(), 201, "join creates a brand-new account");
     let jrb = jr.json::<Value>().await.unwrap();
-    let joiner_acct = jrb["account_id"].as_str().unwrap().to_string();
-    let joiner_dev = jrb["device_id"].as_str().unwrap().to_string();
+    let joiner_acct = jrb["account_id"].as_str().unwrap().to_owned();
+    let joiner_dev = jrb["device_id"].as_str().unwrap().to_owned();
     let joiner_tok = common::login_v2(&app, &joiner, &joiner_acct, &joiner_dev).await;
 
     // --- Owner claims a CLOUD vault (selective) in Backend, then pushes a SECRET
@@ -425,7 +425,7 @@ async fn e2e_v2_join_then_grant_flips_delta_visibility() {
         wrapped_item_key: vec![1, 2, 3],
         version: 1,
         tombstone: false,
-        signature: vec![7u8; 67],
+        signature: vec![7_u8; 67],
         author_pubkey: owner.ed.to_vec(),
         created_at: 0,
         updated_at: 0,

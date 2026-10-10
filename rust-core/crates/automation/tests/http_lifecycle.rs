@@ -25,7 +25,7 @@ impl Connection for Execution {
         self.0.fetch_add(1, Ordering::SeqCst);
         sink.data(false, b"approved result".to_vec());
         sink.exited(Some(0));
-        Ok(Arc::new(Execution(self.0.clone())))
+        Ok(Arc::new(Self(self.0.clone())))
     }
     fn valid(&self) -> bool {
         true
@@ -60,7 +60,7 @@ impl Executor for Execution {
         _: Option<Instant>,
         _: &str,
     ) -> Result<Arc<dyn Connection>> {
-        Ok(Arc::new(Execution(self.0.clone())))
+        Ok(Arc::new(Self(self.0.clone())))
     }
 }
 async fn rpc(url: &str, token: &str, name: &str, args: Value) -> Value {

@@ -28,7 +28,7 @@ impl Store {
                 Val::t(space_intents_json),
                 Val::t(vault_intents_json),
                 Val::I(expires_at),
-                Val::OptB(created_by.map(|b| b.to_vec())),
+                Val::OptB(created_by.map(<[u8]>::to_vec)),
                 Val::I(now),
             ],
         )

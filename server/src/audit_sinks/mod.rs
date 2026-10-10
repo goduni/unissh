@@ -104,9 +104,9 @@ impl Step {
     /// How long the loop waits before the next step.
     pub fn wait(&self) -> Duration {
         match self {
-            Step::Delivered { .. } => Duration::ZERO,
-            Step::Idle => IDLE_POLL,
-            Step::Failed { delay, .. } => *delay,
+            Self::Delivered { .. } => Duration::ZERO,
+            Self::Idle => IDLE_POLL,
+            Self::Failed { delay, .. } => *delay,
         }
     }
 }
@@ -214,7 +214,7 @@ impl Delivery {
     /// Record a failure and return the delay before the retry.
     fn fail(&mut self) -> Duration {
         let base = BACKOFF_MIN
-            .saturating_mul(1u32 << self.failures.min(16))
+            .saturating_mul(1_u32 << self.failures.min(16))
             .min(BACKOFF_MAX);
         self.failures = self.failures.saturating_add(1);
         (self.jitter)(base)
@@ -236,7 +236,7 @@ impl Delivery {
     /// Step until `shutdown` turns true (or its sender is dropped), recording
     /// each outcome in `status`.
     pub async fn run(mut self, status: SharedSinkStatus, mut shutdown: watch::Receiver<bool>) {
-        let name = self.sink.name().to_string();
+        let name = self.sink.name().to_owned();
         tracing::info!(sink = %name, "audit sink started");
         let cursor = self.cursor.load(&name).await.ok();
         let head = self.entries.max_audit_seq().await.ok();
@@ -309,21 +309,23 @@ pub type SharedSinkStatus = Arc<Mutex<SinkStatus>>;
 /// from the cursor and the log head (when both could be read), the counter at 0.
 fn seed_metrics(sink: &str, cursor: Option<i64>, head: Option<i64>) {
     if let Some(seq) = cursor {
-        metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => sink.to_string()).set(seq as f64);
+        metrics::gauge!(METRIC_DELIVERED_SEQ, "sink" => sink.to_owned()).set(seq as f64);
         if let Some(head) = head {
             set_lag(sink, head - seq);
         }
     }
-    metrics::counter!(METRIC_FAILURES_TOTAL, "sink" => sink.to_string()).increment(0);
+    metrics::counter!(METRIC_FAILURES_TOTAL, "sink" => sink.to_owned()).increment(0);
 }
 
 fn set_lag(sink: &str, lag: i64) {
-    metrics::gauge!(METRIC_LAG, "sink" => sink.to_string()).set(lag.max(0) as f64);
+    metrics::gauge!(METRIC_LAG, "sink" => sink.to_owned()).set(lag.max(0) as f64);
 }
 
 /// `head` is the log's max seq when the caller read it (after a delivery).
 fn record(status: &SharedSinkStatus, step: &Step, head: Option<i64>, now: i64) {
-    let mut s = status.lock().unwrap_or_else(|p| p.into_inner());
+    let mut s = status
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     match step {
         Step::Delivered { last, .. } => {
             s.last_delivered_seq = Some(*last);
@@ -350,7 +352,7 @@ fn record(status: &SharedSinkStatus, step: &Step, head: Option<i64>, now: i64) {
 /// A random point in `[0.75·base, base]`, so retries from a fleet (including
 /// those sitting at the 5-minute cap) do not arrive in lockstep.
 fn random_jitter(base: Duration) -> Duration {
-    let mut b = [0u8; 8];
+    let mut b = [0_u8; 8];
     crate::ids::fill_random(&mut b);
     let quarter = (base.as_millis() / 4) as u64;
     let less = if quarter == 0 {
@@ -373,7 +375,7 @@ pub fn spawn_configured(
     // Each sink has its own task, cursor row (keyed by `Sink::name`) and status.
     let mut start = |sink: Arc<dyn Sink>, batch_size: u32| {
         let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
-            sink: sink.name().to_string(),
+            sink: sink.name().to_owned(),
             ..Default::default()
         }));
         statuses.push(status.clone());

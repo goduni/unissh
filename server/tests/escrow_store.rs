@@ -55,8 +55,8 @@ async fn escrow_round_trips_by_handle() {
     assert_eq!(row.keyset_bytes, blob);
     assert_eq!(row.generation, 1);
     assert_eq!(row.account_id, alice);
-    assert_eq!(row.k_auth_hash.as_deref(), Some(&k_auth_hash[..]));
-    assert_eq!(row.argon_salt.as_deref(), Some(&salt[..]));
+    assert_eq!(row.k_auth_hash.as_deref(), Some((&*k_auth_hash)));
+    assert_eq!(row.argon_salt.as_deref(), Some((&*salt)));
     assert_eq!(row.argon_mem_kib, Some(65536));
     assert_eq!(row.argon_iterations, Some(3));
     assert_eq!(row.argon_parallelism, Some(1));
@@ -84,7 +84,7 @@ async fn escrow_resolves_latest_generation() {
     let row = s.get_escrow_by_handle("alice").await.unwrap().unwrap();
     assert_eq!(row.generation, 2, "resolves MAX(generation)");
     assert_eq!(row.keyset_bytes, b"gen2");
-    assert_eq!(row.k_auth_hash.as_deref(), Some(&k_auth_hash[..]));
+    assert_eq!(row.k_auth_hash.as_deref(), Some((&*k_auth_hash)));
 }
 
 #[tokio::test]

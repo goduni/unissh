@@ -29,8 +29,8 @@ async fn claim_login_and_authenticated_push() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim(&app, &id).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
-    let device_id = c["device_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
+    let device_id = c["device_id"].as_str().unwrap().to_owned();
 
     let access = login_v2(&app, &id, &account_id, &device_id).await;
 
@@ -53,8 +53,8 @@ async fn nonce_is_single_use() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim(&app, &id).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
-    let device_id = c["device_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
+    let device_id = c["device_id"].as_str().unwrap().to_owned();
 
     // get a challenge, sign it, verify twice
     let chal: Value = app
@@ -109,7 +109,7 @@ async fn keyset_no_downgrade() {
     let gen1 = ks.to_bytes().unwrap();
     // simulate gen 2 by bumping the generation header bytes [2..6] (server parses header only)
     let mut gen2 = gen1.clone();
-    gen2[2..6].copy_from_slice(&2u32.to_be_bytes());
+    gen2[2..6].copy_from_slice(&2_u32.to_be_bytes());
 
     let put = |blob: &[u8]| {
         app.client
@@ -158,7 +158,7 @@ async fn keyset_put_stores_optional_escrow() {
         unissh_keychain::create_account(None, unissh_keychain::KdfParams::recommended()).unwrap();
     let gen1 = ks.to_bytes().unwrap();
     let mut gen2 = gen1.clone();
-    gen2[2..6].copy_from_slice(&2u32.to_be_bytes());
+    gen2[2..6].copy_from_slice(&2_u32.to_be_bytes());
 
     let put_keyset = |body: Value| {
         app.client
@@ -195,8 +195,8 @@ async fn keyset_put_stores_optional_escrow() {
     // Params MUST be `KdfParams::recommended()` (64 MiB / t=3 / p=1, 16-byte salt): the
     // enroll handler rejects anything else so a real enrollment can never be distinguished
     // from a decoy (enumeration resistance).
-    let k_auth_raw = vec![9u8; 40];
-    let salt = vec![3u8; 16];
+    let k_auth_raw = vec![9_u8; 40];
+    let salt = vec![3_u8; 16];
     let r = put_keyset(json!({
         "keyset_blob": b64(&gen2),
         "escrow": {
@@ -235,12 +235,12 @@ async fn keyset_put_stores_optional_escrow() {
     );
     assert_ne!(
         row.k_auth_hash.as_deref(),
-        Some(&k_auth_raw[..]),
+        Some((&*k_auth_raw)),
         "the raw K_auth is never persisted"
     );
     assert_eq!(
         row.argon_salt.as_deref(),
-        Some(&salt[..]),
+        Some((&*salt)),
         "salt round-trips"
     );
     assert_eq!(row.argon_mem_kib, Some(65536));
@@ -284,8 +284,8 @@ async fn escrow_enroll_rejects_off_spec_argon_params() {
     let weak = put(json!({
         "keyset_blob": b64(&gen1),
         "escrow": {
-            "k_auth": b64(&[9u8; 40]),
-            "argon_salt": b64(&[3u8; 16]),
+            "k_auth": b64(&[9_u8; 40]),
+            "argon_salt": b64(&[3_u8; 16]),
             "argon_mem_kib": 19456,
             "argon_iterations": 2,
             "argon_parallelism": 1,
@@ -303,8 +303,8 @@ async fn escrow_enroll_rejects_off_spec_argon_params() {
     let bad_salt = put(json!({
         "keyset_blob": b64(&gen1),
         "escrow": {
-            "k_auth": b64(&[9u8; 40]),
-            "argon_salt": b64(&[3u8; 24]),
+            "k_auth": b64(&[9_u8; 40]),
+            "argon_salt": b64(&[3_u8; 24]),
             "argon_mem_kib": 65536,
             "argon_iterations": 3,
             "argon_parallelism": 1,
@@ -342,9 +342,9 @@ async fn pake_relay_verbatim() {
         .json()
         .await
         .unwrap();
-    let channel = open["channel_id"].as_str().unwrap().to_string();
+    let channel = open["channel_id"].as_str().unwrap().to_owned();
 
-    let msg1 = b64(&[1u8, 2, 3, 4, 5]);
+    let msg1 = b64(&[1_u8, 2, 3, 4, 5]);
     let s = app
         .client
         .post(format!("{}/v1/relay/msg1", app.base))
@@ -406,7 +406,7 @@ async fn claim_and_tokens(app: &common::TestApp) -> Value {
 }
 
 fn rt(tokens: &Value) -> String {
-    tokens["refresh_token"].as_str().unwrap().to_string()
+    tokens["refresh_token"].as_str().unwrap().to_owned()
 }
 
 #[tokio::test]
@@ -491,7 +491,7 @@ async fn refresh_rejects_malformed_and_unknown_tokens() {
     // Wrong length (not session_id(16)||secret(32)) → 401, no panic.
     assert_eq!(refresh(&app, &b64(b"too-short")).await.status(), 401);
     // Well-formed length but unknown session id → 401.
-    assert_eq!(refresh(&app, &b64(&[7u8; 48])).await.status(), 401);
+    assert_eq!(refresh(&app, &b64(&[7_u8; 48])).await.status(), 401);
 }
 
 // ---- OIDC reassertion gate (Phase 5, Task 3) ----

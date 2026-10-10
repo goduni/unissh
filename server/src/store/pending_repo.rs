@@ -32,7 +32,7 @@ impl Store {
                 Val::b(account_id),
                 Val::OptI(crypto_role),
                 Val::t(source),
-                Val::OptB(proof.map(|b| b.to_vec())),
+                Val::OptB(proof.map(<[u8]>::to_vec)),
                 Val::I(now),
             ],
         )
@@ -70,7 +70,7 @@ impl Store {
         epoch: i64,
         now: i64,
     ) -> AppResult<u64> {
-        let mut total = 0u64;
+        let mut total = 0_u64;
         for ed in member_eds {
             total += tx
                 .exec(
@@ -104,7 +104,7 @@ impl Store {
                 vec![Val::b(vault_id)],
             )
             .await?;
-        let mut total = 0u64;
+        let mut total = 0_u64;
         for r in rows {
             let ed: Option<Vec<u8>> = tx
                 .fetch_optional_as::<crate::store::models::EdOnly>(

@@ -41,13 +41,13 @@ impl WebhookSink {
         instance: String,
     ) -> Result<Self, String> {
         let url = reqwest::Url::parse(url)
-            .map_err(|_| "audit.webhook.url is not a valid URL".to_string())?;
+            .map_err(|_| "audit.webhook.url is not a valid URL".to_owned())?;
         let client = reqwest::Client::builder()
             .timeout(timeout)
             // A redirect would re-POST the log somewhere the owner did not configure.
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| "audit.webhook: cannot build the HTTP client".to_string())?;
+            .map_err(|_| "audit.webhook: cannot build the HTTP client".to_owned())?;
         Ok(Self {
             client,
             url,

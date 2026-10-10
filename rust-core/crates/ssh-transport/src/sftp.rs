@@ -163,7 +163,7 @@ where
 {
     /// Starts the session: sends INIT(v3), awaits VERSION.
     pub(crate) async fn start(stream: S) -> Result<Self, TransportError> {
-        let mut s = Sftp {
+        let mut s = Self {
             stream,
             next_id: 0,
             poisoned: false,
@@ -173,7 +173,7 @@ where
         };
         let mut init = Vec::with_capacity(5);
         init.push(FXP_INIT);
-        init.extend_from_slice(&3u32.to_be_bytes());
+        init.extend_from_slice(&3_u32.to_be_bytes());
         s.send(&init).await?;
         let (typ, body) = s.read_packet().await?;
         if typ != FXP_VERSION {
@@ -480,7 +480,7 @@ where
                     };
                     let id = self.send_read(&handle, next_req, len).await?;
                     in_flight.insert(id, (next_req, len));
-                    next_req += len as u64;
+                    next_req += u64::from(len);
                 }
                 if in_flight.is_empty() {
                     break; // nothing pending and nothing left to request
@@ -502,7 +502,7 @@ where
                         let got = data.len() as u64;
                         request_limit = request_limit.max(off + got);
                         // Short read (legal): re-request the remaining sub-range.
-                        if got < len as u64 {
+                        if got < u64::from(len) {
                             let rlen = len - got as u32;
                             let id2 = self.send_read(&handle, off + got, rlen).await?;
                             in_flight.insert(id2, (off + got, rlen));
@@ -657,7 +657,7 @@ where
         let mut next_offset = start_offset;
         let mut eof = false;
         let mut outcome = TransferOutcome::Completed;
-        let mut buf = vec![0u8; CHUNK];
+        let mut buf = vec![0_u8; CHUNK];
         loop {
             if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
                 outcome = TransferOutcome::Cancelled;
@@ -692,7 +692,7 @@ where
                 let e = status_to_err(code, &mut r);
                 return Err(self.poison(e));
             }
-            acked += len as u64;
+            acked += u64::from(len);
             if let Some(p) = &progress {
                 p.on_progress(acked, total);
             }
@@ -788,7 +788,7 @@ where
         let mut b = vec![FXP_MKDIR];
         b.extend_from_slice(&id.to_be_bytes());
         put_string(&mut b, path.as_bytes());
-        b.extend_from_slice(&0u32.to_be_bytes()); // ATTRS flags = 0
+        b.extend_from_slice(&0_u32.to_be_bytes()); // ATTRS flags = 0
         self.send(&b).await?;
         self.expect_ok(id).await
     }
@@ -932,7 +932,7 @@ where
         put_string(&mut b, path.as_bytes());
         b.extend_from_slice(&pflags.to_be_bytes());
         b.extend_from_slice(&ATTR_PERMISSIONS.to_be_bytes());
-        b.extend_from_slice(&0o600u32.to_be_bytes());
+        b.extend_from_slice(&0o600_u32.to_be_bytes());
         self.send(&b).await?;
         self.expect_handle(id).await
     }
@@ -1238,7 +1238,7 @@ where
     }
 
     async fn read_packet_raw(&mut self) -> Result<(u8, Vec<u8>), TransportError> {
-        let mut len_buf = [0u8; 4];
+        let mut len_buf = [0_u8; 4];
         timeout(IO_TIMEOUT, self.stream.read_exact(&mut len_buf))
             .await
             .map_err(|_| sftp_err("read timeout"))??;
@@ -1246,7 +1246,7 @@ where
         if len == 0 || len > MAX_PACKET {
             return Err(sftp_err("invalid SFTP packet length"));
         }
-        let mut buf = vec![0u8; len];
+        let mut buf = vec![0_u8; len];
         timeout(IO_TIMEOUT, self.stream.read_exact(&mut buf))
             .await
             .map_err(|_| sftp_err("read timeout"))??;
@@ -1281,7 +1281,7 @@ fn is_dir_perm(perms: u32) -> bool {
 }
 
 fn sftp_err(msg: &str) -> TransportError {
-    TransportError::Sftp(msg.to_string())
+    TransportError::Sftp(msg.to_owned())
 }
 
 fn status_to_err(code: u32, r: &mut Reader<'_>) -> TransportError {
@@ -1365,7 +1365,7 @@ impl<'a> Reader<'a> {
 
     fn u64(&mut self) -> Result<u64, TransportError> {
         let b = self.take(8)?;
-        let mut a = [0u8; 8];
+        let mut a = [0_u8; 8];
         a.copy_from_slice(b);
         Ok(u64::from_be_bytes(a))
     }
@@ -1545,10 +1545,10 @@ mod tests {
         let mut buf = Vec::new();
         let flags = ATTR_SIZE | ATTR_PERMISSIONS | ATTR_ACMODTIME;
         buf.extend_from_slice(&flags.to_be_bytes());
-        buf.extend_from_slice(&1234u64.to_be_bytes()); // size
-        buf.extend_from_slice(&0o100644u32.to_be_bytes()); // perms: regular file rw-r--r--
-        buf.extend_from_slice(&111u32.to_be_bytes()); // atime — discarded
-        buf.extend_from_slice(&1_700_000_000u32.to_be_bytes()); // mtime
+        buf.extend_from_slice(&1234_u64.to_be_bytes()); // size
+        buf.extend_from_slice(&0o100644_u32.to_be_bytes()); // perms: regular file rw-r--r--
+        buf.extend_from_slice(&111_u32.to_be_bytes()); // atime — discarded
+        buf.extend_from_slice(&1_700_000_000_u32.to_be_bytes()); // mtime
         let mut r = Reader::new(&buf);
         let (size, perms, mtime, _, _) = parse_attrs(&mut r).unwrap();
         assert_eq!(size, Some(1234));
@@ -1561,7 +1561,7 @@ mod tests {
     fn parse_attrs_handles_absent_mtime_and_perms() {
         let mut buf = Vec::new();
         buf.extend_from_slice(&ATTR_SIZE.to_be_bytes()); // size only
-        buf.extend_from_slice(&42u64.to_be_bytes());
+        buf.extend_from_slice(&42_u64.to_be_bytes());
         let mut r = Reader::new(&buf);
         let (size, perms, mtime, _, _) = parse_attrs(&mut r).unwrap();
         assert_eq!(size, Some(42));

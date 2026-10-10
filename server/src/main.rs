@@ -105,10 +105,11 @@ async fn main() -> anyhow::Result<()> {
         // a wrong working directory silently creates an empty database and this
         // command would hand out a confident code for the wrong instance.
         eprintln!("using {} database at {}", config.db.backend, config.db.url);
-        let pinned = config.setup.code.trim().to_string();
+        let pinned = config.setup.code.trim().to_owned();
         let pinned_hash = (!pinned.is_empty()).then(|| ids::sha256(pinned.as_bytes()));
         // `[u8; 32]` is not `Deref`, so `as_deref()` does not apply here.
-        let state = setup_code_state(&store, pinned_hash.as_ref().map(|h| h.as_slice())).await?;
+        let state =
+            setup_code_state(&store, pinned_hash.as_ref().map(<[u8; 32]>::as_slice)).await?;
         match (state, rotate) {
             (SetupCodeState::Claimed, false) => println!(
                 "This instance is already claimed — no setup code is live (claiming clears \

@@ -21,8 +21,8 @@ fn broker(core: Arc<Core>) -> Arc<Broker> {
 #[test]
 fn encrypted_native_consent_restores_only_unchanged_targets_and_is_revocable() {
     let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("db").to_str().unwrap().to_string();
-    let keyset = dir.path().join("keyset").to_str().unwrap().to_string();
+    let db = dir.path().join("db").to_str().unwrap().to_owned();
+    let keyset = dir.path().join("keyset").to_str().unwrap().to_owned();
     let core = Core::new(db.clone(), keyset.clone());
     let kit = core.create_account(None).unwrap();
     core.create_vault("v".into(), "Vault".into()).unwrap();

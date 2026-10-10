@@ -36,7 +36,7 @@ fn preferences(state: &CoreState) -> Result<RecordingPreferences, FfiError> {
         .map_err(FfiError::other)?
         .map(|bytes| serde_json::from_slice(&bytes).map_err(FfiError::other))
         .transpose()
-        .map(|p| p.unwrap_or_default())
+        .map(std::option::Option::unwrap_or_default)
 }
 impl Core {
     pub fn mcp_recording_preferences(&self) -> Result<RecordingPreferences, FfiError> {
@@ -326,7 +326,7 @@ impl CommandRecording {
                 "unissh_mcp": { "version": 1, "application": self.application,
                     "host": self.host, "port": self.port, "user": self.user,
                     "stdin": b.stdin.as_ref().map(|s| s.as_str()), "env": &*b.env,
-                    "command": b.command.as_str(), "cwd": b.cwd.as_deref().map(|s| s.as_str()),
+                    "command": b.command.as_str(), "cwd": b.cwd.as_deref().map(std::string::String::as_str),
                     "outcome": outcome, "exit_code": meta.exit_code,
                     "truncated": b.truncated, "duration_secs": duration,
                     "events": b.events.iter().map(|e| serde_json::json!({
@@ -456,7 +456,7 @@ impl std::ops::Deref for Environment {
 impl Environment {
     fn zeroize(&mut self) {
         for value in self.0.values_mut() {
-            zeroize::Zeroize::zeroize(value);
+            Zeroize::zeroize(value);
         }
         self.0.clear();
     }

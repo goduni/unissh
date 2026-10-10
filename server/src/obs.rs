@@ -112,7 +112,7 @@ impl MetricsHistory {
                         .map(|v| serde_json::json!({ "t": s.t, "v": v }))
                 })
                 .collect();
-            series.insert(name.to_string(), serde_json::Value::Array(points));
+            series.insert(name.to_owned(), serde_json::Value::Array(points));
         }
         serde_json::Value::Object(series)
     }
@@ -147,7 +147,7 @@ fn parse_unissh_metrics(text: &str) -> BTreeMap<String, f64> {
         if !base.starts_with("unissh_") || gauges.contains(base) {
             continue;
         }
-        *out.entry(base.to_string()).or_insert(0.0) += v;
+        *out.entry(base.to_owned()).or_insert(0.0) += v;
     }
     out
 }

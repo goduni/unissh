@@ -23,13 +23,13 @@ pub enum ObjectTag {
 impl ObjectTag {
     pub fn from_u8(b: u8) -> Option<Self> {
         match b {
-            1 => Some(ObjectTag::Vault),
-            2 => Some(ObjectTag::Item),
-            3 => Some(ObjectTag::MembershipManifest),
-            4 => Some(ObjectTag::MembershipGrant),
-            5 => Some(ObjectTag::Audit),
-            6 => Some(ObjectTag::Keyset),
-            7 => Some(ObjectTag::AccountState),
+            1 => Some(Self::Vault),
+            2 => Some(Self::Item),
+            3 => Some(Self::MembershipManifest),
+            4 => Some(Self::MembershipGrant),
+            5 => Some(Self::Audit),
+            6 => Some(Self::Keyset),
+            7 => Some(Self::AccountState),
             _ => None,
         }
     }
@@ -65,7 +65,7 @@ impl<'a> Reader<'a> {
     }
     fn u64(&mut self) -> Result<u64, AppError> {
         let s = self.take(8)?;
-        let mut a = [0u8; 8];
+        let mut a = [0_u8; 8];
         a.copy_from_slice(s);
         Ok(u64::from_be_bytes(a))
     }
@@ -231,8 +231,8 @@ mod tests {
 
     // Minimal valid Keyset blob: tag(6) + put(len-prefixed payload).
     fn keyset_blob() -> Vec<u8> {
-        let mut b = vec![6u8];
-        let payload = [1u8, 2, 3];
+        let mut b = vec![6_u8];
+        let payload = [1_u8, 2, 3];
         b.extend_from_slice(&(payload.len() as u32).to_be_bytes());
         b.extend_from_slice(&payload);
         b

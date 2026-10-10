@@ -51,7 +51,7 @@ pub struct ExistingSessionCommand {
     #[schemars(range(min = 1, max = 86_400_000))]
     pub timeout_ms: Option<u32>,
     /// Absolute POSIX directory for this exec only. No ~ or variable expansion.
-    #[schemars(length(min = 1, max = 32768), pattern(r"^/"))]
+    #[schemars(length(min = 1, max = 32768), pattern("^/"))]
     pub cwd: Option<String>,
     /// Wait up to 30 seconds for completion/output; never approves a command.
     #[schemars(range(max = 30_000))]
@@ -79,7 +79,7 @@ pub struct OneShotCommand {
     #[schemars(range(min = 1, max = 86_400_000))]
     pub timeout_ms: Option<u32>,
     /// Absolute POSIX directory for this exec only. No ~ or variable expansion.
-    #[schemars(length(min = 1, max = 32768), pattern(r"^/"))]
+    #[schemars(length(min = 1, max = 32768), pattern("^/"))]
     pub cwd: Option<String>,
     /// Wait up to 30 seconds for completion/output; never approves a command.
     #[schemars(range(max = 30_000))]

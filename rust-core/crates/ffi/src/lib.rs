@@ -132,7 +132,7 @@ fn attached_certificate(
         log::warn!("ssh key: the attached certificate certifies another key; ignored");
         return None;
     }
-    Some(line.to_string())
+    Some(line.to_owned())
 }
 
 /// Locks a `Mutex`, recovering from poisoning (the data under these locks is ordinary,
@@ -140,7 +140,7 @@ fn attached_certificate(
 /// helper for the `m.lock().unwrap_or_else(|e| e.into_inner())` idiom used across the
 /// [`Core`] state and the session/pool/tunnel types.
 fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Asserts that the caller is **not** inside any tokio task.
@@ -239,16 +239,16 @@ pub enum FfiError {
 /// `FfiError` (the transaction's own BEGIN/COMMIT errors need this conversion).
 impl From<unissh_storage::StorageError> for FfiError {
     fn from(e: unissh_storage::StorageError) -> Self {
-        FfiError::other(e)
+        Self::other(e)
     }
 }
 
 impl FfiError {
     fn other(e: impl std::fmt::Display) -> Self {
-        FfiError::Other { msg: e.to_string() }
+        Self::Other { msg: e.to_string() }
     }
     fn ssh(e: impl std::fmt::Display) -> Self {
-        FfiError::Ssh { msg: e.to_string() }
+        Self::Ssh { msg: e.to_string() }
     }
 }
 
@@ -280,13 +280,13 @@ pub enum FfiSyncTarget {
 }
 
 impl FfiSyncTarget {
-    fn from_core(t: SyncTarget) -> FfiSyncTarget {
+    fn from_core(t: SyncTarget) -> Self {
         match t {
-            SyncTarget::Local => FfiSyncTarget::Local,
-            SyncTarget::Cloud => FfiSyncTarget::Cloud,
+            SyncTarget::Local => Self::Local,
+            SyncTarget::Cloud => Self::Cloud,
             // SyncTarget is non_exhaustive: an unknown future target → conservatively
             // Local (no cloud operations/gating for an unknown target).
-            _ => FfiSyncTarget::Local,
+            _ => Self::Local,
         }
     }
 }
@@ -542,7 +542,7 @@ fn resolve_binding(
         },
         Some(b) => BindingResolution::Redirected {
             pinned: b.destination_pin.clone(),
-            current: current_destination.to_string(),
+            current: current_destination.to_owned(),
         },
     }
 }
@@ -581,13 +581,13 @@ fn pick_username(
 ) -> String {
     for c in [identity_user, profile_fallback] {
         if !c.trim().is_empty() {
-            return c.to_string();
+            return c.to_owned();
         }
     }
     account_default
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(str::to_owned)
         .unwrap_or_default()
 }
 
@@ -663,7 +663,7 @@ fn personal_destination(
 fn apply_username_template(base_user: &str, username_template: Option<&str>) -> String {
     match username_template {
         Some(t) if !t.trim().is_empty() => t.trim().replace("%u", base_user),
-        _ => base_user.to_string(),
+        _ => base_user.to_owned(),
     }
 }
 
@@ -1267,18 +1267,18 @@ pub enum FfiMemberRole {
 impl FfiMemberRole {
     fn to_core(self) -> MemberRole {
         match self {
-            FfiMemberRole::Viewer => MemberRole::Viewer,
-            FfiMemberRole::Editor => MemberRole::Editor,
-            FfiMemberRole::Admin => MemberRole::Admin,
+            Self::Viewer => MemberRole::Viewer,
+            Self::Editor => MemberRole::Editor,
+            Self::Admin => MemberRole::Admin,
         }
     }
-    fn from_core(r: MemberRole) -> FfiMemberRole {
+    fn from_core(r: MemberRole) -> Self {
         match r {
-            MemberRole::Viewer => FfiMemberRole::Viewer,
-            MemberRole::Editor => FfiMemberRole::Editor,
-            MemberRole::Admin => FfiMemberRole::Admin,
+            MemberRole::Viewer => Self::Viewer,
+            MemberRole::Editor => Self::Editor,
+            MemberRole::Admin => Self::Admin,
             // non_exhaustive: a future role → conservatively Viewer (minimum rights).
-            _ => FfiMemberRole::Viewer,
+            _ => Self::Viewer,
         }
     }
 }
@@ -1295,15 +1295,15 @@ pub enum FfiCachePolicy {
 impl FfiCachePolicy {
     fn to_core(self) -> CachePolicy {
         match self {
-            FfiCachePolicy::OfflineAllowed => CachePolicy::OfflineAllowed,
-            FfiCachePolicy::OnlineOnly => CachePolicy::OnlineOnly,
+            Self::OfflineAllowed => CachePolicy::OfflineAllowed,
+            Self::OnlineOnly => CachePolicy::OnlineOnly,
         }
     }
-    fn from_core(c: CachePolicy) -> FfiCachePolicy {
+    fn from_core(c: CachePolicy) -> Self {
         match c {
-            CachePolicy::OfflineAllowed => FfiCachePolicy::OfflineAllowed,
-            CachePolicy::OnlineOnly => FfiCachePolicy::OnlineOnly,
-            _ => FfiCachePolicy::OfflineAllowed,
+            CachePolicy::OfflineAllowed => Self::OfflineAllowed,
+            CachePolicy::OnlineOnly => Self::OnlineOnly,
+            _ => Self::OfflineAllowed,
         }
     }
 }
@@ -1463,8 +1463,8 @@ pub struct EscrowCreds {
 impl Core {
     /// Creates the facade over the DB and keyset-sidecar paths (not yet unlocked).
     #[uniffi::constructor]
-    pub fn new(db_path: String, keyset_path: String) -> std::sync::Arc<Self> {
-        std::sync::Arc::new(Core {
+    pub fn new(db_path: String, keyset_path: String) -> Arc<Self> {
+        Arc::new(Self {
             sftp_epoch: std::sync::atomic::AtomicU64::new(0),
             sftp_sessions: Mutex::new(Vec::new()),
             db_path: PathBuf::from(db_path),
@@ -1512,7 +1512,7 @@ impl Core {
         let has_password = password.is_some();
         let password = password.map(Zeroizing::new);
         let (secret_key, enc, unlocked) = create_account(
-            password.as_deref().map(|s| s.as_bytes()),
+            password.as_deref().map(std::string::String::as_bytes),
             KdfParams::recommended(),
         )
         .map_err(FfiError::other)?;
@@ -1563,7 +1563,7 @@ impl Core {
         // Emergency Kit: we zeroize the intermediate hex copy; the string returned through the FFI
         // is beyond our control (an FFI-boundary limitation).
         let kit = Zeroizing::new(hex::encode(secret_key.expose_bytes()));
-        Ok(kit.as_str().to_string())
+        Ok(kit.as_str().to_owned())
     }
 
     /// Unlocks the instance with a password (if needed) and the Secret Key (hex from the Emergency Kit).
@@ -1575,9 +1575,12 @@ impl Core {
         // via a probe and returned re-wrapped under the current scheme (`migrated`). This
         // fixes "invalid secret key/master password" for those who created an account on
         // earlier builds. Persisting the re-wrap is below, AFTER opening storage and the floor check.
-        let (unlocked, migrated) =
-            unlock_account_migrating(&enc, password.as_deref().map(|s| s.as_bytes()), &secret_key)
-                .map_err(map_keychain_err)?;
+        let (unlocked, migrated) = unlock_account_migrating(
+            &enc,
+            password.as_deref().map(std::string::String::as_bytes),
+            &secret_key,
+        )
+        .map_err(map_keychain_err)?;
 
         let db_key = derive_db_key(&unlocked);
         let storage = Storage::open(&self.db_path, &db_key[..]).map_err(FfiError::other)?;
@@ -1591,7 +1594,7 @@ impl Core {
         let floor = unissh_keychain::keyset_gen_floor(&storage)
             .map_err(map_keychain_err)?
             .unwrap_or(0);
-        let attempted = enc.generation as u64;
+        let attempted = u64::from(enc.generation);
         if attempted < floor {
             // Security event: an on-disk keyset older than the recorded floor — a
             // possible downgrade attack. Generations are counters, not secrets.
@@ -1617,7 +1620,7 @@ impl Core {
                 attempted,
                 new_enc.generation
             );
-            new_enc.generation as u64
+            u64::from(new_enc.generation)
         } else {
             attempted
         };
@@ -2279,9 +2282,12 @@ impl Core {
         // migrate-on-open: a legacy blob (before round 2) from an old device is opened
         // via a probe and immediately re-wrapped under the current scheme — the local sidecar
         // will hold a v3 record (`migrated`), and offline unlock will proceed without probing.
-        let (unlocked, migrated) =
-            unlock_account_migrating(&enc, password.as_deref().map(|s| s.as_bytes()), &secret_key)
-                .map_err(map_keychain_err)?;
+        let (unlocked, migrated) = unlock_account_migrating(
+            &enc,
+            password.as_deref().map(std::string::String::as_bytes),
+            &secret_key,
+        )
+        .map_err(map_keychain_err)?;
 
         // the db key is derived from the unwrapped keyset, so the floor (in storage-meta)
         // is available only AFTER unlock+open. The raw-crypto unwrap (AEAD verification
@@ -2298,7 +2304,7 @@ impl Core {
         let floor = unissh_keychain::keyset_gen_floor(&storage)
             .map_err(map_keychain_err)?
             .unwrap_or(0);
-        let attempted = enc.generation as u64;
+        let attempted = u64::from(enc.generation);
         if attempted < floor {
             // Security event: an on-disk keyset older than the recorded floor — a
             // possible downgrade attack. Generations are counters, not secrets.
@@ -2316,7 +2322,7 @@ impl Core {
         // the floor — brick protection (see `unlock`). We raise the floor to the actual
         // (persisted) generation.
         let record_to_persist = migrated.as_ref().unwrap_or(&enc);
-        let accepted_gen = record_to_persist.generation as u64;
+        let accepted_gen = u64::from(record_to_persist.generation);
         // Back up the existing sidecar only if the overwrite is a legacy-blob migration
         // (logs the path). We don't touch a normal server-blob acceptance.
         if migrated.is_some() {
@@ -2524,7 +2530,7 @@ impl Core {
         let (secret_key, enc, unlocked) = resp
             .finish_install(
                 &msg3,
-                password.as_deref().map(|s| s.as_bytes()),
+                password.as_deref().map(std::string::String::as_bytes),
                 KdfParams::recommended(),
             )
             .map_err(map_keychain_err)?;
@@ -2553,7 +2559,7 @@ impl Core {
             }
         }
         // anti-rollback floor: TOFU on the generation of the accepted keyset.
-        unissh_keychain::raise_keyset_gen_floor(&storage, enc.generation as u64)
+        unissh_keychain::raise_keyset_gen_floor(&storage, u64::from(enc.generation))
             .map_err(map_keychain_err)?;
 
         *guard = Some(CoreState {
@@ -2570,7 +2576,7 @@ impl Core {
         // Kit; they already have the account one. We zeroize the intermediate hex; the string
         // crossing the FFI boundary is beyond our control (an FFI limitation).
         let kit = Zeroizing::new(hex::encode(secret_key.expose_bytes()));
-        Ok(kit.as_str().to_string())
+        Ok(kit.as_str().to_owned())
     }
 
     /// **Runs a sync** against the foreign transport (server-tz §3.3): first a push
@@ -2683,7 +2689,7 @@ impl Core {
     pub fn restore_deleted_cloud_vaults(&self, tenant_b64: String) -> Result<u32, FfiError> {
         self.with_state_mut(|state| {
             let tenant = tenant_b64.as_bytes();
-            let mut restored = 0u32;
+            let mut restored = 0_u32;
             for v in state
                 .storage
                 .list_tombstoned_cloud_vaults()
@@ -2800,7 +2806,7 @@ impl Core {
     pub fn get_password(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
         self.with_state_mut(|state| {
             let password = read_password_item(state, &vault_id, &item_id)?;
-            Ok(password.as_str().to_string())
+            Ok(password.as_str().to_owned())
         })
     }
 
@@ -2843,7 +2849,7 @@ impl Core {
     pub fn get_note(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
         self.with_state_mut(|state| {
             let text = read_utf8_item(state, &vault_id, &item_id, ITEM_TYPE_NOTE, "a note")?;
-            Ok(text.as_str().to_string())
+            Ok(text.as_str().to_owned())
         })
     }
 
@@ -2993,8 +2999,8 @@ impl Core {
 
         let new_enc = change_password(
             &enc,
-            old_password.as_deref().map(|s| s.as_bytes()),
-            new_password.as_deref().map(|s| s.as_bytes()),
+            old_password.as_deref().map(std::string::String::as_bytes),
+            new_password.as_deref().map(std::string::String::as_bytes),
             &secret_key,
             KdfParams::recommended(),
         )
@@ -3016,7 +3022,7 @@ impl Core {
         } else {
             let unlocked = unlock_account(
                 &enc,
-                old_password.as_deref().map(|s| s.as_bytes()),
+                old_password.as_deref().map(std::string::String::as_bytes),
                 &secret_key,
             )
             .map_err(map_keychain_err)?;
@@ -3112,7 +3118,7 @@ impl Core {
             // an `Encrypted` error is returned — the UI will prompt for a password and retry.
             let normalized = unissh_ssh_agent::normalize_private_key_with_passphrase(
                 &openssh_private,
-                passphrase.as_deref().map(|p| p.as_str()),
+                passphrase.as_deref().map(std::string::String::as_str),
             )
             .map_err(FfiError::ssh)?;
             // validate and extract the public key via a temporary agent
@@ -3525,7 +3531,7 @@ impl Core {
     ) -> Result<Arc<LocalSession>, FfiError> {
         if !LOCAL_TERMINAL_SUPPORTED {
             return Err(FfiError::Other {
-                msg: "local terminal is not available on this platform".to_string(),
+                msg: "local terminal is not available on this platform".to_owned(),
             });
         }
         check_term_size(cols, rows)?;
@@ -3545,7 +3551,7 @@ impl Core {
                         // What a local session ran against, said plainly: this
                         // machine, as this OS account. `ViewRecordings` needs no
                         // special case to list it.
-                        host: "localhost".to_string(),
+                        host: "localhost".to_owned(),
                         user: unissh_local_pty::os_username(),
                         started_unix,
                     }),
@@ -3700,7 +3706,7 @@ impl Core {
 
         // Execution phase (concurrent, with an optional limit and timeout).
         let timeout_dur =
-            (timeout_secs > 0).then(|| tokio::time::Duration::from_secs(timeout_secs as u64));
+            (timeout_secs > 0).then(|| tokio::time::Duration::from_secs(u64::from(timeout_secs)));
         let sem = (max_concurrency > 0)
             .then(|| Arc::new(tokio::sync::Semaphore::new(max_concurrency as usize)));
         let exec_results = self.rt.block_on(async {
@@ -3882,7 +3888,7 @@ impl Core {
         let data = Arc::new(data);
         let remote_path = Arc::new(remote_path);
         let timeout_dur =
-            (timeout_secs > 0).then(|| tokio::time::Duration::from_secs(timeout_secs as u64));
+            (timeout_secs > 0).then(|| tokio::time::Duration::from_secs(u64::from(timeout_secs)));
         let sem = (max_concurrency > 0)
             .then(|| Arc::new(tokio::sync::Semaphore::new(max_concurrency as usize)));
         let put_results = self.rt.block_on(async {
@@ -3906,7 +3912,7 @@ impl Core {
                             .await
                             {
                                 Ok(r) => r,
-                                Err(_) => Err("sftp put timed out".to_string()),
+                                Err(_) => Err("sftp put timed out".to_owned()),
                             }
                         }
                         None => sftp_put_one(&client, &path, &data, make_parent_dirs).await,
@@ -4375,7 +4381,7 @@ impl Core {
                 stdout: String::new(),
                 stderr: String::new(),
                 exit_status: -1,
-                error: Some(msg.to_string()),
+                error: Some(msg.to_owned()),
                 duration_ms: 0,
                 timed_out: false,
             });
@@ -5331,9 +5337,9 @@ impl Core {
     /// (`|1|…`) and invalid ones are skipped with a count.
     pub fn import_known_hosts(&self, text: String) -> Result<KnownHostsImport, FfiError> {
         self.with_state_mut(|state| {
-            let mut imported = 0u32;
-            let mut skipped_hashed = 0u32;
-            let mut skipped_invalid = 0u32;
+            let mut imported = 0_u32;
+            let mut skipped_hashed = 0_u32;
+            let mut skipped_invalid = 0_u32;
             for line in text.lines() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with('#') {
@@ -5411,7 +5417,7 @@ impl Core {
             let vault =
                 Vault::open(&state.storage, &state.keyset, &vid).map_err(FfiError::other)?;
             let mut created_ids = Vec::new();
-            let mut skipped = 0u32;
+            let mut skipped = 0_u32;
             for s in sessions {
                 let proto = if s.protocol.is_empty() {
                     "ssh"
@@ -5445,7 +5451,7 @@ impl Core {
                         user: s.proxy_user.clone(),
                         key_item_id: None,
                         password_item_id: None,
-                        extra: std::collections::BTreeMap::new(),
+                        extra: BTreeMap::new(),
                         hop_ref: None,
                     }]
                 } else {
@@ -5473,7 +5479,7 @@ impl Core {
                             .unwrap_or(1080),
                         username: Some(s.proxy_user.clone()).filter(|u| !u.is_empty()),
                         password_item_id: None,
-                        extra: std::collections::BTreeMap::new(),
+                        extra: BTreeMap::new(),
                     }),
                     _ => None,
                 };
@@ -5494,7 +5500,7 @@ impl Core {
                     record_sessions: false,
                     agent_forward: false,
                     system_agent_public_key: None,
-                    extra: std::collections::BTreeMap::new(),
+                    extra: BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
                 vault
@@ -5524,7 +5530,7 @@ impl Core {
             .map_err(FfiError::other)?;
 
             let mut items_buf: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
-            let mut count = 0u32;
+            let mut count = 0_u32;
             for m in vault.list_items().map_err(FfiError::other)? {
                 if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
                     put_len_bytes(&mut items_buf, &item.item_id);
@@ -5815,7 +5821,7 @@ impl VaultMove<'_> {
                                 changed = true;
                                 format!("{lead}ref={}/{uid}", self.new)
                             }
-                            _ => token.to_string(),
+                            _ => token.to_owned(),
                         }
                     })
                     .collect::<Vec<_>>()
@@ -5976,7 +5982,7 @@ fn rehome_references(
     moved_vid: &[u8],
     moved: &VaultMove,
 ) -> Result<(), FfiError> {
-    let mut skipped = 0usize;
+    let mut skipped = 0_usize;
     for rec in storage.list_vaults()? {
         if rec.vault_id == moved_vid {
             continue;
@@ -6130,7 +6136,7 @@ impl Core {
                     record_sessions: false,
                     agent_forward: false,
                     system_agent_public_key: None,
-                    extra: std::collections::BTreeMap::new(),
+                    extra: BTreeMap::new(),
                 };
                 let json = serde_json::to_vec(&stored).map_err(FfiError::other)?;
                 vault
@@ -6333,7 +6339,7 @@ impl Core {
             }
             let s = std::str::from_utf8(&item.content)
                 .map_err(|_| FfiError::other(format!("{what} is not valid UTF-8")))?;
-            Ok(s.to_string())
+            Ok(s.to_owned())
         })
     }
 
@@ -6346,16 +6352,16 @@ impl Core {
         vault_id: &str,
         group_id: &str,
     ) -> Result<(Vec<MultiExecTarget>, Vec<GroupTargetPlan>), FfiError> {
-        let groups: std::collections::HashMap<String, Vec<String>> = self
-            .list_groups(vault_id.to_string())?
+        let groups: HashMap<String, Vec<String>> = self
+            .list_groups(vault_id.to_owned())?
             .into_iter()
             .map(|g| (g.group_id, g.member_ids))
             .collect();
         if !groups.contains_key(group_id) {
             return Err(FfiError::NotFound);
         }
-        let profiles_map: std::collections::HashMap<String, ConnectionProfile> = self
-            .list_connections(vault_id.to_string())?
+        let profiles_map: HashMap<String, ConnectionProfile> = self
+            .list_connections(vault_id.to_owned())?
             .into_iter()
             .map(|p| (p.profile_id.clone(), p))
             .collect();
@@ -6394,7 +6400,7 @@ impl Core {
                         p.proxy.clone(),
                     );
                     match self.resolve_personal_auth(
-                        vault_id.to_string(),
+                        vault_id.to_owned(),
                         p.uid.clone(),
                         dest,
                         p.user.clone(),
@@ -6761,7 +6767,7 @@ fn connect_with_options(
             // signature would be refused anyway — so the request is simply not
             // made, rather than opening a socket that answers nothing.
             (Some(_), None) => {
-                log::warn!("agent forwarding requested for {host} but no approver is registered")
+                log::warn!("agent forwarding requested for {host} but no approver is registered");
             }
             _ => log::warn!("agent forwarding requested for {host} but it has no key to forward"),
         }
@@ -6810,7 +6816,7 @@ fn connect_with_options(
 /// Linear backoff: the delay before attempt `attempt` (0-based) = `base_ms *
 /// (attempt+1)`.
 fn retry_backoff_ms(attempt: u32, base_ms: u32) -> u64 {
-    base_ms as u64 * (attempt as u64 + 1)
+    u64::from(base_ms) * (u64::from(attempt) + 1)
 }
 
 /// Translates the FFI authentication method into a transport one: the key is loaded into the agent,
@@ -6950,7 +6956,7 @@ fn read_utf8_item(
     }
     let s = std::str::from_utf8(&item.content)
         .map_err(|_| FfiError::other(format!("{what} is not valid UTF-8")))?;
-    Ok(Zeroizing::new(s.to_string()))
+    Ok(Zeroizing::new(s.to_owned()))
 }
 
 /// Laying out a single file onto one host: open SFTP, optionally create the parent
@@ -6978,7 +6984,7 @@ fn parent_dir(path: &str) -> Option<String> {
     let p = path.trim_end_matches('/');
     p.rfind('/').map(|i| {
         if i == 0 {
-            "/".to_string()
+            "/".to_owned()
         } else {
             p[..i].to_string()
         }
@@ -7004,13 +7010,13 @@ fn tags_match(host_tags: &[String], query: &[String], match_all: bool) -> bool {
 /// `visited_groups` breaks cycles, `seen_profiles` deduplicates, `max_depth`
 /// limits the depth. Returns (profiles in traversal order, problems).
 fn flatten_group_members(
-    groups: &std::collections::HashMap<String, Vec<String>>,
+    groups: &HashMap<String, Vec<String>>,
     profiles: &std::collections::HashSet<String>,
     root: &str,
     max_depth: u32,
 ) -> (Vec<String>, Vec<(String, ResolveStatus)>) {
     struct Flattener<'a> {
-        groups: &'a std::collections::HashMap<String, Vec<String>>,
+        groups: &'a HashMap<String, Vec<String>>,
         profiles: &'a std::collections::HashSet<String>,
         max_depth: u32,
         result: Vec<String>,
@@ -7022,7 +7028,7 @@ fn flatten_group_members(
         fn walk(&mut self, gid: &str, depth: u32) {
             if depth > self.max_depth {
                 self.issues
-                    .push((gid.to_string(), ResolveStatus::CycleSkipped));
+                    .push((gid.to_owned(), ResolveStatus::CycleSkipped));
                 return;
             }
             let Some(members) = self.groups.get(gid) else {
@@ -7052,7 +7058,7 @@ fn flatten_group_members(
         max_depth,
         result: Vec::new(),
         seen_profiles: std::collections::HashSet::new(),
-        visited_groups: std::collections::HashSet::from([root.to_string()]),
+        visited_groups: std::collections::HashSet::from([root.to_owned()]),
         issues: Vec::new(),
     };
     f.walk(root, 0);
@@ -7081,11 +7087,11 @@ fn profile_to_target(vault_id: &str, p: ConnectionProfile) -> MultiExecTarget {
 fn profile_auth_to_method(vault_id: &str, auth: ProfileAuth) -> AuthMethod {
     match auth {
         ProfileAuth::Key { key_item_id } => AuthMethod::Agent {
-            vault_id: vault_id.to_string(),
+            vault_id: vault_id.to_owned(),
             key_item_id,
         },
         ProfileAuth::VaultPassword { password_item_id } => AuthMethod::VaultPassword {
-            vault_id: vault_id.to_string(),
+            vault_id: vault_id.to_owned(),
             password_item_id,
         },
         ProfileAuth::PromptPassword => AuthMethod::Password {
@@ -7255,7 +7261,7 @@ impl AccountStatePayload {
         if r.pos != b.len() {
             return Err(fmt());
         }
-        Ok(AccountStatePayload {
+        Ok(Self {
             personal_vault_id: vid,
             default_username: String::from_utf8(user).map_err(|_| fmt())?,
         })
@@ -7463,7 +7469,7 @@ fn jump_to_stored(j: JumpHost) -> Result<StoredJump, FfiError> {
         key_item_id,
         password_item_id,
         hop_ref,
-        extra: std::collections::BTreeMap::new(),
+        extra: BTreeMap::new(),
     })
 }
 
@@ -7494,7 +7500,7 @@ fn proxy_to_stored(p: ProxyConfig) -> Result<StoredProxy, FfiError> {
         port: p.port,
         username: p.username.filter(|u| !u.is_empty()),
         password_item_id,
-        extra: std::collections::BTreeMap::new(),
+        extra: BTreeMap::new(),
     })
 }
 
@@ -7513,7 +7519,7 @@ fn stored_proxy_to_config(vault_id: &str, s: StoredProxy) -> ProxyConfig {
         password: s
             .password_item_id
             .map(|password_item_id| ProxyPassword::Vault {
-                vault_id: vault_id.to_string(),
+                vault_id: vault_id.to_owned(),
                 password_item_id,
             }),
     }
@@ -7638,18 +7644,18 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
                 // vault as the profile. We set this `vault_id`.
                 auth: match (j.password_item_id, j.key_item_id) {
                     (Some(password_item_id), _) => AuthMethod::VaultPassword {
-                        vault_id: vault_id.to_string(),
+                        vault_id: vault_id.to_owned(),
                         password_item_id,
                     },
                     (None, Some(key_item_id)) => AuthMethod::Agent {
-                        vault_id: vault_id.to_string(),
+                        vault_id: vault_id.to_owned(),
                         key_item_id,
                     },
                     // A legacy import may have left the key unassigned: an empty id
                     // preserves the previous semantics "the UI will assign it later" (a connect with
                     // it will give NotFound).
                     (None, None) => AuthMethod::Agent {
-                        vault_id: vault_id.to_string(),
+                        vault_id: vault_id.to_owned(),
                         key_item_id: String::new(),
                     },
                 },
@@ -7709,7 +7715,7 @@ fn backup_aad(vault_id: &[u8], kdf_blob: &[u8]) -> AssociatedData {
     tag.extend_from_slice(BACKUP_MAGIC);
     tag.push(BACKUP_VERSION);
     tag.extend_from_slice(kdf_blob);
-    AssociatedData::new(vault_id.to_vec(), tag, BACKUP_VERSION as u64)
+    AssociatedData::new(vault_id.to_vec(), tag, u64::from(BACKUP_VERSION))
 }
 
 /// Appends a length-prefixed (u32 BE) blob.
@@ -7816,7 +7822,7 @@ fn parse_putty_reg(text: &str) -> Vec<PuttySession> {
 
 /// Strips the quotes from a `.reg` string value.
 fn unquote_reg(v: &str) -> String {
-    v.trim().trim_matches('"').to_string()
+    v.trim().trim_matches('"').to_owned()
 }
 
 /// Parses `dword:0000XXXX` (hex) into `u32`; otherwise 0.
@@ -7875,7 +7881,7 @@ fn parse_proxy_jump(spec: Option<&str>) -> Vec<StoredJump> {
             continue;
         }
         let (user, hostport) = match hop.split_once('@') {
-            Some((u, hp)) => (u.to_string(), hp),
+            Some((u, hp)) => (u.to_owned(), hp),
             None => (String::new(), hop),
         };
         let (host, port) = split_host_port(hostport);
@@ -7885,7 +7891,7 @@ fn parse_proxy_jump(spec: Option<&str>) -> Vec<StoredJump> {
             user,
             key_item_id: None,
             password_item_id: None,
-            extra: std::collections::BTreeMap::new(),
+            extra: BTreeMap::new(),
             hop_ref: None,
         });
     }
@@ -7902,19 +7908,19 @@ fn parse_proxy_jump(spec: Option<&str>) -> Vec<StoredJump> {
 fn split_host_port(s: &str) -> (String, u16) {
     if let Some(rest) = s.strip_prefix('[') {
         if let Some((h, p)) = rest.split_once("]:") {
-            return (h.to_string(), p.parse().unwrap_or(22));
+            return (h.to_owned(), p.parse().unwrap_or(22));
         }
         if let Some(h) = rest.strip_suffix(']') {
-            return (h.to_string(), 22);
+            return (h.to_owned(), 22);
         }
     }
     // A bare IPv6 literal (>1 colon, no brackets) — no port specified.
     if s.matches(':').count() > 1 {
-        return (s.to_string(), 22);
+        return (s.to_owned(), 22);
     }
     match s.rsplit_once(':') {
-        Some((h, p)) => (h.to_string(), p.parse().unwrap_or(22)),
-        None => (s.to_string(), 22),
+        Some((h, p)) => (h.to_owned(), p.parse().unwrap_or(22)),
+        None => (s.to_owned(), 22),
     }
 }
 
@@ -8189,8 +8195,8 @@ pub enum FfiAlgorithmPolicy {
 impl From<FfiAlgorithmPolicy> for unissh_ssh_transport::AlgorithmPolicy {
     fn from(p: FfiAlgorithmPolicy) -> Self {
         match p {
-            FfiAlgorithmPolicy::Balanced => unissh_ssh_transport::AlgorithmPolicy::Balanced,
-            FfiAlgorithmPolicy::Modern => unissh_ssh_transport::AlgorithmPolicy::Modern,
+            FfiAlgorithmPolicy::Balanced => Self::Balanced,
+            FfiAlgorithmPolicy::Modern => Self::Modern,
         }
     }
 }
@@ -8301,7 +8307,7 @@ impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
         self.inner.approve(AgentSignRequest {
             id: next_agent_sign_id(),
             origin: AgentSignOrigin::Forwarded,
-            host: host.to_string(),
+            host: host.to_owned(),
             key: String::new(),
             vault: String::new(),
             user: login
@@ -8344,7 +8350,7 @@ fn userauth_login(blob: &[u8]) -> Option<(String, String)> {
     b = &b[1..];
     let user = std::str::from_utf8(take(&mut b)?).ok()?;
     let service = std::str::from_utf8(take(&mut b)?).ok()?;
-    Some((user.to_string(), service.to_string()))
+    Some((user.to_owned(), service.to_owned()))
 }
 
 /// Asked when the server wants something no stored credential can answer — a
@@ -8381,8 +8387,8 @@ impl unissh_ssh_transport::AuthPrompter for PrompterBridge {
             host: self.host.clone(),
             port: self.port,
             user: self.user.clone(),
-            name: name.to_string(),
-            instruction: instruction.to_string(),
+            name: name.to_owned(),
+            instruction: instruction.to_owned(),
             prompts: prompts
                 .iter()
                 .map(|p| AuthPromptField {
@@ -8480,7 +8486,7 @@ impl RecordingBuf {
 /// recording for the rest of the session.
 fn split_utf8(bytes: Vec<u8>) -> (String, Vec<u8>) {
     match std::str::from_utf8(&bytes) {
-        Ok(s) => (s.to_string(), Vec::new()),
+        Ok(s) => (s.to_owned(), Vec::new()),
         Err(e) => {
             let valid = e.valid_up_to();
             match e.error_len() {
@@ -8508,7 +8514,7 @@ impl SessionRecorder {
             "timestamp": started_unix,
             "title": title,
         });
-        SessionRecorder {
+        Self {
             started: std::time::Instant::now(),
             buf: Mutex::new(RecordingBuf {
                 body: format!("{header}\n"),
@@ -8849,7 +8855,7 @@ impl ExecHandleFfi {
     /// `on_exit` was delivered), `false` — a timeout.
     pub fn wait_exit(&self, timeout_ms: u32) -> Result<bool, FfiError> {
         let deadline =
-            std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64);
+            std::time::Instant::now() + std::time::Duration::from_millis(u64::from(timeout_ms));
         loop {
             if self.handle.has_exited() {
                 return Ok(true);
@@ -9267,7 +9273,7 @@ impl OnboardInitiatorHandle {
     pub fn start(code: Vec<u8>) -> Arc<Self> {
         let code = Zeroizing::new(code);
         let (init, msg1) = OnboardInitiator::start(&code);
-        Arc::new(OnboardInitiatorHandle {
+        Arc::new(Self {
             inner: Mutex::new(Some(init)),
             msg1,
         })
@@ -9296,7 +9302,7 @@ impl OnboardResponderHandle {
     pub fn respond(code: Vec<u8>, msg1: Vec<u8>) -> Result<Arc<Self>, FfiError> {
         let code = Zeroizing::new(code);
         let (resp, msg2) = OnboardResponder::respond(&code, &msg1).map_err(map_keychain_err)?;
-        Ok(Arc::new(OnboardResponderHandle {
+        Ok(Arc::new(Self {
             inner: Mutex::new(Some(resp)),
             msg2,
         }))
@@ -9562,10 +9568,12 @@ impl SftpFfi {
                     // cancellation cannot rely on a pool notification.
                     self.pool_cv
                         .wait_timeout(p, std::time::Duration::from_millis(50))
-                        .unwrap_or_else(|e| e.into_inner())
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .0
                 } else {
-                    self.pool_cv.wait(p).unwrap_or_else(|e| e.into_inner())
+                    self.pool_cv
+                        .wait(p)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                 };
             }
         }
@@ -9741,7 +9749,7 @@ impl SftpFfi {
     /// A relay scratch file is private and owned by this call on every exit.
     pub fn relay_to(
         &self,
-        target: Arc<SftpFfi>,
+        target: Arc<Self>,
         remote: String,
         destination: String,
         progress: Option<Arc<dyn SftpProgressObserver>>,
@@ -10204,7 +10212,7 @@ fn derive_db_key(keyset: &unissh_keychain::UnlockedKeyset) -> Zeroizing<[u8; 32]
     ikm.extend_from_slice(e_secret.as_ref());
 
     let hk = Hkdf::<Sha256>::new(Some(b"unissh-db-key-salt-v1"), ikm.as_ref());
-    let mut key = Zeroizing::new([0u8; 32]);
+    let mut key = Zeroizing::new([0_u8; 32]);
     hk.expand(b"unissh-db-key-v1", key.as_mut())
         .expect("32 is a valid HKDF length");
     key
@@ -10280,7 +10288,7 @@ mod sftp_pool_tests {
     // server is needed: cancelling the waiter must never reach channel I/O.
     fn busy_session() -> SftpFfi {
         SftpFfi {
-            shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shutdown: Arc::new(AtomicBool::new(false)),
             client: Mutex::new(None),
             pool: Mutex::new(SftpPool {
                 idle: Vec::new(),
@@ -10466,7 +10474,7 @@ mod recorder_tests {
         let rec = SessionRecorder::new(80, 24, "t", 0);
         // Every byte here encodes to six characters (\u0001), so raw-byte
         // accounting would let roughly six times the cap through.
-        let chunk = vec![0x01u8; 64 * 1024];
+        let chunk = vec![0x01_u8; 64 * 1024];
         for _ in 0..200 {
             rec.record(&chunk);
         }
@@ -10520,7 +10528,7 @@ mod tests {
         let rederived = derive_escrow_auth_key(Some(&argon_key), &sk);
         assert_eq!(
             &rederived.expose_bytes()[..],
-            &creds.k_auth[..],
+            &*creds.k_auth,
             "re-deriving with the returned params reproduces K_auth"
         );
     }
@@ -10666,7 +10674,7 @@ mod tests {
         let bak = {
             let mut p = path.as_os_str().to_owned();
             p.push(".pre-migration.bak");
-            std::path::PathBuf::from(p)
+            PathBuf::from(p)
         };
         // No sidecar → no-op (no panic, no .bak).
         backup_keyset_sidecar(&path);
@@ -10816,7 +10824,7 @@ mod tests {
                      {"host":"j2","port":22,"user":"","key_item_id":""}]
         }"#;
         let stored: StoredProfile = serde_json::from_str(legacy).unwrap();
-        let prof = stored_to_profile("vaultA", "p1".to_string(), stored);
+        let prof = stored_to_profile("vaultA", "p1".to_owned(), stored);
         assert!(matches!(
             &prof.auth,
             ProfileAuth::Key { key_item_id } if key_item_id == "k1"
@@ -10836,7 +10844,7 @@ mod tests {
         let legacy_pw = r#"{"label":"L","host":"h","port":22,"user":"u",
                             "key_item_id":null,"jumps":[]}"#;
         let stored: StoredProfile = serde_json::from_str(legacy_pw).unwrap();
-        let prof = stored_to_profile("vaultA", "p2".to_string(), stored);
+        let prof = stored_to_profile("vaultA", "p2".to_owned(), stored);
         assert!(matches!(prof.auth, ProfileAuth::PromptPassword));
     }
 
@@ -10846,27 +10854,27 @@ mod tests {
     fn vault_password_profile_roundtrip() {
         let prof = ConnectionProfile {
             proxy: None,
-            profile_id: "p".to_string(),
-            uid: "uid-fixed".to_string(),
-            label: "L".to_string(),
-            host: "h".to_string(),
+            profile_id: "p".to_owned(),
+            uid: "uid-fixed".to_owned(),
+            label: "L".to_owned(),
+            host: "h".to_owned(),
             port: 22,
-            user: "u".to_string(),
+            user: "u".to_owned(),
             auth: ProfileAuth::VaultPassword {
-                password_item_id: "pw1".to_string(),
+                password_item_id: "pw1".to_owned(),
             },
             username_template: None,
             jumps: vec![JumpHost {
-                host: "j".to_string(),
+                host: "j".to_owned(),
                 port: 22,
-                user: "ju".to_string(),
+                user: "ju".to_owned(),
                 auth: AuthMethod::VaultPassword {
-                    vault_id: "vp".to_string(),
-                    password_item_id: "pw2".to_string(),
+                    vault_id: "vp".to_owned(),
+                    password_item_id: "pw2".to_owned(),
                 },
                 hop_ref: None,
             }],
-            tags: vec!["prod".to_string()],
+            tags: vec!["prod".to_owned()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             agent_forward: false,
@@ -10896,7 +10904,7 @@ mod tests {
                 .map(|j| jump_to_stored(j).unwrap())
                 .collect(),
             tags: prof.tags.clone(),
-            extra: std::collections::BTreeMap::new(),
+            extra: BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             agent_forward: false,
@@ -10904,7 +10912,7 @@ mod tests {
         };
         let json = serde_json::to_string(&stored).unwrap();
         let back: StoredProfile = serde_json::from_str(&json).unwrap();
-        let prof2 = stored_to_profile("vp", "p".to_string(), back);
+        let prof2 = stored_to_profile("vp", "p".to_owned(), back);
         assert!(matches!(
             &prof2.auth,
             ProfileAuth::VaultPassword { password_item_id } if password_item_id == "pw1"
@@ -10917,18 +10925,18 @@ mod tests {
         ));
         // The uid survives the round-trip (not re-minted when reading a saved one).
         assert_eq!(prof2.uid, "uid-fixed");
-        assert_eq!(prof2.tags, vec!["prod".to_string()]);
+        assert_eq!(prof2.tags, vec!["prod".to_owned()]);
     }
 
     /// An inline password in a jump host is not serialized into a profile — an error.
     #[test]
     fn inline_jump_password_is_rejected() {
         let jump = JumpHost {
-            host: "j".to_string(),
+            host: "j".to_owned(),
             port: 22,
-            user: "u".to_string(),
+            user: "u".to_owned(),
             auth: AuthMethod::Password {
-                password: "sekret".to_string(),
+                password: "sekret".to_owned(),
             },
             hop_ref: None,
         };
@@ -10989,7 +10997,7 @@ mod tests {
             username_template: None,
             jumps: vec![stored],
             tags: vec![],
-            extra: std::collections::BTreeMap::new(),
+            extra: BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             agent_forward: false,
@@ -11058,7 +11066,7 @@ mod tests {
             user: "alice".into(),
             key_item_id: Some("id_ed25519".into()),
             password_item_id: None,
-            extra: std::collections::BTreeMap::new(),
+            extra: BTreeMap::new(),
         };
         let json = serde_json::to_string(&stored).unwrap();
         let back: StoredIdentity = serde_json::from_str(&json).unwrap();
@@ -11160,7 +11168,7 @@ mod tests {
             profile_uid: "uid1".into(),
             identity_item_id: "ident1".into(),
             destination_pin: "h:22".into(),
-            extra: std::collections::BTreeMap::new(),
+            extra: BTreeMap::new(),
         };
         let json = serde_json::to_string(&stored).unwrap();
         let back: StoredBinding = serde_json::from_str(&json).unwrap();
@@ -11183,7 +11191,12 @@ mod tests {
             sp.extra.get("future_field").and_then(|v| v.as_str()),
             Some("keep")
         );
-        assert_eq!(sp.extra.get("future_num").and_then(|v| v.as_i64()), Some(7));
+        assert_eq!(
+            sp.extra
+                .get("future_num")
+                .and_then(serde_json::Value::as_i64),
+            Some(7)
+        );
         let out = serde_json::to_string(&sp).unwrap();
         assert!(out.contains("future_field") && out.contains("future_num"));
         // Empty extra → no extra keys.
@@ -11238,7 +11251,7 @@ mod tests {
             sp.extra
                 .get("future")
                 .and_then(|v| v.as_str())
-                .map(str::to_string)
+                .map(str::to_owned)
         };
         {
             let mut guard = core.locked_state();
@@ -11251,13 +11264,13 @@ mod tests {
             let json = serde_json::to_vec(&sp).unwrap();
             vault.put_item(b"p", ITEM_TYPE_CONNECTION, &json).unwrap();
         }
-        assert_eq!(read_future(), Some("keep".to_string()));
+        assert_eq!(read_future(), Some("keep".to_owned()));
         // The current client (which doesn't know "future") edits the profile.
         let mut p = core.get_connection("v".into(), "p".into()).unwrap();
         p.label = "renamed".into();
         core.save_connection("v".into(), p).unwrap();
         // The field survived the edit.
-        assert_eq!(read_future(), Some("keep".to_string()));
+        assert_eq!(read_future(), Some("keep".to_owned()));
     }
 
     /// B3.1/B3.2: binding CRUD against a live Core + first-bind guard (a silent
@@ -11824,30 +11837,30 @@ mod tests {
         let legacy = r#"{"label":"L","host":"h","port":22,"user":"u",
                          "key_item_id":"k","jumps":[]}"#;
         let stored: StoredProfile = serde_json::from_str(legacy).unwrap();
-        let prof = stored_to_profile("v", "p".to_string(), stored);
+        let prof = stored_to_profile("v", "p".to_owned(), stored);
         assert!(prof.tags.is_empty());
     }
 
     #[test]
     fn tag_matching_any_and_all() {
-        let host = ["prod".to_string(), "web".to_string(), "eu".to_string()];
+        let host = ["prod".to_owned(), "web".to_owned(), "eu".to_owned()];
         // any: the intersection is non-empty
-        assert!(tags_match(&host, &["prod".to_string()], false));
+        assert!(tags_match(&host, &["prod".to_owned()], false));
         assert!(tags_match(
             &host,
-            &["x".to_string(), "web".to_string()],
+            &["x".to_owned(), "web".to_owned()],
             false
         ));
-        assert!(!tags_match(&host, &["x".to_string()], false));
+        assert!(!tags_match(&host, &["x".to_owned()], false));
         // all: query ⊆ the host's tags
         assert!(tags_match(
             &host,
-            &["prod".to_string(), "web".to_string()],
+            &["prod".to_owned(), "web".to_owned()],
             true
         ));
         assert!(!tags_match(
             &host,
-            &["prod".to_string(), "db".to_string()],
+            &["prod".to_owned(), "db".to_owned()],
             true
         ));
         // an empty query → we select nothing (protection against "exec on everything")
@@ -11861,12 +11874,12 @@ mod tests {
     fn flatten_group_members_respects_depth_limit() {
         use std::collections::{HashMap, HashSet};
         // A chain g0->g1->...->g40, each with the next group + a terminal profile.
-        let profiles: HashSet<String> = ["p_end".to_string()].into_iter().collect();
+        let profiles: HashSet<String> = ["p_end".to_owned()].into_iter().collect();
         let mut groups: HashMap<String, Vec<String>> = HashMap::new();
         for i in 0..40 {
             groups.insert(format!("g{i}"), vec![format!("g{}", i + 1)]);
         }
-        groups.insert("g40".to_string(), vec!["p_end".to_string()]);
+        groups.insert("g40".to_owned(), vec!["p_end".to_owned()]);
         // must not overflow the stack; beyond the limit — CycleSkipped, not a panic.
         let (members, issues) = flatten_group_members(&groups, &profiles, "g0", GROUP_MAX_DEPTH);
         assert!(issues
@@ -11879,12 +11892,14 @@ mod tests {
     #[test]
     fn flatten_group_members_dedup_cycle_depth() {
         use std::collections::HashMap;
-        let profiles: std::collections::HashSet<String> =
-            ["p1", "p2", "p3"].iter().map(|s| s.to_string()).collect();
+        let profiles: std::collections::HashSet<String> = ["p1", "p2", "p3"]
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         let mut groups: HashMap<String, Vec<String>> = HashMap::new();
         // A → [p1, B, p2]; B → [p2, p3, A(cycle)]
-        groups.insert("A".to_string(), vec!["p1".into(), "B".into(), "p2".into()]);
-        groups.insert("B".to_string(), vec!["p2".into(), "p3".into(), "A".into()]);
+        groups.insert("A".to_owned(), vec!["p1".into(), "B".into(), "p2".into()]);
+        groups.insert("B".to_owned(), vec!["p2".into(), "p3".into(), "A".into()]);
 
         let (members, issues) = flatten_group_members(&groups, &profiles, "A", GROUP_MAX_DEPTH);
         // profiles are expanded once each, in traversal order
@@ -11896,7 +11911,7 @@ mod tests {
 
         // a dangling member and a member that is neither a group nor a profile
         let mut g2: HashMap<String, Vec<String>> = HashMap::new();
-        g2.insert("G".to_string(), vec!["p1".into(), "ghost".into()]);
+        g2.insert("G".to_owned(), vec!["p1".into(), "ghost".into()]);
         let (m2, iss2) = flatten_group_members(&g2, &profiles, "G", GROUP_MAX_DEPTH);
         assert_eq!(m2, vec!["p1"]);
         assert!(iss2

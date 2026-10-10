@@ -104,8 +104,10 @@ async fn push(
     for it in &items {
         let is_acl = matches!(
             it.parsed.tag(),
-            Some(crate::codec::ObjectTag::MembershipManifest)
-                | Some(crate::codec::ObjectTag::MembershipGrant)
+            Some(
+                crate::codec::ObjectTag::MembershipManifest
+                    | crate::codec::ObjectTag::MembershipGrant
+            )
         );
         if is_acl || validate {
             crate::crypto::verify_record_sig(&it.bytes)?;
@@ -178,8 +180,8 @@ async fn delta(
     Query(q): Query<DeltaQuery>,
 ) -> AppResult<Json<DeltaResp>> {
     let cursor = q.cursor.unwrap_or(0).max(0);
-    let max = state.config.limits.delta_max_page_size as i64;
-    let def = state.config.limits.delta_page_size as i64;
+    let max = i64::from(state.config.limits.delta_max_page_size);
+    let def = i64::from(state.config.limits.delta_page_size);
     let limit = q.limit.unwrap_or(def).clamp(1, max);
 
     // A1: membership-scoped — a device sees only vaults where it is owner/member.

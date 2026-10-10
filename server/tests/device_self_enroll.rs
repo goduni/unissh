@@ -37,7 +37,7 @@ async fn device_count(app: &TestApp, account_id_b64: &str) -> i64 {
         .store
         .fetch_scalar_i64(
             "SELECT COUNT(*) FROM devices WHERE account_id = ?",
-            vec![Val::b(&acct[..])],
+            vec![Val::b((&*acct))],
         )
         .await
         .unwrap()
@@ -51,8 +51,8 @@ async fn self_enroll_happy_path_new_device_can_login() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
-    let claim_device = c["device_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
+    let claim_device = c["device_id"].as_str().unwrap().to_owned();
 
     assert_eq!(
         device_count(&app, &account_id).await,
@@ -68,7 +68,7 @@ async fn self_enroll_happy_path_new_device_can_login() {
         body["account_id"], account_id,
         "resolved account must match the claim account"
     );
-    let new_device = body["device_id"].as_str().unwrap().to_string();
+    let new_device = body["device_id"].as_str().unwrap().to_owned();
     assert_ne!(new_device, claim_device, "a DISTINCT device id");
 
     assert_eq!(
@@ -102,7 +102,7 @@ async fn self_enroll_web_device_is_kind_web_and_expires() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
 
     let r = app
         .client
@@ -128,7 +128,7 @@ async fn self_enroll_web_device_is_kind_web_and_expires() {
         .fetch_scalar_i64(
             "SELECT COUNT(*) FROM devices \
              WHERE device_id = ? AND kind = 'web' AND expires_at IS NOT NULL",
-            vec![Val::b(&device_id[..])],
+            vec![Val::b((&*device_id))],
         )
         .await
         .unwrap()
@@ -145,7 +145,7 @@ async fn self_enroll_bad_kind_400() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
 
     let r = app
         .client
@@ -205,12 +205,12 @@ async fn self_enroll_x_key_mismatch_400() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
 
     // A fresh, unrelated x25519 key; ed stays id's, signed by id's ed key → the sig is
     // valid over THIS (rebound) payload, but x no longer matches the account's binding.
     let other_x = X25519Keypair::generate().public.to_bytes();
-    let acct_field = vec![0u8; 16];
+    let acct_field = vec![0_u8; 16];
     let core = CoreReg {
         account_id: acct_field.clone(),
         x25519_pub: other_x,
@@ -238,7 +238,7 @@ async fn self_enroll_suspended_account_403() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
 
     // Suspend the account directly in the store (harness stand-in for the admin path).
     let acct = ids::unb64(&account_id).unwrap();
@@ -264,7 +264,7 @@ async fn self_enroll_label_too_long_400() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
 
     let r = app
         .client
@@ -293,15 +293,15 @@ async fn expired_device_cannot_log_in() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
-    let device_b64 = c["device_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
+    let device_b64 = c["device_id"].as_str().unwrap().to_owned();
 
     let device_id = ids::unb64(&device_b64).unwrap();
     app.state
         .store
         .exec(
             "UPDATE devices SET expires_at = ? WHERE device_id = ?",
-            vec![Val::I(1), Val::b(&device_id[..])],
+            vec![Val::I(1), Val::b((&*device_id))],
         )
         .await
         .unwrap();
@@ -346,18 +346,18 @@ async fn expired_device_cannot_refresh() {
     let app = spawn().await;
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
-    let device_b64 = c["device_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
+    let device_b64 = c["device_id"].as_str().unwrap().to_owned();
 
     // A valid session first (device not yet expired), then expire the device.
     let tokens = login_tokens_v2(&app, &id, &account_id, &device_b64).await;
-    let refresh = tokens["refresh_token"].as_str().unwrap().to_string();
+    let refresh = tokens["refresh_token"].as_str().unwrap().to_owned();
     let device_id = ids::unb64(&device_b64).unwrap();
     app.state
         .store
         .exec(
             "UPDATE devices SET expires_at = ? WHERE device_id = ?",
-            vec![Val::I(1), Val::b(&device_id[..])],
+            vec![Val::I(1), Val::b((&*device_id))],
         )
         .await
         .unwrap();

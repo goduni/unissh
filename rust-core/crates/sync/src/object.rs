@@ -38,24 +38,24 @@ pub enum ObjectTag {
 impl ObjectTag {
     pub(crate) fn to_u8(self) -> u8 {
         match self {
-            ObjectTag::Vault => 1,
-            ObjectTag::Item => 2,
-            ObjectTag::MembershipManifest => 3,
-            ObjectTag::MembershipGrant => 4,
-            ObjectTag::Audit => 5,
-            ObjectTag::Keyset => 6,
-            ObjectTag::AccountState => 7,
+            Self::Vault => 1,
+            Self::Item => 2,
+            Self::MembershipManifest => 3,
+            Self::MembershipGrant => 4,
+            Self::Audit => 5,
+            Self::Keyset => 6,
+            Self::AccountState => 7,
         }
     }
     pub(crate) fn from_u8(v: u8) -> Option<Self> {
         match v {
-            1 => Some(ObjectTag::Vault),
-            2 => Some(ObjectTag::Item),
-            3 => Some(ObjectTag::MembershipManifest),
-            4 => Some(ObjectTag::MembershipGrant),
-            5 => Some(ObjectTag::Audit),
-            6 => Some(ObjectTag::Keyset),
-            7 => Some(ObjectTag::AccountState),
+            1 => Some(Self::Vault),
+            2 => Some(Self::Item),
+            3 => Some(Self::MembershipManifest),
+            4 => Some(Self::MembershipGrant),
+            5 => Some(Self::Audit),
+            6 => Some(Self::Keyset),
+            7 => Some(Self::AccountState),
             _ => None,
         }
     }
@@ -117,13 +117,13 @@ impl SyncObject {
     /// The object's type tag.
     pub fn tag(&self) -> ObjectTag {
         match self {
-            SyncObject::Vault(_) => ObjectTag::Vault,
-            SyncObject::Item(_) => ObjectTag::Item,
-            SyncObject::MembershipManifest(_) => ObjectTag::MembershipManifest,
-            SyncObject::MembershipGrant(_) => ObjectTag::MembershipGrant,
-            SyncObject::Audit(_) => ObjectTag::Audit,
-            SyncObject::Keyset(_) => ObjectTag::Keyset,
-            SyncObject::AccountState(_) => ObjectTag::AccountState,
+            Self::Vault(_) => ObjectTag::Vault,
+            Self::Item(_) => ObjectTag::Item,
+            Self::MembershipManifest(_) => ObjectTag::MembershipManifest,
+            Self::MembershipGrant(_) => ObjectTag::MembershipGrant,
+            Self::Audit(_) => ObjectTag::Audit,
+            Self::Keyset(_) => ObjectTag::Keyset,
+            Self::AccountState(_) => ObjectTag::AccountState,
         }
     }
 
@@ -131,13 +131,13 @@ impl SyncObject {
     /// instance-level object with no `vault_id` → `None`.
     pub fn vault_id(&self) -> Option<&[u8]> {
         match self {
-            SyncObject::Vault(v) => Some(&v.vault_id),
-            SyncObject::Item(i) => Some(&i.vault_id),
-            SyncObject::MembershipManifest(m) => Some(&m.vault_id),
-            SyncObject::MembershipGrant(g) => Some(&g.vault_id),
-            SyncObject::Audit(a) => Some(&a.vault_id),
-            SyncObject::Keyset(_) => None,
-            SyncObject::AccountState(_) => None,
+            Self::Vault(v) => Some(&v.vault_id),
+            Self::Item(i) => Some(&i.vault_id),
+            Self::MembershipManifest(m) => Some(&m.vault_id),
+            Self::MembershipGrant(g) => Some(&g.vault_id),
+            Self::Audit(a) => Some(&a.vault_id),
+            Self::Keyset(_) => None,
+            Self::AccountState(_) => None,
         }
     }
 
@@ -145,11 +145,11 @@ impl SyncObject {
     /// `MembershipGrant`/`MembershipManifest` carry an epoch; `Audit`/`Keyset` do not.
     pub fn key_epoch(&self) -> Option<u64> {
         match self {
-            SyncObject::Vault(v) => Some(v.key_epoch),
-            SyncObject::Item(i) => Some(i.key_epoch),
-            SyncObject::MembershipManifest(m) => Some(m.key_epoch),
-            SyncObject::MembershipGrant(g) => Some(g.key_epoch),
-            SyncObject::Audit(_) | SyncObject::Keyset(_) | SyncObject::AccountState(_) => None,
+            Self::Vault(v) => Some(v.key_epoch),
+            Self::Item(i) => Some(i.key_epoch),
+            Self::MembershipManifest(m) => Some(m.key_epoch),
+            Self::MembershipGrant(g) => Some(g.key_epoch),
+            Self::Audit(_) | Self::Keyset(_) | Self::AccountState(_) => None,
         }
     }
 }
@@ -189,7 +189,7 @@ impl<'a> Reader<'a> {
     }
     fn u64(&mut self) -> Result<u64, SyncError> {
         let s = self.take(8)?;
-        let mut a = [0u8; 8];
+        let mut a = [0_u8; 8];
         a.copy_from_slice(s);
         Ok(u64::from_be_bytes(a))
     }
@@ -243,7 +243,7 @@ fn role_u8(r: MemberRole) -> u8 {
     }
 }
 fn role_from(v: u8) -> Result<MemberRole, SyncError> {
-    MemberRole::from_i64(v as i64).ok_or(SyncError::Format)
+    MemberRole::from_i64(i64::from(v)).ok_or(SyncError::Format)
 }
 
 impl SyncObject {
@@ -252,13 +252,13 @@ impl SyncObject {
         let mut out = Vec::new();
         out.push(self.tag().to_u8());
         match self {
-            SyncObject::Vault(v) => {
+            Self::Vault(v) => {
                 put_bytes(&mut out, &v.vault_id)?;
                 out.push(sync_target_u8(v.sync_target));
                 put_bytes(&mut out, &v.name_blob)?;
                 put_bytes(&mut out, &v.wrapped_vk)?;
                 out.extend_from_slice(&v.version.to_be_bytes());
-                out.push(v.tombstone as u8);
+                out.push(u8::from(v.tombstone));
                 put_bytes(&mut out, &v.signature)?;
                 put_bytes(&mut out, &v.author_pubkey)?;
                 out.extend_from_slice(&v.key_epoch.to_be_bytes());
@@ -268,27 +268,27 @@ impl SyncObject {
                 // unambiguously determined by the transport's tenant. Sending it is pointless and undesirable
                 // (we do not hand the server the binding map). from_bytes restores it empty.
             }
-            SyncObject::Item(i) => {
+            Self::Item(i) => {
                 put_bytes(&mut out, &i.vault_id)?;
                 put_bytes(&mut out, &i.item_id)?;
                 out.extend_from_slice(&i.item_type.to_be_bytes());
                 put_bytes(&mut out, &i.content_blob)?;
                 put_bytes(&mut out, &i.wrapped_item_key)?;
                 out.extend_from_slice(&i.version.to_be_bytes());
-                out.push(i.tombstone as u8);
+                out.push(u8::from(i.tombstone));
                 put_bytes(&mut out, &i.signature)?;
                 put_bytes(&mut out, &i.author_pubkey)?;
                 out.extend_from_slice(&i.key_epoch.to_be_bytes());
                 // created_at/updated_at are storage-owned, NOT synced.
             }
-            SyncObject::MembershipManifest(m) => {
+            Self::MembershipManifest(m) => {
                 put_bytes(&mut out, &m.vault_id)?;
                 out.extend_from_slice(&m.key_epoch.to_be_bytes());
                 put_bytes(&mut out, &m.manifest_blob)?;
                 put_bytes(&mut out, &m.signature)?;
                 put_bytes(&mut out, &m.author_pubkey)?;
             }
-            SyncObject::MembershipGrant(g) => {
+            Self::MembershipGrant(g) => {
                 put_bytes(&mut out, &g.vault_id)?;
                 put_bytes(&mut out, &g.member_pubkey)?;
                 out.extend_from_slice(&g.key_epoch.to_be_bytes());
@@ -300,16 +300,16 @@ impl SyncObject {
                 put_bytes(&mut out, &g.signature)?;
                 put_bytes(&mut out, &g.author_pubkey)?;
             }
-            SyncObject::Audit(a) => {
+            Self::Audit(a) => {
                 put_bytes(&mut out, &a.vault_id)?;
                 put_bytes(&mut out, &a.entry_blob)?;
                 put_bytes(&mut out, &a.signature)?;
                 put_bytes(&mut out, &a.author_pubkey)?;
             }
-            SyncObject::Keyset(b) => {
+            Self::Keyset(b) => {
                 put_bytes(&mut out, b)?;
             }
-            SyncObject::AccountState(a) => {
+            Self::AccountState(a) => {
                 // version:u64be (fixed, also in the signed content) || payload ||
                 // signature || author_pubkey (open column for the delta filter).
                 out.extend_from_slice(&a.version.to_be_bytes());
@@ -338,7 +338,7 @@ impl SyncObject {
                 let author_pubkey = r.bytes()?;
                 let key_epoch = r.u64()?;
                 let cache_policy = cache_policy_from(r.u8()?)?;
-                SyncObject::Vault(VaultRecord {
+                Self::Vault(VaultRecord {
                     vault_id,
                     sync_target,
                     name_blob,
@@ -367,7 +367,7 @@ impl SyncObject {
                 let signature = r.bytes()?;
                 let author_pubkey = r.bytes()?;
                 let key_epoch = r.u64()?;
-                SyncObject::Item(ItemRecord {
+                Self::Item(ItemRecord {
                     vault_id,
                     item_id,
                     item_type,
@@ -388,7 +388,7 @@ impl SyncObject {
                 let manifest_blob = r.bytes()?;
                 let signature = r.bytes()?;
                 let author_pubkey = r.bytes()?;
-                SyncObject::MembershipManifest(MembershipManifest {
+                Self::MembershipManifest(MembershipManifest {
                     vault_id,
                     key_epoch,
                     manifest_blob,
@@ -405,7 +405,7 @@ impl SyncObject {
                 let wrapped_vk = r.bytes()?;
                 let signature = r.bytes()?;
                 let author_pubkey = r.bytes()?;
-                SyncObject::MembershipGrant(MembershipGrant {
+                Self::MembershipGrant(MembershipGrant {
                     vault_id,
                     member_pubkey,
                     key_epoch,
@@ -421,20 +421,20 @@ impl SyncObject {
                 let entry_blob = r.bytes()?;
                 let signature = r.bytes()?;
                 let author_pubkey = r.bytes()?;
-                SyncObject::Audit(AuditObject {
+                Self::Audit(AuditObject {
                     vault_id,
                     entry_blob,
                     signature,
                     author_pubkey,
                 })
             }
-            ObjectTag::Keyset => SyncObject::Keyset(r.bytes()?),
+            ObjectTag::Keyset => Self::Keyset(r.bytes()?),
             ObjectTag::AccountState => {
                 let version = r.u64()?;
                 let payload = r.bytes()?;
                 let signature = r.bytes()?;
                 let author_pubkey = r.bytes()?;
-                SyncObject::AccountState(AccountStateObject {
+                Self::AccountState(AccountStateObject {
                     author_pubkey,
                     version,
                     payload,
@@ -460,8 +460,8 @@ mod tests {
             wrapped_vk: vec![4, 5, 6],
             version: 7,
             tombstone: false,
-            signature: vec![9u8; 67],
-            author_pubkey: vec![0u8; 32],
+            signature: vec![9_u8; 67],
+            author_pubkey: vec![0_u8; 32],
             key_epoch: 2,
             cache_policy: CachePolicy::OfflineAllowed,
             // sync_tenant does not go over the wire → the round-trip restores it empty.
@@ -478,8 +478,8 @@ mod tests {
             wrapped_item_key: vec![5, 6],
             version: 9,
             tombstone: true,
-            signature: vec![7u8; 67],
-            author_pubkey: vec![8u8; 32],
+            signature: vec![7_u8; 67],
+            author_pubkey: vec![8_u8; 32],
             created_at: 0,
             updated_at: 0,
             key_epoch: 3,
@@ -502,15 +502,15 @@ mod tests {
             SyncObject::Audit(AuditObject {
                 vault_id: b"v1".to_vec(),
                 entry_blob: vec![1, 2, 3],
-                signature: vec![4u8; 67],
-                author_pubkey: vec![5u8; 32],
+                signature: vec![4_u8; 67],
+                author_pubkey: vec![5_u8; 32],
             }),
             SyncObject::Keyset(vec![9, 9, 9]),
             SyncObject::AccountState(AccountStateObject {
-                author_pubkey: vec![0xAu8; 32],
+                author_pubkey: vec![0xA_u8; 32],
                 version: 12345,
                 payload: vec![1, 2, 3, 4, 5],
-                signature: vec![0xBu8; 67],
+                signature: vec![0xB_u8; 67],
             }),
         ] {
             let bytes = o.to_bytes().unwrap();
@@ -522,10 +522,10 @@ mod tests {
     #[test]
     fn account_state_tag_is_account_scoped() {
         let o = SyncObject::AccountState(AccountStateObject {
-            author_pubkey: vec![7u8; 32],
+            author_pubkey: vec![7_u8; 32],
             version: 1,
             payload: vec![9],
-            signature: vec![8u8; 67],
+            signature: vec![8_u8; 67],
         });
         assert_eq!(o.tag(), ObjectTag::AccountState);
         // account-scoped: NOT vault-scoped and does NOT carry an epoch.

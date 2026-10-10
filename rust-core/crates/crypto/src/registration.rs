@@ -69,8 +69,8 @@ mod tests {
     fn payload() -> RegistrationPayload {
         RegistrationPayload {
             account_id: b"acc-16-bytes----".to_vec(),
-            x25519_pub: [1u8; 32],
-            ed25519_pub: [2u8; 32],
+            x25519_pub: [1_u8; 32],
+            ed25519_pub: [2_u8; 32],
         }
     }
 

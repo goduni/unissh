@@ -260,7 +260,7 @@ where
     stream.write_all(&request).await?;
 
     // Reply: VN(0) CD DSTPORT(2) DSTIP(4).
-    let mut reply = [0u8; 8];
+    let mut reply = [0_u8; 8];
     stream
         .read_exact(&mut reply)
         .await
@@ -288,7 +288,7 @@ fn socks4_request(
             "socks4 cannot reach an IPv6 destination; use socks5",
         ));
     }
-    let mut req = vec![4u8, 1u8];
+    let mut req = vec![4_u8, 1_u8];
     req.extend_from_slice(&dest_port.to_be_bytes());
     let hostname = match dest_host.parse::<Ipv4Addr>() {
         Ok(ip) => {
@@ -335,7 +335,7 @@ where
     };
     stream.write_all(greeting).await?;
 
-    let mut choice = [0u8; 2];
+    let mut choice = [0_u8; 2];
     stream
         .read_exact(&mut choice)
         .await
@@ -350,7 +350,7 @@ where
             let pass = proxy.password.as_deref().map_or("", |p| p.as_str());
             let auth = socks5_auth_request(user, pass)?;
             stream.write_all(&auth).await?;
-            let mut status = [0u8; 2];
+            let mut status = [0_u8; 2];
             stream
                 .read_exact(&mut status)
                 .await
@@ -375,7 +375,7 @@ where
 
     // Reply: VER REP RSV ATYP BND.ADDR BND.PORT — the bound address is
     // variable-length and must be consumed so the SSH banner starts the stream.
-    let mut head = [0u8; 4];
+    let mut head = [0_u8; 4];
     stream
         .read_exact(&mut head)
         .await
@@ -399,13 +399,13 @@ where
         0x01 => 4,
         0x04 => 16,
         0x03 => {
-            let mut len = [0u8; 1];
+            let mut len = [0_u8; 1];
             stream.read_exact(&mut len).await?;
             len[0] as usize
         }
         a => return Err(proxy_err(format!("socks5 proxy: bad address type {a}"))),
     };
-    let mut rest = vec![0u8; addr_len + 2];
+    let mut rest = vec![0_u8; addr_len + 2];
     stream.read_exact(&mut rest).await?;
     Ok(())
 }
@@ -416,7 +416,7 @@ fn socks5_auth_request(user: &str, pass: &str) -> Result<Vec<u8>, TransportError
     if user.len() > 255 || pass.len() > 255 {
         return Err(proxy_err("socks5 username/password longer than 255 bytes"));
     }
-    let mut req = vec![1u8, user.len() as u8];
+    let mut req = vec![1_u8, user.len() as u8];
     req.extend_from_slice(user.as_bytes());
     req.push(pass.len() as u8);
     req.extend_from_slice(pass.as_bytes());
@@ -426,7 +426,7 @@ fn socks5_auth_request(user: &str, pass: &str) -> Result<Vec<u8>, TransportError
 /// Builds the SOCKS5 CONNECT request; a hostname destination is sent as-is
 /// (ATYP 3) for the proxy to resolve.
 fn socks5_connect_request(dest_host: &str, dest_port: u16) -> Result<Vec<u8>, TransportError> {
-    let mut req = vec![5u8, 1u8, 0u8];
+    let mut req = vec![5_u8, 1_u8, 0_u8];
     if let Ok(ip) = dest_host.parse::<Ipv4Addr>() {
         req.push(0x01);
         req.extend_from_slice(&ip.octets());
@@ -538,7 +538,7 @@ mod tests {
             [
                 &[5, 1, 0, 3, 11][..],
                 b"example.com",
-                &(2222u16).to_be_bytes()
+                &(2222_u16).to_be_bytes()
             ]
             .concat()
         );

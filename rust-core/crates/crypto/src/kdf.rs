@@ -80,7 +80,7 @@ impl KdfParams {
         parallelism: u32,
         salt_len: usize,
     ) -> Self {
-        let mut salt = vec![0u8; salt_len];
+        let mut salt = vec![0_u8; salt_len];
         OsRng.fill_bytes(&mut salt);
         Self {
             mem_kib,
@@ -162,7 +162,7 @@ pub fn derive_key(password: &[u8], params: &KdfParams) -> Result<SymmetricKey, C
     .map_err(|_| CryptoError::Kdf)?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, p);
 
-    let mut out = [0u8; SYMMETRIC_KEY_LEN];
+    let mut out = [0_u8; SYMMETRIC_KEY_LEN];
     argon
         .hash_password_into(password, &params.salt, &mut out)
         .map_err(|_| CryptoError::Kdf)?;

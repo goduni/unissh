@@ -419,7 +419,7 @@ async fn keyset_put(
 ) -> AppResult<Json<KeysetPutResp>> {
     let blob = ids::unb64(&req.keyset_blob)?;
     let header = crypto::parse_keyset_header(&blob)?;
-    let generation = header.generation as i64;
+    let generation = i64::from(header.generation);
     let acc = auth.account_id();
     // No-downgrade: generation > max of the existing one (§6.4).
     if let Some(maxg) = state.store.keyset_max_generation(acc).await? {
@@ -863,11 +863,7 @@ async fn device_self_enroll(
     //    expire (expires_at = NULL).
     let now = state.now();
     let device_id = ids::random_id16().to_vec();
-    let expires_at = if kind == "web" {
-        Some(now + WEB_DEVICE_TTL_SECONDS)
-    } else {
-        None
-    };
+    let expires_at = (kind == "web").then(|| now + WEB_DEVICE_TTL_SECONDS);
     state
         .store
         .create_device(

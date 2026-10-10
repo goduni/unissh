@@ -332,10 +332,10 @@ fn build_sk_ed25519_openssh() -> String {
     use unissh_ssh_agent::ssh_key::public;
     use unissh_ssh_agent::ssh_key::LineEnding;
 
-    let ed = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let ed = ed25519_dalek::SigningKey::from_bytes(&[7_u8; 32]);
     let public = public::SkEd25519::new(
         public::Ed25519PublicKey(ed.verifying_key().to_bytes()),
-        "ssh:".to_string(),
+        "ssh:".to_owned(),
     );
     let kp = SkEd25519::new(public, 0x01, vec![0xAB; 32]).expect("sk keypair");
     PrivateKey::new(KeypairData::SkEd25519(kp), "test sk key")

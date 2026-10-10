@@ -43,13 +43,13 @@ pub fn os_username() -> String {
     let vars = ["USER", "LOGNAME"];
     for v in vars {
         if let Some(name) = std::env::var_os(v) {
-            let name = name.to_string_lossy().trim().to_string();
+            let name = name.to_string_lossy().trim().to_owned();
             if !name.is_empty() {
                 return name;
             }
         }
     }
-    "unknown".to_string()
+    "unknown".to_owned()
 }
 
 /// This machine's hostname — what tells a local pane apart from a remote one in
@@ -57,7 +57,7 @@ pub fn os_username() -> String {
 pub fn machine_name() -> String {
     let name = gethostname::gethostname().to_string_lossy().to_string();
     if name.trim().is_empty() {
-        "localhost".to_string()
+        "localhost".to_owned()
     } else {
         name
     }
@@ -98,7 +98,7 @@ fn default_program() -> String {
     if let Some(sh) = passwd_shell(&os_username()) {
         return sh;
     }
-    "/bin/sh".to_string()
+    "/bin/sh".to_owned()
 }
 
 /// The login shell recorded for `user` in `/etc/passwd`, if that file names one.
@@ -121,7 +121,7 @@ fn passwd_shell_in(passwd: &str, user: &str) -> Option<String> {
         // name:passwd:uid:gid:gecos:home:shell — five fields past the name.
         let shell = fields.nth(5)?;
         if Path::new(shell).is_absolute() {
-            return Some(shell.to_string());
+            return Some(shell.to_owned());
         }
     }
     None
@@ -180,9 +180,9 @@ pub fn program_label(program: &str) -> String {
         tail
     };
     if stem.is_empty() {
-        program.to_string()
+        program.to_owned()
     } else {
-        stem.to_string()
+        stem.to_owned()
     }
 }
 
@@ -194,7 +194,7 @@ mod tests {
     fn splits_quoted_arguments() {
         assert_eq!(
             split_args(r#"-c "echo hi""#),
-            Some(vec!["-c".to_string(), "echo hi".to_string()])
+            Some(vec!["-c".to_owned(), "echo hi".to_owned()])
         );
         assert_eq!(split_args(""), Some(Vec::new()));
     }
@@ -232,7 +232,7 @@ mod tests {
                       someone:x:1000:1000:Some One:/home/someone:/usr/bin/fish\n";
         assert_eq!(
             passwd_shell_in(passwd, "someone"),
-            Some("/usr/bin/fish".to_string())
+            Some("/usr/bin/fish".to_owned())
         );
         assert_eq!(passwd_shell_in(passwd, "nobody"), None);
         assert_eq!(passwd_shell_in(passwd, ""), None);

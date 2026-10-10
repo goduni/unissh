@@ -49,7 +49,7 @@ fn parse_sig_blob(blob: &[u8]) -> Result<[u8; 64], AppError> {
     if alg != ALG_ED25519 {
         return Err(AppError::malformed("signature blob: not Ed25519"));
     }
-    let mut sig = [0u8; 64];
+    let mut sig = [0_u8; 64];
     sig.copy_from_slice(&blob[3..]);
     Ok(sig)
 }
@@ -96,9 +96,9 @@ impl RegistrationPayload {
             return Err(AppError::malformed("registration payload length mismatch"));
         }
         let account_id = bytes[2..2 + alen].to_vec();
-        let mut x25519_pub = [0u8; 32];
+        let mut x25519_pub = [0_u8; 32];
         x25519_pub.copy_from_slice(&bytes[2 + alen..2 + alen + 32]);
-        let mut ed25519_pub = [0u8; 32];
+        let mut ed25519_pub = [0_u8; 32];
         ed25519_pub.copy_from_slice(&bytes[2 + alen + 32..2 + alen + 64]);
         Ok(Self {
             account_id,
@@ -212,7 +212,7 @@ pub fn parse_keyset_header(blob: &[u8]) -> Result<KeysetHeader, AppError> {
     }
     let generation = u32::from_be_bytes([blob[2], blob[3], blob[4], blob[5]]);
     let kdf_len = u16::from_be_bytes([blob[6], blob[7]]) as usize;
-    let mut pos = 8usize;
+    let mut pos = 8_usize;
     if kdf_len > 0 {
         let end = pos
             .checked_add(kdf_len)
@@ -230,9 +230,9 @@ pub fn parse_keyset_header(blob: &[u8]) -> Result<KeysetHeader, AppError> {
     if blob.len() < pos + 64 + 1 {
         return Err(AppError::malformed("keyset: missing pubkeys/wrapped"));
     }
-    let mut x25519_pub = [0u8; 32];
+    let mut x25519_pub = [0_u8; 32];
     x25519_pub.copy_from_slice(&blob[pos..pos + 32]);
-    let mut ed25519_pub = [0u8; 32];
+    let mut ed25519_pub = [0_u8; 32];
     ed25519_pub.copy_from_slice(&blob[pos + 32..pos + 64]);
     // wrapped_keyset = the remainder, must be non-empty.
     if blob.len() <= pos + 64 {
@@ -280,7 +280,7 @@ impl<'a> Cursor<'a> {
     }
     fn u64(&mut self) -> Result<u64, AppError> {
         let s = self.take(8)?;
-        let mut a = [0u8; 8];
+        let mut a = [0_u8; 8];
         a.copy_from_slice(s);
         Ok(u64::from_be_bytes(a))
     }

@@ -123,7 +123,7 @@ fn nonce_for(id: &common::Identity) -> String {
 
 fn sign_token(pem: &str, claims: &serde_json::Value) -> String {
     let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some(KID.to_string());
+    header.kid = Some(KID.to_owned());
     let key = EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap();
     encode(&header, claims, &key).unwrap()
 }

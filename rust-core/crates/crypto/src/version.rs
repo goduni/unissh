@@ -47,10 +47,10 @@ impl AlgId {
     /// Parses an identifier. An unknown/reserved id → error.
     pub fn from_u16(v: u16) -> Result<Self, CryptoError> {
         Ok(match v {
-            0x0001 => AlgId::XChaCha20Poly1305,
-            0x0010 => AlgId::HpkeX25519HkdfSha256ChaCha20,
-            0x0020 => AlgId::Ed25519,
-            0x0030 => AlgId::Argon2idParams,
+            0x0001 => Self::XChaCha20Poly1305,
+            0x0010 => Self::HpkeX25519HkdfSha256ChaCha20,
+            0x0020 => Self::Ed25519,
+            0x0030 => Self::Argon2idParams,
             other => return Err(CryptoError::UnsupportedAlgorithm(other)),
         })
     }

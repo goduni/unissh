@@ -257,16 +257,16 @@ fn item_key_epoch_roundtrips_through_put_and_history() {
 
     let mut it = item(b"v", b"i", 1, false);
     it.key_epoch = 2;
-    it.signature = vec![0u8; 67];
-    it.author_pubkey = vec![0u8; 32];
+    it.signature = vec![0_u8; 67];
+    it.author_pubkey = vec![0_u8; 32];
     s.put_item(&it).unwrap();
     assert_eq!(s.get_item(b"v", b"i").unwrap().unwrap().key_epoch, 2);
 
     // Archiving preserves the key_epoch of the version being archived.
     let mut it2 = item(b"v", b"i", 2, false);
     it2.key_epoch = 3;
-    it2.signature = vec![0u8; 67];
-    it2.author_pubkey = vec![0u8; 32];
+    it2.signature = vec![0_u8; 67];
+    it2.author_pubkey = vec![0_u8; 32];
     s.archive_and_put(&it2, 10).unwrap();
 
     // The current version is epoch 3.
@@ -420,12 +420,12 @@ fn check_consistency_ok_for_clean_db() {
     // used not to audit vaults, so the helper with dummy `b"sig"`/`b"pub"` passed; now
     // the structural audit covers vault records as well).
     let mut v = vault(b"v", 1);
-    v.signature = vec![0u8; 67];
-    v.author_pubkey = vec![0u8; 32];
+    v.signature = vec![0_u8; 67];
+    v.author_pubkey = vec![0_u8; 32];
     st.put_vault(&v).unwrap();
     let mut it = item(b"v", b"i", 1, false);
-    it.signature = vec![0u8; 67];
-    it.author_pubkey = vec![0u8; 32];
+    it.signature = vec![0_u8; 67];
+    it.author_pubkey = vec![0_u8; 32];
     st.put_item(&it).unwrap();
 
     let report = st.check_consistency().unwrap();
@@ -439,8 +439,8 @@ fn check_consistency_flags_orphan_item() {
     let st = Storage::open_in_memory(&key(21)).unwrap();
     // the item references a non-existent vault
     let mut it = item(b"ghost", b"i", 1, false);
-    it.signature = vec![0u8; 67];
-    it.author_pubkey = vec![0u8; 32];
+    it.signature = vec![0_u8; 67];
+    it.author_pubkey = vec![0_u8; 32];
     st.put_item(&it).unwrap();
 
     let report = st.check_consistency().unwrap();
@@ -464,8 +464,8 @@ fn check_consistency_flags_bad_record() {
         wrapped_item_key: vec![],
         version: 0,
         tombstone: true,
-        signature: vec![0u8; 10],
-        author_pubkey: vec![0u8; 5],
+        signature: vec![0_u8; 10],
+        author_pubkey: vec![0_u8; 5],
         created_at: 0,
         updated_at: 0,
         key_epoch: 0,
@@ -487,8 +487,8 @@ fn check_consistency_flags_bad_record() {
 fn hist_item(content: &[u8], version: u64) -> ItemRecord {
     let mut it = item(b"v", b"pw", version, false);
     it.content_blob = content.to_vec();
-    it.signature = vec![0u8; 67];
-    it.author_pubkey = vec![0u8; 32];
+    it.signature = vec![0_u8; 67];
+    it.author_pubkey = vec![0_u8; 32];
     it
 }
 
@@ -566,8 +566,8 @@ fn membership_manifest_roundtrip_and_upsert() {
         vault_id: b"v".to_vec(),
         key_epoch: 1,
         manifest_blob: b"signed-manifest".to_vec(),
-        signature: vec![0u8; 64],
-        author_pubkey: vec![0u8; 32],
+        signature: vec![0_u8; 64],
+        author_pubkey: vec![0_u8; 32],
     };
     s.put_membership_manifest(&m).unwrap();
     assert_eq!(s.get_membership_manifest(b"v", 1).unwrap().unwrap(), m);
@@ -599,8 +599,8 @@ fn membership_grants_list_and_upsert_and_remove() {
         role: MemberRole::Editor,
         not_after: 0,
         wrapped_vk: b"wvk-alice".to_vec(),
-        signature: vec![0u8; 64],
-        author_pubkey: vec![0u8; 32],
+        signature: vec![0_u8; 64],
+        author_pubkey: vec![0_u8; 32],
     };
     let g2 = MembershipGrant {
         vault_id: b"v".to_vec(),
@@ -609,8 +609,8 @@ fn membership_grants_list_and_upsert_and_remove() {
         role: MemberRole::Viewer,
         not_after: 0,
         wrapped_vk: b"wvk-bob".to_vec(),
-        signature: vec![0u8; 64],
-        author_pubkey: vec![0u8; 32],
+        signature: vec![0_u8; 64],
+        author_pubkey: vec![0_u8; 32],
     };
     s.put_membership_grant(&g1).unwrap();
     s.put_membership_grant(&g2).unwrap();
@@ -697,8 +697,12 @@ fn audit_log_append_and_list_monotonic() {
     // empty
     assert!(s.list_audit(0).unwrap().is_empty());
 
-    let seq1 = s.append_audit(b"entry-1", &[0u8; 64], &[0u8; 32]).unwrap();
-    let seq2 = s.append_audit(b"entry-2", &[1u8; 64], &[1u8; 32]).unwrap();
+    let seq1 = s
+        .append_audit(b"entry-1", &[0_u8; 64], &[0_u8; 32])
+        .unwrap();
+    let seq2 = s
+        .append_audit(b"entry-2", &[1_u8; 64], &[1_u8; 32])
+        .unwrap();
     assert!(seq2 > seq1, "seq must grow monotonically");
 
     let all = s.list_audit(0).unwrap();
@@ -719,7 +723,7 @@ fn audit_log_append_and_list_monotonic() {
 #[test]
 fn audit_log_list_past_end_is_empty_not_panic() {
     let s = Storage::open_in_memory(&key(0x54)).unwrap();
-    s.append_audit(b"e", &[0u8; 64], &[0u8; 32]).unwrap();
+    s.append_audit(b"e", &[0_u8; 64], &[0_u8; 32]).unwrap();
     // since_seq past the end → empty, not a panic
     assert!(s.list_audit(u64::MAX).unwrap().is_empty());
 }
@@ -760,7 +764,7 @@ fn vault_trust_anchor_roundtrip_and_purge() {
     let s = Storage::open_in_memory(&key(0x5a)).unwrap();
     assert!(s.get_vault_trust_anchor(b"v").unwrap().is_none());
 
-    let owner = vec![0xAAu8; 32];
+    let owner = vec![0xAA_u8; 32];
     s.set_vault_trust_anchor(b"v", &owner).unwrap();
     let a = s.get_vault_trust_anchor(b"v").unwrap().unwrap();
     assert_eq!(a.vault_id, b"v");
@@ -787,7 +791,7 @@ fn raw_open(path: &std::path::Path, k: &[u8; 32]) -> rusqlite::Connection {
 fn build_v3_db(path: &std::path::Path, k: &[u8; 32]) {
     let conn = raw_open(path, k);
     conn.execute_batch(
-        r#"
+        "
         BEGIN;
         CREATE TABLE meta (k TEXT PRIMARY KEY, v BLOB NOT NULL);
         CREATE TABLE vaults (
@@ -819,7 +823,7 @@ fn build_v3_db(path: &std::path::Path, k: &[u8; 32]) {
             VALUES (X'7631', X'6931', 1, X'636f6e74656e74', X'77696b', 7, 0, X'736967', X'617574686f72', 11, 22);
         PRAGMA user_version = 3;
         COMMIT;
-        "#,
+        ",
     )
     .unwrap();
 }

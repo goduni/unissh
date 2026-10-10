@@ -16,7 +16,7 @@ fn keyset() -> UnlockedKeyset {
 }
 #[allow(dead_code)]
 fn storage() -> Storage {
-    Storage::open_in_memory(&[7u8; 32]).unwrap()
+    Storage::open_in_memory(&[7_u8; 32]).unwrap()
 }
 
 #[test]

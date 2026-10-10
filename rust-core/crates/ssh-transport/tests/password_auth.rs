@@ -128,14 +128,14 @@ fn password_opts(port: u16, password: &str) -> ConnectOptions {
         port,
         "root",
         Auth::Password {
-            password: Zeroizing::new(password.to_string()),
+            password: Zeroizing::new(password.to_owned()),
         },
     )
 }
 
 async fn try_connect(port: u16, password: &str) -> Result<SshClient, TransportError> {
     let agent = InMemoryAgent::new();
-    let storage = Storage::open_in_memory(&[9u8; 32]).unwrap();
+    let storage = Storage::open_in_memory(&[9_u8; 32]).unwrap();
     SshClient::connect(&password_opts(port, password), &agent, &storage).await
 }
 

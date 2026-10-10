@@ -108,8 +108,8 @@ async fn audit_query(
 ) -> AppResult<Json<AuditQueryResp>> {
     auth.require_owner(&state.store).await?;
     let since = q.since_seq.unwrap_or(0).max(0);
-    let max = state.config.limits.delta_max_page_size as i64;
-    let def = state.config.limits.delta_page_size as i64;
+    let max = i64::from(state.config.limits.delta_max_page_size);
+    let def = i64::from(state.config.limits.delta_page_size);
     let limit = q.limit.unwrap_or(def).clamp(1, max);
 
     let rows = state.store.query_audit(since, limit).await?;
@@ -178,7 +178,7 @@ pub(crate) fn entry_value(r: &AuditExportRow) -> serde_json::Value {
 impl From<&AuditExportRow> for ExportLine {
     fn from(r: &AuditExportRow) -> Self {
         let entry = entry_value(r);
-        ExportLine {
+        Self {
             seq: r.seq,
             server_seq: r.server_seq,
             source: r.source.clone(),
@@ -214,7 +214,7 @@ async fn audit_export(
     let to = q.to_seq.map_or(head, |t| t.min(head));
 
     // Rows per round-trip: the same page size as the `/v1/audit` listing.
-    let page = (state.config.limits.delta_page_size as i64).max(1);
+    let page = i64::from(state.config.limits.delta_page_size).max(1);
     let store = state.store.clone();
     let pages = futures_util::stream::try_unfold(from, move |next| {
         let store = store.clone();
@@ -245,9 +245,9 @@ async fn audit_export(
     let filename = format!("attachment; filename=\"unissh-audit-{from}-{to}.jsonl\"");
     Ok((
         [
-            (header::CONTENT_TYPE, "application/jsonl".to_string()),
+            (header::CONTENT_TYPE, "application/jsonl".to_owned()),
             (header::CONTENT_DISPOSITION, filename),
-            (header::CACHE_CONTROL, "no-store".to_string()),
+            (header::CACHE_CONTROL, "no-store".to_owned()),
         ],
         Body::from_stream(body),
     )

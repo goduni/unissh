@@ -56,7 +56,7 @@ impl LockedKey {
             .try_sign(data)
             .map_err(|e| AgentError::Ssh(e.to_string()))?;
         Ok(AgentSignature {
-            algorithm: sig.algorithm().as_str().to_string(),
+            algorithm: sig.algorithm().as_str().to_owned(),
             signature: sig.as_bytes().to_vec(),
         })
         // `key` is zeroized on Drop.
@@ -107,7 +107,7 @@ fn sign_rsa(kp: &RsaKeypair, data: &[u8], hash: RsaHash) -> Result<AgentSignatur
     };
     let sig = sig.map_err(|e| AgentError::Ssh(e.to_string()))?;
     Ok(AgentSignature {
-        algorithm: algorithm.to_string(),
+        algorithm: algorithm.to_owned(),
         signature: sig.to_bytes().to_vec(),
     })
 }

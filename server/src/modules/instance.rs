@@ -55,7 +55,7 @@ async fn instance_info(State(state): State<AppState>) -> AppResult<Json<Instance
     Ok(Json(InstanceInfo {
         claimed: row.claimed != 0,
         name: row.name,
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
         instance_id: ids::b64(&row.instance_id),
         auth,
         oidc,

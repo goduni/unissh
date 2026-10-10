@@ -21,8 +21,8 @@ async fn escrow_keyless_recovery_round_trip() {
     // 1. Claim the instance as the owner (handle "owner") and log in for the PUT.
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
-    let device_id = c["device_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
+    let device_id = c["device_id"].as_str().unwrap().to_owned();
     let access = login_v2(&app, &id, &account_id, &device_id).await;
 
     // The escrow keyset is a REAL, openable keyset minted by the core, driven
@@ -47,9 +47,9 @@ async fn escrow_keyless_recovery_round_trip() {
             "escrow": {
                 "k_auth": b64(k_auth.expose_bytes()),
                 "argon_salt": b64(&params.salt),
-                "argon_mem_kib": params.mem_kib as i64,
-                "argon_iterations": params.iterations as i64,
-                "argon_parallelism": params.parallelism as i64,
+                "argon_mem_kib": i64::from(params.mem_kib),
+                "argon_iterations": i64::from(params.iterations),
+                "argon_parallelism": i64::from(params.parallelism),
             }
         }))
         .send()
@@ -71,9 +71,9 @@ async fn escrow_keyless_recovery_round_trip() {
         b64(&params.salt),
         "the real salt is echoed back"
     );
-    assert_eq!(p["argon_mem_kib"], params.mem_kib as i64);
-    assert_eq!(p["argon_iterations"], params.iterations as i64);
-    assert_eq!(p["argon_parallelism"], params.parallelism as i64);
+    assert_eq!(p["argon_mem_kib"], i64::from(params.mem_kib));
+    assert_eq!(p["argon_iterations"], i64::from(params.iterations));
+    assert_eq!(p["argon_parallelism"], i64::from(params.parallelism));
 
     // 4. A FRESH client (no session, no device): rebuild the params from the GET,
     //    re-derive K_auth from (password, SecretKey), and fetch the keyset by handle.
@@ -116,7 +116,7 @@ async fn escrow_keyless_recovery_round_trip() {
     let bad = app
         .client
         .post(format!("{}/v1/escrow/fetch", app.base))
-        .json(&json!({ "handle": "owner", "k_auth": b64(&[0u8; 32]) }))
+        .json(&json!({ "handle": "owner", "k_auth": b64(&[0_u8; 32]) }))
         .send()
         .await
         .unwrap();
@@ -154,9 +154,9 @@ async fn escrow_params_and_fetch_resist_enumeration() {
         "the decoy salt is stable per handle across calls"
     );
     let rec = KdfParams::recommended();
-    assert_eq!(p1["argon_mem_kib"], rec.mem_kib as i64);
-    assert_eq!(p1["argon_iterations"], rec.iterations as i64);
-    assert_eq!(p1["argon_parallelism"], rec.parallelism as i64);
+    assert_eq!(p1["argon_mem_kib"], i64::from(rec.mem_kib));
+    assert_eq!(p1["argon_iterations"], i64::from(rec.iterations));
+    assert_eq!(p1["argon_parallelism"], i64::from(rec.parallelism));
     let salt = unb64(p1["argon_salt"].as_str().unwrap()).unwrap();
     assert_eq!(
         salt.len(),
@@ -211,7 +211,7 @@ async fn escrow_params_and_fetch_resist_enumeration() {
     let fetch = app
         .client
         .post(format!("{}/v1/escrow/fetch", app.base))
-        .json(&json!({ "handle": "ghost", "k_auth": b64(&[0u8; 32]) }))
+        .json(&json!({ "handle": "ghost", "k_auth": b64(&[0_u8; 32]) }))
         .send()
         .await
         .unwrap();
@@ -228,8 +228,8 @@ async fn escrow_unenrolled_account_is_indistinguishable() {
     // escrow must be INDISTINGUISHABLE from a handle that doesn't exist at all.
     let id = make_identity();
     let c = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let account_id = c["account_id"].as_str().unwrap().to_string();
-    let device_id = c["device_id"].as_str().unwrap().to_string();
+    let account_id = c["account_id"].as_str().unwrap().to_owned();
+    let device_id = c["device_id"].as_str().unwrap().to_owned();
     let access = login_v2(&app, &id, &account_id, &device_id).await;
 
     let password: &[u8] = b"pw";
@@ -270,9 +270,9 @@ async fn escrow_unenrolled_account_is_indistinguishable() {
         .await
         .unwrap();
     let rec = KdfParams::recommended();
-    assert_eq!(owner1["argon_mem_kib"], rec.mem_kib as i64);
-    assert_eq!(owner1["argon_iterations"], rec.iterations as i64);
-    assert_eq!(owner1["argon_parallelism"], rec.parallelism as i64);
+    assert_eq!(owner1["argon_mem_kib"], i64::from(rec.mem_kib));
+    assert_eq!(owner1["argon_iterations"], i64::from(rec.iterations));
+    assert_eq!(owner1["argon_parallelism"], i64::from(rec.parallelism));
     assert_eq!(
         unb64(owner1["argon_salt"].as_str().unwrap()).unwrap().len(),
         16,
@@ -307,7 +307,7 @@ async fn escrow_unenrolled_account_is_indistinguishable() {
     let fetch = app
         .client
         .post(format!("{}/v1/escrow/fetch", app.base))
-        .json(&json!({ "handle": "owner", "k_auth": b64(&[0u8; 32]) }))
+        .json(&json!({ "handle": "owner", "k_auth": b64(&[0_u8; 32]) }))
         .send()
         .await
         .unwrap();

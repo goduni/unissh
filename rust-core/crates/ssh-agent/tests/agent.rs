@@ -156,7 +156,7 @@ fn key_from_vault_to_agent_roundtrip() {
     use unissh_vault::Vault;
 
     let (pem, public) = generate_ed25519_openssh().unwrap();
-    let st = Storage::open_in_memory(&[9u8; 32]).unwrap();
+    let st = Storage::open_in_memory(&[9_u8; 32]).unwrap();
     let (_sk, _rec, ks) = create_account(None, KdfParams::recommended()).unwrap();
     let v = Vault::create(&st, &ks, b"vault".to_vec(), b"ssh-keys").unwrap();
     v.put_item(b"id_ed25519", 1, pem.as_bytes()).unwrap();

@@ -140,7 +140,7 @@ impl<T: AgentKeys + ?Sized> AgentKeys for std::sync::Arc<T> {
         (**self).sign(key, data, rsa)
     }
     fn hang_up(&self) {
-        (**self).hang_up()
+        (**self).hang_up();
     }
 }
 
@@ -164,7 +164,7 @@ impl ForwardedAgent {
             .split_whitespace()
             .nth(2)
             .unwrap_or("unissh")
-            .to_string()
+            .to_owned()
     }
 }
 
@@ -404,7 +404,7 @@ where
         let policy = agent.clone();
         let mut job = tokio::task::spawn_blocking(move || answer(&*policy, &body));
         let reply = loop {
-            let mut chunk = [0u8; 4096];
+            let mut chunk = [0_u8; 4096];
             tokio::select! {
                 done = &mut job => break done,
                 read = stream.read(&mut chunk), if inbox.len() <= 4 + MAX_FRAME => match read {
@@ -432,7 +432,7 @@ async fn fill<S: tokio::io::AsyncRead + Unpin>(
     inbox: &mut Vec<u8>,
     want: usize,
 ) -> std::io::Result<()> {
-    let mut chunk = [0u8; 4096];
+    let mut chunk = [0_u8; 4096];
     while inbox.len() < want {
         let n = stream.read(&mut chunk).await?;
         if n == 0 {
@@ -466,7 +466,7 @@ mod tests {
             _rsa: RsaHash,
         ) -> Result<(String, Vec<u8>), TransportError> {
             self.signed.lock().unwrap().push(data.to_vec());
-            Ok(("ssh-ed25519".to_string(), vec![0xAA; 64]))
+            Ok(("ssh-ed25519".to_owned(), vec![0xAA; 64]))
         }
     }
 
@@ -490,7 +490,7 @@ mod tests {
                 keys: keys.clone(),
                 key_id: b"k".to_vec(),
                 public_openssh: public,
-                host: "bastion".to_string(),
+                host: "bastion".to_owned(),
                 approval: Arc::new(Approval(approve)),
             }),
             keys,
@@ -535,7 +535,7 @@ mod tests {
         let public = russh::keys::PublicKey::from_openssh(public).unwrap();
         // Through the trait: `PublicKey` also has an inherent SSHSIG `verify`.
         Verifier::verify(&public, data, &signature).expect("the signature verifies");
-        algorithm.to_string()
+        algorithm.to_owned()
     }
 
     #[test]
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn mutating_requests_are_refused() {
         let (a, _) = agent(true);
-        for kind in [17u8, 18, 19, 20, 21, 22, 25, 26, 27] {
+        for kind in [17_u8, 18, 19, 20, 21, 22, 25, 26, 27] {
             let reply = answer(&a, &[kind]);
             assert_eq!(
                 reply[4],
@@ -667,7 +667,7 @@ mod tests {
     fn caller() -> AgentCaller {
         AgentCaller {
             pid: Some(4242),
-            executable: Some("/usr/bin/ssh".to_string()),
+            executable: Some("/usr/bin/ssh".to_owned()),
         }
     }
 
@@ -733,7 +733,7 @@ mod tests {
         let reply = answer(&agent, &sign_request(&deploy.blob().unwrap(), b"to-sign"));
         assert_eq!(
             *prompt.asked.lock().unwrap(),
-            vec![("deploy".to_string(), caller())]
+            vec![("deploy".to_owned(), caller())]
         );
         verified(&reply, &deploy.public_openssh, b"to-sign");
     }
@@ -775,15 +775,15 @@ mod tests {
         assert_eq!(
             listed,
             vec![
-                (work.blob().unwrap(), "work".to_string()),
-                (cert.to_bytes().unwrap(), "work".to_string()),
+                (work.blob().unwrap(), "work".to_owned()),
+                (cert.to_bytes().unwrap(), "work".to_owned()),
             ]
         );
 
         let reply = answer(&agent, &sign_request(&cert.to_bytes().unwrap(), b"to-sign"));
         assert_eq!(
             *prompt.asked.lock().unwrap(),
-            vec![("work".to_string(), caller())]
+            vec![("work".to_owned(), caller())]
         );
         assert_eq!(*keys.signed_with.lock().unwrap(), vec![b"work".to_vec()]);
         verified(&reply, &work.public_openssh, b"to-sign");
@@ -800,8 +800,8 @@ mod tests {
             .unwrap();
         let rsa = OfferedKey {
             key_id: b"rsa".to_vec(),
-            public_openssh: RSA_PUB.to_string(),
-            comment: "rsa".to_string(),
+            public_openssh: RSA_PUB.to_owned(),
+            comment: "rsa".to_owned(),
         };
         let prompt = Arc::new(Prompt {
             answer: true,

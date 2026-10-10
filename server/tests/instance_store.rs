@@ -51,7 +51,7 @@ async fn ensure_is_idempotent_and_claim_is_single_winner() {
 
     let row = s.instance().await.unwrap();
     assert_eq!(row.claimed, 1);
-    assert_eq!(row.owner_account_id.as_deref(), Some(&owner[..]));
+    assert_eq!(row.owner_account_id.as_deref(), Some((&*owner)));
     assert!(row.setup_code_hash.is_none(), "code cleared on claim");
     assert_eq!(row.name.as_deref(), Some("Acme"));
 }

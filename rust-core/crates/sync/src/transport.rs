@@ -121,8 +121,8 @@ mod tests {
         SyncObject::Audit(AuditObject {
             vault_id: vec![tag],
             entry_blob: vec![tag],
-            signature: vec![1u8; 67],
-            author_pubkey: vec![2u8; 32],
+            signature: vec![1_u8; 67],
+            author_pubkey: vec![2_u8; 32],
         })
     }
 

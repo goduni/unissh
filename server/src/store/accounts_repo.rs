@@ -140,7 +140,7 @@ impl Store {
         let n = self
             .exec(
                 "UPDATE accounts SET is_owner = ? WHERE account_id = ?",
-                vec![Val::I(is_owner as i64), Val::b(account_id)],
+                vec![Val::I(i64::from(is_owner)), Val::b(account_id)],
             )
             .await?;
         if n == 0 {

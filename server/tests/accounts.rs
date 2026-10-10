@@ -70,7 +70,7 @@ async fn owner_promote_demote_with_anti_lockout() {
     let app = spawn().await;
     let admin = make_identity();
     let c = claim_named(&app, &admin, Some("Genesis"), None).await;
-    let admin_acct = c["account_id"].as_str().unwrap().to_string();
+    let admin_acct = c["account_id"].as_str().unwrap().to_owned();
     let admin_bearer = app
         .login(&admin, &admin_acct, c["device_id"].as_str().unwrap())
         .await;
@@ -120,8 +120,8 @@ async fn second_device_shares_keyset_and_authenticates() {
     let app = spawn().await;
     let acct = make_identity();
     let c = claim_named(&app, &acct, Some("Игорь"), Some("igor")).await;
-    let acct_id = c["account_id"].as_str().unwrap().to_string();
-    let dev1 = c["device_id"].as_str().unwrap().to_string();
+    let acct_id = c["account_id"].as_str().unwrap().to_owned();
+    let dev1 = c["device_id"].as_str().unwrap().to_owned();
     let bearer1 = app.login(&acct, &acct_id, &dev1).await;
 
     // add a second device under the same account (shares the keyset)
@@ -135,7 +135,7 @@ async fn second_device_shares_keyset_and_authenticates() {
         .json()
         .await
         .unwrap();
-    let dev2 = add["device_id"].as_str().unwrap().to_string();
+    let dev2 = add["device_id"].as_str().unwrap().to_owned();
     assert_ne!(dev2, dev1);
 
     // the NEW device authenticates with the SAME keyset (shared identity)

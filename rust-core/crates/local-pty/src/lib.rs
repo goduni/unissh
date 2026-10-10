@@ -195,7 +195,7 @@ impl LocalPty {
                     .err()
                     .or_else(|| writer.err())
                     .map(|e| e.to_string())
-                    .unwrap_or_else(|| "pty handles unavailable".to_string());
+                    .unwrap_or_else(|| "pty handles unavailable".to_owned());
                 return Err(LocalPtyError::Open(e));
             }
         };
@@ -218,7 +218,7 @@ impl LocalPty {
             exit_tx,
         );
 
-        Ok(LocalPty {
+        Ok(Self {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
@@ -234,7 +234,7 @@ impl LocalPty {
         let mut writer = self
             .writer
             .lock()
-            .map_err(|_| LocalPtyError::Gone("writer".to_string()))?;
+            .map_err(|_| LocalPtyError::Gone("writer".to_owned()))?;
         writer
             .write_all(data)
             .and_then(|()| writer.flush())
@@ -247,7 +247,7 @@ impl LocalPty {
         let master = self
             .master
             .lock()
-            .map_err(|_| LocalPtyError::Gone("pty".to_string()))?;
+            .map_err(|_| LocalPtyError::Gone("pty".to_owned()))?;
         master
             .resize(PtySize {
                 rows: rows.max(1),
@@ -332,7 +332,7 @@ fn spawn_reader(
         // Held only so that dropping it — when this thread ends — is what tells
         // the waiter the output has run dry.
         let _eof = eof;
-        let mut buf = vec![0u8; READ_BUF];
+        let mut buf = vec![0_u8; READ_BUF];
         loop {
             match reader.read(&mut buf) {
                 // EOF: every slave handle is closed, so nothing can write again.

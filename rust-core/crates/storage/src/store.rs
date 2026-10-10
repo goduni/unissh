@@ -48,14 +48,18 @@ static OPEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 impl Storage {
     /// Opens (creating if needed) the instance's encrypted DB at the given path.
     pub fn open(path: &Path, db_key: &[u8]) -> Result<Self, StorageError> {
-        let _serialized = OPEN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _serialized = OPEN_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let conn = Connection::open(path)?;
         Self::init(conn, db_key)
     }
 
     /// Opens an in-memory encrypted DB (for tests / ephemeral instances).
     pub fn open_in_memory(db_key: &[u8]) -> Result<Self, StorageError> {
-        let _serialized = OPEN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _serialized = OPEN_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let conn = Connection::open_in_memory()?;
         Self::init(conn, db_key)
     }
@@ -84,7 +88,7 @@ impl Storage {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
         static NEXT_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let storage = Storage {
+        let storage = Self {
             conn,
             automation_epoch: NEXT_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
@@ -306,7 +310,7 @@ impl Storage {
                 v.name_blob,
                 v.wrapped_vk,
                 version,
-                v.tombstone as i64,
+                i64::from(v.tombstone),
                 v.signature,
                 v.author_pubkey,
                 key_epoch,
@@ -503,11 +507,11 @@ impl Storage {
             params![
                 it.vault_id,
                 it.item_id,
-                it.item_type as i64,
+                i64::from(it.item_type),
                 it.content_blob,
                 it.wrapped_item_key,
                 version,
-                it.tombstone as i64,
+                i64::from(it.tombstone),
                 it.signature,
                 it.author_pubkey,
                 now,
@@ -613,8 +617,8 @@ impl Storage {
              (vault_id, item_id, item_type, content_blob, wrapped_item_key, version, tombstone, signature, author_pubkey, created_at, updated_at, key_epoch)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![
-                r.vault_id, r.item_id, r.item_type as i64, r.content_blob, r.wrapped_item_key,
-                checked_version(r.version)?, r.tombstone as i64, r.signature, r.author_pubkey,
+                r.vault_id, r.item_id, i64::from(r.item_type), r.content_blob, r.wrapped_item_key,
+                checked_version(r.version)?, i64::from(r.tombstone), r.signature, r.author_pubkey,
                 r.created_at, r.updated_at, checked_version(r.key_epoch)?
             ],
         )?;
@@ -736,7 +740,7 @@ impl Storage {
             .conn
             .query_row(
                 "SELECT host_key FROM known_hosts WHERE host = ?1 AND port = ?2",
-                params![host, port as i64],
+                params![host, i64::from(port)],
                 |r| r.get::<_, Vec<u8>>(0),
             )
             .optional()?)
@@ -755,7 +759,7 @@ impl Storage {
         self.conn.execute(
             "INSERT INTO known_hosts (host, port, host_key, added_at) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(host, port) DO UPDATE SET host_key=excluded.host_key, added_at=excluded.added_at",
-            params![host, port as i64, host_key, added_at],
+            params![host, i64::from(port), host_key, added_at],
         )?;
         Ok(())
     }
@@ -783,7 +787,7 @@ impl Storage {
         let host = host.to_ascii_lowercase(); // canonical (see get_known_host)
         let n = self.conn.execute(
             "DELETE FROM known_hosts WHERE host = ?1 AND port = ?2",
-            params![host, port as i64],
+            params![host, i64::from(port)],
         )?;
         Ok(n > 0)
     }
@@ -1316,7 +1320,7 @@ impl Storage {
                     kind: ConsistencyKind::OrphanItem,
                     vault_id_hex: to_hex(&vid),
                     item_id_hex: to_hex(&iid),
-                    detail: "item references no vault row".to_string(),
+                    detail: "item references no vault row".to_owned(),
                 });
             }
         }
@@ -1394,7 +1398,7 @@ impl Storage {
                     kind: ConsistencyKind::StaleHistory,
                     vault_id_hex: to_hex(&vid),
                     item_id_hex: to_hex(&iid),
-                    detail: "version history for a deleted/absent item".to_string(),
+                    detail: "version history for a deleted/absent item".to_owned(),
                 });
             }
         }
@@ -1667,7 +1671,7 @@ mod purge_tests {
     };
 
     fn st() -> Storage {
-        Storage::open_in_memory(&[9u8; 32]).unwrap()
+        Storage::open_in_memory(&[9_u8; 32]).unwrap()
     }
 
     fn vrec(id: &[u8]) -> VaultRecord {
@@ -1678,8 +1682,8 @@ mod purge_tests {
             wrapped_vk: vec![4, 5, 6],
             version: 1,
             tombstone: false,
-            signature: vec![0u8; 67],
-            author_pubkey: vec![0u8; 32],
+            signature: vec![0_u8; 67],
+            author_pubkey: vec![0_u8; 32],
             key_epoch: 1,
             cache_policy: CachePolicy::OfflineAllowed,
             sync_tenant: Vec::new(),
@@ -1694,8 +1698,8 @@ mod purge_tests {
             wrapped_item_key: vec![1, 1, 1],
             version: 1,
             tombstone: false,
-            signature: vec![0u8; 67],
-            author_pubkey: vec![0u8; 32],
+            signature: vec![0_u8; 67],
+            author_pubkey: vec![0_u8; 32],
             created_at: 0,
             updated_at: 0,
             key_epoch: 1,
@@ -1718,19 +1722,19 @@ mod purge_tests {
             vault_id: vid.clone(),
             key_epoch: 1,
             manifest_blob: vec![1],
-            signature: vec![0u8; 67],
-            author_pubkey: vec![0u8; 32],
+            signature: vec![0_u8; 67],
+            author_pubkey: vec![0_u8; 32],
         })
         .unwrap();
         s.put_membership_grant(&MembershipGrant {
             vault_id: vid.clone(),
-            member_pubkey: vec![2u8; 32],
+            member_pubkey: vec![2_u8; 32],
             key_epoch: 1,
             role: MemberRole::Editor,
             not_after: 0,
             wrapped_vk: vec![3],
-            signature: vec![0u8; 67],
-            author_pubkey: vec![0u8; 32],
+            signature: vec![0_u8; 67],
+            author_pubkey: vec![0_u8; 32],
         })
         .unwrap();
         s.set_vault_epoch_floor(&vid, 1).unwrap();

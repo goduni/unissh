@@ -13,7 +13,7 @@ fn keyset() -> UnlockedKeyset {
     unlocked
 }
 fn storage() -> Storage {
-    Storage::open_in_memory(&[7u8; 32]).unwrap()
+    Storage::open_in_memory(&[7_u8; 32]).unwrap()
 }
 fn ed_of(ks: &UnlockedKeyset) -> Vec<u8> {
     ks.signing.verifying.to_bytes().to_vec()

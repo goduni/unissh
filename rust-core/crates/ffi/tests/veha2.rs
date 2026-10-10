@@ -13,8 +13,8 @@ const TENANT: &str = "dGVuYW50LXRlc3Q="; // base64("tenant-test")
 
 fn new_core(dir: &std::path::Path) -> Arc<Core> {
     Core::new(
-        dir.join("inst.db").to_str().unwrap().to_string(),
-        dir.join("keyset.bin").to_str().unwrap().to_string(),
+        dir.join("inst.db").to_str().unwrap().to_owned(),
+        dir.join("keyset.bin").to_str().unwrap().to_owned(),
     )
 }
 
@@ -25,7 +25,7 @@ fn create_cloud_vault_returns_uuid_hex_and_lists() {
     core.create_account(None).unwrap();
 
     let vid = core
-        .create_cloud_vault("Shared".to_string(), TENANT.to_string())
+        .create_cloud_vault("Shared".to_owned(), TENANT.to_owned())
         .unwrap();
     // vault_id = UUIDv4 (16 bytes) in hex = 32 hex chars
     assert_eq!(vid.len(), 32);
@@ -38,7 +38,7 @@ fn create_cloud_vault_returns_uuid_hex_and_lists() {
     // on a locked core — Locked
     core.lock();
     assert!(matches!(
-        core.create_cloud_vault("X".to_string(), TENANT.to_string()),
+        core.create_cloud_vault("X".to_owned(), TENANT.to_owned()),
         Err(unissh_ffi::FfiError::Locked)
     ));
 }
@@ -49,7 +49,7 @@ fn membership_add_list_fingerprint_pin() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
     let vid = core
-        .create_cloud_vault("Team".to_string(), TENANT.to_string())
+        .create_cloud_vault("Team".to_owned(), TENANT.to_owned())
         .unwrap();
 
     // fixed public keys of the "member" (32 bytes each) — public material
@@ -81,13 +81,13 @@ fn membership_add_list_fingerprint_pin() {
     assert_eq!(fp, me.fingerprint);
 
     // OOB pin: first time ok (TOFU), repeat with the same key — ok
-    core.confirm_member_pin("acct-bob".to_string(), member_ed.clone())
+    core.confirm_member_pin("acct-bob".to_owned(), member_ed.clone())
         .unwrap();
-    core.confirm_member_pin("acct-bob".to_string(), member_ed.clone())
+    core.confirm_member_pin("acct-bob".to_owned(), member_ed.clone())
         .unwrap();
     // a different key under the same account_id → error (PinMismatch)
     assert!(core
-        .confirm_member_pin("acct-bob".to_string(), "33".repeat(32))
+        .confirm_member_pin("acct-bob".to_owned(), "33".repeat(32))
         .is_err());
 }
 
@@ -97,7 +97,7 @@ fn set_personal_vault_rejects_shared_vault() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
     let vid = core
-        .create_cloud_vault("Team".to_string(), TENANT.to_string())
+        .create_cloud_vault("Team".to_owned(), TENANT.to_owned())
         .unwrap();
     // Solo vault (no members yet) → can be made personal.
     core.set_personal_vault(vid.clone()).unwrap();
@@ -123,9 +123,9 @@ fn local_vault_can_be_personal() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("personal-local".to_string(), "Personal".to_string())
+    core.create_vault("personal-local".to_owned(), "Personal".to_owned())
         .unwrap();
-    core.set_personal_vault("personal-local".to_string())
+    core.set_personal_vault("personal-local".to_owned())
         .unwrap();
     assert_eq!(
         core.get_personal_vault().unwrap().as_deref(),
@@ -140,7 +140,7 @@ fn rotate_vk_and_purge_cloud_vault() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
     let vid = core
-        .create_cloud_vault("R".to_string(), TENANT.to_string())
+        .create_cloud_vault("R".to_owned(), TENANT.to_owned())
         .unwrap();
 
     // owner (Admin) + bob (Editor)
@@ -192,10 +192,10 @@ fn identity_account_id_registration_and_server_auth() {
     // server-auth signature is non-empty (domain unissh-server-auth-v1)
     let sig = core
         .sign_server_challenge(
-            "vault.example.com".to_string(),
+            "vault.example.com".to_owned(),
             aid1.clone(),
-            "device-1".to_string(),
-            "key-1".to_string(),
+            "device-1".to_owned(),
+            "key-1".to_owned(),
             b"server-nonce".to_vec(),
             9999999999,
         )
@@ -221,7 +221,7 @@ fn cache_policy_get_set_and_audit() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
     let vid = core
-        .create_cloud_vault("C".to_string(), TENANT.to_string())
+        .create_cloud_vault("C".to_owned(), TENANT.to_owned())
         .unwrap();
 
     // default — OfflineAllowed
@@ -238,7 +238,7 @@ fn cache_policy_get_set_and_audit() {
 
     // audit: append an opaque signed triple → query sees it
     let entry = b"signed-audit-event".to_vec();
-    let sig = vec![7u8; 67];
+    let sig = vec![7_u8; 67];
     let author = "66".repeat(32);
     core.audit_append(vid.clone(), entry.clone(), sig.clone(), author.clone())
         .unwrap();
@@ -258,10 +258,8 @@ fn onboarding_path_a_unlock_from_server_blob() {
     // Device A: create an account with a password, grab the Secret Key + keyset blob.
     let dir_a = tempfile::tempdir().unwrap();
     let core_a = new_core(dir_a.path());
-    let secret = core_a.create_account(Some("pw".to_string())).unwrap();
-    core_a
-        .create_vault("v".to_string(), "V".to_string())
-        .unwrap();
+    let secret = core_a.create_account(Some("pw".to_owned())).unwrap();
+    core_a.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     // keyset blob A = contents of the keyset sidecar (already encrypted under the Unlock Key).
     let keyset_blob = std::fs::read(dir_a.path().join("keyset.bin")).unwrap();
 
@@ -270,7 +268,7 @@ fn onboarding_path_a_unlock_from_server_blob() {
     let core_b = new_core(dir_b.path());
     assert!(!dir_b.path().join("inst.db").exists());
     core_b
-        .unlock_from_server_blob(keyset_blob.clone(), Some("pw".to_string()), secret.clone())
+        .unlock_from_server_blob(keyset_blob.clone(), Some("pw".to_owned()), secret.clone())
         .unwrap();
     assert!(core_b.is_unlocked());
 
@@ -293,14 +291,14 @@ fn onboarding_path_a_unlock_from_server_blob() {
     let dir_c = tempfile::tempdir().unwrap();
     let core_c = new_core(dir_c.path());
     assert!(core_c
-        .unlock_from_server_blob(vec![1, 2, 3], Some("pw".to_string()), secret.clone())
+        .unlock_from_server_blob(vec![1, 2, 3], Some("pw".to_owned()), secret.clone())
         .is_err());
 
     // wrong password → InvalidCredentials
     let dir_d = tempfile::tempdir().unwrap();
     let core_d = new_core(dir_d.path());
     assert!(matches!(
-        core_d.unlock_from_server_blob(keyset_blob, Some("wrong".to_string()), secret),
+        core_d.unlock_from_server_blob(keyset_blob, Some("wrong".to_owned()), secret),
         Err(unissh_ffi::FfiError::InvalidCredentials)
     ));
 }
@@ -356,12 +354,12 @@ fn unlock_from_server_blob_rejects_stale_generation() {
     // Device A: account (gen 1) → capture the OLD blob → change password (gen 2).
     let dir_a = tempfile::tempdir().unwrap();
     let core_a = new_core(dir_a.path());
-    let secret = core_a.create_account(Some("pw1".to_string())).unwrap();
+    let secret = core_a.create_account(Some("pw1".to_owned())).unwrap();
     let stale_blob = std::fs::read(dir_a.path().join("keyset.bin")).unwrap(); // gen 1
     core_a
         .change_password(
-            Some("pw1".to_string()),
-            Some("pw2".to_string()),
+            Some("pw1".to_owned()),
+            Some("pw2".to_owned()),
             secret.clone(),
         )
         .unwrap();
@@ -371,14 +369,14 @@ fn unlock_from_server_blob_rejects_stale_generation() {
     let dir_b = tempfile::tempdir().unwrap();
     let core_b = new_core(dir_b.path());
     core_b
-        .unlock_from_server_blob(fresh_blob, Some("pw2".to_string()), secret.clone())
+        .unlock_from_server_blob(fresh_blob, Some("pw2".to_owned()), secret.clone())
         .unwrap();
     core_b.lock();
 
     // A malicious server slips in the OLD blob (gen 1 < floor 2) with the correct old
     // password — it must be rejected as a rollback (not InvalidCredentials).
     let err = core_b
-        .unlock_from_server_blob(stale_blob, Some("pw1".to_string()), secret)
+        .unlock_from_server_blob(stale_blob, Some("pw1".to_owned()), secret)
         .unwrap_err();
     assert!(
         matches!(err, unissh_ffi::FfiError::Other { .. }),
@@ -395,14 +393,14 @@ fn unlock_from_server_blob_rejects_stale_generation() {
 fn change_password_raises_floor_rejecting_old_blob() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
-    let secret = core.create_account(Some("old".to_string())).unwrap();
+    let secret = core.create_account(Some("old".to_owned())).unwrap();
     // gen 1 blob BEFORE the password change.
     let old_blob = std::fs::read(dir.path().join("keyset.bin")).unwrap();
 
     // Password change (in the unlocked state): gen → 2, floor → 2.
     core.change_password(
-        Some("old".to_string()),
-        Some("new".to_string()),
+        Some("old".to_owned()),
+        Some("new".to_owned()),
         secret.clone(),
     )
     .unwrap();
@@ -411,7 +409,7 @@ fn change_password_raises_floor_rejecting_old_blob() {
     // via the same inst.db (anti-rollback floor in storage-meta).
     core.lock();
     let err = core
-        .unlock_from_server_blob(old_blob, Some("old".to_string()), secret.clone())
+        .unlock_from_server_blob(old_blob, Some("old".to_owned()), secret.clone())
         .unwrap_err();
     assert!(
         matches!(err, unissh_ffi::FfiError::Other { .. }),
@@ -421,7 +419,7 @@ fn change_password_raises_floor_rejecting_old_blob() {
 
     // And the fresh blob (gen 2) with the new password — unlocks.
     let fresh_blob = std::fs::read(dir.path().join("keyset.bin")).unwrap();
-    core.unlock_from_server_blob(fresh_blob, Some("new".to_string()), secret)
+    core.unlock_from_server_blob(fresh_blob, Some("new".to_owned()), secret)
         .unwrap();
     assert!(core.is_unlocked());
 }
@@ -435,22 +433,21 @@ fn change_password_raises_floor_rejecting_old_blob() {
 fn local_unlock_rejects_stale_sidecar() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
-    let secret = core.create_account(Some("pw1".to_string())).unwrap();
+    let secret = core.create_account(Some("pw1".to_owned())).unwrap();
     // gen 1 blob BEFORE the password change (captured for the downgrade attack).
     let stale_blob = std::fs::read(dir.path().join("keyset.bin")).unwrap();
 
     // Password change (in the unlocked state): gen → 2, floor → 2.
     core.change_password(
-        Some("pw1".to_string()),
-        Some("pw2".to_string()),
+        Some("pw1".to_owned()),
+        Some("pw2".to_owned()),
         secret.clone(),
     )
     .unwrap();
 
     // POSITIVE: a normal unlock with the current (gen 2 ≥ floor 2) sidecar — unlocks.
     core.lock();
-    core.unlock(Some("pw2".to_string()), secret.clone())
-        .unwrap();
+    core.unlock(Some("pw2".to_owned()), secret.clone()).unwrap();
     assert!(core.is_unlocked());
 
     // The attacker swaps the sidecar for the OLD blob (gen 1 < floor 2) and tries to unlock
@@ -458,7 +455,7 @@ fn local_unlock_rejects_stale_sidecar() {
     core.lock();
     std::fs::write(dir.path().join("keyset.bin"), &stale_blob).unwrap();
     let err = core
-        .unlock(Some("pw1".to_string()), secret.clone())
+        .unlock(Some("pw1".to_owned()), secret.clone())
         .unwrap_err();
     assert!(
         matches!(err, unissh_ffi::FfiError::Other { .. }),
@@ -477,7 +474,7 @@ fn onboarding_path_b_pake_device_to_device() {
     // Device A (initiator): an existing unlocked account.
     let dir_a = tempfile::tempdir().unwrap();
     let core_a = new_core(dir_a.path());
-    let sk_a = core_a.create_account(Some("pw-a".to_string())).unwrap();
+    let sk_a = core_a.create_account(Some("pw-a".to_owned())).unwrap();
 
     let code = b"123456".to_vec(); // short OOB code, shown to the user
 
@@ -498,7 +495,7 @@ fn onboarding_path_b_pake_device_to_device() {
     let dir_b = tempfile::tempdir().unwrap();
     let core_b = new_core(dir_b.path());
     let sk_b = core_b
-        .onboard_finish_install(resp, msg3, Some("pw-b".to_string()))
+        .onboard_finish_install(resp, msg3, Some("pw-b".to_owned()))
         .unwrap();
     assert!(core_b.is_unlocked());
 
@@ -508,7 +505,7 @@ fn onboarding_path_b_pake_device_to_device() {
     // "restart" (a fresh Core on the same files) — otherwise the device would be locked out.
     let core_b2 = new_core(dir_b.path());
     core_b2
-        .unlock(Some("pw-b".to_string()), sk_b.clone())
+        .unlock(Some("pw-b".to_owned()), sk_b.clone())
         .unwrap();
     assert!(core_b2.is_unlocked());
 
@@ -580,18 +577,18 @@ fn sync_round_trip_via_callback_transport() {
     // creates the account, B onboards via Path A with the same keyset blob (as in Task 8).
     let dir_a = tempfile::tempdir().unwrap();
     let core_a = new_core(dir_a.path());
-    let secret = core_a.create_account(Some("pw".to_string())).unwrap();
+    let secret = core_a.create_account(Some("pw".to_owned())).unwrap();
     let keyset_blob = std::fs::read(dir_a.path().join("keyset.bin")).unwrap();
     // Cloud vault bound to TENANT: only vaults bound to the synced server
     // are pushed (1:1 binding). A local vault would not go out.
     core_a
-        .create_cloud_vault("Synced".to_string(), TENANT.to_string())
+        .create_cloud_vault("Synced".to_owned(), TENANT.to_owned())
         .unwrap();
 
     let dir_b = tempfile::tempdir().unwrap();
     let core_b = new_core(dir_b.path());
     core_b
-        .unlock_from_server_blob(keyset_blob, Some("pw".to_string()), secret)
+        .unlock_from_server_blob(keyset_blob, Some("pw".to_owned()), secret)
         .unwrap();
 
     // the shared "server" behind the callback
@@ -600,15 +597,11 @@ fn sync_round_trip_via_callback_transport() {
     });
 
     // A push
-    let rep_a = core_a
-        .sync_now(backend.clone(), TENANT.to_string())
-        .unwrap();
+    let rep_a = core_a.sync_now(backend.clone(), TENANT.to_owned()).unwrap();
     assert!(rep_a.pushed >= 1, "A must push at least the vault record");
 
     // B pull → sees A's vault
-    let rep_b = core_b
-        .sync_now(backend.clone(), TENANT.to_string())
-        .unwrap();
+    let rep_b = core_b.sync_now(backend.clone(), TENANT.to_owned()).unwrap();
     assert!(rep_b.applied >= 1, "B must apply >=1 object: {rep_b:?}");
     let vaults_b = core_b.list_vaults().unwrap();
     assert!(vaults_b.iter().any(|v| v.name == "Synced"));
@@ -616,7 +609,7 @@ fn sync_round_trip_via_callback_transport() {
     // locked negative
     core_a.lock();
     assert!(matches!(
-        core_a.sync_now(backend, TENANT.to_string()),
+        core_a.sync_now(backend, TENANT.to_owned()),
         Err(unissh_ffi::FfiError::Locked)
     ));
 }
@@ -634,14 +627,14 @@ fn new_ffi_methods_never_return_private_key_material() {
     // the boundary (the keyset secrets X25519/Ed25519 themselves are not handed out by
     // design, so the test cannot obtain their 32-byte values — that is exactly the
     // boundary guarantee). No return/sidecar/relay blob must carry the raw Secret Key.
-    let secret_hex = core.create_account(Some("masterpw".to_string())).unwrap();
+    let secret_hex = core.create_account(Some("masterpw".to_owned())).unwrap();
     let secret_raw = hex::decode(secret_hex.trim()).unwrap();
     // 128-bit Secret Key (SECRET_KEY_LEN=16). We scan exactly these raw bytes — this
     // strengthens the check beyond the ASCII marker 'OPENSSH PRIVATE KEY'.
     assert_eq!(secret_raw.len(), 16, "Secret Key — 16 bytes (128 bits)");
 
     let vid = core
-        .create_cloud_vault("Sec".to_string(), TENANT.to_string())
+        .create_cloud_vault("Sec".to_owned(), TENANT.to_owned())
         .unwrap();
     core.add_member(
         vid.clone(),
@@ -719,12 +712,12 @@ fn new_methods_require_unlock() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
     let vid = core
-        .create_cloud_vault("L".to_string(), TENANT.to_string())
+        .create_cloud_vault("L".to_owned(), TENANT.to_owned())
         .unwrap();
     core.lock();
 
     assert!(matches!(
-        core.create_cloud_vault("x".into(), TENANT.to_string()),
+        core.create_cloud_vault("x".into(), TENANT.to_owned()),
         Err(FfiError::Locked)
     ));
     assert!(matches!(
@@ -790,7 +783,7 @@ fn new_methods_reject_bad_input_without_panic() {
     ));
     // corrupt hex/length pubkey
     let vid = core
-        .create_cloud_vault("B".into(), TENANT.to_string())
+        .create_cloud_vault("B".into(), TENANT.to_owned())
         .unwrap();
     assert!(matches!(
         core.add_member(
@@ -816,11 +809,11 @@ fn new_methods_reject_bad_input_without_panic() {
 fn e2e_cloud_membership_lifecycle() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
-    core.create_account(Some("pw".to_string())).unwrap();
+    core.create_account(Some("pw".to_owned())).unwrap();
 
     // 1) cloud vault
     let vid = core
-        .create_cloud_vault("Project X".to_string(), TENANT.to_string())
+        .create_cloud_vault("Project X".to_owned(), TENANT.to_owned())
         .unwrap();
 
     // 2) add two members
@@ -918,10 +911,10 @@ fn sign_server_challenge_raw_matches_string_variant_and_accepts_non_utf8() {
     // Ed25519) signature as the string one — it only drops the UTF-8 requirement on id.
     let s = core
         .sign_server_challenge(
-            "h".to_string(),
-            "a".to_string(),
-            "d".to_string(),
-            "k".to_string(),
+            "h".to_owned(),
+            "a".to_owned(),
+            "d".to_owned(),
+            "k".to_owned(),
             b"n".to_vec(),
             1,
         )
@@ -940,7 +933,7 @@ fn sign_server_challenge_raw_matches_string_variant_and_accepts_non_utf8() {
     assert_eq!(r.len(), 67);
 
     // the raw variant accepts NON-UTF8 identifiers (the server's random 16 bytes).
-    let non_utf8 = vec![0u8, 159, 146, 150]; // invalid UTF-8
+    let non_utf8 = vec![0_u8, 159, 146, 150]; // invalid UTF-8
     let sig = core
         .sign_server_challenge_raw(
             non_utf8.clone(),
@@ -961,10 +954,10 @@ fn vault_info_exposes_sync_target_and_tenant() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
 
-    core.create_vault("local-1".to_string(), "Local".to_string())
+    core.create_vault("local-1".to_owned(), "Local".to_owned())
         .unwrap();
     let cloud_hex = core
-        .create_cloud_vault("Cloud".to_string(), TENANT.to_string())
+        .create_cloud_vault("Cloud".to_owned(), TENANT.to_owned())
         .unwrap();
 
     let vaults = core.list_vaults().unwrap();
@@ -976,7 +969,7 @@ fn vault_info_exposes_sync_target_and_tenant() {
     // 1:1 binding: the local vault is not bound; the cloud vault is bound to TENANT (the UI
     // shows the associated server).
     assert_eq!(local.sync_tenant, None);
-    assert_eq!(cloud.sync_tenant, Some(TENANT.to_string()));
+    assert_eq!(cloud.sync_tenant, Some(TENANT.to_owned()));
 }
 
 #[test]
@@ -986,7 +979,7 @@ fn create_cloud_vault_requires_active_server() {
     core.create_account(None).unwrap();
     // Empty tenant (no active server) → the typed refusal.
     assert!(matches!(
-        core.create_cloud_vault("X".to_string(), String::new()),
+        core.create_cloud_vault("X".to_owned(), String::new()),
         Err(unissh_ffi::FfiError::NoServer)
     ));
 }
@@ -1000,21 +993,18 @@ fn bind_unbound_cloud_vaults_binds_legacy_and_is_idempotent() {
     // Simulate legacy: a cloud vault "without a server" — create it with one tenant; then,
     // since an empty binding can't be produced directly via ffi, we test the normal path:
     // the vault is created under TENANT → binding to a DIFFERENT tenant changes nothing (already bound).
-    core.create_cloud_vault("Legacy".to_string(), TENANT.to_string())
+    core.create_cloud_vault("Legacy".to_owned(), TENANT.to_owned())
         .unwrap();
     let other = "b3RoZXItdGVuYW50"; // base64("other-tenant")
                                     // An already-bound vault is not re-bound → 0 affected.
-    assert_eq!(
-        core.bind_unbound_cloud_vaults(other.to_string()).unwrap(),
-        0
-    );
+    assert_eq!(core.bind_unbound_cloud_vaults(other.to_owned()).unwrap(), 0);
     let v = core
         .list_vaults()
         .unwrap()
         .into_iter()
         .find(|v| v.name == "Legacy")
         .unwrap();
-    assert_eq!(v.sync_tenant, Some(TENANT.to_string()));
+    assert_eq!(v.sync_tenant, Some(TENANT.to_owned()));
 
     // An empty tenant is rejected.
     assert!(core.bind_unbound_cloud_vaults(String::new()).is_err());
@@ -1030,7 +1020,7 @@ fn sync_push_skips_vault_bound_to_other_tenant() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
     // The vault is bound to TENANT.
-    core.create_cloud_vault("Bound".to_string(), TENANT.to_string())
+    core.create_cloud_vault("Bound".to_owned(), TENANT.to_owned())
         .unwrap();
 
     // Sync with a DIFFERENT tenant: the vault is not pushed (bound to another server).
@@ -1038,7 +1028,7 @@ fn sync_push_skips_vault_bound_to_other_tenant() {
         inner: Mutex::new(InMemoryTransport::new()),
     });
     let other = "b3RoZXItdGVuYW50"; // base64("other-tenant")
-    let rep = core.sync_now(backend, other.to_string()).unwrap();
+    let rep = core.sync_now(backend, other.to_owned()).unwrap();
     assert_eq!(
         rep.pushed, 0,
         "vault bound to TENANT must NOT push to other tenant"
@@ -1051,12 +1041,12 @@ fn cloud_vault_can_hold_items() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
     let vid = core
-        .create_cloud_vault("Cloud".to_string(), TENANT.to_string())
+        .create_cloud_vault("Cloud".to_owned(), TENANT.to_owned())
         .unwrap();
     // Put a secret in the CLOUD vault (id is hex) and read it back.
-    core.save_password(vid.clone(), "p1".to_string(), "secret".to_string())
+    core.save_password(vid.clone(), "p1".to_owned(), "secret".to_owned())
         .unwrap();
-    let got = core.get_password(vid.clone(), "p1".to_string()).unwrap();
+    let got = core.get_password(vid.clone(), "p1".to_owned()).unwrap();
     assert_eq!(got, "secret");
     let items = core.list_items(vid).unwrap();
     assert_eq!(items.len(), 1);
@@ -1068,9 +1058,9 @@ fn cloud_vault_rename_reflects_in_list() {
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
     let vid = core
-        .create_cloud_vault("Old".to_string(), TENANT.to_string())
+        .create_cloud_vault("Old".to_owned(), TENANT.to_owned())
         .unwrap();
-    core.rename_vault(vid.clone(), "New".to_string()).unwrap();
+    core.rename_vault(vid.clone(), "New".to_owned()).unwrap();
     // list_vaults reads the name cache by the RAW id — the rename must show.
     let vaults = core.list_vaults().unwrap();
     let v = vaults.iter().find(|v| v.vault_id == vid).unwrap();
@@ -1115,7 +1105,7 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     use unissh_sync::{InMemoryTransport, SyncObject, SyncTransport};
 
     const LOCAL: &str = "ops-local";
-    let s = |x: &str| x.to_string();
+    let s = |x: &str| x.to_owned();
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
@@ -1310,7 +1300,7 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     let uids_before = uids_of(LOCAL);
 
     let new_id = core
-        .convert_vault_to_cloud(s(LOCAL), TENANT.to_string())
+        .convert_vault_to_cloud(s(LOCAL), TENANT.to_owned())
         .unwrap();
 
     // A cloud vault with a 16-byte UUID id, bound to the server, same name; the
@@ -1399,7 +1389,7 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     let backend = Arc::new(AppTransport {
         inner: Mutex::new(InMemoryTransport::new()),
     });
-    core.sync_now(backend.clone(), TENANT.to_string()).unwrap();
+    core.sync_now(backend.clone(), TENANT.to_owned()).unwrap();
     let new_raw = hex::decode(&new_id).unwrap();
     let mut vault_pushed = false;
     let mut pushed_items = BTreeMap::new();
@@ -1425,7 +1415,7 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     // moving the Personal vault re-points it at the new id in the same step.
     assert_eq!(core.get_personal_vault().unwrap().as_deref(), Some(ME));
     let new_me = core
-        .convert_vault_to_cloud(s(ME), TENANT.to_string())
+        .convert_vault_to_cloud(s(ME), TENANT.to_owned())
         .unwrap();
     assert_eq!(core.get_personal_vault().unwrap(), Some(new_me));
 }
@@ -1440,7 +1430,7 @@ fn moved_vault_rekeys_its_own_binding() {
     };
 
     const SOLO: &str = "solo";
-    let s = |x: &str| x.to_string();
+    let s = |x: &str| x.to_owned();
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
@@ -1519,7 +1509,7 @@ fn moved_vault_rekeys_its_own_binding() {
     .unwrap();
 
     let new_id = core
-        .convert_vault_to_cloud(s(SOLO), TENANT.to_string())
+        .convert_vault_to_cloud(s(SOLO), TENANT.to_owned())
         .unwrap();
 
     let binding = core
@@ -1540,29 +1530,29 @@ fn move_to_server_refusals_leave_the_vault_untouched() {
 
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
-    let secret = core.create_account(Some("pw".to_string())).unwrap();
-    core.create_vault("loc".to_string(), "Local".to_string())
+    let secret = core.create_account(Some("pw".to_owned())).unwrap();
+    core.create_vault("loc".to_owned(), "Local".to_owned())
         .unwrap();
-    core.save_password("loc".to_string(), "p".to_string(), "s3cret".to_string())
+    core.save_password("loc".to_owned(), "p".to_owned(), "s3cret".to_owned())
         .unwrap();
     let cloud = core
-        .create_cloud_vault("Cloud".to_string(), TENANT.to_string())
+        .create_cloud_vault("Cloud".to_owned(), TENANT.to_owned())
         .unwrap();
 
     assert!(matches!(
-        core.convert_vault_to_cloud("loc".to_string(), String::new()),
+        core.convert_vault_to_cloud("loc".to_owned(), String::new()),
         Err(FfiError::NoServer)
     ));
     assert!(matches!(
-        core.convert_vault_to_cloud(cloud.clone(), TENANT.to_string()),
+        core.convert_vault_to_cloud(cloud.clone(), TENANT.to_owned()),
         Err(FfiError::AlreadyCloud)
     ));
     core.lock();
     assert!(matches!(
-        core.convert_vault_to_cloud("loc".to_string(), TENANT.to_string()),
+        core.convert_vault_to_cloud("loc".to_owned(), TENANT.to_owned()),
         Err(FfiError::Locked)
     ));
-    core.unlock(Some("pw".to_string()), secret).unwrap();
+    core.unlock(Some("pw".to_owned()), secret).unwrap();
 
     let vaults = core.list_vaults().unwrap();
     assert_eq!(vaults.len(), 2, "no vault created or removed");
@@ -1570,8 +1560,7 @@ fn move_to_server_refusals_leave_the_vault_untouched() {
     assert_eq!(local.sync_target, FfiSyncTarget::Local);
     assert_eq!(local.sync_tenant, None);
     assert_eq!(
-        core.get_password("loc".to_string(), "p".to_string())
-            .unwrap(),
+        core.get_password("loc".to_owned(), "p".to_owned()).unwrap(),
         "s3cret"
     );
     let still_cloud = vaults.iter().find(|v| v.vault_id == cloud).unwrap();

@@ -33,7 +33,7 @@ impl Executor for CoreExecutor {
             .map_err(error)?
             .map(|bytes| serde_json::from_slice(&bytes).map_err(|_| ToolError::TargetUnavailable))
             .transpose()
-            .map(|s| s.unwrap_or_default())
+            .map(std::option::Option::unwrap_or_default)
     }
     fn save_access(&self, access: &[SavedAccess]) -> Result<()> {
         let bytes = serde_json::to_vec(access).map_err(|_| ToolError::TargetUnavailable)?;

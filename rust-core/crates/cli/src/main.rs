@@ -66,12 +66,12 @@ fn print_multi(results: Vec<unissh_ffi::MultiExecResult>) {
 fn item_auth(vault: &str, item: &str) -> AuthMethod {
     match item.strip_prefix("pw:") {
         Some(id) => AuthMethod::VaultPassword {
-            vault_id: vault.to_string(),
-            password_item_id: id.to_string(),
+            vault_id: vault.to_owned(),
+            password_item_id: id.to_owned(),
         },
         None => AuthMethod::Agent {
-            vault_id: vault.to_string(),
-            key_item_id: item.to_string(),
+            vault_id: vault.to_owned(),
+            key_item_id: item.to_owned(),
         },
     }
 }
@@ -503,7 +503,7 @@ struct SftpTarget {
 
 /// Session observer: prints PTY output to stdout, signals on close.
 struct StdoutObserver {
-    done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    done: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SessionObserver for StdoutObserver {
@@ -619,9 +619,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     return Err(format!("bad --host '{h}', expected host:port:user").into());
                 }
                 targets.push(MultiExecTarget {
-                    host: parts[0].to_string(),
+                    host: parts[0].to_owned(),
                     port: parts[1].parse()?,
-                    user: parts[2].to_string(),
+                    user: parts[2].to_owned(),
                     auth: build_auth(&vault, item.clone(), ssh_password.clone())?,
                     jumps: vec![],
                     proxy: None,
@@ -757,7 +757,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 auth,
                 jumps,
                 proxy,
-                "xterm-256color".to_string(),
+                "xterm-256color".to_owned(),
                 80,
                 24,
                 observer,
@@ -900,8 +900,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     unissh_ffi::ProfileAuth::VaultPassword { password_item_id } => {
                         format!("pw:{password_item_id}")
                     }
-                    unissh_ffi::ProfileAuth::PromptPassword => "(password)".to_string(),
-                    unissh_ffi::ProfileAuth::Personal => "(personal)".to_string(),
+                    unissh_ffi::ProfileAuth::PromptPassword => "(password)".to_owned(),
+                    unissh_ffi::ProfileAuth::Personal => "(personal)".to_owned(),
                     unissh_ffi::ProfileAuth::SystemAgent { public_key } => {
                         // Just the comment/type, not the whole blob: a listing
                         // wants to be readable, and the key is not a secret but
@@ -1035,18 +1035,18 @@ fn parse_proxy(spec: Option<&str>) -> Result<Option<ProxyConfig>, Box<dyn Error>
     let (username, password) = match userinfo {
         Some(u) => match u.split_once(':') {
             Some((name, pass)) => (
-                Some(name.to_string()),
+                Some(name.to_owned()),
                 Some(ProxyPassword::Inline {
-                    password: pass.to_string(),
+                    password: pass.to_owned(),
                 }),
             ),
-            None => (Some(u.to_string()), None),
+            None => (Some(u.to_owned()), None),
         },
         None => (None, None),
     };
     Ok(Some(ProxyConfig {
         kind,
-        host: host.to_string(),
+        host: host.to_owned(),
         port: port.parse()?,
         username,
         password,
@@ -1064,9 +1064,9 @@ fn parse_jumps(vault: &str, specs: &[String]) -> Result<Vec<JumpHost>, Box<dyn E
             .into());
         }
         out.push(JumpHost {
-            host: parts[0].to_string(),
+            host: parts[0].to_owned(),
             port: parts[1].parse()?,
-            user: parts[2].to_string(),
+            user: parts[2].to_owned(),
             auth: item_auth(vault, parts[3]),
             hop_ref: None,
         });

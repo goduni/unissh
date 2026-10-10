@@ -77,8 +77,8 @@ pub async fn write_accept(
             // ACL objects (manifest/grant) — their integrity is mandatory, since
             // the delta visibility filter trusts them; other tiers are skipped (the
             // client re-verifies them on read, server-side RBAC is under the toggle).
-            Some(ObjectTag::Vault) | Some(ObjectTag::Item) if acl_only => {}
-            Some(ObjectTag::Vault) | Some(ObjectTag::Item) => {
+            Some(ObjectTag::Vault | ObjectTag::Item) if acl_only => {}
+            Some(ObjectTag::Vault | ObjectTag::Item) => {
                 let vault_id = p
                     .vault_id
                     .as_deref()
@@ -99,7 +99,7 @@ pub async fn write_accept(
                     }
                 }
             }
-            Some(ObjectTag::MembershipManifest) | Some(ObjectTag::MembershipGrant) => {
+            Some(ObjectTag::MembershipManifest | ObjectTag::MembershipGrant) => {
                 let vault_id = p
                     .vault_id
                     .as_deref()
@@ -363,7 +363,7 @@ async fn grants_get(
 
 /// Reconstruct the bytes of `SyncObject::MembershipManifest` (§5.2 tag 3).
 fn manifest_object_bytes(m: &crate::store::models::ManifestRow) -> Vec<u8> {
-    let mut out = vec![3u8];
+    let mut out = vec![3_u8];
     put(&mut out, &m.vault_id);
     out.extend_from_slice(&(m.key_epoch as u64).to_be_bytes());
     put(&mut out, &m.manifest_blob);
@@ -374,7 +374,7 @@ fn manifest_object_bytes(m: &crate::store::models::ManifestRow) -> Vec<u8> {
 
 /// Reconstruct the bytes of `SyncObject::MembershipGrant` (§5.2 tag 4).
 fn grant_object_bytes(g: &crate::store::models::GrantRow) -> Vec<u8> {
-    let mut out = vec![4u8];
+    let mut out = vec![4_u8];
     put(&mut out, &g.vault_id);
     put(&mut out, &g.member_pubkey);
     out.extend_from_slice(&(g.key_epoch as u64).to_be_bytes());
@@ -422,7 +422,7 @@ mod tests {
     /// client misparses the grant in the field.
     #[test]
     fn grant_object_bytes_roundtrips_through_canonical_reader() {
-        for (na, want) in [(Some(1_900_000_000i64), 1_900_000_000i64), (None, 0)] {
+        for (na, want) in [(Some(1_900_000_000_i64), 1_900_000_000_i64), (None, 0)] {
             let g = grant_row(na);
             let bytes = grant_object_bytes(&g);
             let p = parse_open(&bytes).expect("canonical reader must parse our own bytes");

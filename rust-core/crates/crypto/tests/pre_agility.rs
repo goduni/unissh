@@ -12,7 +12,7 @@ use unissh_crypto::{
 };
 
 fn key() -> SymmetricKey {
-    SymmetricKey::from_bytes([0x42u8; 32])
+    SymmetricKey::from_bytes([0x42_u8; 32])
 }
 fn aad() -> AssociatedData {
     AssociatedData::new(b"vault".to_vec(), b"item".to_vec(), 7)
@@ -49,8 +49,8 @@ fn pre_agility_rejects_wrong_aad() {
 
 #[test]
 fn keywrap_pre_agility_roundtrips() {
-    let kek = SymmetricKey::from_bytes([0x55u8; 32]);
-    let k = SymmetricKey::from_bytes([0x66u8; 32]);
+    let kek = SymmetricKey::from_bytes([0x55_u8; 32]);
+    let k = SymmetricKey::from_bytes([0x66_u8; 32]);
     let blob = wrap_key_pre_agility(&kek, &k, b"item-1").unwrap();
     let got = unwrap_key_pre_agility(&kek, &blob, b"item-1").unwrap();
     assert_eq!(got.expose_bytes(), k.expose_bytes());
@@ -79,17 +79,17 @@ const FROZEN_PRE_AGILITY_WRAPPER: &[u8] = &[
 
 #[test]
 fn frozen_pre_agility_wrapper_still_unwraps() {
-    let kek = SymmetricKey::from_bytes([0x55u8; 32]);
+    let kek = SymmetricKey::from_bytes([0x55_u8; 32]);
     let got = unwrap_key_pre_agility(&kek, FROZEN_PRE_AGILITY_WRAPPER, b"item-1")
         .expect("the frozen pre-agility wrapper must keep unwrapping");
-    assert_eq!(got.expose_bytes(), &[0x66u8; 32]);
+    assert_eq!(got.expose_bytes(), &[0x66_u8; 32]);
 }
 
 #[test]
 fn frozen_pre_agility_wrapper_is_bound_to_its_aad() {
     // The other half of the guarantee: the captured bytes decode under the AAD they
     // were sealed with and no other, so the vector pins the binding, not just the key.
-    let kek = SymmetricKey::from_bytes([0x55u8; 32]);
+    let kek = SymmetricKey::from_bytes([0x55_u8; 32]);
     assert!(unwrap_key_pre_agility(&kek, FROZEN_PRE_AGILITY_WRAPPER, b"item-2").is_err());
 }
 
@@ -98,8 +98,8 @@ fn keywrap_current_and_pre_agility_incompatible() {
     // Canary for keywrap: round 2 added the KEYWRAP_DOMAIN domain tag and header
     // binding — this is a change to the wrapped-key format. The current unwrap does not open
     // a pre-round-2 wrapper and vice versa.
-    let kek = SymmetricKey::from_bytes([0x55u8; 32]);
-    let k = SymmetricKey::from_bytes([0x66u8; 32]);
+    let kek = SymmetricKey::from_bytes([0x55_u8; 32]);
+    let k = SymmetricKey::from_bytes([0x66_u8; 32]);
     let current = wrap_key(&kek, &k, b"item-1").unwrap();
     let legacy = wrap_key_pre_agility(&kek, &k, b"item-1").unwrap();
     assert!(unwrap_key(&kek, &legacy, b"item-1").is_err());

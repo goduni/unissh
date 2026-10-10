@@ -15,21 +15,21 @@ pub fn fill_random(buf: &mut [u8]) {
 
 /// 16 random bytes (account-id, space-id, device-id, invite-id, channel-id …).
 pub fn random_id16() -> [u8; 16] {
-    let mut b = [0u8; 16];
+    let mut b = [0_u8; 16];
     fill_random(&mut b);
     b
 }
 
 /// 32 random bytes (session access/refresh, nonce, invite random part).
 pub fn random_bytes32() -> [u8; 32] {
-    let mut b = [0u8; 32];
+    let mut b = [0_u8; 32];
     fill_random(&mut b);
     b
 }
 
 /// N random bytes.
 pub fn random_vec(n: usize) -> Vec<u8> {
-    let mut v = vec![0u8; n];
+    let mut v = vec![0_u8; n];
     fill_random(&mut v);
     v
 }

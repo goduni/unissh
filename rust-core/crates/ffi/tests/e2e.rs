@@ -16,8 +16,8 @@ use unissh_ffi::{
 
 fn agent_auth(vault_id: &str, key_item_id: &str) -> AuthMethod {
     AuthMethod::Agent {
-        vault_id: vault_id.to_string(),
-        key_item_id: key_item_id.to_string(),
+        vault_id: vault_id.to_owned(),
+        key_item_id: key_item_id.to_owned(),
     }
 }
 
@@ -50,11 +50,11 @@ fn sftp_server_path() -> &'static str {
 }
 
 impl TestSshd {
-    fn start(authorized_pubkey: &str) -> TestSshd {
+    fn start(authorized_pubkey: &str) -> Self {
         Self::start_on_port(authorized_pubkey, free_port())
     }
 
-    fn start_on_port(authorized_pubkey: &str, port: u16) -> TestSshd {
+    fn start_on_port(authorized_pubkey: &str, port: u16) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         let hostkey = p.join("hostkey");
@@ -98,7 +98,7 @@ impl TestSshd {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        TestSshd {
+        Self {
             child,
             port,
             _dir: dir,
@@ -108,7 +108,7 @@ impl TestSshd {
     /// Like [`Self::start`], but with `MaxSessions {max_sessions}` — the server
     /// will refuse to open more session channels (`AdministrativelyProhibited`).
     /// For testing SFTP channel-pool degradation against a restrictive server.
-    fn start_with_max_sessions(authorized_pubkey: &str, max_sessions: u32) -> TestSshd {
+    fn start_with_max_sessions(authorized_pubkey: &str, max_sessions: u32) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         let hostkey = p.join("hostkey");
@@ -154,7 +154,7 @@ impl TestSshd {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        TestSshd {
+        Self {
             child,
             port,
             _dir: dir,
@@ -165,7 +165,7 @@ impl TestSshd {
 impl TestSshd {
     /// Brings up an sshd that trusts user certificates signed by `ca_pubkey`
     /// (via TrustedUserCAKeys) instead of authorized_keys.
-    fn start_with_ca(ca_pubkey: &str) -> TestSshd {
+    fn start_with_ca(ca_pubkey: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         let hostkey = p.join("hostkey");
@@ -208,7 +208,7 @@ impl TestSshd {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        TestSshd {
+        Self {
             child,
             port,
             _dir: dir,
@@ -225,8 +225,8 @@ impl Drop for TestSshd {
 
 fn new_core(dir: &std::path::Path) -> std::sync::Arc<Core> {
     Core::new(
-        dir.join("inst.db").to_str().unwrap().to_string(),
-        dir.join("keyset.bin").to_str().unwrap().to_string(),
+        dir.join("inst.db").to_str().unwrap().to_owned(),
+        dir.join("keyset.bin").to_str().unwrap().to_owned(),
     )
 }
 
@@ -235,22 +235,22 @@ fn end_to_end_local_scenario() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
 
-    let secret = core.create_account(Some("master-pw".to_string())).unwrap();
-    core.create_vault("default".to_string(), "Default".to_string())
+    let secret = core.create_account(Some("master-pw".to_owned())).unwrap();
+    core.create_vault("default".to_owned(), "Default".to_owned())
         .unwrap();
     let pubkey = core
-        .generate_ssh_key("default".to_string(), "id_ed25519".to_string())
+        .generate_ssh_key("default".to_owned(), "id_ed25519".to_owned())
         .unwrap();
     assert!(pubkey.starts_with("ssh-ed25519 "));
 
     let sshd = TestSshd::start(&pubkey);
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("default", "id_ed25519"),
-            "echo ffi-e2e".to_string(),
+            "echo ffi-e2e".to_owned(),
             vec![],
             None,
         )
@@ -261,9 +261,9 @@ fn end_to_end_local_scenario() {
     // lock → unlock with the same password + Secret Key; data is preserved
     core.lock();
     assert!(!core.is_unlocked());
-    core.unlock(Some("master-pw".to_string()), secret).unwrap();
+    core.unlock(Some("master-pw".to_owned()), secret).unwrap();
     assert!(core.is_unlocked());
-    assert_eq!(core.list_items("default".to_string()).unwrap().len(), 1);
+    assert_eq!(core.list_items("default".to_owned()).unwrap().len(), 1);
 }
 
 #[test]
@@ -271,9 +271,9 @@ fn end_to_end_proxyjump() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
 
     let jump = TestSshd::start(&pubkey);
@@ -281,15 +281,15 @@ fn end_to_end_proxyjump() {
 
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             target.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
-            "echo through-jump".to_string(),
+            "echo through-jump".to_owned(),
             vec![JumpHost {
-                host: "127.0.0.1".to_string(),
+                host: "127.0.0.1".to_owned(),
                 port: jump.port,
-                user: "root".to_string(),
+                user: "root".to_owned(),
                 auth: agent_auth("v", "key"),
                 hop_ref: None,
             }],
@@ -324,20 +324,20 @@ fn fake_socks5_counted(
             let Ok(mut s) = conn else { break };
             let counter = counter.clone();
             std::thread::spawn(move || {
-                let mut head = [0u8; 2];
+                let mut head = [0_u8; 2];
                 s.read_exact(&mut head).unwrap();
-                let mut methods = vec![0u8; head[1] as usize];
+                let mut methods = vec![0_u8; head[1] as usize];
                 s.read_exact(&mut methods).unwrap();
                 if let Some((user, pass)) = creds {
                     assert!(methods.contains(&0x02));
                     s.write_all(&[5, 2]).unwrap();
-                    let mut vu = [0u8; 2];
+                    let mut vu = [0_u8; 2];
                     s.read_exact(&mut vu).unwrap();
-                    let mut ub = vec![0u8; vu[1] as usize];
+                    let mut ub = vec![0_u8; vu[1] as usize];
                     s.read_exact(&mut ub).unwrap();
-                    let mut pl = [0u8; 1];
+                    let mut pl = [0_u8; 1];
                     s.read_exact(&mut pl).unwrap();
-                    let mut pb = vec![0u8; pl[0] as usize];
+                    let mut pb = vec![0_u8; pl[0] as usize];
                     s.read_exact(&mut pb).unwrap();
                     if ub != user.as_bytes() || pb != pass.as_bytes() {
                         s.write_all(&[1, 1]).unwrap();
@@ -347,25 +347,25 @@ fn fake_socks5_counted(
                 } else {
                     s.write_all(&[5, 0]).unwrap();
                 }
-                let mut req = [0u8; 4];
+                let mut req = [0_u8; 4];
                 s.read_exact(&mut req).unwrap();
                 assert_eq!(&req[..3], &[5, 1, 0]);
                 let host = match req[3] {
                     1 => {
-                        let mut a = [0u8; 4];
+                        let mut a = [0_u8; 4];
                         s.read_exact(&mut a).unwrap();
                         format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3])
                     }
                     3 => {
-                        let mut len = [0u8; 1];
+                        let mut len = [0_u8; 1];
                         s.read_exact(&mut len).unwrap();
-                        let mut dn = vec![0u8; len[0] as usize];
+                        let mut dn = vec![0_u8; len[0] as usize];
                         s.read_exact(&mut dn).unwrap();
                         String::from_utf8(dn).unwrap()
                     }
                     _ => return,
                 };
-                let mut pb = [0u8; 2];
+                let mut pb = [0_u8; 2];
                 s.read_exact(&mut pb).unwrap();
                 let dport = u16::from_be_bytes(pb);
                 s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).unwrap();
@@ -391,24 +391,24 @@ fn end_to_end_socks5_proxy() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     let proxy_port = fake_socks5_blocking(None);
 
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
-            "echo through-proxy".to_string(),
+            "echo through-proxy".to_owned(),
             vec![],
             Some(ProxyConfig {
                 kind: ProxyKind::Socks5,
-                host: "127.0.0.1".to_string(),
+                host: "127.0.0.1".to_owned(),
                 port: proxy_port,
                 username: None,
                 password: None,
@@ -425,35 +425,31 @@ fn end_to_end_proxy_with_vault_password() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
-    core.save_password(
-        "v".to_string(),
-        "proxy-pw".to_string(),
-        "sekret".to_string(),
-    )
-    .unwrap();
+    core.save_password("v".to_owned(), "proxy-pw".to_owned(), "sekret".to_owned())
+        .unwrap();
     let sshd = TestSshd::start(&pubkey);
     let proxy_port = fake_socks5_blocking(Some(("joe", "sekret")));
 
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
-            "echo through-auth-proxy".to_string(),
+            "echo through-auth-proxy".to_owned(),
             vec![],
             Some(ProxyConfig {
                 kind: ProxyKind::Socks5,
-                host: "127.0.0.1".to_string(),
+                host: "127.0.0.1".to_owned(),
                 port: proxy_port,
-                username: Some("joe".to_string()),
+                username: Some("joe".to_owned()),
                 password: Some(ProxyPassword::Vault {
-                    vault_id: "v".to_string(),
-                    password_item_id: "proxy-pw".to_string(),
+                    vault_id: "v".to_owned(),
+                    password_item_id: "proxy-pw".to_owned(),
                 }),
             }),
         )
@@ -470,31 +466,31 @@ fn referenced_bastion_carries_its_own_proxy() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let bastion = TestSshd::start(&pubkey);
     let target = TestSshd::start(&pubkey);
     let (proxy_port, proxy_hits) = fake_socks5_counted(None);
 
     core.save_connection(
-        "v".to_string(),
+        "v".to_owned(),
         unissh_ffi::ConnectionProfile {
-            profile_id: "bastion".to_string(),
+            profile_id: "bastion".to_owned(),
             uid: String::new(),
             username_template: None,
-            label: "Bastion".to_string(),
-            host: "127.0.0.1".to_string(),
+            label: "Bastion".to_owned(),
+            host: "127.0.0.1".to_owned(),
             port: bastion.port,
-            user: "root".to_string(),
+            user: "root".to_owned(),
             auth: unissh_ffi::ProfileAuth::Key {
-                key_item_id: "key".to_string(),
+                key_item_id: "key".to_owned(),
             },
             jumps: vec![],
             proxy: Some(ProxyConfig {
                 kind: ProxyKind::Socks5,
-                host: "127.0.0.1".to_string(),
+                host: "127.0.0.1".to_owned(),
                 port: proxy_port,
                 username: None,
                 password: None,
@@ -507,24 +503,24 @@ fn referenced_bastion_carries_its_own_proxy() {
     )
     .unwrap();
     let bastion_uid = core
-        .get_connection("v".to_string(), "bastion".to_string())
+        .get_connection("v".to_owned(), "bastion".to_owned())
         .unwrap()
         .uid;
 
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             target.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
-            "echo via-ref-proxy".to_string(),
+            "echo via-ref-proxy".to_owned(),
             vec![JumpHost {
                 host: String::new(),
                 port: 22,
                 user: String::new(),
                 auth: agent_auth("v", "key"),
                 hop_ref: Some(unissh_ffi::HopRef {
-                    vault_id: "v".to_string(),
+                    vault_id: "v".to_owned(),
                     profile_uid: bastion_uid,
                 }),
             }],
@@ -545,26 +541,26 @@ fn profile_with_proxy_roundtrip_and_inline_rejection() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let prof = unissh_ffi::ConnectionProfile {
-        profile_id: "proxied".to_string(),
+        profile_id: "proxied".to_owned(),
         uid: String::new(),
         username_template: None,
-        label: "Proxied".to_string(),
-        host: "10.0.0.7".to_string(),
+        label: "Proxied".to_owned(),
+        host: "10.0.0.7".to_owned(),
         port: 22,
-        user: "root".to_string(),
+        user: "root".to_owned(),
         auth: unissh_ffi::ProfileAuth::PromptPassword,
         jumps: vec![],
         proxy: Some(ProxyConfig {
             kind: ProxyKind::Http,
-            host: "proxy.corp".to_string(),
+            host: "proxy.corp".to_owned(),
             port: 3128,
-            username: Some("joe".to_string()),
+            username: Some("joe".to_owned()),
             password: Some(ProxyPassword::Vault {
-                vault_id: "ignored-on-save".to_string(),
-                password_item_id: "proxy-pw".to_string(),
+                vault_id: "ignored-on-save".to_owned(),
+                password_item_id: "proxy-pw".to_owned(),
             }),
         }),
         tags: vec![],
@@ -572,10 +568,10 @@ fn profile_with_proxy_roundtrip_and_inline_rejection() {
         record_sessions: false,
         agent_forward: false,
     };
-    core.save_connection("v".to_string(), prof).unwrap();
+    core.save_connection("v".to_owned(), prof).unwrap();
 
     let got = core
-        .get_connection("v".to_string(), "proxied".to_string())
+        .get_connection("v".to_owned(), "proxied".to_owned())
         .unwrap();
     let p = got.proxy.expect("proxy survives the round-trip");
     assert!(matches!(p.kind, ProxyKind::Http));
@@ -591,22 +587,22 @@ fn profile_with_proxy_roundtrip_and_inline_rejection() {
 
     // An inline proxy password must not reach the profile JSON — rejected.
     let bad = unissh_ffi::ConnectionProfile {
-        profile_id: "bad-proxy".to_string(),
+        profile_id: "bad-proxy".to_owned(),
         uid: String::new(),
         username_template: None,
-        label: "x".to_string(),
-        host: "h".to_string(),
+        label: "x".to_owned(),
+        host: "h".to_owned(),
         port: 22,
-        user: "u".to_string(),
+        user: "u".to_owned(),
         auth: unissh_ffi::ProfileAuth::PromptPassword,
         jumps: vec![],
         proxy: Some(ProxyConfig {
             kind: ProxyKind::Socks5,
-            host: "p".to_string(),
+            host: "p".to_owned(),
             port: 1080,
-            username: Some("u".to_string()),
+            username: Some("u".to_owned()),
             password: Some(ProxyPassword::Inline {
-                password: "inline-secret".to_string(),
+                password: "inline-secret".to_owned(),
             }),
         }),
         tags: vec![],
@@ -614,11 +610,11 @@ fn profile_with_proxy_roundtrip_and_inline_rejection() {
         record_sessions: false,
         agent_forward: false,
     };
-    let err = core.save_connection("v".to_string(), bad).unwrap_err();
+    let err = core.save_connection("v".to_owned(), bad).unwrap_err();
     assert!(err.to_string().contains("proxy password"), "got: {err}");
     // And the raw stored JSON of the good profile never contains a secret.
     assert!(core
-        .get_connection("v".to_string(), "bad-proxy".to_string())
+        .get_connection("v".to_owned(), "bad-proxy".to_owned())
         .is_err());
 }
 
@@ -627,7 +623,7 @@ fn import_putty_proxy_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     // ProxyMethod 2 = SOCKS5 (0x1F90 = 8080); the proxy password is deliberately
     // NOT imported (an inline secret cannot live in profile JSON).
@@ -641,12 +637,12 @@ fn import_putty_proxy_sessions() {
         \"ProxyUsername\"=\"joe\"\r\n\
         \"ProxyPassword\"=\"never-imported\"\r\n";
     let report = core
-        .import_putty_sessions("v".to_string(), reg.to_string())
+        .import_putty_sessions("v".to_owned(), reg.to_owned())
         .unwrap();
     assert_eq!(report.created_ids, vec!["viaproxy"]);
 
     let p = core
-        .get_connection("v".to_string(), "viaproxy".to_string())
+        .get_connection("v".to_owned(), "viaproxy".to_owned())
         .unwrap();
     let proxy = p.proxy.expect("putty proxy imported");
     assert!(matches!(proxy.kind, ProxyKind::Socks5));
@@ -660,10 +656,10 @@ fn import_putty_proxy_sessions() {
 fn private_key_never_stored_in_plaintext() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
-    core.create_account(Some("pw".to_string())).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_account(Some("pw".to_owned())).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
 
     // public is public
@@ -707,9 +703,9 @@ fn multi_exec_on_several_hosts() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
 
     let sshd1 = TestSshd::start(&pubkey);
@@ -718,16 +714,16 @@ fn multi_exec_on_several_hosts() {
     let mk = |port: u16| MultiExecTarget {
         proxy: None,
         publickey_only: false,
-        host: "127.0.0.1".to_string(),
+        host: "127.0.0.1".to_owned(),
         port,
-        user: "root".to_string(),
+        user: "root".to_owned(),
         auth: agent_auth("v", "key"),
         jumps: vec![],
     };
     let results = core
         .ssh_exec_multi(
             vec![mk(sshd1.port), mk(sshd2.port)],
-            "echo multi-ok".to_string(),
+            "echo multi-ok".to_owned(),
             0,
             0,
         )
@@ -746,9 +742,9 @@ fn certificate_auth() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let user_pub = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
 
     // CA + signing the user's public key with a certificate (principal root)
@@ -776,11 +772,11 @@ fn certificate_auth() {
     let cert = std::fs::read_to_string(work.path().join("user-cert.pub")).unwrap();
 
     // import the certificate into the core
-    core.import_ssh_certificate("v".to_string(), "key".to_string(), cert)
+    core.import_ssh_certificate("v".to_owned(), "key".to_owned(), cert)
         .unwrap();
 
     // in the listing the key is flagged as having a certificate
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     let key_item = items.iter().find(|i| i.item_id == "key").unwrap();
     assert!(
         key_item.has_certificate,
@@ -791,11 +787,11 @@ fn certificate_auth() {
     let sshd = TestSshd::start_with_ca(&ca_pub);
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
-            "echo cert-ok".to_string(),
+            "echo cert-ok".to_owned(),
             vec![],
             None,
         )
@@ -812,15 +808,10 @@ fn import_pkcs1_rsa_key_and_auth() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let pubkey = core
-        .import_ssh_key(
-            "v".to_string(),
-            "rsa".to_string(),
-            RSA_PKCS1.to_string(),
-            None,
-        )
+        .import_ssh_key("v".to_owned(), "rsa".to_owned(), RSA_PKCS1.to_owned(), None)
         .unwrap();
     assert!(
         pubkey.starts_with("ssh-rsa "),
@@ -828,18 +819,18 @@ fn import_pkcs1_rsa_key_and_auth() {
     );
 
     // the key is stored in the vault as a separate item
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     assert!(items.iter().any(|i| i.item_id == "rsa"), "key item stored");
 
     // full connect to a real sshd with the imported PKCS#1 key
     let sshd = TestSshd::start(&pubkey);
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "rsa"),
-            "echo ffi-pkcs1".to_string(),
+            "echo ffi-pkcs1".to_owned(),
             vec![],
             None,
         )
@@ -900,9 +891,9 @@ fn interactive_pty_session() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
 
     let sshd = TestSshd::start(&pubkey);
@@ -913,13 +904,13 @@ fn interactive_pty_session() {
     });
     let session = core
         .open_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             observer.clone(),
@@ -954,25 +945,25 @@ fn vault_and_item_management() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "Old Name".to_string())
+    core.create_vault("v".to_owned(), "Old Name".to_owned())
         .unwrap();
-    core.generate_ssh_key("v".to_string(), "k".to_string())
+    core.generate_ssh_key("v".to_owned(), "k".to_owned())
         .unwrap();
 
     // rename
-    core.rename_vault("v".to_string(), "New Name".to_string())
+    core.rename_vault("v".to_owned(), "New Name".to_owned())
         .unwrap();
     let vaults = core.list_vaults().unwrap();
     assert_eq!(vaults.len(), 1);
     assert_eq!(vaults[0].name, "New Name");
 
     // delete item
-    assert_eq!(core.list_items("v".to_string()).unwrap().len(), 1);
-    core.delete_item("v".to_string(), "k".to_string()).unwrap();
-    assert!(core.list_items("v".to_string()).unwrap().is_empty());
+    assert_eq!(core.list_items("v".to_owned()).unwrap().len(), 1);
+    core.delete_item("v".to_owned(), "k".to_owned()).unwrap();
+    assert!(core.list_items("v".to_owned()).unwrap().is_empty());
 
     // delete vault
-    core.delete_vault("v".to_string()).unwrap();
+    core.delete_vault("v".to_owned()).unwrap();
     assert!(core.list_vaults().unwrap().is_empty());
 }
 
@@ -981,19 +972,19 @@ fn known_hosts_list_and_forget() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
     // the connection pins the host key (TOFU)
     core.ssh_exec(
-        "127.0.0.1".to_string(),
+        "127.0.0.1".to_owned(),
         sshd.port,
-        "root".to_string(),
+        "root".to_owned(),
         agent_auth("v", "key"),
-        "true".to_string(),
+        "true".to_owned(),
         vec![],
         None,
     )
@@ -1005,14 +996,10 @@ fn known_hosts_list_and_forget() {
     assert_eq!(hosts[0].port, sshd.port);
     assert!(hosts[0].key.starts_with("ssh-"));
 
-    assert!(core
-        .forget_host("127.0.0.1".to_string(), sshd.port)
-        .unwrap());
+    assert!(core.forget_host("127.0.0.1".to_owned(), sshd.port).unwrap());
     assert!(core.list_known_hosts().unwrap().is_empty());
     // repeated forget — the record is already gone
-    assert!(!core
-        .forget_host("127.0.0.1".to_string(), sshd.port)
-        .unwrap());
+    assert!(!core.forget_host("127.0.0.1".to_owned(), sshd.port).unwrap());
 }
 
 #[test]
@@ -1022,20 +1009,20 @@ fn password_auth_path_wired() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
     let res = core.ssh_exec(
-        "127.0.0.1".to_string(),
+        "127.0.0.1".to_owned(),
         sshd.port,
-        "root".to_string(),
+        "root".to_owned(),
         AuthMethod::Password {
-            password: "wrong".to_string(),
+            password: "wrong".to_owned(),
         },
-        "true".to_string(),
+        "true".to_owned(),
         vec![],
         None,
     );
@@ -1047,20 +1034,20 @@ fn host_key_mismatch_detected() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
 
     // first sshd → pin its host key (TOFU)
     let sshd1 = TestSshd::start(&pubkey);
     let port = sshd1.port;
     core.ssh_exec(
-        "127.0.0.1".to_string(),
+        "127.0.0.1".to_owned(),
         port,
-        "root".to_string(),
+        "root".to_owned(),
         agent_auth("v", "key"),
-        "true".to_string(),
+        "true".to_owned(),
         vec![],
         None,
     )
@@ -1068,16 +1055,16 @@ fn host_key_mismatch_detected() {
 
     // bring up a DIFFERENT sshd (different host key) on the SAME port
     drop(sshd1);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(200));
     let _sshd2 = TestSshd::start_on_port(&pubkey, port);
 
     let err = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
-            "true".to_string(),
+            "true".to_owned(),
             vec![],
             None,
         )
@@ -1092,13 +1079,13 @@ fn host_key_mismatch_detected() {
 fn change_password_e2e() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
-    let secret = core.create_account(Some("old-pw".to_string())).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    let secret = core.create_account(Some("old-pw".to_owned())).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     // change the password
     core.change_password(
-        Some("old-pw".to_string()),
-        Some("new-pw".to_string()),
+        Some("old-pw".to_owned()),
+        Some("new-pw".to_owned()),
         secret.clone(),
     )
     .unwrap();
@@ -1106,24 +1093,24 @@ fn change_password_e2e() {
     // the old password no longer unlocks, the new one does
     core.lock();
     assert!(matches!(
-        core.unlock(Some("old-pw".to_string()), secret.clone()),
+        core.unlock(Some("old-pw".to_owned()), secret.clone()),
         Err(unissh_ffi::FfiError::InvalidCredentials)
     ));
-    core.unlock(Some("new-pw".to_string()), secret.clone())
+    core.unlock(Some("new-pw".to_owned()), secret.clone())
         .unwrap();
     assert_eq!(core.list_vaults().unwrap().len(), 1);
 
     // wrong old credentials don't "brick" the account (error, no overwrite)
     assert!(core
         .change_password(
-            Some("wrong".to_string()),
-            Some("x".to_string()),
+            Some("wrong".to_owned()),
+            Some("x".to_owned()),
             secret.clone()
         )
         .is_err());
     // still unlocks with the current password
     core.lock();
-    core.unlock(Some("new-pw".to_string()), secret).unwrap();
+    core.unlock(Some("new-pw".to_owned()), secret).unwrap();
     assert!(core.is_unlocked());
 }
 
@@ -1132,27 +1119,27 @@ fn get_public_key_and_item_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let generated = core
-        .generate_ssh_key("v".to_string(), "id".to_string())
+        .generate_ssh_key("v".to_owned(), "id".to_owned())
         .unwrap();
 
     // the public key matches the one returned at generation; a fingerprint is present
     let pk = core
-        .get_public_key("v".to_string(), "id".to_string())
+        .get_public_key("v".to_owned(), "id".to_owned())
         .unwrap();
     assert_eq!(pk.openssh.trim(), generated.trim());
     assert!(pk.fingerprint.starts_with("SHA256:"));
 
     // metadata: timestamps are set, no certificate
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     let it = items.iter().find(|i| i.item_id == "id").unwrap();
     assert!(it.created_at > 0 && it.updated_at > 0);
     assert!(!it.has_certificate);
 
     // get_public_key on a missing item → NotFound
     assert!(matches!(
-        core.get_public_key("v".to_string(), "nope".to_string()),
+        core.get_public_key("v".to_owned(), "nope".to_owned()),
         Err(unissh_ffi::FfiError::NotFound)
     ));
 }
@@ -1162,24 +1149,24 @@ fn rename_item_e2e() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "old".to_string())
+        .generate_ssh_key("v".to_owned(), "old".to_owned())
         .unwrap();
     let before = core
-        .get_public_key("v".to_string(), "old".to_string())
+        .get_public_key("v".to_owned(), "old".to_owned())
         .unwrap();
 
-    core.rename_item("v".to_string(), "old".to_string(), "new".to_string())
+    core.rename_item("v".to_owned(), "old".to_owned(), "new".to_owned())
         .unwrap();
 
     // the old one is gone, the new one carries the same key
     assert!(matches!(
-        core.get_public_key("v".to_string(), "old".to_string()),
+        core.get_public_key("v".to_owned(), "old".to_owned()),
         Err(unissh_ffi::FfiError::NotFound)
     ));
     let after = core
-        .get_public_key("v".to_string(), "new".to_string())
+        .get_public_key("v".to_owned(), "new".to_owned())
         .unwrap();
     assert_eq!(before.openssh, after.openssh);
 
@@ -1187,11 +1174,11 @@ fn rename_item_e2e() {
     let sshd = TestSshd::start(&pubkey);
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "new"),
-            "echo renamed-ok".to_string(),
+            "echo renamed-ok".to_owned(),
             vec![],
             None,
         )
@@ -1203,14 +1190,14 @@ fn rename_item_e2e() {
 fn rotation_fixture(dir: &std::path::Path) -> std::sync::Arc<Core> {
     let core = new_core(dir);
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     core
 }
 
 fn public_key(core: &Core, item: &str) -> Result<String, unissh_ffi::FfiError> {
-    core.get_public_key("v".to_string(), item.to_string())
+    core.get_public_key("v".to_owned(), item.to_owned())
         .map(|p| p.openssh)
 }
 
@@ -1221,21 +1208,21 @@ fn key_rotation_begin_creates_distinct_candidate() {
     let before = public_key(&core, "key").unwrap();
 
     let candidate = core
-        .begin_key_rotation("v".to_string(), "key".to_string())
+        .begin_key_rotation("v".to_owned(), "key".to_owned())
         .unwrap();
 
     assert_ne!(candidate, "key");
     assert_ne!(public_key(&core, &candidate).unwrap(), before);
     assert_eq!(public_key(&core, "key").unwrap(), before);
     assert_eq!(
-        core.list_item_versions("v".to_string(), "key".to_string())
+        core.list_item_versions("v".to_owned(), "key".to_owned())
             .unwrap(),
         vec![1]
     );
     assert_eq!(
-        core.list_key_rotations("v".to_string()).unwrap(),
+        core.list_key_rotations("v".to_owned()).unwrap(),
         vec![unissh_ffi::KeyRotationLink {
-            key_id: "key".to_string(),
+            key_id: "key".to_owned(),
             candidate_id: candidate,
             started_elsewhere: false,
         }]
@@ -1268,24 +1255,24 @@ fn key_rotation_finish_commits_candidate_into_original() {
         .unwrap()
         .success());
     let cert = std::fs::read_to_string(work.path().join("user-cert.pub")).unwrap();
-    core.import_ssh_certificate("v".to_string(), "key".to_string(), cert)
+    core.import_ssh_certificate("v".to_owned(), "key".to_owned(), cert)
         .unwrap();
     let candidate = core
-        .begin_key_rotation("v".to_string(), "key".to_string())
+        .begin_key_rotation("v".to_owned(), "key".to_owned())
         .unwrap();
     let new_pub = public_key(&core, &candidate).unwrap();
 
-    core.finish_key_rotation("v".to_string(), "key".to_string(), candidate.clone())
+    core.finish_key_rotation("v".to_owned(), "key".to_owned(), candidate.clone())
         .unwrap();
 
     assert_eq!(public_key(&core, "key").unwrap(), new_pub);
     assert_eq!(
-        core.list_item_versions("v".to_string(), "key".to_string())
+        core.list_item_versions("v".to_owned(), "key".to_owned())
             .unwrap(),
         vec![2, 1],
         "the old material stays in the item's history"
     );
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     assert!(
         !items
             .iter()
@@ -1294,7 +1281,7 @@ fn key_rotation_finish_commits_candidate_into_original() {
             .has_certificate
     );
     assert!(!items.iter().any(|i| i.item_id == candidate));
-    assert!(core.list_key_rotations("v".to_string()).unwrap().is_empty());
+    assert!(core.list_key_rotations("v".to_owned()).unwrap().is_empty());
 }
 
 #[test]
@@ -1303,10 +1290,10 @@ fn key_rotation_abandon_tombstones_only_the_candidate() {
     let core = rotation_fixture(dir.path());
     let before = public_key(&core, "key").unwrap();
     let candidate = core
-        .begin_key_rotation("v".to_string(), "key".to_string())
+        .begin_key_rotation("v".to_owned(), "key".to_owned())
         .unwrap();
 
-    core.abandon_key_rotation("v".to_string(), candidate.clone())
+    core.abandon_key_rotation("v".to_owned(), candidate.clone())
         .unwrap();
 
     assert!(matches!(
@@ -1315,11 +1302,11 @@ fn key_rotation_abandon_tombstones_only_the_candidate() {
     ));
     assert_eq!(public_key(&core, "key").unwrap(), before);
     assert_eq!(
-        core.list_item_versions("v".to_string(), "key".to_string())
+        core.list_item_versions("v".to_owned(), "key".to_owned())
             .unwrap(),
         vec![1]
     );
-    assert!(core.list_key_rotations("v".to_string()).unwrap().is_empty());
+    assert!(core.list_key_rotations("v".to_owned()).unwrap().is_empty());
 }
 
 #[test]
@@ -1327,10 +1314,10 @@ fn key_rotation_second_begin_refused_while_candidate_live() {
     let dir = tempfile::tempdir().unwrap();
     let core = rotation_fixture(dir.path());
     let candidate = core
-        .begin_key_rotation("v".to_string(), "key".to_string())
+        .begin_key_rotation("v".to_owned(), "key".to_owned())
         .unwrap();
 
-    let second = core.begin_key_rotation("v".to_string(), "key".to_string());
+    let second = core.begin_key_rotation("v".to_owned(), "key".to_owned());
 
     assert!(matches!(
         second,
@@ -1345,26 +1332,26 @@ fn key_rotation_unlinked_candidate_listed_elsewhere_abandonable_not_finishable()
     let before = public_key(&core, "key").unwrap();
     // As a candidate synced from another device arrives: a plain key at the
     // derived id, with no link on this device.
-    core.generate_ssh_key("v".to_string(), "key (rotation)".to_string())
+    core.generate_ssh_key("v".to_owned(), "key (rotation)".to_owned())
         .unwrap();
 
     assert_eq!(
-        core.list_key_rotations("v".to_string()).unwrap(),
+        core.list_key_rotations("v".to_owned()).unwrap(),
         vec![unissh_ffi::KeyRotationLink {
-            key_id: "key".to_string(),
-            candidate_id: "key (rotation)".to_string(),
+            key_id: "key".to_owned(),
+            candidate_id: "key (rotation)".to_owned(),
             started_elsewhere: true,
         }]
     );
     assert!(matches!(
         core.finish_key_rotation(
-            "v".to_string(),
-            "key".to_string(),
-            "key (rotation)".to_string()
+            "v".to_owned(),
+            "key".to_owned(),
+            "key (rotation)".to_owned()
         ),
         Err(unissh_ffi::FfiError::NotFound)
     ));
-    core.abandon_key_rotation("v".to_string(), "key (rotation)".to_string())
+    core.abandon_key_rotation("v".to_owned(), "key (rotation)".to_owned())
         .unwrap();
     assert!(matches!(
         public_key(&core, "key (rotation)"),
@@ -1378,23 +1365,22 @@ fn key_rotation_replaced_candidate_listed_elsewhere_not_finishable() {
     let dir = tempfile::tempdir().unwrap();
     let core = rotation_fixture(dir.path());
     let candidate = core
-        .begin_key_rotation("v".to_string(), "key".to_string())
+        .begin_key_rotation("v".to_owned(), "key".to_owned())
         .unwrap();
     // The candidate is deleted elsewhere and a different key syncs in under its
     // id: this device's link still names the id, but not that key.
-    core.delete_item("v".to_string(), candidate.clone())
-        .unwrap();
-    core.generate_ssh_key("v".to_string(), candidate.clone())
+    core.delete_item("v".to_owned(), candidate.clone()).unwrap();
+    core.generate_ssh_key("v".to_owned(), candidate.clone())
         .unwrap();
 
     assert!(matches!(
-        core.finish_key_rotation("v".to_string(), "key".to_string(), candidate.clone()),
+        core.finish_key_rotation("v".to_owned(), "key".to_owned(), candidate.clone()),
         Err(unissh_ffi::FfiError::NotFound)
     ));
     assert_eq!(
-        core.list_key_rotations("v".to_string()).unwrap(),
+        core.list_key_rotations("v".to_owned()).unwrap(),
         vec![unissh_ffi::KeyRotationLink {
-            key_id: "key".to_string(),
+            key_id: "key".to_owned(),
             candidate_id: candidate,
             started_elsewhere: true,
         }]
@@ -1406,19 +1392,19 @@ fn trust_host_e2e() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
 
     let sshd1 = TestSshd::start(&pubkey);
     let port = sshd1.port;
     core.ssh_exec(
-        "127.0.0.1".to_string(),
+        "127.0.0.1".to_owned(),
         port,
-        "root".to_string(),
+        "root".to_owned(),
         agent_auth("v", "key"),
-        "true".to_string(),
+        "true".to_owned(),
         vec![],
         None,
     )
@@ -1426,14 +1412,14 @@ fn trust_host_e2e() {
 
     // a different host key on the same port → mismatch with a fingerprint
     drop(sshd1);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(200));
     let _sshd2 = TestSshd::start_on_port(&pubkey, port);
     let presented = match core.ssh_exec(
-        "127.0.0.1".to_string(),
+        "127.0.0.1".to_owned(),
         port,
-        "root".to_string(),
+        "root".to_owned(),
         agent_auth("v", "key"),
-        "true".to_string(),
+        "true".to_owned(),
         vec![],
         None,
     ) {
@@ -1446,22 +1432,22 @@ fn trust_host_e2e() {
 
     // trusting with the "wrong" fingerprint is not allowed
     assert!(matches!(
-        core.trust_host("127.0.0.1".to_string(), port, "SHA256:bogus".to_string()),
+        core.trust_host("127.0.0.1".to_owned(), port, "SHA256:bogus".to_owned()),
         Err(unissh_ffi::FfiError::HostKeyMismatch { .. })
     ));
 
     // trust the new key with the confirmed fingerprint → everything works afterward
     let fp = core
-        .trust_host("127.0.0.1".to_string(), port, presented)
+        .trust_host("127.0.0.1".to_owned(), port, presented)
         .unwrap();
     assert!(fp.starts_with("SHA256:"));
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
-            "echo trusted".to_string(),
+            "echo trusted".to_owned(),
             vec![],
             None,
         )
@@ -1482,7 +1468,7 @@ fn local_forward_e2e() {
                 Err(_) => break,
             };
             std::thread::spawn(move || {
-                let mut buf = [0u8; 256];
+                let mut buf = [0_u8; 256];
                 if let Ok(n) = s.read(&mut buf) {
                     let _ = s.write_all(&buf[..n]);
                 }
@@ -1493,22 +1479,22 @@ fn local_forward_e2e() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
     let tunnel = core
         .open_local_forward(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "127.0.0.1:0".to_string(),
-            "127.0.0.1".to_string(),
+            "127.0.0.1:0".to_owned(),
+            "127.0.0.1".to_owned(),
             echo_port,
         )
         .unwrap();
@@ -1518,7 +1504,7 @@ fn local_forward_e2e() {
     // connect through the tunnel → land on the echo server
     let mut conn = std::net::TcpStream::connect(&bind).unwrap();
     conn.write_all(b"ping-through-tunnel").unwrap();
-    let mut got = [0u8; 64];
+    let mut got = [0_u8; 64];
     let n = conn.read(&mut got).unwrap();
     assert_eq!(&got[..n], b"ping-through-tunnel");
 
@@ -1530,17 +1516,17 @@ fn sftp_e2e() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
     let sftp = core
         .open_sftp(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
@@ -1577,24 +1563,24 @@ fn connection_profiles_crud_and_import() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let prof = unissh_ffi::ConnectionProfile {
         proxy: None,
-        profile_id: "prod-web".to_string(),
+        profile_id: "prod-web".to_owned(),
         uid: String::new(),
         username_template: None,
-        label: "Prod Web".to_string(),
-        host: "10.0.0.5".to_string(),
+        label: "Prod Web".to_owned(),
+        host: "10.0.0.5".to_owned(),
         port: 22,
-        user: "deploy".to_string(),
+        user: "deploy".to_owned(),
         auth: unissh_ffi::ProfileAuth::Key {
-            key_item_id: "id_ed25519".to_string(),
+            key_item_id: "id_ed25519".to_owned(),
         },
         jumps: vec![JumpHost {
-            host: "bastion".to_string(),
+            host: "bastion".to_owned(),
             port: 22,
-            user: "admin".to_string(),
+            user: "admin".to_owned(),
             auth: agent_auth("v", "id_ed25519"),
             hop_ref: None,
         }],
@@ -1603,12 +1589,12 @@ fn connection_profiles_crud_and_import() {
         record_sessions: false,
         agent_forward: false,
     };
-    core.save_connection("v".to_string(), prof).unwrap();
+    core.save_connection("v".to_owned(), prof).unwrap();
 
-    let list = core.list_connections("v".to_string()).unwrap();
+    let list = core.list_connections("v".to_owned()).unwrap();
     assert_eq!(list.len(), 1);
     let got = core
-        .get_connection("v".to_string(), "prod-web".to_string())
+        .get_connection("v".to_owned(), "prod-web".to_owned())
         .unwrap();
     assert_eq!(got.host, "10.0.0.5");
     assert_eq!(got.user, "deploy");
@@ -1621,19 +1607,19 @@ fn connection_profiles_crud_and_import() {
 
     // profiles don't show up in the regular listing as "keys" — it's a separate type
     // (list_items returns them with item_type=3); verify that management works
-    core.delete_connection("v".to_string(), "prod-web".to_string())
+    core.delete_connection("v".to_owned(), "prod-web".to_owned())
         .unwrap();
-    assert!(core.list_connections("v".to_string()).unwrap().is_empty());
+    assert!(core.list_connections("v".to_owned()).unwrap().is_empty());
 
     // import ssh-config
     let cfg = "Host web prod\n  HostName 192.168.1.10\n  User deploy\n  Port 2222\n\
                Host bastion\n  HostName gw.example.com\n  ProxyJump jumpuser@jump.example.com:2200\n";
     let created = core
-        .import_ssh_config("v".to_string(), cfg.to_string())
+        .import_ssh_config("v".to_owned(), cfg.to_owned())
         .unwrap();
     assert_eq!(created, vec!["web", "prod", "bastion"]);
     let bastion = core
-        .get_connection("v".to_string(), "bastion".to_string())
+        .get_connection("v".to_owned(), "bastion".to_owned())
         .unwrap();
     assert_eq!(bastion.host, "gw.example.com");
     assert_eq!(bastion.jumps.len(), 1);
@@ -1647,20 +1633,20 @@ fn cross_type_clobber_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "id".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "id".to_owned())
         .unwrap();
 
     // a connection profile with the id of an existing key must NOT overwrite the key
     let prof = unissh_ffi::ConnectionProfile {
         proxy: None,
-        profile_id: "id".to_string(),
+        profile_id: "id".to_owned(),
         uid: String::new(),
         username_template: None,
-        label: "x".to_string(),
-        host: "h".to_string(),
+        label: "x".to_owned(),
+        host: "h".to_owned(),
         port: 22,
-        user: "u".to_string(),
+        user: "u".to_owned(),
         auth: unissh_ffi::ProfileAuth::PromptPassword,
         jumps: vec![],
         tags: vec![],
@@ -1669,24 +1655,22 @@ fn cross_type_clobber_rejected() {
         agent_forward: false,
     };
     assert!(matches!(
-        core.save_connection("v".to_string(), prof),
+        core.save_connection("v".to_owned(), prof),
         Err(unissh_ffi::FfiError::AlreadyExists)
     ));
     // the key is intact and readable
-    assert!(core
-        .get_public_key("v".to_string(), "id".to_string())
-        .is_ok());
+    assert!(core.get_public_key("v".to_owned(), "id".to_owned()).is_ok());
 
     // and vice versa: generating a key over a profile is rejected
     let prof2 = unissh_ffi::ConnectionProfile {
         proxy: None,
-        profile_id: "conn".to_string(),
+        profile_id: "conn".to_owned(),
         uid: String::new(),
         username_template: None,
-        label: "x".to_string(),
-        host: "h".to_string(),
+        label: "x".to_owned(),
+        host: "h".to_owned(),
         port: 22,
-        user: "u".to_string(),
+        user: "u".to_owned(),
         auth: unissh_ffi::ProfileAuth::PromptPassword,
         jumps: vec![],
         tags: vec![],
@@ -1694,20 +1678,18 @@ fn cross_type_clobber_rejected() {
         record_sessions: false,
         agent_forward: false,
     };
-    core.save_connection("v".to_string(), prof2).unwrap();
+    core.save_connection("v".to_owned(), prof2).unwrap();
     assert!(matches!(
-        core.generate_ssh_key("v".to_string(), "conn".to_string()),
+        core.generate_ssh_key("v".to_owned(), "conn".to_owned()),
         Err(unissh_ffi::FfiError::AlreadyExists)
     ));
 
     // import_ssh_config with an alias = a key id skips it (does not overwrite)
     let created = core
-        .import_ssh_config("v".to_string(), "Host id\n  HostName x\n".to_string())
+        .import_ssh_config("v".to_owned(), "Host id\n  HostName x\n".to_owned())
         .unwrap();
     assert!(created.is_empty(), "colliding alias must be skipped");
-    assert!(core
-        .get_public_key("v".to_string(), "id".to_string())
-        .is_ok());
+    assert!(core.get_public_key("v".to_owned(), "id".to_owned()).is_ok());
 }
 
 #[test]
@@ -1715,13 +1697,11 @@ fn import_ssh_config_ipv6_proxyjump() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let cfg = "Host h\n  HostName 2001:db8::5\n  ProxyJump j@[2001:db8::1]:2200\n";
-    core.import_ssh_config("v".to_string(), cfg.to_string())
+    core.import_ssh_config("v".to_owned(), cfg.to_owned())
         .unwrap();
-    let p = core
-        .get_connection("v".to_string(), "h".to_string())
-        .unwrap();
+    let p = core.get_connection("v".to_owned(), "h".to_owned()).unwrap();
     assert_eq!(p.host, "2001:db8::5");
     assert_eq!(p.jumps.len(), 1);
     assert_eq!(p.jumps[0].host, "2001:db8::1");
@@ -1795,7 +1775,7 @@ mod pwserver {
             .enable_all()
             .build()
             .unwrap();
-        let password = password.to_string();
+        let password = password.to_owned();
         let port = rt.block_on(async move {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
@@ -1849,40 +1829,39 @@ fn password_items_crud() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
-    core.save_password("v".to_string(), "srv1".to_string(), "s3cret!".to_string())
+    core.save_password("v".to_owned(), "srv1".to_owned(), "s3cret!".to_owned())
         .unwrap();
 
     // reveal returns what was stored
     assert_eq!(
-        core.get_password("v".to_string(), "srv1".to_string())
+        core.get_password("v".to_owned(), "srv1".to_owned())
             .unwrap(),
         "s3cret!"
     );
 
     // in the items listing — type "password" (4), the version grows on update
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     let it = items.iter().find(|i| i.item_id == "srv1").unwrap();
     assert_eq!(it.item_type, 4);
     let v1 = it.version;
 
-    core.save_password("v".to_string(), "srv1".to_string(), "newpass".to_string())
+    core.save_password("v".to_owned(), "srv1".to_owned(), "newpass".to_owned())
         .unwrap();
     assert_eq!(
-        core.get_password("v".to_string(), "srv1".to_string())
+        core.get_password("v".to_owned(), "srv1".to_owned())
             .unwrap(),
         "newpass"
     );
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     let it = items.iter().find(|i| i.item_id == "srv1").unwrap();
     assert!(it.version > v1, "version must grow monotonically");
 
     // deletion (tombstone) → NotFound
-    core.delete_item("v".to_string(), "srv1".to_string())
-        .unwrap();
+    core.delete_item("v".to_owned(), "srv1".to_owned()).unwrap();
     assert!(matches!(
-        core.get_password("v".to_string(), "srv1".to_string()),
+        core.get_password("v".to_owned(), "srv1".to_owned()),
         Err(unissh_ffi::FfiError::NotFound)
     ));
 }
@@ -1893,22 +1872,22 @@ fn get_password_refuses_non_password_items() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
 
     let err = core
-        .get_password("v".to_string(), "key".to_string())
+        .get_password("v".to_owned(), "key".to_owned())
         .unwrap_err();
     assert!(
         !matches!(err, unissh_ffi::FfiError::NotFound),
         "expected a type error, not NotFound"
     );
     // and vice versa: a password does not masquerade as a key
-    core.save_password("v".to_string(), "pw".to_string(), "x".to_string())
+    core.save_password("v".to_owned(), "pw".to_owned(), "x".to_owned())
         .unwrap();
     assert!(core
-        .get_public_key("v".to_string(), "pw".to_string())
+        .get_public_key("v".to_owned(), "pw".to_owned())
         .is_err());
 }
 
@@ -1917,18 +1896,16 @@ fn cross_type_clobber_password_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "id".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "id".to_owned())
         .unwrap();
 
     // a password with the id of an existing key must NOT overwrite the key
     assert!(matches!(
-        core.save_password("v".to_string(), "id".to_string(), "x".to_string()),
+        core.save_password("v".to_owned(), "id".to_owned(), "x".to_owned()),
         Err(unissh_ffi::FfiError::AlreadyExists)
     ));
-    assert!(core
-        .get_public_key("v".to_string(), "id".to_string())
-        .is_ok());
+    assert!(core.get_public_key("v".to_owned(), "id".to_owned()).is_ok());
 }
 
 #[test]
@@ -1936,22 +1913,22 @@ fn connect_with_vault_password() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.save_password("v".to_string(), "srv".to_string(), "hunter2!".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.save_password("v".to_owned(), "srv".to_owned(), "hunter2!".to_owned())
         .unwrap();
 
     let (_rt, port) = pwserver::start("hunter2!");
 
     let res = core
         .ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             port,
-            "root".to_string(),
+            "root".to_owned(),
             AuthMethod::VaultPassword {
-                vault_id: "v".to_string(),
-                password_item_id: "srv".to_string(),
+                vault_id: "v".to_owned(),
+                password_item_id: "srv".to_owned(),
             },
-            "echo vault-pw".to_string(),
+            "echo vault-pw".to_owned(),
             vec![],
             None,
         )
@@ -1962,14 +1939,14 @@ fn connect_with_vault_password() {
     // a bad reference → NotFound even before connecting
     assert!(matches!(
         core.ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             port,
-            "root".to_string(),
+            "root".to_owned(),
             AuthMethod::VaultPassword {
-                vault_id: "v".to_string(),
-                password_item_id: "nope".to_string(),
+                vault_id: "v".to_owned(),
+                password_item_id: "nope".to_owned(),
             },
-            "true".to_string(),
+            "true".to_owned(),
             vec![],
             None,
         ),
@@ -1977,18 +1954,17 @@ fn connect_with_vault_password() {
     ));
 
     // a deleted (tombstone) password is also not acceptable
-    core.delete_item("v".to_string(), "srv".to_string())
-        .unwrap();
+    core.delete_item("v".to_owned(), "srv".to_owned()).unwrap();
     assert!(matches!(
         core.ssh_exec(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             port,
-            "root".to_string(),
+            "root".to_owned(),
             AuthMethod::VaultPassword {
-                vault_id: "v".to_string(),
-                password_item_id: "srv".to_string(),
+                vault_id: "v".to_owned(),
+                password_item_id: "srv".to_owned(),
             },
-            "true".to_string(),
+            "true".to_owned(),
             vec![],
             None,
         ),
@@ -2001,28 +1977,28 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     // a profile referencing a password + a jump using a password from the vault
     let prof = unissh_ffi::ConnectionProfile {
         proxy: None,
-        profile_id: "pw-host".to_string(),
+        profile_id: "pw-host".to_owned(),
         uid: String::new(),
         username_template: None,
-        label: "PW Host".to_string(),
-        host: "10.0.0.7".to_string(),
+        label: "PW Host".to_owned(),
+        host: "10.0.0.7".to_owned(),
         port: 22,
-        user: "root".to_string(),
+        user: "root".to_owned(),
         auth: unissh_ffi::ProfileAuth::VaultPassword {
-            password_item_id: "srv-pw".to_string(),
+            password_item_id: "srv-pw".to_owned(),
         },
         jumps: vec![JumpHost {
-            host: "bastion".to_string(),
+            host: "bastion".to_owned(),
             port: 22,
-            user: "jump".to_string(),
+            user: "jump".to_owned(),
             auth: AuthMethod::VaultPassword {
-                vault_id: "v".to_string(),
-                password_item_id: "bastion-pw".to_string(),
+                vault_id: "v".to_owned(),
+                password_item_id: "bastion-pw".to_owned(),
             },
             hop_ref: None,
         }],
@@ -2031,10 +2007,10 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         record_sessions: false,
         agent_forward: false,
     };
-    core.save_connection("v".to_string(), prof).unwrap();
+    core.save_connection("v".to_owned(), prof).unwrap();
 
     let got = core
-        .get_connection("v".to_string(), "pw-host".to_string())
+        .get_connection("v".to_owned(), "pw-host".to_owned())
         .unwrap();
     assert!(matches!(
         &got.auth,
@@ -2048,20 +2024,20 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
     // inline password in the profile's jump host — rejected (secret not written to JSON)
     let bad = unissh_ffi::ConnectionProfile {
         proxy: None,
-        profile_id: "bad".to_string(),
+        profile_id: "bad".to_owned(),
         uid: String::new(),
         username_template: None,
-        label: "x".to_string(),
-        host: "h".to_string(),
+        label: "x".to_owned(),
+        host: "h".to_owned(),
         port: 22,
-        user: "u".to_string(),
+        user: "u".to_owned(),
         auth: unissh_ffi::ProfileAuth::PromptPassword,
         jumps: vec![JumpHost {
-            host: "j".to_string(),
+            host: "j".to_owned(),
             port: 22,
-            user: "u".to_string(),
+            user: "u".to_owned(),
             auth: AuthMethod::Password {
-                password: "inline-secret".to_string(),
+                password: "inline-secret".to_owned(),
             },
             hop_ref: None,
         }],
@@ -2070,9 +2046,9 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
         record_sessions: false,
         agent_forward: false,
     };
-    assert!(core.save_connection("v".to_string(), bad).is_err());
+    assert!(core.save_connection("v".to_owned(), bad).is_err());
     assert!(matches!(
-        core.get_connection("v".to_string(), "bad".to_string()),
+        core.get_connection("v".to_owned(), "bad".to_owned()),
         Err(unissh_ffi::FfiError::NotFound)
     ));
 }
@@ -2081,11 +2057,11 @@ fn profile_with_vault_password_and_inline_jump_rejection() {
 fn password_never_stored_in_plaintext() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
-    core.create_account(Some("masterpw".to_string())).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_account(Some("masterpw".to_owned())).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let secret = "uniqu3-p4ssw0rd-m4rker";
-    core.save_password("v".to_string(), "srv".to_string(), secret.to_string())
+    core.save_password("v".to_owned(), "srv".to_owned(), secret.to_owned())
         .unwrap();
     core.lock();
 
@@ -2198,7 +2174,7 @@ mod fleetserver {
             .enable_all()
             .build()
             .unwrap();
-        let password = password.to_string();
+        let password = password.to_owned();
         let port = rt.block_on(async move {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
@@ -2247,12 +2223,12 @@ fn pw_target(port: u16) -> MultiExecTarget {
     MultiExecTarget {
         proxy: None,
         publickey_only: false,
-        host: "127.0.0.1".to_string(),
+        host: "127.0.0.1".to_owned(),
         port,
-        user: "root".to_string(),
+        user: "root".to_owned(),
         auth: AuthMethod::VaultPassword {
-            vault_id: "v".to_string(),
-            password_item_id: "pw".to_string(),
+            vault_id: "v".to_owned(),
+            password_item_id: "pw".to_owned(),
         },
         jumps: vec![],
     }
@@ -2261,8 +2237,8 @@ fn pw_target(port: u16) -> MultiExecTarget {
 fn core_with_pw(dir: &std::path::Path, password: &str) -> std::sync::Arc<Core> {
     let core = new_core(dir);
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.save_password("v".to_string(), "pw".to_string(), password.to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.save_password("v".to_owned(), "pw".to_owned(), password.to_owned())
         .unwrap();
     core
 }
@@ -2280,7 +2256,7 @@ fn multi_exec_timeout_marks_timed_out() {
 
     // exec hangs on the server; a per-host timeout=1s must flag the result and return control.
     let results = core
-        .ssh_exec_multi(vec![pw_target(port)], "echo hi".to_string(), 0, 1)
+        .ssh_exec_multi(vec![pw_target(port)], "echo hi".to_owned(), 0, 1)
         .unwrap();
     assert_eq!(results.len(), 1);
     assert!(results[0].timed_out, "expected timed_out=true");
@@ -2299,7 +2275,7 @@ fn multi_exec_concurrency_is_capped() {
     // 5 targets on the same port, limit 2 → no more than 2 run concurrently.
     let targets: Vec<_> = (0..5).map(|_| pw_target(port)).collect();
     let results = core
-        .ssh_exec_multi(targets, "echo hi".to_string(), 2, 0)
+        .ssh_exec_multi(targets, "echo hi".to_owned(), 2, 0)
         .unwrap();
     assert_eq!(results.len(), 5);
     for r in &results {
@@ -2324,29 +2300,29 @@ fn secure_notes_crud() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let note = "IPMI: 10.0.0.9 admin / recovery codes:\n111-222\n333-444";
-    core.save_note("v".to_string(), "host-notes".to_string(), note.to_string())
+    core.save_note("v".to_owned(), "host-notes".to_owned(), note.to_owned())
         .unwrap();
     assert_eq!(
-        core.get_note("v".to_string(), "host-notes".to_string())
+        core.get_note("v".to_owned(), "host-notes".to_owned())
             .unwrap(),
         note
     );
 
     // type 6, the version grows on update
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     let it = items.iter().find(|i| i.item_id == "host-notes").unwrap();
     assert_eq!(it.item_type, 6);
     let v1 = it.version;
     core.save_note(
-        "v".to_string(),
-        "host-notes".to_string(),
-        "updated".to_string(),
+        "v".to_owned(),
+        "host-notes".to_owned(),
+        "updated".to_owned(),
     )
     .unwrap();
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     assert!(
         items
             .iter()
@@ -2357,10 +2333,10 @@ fn secure_notes_crud() {
     );
 
     // deletion → NotFound
-    core.delete_item("v".to_string(), "host-notes".to_string())
+    core.delete_item("v".to_owned(), "host-notes".to_owned())
         .unwrap();
     assert!(matches!(
-        core.get_note("v".to_string(), "host-notes".to_string()),
+        core.get_note("v".to_owned(), "host-notes".to_owned()),
         Err(unissh_ffi::FfiError::NotFound)
     ));
 }
@@ -2371,26 +2347,22 @@ fn get_note_is_type_gated() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
-    core.save_password("v".to_string(), "pw".to_string(), "secret".to_string())
+    core.save_password("v".to_owned(), "pw".to_owned(), "secret".to_owned())
         .unwrap();
-    core.save_note("v".to_string(), "note".to_string(), "hello".to_string())
+    core.save_note("v".to_owned(), "note".to_owned(), "hello".to_owned())
         .unwrap();
 
     // get_note on a key/password → not NotFound, but a type error
-    let e = core
-        .get_note("v".to_string(), "key".to_string())
-        .unwrap_err();
+    let e = core.get_note("v".to_owned(), "key".to_owned()).unwrap_err();
     assert!(!matches!(e, unissh_ffi::FfiError::NotFound));
-    let e = core
-        .get_note("v".to_string(), "pw".to_string())
-        .unwrap_err();
+    let e = core.get_note("v".to_owned(), "pw".to_owned()).unwrap_err();
     assert!(!matches!(e, unissh_ffi::FfiError::NotFound));
     // get_password on a note → error
     assert!(core
-        .get_password("v".to_string(), "note".to_string())
+        .get_password("v".to_owned(), "note".to_owned())
         .is_err());
 }
 
@@ -2398,10 +2370,10 @@ fn get_note_is_type_gated() {
 fn note_never_stored_in_plaintext() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
-    core.create_account(Some("masterpw".to_string())).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_account(Some("masterpw".to_owned())).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let marker = "uniqu3-n0te-m4rker";
-    core.save_note("v".to_string(), "n".to_string(), marker.to_string())
+    core.save_note("v".to_owned(), "n".to_owned(), marker.to_owned())
         .unwrap();
     core.lock();
     let db = std::fs::read(dir.path().join("inst.db")).unwrap();
@@ -2415,21 +2387,21 @@ fn note_never_stored_in_plaintext() {
 
 fn save_profile(core: &Core, id: &str, host: &str, port: u16, key_item: &str, tags: &[&str]) {
     core.save_connection(
-        "v".to_string(),
+        "v".to_owned(),
         unissh_ffi::ConnectionProfile {
             proxy: None,
-            profile_id: id.to_string(),
+            profile_id: id.to_owned(),
             uid: String::new(),
             username_template: None,
-            label: id.to_string(),
-            host: host.to_string(),
+            label: id.to_owned(),
+            host: host.to_owned(),
             port,
-            user: "root".to_string(),
+            user: "root".to_owned(),
             auth: unissh_ffi::ProfileAuth::Key {
-                key_item_id: key_item.to_string(),
+                key_item_id: key_item.to_owned(),
             },
             jumps: vec![],
-            tags: tags.iter().map(|s| s.to_string()).collect(),
+            tags: tags.iter().map(std::string::ToString::to_string).collect(),
             startup_snippet_ids: vec![],
             record_sessions: false,
             agent_forward: false,
@@ -2443,8 +2415,8 @@ fn select_targets_by_tags_filters() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     save_profile(&core, "web1", "10.0.0.1", 22, "key", &["prod", "web"]);
     save_profile(&core, "web2", "10.0.0.2", 22, "key", &["staging", "web"]);
@@ -2452,7 +2424,7 @@ fn select_targets_by_tags_filters() {
 
     // any: tag=web → web1, web2
     let any_web = core
-        .select_targets_by_tags("v".to_string(), vec!["web".to_string()], false)
+        .select_targets_by_tags("v".to_owned(), vec!["web".to_owned()], false)
         .unwrap();
     let mut hosts: Vec<_> = any_web.iter().map(|t| t.host.clone()).collect();
     hosts.sort();
@@ -2461,8 +2433,8 @@ fn select_targets_by_tags_filters() {
     // all: prod+web → only web1
     let all = core
         .select_targets_by_tags(
-            "v".to_string(),
-            vec!["prod".to_string(), "web".to_string()],
+            "v".to_owned(),
+            vec!["prod".to_owned(), "web".to_owned()],
             true,
         )
         .unwrap();
@@ -2471,7 +2443,7 @@ fn select_targets_by_tags_filters() {
 
     // empty query → nothing
     assert!(core
-        .select_targets_by_tags("v".to_string(), vec![], false)
+        .select_targets_by_tags("v".to_owned(), vec![], false)
         .unwrap()
         .is_empty());
 }
@@ -2484,25 +2456,25 @@ fn select_targets_by_tags_excludes_prompt_password() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     save_profile(&core, "web1", "10.0.0.1", 22, "key", &["web"]);
     // PromptPassword host with the same tag — must be filtered out.
     core.save_connection(
-        "v".to_string(),
+        "v".to_owned(),
         unissh_ffi::ConnectionProfile {
             proxy: None,
-            profile_id: "ask1".to_string(),
+            profile_id: "ask1".to_owned(),
             uid: String::new(),
             username_template: None,
-            label: "ask1".to_string(),
-            host: "10.0.0.9".to_string(),
+            label: "ask1".to_owned(),
+            host: "10.0.0.9".to_owned(),
             port: 22,
-            user: "root".to_string(),
+            user: "root".to_owned(),
             auth: unissh_ffi::ProfileAuth::PromptPassword,
             jumps: vec![],
-            tags: vec!["web".to_string()],
+            tags: vec!["web".to_owned()],
             startup_snippet_ids: vec![],
             record_sessions: false,
             agent_forward: false,
@@ -2511,7 +2483,7 @@ fn select_targets_by_tags_excludes_prompt_password() {
     .unwrap();
 
     let sel = core
-        .select_targets_by_tags("v".to_string(), vec!["web".to_string()], false)
+        .select_targets_by_tags("v".to_owned(), vec!["web".to_owned()], false)
         .unwrap();
     let hosts: Vec<_> = sel.iter().map(|t| t.host.clone()).collect();
     assert_eq!(
@@ -2526,9 +2498,9 @@ fn ssh_exec_by_tags_runs_on_matching() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     save_profile(&core, "h1", "127.0.0.1", sshd.port, "key", &["prod"]);
@@ -2536,10 +2508,10 @@ fn ssh_exec_by_tags_runs_on_matching() {
 
     let results = core
         .ssh_exec_by_tags(
-            "v".to_string(),
-            vec!["prod".to_string()],
+            "v".to_owned(),
+            vec!["prod".to_owned()],
             false,
-            "echo tagged".to_string(),
+            "echo tagged".to_owned(),
             0,
             0,
         )
@@ -2553,10 +2525,13 @@ fn ssh_exec_by_tags_runs_on_matching() {
 
 fn group(id: &str, members: &[&str], parent: Option<&str>) -> unissh_ffi::ServerGroup {
     unissh_ffi::ServerGroup {
-        group_id: id.to_string(),
-        label: id.to_string(),
-        member_ids: members.iter().map(|s| s.to_string()).collect(),
-        parent_id: parent.map(|s| s.to_string()),
+        group_id: id.to_owned(),
+        label: id.to_owned(),
+        member_ids: members
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
+        parent_id: parent.map(|s| s.to_owned()),
     }
 }
 
@@ -2565,37 +2540,37 @@ fn host_group_crud_and_tombstone() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
-    core.save_group("v".to_string(), group("prod", &["web1", "web2"], None))
+    core.save_group("v".to_owned(), group("prod", &["web1", "web2"], None))
         .unwrap();
-    let g = core.get_group("v".to_string(), "prod".to_string()).unwrap();
+    let g = core.get_group("v".to_owned(), "prod".to_owned()).unwrap();
     assert_eq!(g.label, "prod");
     assert_eq!(g.member_ids, vec!["web1", "web2"]);
     assert!(g.parent_id.is_none());
 
     // type 5, the version grows
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     let it = items.iter().find(|i| i.item_id == "prod").unwrap();
     assert_eq!(it.item_type, 5);
     let v1 = it.version;
-    core.save_group("v".to_string(), group("prod", &["web1"], Some("all")))
+    core.save_group("v".to_owned(), group("prod", &["web1"], Some("all")))
         .unwrap();
-    let items = core.list_items("v".to_string()).unwrap();
+    let items = core.list_items("v".to_owned()).unwrap();
     assert!(items.iter().find(|i| i.item_id == "prod").unwrap().version > v1);
-    let g = core.get_group("v".to_string(), "prod".to_string()).unwrap();
+    let g = core.get_group("v".to_owned(), "prod".to_owned()).unwrap();
     assert_eq!(g.parent_id.as_deref(), Some("all"));
 
-    assert_eq!(core.list_groups("v".to_string()).unwrap().len(), 1);
+    assert_eq!(core.list_groups("v".to_owned()).unwrap().len(), 1);
 
     // tombstone → NotFound, list doesn't see it
-    core.delete_group("v".to_string(), "prod".to_string())
+    core.delete_group("v".to_owned(), "prod".to_owned())
         .unwrap();
     assert!(matches!(
-        core.get_group("v".to_string(), "prod".to_string()),
+        core.get_group("v".to_owned(), "prod".to_owned()),
         Err(unissh_ffi::FfiError::NotFound)
     ));
-    assert!(core.list_groups("v".to_string()).unwrap().is_empty());
+    assert!(core.list_groups("v".to_owned()).unwrap().is_empty());
 }
 
 #[test]
@@ -2603,29 +2578,27 @@ fn group_validation_and_clobber() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "id".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "id".to_owned())
         .unwrap();
 
     // self-membership / self-parenting / empty id → error
     assert!(core
-        .save_group("v".to_string(), group("g", &["g"], None))
+        .save_group("v".to_owned(), group("g", &["g"], None))
         .is_err());
     assert!(core
-        .save_group("v".to_string(), group("g", &[], Some("g")))
+        .save_group("v".to_owned(), group("g", &[], Some("g")))
         .is_err());
     assert!(core
-        .save_group("v".to_string(), group("", &[], None))
+        .save_group("v".to_owned(), group("", &[], None))
         .is_err());
 
     // cross-type clobber: a group with the id of an existing key → AlreadyExists, key intact
     assert!(matches!(
-        core.save_group("v".to_string(), group("id", &[], None)),
+        core.save_group("v".to_owned(), group("id", &[], None)),
         Err(unissh_ffi::FfiError::AlreadyExists)
     ));
-    assert!(core
-        .get_public_key("v".to_string(), "id".to_string())
-        .is_ok());
+    assert!(core.get_public_key("v".to_owned(), "id".to_owned()).is_ok());
 }
 
 #[test]
@@ -2634,10 +2607,10 @@ fn group_serde_forward_compat() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.save_group("v".to_string(), group("g", &["a", "b"], None))
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.save_group("v".to_owned(), group("g", &["a", "b"], None))
         .unwrap();
-    let g = core.get_group("v".to_string(), "g".to_string()).unwrap();
+    let g = core.get_group("v".to_owned(), "g".to_owned()).unwrap();
     assert!(g.parent_id.is_none());
     assert_eq!(g.member_ids, vec!["a", "b"]);
 }
@@ -2647,28 +2620,22 @@ fn ssh_exec_group_runs_nested() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     save_profile(&core, "p1", "127.0.0.1", sshd.port, "key", &[]);
     save_profile(&core, "p2", "127.0.0.1", sshd.port, "key", &[]);
 
     // A → [p1, B]; B → [p2]  (nesting)
-    core.save_group("v".to_string(), group("B", &["p2"], None))
+    core.save_group("v".to_owned(), group("B", &["p2"], None))
         .unwrap();
-    core.save_group("v".to_string(), group("A", &["p1", "B"], None))
+    core.save_group("v".to_owned(), group("A", &["p1", "B"], None))
         .unwrap();
 
     let results = core
-        .ssh_exec_group(
-            "v".to_string(),
-            "A".to_string(),
-            "echo grp".to_string(),
-            0,
-            0,
-        )
+        .ssh_exec_group("v".to_owned(), "A".to_owned(), "echo grp".to_owned(), 0, 0)
         .unwrap();
     assert_eq!(results.len(), 2, "a nested group should yield 2 hosts");
     for r in &results {
@@ -2682,14 +2649,14 @@ fn ssh_exec_group_empty_is_ok() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.save_group("v".to_string(), group("empty", &[], None))
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.save_group("v".to_owned(), group("empty", &[], None))
         .unwrap();
     let results = core
         .ssh_exec_group(
-            "v".to_string(),
-            "empty".to_string(),
-            "echo x".to_string(),
+            "v".to_owned(),
+            "empty".to_owned(),
+            "echo x".to_owned(),
             0,
             0,
         )
@@ -2702,22 +2669,22 @@ fn dry_run_group_reports_statuses() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     // ok profile (key), prompt profile (PromptPassword), and a dangling reference
     save_profile(&core, "ok1", "10.0.0.1", 22, "key", &[]);
     core.save_connection(
-        "v".to_string(),
+        "v".to_owned(),
         unissh_ffi::ConnectionProfile {
             proxy: None,
-            profile_id: "prompt1".to_string(),
+            profile_id: "prompt1".to_owned(),
             uid: String::new(),
             username_template: None,
-            label: "p".to_string(),
-            host: "10.0.0.2".to_string(),
+            label: "p".to_owned(),
+            host: "10.0.0.2".to_owned(),
             port: 22,
-            user: "root".to_string(),
+            user: "root".to_owned(),
             auth: unissh_ffi::ProfileAuth::PromptPassword,
             jumps: vec![],
             tags: vec![],
@@ -2728,14 +2695,12 @@ fn dry_run_group_reports_statuses() {
     )
     .unwrap();
     core.save_group(
-        "v".to_string(),
+        "v".to_owned(),
         group("g", &["ok1", "prompt1", "ghost"], None),
     )
     .unwrap();
 
-    let plans = core
-        .dry_run_group("v".to_string(), "g".to_string())
-        .unwrap();
+    let plans = core.dry_run_group("v".to_owned(), "g".to_owned()).unwrap();
     let status = |id: &str| plans.iter().find(|p| p.member_id == id).map(|p| p.status);
     assert_eq!(status("ok1"), Some(unissh_ffi::ResolveStatus::Ok));
     assert_eq!(
@@ -2755,27 +2720,21 @@ fn ssh_exec_group_marks_dangling_and_cycle() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     save_profile(&core, "p1", "127.0.0.1", sshd.port, "key", &[]);
 
     // cycle A→B→A + a dangling member; p1 is valid and must run once
-    core.save_group("v".to_string(), group("A", &["p1", "B", "ghost"], None))
+    core.save_group("v".to_owned(), group("A", &["p1", "B", "ghost"], None))
         .unwrap();
-    core.save_group("v".to_string(), group("B", &["A"], None))
+    core.save_group("v".to_owned(), group("B", &["A"], None))
         .unwrap();
 
     let results = core
-        .ssh_exec_group(
-            "v".to_string(),
-            "A".to_string(),
-            "echo ok".to_string(),
-            0,
-            0,
-        )
+        .ssh_exec_group("v".to_owned(), "A".to_owned(), "echo ok".to_owned(), 0, 0)
         .unwrap();
     // exactly one success (p1), plus error markers for ghost and the cycle
     let ok: Vec<_> = results.iter().filter(|r| r.error.is_none()).collect();
@@ -2806,9 +2765,9 @@ fn resize_changes_terminal_size() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
@@ -2818,13 +2777,13 @@ fn resize_changes_terminal_size() {
     });
     let session = core
         .open_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             observer.clone(),
@@ -2867,9 +2826,9 @@ fn open_session_rejects_zero_size() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     let observer = std::sync::Arc::new(CollectObserver {
@@ -2877,13 +2836,13 @@ fn open_session_rejects_zero_size() {
         closed: std::sync::atomic::AtomicBool::new(false),
     });
     let r = core.open_session(
-        "127.0.0.1".to_string(),
+        "127.0.0.1".to_owned(),
         sshd.port,
-        "root".to_string(),
+        "root".to_owned(),
         agent_auth("v", "key"),
         vec![],
         None,
-        "xterm".to_string(),
+        "xterm".to_owned(),
         0,
         24,
         observer,
@@ -2900,16 +2859,16 @@ fn verify_vault_integrity_ok() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
-    core.save_password("v".to_string(), "pw".to_string(), "s".to_string())
+    core.save_password("v".to_owned(), "pw".to_owned(), "s".to_owned())
         .unwrap();
-    core.save_note("v".to_string(), "n".to_string(), "note".to_string())
+    core.save_note("v".to_owned(), "n".to_owned(), "note".to_owned())
         .unwrap();
-    core.delete_item("v".to_string(), "n".to_string()).unwrap(); // tombstone
+    core.delete_item("v".to_owned(), "n".to_owned()).unwrap(); // tombstone
 
-    let report = core.verify_vault_integrity("v".to_string()).unwrap();
+    let report = core.verify_vault_integrity("v".to_owned()).unwrap();
     assert!(report.ok, "issues: {:?}", report.issues);
     assert!(report.issues.is_empty());
     // vault + key + pw + n(tombstone) = 4
@@ -2923,30 +2882,29 @@ fn export_ssh_config_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let cfg = "Host web\n  HostName 192.168.1.10\n  User deploy\n  Port 2222\n\
                Host gw\n  HostName gw.example.com\n  ProxyJump jumpuser@jump.example.com:2200\n";
-    core.import_ssh_config("v".to_string(), cfg.to_string())
+    core.import_ssh_config("v".to_owned(), cfg.to_owned())
         .unwrap();
 
-    let exported = core.export_ssh_config("v".to_string()).unwrap();
+    let exported = core.export_ssh_config("v".to_owned()).unwrap();
     assert!(exported.contains("Host web"));
     assert!(exported.contains("HostName 192.168.1.10"));
     assert!(exported.contains("Port 2222"));
     assert!(exported.contains("ProxyJump jumpuser@jump.example.com:2200"));
 
     // round-trip: importing the export into a fresh vault yields the same profiles
-    core.create_vault("v2".to_string(), "V2".to_string())
-        .unwrap();
-    core.import_ssh_config("v2".to_string(), exported).unwrap();
+    core.create_vault("v2".to_owned(), "V2".to_owned()).unwrap();
+    core.import_ssh_config("v2".to_owned(), exported).unwrap();
     let web = core
-        .get_connection("v2".to_string(), "web".to_string())
+        .get_connection("v2".to_owned(), "web".to_owned())
         .unwrap();
     assert_eq!(web.host, "192.168.1.10");
     assert_eq!(web.port, 2222);
     assert_eq!(web.user, "deploy");
     let gw = core
-        .get_connection("v2".to_string(), "gw".to_string())
+        .get_connection("v2".to_owned(), "gw".to_owned())
         .unwrap();
     assert_eq!(gw.jumps.len(), 1);
     assert_eq!(gw.jumps[0].host, "jump.example.com");
@@ -2961,10 +2919,10 @@ fn import_known_hosts_pins_and_skips_hashed() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     // a real ed25519 public key
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "k".to_string())
+        .generate_ssh_key("v".to_owned(), "k".to_owned())
         .unwrap();
 
     let text = format!(
@@ -2996,8 +2954,8 @@ fn check_consistency_ok() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "k".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "k".to_owned())
         .unwrap();
     let report = core.check_consistency().unwrap();
     assert!(report.ok, "issues: {:?}", report.issues);
@@ -3011,9 +2969,9 @@ fn key_target(port: u16) -> MultiExecTarget {
     MultiExecTarget {
         proxy: None,
         publickey_only: false,
-        host: "127.0.0.1".to_string(),
+        host: "127.0.0.1".to_owned(),
         port,
-        user: "root".to_string(),
+        user: "root".to_owned(),
         auth: agent_auth("v", "key"),
         jumps: vec![],
     }
@@ -3024,9 +2982,9 @@ fn sftp_put_multi_distributes_file() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
@@ -3035,7 +2993,7 @@ fn sftp_put_multi_distributes_file() {
     let results = core
         .sftp_put_multi(
             vec![key_target(sshd.port)],
-            path.to_str().unwrap().to_string(),
+            path.to_str().unwrap().to_owned(),
             data.clone(),
             false,
             0,
@@ -3052,9 +3010,9 @@ fn sftp_put_multi_makes_parent_dirs() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
@@ -3064,7 +3022,7 @@ fn sftp_put_multi_makes_parent_dirs() {
     let r1 = core
         .sftp_put_multi(
             vec![key_target(sshd.port)],
-            path.to_str().unwrap().to_string(),
+            path.to_str().unwrap().to_owned(),
             data.clone(),
             true,
             0,
@@ -3078,7 +3036,7 @@ fn sftp_put_multi_makes_parent_dirs() {
     let r2 = core
         .sftp_put_multi(
             vec![key_target(sshd.port)],
-            path.to_str().unwrap().to_string(),
+            path.to_str().unwrap().to_owned(),
             b"again".to_vec(),
             true,
             0,
@@ -3112,9 +3070,9 @@ fn broadcast_fans_out_input() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
@@ -3124,7 +3082,7 @@ fn broadcast_fans_out_input() {
     let session = core
         .open_broadcast(
             vec![key_target(sshd.port), key_target(sshd.port)],
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             obs.clone(),
@@ -3186,9 +3144,9 @@ fn ssh_exec_stream_streams_and_reports_exit() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
@@ -3199,11 +3157,11 @@ fn ssh_exec_stream_streams_and_reports_exit() {
     });
     let handle = core
         .ssh_exec_stream(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
-            "echo to-out; echo to-err 1>&2; exit 3".to_string(),
+            "echo to-out; echo to-err 1>&2; exit 3".to_owned(),
             vec![],
             None,
             obs.clone(),
@@ -3238,16 +3196,16 @@ fn sftp_upload_download_resume_and_cancel() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     let sftp = core
         .open_sftp(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
@@ -3256,7 +3214,7 @@ fn sftp_upload_download_resume_and_cancel() {
         .unwrap();
 
     // source ~100KB (several 32KB chunks)
-    let content: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+    let content: Vec<u8> = (0..100_000_u32).map(|i| (i % 251) as u8).collect();
     let src = dir.path().join("src.bin");
     std::fs::write(&src, &content).unwrap();
     let remote = dir.path().join("remote.bin");
@@ -3265,8 +3223,8 @@ fn sftp_upload_download_resume_and_cancel() {
     let prog = Arc::new(ProgObs::default());
     let done = sftp
         .sftp_upload(
-            src.to_str().unwrap().to_string(),
-            remote.to_str().unwrap().to_string(),
+            src.to_str().unwrap().to_owned(),
+            remote.to_str().unwrap().to_owned(),
             0,
             Some(prog.clone()),
             None,
@@ -3280,8 +3238,8 @@ fn sftp_upload_download_resume_and_cancel() {
     let dl = dir.path().join("dl.bin");
     let done = sftp
         .sftp_download(
-            remote.to_str().unwrap().to_string(),
-            dl.to_str().unwrap().to_string(),
+            remote.to_str().unwrap().to_owned(),
+            dl.to_str().unwrap().to_owned(),
             0,
             None, // known_size: the core will stat by itself
             None,
@@ -3296,8 +3254,8 @@ fn sftp_upload_download_resume_and_cancel() {
     std::fs::write(&resume, &content[..40_000]).unwrap();
     let done = sftp
         .sftp_download(
-            remote.to_str().unwrap().to_string(),
-            resume.to_str().unwrap().to_string(),
+            remote.to_str().unwrap().to_owned(),
+            resume.to_str().unwrap().to_owned(),
             40_000,
             Some(content.len() as u64), // known_size: skip the stat (directory resume)
             None,
@@ -3313,8 +3271,8 @@ fn sftp_upload_download_resume_and_cancel() {
     let cancelled = dir.path().join("cancelled.bin");
     let done = sftp
         .sftp_download(
-            remote.to_str().unwrap().to_string(),
-            cancelled.to_str().unwrap().to_string(),
+            remote.to_str().unwrap().to_owned(),
+            cancelled.to_str().unwrap().to_owned(),
             0,
             None, // known_size
             None,
@@ -3333,9 +3291,9 @@ fn reconnecting_session_reconnects_and_works() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
@@ -3345,13 +3303,13 @@ fn reconnecting_session_reconnects_and_works() {
     });
     let session = core
         .open_reconnecting_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             2,
@@ -3384,8 +3342,8 @@ fn reconnecting_session_fails_after_retries() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let observer = std::sync::Arc::new(CollectObserver {
         buf: std::sync::Mutex::new(Vec::new()),
@@ -3394,13 +3352,13 @@ fn reconnecting_session_fails_after_retries() {
     // nobody listens on this port → the connect exhausts its attempts and returns an error
     let dead = free_port();
     let r = core.open_reconnecting_session(
-        "127.0.0.1".to_string(),
+        "127.0.0.1".to_owned(),
         dead,
-        "root".to_string(),
+        "root".to_owned(),
         agent_auth("v", "key"),
         vec![],
         None,
-        "xterm".to_string(),
+        "xterm".to_owned(),
         80,
         24,
         2,
@@ -3418,7 +3376,7 @@ fn import_putty_sessions_creates_profiles() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     // the session name "prod web" is url-encoded as prod%20web; port dword (0x16=22, 0x935=2357)
     let reg = "Windows Registry Editor Version 5.00\r\n\r\n\
@@ -3431,14 +3389,14 @@ fn import_putty_sessions_creates_profiles() {
         \"HostName\"=\"10.0.0.9\"\r\n\
         \"Protocol\"=\"telnet\"\r\n";
     let report = core
-        .import_putty_sessions("v".to_string(), reg.to_string())
+        .import_putty_sessions("v".to_owned(), reg.to_owned())
         .unwrap();
     // the ssh session is created, telnet is skipped
     assert_eq!(report.created_ids, vec!["prod web"]);
     assert_eq!(report.skipped, 1);
 
     let p = core
-        .get_connection("v".to_string(), "prod web".to_string())
+        .get_connection("v".to_owned(), "prod web".to_owned())
         .unwrap();
     assert_eq!(p.host, "10.0.0.5");
     assert_eq!(p.port, 2357);
@@ -3452,47 +3410,46 @@ fn password_version_history_reveal_and_delete() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.save_password("v".to_string(), "pw".to_string(), "p1".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.save_password("v".to_owned(), "pw".to_owned(), "p1".to_owned())
         .unwrap();
-    core.save_password("v".to_string(), "pw".to_string(), "p2".to_string())
+    core.save_password("v".to_owned(), "pw".to_owned(), "p2".to_owned())
         .unwrap();
-    core.save_password("v".to_string(), "pw".to_string(), "p3".to_string())
+    core.save_password("v".to_owned(), "pw".to_owned(), "p3".to_owned())
         .unwrap();
 
     let mut versions = core
-        .list_item_versions("v".to_string(), "pw".to_string())
+        .list_item_versions("v".to_owned(), "pw".to_owned())
         .unwrap();
     versions.sort();
     assert_eq!(versions, vec![1, 2, 3]);
 
     assert_eq!(
-        core.get_password_version("v".to_string(), "pw".to_string(), 1)
+        core.get_password_version("v".to_owned(), "pw".to_owned(), 1)
             .unwrap(),
         "p1"
     );
     assert_eq!(
-        core.get_password_version("v".to_string(), "pw".to_string(), 2)
+        core.get_password_version("v".to_owned(), "pw".to_owned(), 2)
             .unwrap(),
         "p2"
     );
     assert_eq!(
-        core.get_password("v".to_string(), "pw".to_string())
-            .unwrap(),
+        core.get_password("v".to_owned(), "pw".to_owned()).unwrap(),
         "p3"
     );
 
     // type-gate: a key's version can't be pulled via the password reveal
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     assert!(core
-        .get_password_version("v".to_string(), "key".to_string(), 1)
+        .get_password_version("v".to_owned(), "key".to_owned(), 1)
         .is_err());
 
     // deletion clears the history
-    core.delete_item("v".to_string(), "pw".to_string()).unwrap();
+    core.delete_item("v".to_owned(), "pw".to_owned()).unwrap();
     assert!(core
-        .list_item_versions("v".to_string(), "pw".to_string())
+        .list_item_versions("v".to_owned(), "pw".to_owned())
         .unwrap()
         .is_empty());
 }
@@ -3505,25 +3462,19 @@ fn vault_backup_export_import_round_trip() {
     let dir_a = tempfile::tempdir().unwrap();
     let core_a = new_core(dir_a.path());
     core_a.create_account(None).unwrap();
-    core_a
-        .create_vault("v".to_string(), "V".to_string())
-        .unwrap();
+    core_a.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pub_a = core_a
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     core_a
-        .save_password("v".to_string(), "pw".to_string(), "secret-pw".to_string())
+        .save_password("v".to_owned(), "pw".to_owned(), "secret-pw".to_owned())
         .unwrap();
     core_a
-        .save_note(
-            "v".to_string(),
-            "note".to_string(),
-            "secret-note".to_string(),
-        )
+        .save_note("v".to_owned(), "note".to_owned(), "secret-note".to_owned())
         .unwrap();
 
     let backup = core_a
-        .export_vault("v".to_string(), "backup-pass".to_string())
+        .export_vault("v".to_owned(), "backup-pass".to_owned())
         .unwrap();
     assert!(!backup.is_empty());
 
@@ -3534,28 +3485,28 @@ fn vault_backup_export_import_round_trip() {
     core_b
         .import_vault(
             backup.clone(),
-            "backup-pass".to_string(),
-            "restored".to_string(),
+            "backup-pass".to_owned(),
+            "restored".to_owned(),
         )
         .unwrap();
 
     // secrets restored
     assert_eq!(
         core_b
-            .get_password("restored".to_string(), "pw".to_string())
+            .get_password("restored".to_owned(), "pw".to_owned())
             .unwrap(),
         "secret-pw"
     );
     assert_eq!(
         core_b
-            .get_note("restored".to_string(), "note".to_string())
+            .get_note("restored".to_owned(), "note".to_owned())
             .unwrap(),
         "secret-note"
     );
     // the private key is restored (the public key matches the original)
     assert_eq!(
         core_b
-            .get_public_key("restored".to_string(), "key".to_string())
+            .get_public_key("restored".to_owned(), "key".to_owned())
             .unwrap()
             .openssh,
         pub_a
@@ -3563,7 +3514,7 @@ fn vault_backup_export_import_round_trip() {
 
     // wrong passphrase → error
     assert!(core_b
-        .import_vault(backup.clone(), "wrong-pass".to_string(), "x".to_string())
+        .import_vault(backup.clone(), "wrong-pass".to_owned(), "x".to_owned())
         .is_err());
 
     // corrupted backup → error
@@ -3571,7 +3522,7 @@ fn vault_backup_export_import_round_trip() {
     let n = tampered.len();
     tampered[n - 1] ^= 0x01;
     assert!(core_b
-        .import_vault(tampered, "backup-pass".to_string(), "y".to_string())
+        .import_vault(tampered, "backup-pass".to_owned(), "y".to_owned())
         .is_err());
 
     // A restore carries the ORIGINAL vault's name with it — the name is a record
@@ -3590,7 +3541,7 @@ fn vault_backup_export_import_round_trip() {
     assert_eq!(named.name, "V", "the backup carries the source's name");
 
     core_b
-        .rename_vault("restored".to_string(), "RETEST-restored".to_string())
+        .rename_vault("restored".to_owned(), "RETEST-restored".to_owned())
         .unwrap();
     let renamed = core_b
         .list_vaults()
@@ -3611,16 +3562,16 @@ fn sftp_download_rejects_offset_beyond_size() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     let sftp = core
         .open_sftp(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
@@ -3632,8 +3583,8 @@ fn sftp_download_rejects_offset_beyond_size() {
     std::fs::write(&src, b"abc").unwrap();
     let remote = dir.path().join("remote.bin");
     sftp.sftp_upload(
-        src.to_str().unwrap().to_string(),
-        remote.to_str().unwrap().to_string(),
+        src.to_str().unwrap().to_owned(),
+        remote.to_str().unwrap().to_owned(),
         0,
         None,
         None,
@@ -3644,8 +3595,8 @@ fn sftp_download_rejects_offset_beyond_size() {
     let dl = dir.path().join("dl.bin");
     assert!(sftp
         .sftp_download(
-            remote.to_str().unwrap().to_string(),
-            dl.to_str().unwrap().to_string(),
+            remote.to_str().unwrap().to_owned(),
+            dl.to_str().unwrap().to_owned(),
             999,
             None, // known_size
             None,
@@ -3663,16 +3614,16 @@ fn sftp_pool_parallel_downloads() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     let sftp = core
         .open_sftp(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
@@ -3681,24 +3632,24 @@ fn sftp_pool_parallel_downloads() {
         .unwrap();
 
     // 8 files with distinguishable contents; upload sequentially.
-    let n = 8usize;
+    let n = 8_usize;
     let remotes: Vec<(String, Vec<u8>)> = (0..n)
         .map(|i| {
-            let content: Vec<u8> = (0..50_000u32)
+            let content: Vec<u8> = (0..50_000_u32)
                 .map(|b| ((b as usize + i) % 251) as u8)
                 .collect();
             let src = dir.path().join(format!("src{i}.bin"));
             std::fs::write(&src, &content).unwrap();
             let remote = dir.path().join(format!("remote{i}.bin"));
             sftp.sftp_upload(
-                src.to_str().unwrap().to_string(),
-                remote.to_str().unwrap().to_string(),
+                src.to_str().unwrap().to_owned(),
+                remote.to_str().unwrap().to_owned(),
                 0,
                 None,
                 None,
             )
             .unwrap();
-            (remote.to_str().unwrap().to_string(), content)
+            (remote.to_str().unwrap().to_owned(), content)
         })
         .collect();
 
@@ -3714,7 +3665,7 @@ fn sftp_pool_parallel_downloads() {
                 let ok = sftp
                     .sftp_download(
                         remote,
-                        dl.to_str().unwrap().to_string(),
+                        dl.to_str().unwrap().to_owned(),
                         0,
                         Some(content.len() as u64),
                         None,
@@ -3741,16 +3692,16 @@ fn sftp_pool_degrades_on_max_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start_with_max_sessions(&pubkey, 1);
     let sftp = core
         .open_sftp(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
@@ -3758,24 +3709,24 @@ fn sftp_pool_degrades_on_max_sessions() {
         )
         .unwrap();
 
-    let n = 6usize;
+    let n = 6_usize;
     let remotes: Vec<(String, Vec<u8>)> = (0..n)
         .map(|i| {
-            let content: Vec<u8> = (0..30_000u32)
+            let content: Vec<u8> = (0..30_000_u32)
                 .map(|b| ((b as usize + i) % 251) as u8)
                 .collect();
             let src = dir.path().join(format!("src{i}.bin"));
             std::fs::write(&src, &content).unwrap();
             let remote = dir.path().join(format!("remote{i}.bin"));
             sftp.sftp_upload(
-                src.to_str().unwrap().to_string(),
-                remote.to_str().unwrap().to_string(),
+                src.to_str().unwrap().to_owned(),
+                remote.to_str().unwrap().to_owned(),
                 0,
                 None,
                 None,
             )
             .unwrap();
-            (remote.to_str().unwrap().to_string(), content)
+            (remote.to_str().unwrap().to_owned(), content)
         })
         .collect();
 
@@ -3791,7 +3742,7 @@ fn sftp_pool_degrades_on_max_sessions() {
                 let ok = sftp
                     .sftp_download(
                         remote,
-                        dl.to_str().unwrap().to_string(),
+                        dl.to_str().unwrap().to_owned(),
                         0,
                         Some(content.len() as u64),
                         None,
@@ -3813,27 +3764,25 @@ fn import_vault_rejects_used_vault_id() {
     let dir_a = tempfile::tempdir().unwrap();
     let core_a = new_core(dir_a.path());
     core_a.create_account(None).unwrap();
+    core_a.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     core_a
-        .create_vault("v".to_string(), "V".to_string())
-        .unwrap();
-    core_a
-        .save_password("v".to_string(), "pw".to_string(), "s".to_string())
+        .save_password("v".to_owned(), "pw".to_owned(), "s".to_owned())
         .unwrap();
     let backup = core_a
-        .export_vault("v".to_string(), "pass".to_string())
+        .export_vault("v".to_owned(), "pass".to_owned())
         .unwrap();
 
     let dir_b = tempfile::tempdir().unwrap();
     let core_b = new_core(dir_b.path());
     core_b.create_account(None).unwrap();
     core_b
-        .import_vault(backup.clone(), "pass".to_string(), "restored".to_string())
+        .import_vault(backup.clone(), "pass".to_owned(), "restored".to_owned())
         .unwrap();
     // delete it — the id stays occupied by a tombstone
-    core_b.delete_vault("restored".to_string()).unwrap();
+    core_b.delete_vault("restored".to_owned()).unwrap();
     // re-importing into the same id → a clear error, not corruption
     assert!(matches!(
-        core_b.import_vault(backup, "pass".to_string(), "restored".to_string()),
+        core_b.import_vault(backup, "pass".to_owned(), "restored".to_owned()),
         Err(unissh_ffi::FfiError::AlreadyExists)
     ));
 }
@@ -3843,11 +3792,11 @@ fn backup_tampered_kdf_params_fail() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.save_password("v".to_string(), "pw".to_string(), "s".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.save_password("v".to_owned(), "pw".to_owned(), "s".to_owned())
         .unwrap();
     let backup = core
-        .export_vault("v".to_string(), "pass".to_string())
+        .export_vault("v".to_owned(), "pass".to_owned())
         .unwrap();
 
     // a byte inside kdf_blob (after magic(4)+version(1)+len(4)) — now covered by AAD
@@ -3857,7 +3806,7 @@ fn backup_tampered_kdf_params_fail() {
     let core2 = new_core(dir2.path());
     core2.create_account(None).unwrap();
     assert!(core2
-        .import_vault(tampered, "pass".to_string(), "x".to_string())
+        .import_vault(tampered, "pass".to_owned(), "x".to_owned())
         .is_err());
 }
 
@@ -3866,21 +3815,21 @@ fn import_putty_skips_existing_profile() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     save_profile(&core, "web", "10.0.0.1", 22, "key", &[]);
 
     let reg = "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\web]\r\n\
         \"HostName\"=\"10.0.0.99\"\r\n\"Protocol\"=\"ssh\"\r\n";
     let report = core
-        .import_putty_sessions("v".to_string(), reg.to_string())
+        .import_putty_sessions("v".to_owned(), reg.to_owned())
         .unwrap();
     assert!(report.created_ids.is_empty());
     assert_eq!(report.skipped, 1);
     // the existing profile is NOT overwritten
     assert_eq!(
-        core.get_connection("v".to_string(), "web".to_string())
+        core.get_connection("v".to_owned(), "web".to_owned())
             .unwrap()
             .host,
         "10.0.0.1"
@@ -3894,9 +3843,9 @@ fn reconnecting_session_auto_reconnects_on_write() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     let observer = Arc::new(CollectObserver {
@@ -3905,13 +3854,13 @@ fn reconnecting_session_auto_reconnects_on_write() {
     });
     let session = core
         .open_reconnecting_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             2,
@@ -3968,49 +3917,44 @@ fn secret_returning_surface() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.save_password("v".to_string(), "pw".to_string(), "s3cret".to_string())
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.save_password("v".to_owned(), "pw".to_owned(), "s3cret".to_owned())
         .unwrap();
-    core.save_note("v".to_string(), "nt".to_string(), "a note".to_string())
+    core.save_note("v".to_owned(), "nt".to_owned(), "a note".to_owned())
         .unwrap();
-    core.generate_ssh_key("v".to_string(), "key".to_string())
+    core.generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
 
     // get_password: reveal only for a password item, otherwise refuse (type-gate).
     assert_eq!(
-        core.get_password("v".to_string(), "pw".to_string())
-            .unwrap(),
+        core.get_password("v".to_owned(), "pw".to_owned()).unwrap(),
         "s3cret"
     );
-    assert!(core
-        .get_password("v".to_string(), "nt".to_string())
-        .is_err());
-    assert!(core
-        .get_password("v".to_string(), "key".to_string())
-        .is_err());
+    assert!(core.get_password("v".to_owned(), "nt".to_owned()).is_err());
+    assert!(core.get_password("v".to_owned(), "key".to_owned()).is_err());
 
     // get_note: reveal only for a note item.
     assert_eq!(
-        core.get_note("v".to_string(), "nt".to_string()).unwrap(),
+        core.get_note("v".to_owned(), "nt".to_owned()).unwrap(),
         "a note"
     );
-    assert!(core.get_note("v".to_string(), "pw".to_string()).is_err());
+    assert!(core.get_note("v".to_owned(), "pw".to_owned()).is_err());
 
     // export_ssh_key: the private key — by-design, but only for an SSH-key item.
     let priv_key = core
-        .export_ssh_key("v".to_string(), "key".to_string())
+        .export_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     assert!(
         priv_key.contains("PRIVATE KEY"),
         "expected an OpenSSH private key"
     );
     assert!(core
-        .export_ssh_key("v".to_string(), "pw".to_string())
+        .export_ssh_key("v".to_owned(), "pw".to_owned())
         .is_err());
 
     // export_vault: a non-empty encrypted backup.
     let backup = core
-        .export_vault("v".to_string(), "backup-pass".to_string())
+        .export_vault("v".to_owned(), "backup-pass".to_owned())
         .unwrap();
     assert!(!backup.is_empty());
 }
@@ -4022,63 +3966,63 @@ fn snippet_crud_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     core.save_snippet(
-        "v".to_string(),
+        "v".to_owned(),
         unissh_ffi::Snippet {
-            snippet_id: "tail-log".to_string(),
-            label: "Tail the app log".to_string(),
-            command: "sudo journalctl -fu app".to_string(),
-            tags: vec!["ops".to_string()],
+            snippet_id: "tail-log".to_owned(),
+            label: "Tail the app log".to_owned(),
+            command: "sudo journalctl -fu app".to_owned(),
+            tags: vec!["ops".to_owned()],
         },
     )
     .unwrap();
     core.save_snippet(
-        "v".to_string(),
+        "v".to_owned(),
         unissh_ffi::Snippet {
-            snippet_id: "motd".to_string(),
-            label: "A greeting".to_string(),
-            command: "echo hi".to_string(),
+            snippet_id: "motd".to_owned(),
+            label: "A greeting".to_owned(),
+            command: "echo hi".to_owned(),
             tags: vec![],
         },
     )
     .unwrap();
 
-    let list = core.list_snippets("v".to_string()).unwrap();
+    let list = core.list_snippets("v".to_owned()).unwrap();
     assert_eq!(list.len(), 2);
     // Sorted by label, so the library does not reshuffle between reads.
     assert_eq!(list[0].label, "A greeting");
     assert_eq!(list[1].command, "sudo journalctl -fu app");
-    assert_eq!(list[1].tags, vec!["ops".to_string()]);
+    assert_eq!(list[1].tags, vec!["ops".to_owned()]);
 
     // Empty id and empty command are refused rather than stored as junk.
     assert!(core
         .save_snippet(
-            "v".to_string(),
+            "v".to_owned(),
             unissh_ffi::Snippet {
                 snippet_id: String::new(),
-                label: "x".to_string(),
-                command: "echo".to_string(),
+                label: "x".to_owned(),
+                command: "echo".to_owned(),
                 tags: vec![],
             },
         )
         .is_err());
     assert!(core
         .save_snippet(
-            "v".to_string(),
+            "v".to_owned(),
             unissh_ffi::Snippet {
-                snippet_id: "blank".to_string(),
-                label: "x".to_string(),
+                snippet_id: "blank".to_owned(),
+                label: "x".to_owned(),
                 command: String::new(),
                 tags: vec![],
             },
         )
         .is_err());
 
-    core.delete_snippet("v".to_string(), "motd".to_string())
+    core.delete_snippet("v".to_owned(), "motd".to_owned())
         .unwrap();
-    let after = core.list_snippets("v".to_string()).unwrap();
+    let after = core.list_snippets("v".to_owned()).unwrap();
     assert_eq!(after.len(), 1);
     assert_eq!(after[0].snippet_id, "tail-log");
 }
@@ -4090,20 +4034,16 @@ fn snippet_cannot_overwrite_another_item_type() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.save_password(
-        "v".to_string(),
-        "shared-id".to_string(),
-        "s3cret".to_string(),
-    )
-    .unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.save_password("v".to_owned(), "shared-id".to_owned(), "s3cret".to_owned())
+        .unwrap();
 
     let clash = core.save_snippet(
-        "v".to_string(),
+        "v".to_owned(),
         unissh_ffi::Snippet {
-            snippet_id: "shared-id".to_string(),
-            label: "sneaky".to_string(),
-            command: "echo pwned".to_string(),
+            snippet_id: "shared-id".to_owned(),
+            label: "sneaky".to_owned(),
+            command: "echo pwned".to_owned(),
             tags: vec![],
         },
     );
@@ -4113,7 +4053,7 @@ fn snippet_cannot_overwrite_another_item_type() {
     );
     // And the password is still intact.
     assert_eq!(
-        core.get_password("v".to_string(), "shared-id".to_string())
+        core.get_password("v".to_owned(), "shared-id".to_owned())
             .unwrap(),
         "s3cret"
     );
@@ -4127,43 +4067,43 @@ fn profile_carries_its_startup_snippets() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let mut p = unissh_ffi::ConnectionProfile {
         proxy: None,
-        profile_id: "web1".to_string(),
+        profile_id: "web1".to_owned(),
         uid: String::new(),
-        label: "web1".to_string(),
-        host: "10.0.0.1".to_string(),
+        label: "web1".to_owned(),
+        host: "10.0.0.1".to_owned(),
         port: 22,
-        user: "deploy".to_string(),
+        user: "deploy".to_owned(),
         auth: unissh_ffi::ProfileAuth::PromptPassword,
         username_template: None,
         jumps: vec![],
         tags: vec![],
-        startup_snippet_ids: vec!["tmux-attach".to_string(), "cd-app".to_string()],
+        startup_snippet_ids: vec!["tmux-attach".to_owned(), "cd-app".to_owned()],
         record_sessions: false,
         agent_forward: false,
     };
-    core.save_connection("v".to_string(), p.clone()).unwrap();
+    core.save_connection("v".to_owned(), p.clone()).unwrap();
 
     let read = core
-        .list_connections("v".to_string())
+        .list_connections("v".to_owned())
         .unwrap()
         .into_iter()
         .find(|c| c.profile_id == "web1")
         .expect("saved profile");
     assert_eq!(
         read.startup_snippet_ids,
-        vec!["tmux-attach".to_string(), "cd-app".to_string()],
+        vec!["tmux-attach".to_owned(), "cd-app".to_owned()],
         "order matters — these are typed in sequence"
     );
 
     p.uid = read.uid.clone();
     p.startup_snippet_ids.clear();
-    core.save_connection("v".to_string(), p).unwrap();
+    core.save_connection("v".to_owned(), p).unwrap();
     let cleared = core
-        .list_connections("v".to_string())
+        .list_connections("v".to_owned())
         .unwrap()
         .into_iter()
         .find(|c| c.profile_id == "web1")
@@ -4178,9 +4118,9 @@ fn session_recording_captures_and_persists() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
@@ -4190,20 +4130,20 @@ fn session_recording_captures_and_persists() {
     });
     let session = core
         .open_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             observer.clone(),
             Some(unissh_ffi::RecordingRequest {
-                vault_id: "v".to_string(),
-                recording_id: "rec-1".to_string(),
-                label: "test host".to_string(),
+                vault_id: "v".to_owned(),
+                recording_id: "rec-1".to_owned(),
+                label: "test host".to_owned(),
             }),
             false,
         )
@@ -4211,7 +4151,7 @@ fn session_recording_captures_and_persists() {
 
     // Nothing is written while the session is live — the document lands when it ends.
     assert!(
-        core.list_recordings("v".to_string()).unwrap().is_empty(),
+        core.list_recordings("v".to_owned()).unwrap().is_empty(),
         "a recording must not appear before the session it records has finished"
     );
 
@@ -4229,7 +4169,7 @@ fn session_recording_captures_and_persists() {
     // on_close is delivered from the reader task, so give it a moment to land.
     let deadline = Instant::now() + Duration::from_secs(5);
     let meta = loop {
-        let list = core.list_recordings("v".to_string()).unwrap();
+        let list = core.list_recordings("v".to_owned()).unwrap();
         if let Some(m) = list.into_iter().next() {
             break m;
         }
@@ -4250,7 +4190,7 @@ fn session_recording_captures_and_persists() {
     assert!(meta.size_bytes > 0);
 
     let cast = core
-        .get_recording("v".to_string(), "rec-1".to_string())
+        .get_recording("v".to_owned(), "rec-1".to_owned())
         .unwrap();
     let mut lines = cast.lines();
     // The header is a JSON object naming the format version and the geometry.
@@ -4277,9 +4217,9 @@ fn session_recording_captures_and_persists() {
         "the recording is missing the output it recorded"
     );
 
-    core.delete_recording("v".to_string(), "rec-1".to_string())
+    core.delete_recording("v".to_owned(), "rec-1".to_owned())
         .unwrap();
-    assert!(core.list_recordings("v".to_string()).unwrap().is_empty());
+    assert!(core.list_recordings("v".to_owned()).unwrap().is_empty());
 }
 
 /// Closing the TAB, not the shell: the handle is closed and dropped at once.
@@ -4296,9 +4236,9 @@ fn a_recording_survives_the_session_being_dropped_on_close() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
@@ -4308,20 +4248,20 @@ fn a_recording_survives_the_session_being_dropped_on_close() {
     });
     let session = core
         .open_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             observer.clone(),
             Some(unissh_ffi::RecordingRequest {
-                vault_id: "v".to_string(),
-                recording_id: "rec-tab".to_string(),
-                label: "test host".to_string(),
+                vault_id: "v".to_owned(),
+                recording_id: "rec-tab".to_owned(),
+                label: "test host".to_owned(),
             }),
             false,
         )
@@ -4343,7 +4283,7 @@ fn a_recording_survives_the_session_being_dropped_on_close() {
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let meta = loop {
-        let list = core.list_recordings("v".to_string()).unwrap();
+        let list = core.list_recordings("v".to_owned()).unwrap();
         if let Some(m) = list.into_iter().next() {
             break m;
         }
@@ -4357,7 +4297,7 @@ fn a_recording_survives_the_session_being_dropped_on_close() {
     assert!(meta.size_bytes > 0);
 
     let cast = core
-        .get_recording("v".to_string(), "rec-tab".to_string())
+        .get_recording("v".to_owned(), "rec-tab".to_owned())
         .unwrap();
     assert!(
         cast.contains("closed-by-tab"),
@@ -4371,9 +4311,9 @@ fn no_recording_request_records_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     let observer = std::sync::Arc::new(CollectObserver {
@@ -4382,13 +4322,13 @@ fn no_recording_request_records_nothing() {
     });
     let session = core
         .open_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             observer,
@@ -4400,7 +4340,7 @@ fn no_recording_request_records_nothing() {
     std::thread::sleep(Duration::from_millis(400));
     session.close().unwrap();
     std::thread::sleep(Duration::from_millis(400));
-    assert!(core.list_recordings("v".to_string()).unwrap().is_empty());
+    assert!(core.list_recordings("v".to_owned()).unwrap().is_empty());
 }
 
 /// A profile can carry a system-agent identity, and it survives a round-trip.
@@ -4412,21 +4352,21 @@ fn profile_round_trips_a_system_agent_identity() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let pub_line = "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QHNzaC5jb20AAAA token";
     core.save_connection(
-        "v".to_string(),
+        "v".to_owned(),
         unissh_ffi::ConnectionProfile {
             proxy: None,
-            profile_id: "gw".to_string(),
+            profile_id: "gw".to_owned(),
             uid: String::new(),
-            label: "gw".to_string(),
-            host: "gw.example.com".to_string(),
+            label: "gw".to_owned(),
+            host: "gw.example.com".to_owned(),
             port: 22,
-            user: "me".to_string(),
+            user: "me".to_owned(),
             auth: unissh_ffi::ProfileAuth::SystemAgent {
-                public_key: pub_line.to_string(),
+                public_key: pub_line.to_owned(),
             },
             username_template: None,
             jumps: vec![],
@@ -4439,14 +4379,14 @@ fn profile_round_trips_a_system_agent_identity() {
     .unwrap();
 
     let read = core
-        .list_connections("v".to_string())
+        .list_connections("v".to_owned())
         .unwrap()
         .into_iter()
         .find(|c| c.profile_id == "gw")
         .expect("saved profile");
     match read.auth {
         unissh_ffi::ProfileAuth::SystemAgent { public_key } => {
-            assert_eq!(public_key, pub_line)
+            assert_eq!(public_key, pub_line);
         }
         _ => panic!("expected ProfileAuth::SystemAgent"),
     }
@@ -4457,18 +4397,22 @@ fn profile_round_trips_a_system_agent_identity() {
 /// would send the user to check their key.
 #[test]
 fn system_agent_without_an_agent_reports_the_agent() {
-    let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = AGENT_ENV
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     // Point SSH_AUTH_SOCK at nothing so the lookup fails deterministically
     // rather than depending on whatever the test machine happens to run.
     let missing = dir.path().join("no-such-agent.sock");
     // SAFETY: single-threaded test setup; no other thread reads the environment
     // between the set and the call below.
-    unsafe { std::env::set_var("SSH_AUTH_SOCK", &missing) };
+    unsafe {
+        std::env::set_var("SSH_AUTH_SOCK", &missing);
+    }
 
     let err = core.system_agent_keys().expect_err("no agent is listening");
     let msg = err.to_string();
@@ -4491,9 +4435,9 @@ fn a_recording_is_written_off_the_runtime() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
     let observer = std::sync::Arc::new(CollectObserver {
@@ -4502,20 +4446,20 @@ fn a_recording_is_written_off_the_runtime() {
     });
     let session = core
         .open_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             observer,
             Some(unissh_ffi::RecordingRequest {
-                vault_id: "v".to_string(),
-                recording_id: "rec-thread".to_string(),
-                label: "t".to_string(),
+                vault_id: "v".to_owned(),
+                recording_id: "rec-thread".to_owned(),
+                label: "t".to_owned(),
             }),
             false,
         )
@@ -4528,7 +4472,7 @@ fn a_recording_is_written_off_the_runtime() {
     // never lands if it tripped. Waiting for it is the check.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if !core.list_recordings("v".to_string()).unwrap().is_empty() {
+        if !core.list_recordings("v".to_owned()).unwrap().is_empty() {
             break;
         }
         assert!(
@@ -4557,9 +4501,9 @@ fn the_core_lock_is_free_during_a_handshake() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let pubkey = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let sshd = TestSshd::start(&pubkey);
 
@@ -4585,7 +4529,7 @@ fn the_core_lock_is_free_during_a_handshake() {
 
     let observer = std::sync::Arc::new(CollectObserver {
         buf: std::sync::Mutex::new(Vec::new()),
-        closed: std::sync::atomic::AtomicBool::new(false),
+        closed: AtomicBool::new(false),
     });
     // A quiet baseline first: on a loaded CI box the scheduler alone can stall a
     // thread for milliseconds, and comparing against a fixed number would make
@@ -4597,13 +4541,13 @@ fn the_core_lock_is_free_during_a_handshake() {
     let connect_started = Instant::now();
     let session = core
         .open_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
+            "root".to_owned(),
             agent_auth("v", "key"),
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             observer,
@@ -4655,7 +4599,7 @@ impl TestAgent {
     /// Starts an agent and loads `private_key_pem` into it. Returns `None` when
     /// the tools are missing, so the test skips rather than fails on a machine
     /// without OpenSSH.
-    fn start(private_key_pem: &str) -> Option<TestAgent> {
+    fn start(private_key_pem: &str) -> Option<Self> {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("agent.sock");
         let out = Command::new("ssh-agent")
@@ -4674,7 +4618,7 @@ impl TestAgent {
             .split(';')
             .next()?
             .trim()
-            .to_string();
+            .to_owned();
 
         let key_path = dir.path().join("id");
         std::fs::write(&key_path, private_key_pem).unwrap();
@@ -4695,7 +4639,7 @@ impl TestAgent {
             let _ = Command::new("kill").arg(&pid).status();
             return None;
         }
-        Some(TestAgent {
+        Some(Self {
             sock,
             pid,
             _dir: dir,
@@ -4716,7 +4660,9 @@ impl Drop for TestAgent {
 /// 1Password would take, so it is the one that has to be exercised for real.
 #[test]
 fn system_agent_authenticates_end_to_end() {
-    let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = AGENT_ENV
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // A key the agent will hold and sshd will trust. Generated with ssh-keygen so
     // the whole chain is the real formats.
     let dir = tempfile::tempdir().unwrap();
@@ -4740,11 +4686,13 @@ fn system_agent_authenticates_end_to_end() {
         return;
     };
     // SAFETY: single-threaded test setup, before any core call reads it.
-    unsafe { std::env::set_var("SSH_AUTH_SOCK", &agent.sock) };
+    unsafe {
+        std::env::set_var("SSH_AUTH_SOCK", &agent.sock);
+    }
 
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     // The picker's data source must see the key the agent actually holds.
     let listed = core.system_agent_keys().unwrap();
@@ -4768,15 +4716,15 @@ fn system_agent_authenticates_end_to_end() {
     // produce this signature.
     let session = core
         .open_session(
-            "127.0.0.1".to_string(),
+            "127.0.0.1".to_owned(),
             sshd.port,
-            "root".to_string(),
-            unissh_ffi::AuthMethod::SystemAgent {
+            "root".to_owned(),
+            AuthMethod::SystemAgent {
                 public_key: chosen.public_key.clone(),
             },
             vec![],
             None,
-            "xterm".to_string(),
+            "xterm".to_owned(),
             80,
             24,
             observer.clone(),
@@ -4806,7 +4754,9 @@ fn system_agent_authenticates_end_to_end() {
 /// their key instead of plugging in their token.
 #[test]
 fn system_agent_missing_key_is_named() {
-    let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = AGENT_ENV
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("held");
     if Command::new("ssh-keygen")
@@ -4823,7 +4773,9 @@ fn system_agent_missing_key_is_named() {
     let Some(agent) = TestAgent::start(&held) else {
         return;
     };
-    unsafe { std::env::set_var("SSH_AUTH_SOCK", &agent.sock) };
+    unsafe {
+        std::env::set_var("SSH_AUTH_SOCK", &agent.sock);
+    }
 
     // A different key, never added to the agent.
     let other = dir.path().join("other");
@@ -4841,7 +4793,7 @@ fn system_agent_missing_key_is_named() {
 
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let sshd = TestSshd::start(&other_pub);
     let observer = std::sync::Arc::new(CollectObserver {
         buf: std::sync::Mutex::new(Vec::new()),
@@ -4850,15 +4802,15 @@ fn system_agent_missing_key_is_named() {
     // `SshSession` is not Debug (it holds a live connection), so unwrap the
     // Result by hand rather than through expect_err.
     let outcome = core.open_session(
-        "127.0.0.1".to_string(),
+        "127.0.0.1".to_owned(),
         sshd.port,
-        "root".to_string(),
-        unissh_ffi::AuthMethod::SystemAgent {
+        "root".to_owned(),
+        AuthMethod::SystemAgent {
             public_key: other_pub.clone(),
         },
         vec![],
         None,
-        "xterm".to_string(),
+        "xterm".to_owned(),
         80,
         24,
         observer,
@@ -4880,18 +4832,22 @@ fn system_agent_missing_key_is_named() {
 /// socket fails with the typed refusal instead of asking UniSSH itself.
 #[test]
 fn system_agent_auth_refuses_the_endpoint_set_on_the_core() {
-    let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = AGENT_ENV
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let public = core
-        .generate_ssh_key("v".to_string(), "key".to_string())
+        .generate_ssh_key("v".to_owned(), "key".to_owned())
         .unwrap();
     let own = dir.path().join("agent.sock"); // the listener is off: no file
     core.set_system_agent_endpoint(Some(own.clone()));
     // SAFETY: single-threaded test setup, serialized by AGENT_ENV.
-    unsafe { std::env::set_var("SSH_AUTH_SOCK", &own) };
+    unsafe {
+        std::env::set_var("SSH_AUTH_SOCK", &own);
+    }
 
     let sshd = TestSshd::start(&public);
     let observer = std::sync::Arc::new(CollectObserver {
@@ -4899,13 +4855,13 @@ fn system_agent_auth_refuses_the_endpoint_set_on_the_core() {
         closed: std::sync::atomic::AtomicBool::new(false),
     });
     let outcome = core.open_session(
-        "127.0.0.1".to_string(),
+        "127.0.0.1".to_owned(),
         sshd.port,
-        "root".to_string(),
-        unissh_ffi::AuthMethod::SystemAgent { public_key: public },
+        "root".to_owned(),
+        AuthMethod::SystemAgent { public_key: public },
         vec![],
         None,
-        "xterm".to_string(),
+        "xterm".to_owned(),
         80,
         24,
         observer,
@@ -4962,8 +4918,8 @@ fn local_session_streams_output_and_exit_code() {
     let session = core
         .open_local_session(
             unissh_ffi::LocalSpec {
-                program: "/bin/sh".to_string(),
-                args: vec!["-c".to_string(), "echo local-marker; exit 3".to_string()],
+                program: "/bin/sh".to_owned(),
+                args: vec!["-c".to_owned(), "echo local-marker; exit 3".to_owned()],
                 cwd: None,
             },
             80,
@@ -5006,23 +4962,23 @@ fn local_session_records_into_the_vault() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let obs = Arc::new(Obs(AtomicBool::new(false)));
     let session = core
         .open_local_session(
             unissh_ffi::LocalSpec {
-                program: "/bin/sh".to_string(),
-                args: vec!["-c".to_string(), "echo recorded-locally".to_string()],
+                program: "/bin/sh".to_owned(),
+                args: vec!["-c".to_owned(), "echo recorded-locally".to_owned()],
                 cwd: None,
             },
             80,
             24,
             obs.clone(),
             Some(unissh_ffi::RecordingRequest {
-                vault_id: "v".to_string(),
-                recording_id: "rec-local".to_string(),
-                label: "sh".to_string(),
+                vault_id: "v".to_owned(),
+                recording_id: "rec-local".to_owned(),
+                label: "sh".to_owned(),
             }),
         )
         .expect("a local session must open on a desktop platform");
@@ -5030,7 +4986,7 @@ fn local_session_records_into_the_vault() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let meta = loop {
         if let Some(m) = core
-            .list_recordings("v".to_string())
+            .list_recordings("v".to_owned())
             .unwrap()
             .into_iter()
             .next()
@@ -5053,7 +5009,7 @@ fn local_session_records_into_the_vault() {
     assert!(!meta.truncated);
 
     let body = core
-        .get_recording("v".to_string(), "rec-local".to_string())
+        .get_recording("v".to_owned(), "rec-local".to_owned())
         .unwrap();
     assert!(
         body.contains("recorded-locally"),
@@ -5089,7 +5045,7 @@ fn local_session_rejects_a_zero_terminal_size() {
     // hand rather than through expect_err.
     let err = match core.open_local_session(
         unissh_ffi::LocalSpec {
-            program: "/bin/sh".to_string(),
+            program: "/bin/sh".to_owned(),
             args: vec![],
             cwd: None,
         },
@@ -5122,11 +5078,11 @@ fn local_shell_split_args_parses_like_a_shell() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     assert_eq!(
-        core.local_shell_split_args("-c \"echo hi\"".to_string()),
-        Some(vec!["-c".to_string(), "echo hi".to_string()])
+        core.local_shell_split_args("-c \"echo hi\"".to_owned()),
+        Some(vec!["-c".to_owned(), "echo hi".to_owned()])
     );
     // An unbalanced quote is a mistake to surface, not to guess at.
-    assert_eq!(core.local_shell_split_args("\"oops".to_string()), None);
+    assert_eq!(core.local_shell_split_args("\"oops".to_owned()), None);
 }
 
 #[cfg(unix)]
@@ -5157,7 +5113,7 @@ fn a_local_recording_survives_the_auto_lock_that_kills_it() {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     let secret = core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
 
     let obs = Arc::new(Obs {
         seen: std::sync::Mutex::new(Vec::new()),
@@ -5166,10 +5122,10 @@ fn a_local_recording_survives_the_auto_lock_that_kills_it() {
     let session = core
         .open_local_session(
             unissh_ffi::LocalSpec {
-                program: "/bin/sh".to_string(),
+                program: "/bin/sh".to_owned(),
                 args: vec![
-                    "-c".to_string(),
-                    "echo before-the-lock; sleep 120".to_string(),
+                    "-c".to_owned(),
+                    "echo before-the-lock; sleep 120".to_owned(),
                 ],
                 cwd: None,
             },
@@ -5177,9 +5133,9 @@ fn a_local_recording_survives_the_auto_lock_that_kills_it() {
             24,
             obs.clone(),
             Some(unissh_ffi::RecordingRequest {
-                vault_id: "v".to_string(),
-                recording_id: "rec-locked".to_string(),
-                label: "sh".to_string(),
+                vault_id: "v".to_owned(),
+                recording_id: "rec-locked".to_owned(),
+                label: "sh".to_owned(),
             }),
         )
         .expect("a local session must open on a desktop platform");
@@ -5197,14 +5153,14 @@ fn a_local_recording_survives_the_auto_lock_that_kills_it() {
     core.lock();
 
     core.unlock(None, secret).unwrap();
-    let list = core.list_recordings("v".to_string()).unwrap();
+    let list = core.list_recordings("v".to_owned()).unwrap();
     assert_eq!(
         list.len(),
         1,
         "the recording was lost to the lock that followed the close"
     );
     let body = core
-        .get_recording("v".to_string(), "rec-locked".to_string())
+        .get_recording("v".to_owned(), "rec-locked".to_owned())
         .unwrap();
     assert!(
         body.contains("before-the-lock"),
@@ -5353,9 +5309,9 @@ fn system_agent_request(agent: &SystemAgent, request: &[u8], caller: AgentCaller
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let ask = async move {
             client.write_all(&frame).await.unwrap();
-            let mut len = [0u8; 4];
+            let mut len = [0_u8; 4];
             client.read_exact(&mut len).await.unwrap();
-            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            let mut body = vec![0_u8; u32::from_be_bytes(len) as usize];
             client.read_exact(&mut body).await.unwrap();
             body // dropping `client` ends the server loop
         };
@@ -5398,30 +5354,30 @@ fn system_agent_offers_the_shared_keys_follows_a_toggle_and_empties_when_locked(
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let work = core
-        .generate_ssh_key("v".to_string(), "work".to_string())
+        .generate_ssh_key("v".to_owned(), "work".to_owned())
         .unwrap();
     let deploy = core
-        .generate_ssh_key("v".to_string(), "deploy".to_string())
+        .generate_ssh_key("v".to_owned(), "deploy".to_owned())
         .unwrap();
 
-    core.set_system_agent_shared("v".to_string(), "work".to_string(), true)
+    core.set_system_agent_shared("v".to_owned(), "work".to_owned(), true)
         .unwrap();
     assert_eq!(
         system_agent_identities(&core),
-        vec![(openssh_blob(&work), "work".to_string())],
+        vec![(openssh_blob(&work), "work".to_owned())],
         "only the shared key is offered"
     );
 
     // No restart: the next request sees the new set.
-    core.set_system_agent_shared("v".to_string(), "deploy".to_string(), true)
+    core.set_system_agent_shared("v".to_owned(), "deploy".to_owned(), true)
         .unwrap();
-    core.set_system_agent_shared("v".to_string(), "work".to_string(), false)
+    core.set_system_agent_shared("v".to_owned(), "work".to_owned(), false)
         .unwrap();
     assert_eq!(
         system_agent_identities(&core),
-        vec![(openssh_blob(&deploy), "deploy".to_string())]
+        vec![(openssh_blob(&deploy), "deploy".to_owned())]
     );
 
     // A locked core offers nothing — an empty list, not an error.
@@ -5465,11 +5421,11 @@ fn core_sharing_work() -> (std::sync::Arc<Core>, tempfile::TempDir, String) {
     let dir = tempfile::tempdir().unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
     let work = core
-        .generate_ssh_key("v".to_string(), "work".to_string())
+        .generate_ssh_key("v".to_owned(), "work".to_owned())
         .unwrap();
-    core.set_system_agent_shared("v".to_string(), "work".to_string(), true)
+    core.set_system_agent_shared("v".to_owned(), "work".to_owned(), true)
         .unwrap();
     (core, dir, work)
 }
@@ -5481,7 +5437,7 @@ fn sign_request(public: &str, data: &[u8]) -> Vec<u8> {
         request.extend_from_slice(&(field.len() as u32).to_be_bytes());
         request.extend_from_slice(field);
     }
-    request.extend_from_slice(&0u32.to_be_bytes()); // flags
+    request.extend_from_slice(&0_u32.to_be_bytes()); // flags
     request
 }
 
@@ -5516,7 +5472,7 @@ fn system_agent_signs_with_a_shared_key_once_approved() {
 
     let caller = AgentCaller {
         pid: Some(4242),
-        executable: Some("/usr/bin/git".to_string()),
+        executable: Some("/usr/bin/git".to_owned()),
     };
     let reply = system_agent_request(
         &core.system_agent(),
@@ -5549,9 +5505,9 @@ fn system_agent_signs_with_a_shared_key_once_approved() {
 fn system_agent_offers_an_attached_certificate_and_signs_it_with_the_key() {
     let (core, _dir, work) = core_sharing_work();
     let other = core
-        .generate_ssh_key("v".to_string(), "other".to_string())
+        .generate_ssh_key("v".to_owned(), "other".to_owned())
         .unwrap();
-    core.set_system_agent_shared("v".to_string(), "other".to_string(), true)
+    core.set_system_agent_shared("v".to_owned(), "other".to_owned(), true)
         .unwrap();
 
     let ca_dir = tempfile::tempdir().unwrap();
@@ -5574,18 +5530,18 @@ fn system_agent_offers_an_attached_certificate_and_signs_it_with_the_key() {
         .unwrap()
         .success());
     let cert = std::fs::read_to_string(ca_dir.path().join("work-cert.pub")).unwrap();
-    core.import_ssh_certificate("v".to_string(), "work".to_string(), cert.clone())
+    core.import_ssh_certificate("v".to_owned(), "work".to_owned(), cert.clone())
         .unwrap();
     // The same certificate attached to `other`, which it does not certify.
-    core.import_ssh_certificate("v".to_string(), "other".to_string(), cert.clone())
+    core.import_ssh_certificate("v".to_owned(), "other".to_owned(), cert.clone())
         .unwrap();
 
     assert_eq!(
         system_agent_identities(&core),
         vec![
-            (openssh_blob(&work), "work".to_string()),
-            (openssh_blob(&cert), "work".to_string()),
-            (openssh_blob(&other), "other".to_string()),
+            (openssh_blob(&work), "work".to_owned()),
+            (openssh_blob(&cert), "work".to_owned()),
+            (openssh_blob(&other), "other".to_owned()),
         ]
     );
 
@@ -5608,7 +5564,7 @@ fn system_agent_refuses_a_key_unshared_while_its_prompt_was_open() {
     let unshare = std::sync::Arc::downgrade(&core);
     core.set_agent_approver(Some(RecordingApprover::new(move || {
         if let Some(core) = unshare.upgrade() {
-            core.set_system_agent_shared("v".to_string(), "work".to_string(), false)
+            core.set_system_agent_shared("v".to_owned(), "work".to_owned(), false)
                 .unwrap();
         }
     })));
@@ -5671,7 +5627,7 @@ fn system_agent_refuses_a_sign_request_beyond_the_open_prompt_cap() {
 #[test]
 fn system_agent_does_not_offer_a_key_replaced_under_the_same_id() {
     let (core, _dir, _old) = core_sharing_work();
-    core.generate_ssh_key("v".to_string(), "work".to_string())
+    core.generate_ssh_key("v".to_owned(), "work".to_owned())
         .unwrap();
     assert_eq!(system_agent_identities(&core), vec![]);
 }
@@ -5692,16 +5648,15 @@ fn system_agent_forgets_the_share_of_a_deleted_key() {
     let private = std::fs::read_to_string(&key_path).unwrap();
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
-    core.create_vault("v".to_string(), "V".to_string()).unwrap();
-    core.import_ssh_key("v".to_string(), "work".to_string(), private.clone(), None)
+    core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+    core.import_ssh_key("v".to_owned(), "work".to_owned(), private.clone(), None)
         .unwrap();
-    core.set_system_agent_shared("v".to_string(), "work".to_string(), true)
+    core.set_system_agent_shared("v".to_owned(), "work".to_owned(), true)
         .unwrap();
     assert_eq!(system_agent_identities(&core).len(), 1);
 
-    core.delete_item("v".to_string(), "work".to_string())
-        .unwrap();
-    core.import_ssh_key("v".to_string(), "work".to_string(), private, None)
+    core.delete_item("v".to_owned(), "work".to_owned()).unwrap();
+    core.import_ssh_key("v".to_owned(), "work".to_owned(), private, None)
         .unwrap();
     assert_eq!(system_agent_identities(&core), vec![]);
 }

@@ -49,7 +49,10 @@ impl Broker {
 
     /// Explicit native revocation must remove consent before reporting success.
     pub fn forget_access(&self, owner: Option<&str>) -> Result<()> {
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.revocation_epoch.fetch_add(1, Ordering::SeqCst);
         self.revoke_inner(owner);
         let mut saved = self.executor.load_access()?;
@@ -59,7 +62,10 @@ impl Broker {
 
     /// Native lock/sleep/exit stops execution without deleting the user's choices.
     pub fn suspend(&self) {
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.suspended.store(true, Ordering::SeqCst);
         self.revocation_epoch.fetch_add(1, Ordering::SeqCst);
         self.revoke_inner(None);
@@ -74,7 +80,10 @@ impl Broker {
     }
     /// A queued native wake/unlock cannot undo a newer lock or revocation.
     pub fn resume_if_current(&self, epoch: u64) {
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.lifecycle_epoch() != epoch {
             return;
         }
@@ -92,7 +101,10 @@ impl Broker {
         if *lock(&self.access_revision) == Some(revision) {
             return;
         }
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.suspended.load(Ordering::SeqCst) {
             return;
         }

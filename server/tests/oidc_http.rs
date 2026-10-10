@@ -155,7 +155,7 @@ fn nonce_for(id: &common::Identity) -> String {
 /// Sign an id_token with `pem` under `kid = KID`, `alg = RS256`, over `claims`.
 fn sign_token(pem: &str, claims: &serde_json::Value) -> String {
     let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some(KID.to_string());
+    header.kid = Some(KID.to_owned());
     let key = EncodingKey::from_rsa_pem(pem.as_bytes()).expect("load RSA signing PEM");
     encode(&header, claims, &key).expect("sign id_token")
 }
@@ -401,8 +401,8 @@ async fn second_callback_reuses_account() {
     .await;
     assert_eq!(r1.status(), 201, "first callback creates the account");
     let b1: serde_json::Value = r1.json().await.unwrap();
-    let account_1 = b1["account_id"].as_str().unwrap().to_string();
-    let device_1 = b1["device_id"].as_str().unwrap().to_string();
+    let account_1 = b1["account_id"].as_str().unwrap().to_owned();
+    let device_1 = b1["device_id"].as_str().unwrap().to_owned();
 
     // Same (iss, sub), a freshly signed token (new nonce is still this identity's).
     let r2 = post_callback(
@@ -455,7 +455,7 @@ async fn reassertion_gate_blocks_stale_refresh_then_fresh_callback_works() {
     .await;
     assert_eq!(r1.status(), 201);
     let b1: serde_json::Value = r1.json().await.unwrap();
-    let refresh = b1["refresh_token"].as_str().unwrap().to_string();
+    let refresh = b1["refresh_token"].as_str().unwrap().to_owned();
 
     // Within the reassertion window, refresh rotates fine.
     let ok = app
@@ -467,7 +467,7 @@ async fn reassertion_gate_blocks_stale_refresh_then_fresh_callback_works() {
         .unwrap();
     assert_eq!(ok.status(), 200, "oidc session refreshes inside its window");
     let rotated = ok.json::<serde_json::Value>().await.unwrap();
-    let refresh2 = rotated["refresh_token"].as_str().unwrap().to_string();
+    let refresh2 = rotated["refresh_token"].as_str().unwrap().to_owned();
 
     // Advance past max_reassertion_age (TestClock) → the OIDC reassertion gate trips.
     app.clock.advance(604_800 + 10);
@@ -515,9 +515,9 @@ async fn reassertion_gate_blocks_stale_refresh_then_fresh_callback_works() {
 /// membership can be seeded in C.
 async fn boot_reconcile() -> (common::TestApp, [u8; 16], [u8; 16], [u8; 16]) {
     let jwks_url = spawn_jwks().await;
-    let space_a = [0xa1u8; 16];
-    let space_b = [0xb2u8; 16];
-    let space_c = [0xc3u8; 16];
+    let space_a = [0xa1_u8; 16];
+    let space_b = [0xb2_u8; 16];
+    let space_c = [0xc3_u8; 16];
     let (a_b64, b_b64) = (ids::b64(&space_a), ids::b64(&space_b));
     let app = common::spawn_with(move |cfg| {
         cfg.oidc.enabled = true;

@@ -45,8 +45,8 @@ impl RateLimiter {
                 buckets: HashMap::new(),
                 last_sweep: i64::MIN,
             }),
-            rps: rps.max(1) as f64,
-            burst: burst.max(1) as f64,
+            rps: f64::from(rps.max(1)),
+            burst: f64::from(burst.max(1)),
             clock,
         }
     }
@@ -87,7 +87,7 @@ impl RateLimiter {
 /// client-controlled and forgeable, so we can't take the first (otherwise the
 /// per-IP rate-limit is bypassed by XFF spoofing). Exactly one
 /// trusted hop is assumed (the documented topology: a single Caddy/nginx in front of the server).
-fn client_ip(state: &AppState, peer: SocketAddr, headers: &axum::http::HeaderMap) -> IpAddr {
+fn client_ip(state: &AppState, peer: SocketAddr, headers: &http::HeaderMap) -> IpAddr {
     if state.config.server.trust_proxy {
         if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
             if let Some(last) = xff.rsplit(',').next() {

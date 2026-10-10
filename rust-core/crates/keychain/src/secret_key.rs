@@ -25,7 +25,7 @@ pub struct SecretKey([u8; SECRET_KEY_LEN]);
 impl SecretKey {
     /// Generates a new Secret Key from the system CSPRNG.
     pub fn generate() -> Self {
-        let mut bytes = [0u8; SECRET_KEY_LEN];
+        let mut bytes = [0_u8; SECRET_KEY_LEN];
         OsRng.fill_bytes(&mut bytes);
         Self(bytes)
     }

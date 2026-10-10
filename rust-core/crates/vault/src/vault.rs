@@ -131,7 +131,7 @@ impl<'a> Vault<'a> {
     ) -> Result<Self, VaultError> {
         let vault_id = vault_id.into();
         let vk = SymmetricKey::generate();
-        let version = 1u64;
+        let version = 1_u64;
 
         let name_blob = aead_encrypt(&vk, name, &name_aad(&vault_id, version))?;
         // The owner VK wrapping is bound to (vault_id, owner_ed, key_epoch) — like
@@ -704,7 +704,7 @@ impl<'a> Vault<'a> {
                     Some(prev),
                 )
             }
-            None => (1u64, None),
+            None => (1_u64, None),
         };
         // grants: (recipient_x25519, member_ed25519, role) for each member
         // whose x25519 is known.
@@ -1066,7 +1066,7 @@ impl<'a> Vault<'a> {
         // OWN key and reject every owner-authored record.
         let trusted = self.genesis_owner.as_slice();
         let mut issues = Vec::new();
-        let mut checked = 0u64;
+        let mut checked = 0_u64;
 
         if let Some(vrec) = self.storage.get_vault(&self.vault_id)? {
             checked += 1;
@@ -1333,8 +1333,7 @@ pub fn verify_record_authority(
     }
     // (a) Re-verify the D1 chain from genesis_owner to record_epoch —
     // self-sufficiently, without trusting storage. Returns the verified set@epoch.
-    let members =
-        crate::membership::verify_chain_to_epoch(storage, vault_id, record_epoch, genesis_owner)?;
+    let members = verify_chain_to_epoch(storage, vault_id, record_epoch, genesis_owner)?;
     // author ∈ the verified set@epoch.
     if !members.contains(author_pubkey) {
         return Err(VaultError::NotAMember);
@@ -1528,7 +1527,7 @@ mod legacy_read_tests {
         content: &[u8],
     ) {
         let vk = SymmetricKey::generate();
-        let version = 1u64;
+        let version = 1_u64;
         let name_blob = aead_encrypt_pre_agility(&vk, name, &name_aad(vault_id, version)).unwrap();
         // the owner wrapping was bound to the raw vault_id (before round 2).
         let wrapped_vk = seal_key_to_public(&ks.encryption.public, &vk, vault_id).unwrap();
@@ -1572,7 +1571,7 @@ mod legacy_read_tests {
 
     #[test]
     fn legacy_vault_opens_and_item_decrypts_via_fallback() {
-        let st = Storage::open_in_memory(&[7u8; 32]).unwrap();
+        let st = Storage::open_in_memory(&[7_u8; 32]).unwrap();
         let ks = keyset();
         forge_legacy_vault(
             &st,
@@ -1596,7 +1595,7 @@ mod legacy_read_tests {
     #[test]
     fn wrong_keyset_still_fails_on_legacy_vault() {
         // the fallback must not open a legacy vault with ANOTHER keyset — both schemes fail.
-        let st = Storage::open_in_memory(&[7u8; 32]).unwrap();
+        let st = Storage::open_in_memory(&[7_u8; 32]).unwrap();
         let ks = keyset();
         forge_legacy_vault(&st, &ks, b"v", b"n", b"i", 1, b"c");
         let other = keyset();
@@ -1609,7 +1608,7 @@ mod legacy_read_tests {
     #[test]
     fn current_vault_unaffected_by_fallback() {
         // Regression: the current format opens on the first attempt, the fallback does not interfere.
-        let st = Storage::open_in_memory(&[7u8; 32]).unwrap();
+        let st = Storage::open_in_memory(&[7_u8; 32]).unwrap();
         let ks = keyset();
         let v = Vault::create(&st, &ks, b"v-cur".to_vec(), b"New").unwrap();
         v.put_item(b"i", 1, b"new-secret").unwrap();

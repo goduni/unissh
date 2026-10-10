@@ -166,11 +166,11 @@ async fn authorize(State(guard): State<Guard>, mut request: Request, next: Next)
     let Ok(_slot) = guard.requests.try_acquire() else {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
-    let mut response =
-        match tokio::time::timeout(std::time::Duration::from_secs(35), next.run(request)).await {
-            Ok(response) => response,
-            Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
-        };
+    let mut response = match tokio::time::timeout(Duration::from_secs(35), next.run(request)).await
+    {
+        Ok(response) => response,
+        Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+    };
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         "no-store".parse().expect("literal header"),

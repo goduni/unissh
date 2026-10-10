@@ -6,7 +6,7 @@ use unissh_keychain::{
 use unissh_storage::Storage;
 
 fn st() -> Storage {
-    Storage::open_in_memory(&[7u8; 32]).unwrap()
+    Storage::open_in_memory(&[7_u8; 32]).unwrap()
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn fast_params() -> KdfParams {
         mem_kib: 19 * 1024,
         iterations: 2,
         parallelism: 1,
-        salt: vec![5u8; 16],
+        salt: vec![5_u8; 16],
     }
 }
 
@@ -190,7 +190,7 @@ fn checked_unlock_raises_floor_to_record_generation() {
     // floor raised to the record's generation (=1)
     assert_eq!(
         keyset_gen_floor(&s).unwrap(),
-        Some(record.generation as u64)
+        Some(u64::from(record.generation))
     );
 }
 
@@ -199,13 +199,13 @@ fn checked_unlock_rejects_generation_below_floor() {
     let s = st();
     let (sk, record, _) = create_account(Some(b"pw"), fast_params()).unwrap();
     // artificially raise the floor above the record's generation
-    raise_keyset_gen_floor(&s, (record.generation as u64) + 5).unwrap();
+    raise_keyset_gen_floor(&s, u64::from(record.generation) + 5).unwrap();
     let err = unlock_account_checked(&record, Some(b"pw"), &sk, &s).unwrap_err();
     assert_eq!(
         err,
         KeychainError::GenerationRollback {
-            attempted: record.generation as u64,
-            floor: (record.generation as u64) + 5,
+            attempted: u64::from(record.generation),
+            floor: u64::from(record.generation) + 5,
         }
     );
 }
@@ -243,7 +243,7 @@ fn change_password_raises_floor_blocks_old_blob() {
     raise_floor_after_change_password(&s, &rotated).unwrap();
     assert_eq!(
         keyset_gen_floor(&s).unwrap(),
-        Some(rotated.generation as u64)
+        Some(u64::from(rotated.generation))
     );
 
     // the OLD blob (password downgrade) no longer opens on this device

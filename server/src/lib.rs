@@ -178,7 +178,7 @@ async fn put_setup_code_hash(store: &Store, want: &[u8]) -> AppResult<()> {
 /// effect immediately: the claim handler reads the hash per request, so a running
 /// server needs no restart. Refuses on a claimed instance.
 pub async fn rotate_setup_code(store: &Store) -> AppResult<String> {
-    let mut rnd = [0u8; 6];
+    let mut rnd = [0_u8; 6];
     ids::fill_random(&mut rnd);
     let code = ids::generate_setup_code(&rnd);
     put_setup_code_hash(store, &ids::sha256(code.as_bytes())).await?;
@@ -221,7 +221,7 @@ pub fn tls_plan(server: &config::ServerConfig) -> Result<TlsPlan, String> {
         return Err(
             "server.acme=true: in-process ACME is not built in — terminate TLS at a \
              reverse proxy (Caddy/nginx/Traefik) or set server.tls_cert + server.tls_key"
-                .to_string(),
+                .to_owned(),
         );
     }
     if !server.tls_cert.is_empty() && !server.tls_key.is_empty() {

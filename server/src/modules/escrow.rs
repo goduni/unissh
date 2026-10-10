@@ -170,7 +170,7 @@ async fn escrow_fetch(
     // so the constant-time compare below still runs and denies.
     let got: [u8; 32] = match ids::unb64(&req.k_auth) {
         Ok(bytes) => ids::sha256(&bytes),
-        Err(_) => [0u8; 32],
+        Err(_) => [0_u8; 32],
     };
     let row = state.store.get_escrow_by_handle(&req.handle).await?;
 
@@ -180,7 +180,7 @@ async fn escrow_fetch(
     let want: Vec<u8> = row
         .as_ref()
         .and_then(|r| r.k_auth_hash.clone())
-        .unwrap_or_else(|| vec![0u8; 32]);
+        .unwrap_or_else(|| vec![0_u8; 32]);
     let enrolled = row.as_ref().and_then(|r| r.k_auth_hash.as_ref()).is_some();
     let matched = ct_eq(&got, &want);
 
@@ -207,9 +207,9 @@ mod tests {
     #[test]
     fn decoy_shape_equals_recommended() {
         let r = KdfParams::recommended();
-        assert_eq!(RECOMMENDED_MEM_KIB, r.mem_kib as i64);
-        assert_eq!(RECOMMENDED_ITERATIONS, r.iterations as i64);
-        assert_eq!(RECOMMENDED_PARALLELISM, r.parallelism as i64);
+        assert_eq!(RECOMMENDED_MEM_KIB, i64::from(r.mem_kib));
+        assert_eq!(RECOMMENDED_ITERATIONS, i64::from(r.iterations));
+        assert_eq!(RECOMMENDED_PARALLELISM, i64::from(r.parallelism));
         assert_eq!(RECOMMENDED_SALT_LEN, r.salt.len());
     }
 }

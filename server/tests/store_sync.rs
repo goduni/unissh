@@ -20,8 +20,8 @@ fn audit(tag: u8) -> SyncObject {
     SyncObject::Audit(AuditObject {
         vault_id: vec![],
         entry_blob: vec![tag],
-        signature: vec![1u8; 67],
-        author_pubkey: vec![2u8; 32],
+        signature: vec![1_u8; 67],
+        author_pubkey: vec![2_u8; 32],
     })
 }
 
@@ -37,7 +37,7 @@ fn vault_tomb(owner: u8, version: u64, tombstone: bool) -> SyncObject {
         wrapped_vk: vec![4, 5, 6],
         version,
         tombstone,
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
         author_pubkey: vec![owner; 32],
         key_epoch: 1,
         cache_policy: CachePolicy::OfflineAllowed,
@@ -105,12 +105,12 @@ async fn monotonic_seq_order_and_first_is_one() {
     );
 
     // delta returns all, seq>cursor ASC
-    let d = s.delta_since(0, 100, &[0u8; 32], 1_000_000).await.unwrap();
+    let d = s.delta_since(0, 100, &[0_u8; 32], 1_000_000).await.unwrap();
     assert_eq!(
         d.iter().map(|x| x.server_seq).collect::<Vec<_>>(),
         vec![1, 2, 3, 4]
     );
-    let d2 = s.delta_since(2, 100, &[0u8; 32], 1_000_000).await.unwrap();
+    let d2 = s.delta_since(2, 100, &[0_u8; 32], 1_000_000).await.unwrap();
     assert_eq!(
         d2.iter().map(|x| x.server_seq).collect::<Vec<_>>(),
         vec![3, 4]
@@ -199,7 +199,7 @@ async fn push_created_personal_vault_binds_owner_account() {
         wrapped_vk: vec![4, 5, 6],
         version: 1,
         tombstone: false,
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
         author_pubkey: ed.clone(),
         key_epoch: 1,
         cache_policy: CachePolicy::OfflineAllowed,
@@ -303,7 +303,7 @@ fn vault_owned(vault_id: &[u8], owner: &[u8]) -> SyncObject {
         wrapped_vk: vec![4, 5, 6],
         version: 1,
         tombstone: false,
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
         author_pubkey: owner.to_vec(),
         key_epoch: 1,
         cache_policy: CachePolicy::OfflineAllowed,
@@ -316,7 +316,7 @@ fn manifest(vault_id: &[u8], epoch: u64, author: &[u8]) -> SyncObject {
         vault_id: vault_id.to_vec(),
         key_epoch: epoch,
         manifest_blob: vec![1, 2, 3, 4],
-        signature: vec![7u8; 67],
+        signature: vec![7_u8; 67],
         author_pubkey: author.to_vec(),
     })
 }
@@ -328,8 +328,8 @@ fn grant(vault_id: &[u8], member: &[u8], epoch: u64, author: &[u8]) -> SyncObjec
         key_epoch: epoch,
         role: MemberRole::Editor,
         not_after: 0, // <=0 = no expiry
-        wrapped_vk: vec![5u8; 48],
-        signature: vec![8u8; 67],
+        wrapped_vk: vec![5_u8; 48],
+        signature: vec![8_u8; 67],
         author_pubkey: author.to_vec(),
     })
 }
@@ -340,9 +340,9 @@ fn grant(vault_id: &[u8], member: &[u8], epoch: u64, author: &[u8]) -> SyncObjec
 async fn delta_filters_by_vault_membership() {
     let s = fresh_store().await;
 
-    let owner1 = [0x11u8; 32];
-    let owner2 = [0x22u8; 32];
-    let stranger = [0x99u8; 32];
+    let owner1 = [0x11_u8; 32];
+    let owner2 = [0x22_u8; 32];
+    let stranger = [0x99_u8; 32];
 
     s.push_objects(
         None,
@@ -385,8 +385,8 @@ async fn delta_filters_by_vault_membership() {
 async fn delta_grant_grants_visibility() {
     let s = fresh_store().await;
 
-    let owner = [0x11u8; 32];
-    let member = [0x33u8; 32];
+    let owner = [0x11_u8; 32];
+    let member = [0x33_u8; 32];
 
     s.push_objects(
         None,
@@ -409,7 +409,7 @@ async fn delta_grant_grants_visibility() {
     );
     // a stranger without a grant — nothing (no vault-less objects).
     assert_eq!(
-        s.delta_since(0, 100, &[0x99u8; 32], 200)
+        s.delta_since(0, 100, &[0x99_u8; 32], 200)
             .await
             .unwrap()
             .len(),
@@ -421,8 +421,8 @@ async fn delta_grant_grants_visibility() {
 #[tokio::test]
 async fn replayed_grant_does_not_resurrect_revoked_access() {
     let s = fresh_store().await;
-    let owner = [0x11u8; 32];
-    let member = [0x33u8; 32];
+    let owner = [0x11_u8; 32];
+    let member = [0x33_u8; 32];
 
     s.push_objects(
         None,
@@ -478,8 +478,8 @@ async fn replayed_grant_does_not_resurrect_revoked_access() {
 #[tokio::test]
 async fn delta_stale_epoch_grant_loses_visibility() {
     let s = fresh_store().await;
-    let owner = [0x11u8; 32];
-    let member = [0x33u8; 32];
+    let owner = [0x11_u8; 32];
+    let member = [0x33_u8; 32];
 
     s.push_objects(
         None,
@@ -520,8 +520,8 @@ async fn delta_stale_epoch_grant_loses_visibility() {
 #[tokio::test]
 async fn delta_expired_grant_stops_delivering() {
     let s = fresh_store().await;
-    let owner = [0x11u8; 32];
-    let member = [0x33u8; 32];
+    let owner = [0x11_u8; 32];
+    let member = [0x33_u8; 32];
 
     let mut g = grant(b"vault-1", &member, 1, &owner);
     if let SyncObject::MembershipGrant(ref mut mg) = g {
@@ -566,7 +566,7 @@ fn item_no_vault() -> SyncObject {
         wrapped_item_key: vec![8, 8],
         version: 1,
         tombstone: false,
-        signature: vec![6u8; 67],
+        signature: vec![6_u8; 67],
         author_pubkey: vec![0xAB; 32],
         created_at: 0,
         updated_at: 0,
@@ -589,7 +589,7 @@ async fn empty_vault_id_vault_scoped_object_not_broadcast() {
     .unwrap();
 
     // the stranger sees ONLY the keyset (genuinely vault-less), not the Item with an empty vault_id.
-    let rows = s.delta_since(0, 100, &[0x99u8; 32], 200).await.unwrap();
+    let rows = s.delta_since(0, 100, &[0x99_u8; 32], 200).await.unwrap();
     assert_eq!(
         rows.len(),
         1,
@@ -606,7 +606,7 @@ fn item_in_vault(vault_id: &[u8], item_id: &[u8]) -> SyncObject {
         wrapped_item_key: vec![8, 8],
         version: 1,
         tombstone: false,
-        signature: vec![6u8; 67],
+        signature: vec![6_u8; 67],
         author_pubkey: vec![0x11; 32],
         created_at: 0,
         updated_at: 0,
@@ -618,8 +618,8 @@ fn item_in_vault(vault_id: &[u8], item_id: &[u8]) -> SyncObject {
 #[tokio::test]
 async fn grant_activation_reemits_vault_objects_above_cursor() {
     let s = fresh_store().await;
-    let owner = [0x11u8; 32];
-    let member = [0x33u8; 32];
+    let owner = [0x11_u8; 32];
+    let member = [0x33_u8; 32];
 
     // The owner creates vault v + item (seqs 1,2) BEFORE membership.
     s.push_objects(
@@ -670,7 +670,7 @@ fn account_state(author: &[u8], version: u64) -> SyncObject {
         author_pubkey: author.to_vec(),
         version,
         payload: vec![1, 2, 3],
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
     })
 }
 
@@ -678,8 +678,8 @@ fn account_state(author: &[u8], version: u64) -> SyncObject {
 #[tokio::test]
 async fn delta_account_state_visible_only_to_author() {
     let s = fresh_store().await;
-    let alice = [0xA1u8; 32];
-    let bob = [0xB2u8; 32];
+    let alice = [0xA1_u8; 32];
+    let bob = [0xB2_u8; 32];
 
     s.push_objects(None, b"as1", vec![push_obj(account_state(&alice, 1))], 100)
         .await
@@ -713,10 +713,10 @@ async fn account_state_row_count(s: &Store, author: &[u8]) -> i64 {
 #[tokio::test]
 async fn account_state_older_versions_compacted() {
     let s = fresh_store().await;
-    let author = [0xA1u8; 32];
+    let author = [0xA1_u8; 32];
 
     // Three consecutive bumps: v1→v2→v3.
-    for v in 1..=3u64 {
+    for v in 1..=3_u64 {
         let idem = format!("as{v}");
         s.push_objects(
             None,
@@ -749,7 +749,7 @@ async fn account_state_older_versions_compacted() {
         author_pubkey: author.to_vec(),
         version: 3,
         payload: vec![7, 7, 7],
-        signature: vec![1u8; 67],
+        signature: vec![1_u8; 67],
     });
     s.push_objects(None, b"as3b", vec![push_obj(sibling)], 100)
         .await
@@ -761,7 +761,7 @@ async fn account_state_older_versions_compacted() {
     );
 
     // A stale version of another author is not affected by our author's compaction.
-    let other = [0xB2u8; 32];
+    let other = [0xB2_u8; 32];
     s.push_objects(None, b"ob1", vec![push_obj(account_state(&other, 1))], 100)
         .await
         .unwrap();
@@ -780,9 +780,9 @@ async fn account_state_older_versions_compacted() {
 #[tokio::test]
 async fn list_accessible_vaults_scopes_by_membership() {
     let s = fresh_store().await;
-    let owner = [0x11u8; 32];
-    let member = [0x33u8; 32];
-    let stranger = [0x99u8; 32];
+    let owner = [0x11_u8; 32];
+    let member = [0x33_u8; 32];
+    let stranger = [0x99_u8; 32];
 
     // vault-1: owner's, shared with `member` (manifest@1 + grant@1).
     s.push_objects(
@@ -840,7 +840,7 @@ async fn list_accessible_vaults_scopes_by_membership() {
 #[tokio::test]
 async fn delta_since_vault_filters_to_one_vault() {
     let s = fresh_store().await;
-    let owner = [0x11u8; 32];
+    let owner = [0x11_u8; 32];
 
     s.push_objects(
         None,
@@ -865,7 +865,7 @@ async fn delta_since_vault_filters_to_one_vault() {
 
     // A stranger gets nothing even when naming a specific vault.
     assert_eq!(
-        s.delta_since_vault(0, 100, &[0x99u8; 32], 200, b"vault-1")
+        s.delta_since_vault(0, 100, &[0x99_u8; 32], 200, b"vault-1")
             .await
             .unwrap()
             .len(),

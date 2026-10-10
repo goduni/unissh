@@ -39,7 +39,7 @@ impl FromRequestParts<AppState> for AuthCtx {
     type Rejection = AppError;
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> AppResult<Self> {
         let (session, device) = resolve_bearer(parts, state).await?;
-        Ok(AuthCtx { session, device })
+        Ok(Self { session, device })
     }
 }
 
@@ -63,7 +63,7 @@ impl FromRequestParts<AppState> for OwnerCtx {
             return Err(AppError::forbidden("owner role required"));
         }
         metrics::counter!("unissh_admin_requests_total").increment(1);
-        Ok(OwnerCtx { session, device })
+        Ok(Self { session, device })
     }
 }
 
@@ -122,7 +122,7 @@ pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    let mut diff = 0u8;
+    let mut diff = 0_u8;
     for (x, y) in a.iter().zip(b.iter()) {
         diff |= x ^ y;
     }
@@ -148,7 +148,7 @@ impl FromRequestParts<AppState> for OpsCtx {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         if ct_eq(got.as_bytes(), want) {
-            Ok(OpsCtx)
+            Ok(Self)
         } else {
             Err(AppError::unauthenticated("invalid ops token"))
         }

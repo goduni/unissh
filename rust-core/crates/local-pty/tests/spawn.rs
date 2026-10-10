@@ -26,7 +26,7 @@ struct Collector {
 
 impl Collector {
     fn new() -> Arc<Self> {
-        Arc::new(Collector {
+        Arc::new(Self {
             exit: AtomicI32::new(i32::MIN),
             ..Default::default()
         })
@@ -81,8 +81,8 @@ impl PtySink for Collector {
 
 fn spec(program: &str, args: &[&str]) -> LocalSpec {
     LocalSpec {
-        program: program.to_string(),
-        args: args.iter().map(|a| (*a).to_string()).collect(),
+        program: program.to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
         cwd: None,
         cols: 80,
         rows: 24,

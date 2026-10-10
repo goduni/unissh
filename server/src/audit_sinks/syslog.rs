@@ -85,7 +85,7 @@ pub fn format_message(h: &Header, row: &AuditExportRow) -> String {
     );
     for (name, value) in [
         ("seq", row.seq.to_string()),
-        ("event", event.to_string()),
+        ("event", event.to_owned()),
         ("space_id", b64(&row.space_id)),
         ("vault_id", b64(&row.vault_id)),
     ] {
@@ -167,13 +167,13 @@ impl SyslogSink {
     pub fn from_config(cfg: &SyslogConfig, public_url: &str) -> Result<Self, String> {
         let facility = cfg
             .facility_code()
-            .ok_or_else(|| "audit.syslog.facility is not a syslog facility".to_string())?;
+            .ok_or_else(|| "audit.syslog.facility is not a syslog facility".to_owned())?;
         let hostname = reqwest::Url::parse(public_url)
             .ok()
             // RFC 5424 wants an IPv6 HOSTNAME bare, without URL brackets.
             .and_then(|u| {
                 u.host_str()
-                    .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
+                    .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_owned())
             })
             .filter(|h| (1..=255).contains(&h.len()) && h.bytes().all(|b| (33..=126).contains(&b)))
             .unwrap_or_else(|| "-".into());
@@ -303,7 +303,7 @@ async fn udp_connect(address: &str) -> Result<UdpSocket, SinkError> {
 /// checked before each batch. A collector never sends on a syslog stream, so
 /// readable data is unexpected but harmless.
 fn tcp_alive(s: &TcpStream) -> bool {
-    let mut buf = [0u8; 64];
+    let mut buf = [0_u8; 64];
     match s.try_read(&mut buf) {
         Ok(0) => false,
         Ok(_) => true,
@@ -387,7 +387,7 @@ mod tests {
             rows: vec![row(1, vec![0; 49_200]), row(2, b"small".to_vec())],
         };
         assert_eq!(sink.deliver(&batch).await, Ok(()));
-        let mut buf = vec![0u8; 70_000];
+        let mut buf = vec![0_u8; 70_000];
         let n = collector.recv(&mut buf).await.unwrap();
         assert!(
             std::str::from_utf8(&buf[..n])

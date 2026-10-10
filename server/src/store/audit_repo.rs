@@ -140,7 +140,7 @@ impl Store {
             )
             .await?
             .map(|r| r.b)
-            .unwrap_or_else(|| vec![0u8; 32]);
+            .unwrap_or_else(|| vec![0_u8; 32]);
         let record = audit_record_bytes(
             seq,
             source,
@@ -161,9 +161,9 @@ impl Store {
                 Val::I(seq),
                 Val::t(source),
                 Val::b(entry_blob),
-                Val::OptB(signature.map(|s| s.to_vec())),
-                Val::OptB(author_pubkey.map(|a| a.to_vec())),
-                Val::OptB(vault_id.map(|v| v.to_vec())),
+                Val::OptB(signature.map(<[u8]>::to_vec)),
+                Val::OptB(author_pubkey.map(<[u8]>::to_vec)),
+                Val::OptB(vault_id.map(<[u8]>::to_vec)),
                 Val::I(now),
                 Val::OptI(server_seq),
                 Val::B(chain),
@@ -249,8 +249,8 @@ impl Store {
                 vec![],
             )
             .await?;
-        let mut expected = vec![0u8; 32];
-        let mut count = 0i64;
+        let mut expected = vec![0_u8; 32];
+        let mut count = 0_i64;
         let mut head: Option<Vec<u8>> = None;
         for r in &rows {
             count += 1;

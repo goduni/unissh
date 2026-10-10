@@ -54,13 +54,13 @@ fn opt_u64(o: Option<u64>) -> AppResult<Val> {
     }
 }
 fn opt_u32(o: Option<u32>) -> Val {
-    Val::OptI(o.map(|v| v as i64))
+    Val::OptI(o.map(|v| i64::from(v)))
 }
 fn opt_u8(o: Option<u8>) -> Val {
-    Val::OptI(o.map(|v| v as i64))
+    Val::OptI(o.map(|v| i64::from(v)))
 }
 fn opt_bool(o: Option<bool>) -> Val {
-    Val::OptI(o.map(|b| b as i64))
+    Val::OptI(o.map(|b| i64::from(b)))
 }
 fn opt_b(o: &Option<Vec<u8>>) -> Val {
     Val::OptB(o.clone())
@@ -322,7 +322,7 @@ pub(crate) async fn insert_object(
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         vec![
             Val::I(seq),
-            Val::I(p.tag_u8 as i64),
+            Val::I(i64::from(p.tag_u8)),
             Val::b(bytes),
             opt_b(&p.vault_id),
             opt_b(&p.item_id),
@@ -365,9 +365,9 @@ pub(crate) async fn materialize(
                 .ok_or_else(|| AppError::malformed("vault: missing author"))?;
             let version = req_u64(p.obj_version, "vault.version")?;
             let epoch = req_u64(p.key_epoch, "vault.key_epoch")?;
-            let st = p.sync_target.unwrap_or(1) as i64;
-            let cp = p.cache_policy.unwrap_or(0) as i64;
-            let tomb = p.tombstone.unwrap_or(false) as i64;
+            let st = i64::from(p.sync_target.unwrap_or(1));
+            let cp = i64::from(p.cache_policy.unwrap_or(0));
+            let tomb = i64::from(p.tombstone.unwrap_or(false));
 
             let existing = tx
                 .fetch_optional_as::<VaultOwner>(
@@ -478,7 +478,7 @@ pub(crate) async fn materialize(
             let vault_id = p.vault_id.clone().unwrap_or_default();
             let member = p.member_pubkey.clone().unwrap_or_default();
             let epoch = req_u64(p.key_epoch, "grant.key_epoch")?;
-            let role = p.role.unwrap_or(0) as i64;
+            let role = i64::from(p.role.unwrap_or(0));
             let wrapped = p.wrapped_vk.clone().unwrap_or_default();
             let sig = p.signature.clone().unwrap_or_default();
             let author = p.author_pubkey.clone().unwrap_or_default();

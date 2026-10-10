@@ -32,7 +32,7 @@ pub const ED25519_KEY_LEN: usize = 32;
 /// Returns `N` cryptographically random bytes from the system CSPRNG. For unguessable,
 /// non-recyclable identifiers (for example an immutable profile uid).
 pub fn random_bytes<const N: usize>() -> [u8; N] {
-    let mut b = [0u8; N];
+    let mut b = [0_u8; N];
     OsRng.fill_bytes(&mut b);
     b
 }
@@ -48,7 +48,7 @@ pub struct SymmetricKey([u8; SYMMETRIC_KEY_LEN]);
 impl SymmetricKey {
     /// Generates a random key from the system CSPRNG.
     pub fn generate() -> Self {
-        let mut bytes = [0u8; SYMMETRIC_KEY_LEN];
+        let mut bytes = [0_u8; SYMMETRIC_KEY_LEN];
         OsRng.fill_bytes(&mut bytes);
         Self(bytes)
     }
@@ -113,7 +113,7 @@ impl X25519PublicKey {
     /// Serializes the public key into 32 bytes.
     pub fn to_bytes(&self) -> [u8; X25519_KEY_LEN] {
         let ga = self.0.to_bytes();
-        let mut out = [0u8; X25519_KEY_LEN];
+        let mut out = [0_u8; X25519_KEY_LEN];
         out.copy_from_slice(ga.as_slice());
         out
     }
@@ -130,7 +130,7 @@ impl X25519SecretKey {
     /// Serializes the private key into 32 bytes. A secret — access explicitly and with care.
     pub fn expose_to_bytes(&self) -> [u8; X25519_KEY_LEN] {
         let ga = self.0.to_bytes();
-        let mut out = [0u8; X25519_KEY_LEN];
+        let mut out = [0_u8; X25519_KEY_LEN];
         out.copy_from_slice(ga.as_slice());
         out
     }

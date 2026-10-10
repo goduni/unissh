@@ -73,12 +73,12 @@ impl Store {
                      VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 1, 0, 0, ?)",
                     vec![
                         Val::b(vault_id),
-                        Val::OptB(space_id.map(|b| b.to_vec())),
-                        Val::OptB(owner_account_id.map(|b| b.to_vec())),
+                        Val::OptB(space_id.map(<[u8]>::to_vec)),
+                        Val::OptB(owner_account_id.map(<[u8]>::to_vec)),
                         Val::b(owner_pubkey),
                         Val::t(access_policy),
                         Val::OptI(space_wide_role),
-                        Val::I(manual_approve as i64),
+                        Val::I(i64::from(manual_approve)),
                         Val::I(now),
                     ],
                 )

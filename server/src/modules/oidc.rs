@@ -144,7 +144,7 @@ async fn oidc_callback(
     //     claim, or a hash of the token when absent, and reject a second use (401).
     //     Inside the tx: a login that later fails/rolls back does NOT burn the token.
     let jti_key = match claims.jti.as_deref() {
-        Some(j) if !j.is_empty() => j.to_string(),
+        Some(j) if !j.is_empty() => j.to_owned(),
         _ => format!("h:{}", ids::b64(&ids::sha256(req.id_token.as_bytes()))),
     };
     state.store.oidc_prune_expired_jti(&mut tx, now).await?;
@@ -423,7 +423,9 @@ async fn resolve_jwk(config: &OidcConfig, now: i64, kid: Option<&str>) -> AppRes
 
     // 1. Serve a fresh cache entry (positive or negative) with NO network I/O.
     {
-        let guard = jwks_cache().lock().unwrap_or_else(|e| e.into_inner());
+        let guard = jwks_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((entry, ts)) = guard.get(&ck) {
             let ttl = match entry {
                 Resolution::Found(_) => JWKS_TTL_SECONDS,
@@ -443,7 +445,9 @@ async fn resolve_jwk(config: &OidcConfig, now: i64, kid: Option<&str>) -> AppRes
     let set = fetch_jwks(&jwks_url).await?;
     let selected = select_key(&set, kid).cloned();
     {
-        let mut guard = jwks_cache().lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = jwks_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Refresh every kid'd key present in the fetched set.
         for k in &set.keys {
             if let Some(id) = &k.common.key_id {
@@ -554,12 +558,12 @@ async fn verify_id_token(
         .get("iss")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::unauthenticated("invalid id_token"))?
-        .to_string();
+        .to_owned();
     let sub = claims
         .get("sub")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::unauthenticated("invalid id_token"))?
-        .to_string();
+        .to_owned();
     let nonce = claims
         .get("nonce")
         .and_then(|v| v.as_str())

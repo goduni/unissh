@@ -12,8 +12,8 @@ fn pending(cfg: &SshConfig) -> Vec<String> {
 
 fn file(path: &str, text: &str) -> Vec<IncludedFile> {
     vec![IncludedFile {
-        path: path.to_string(),
-        text: text.to_string(),
+        path: path.to_owned(),
+        text: text.to_owned(),
     }]
 }
 
@@ -184,7 +184,7 @@ Host *
     assert_eq!(db.local_forwards.len(), 2);
     assert!(db.local_forwards.iter().any(|f| f.starts_with("5432 ")));
     assert!(db.local_forwards.iter().any(|f| f.starts_with("9000 ")));
-    assert_eq!(db.dynamic_forwards, vec!["1080".to_string()]);
+    assert_eq!(db.dynamic_forwards, vec!["1080".to_owned()]);
 }
 
 #[test]
@@ -201,7 +201,7 @@ Host box
     assert_eq!(s.server_alive_interval, Some(30));
     assert_eq!(s.connect_timeout, Some(5));
     assert_eq!(s.compression, Some(true));
-    assert_eq!(s.set_env, vec!["LANG=C.UTF-8".to_string()]);
+    assert_eq!(s.set_env, vec!["LANG=C.UTF-8".to_owned()]);
 }
 
 #[test]
@@ -307,9 +307,9 @@ fn a_hosts_origin_is_the_file_it_was_written_in() {
     assert_eq!(
         origins,
         vec![
-            ("p1a".to_string(), Some("project1/config".to_string())),
-            ("p1b".to_string(), Some("project1/config".to_string())),
-            ("local".to_string(), None),
+            ("p1a".to_owned(), Some("project1/config".to_owned())),
+            ("p1b".to_owned(), Some("project1/config".to_owned())),
+            ("local".to_owned(), None),
         ]
     );
 }
@@ -353,7 +353,7 @@ fn one_include_line_may_name_several_files() {
     let root = "Include project1/config missing/config \"with space/config\"\n";
     let mut asked: Vec<String> = Vec::new();
     let cfg = SshConfig::parse_with_includes(root, |path, _via| {
-        asked.push(path.to_string());
+        asked.push(path.to_owned());
         match path {
             "project1/config" => file("project1/config", "Host p1\n"),
             "with space/config" => file("with space/config", "Host spaced\n"),
@@ -385,7 +385,7 @@ fn the_loader_is_told_which_file_the_include_line_sits_in() {
     let root = "Include a/config\n";
     let mut asked: Vec<(String, Option<String>)> = Vec::new();
     SshConfig::parse_with_includes(root, |path, via| {
-        asked.push((path.to_string(), via.map(str::to_string)));
+        asked.push((path.to_owned(), via.map(str::to_owned)));
         match path {
             "a/config" => file("a/config", "Include b/config\n"),
             "b/config" => file("b/config", "Host deep\n"),
@@ -396,8 +396,8 @@ fn the_loader_is_told_which_file_the_include_line_sits_in() {
     assert_eq!(
         asked,
         [
-            ("a/config".to_string(), None),
-            ("b/config".to_string(), Some("a/config".to_string())),
+            ("a/config".to_owned(), None),
+            ("b/config".to_owned(), Some("a/config".to_owned())),
         ]
     );
 }
@@ -420,8 +420,8 @@ fn an_unfollowed_include_names_the_file_it_was_written_in() {
     assert_eq!(
         got,
         [
-            ("local".to_string(), None),
-            ("local".to_string(), Some("a/config".to_string())),
+            ("local".to_owned(), None),
+            ("local".to_owned(), Some("a/config".to_owned())),
         ]
     );
 }

@@ -38,7 +38,7 @@ fn id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -348,7 +348,10 @@ impl Broker {
         if self.executor.revision()? != revision {
             return Err(ToolError::GrantExpired);
         }
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.revocation_epoch.load(Ordering::SeqCst) != generation {
             return Err(ToolError::GrantExpired);
         }
@@ -391,7 +394,10 @@ impl Broker {
     /// Invalidate live admission/output; saved consent is retained. Native explicit
     /// revocation uses `forget_access`. Cleanup runs without the state lock.
     pub fn revoke(&self, owner: Option<&str>) {
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.revocation_epoch.fetch_add(1, Ordering::SeqCst);
         self.revoke_inner(owner);
     }
@@ -431,7 +437,10 @@ impl Broker {
     }
 
     fn revoke_expired(&self, owner: &str, epoch: &str) {
-        let _admission = self.admission.write().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // The sweep's revision/owner list may predate a concurrent native grant.
         // Recheck both identity and expiry under the same gate as grant publication.
         let revision = self.executor.revision().ok();
@@ -535,11 +544,11 @@ impl Broker {
                 .or_else(|| grant.is_none().then_some(ToolError::GrantRequired));
             let max = grant.map_or(600_000, |g| g.max_timeout_ms);
             return Ok(
-                json!({"status": error.map_or("ready".to_string(), |e| serde_json::to_value(e).unwrap().as_str().unwrap().to_owned()),
+                json!({"status": error.map_or("ready".to_owned(), |e| serde_json::to_value(e).unwrap().as_str().unwrap().to_owned()),
                 "message": error.map_or("Access is ready.", ToolError::message),
                 "approval_mode": grant.map(|g| g.approval_mode),
                 "remaining_seconds": grant.and_then(|g| g.until).map(|d| d.saturating_duration_since(Instant::now()).as_secs()),
-                "limits": {"max_timeout_ms": max, "default_timeout_ms": 120_000u32.min(max), "max_connections": 4, "max_active_commands": 8, "max_retained_commands": RECORDS_PER_GRANT, "max_session_records":32,
+                "limits": {"max_timeout_ms": max, "default_timeout_ms": 120_000_u32.min(max), "max_connections": 4, "max_active_commands": 8, "max_retained_commands": RECORDS_PER_GRANT, "max_session_records":32,
                     "output_per_run_bytes":OUTPUT_PER_RUN,"output_page_bytes":PAGE_BYTES,
                     "output_retention_seconds":null, "idle_session_seconds":300, "stdin_bytes":32768, "env_bytes":16384}}),
             );
@@ -550,7 +559,11 @@ impl Broker {
             &request,
             ToolRequest::CloseSession(_) | ToolRequest::CancelCommand(_)
         ) {
-            Some(self.admission.write().unwrap_or_else(|e| e.into_inner()))
+            Some(
+                self.admission
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
         } else {
             None
         };
@@ -944,7 +957,10 @@ impl Broker {
         }
         self.sweep();
         let revision = self.executor.revision()?;
-        let _admission = self.admission.read().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = lock(&self.state);
         let grant = state.grants.get(owner).ok_or(ToolError::GrantRequired)?;
         if grant.revision != revision || grant.until.is_some_and(|until| Instant::now() >= until) {
@@ -996,7 +1012,10 @@ impl Broker {
     ) -> Result<Value> {
         self.sweep();
         let revision = self.executor.revision()?;
-        let _admission = self.admission.read().unwrap_or_else(|e| e.into_inner());
+        let _admission = self
+            .admission
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = lock(&self.state);
         let grant = state.grants.get(owner).ok_or(ToolError::GrantRequired)?;
         if grant.revision != revision || grant.until.is_some_and(|until| Instant::now() >= until) {
@@ -1021,8 +1040,8 @@ impl Broker {
                     .has_more(value["next_cursor"].as_str().unwrap_or("0"))
         );
         value["command"] = json!(&*run.command);
-        value["cwd"] = json!(run.cwd.as_deref().map(|s| s.as_str()));
-        value["stdin"] = json!(run.stdin.as_deref().map(|s| s.as_str()));
+        value["cwd"] = json!(run.cwd.as_deref().map(std::string::String::as_str));
+        value["stdin"] = json!(run.stdin.as_deref().map(std::string::String::as_str));
         value["env"] = json!(&*run.env);
         value["timeout_ms"] = json!(run.timeout_ms);
         value["state"] = json!(run.state);
@@ -1118,7 +1137,7 @@ impl Broker {
             run.cwd.as_ref().map(|cwd| cwd.as_str()),
             &run.env,
         );
-        let rid = run_id.to_string();
+        let rid = run_id.to_owned();
         let run = state.runs.get_mut(run_id).unwrap();
         run.state = if connection.is_none() {
             "connecting"
@@ -1172,7 +1191,10 @@ impl Broker {
                 if cancelled(&stop) || Instant::now() >= deadline {
                     return Err(ToolError::GrantExpired);
                 }
-                let admission = broker.admission.read().unwrap_or_else(|e| e.into_inner());
+                let admission = broker
+                    .admission
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if cancelled(&stop) || Instant::now() >= deadline {
                     return Err(ToolError::GrantExpired);
                 }
@@ -1363,7 +1385,7 @@ fn unix_ms() -> u64 {
 fn native_run_json(id: &str, run: &Run) -> Value {
     let mut value = run_json(id, run);
     value["command_preview"] = json!(run.command.chars().take(256).collect::<String>());
-    value["cwd"] = json!(run.cwd.as_deref().map(|s| s.as_str()));
+    value["cwd"] = json!(run.cwd.as_deref().map(std::string::String::as_str));
     value["created_unix_ms"] = json!(run.created_unix_ms);
     value["started_unix_ms"] = json!(run.started_unix_ms);
     value["elapsed_ms"] = json!(run.started_at.map(|at| run
@@ -1529,7 +1551,7 @@ mod deadlines {
         let run = b.request("a".into(), request).unwrap()["run_id"]
             .as_str()
             .unwrap()
-            .to_string();
+            .to_owned();
         (b, run)
     }
     #[test]

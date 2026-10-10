@@ -280,7 +280,7 @@ impl WebhookConfig {
     /// Boot-time validation: a malformed sink is a startup error, not a warning.
     pub fn validate(&self) -> Result<(), String> {
         let url = reqwest::Url::parse(&self.url)
-            .map_err(|_| "audit.webhook.url is not a valid URL".to_string())?;
+            .map_err(|_| "audit.webhook.url is not a valid URL".to_owned())?;
         if url.scheme() != "https" && url.scheme() != "http" {
             return Err("audit.webhook.url must be http:// or https://".into());
         }
@@ -573,14 +573,14 @@ fn redacted(s: &str) -> &'static str {
 impl Config {
     /// Load: defaults → TOML (if a path is given and exists) → env (`UNISSH__`).
     pub fn load(toml_path: Option<&Path>) -> Result<Self, Box<figment::Error>> {
-        let mut fig = Figment::from(Serialized::defaults(Config::default()));
+        let mut fig = Figment::from(Serialized::defaults(Self::default()));
         if let Some(p) = toml_path {
             if p.exists() {
                 fig = fig.merge(Toml::file(p));
             }
         }
         fig = fig.merge(Env::prefixed("UNISSH__").split("__"));
-        let mut config: Config = fig.extract().map_err(Box::new)?;
+        let mut config: Self = fig.extract().map_err(Box::new)?;
         config.audit.normalize();
         // Fail fast on a bad OIDC group_map so no per-login SSO path can be broken by
         // one malformed entry (see `OidcConfig::validate`).
@@ -619,7 +619,7 @@ mod oidc_validate_tests {
     }
 
     fn b64_16() -> String {
-        base64::engine::general_purpose::STANDARD.encode([0x5au8; 16])
+        base64::engine::general_purpose::STANDARD.encode([0x5a_u8; 16])
     }
 
     #[test]
@@ -647,7 +647,7 @@ mod oidc_validate_tests {
 
     #[test]
     fn wrong_length_space_id_fails() {
-        let short = base64::engine::general_purpose::STANDARD.encode([0u8; 8]);
+        let short = base64::engine::general_purpose::STANDARD.encode([0_u8; 8]);
         let c = OidcConfig {
             group_map: vec![gm(&short, "member")],
             ..Default::default()
