@@ -610,7 +610,8 @@ export function App() {
         {showApp && <Modals />}
         {showApp && isDesktopOs() && <McpApproval />}
         {showApp && <AuthPrompt />}
-        {showApp && <AgentApproval />}
+        {/* Under `unlocked`, not `showApp`: see the desktop shell below. */}
+        {unlocked && <AgentApproval />}
         {showApp && <CommandPalette />}
         {showApp && <ImportPreview />}
         {showApp && <GroupsModal />}
@@ -697,7 +698,13 @@ export function App() {
       <EntryOverlays />
       {showApp && <Modals />}
       {showApp && isDesktopOs() && <McpApproval />}
-        {showApp && <AuthPrompt />}
+      {showApp && <AuthPrompt />}
+      {/* BOTH shells mount this (App.shells.test.ts): without it every agent
+          signature request waits out its minute unseen and is refused. Under
+          `unlocked`, not `showApp`: a request must also be answerable while an
+          entry overlay (the Emergency Kit) covers the app. It sits above them
+          and above Settings (500 on the ladder in SettingsOverlay). */}
+      {unlocked && <AgentApproval />}
       {showApp && <CommandPalette />}
       {showApp && <SettingsOverlay />}
       {showApp && <ImportPreview />}
