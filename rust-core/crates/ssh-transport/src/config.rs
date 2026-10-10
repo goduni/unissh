@@ -284,7 +284,12 @@ impl SshConfig {
                             continue;
                         }
                         for inc in files {
-                            self.parse_into(&inc.text, Some(&inc.path), load, depth + 1)?;
+                            #[expect(
+                                clippy::arithmetic_side_effects,
+                                reason = "depth < MAX_INCLUDE_DEPTH (16) is checked by the branch above"
+                            )]
+                            let next_depth = depth + 1;
+                            self.parse_into(&inc.text, Some(&inc.path), load, next_depth)?;
                         }
                     }
                     // Reopen the same Host block: in OpenSSH an Include in the
@@ -520,6 +525,11 @@ fn merge(into: &mut HostSettings, from: &HostSettings) {
 /// Simple glob: `*` (any number of characters) and `?` (a single character). An
 /// iterative two-pointer approach with backtracking only over the last `*` — linear,
 /// without recursion and without catastrophic backtracking on patterns like `*a*a*…`.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "every `+= 1`/`+ 1` is on an index that `get` just returned Some for (or, for \
+              star_ti, one <= ti < t.len()), so it is < the length of a Vec and cannot overflow"
+)]
 pub fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();

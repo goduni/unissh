@@ -285,7 +285,7 @@ fn take_string<'a>(input: &mut &'a [u8]) -> Option<&'a [u8]> {
 }
 
 fn framed(payload: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(4 + payload.len());
+    let mut out = Vec::with_capacity(payload.len().saturating_add(4));
     put_string(&mut out, payload)?;
     Some(out)
 }
@@ -399,10 +399,15 @@ where
             log::warn!("agent: refusing a {len}-byte frame");
             return;
         }
-        if fill(&mut stream, &mut inbox, 4 + len).await.is_err() {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "len <= MAX_FRAME (256 KiB) is checked just above, so 4 + len cannot overflow"
+        )]
+        let frame_len = 4 + len;
+        if fill(&mut stream, &mut inbox, frame_len).await.is_err() {
             return;
         }
-        let body: Vec<u8> = inbox.drain(..4 + len).skip(4).collect();
+        let body: Vec<u8> = inbox.drain(..frame_len).skip(4).collect();
         let policy = agent.clone();
         let mut job = tokio::task::spawn_blocking(move || answer(&*policy, &body));
         let reply = loop {

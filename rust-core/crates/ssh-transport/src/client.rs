@@ -41,6 +41,9 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// only granted when someone is actually there to be asked.
 const INTERACTIVE_BUDGET: Duration = Duration::from_secs(300);
 
+/// The authentication deadline when a person may be in the loop.
+const INTERACTIVE_DEADLINE: Duration = HANDSHAKE_TIMEOUT.saturating_add(INTERACTIVE_BUDGET);
+
 /// The authentication method.
 #[derive(Clone)]
 pub enum Auth {
@@ -584,7 +587,9 @@ impl SshClient {
         // The remaining jumps and the final host — tunneled through the previous one.
         let rest: Vec<&ConnectOptions> = later_hops.iter().chain(std::iter::once(target)).collect();
         for (idx, hop) in rest.iter().enumerate() {
-            let is_target = idx + 1 == rest.len();
+            // `rest` is `later_hops` followed by `target`, so the target sits at index
+            // `later_hops.len()`.
+            let is_target = idx == later_hops.len();
             let stream = current
                 .channel_open_direct_tcpip(
                     hop.host.clone(),
@@ -1433,7 +1438,7 @@ async fn authenticate(
     let waits_on_a_person =
         opts.prompter.is_some() || matches!(opts.auth, Auth::SystemAgent { .. });
     let deadline = if waits_on_a_person {
-        HANDSHAKE_TIMEOUT + INTERACTIVE_BUDGET
+        INTERACTIVE_DEADLINE
     } else {
         HANDSHAKE_TIMEOUT
     };
@@ -1913,12 +1918,17 @@ impl Signer for AgentSigner<'_> {
         // russh expects: to_sign ++ string( string(alg) || string(sig) ).
         let wire_len =
             |len: usize| u32::try_from(len).map_err(|e| TransportError::KeyEncoding(e.to_string()));
-        let inner_len = 4 + name.len() + 4 + raw.len();
+        let name_len = wire_len(name.len())?;
+        let raw_len = wire_len(raw.len())?;
+        let inner_len = name_len
+            .checked_add(raw_len)
+            .and_then(|n| n.checked_add(8))
+            .ok_or_else(|| TransportError::KeyEncoding("signature blob exceeds u32".to_owned()))?;
         let mut out = to_sign;
-        out.extend_from_slice(&wire_len(inner_len)?.to_be_bytes());
-        out.extend_from_slice(&wire_len(name.len())?.to_be_bytes());
+        out.extend_from_slice(&inner_len.to_be_bytes());
+        out.extend_from_slice(&name_len.to_be_bytes());
         out.extend_from_slice(name);
-        out.extend_from_slice(&wire_len(raw.len())?.to_be_bytes());
+        out.extend_from_slice(&raw_len.to_be_bytes());
         out.extend_from_slice(raw);
         Ok(out)
     }
