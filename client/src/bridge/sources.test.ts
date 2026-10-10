@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SftpSession } from "@/store/sftp-types";
 
 const { api } = vi.hoisted(() => ({
-  api: { sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), localRemove: vi.fn(), sftpReopen: vi.fn(), sftpListDirCancel: vi.fn(), cancelNew: vi.fn(), cancelTrigger: vi.fn(), cancelDispose: vi.fn() },
+  api: { sftpRename: vi.fn(), sftpCommit: vi.fn(), sftpRemove: vi.fn(), sftpRmdir: vi.fn(), sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), localRemove: vi.fn(), sftpReopen: vi.fn(), sftpListDirCancel: vi.fn(), cancelNew: vi.fn(), cancelTrigger: vi.fn(), cancelDispose: vi.fn() },
 }));
 vi.mock("@/bridge/api", () => api);
 import { sourceFor } from "./sources";
@@ -36,6 +36,42 @@ describe("a reaped channel", () => {
     expect(api.sftpReopen).toHaveBeenCalledExactlyOnceWith("s");
     expect(api.sftpListDirCancel.mock.calls).toEqual([["s", "/dir", "token"], ["s", "/dir", "token"]]);
     expect(api.cancelDispose).toHaveBeenCalledExactlyOnceWith("token");
+  });
+});
+
+describe("a channel that dies under a request that changes the server", () => {
+  const dead = { kind: "ssh", msg: "channel closed" };
+  const absent = { kind: "ssh", msg: "sftp error: status 2: No such file" };
+  const file = { isDir: false, size: 1, mode: 0o100644 };
+
+  it.each([
+    ["rename", () => remote().rename("/a", "/b"), api.sftpRename],
+    ["commit", () => remote().commit("/a", "/b", true), api.sftpCommit],
+  ] as const)("sends a %s again after the reopen while its source is still in place", async (_name, run, request) => {
+    request.mockRejectedValueOnce(dead).mockResolvedValueOnce(undefined);
+    api.sftpLstat.mockResolvedValue(file);
+    await run();
+    expect(api.sftpReopen).toHaveBeenCalledExactlyOnceWith("s");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+  it("does not repeat a rename that landed before its reply was lost", async () => {
+    api.sftpRename.mockRejectedValue(dead);
+    api.sftpLstat.mockImplementation(async (_id, path) => { if (path === "/a") throw absent; return file; });
+    await remote().rename("/a", "/b");
+    expect(api.sftpRename).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ["file", () => remote().remove("/a"), api.sftpRemove],
+    ["folder", () => remote().removeEmptyDir("/a"), api.sftpRmdir],
+  ] as const)("takes a %s that is already gone on the second try as removed", async (_name, run, request) => {
+    request.mockRejectedValueOnce(dead).mockRejectedValueOnce(absent);
+    await run();
+    expect(api.sftpReopen).toHaveBeenCalledExactlyOnceWith("s");
+  });
+  it("still reports a file that was never there", async () => {
+    api.sftpRemove.mockRejectedValue(absent);
+    await expect(remote().remove("/a")).rejects.toEqual(absent);
+    expect(api.sftpReopen).not.toHaveBeenCalled();
   });
 });
 

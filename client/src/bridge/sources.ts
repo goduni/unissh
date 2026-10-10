@@ -138,6 +138,43 @@ class RemoteSource implements FileSource {
       return await fn(); // single retry — a truly dead SSH connection still throws
     }
   }
+  /** withReopen for a request that takes something away (REMOVE, RMDIR). The
+   *  channel can die after the server acted but before its reply arrived, and
+   *  the second try then finds nothing: "no such file" on the SECOND try means
+   *  the first one did it, so it is success. On the first try it stays an
+   *  error. Repeating is safe either way — the request names one path, is never
+   *  recursive, and can remove at most the entry the caller meant. */
+  private async gone(run: () => Promise<void>): Promise<void> {
+    let retry = false;
+    await this.withReopen(async () => {
+      const second = retry;
+      retry = true;
+      try {
+        await run();
+      } catch (error) {
+        if (!second || !/\bstatus 2\b/.test(apiErrorMessage(error))) throw error;
+      }
+    });
+  }
+  /** withReopen for a request that renames `from` onto `to` (RENAME, and the
+   *  posix-rename behind a replacing commit). It is NOT repeated blindly: if
+   *  the reply was lost after the server acted, `from` is gone and a second
+   *  request would fail with "no such file" although the move happened — and
+   *  the caller would report a failed move, or copy what is no longer there.
+   *  So after the reopen the outcome is looked at first: `from` gone and `to`
+   *  present means the first request landed, and nothing is sent again. With
+   *  `from` still in place the first request did nothing a second one cannot
+   *  redo: posix-rename is atomic, and a plain RENAME that stopped between its
+   *  link and unlink makes the second one fail on the existing `to`, which is
+   *  the truth. */
+  private async moved(from: string, to: string, run: () => Promise<void>): Promise<void> {
+    let retry = false;
+    await this.withReopen(async () => {
+      if (retry && await this.lstat(from) === null && await this.lstat(to) !== null) return;
+      retry = true;
+      await run();
+    });
+  }
   async list(path: string, signal?: AbortSignal): Promise<Entry[]> {
     let list: SftpEntry[];
     // A cancellable listing heals a reaped channel exactly like a plain one. The
@@ -220,7 +257,7 @@ class RemoteSource implements FileSource {
     return api.sftpCreateNewFile(this.id, path, this.cancelId);
   }
   remove(path: string): Promise<void> {
-    return api.sftpRemove(this.id, path);
+    return this.gone(() => api.sftpRemove(this.id, path));
   }
   rmdir(path: string): Promise<void> {
     // Recursive — SFTP RMDIR only removes empty dirs (a non-empty one returns
@@ -228,12 +265,14 @@ class RemoteSource implements FileSource {
     return api.sftpRmdirRecursive(this.id, path);
   }
   removeEmptyDir(path: string): Promise<void> {
-    return api.sftpRmdir(this.id, path);
+    return this.gone(() => api.sftpRmdir(this.id, path));
   }
   rename(from: string, to: string): Promise<void> {
-    return api.sftpRename(this.id, from, to);
+    return this.moved(from, to, () => api.sftpRename(this.id, from, to));
   }
-  commit(from: string, to: string, replace: boolean): Promise<void> { return api.sftpCommit(this.id, from, to, replace, this.cancelId); }
+  commit(from: string, to: string, replace: boolean): Promise<void> {
+    return this.moved(from, to, () => api.sftpCommit(this.id, from, to, replace, this.cancelId));
+  }
   setMetadata(path: string, mode?: number, mtime?: number): Promise<void> { return api.sftpSetMetadata(this.id, path, mode === undefined ? undefined : mode & 0o777, mtime, this.cancelId); }
   chmod(path: string, mode: number): Promise<void> {
     return api.sftpChmod(this.id, path, mode);
