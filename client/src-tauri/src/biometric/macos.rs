@@ -103,9 +103,21 @@ const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25_308;
 const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34_018;
 
 /// `LAError` codes meaning "this Mac cannot do Touch ID right now": no login
-/// password (-5), no sensor reachable — including a closed lid — (-6), nothing
-/// enrolled (-7). Never a reason to wipe.
-const LA_ERROR_UNAVAILABLE: [isize; 3] = [-5, -6, -7];
+/// password (`passcodeNotSet`, -5), no sensor reachable — including a closed
+/// lid — (`biometryNotAvailable`, -6), nothing enrolled (`biometryNotEnrolled`,
+/// -7), and the two a desktop Mac with a Magic Keyboard gives: the keyboard's
+/// sensor is not paired (`biometryNotPaired`, -12) or is out of reach
+/// (`biometryDisconnected`, -13). Never a reason to wipe. The values are
+/// `kLAError*` in `LAPublicDefines.h`; -11 is `watchNotAvailable`, which the
+/// biometrics-only policy used here does not return.
+const LA_ERROR_UNAVAILABLE: [isize; 5] = [-5, -6, -7, -12, -13];
+
+/// The prompt's reason when the caller sent none. `evaluatePolicy` raises an
+/// Objective-C exception on an empty `localizedReason` — it "must be non-empty"
+/// — and an exception unwinding into Rust aborts the process, so an empty or
+/// blank string from the webview (a missing translation) must never reach it.
+/// Shown after "UniSSH is trying to".
+const FALLBACK_REASON: &str = "unlock your vault";
 
 /// Domain-state tags: which API produced a stored hash.
 const TAG_LEGACY: u8 = 0;
@@ -255,12 +267,18 @@ fn evaluate(ctx: &LAContext, reason: &str) -> Result<(), isize> {
             log::debug!("biometric: Touch ID reply arrived after the waiter left");
         }
     });
+    let reason = if reason.trim().is_empty() {
+        FALLBACK_REASON
+    } else {
+        reason
+    };
+    let reason = NSString::from_str(reason);
     // SAFETY: the reply block is `Send`-safe (it only owns an mpsc Sender), as
-    // the method requires; the reason is a valid NSString.
+    // the method requires; the reason is a valid, non-empty NSString.
     unsafe {
         ctx.evaluatePolicy_localizedReason_reply(
             LAPolicy::DeviceOwnerAuthenticationWithBiometrics,
-            &NSString::from_str(reason),
+            &reason,
             &reply,
         );
     }
