@@ -70,7 +70,7 @@ fn emit(app: &AppHandle, signal: SystemLockSignal) {
 static SCREEN_LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn is_screen_locked() -> bool {
-    SCREEN_LOCKED.load(std::sync::atomic::Ordering::SeqCst)
+    SCREEN_LOCKED.load(Ordering::SeqCst)
 }
 
 /// Wake alone must not restore access while the OS screen remains locked.
@@ -82,12 +82,8 @@ fn wake(app: &AppHandle) {
 
 fn emit_with_token(app: &AppHandle, signal: SystemLockSignal, token: Option<u64>) {
     match signal {
-        SystemLockSignal::ScreenLock => {
-            SCREEN_LOCKED.store(true, std::sync::atomic::Ordering::SeqCst)
-        }
-        SystemLockSignal::ScreenUnlock => {
-            SCREEN_LOCKED.store(false, std::sync::atomic::Ordering::SeqCst)
-        }
+        SystemLockSignal::ScreenLock => SCREEN_LOCKED.store(true, Ordering::SeqCst),
+        SystemLockSignal::ScreenUnlock => SCREEN_LOCKED.store(false, Ordering::SeqCst),
         SystemLockSignal::Suspend => {}
     }
     if matches!(
@@ -100,7 +96,9 @@ fn emit_with_token(app: &AppHandle, signal: SystemLockSignal, token: Option<u64>
         crate::commands::resume_after_unlock(app);
     }
     log::info!("system-lock: {signal:?}");
-    let _ = app.emit("system-lock", SystemLockEvent { signal, token });
+    if let Err(e) = app.emit("system-lock", SystemLockEvent { signal, token }) {
+        log::debug!("system-lock: event not delivered (no window to tell): {e}");
+    }
 }
 
 /// How long a suspend may be held open while the front end shuts the vault.
@@ -133,6 +131,16 @@ const SUSPEND_GRACE: Duration = Duration::from_millis(1_500);
 static SUSPEND_ACK: Mutex<Option<(u64, SyncSender<()>)>> = Mutex::new(None);
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
+/// Lock the hand-off slot. Every caller is an OS callback or a command that
+/// returns nothing; the slot is a plain `Option`, so a poisoned lock is
+/// recovered rather than letting a suspend wait out its whole grace period.
+fn suspend_slot() -> std::sync::MutexGuard<'static, Option<(u64, SyncSender<()>)>> {
+    SUSPEND_ACK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 /// Names each suspend hand-off. Only ever incremented.
 static NEXT_SUSPEND: AtomicU64 = AtomicU64::new(1);
 
@@ -160,7 +168,7 @@ fn emit_suspend_and_wait(app: &AppHandle) {
 fn arm_suspend_ack() -> (u64, Receiver<()>) {
     let token = NEXT_SUSPEND.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = sync_channel(1);
-    *SUSPEND_ACK.lock().expect("suspend ack") = Some((token, tx));
+    *suspend_slot() = Some((token, tx));
     (token, rx)
 }
 
@@ -171,7 +179,7 @@ fn wait_suspend_ack(rx: Receiver<()>, timeout: Duration) {
     if rx.recv_timeout(timeout).is_err() {
         log::warn!("system-lock: no lock confirmation before suspend; going down anyway");
     }
-    SUSPEND_ACK.lock().expect("suspend ack").take();
+    suspend_slot().take();
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -185,11 +193,17 @@ fn wait_suspend_ack(rx: Receiver<()>, timeout: Duration) {
 /// the moment a vault is still unlocked. So an ack that does not name the
 /// hand-off it belongs to is dropped.
 pub fn ack(token: u64) {
-    let mut slot = SUSPEND_ACK.lock().expect("suspend ack");
-    if slot.as_ref().is_some_and(|(open, _)| *open == token) {
-        if let Some((_, tx)) = slot.take() {
-            let _ = tx.send(());
+    let open = {
+        let mut slot = suspend_slot();
+        if slot.as_ref().is_some_and(|(open, _)| *open == token) {
+            slot.take()
+        } else {
+            None
         }
+    };
+    // The waiter gives up at its deadline; an ack after that has no one to wake.
+    if open.is_some_and(|(_, tx)| tx.send(()).is_err()) {
+        log::debug!("system-lock: suspend ack {token} arrived after the wait ended");
     }
 }
 

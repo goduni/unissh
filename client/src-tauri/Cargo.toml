@@ -274,9 +274,11 @@ custom-protocol = ["tauri/custom-protocol"]
 tempfile = "3"
 
 # Copy of the root workspace's lint policy (separate Cargo root — cannot inherit).
-# Differences: `unsafe_code = "allow"` (JNI, Security.framework, LocalAuthentication
-# bindings live here; every block still needs a `// SAFETY:` comment) and
-# `missing_docs = "allow"` (binary crate). Keep the rest identical to ../../Cargo.toml.
+# Three documented differences: `unsafe_code = "allow"` (JNI, Security.framework,
+# LocalAuthentication bindings live here; every block still needs a `// SAFETY:`
+# comment), `missing_docs = "allow"` (binary crate) and `clippy::unreachable = "allow"`
+# (it fires inside the `#[tauri::command]` expansion). Keep the rest identical to
+# ../../Cargo.toml.
 [lints.rust]
 # Safety
 unsafe_code = "allow"                     # JNI, Security.framework, LocalAuthentication bindings; every block still needs `// SAFETY:`
@@ -310,7 +312,7 @@ unused_qualifications = "warn"
 unwrap_used = "deny"
 expect_used = "deny"                      # a true invariant keeps `.expect()` under `#[expect(clippy::expect_used, reason)]`
 panic = "deny"
-unreachable = "deny"
+unreachable = "allow"                     # fires inside #[tauri::command] expansion (209 sites); our own code has no unreachable!()
 todo = "deny"
 unimplemented = "deny"
 panic_in_result_fn = "deny"

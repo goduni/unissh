@@ -47,12 +47,12 @@ pub enum ApiError {
 
 impl ApiError {
     pub fn other(msg: impl std::fmt::Display) -> Self {
-        ApiError::Other {
+        Self::Other {
             msg: msg.to_string(),
         }
     }
     pub fn not_found(what: impl std::fmt::Display) -> Self {
-        ApiError::Other {
+        Self::Other {
             msg: format!("not found: {what}"),
         }
     }
@@ -61,33 +61,31 @@ impl ApiError {
 impl From<FfiError> for ApiError {
     fn from(e: FfiError) -> Self {
         match e {
-            FfiError::HostUntrusted => ApiError::other("Verify the SSH host key in UniSSH first."),
-            FfiError::Locked => ApiError::Locked,
-            FfiError::InvalidCredentials => ApiError::InvalidCredentials,
-            FfiError::NotFound => ApiError::NotFound,
-            FfiError::AlreadyExists => ApiError::AlreadyExists,
-            FfiError::AlreadyCloud => ApiError::AlreadyCloud,
-            FfiError::NoServer => ApiError::NoServer,
+            FfiError::HostUntrusted => Self::other("Verify the SSH host key in UniSSH first."),
+            FfiError::Locked => Self::Locked,
+            FfiError::InvalidCredentials => Self::InvalidCredentials,
+            FfiError::NotFound => Self::NotFound,
+            FfiError::AlreadyExists => Self::AlreadyExists,
+            FfiError::AlreadyCloud => Self::AlreadyCloud,
+            FfiError::NoServer => Self::NoServer,
             FfiError::HostKeyMismatch {
                 host,
                 port,
                 fingerprint,
-            } => ApiError::HostKeyMismatch {
+            } => Self::HostKeyMismatch {
                 host,
                 port,
                 fingerprint,
             },
             FfiError::RotationInProgress { candidate_id } => {
-                ApiError::RotationInProgress { candidate_id }
+                Self::RotationInProgress { candidate_id }
             }
-            FfiError::RotationPartlyFinished { key_id } => {
-                ApiError::RotationPartlyFinished { key_id }
-            }
+            FfiError::RotationPartlyFinished { key_id } => Self::RotationPartlyFinished { key_id },
             FfiError::PublickeyOnlyNeedsKey => {
-                ApiError::other("A key-only login needs key authentication.")
+                Self::other("A key-only login needs key authentication.")
             }
-            FfiError::Ssh { msg } => ApiError::Ssh { msg },
-            FfiError::Other { msg } => ApiError::Other { msg },
+            FfiError::Ssh { msg } => Self::Ssh { msg },
+            FfiError::Other { msg } => Self::Other { msg },
         }
     }
 }
@@ -95,8 +93,8 @@ impl From<FfiError> for ApiError {
 /// A `JoinError` from `spawn_blocking` (task panicked / cancelled).
 impl From<tauri::Error> for ApiError {
     fn from(e: tauri::Error) -> Self {
-        ApiError::other(e)
+        Self::other(e)
     }
 }
 
-pub type ApiResult<T> = std::result::Result<T, ApiError>;
+pub type ApiResult<T> = Result<T, ApiError>;

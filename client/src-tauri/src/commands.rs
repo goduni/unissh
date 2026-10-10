@@ -170,9 +170,20 @@ pub async fn reset_partial_instance(
     }
     // Partial: clearing the stray file is the desired end state, so a missing-file
     // error (the other path was never written) is fine to ignore.
-    let _ = std::fs::remove_file(&state.db_path);
-    let _ = std::fs::remove_file(&state.keyset_path);
+    remove_if_present(&state.db_path);
+    remove_if_present(&state.keyset_path);
     Ok(())
+}
+
+/// Best-effort removal for the reset paths. A missing file is already the
+/// desired end state; any other failure is logged so a reset that left a file
+/// behind is diagnosable (the next boot sees it and offers the reset again).
+fn remove_if_present(path: &std::path::Path) {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            log::warn!("reset: failed to remove {}: {e}", path.display());
+        }
+    }
 }
 
 /// Full, destructive reset of THIS device's instance — the "can't unlock → start
@@ -193,20 +204,26 @@ pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -
             "refusing to reset an unlocked instance — lock it first",
         ));
     }
-    let _ = std::fs::remove_file(&state.db_path);
-    let _ = std::fs::remove_file(&state.keyset_path);
+    remove_if_present(&state.db_path);
+    remove_if_present(&state.keyset_path);
     // The pre-migration keyset backup (`<keyset>.pre-migration.bak`), if present.
     let mut bak = state.keyset_path.clone().into_os_string();
     bak.push(".pre-migration.bak");
-    let _ = std::fs::remove_file(std::path::PathBuf::from(bak));
+    remove_if_present(&std::path::PathBuf::from(bak));
     // Forget cloud links + the stale keychain Secret Key so re-onboarding is clean.
-    state.cloud.clear_all();
-    let _ = crate::keychain::keychain_delete_secret_key().await;
+    // A poisoned cloud registry is reported after the remaining best-effort steps
+    // have run, so one failure does not leave the keychain and biometric half-reset.
+    let cloud_cleared = state.cloud.clear_all();
+    if let Err(e) = crate::keychain::keychain_delete_secret_key().await {
+        log::warn!("reset: failed to delete the keychain Secret Key: {e:?}");
+    }
     // And biometric unlock: the sealed password beside the keyset and its
     // device secret in the platform store. Idempotent, best-effort like the rest.
     let blob = crate::biometric::blob_path(&state);
-    let _ = blocking_api(move || crate::biometric::forget_now(&blob)).await;
-    Ok(())
+    if let Err(e) = blocking_api(move || crate::biometric::forget_now(&blob)).await {
+        log::warn!("reset: failed to forget biometric unlock: {e:?}");
+    }
+    cloud_cleared
 }
 
 /// True when the session is run by a tiling window manager.
@@ -300,7 +317,7 @@ pub fn log_dir(app: tauri::AppHandle) -> ApiResult<String> {
 #[tauri::command]
 pub fn reveal_log_dir(app: tauri::AppHandle) -> ApiResult<()> {
     let dir = app.path().app_log_dir().map_err(ApiError::other)?;
-    std::fs::create_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).map_err(ApiError::other)?;
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(target_os = "windows") {
@@ -1746,6 +1763,10 @@ pub async fn tunnel_close(id: String, state: State<'_, AppState>) -> ApiResult<(
     reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
 )]
 #[tauri::command]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the epoch guard must cover the insert so invalidate_sftp cannot clear the map in between"
+)]
 pub async fn sftp_open(
     host: String,
     port: u16,
@@ -1756,14 +1777,22 @@ pub async fn sftp_open(
     parallelism: u32,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
-    let epoch = *state.sftp_epoch.lock().unwrap_or_else(|e| e.into_inner());
+    let epoch = *state
+        .sftp_epoch
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let core = state.core.clone();
     let auth = auth.into();
     let jumps = conv_jumps(jumps);
     let proxy = conv_proxy(proxy);
     let sftp =
         blocking(move || core.open_sftp(host, port, user, auth, jumps, proxy, parallelism)).await?;
-    let guard = state.sftp_epoch.lock().unwrap_or_else(|e| e.into_inner());
+    // Held across the insert on purpose: `invalidate_sftp` bumps the epoch under
+    // this lock before clearing the map, so a stale session can never slip in.
+    let guard = state
+        .sftp_epoch
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if *guard != epoch || !state.core.is_unlocked() {
         sftp.close();
         return Err(ApiError::other(
@@ -1776,7 +1805,10 @@ pub async fn sftp_open(
 }
 
 fn invalidate_sftp(state: &AppState) {
-    let mut epoch = state.sftp_epoch.lock().unwrap_or_else(|e| e.into_inner());
+    let mut epoch = state
+        .sftp_epoch
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     *epoch = epoch.wrapping_add(1);
     let sessions: Vec<_> = state.sftp.iter().map(|s| s.value().clone()).collect();
     state.sftp.clear();
@@ -1792,10 +1824,7 @@ pub async fn sftp_invalidate(state: State<'_, AppState>) -> ApiResult<()> {
     Ok(())
 }
 
-fn transfer_cancel(
-    state: &AppState,
-    id: Option<String>,
-) -> ApiResult<Option<Arc<unissh_ffi::CancelToken>>> {
+fn transfer_cancel(state: &AppState, id: Option<String>) -> ApiResult<Option<Arc<CancelToken>>> {
     id.map(|id| {
         state
             .cancels
@@ -1997,7 +2026,12 @@ pub async fn local_realpath(path: String) -> ApiResult<String> {
             .map_err(ApiError::other)?
             .into_os_string()
             .into_string()
-            .map_err(|_| ApiError::other("Path is not valid UTF-8"))
+            .map_err(|path| {
+                ApiError::other(format!(
+                    "Path is not valid UTF-8: {}",
+                    path.to_string_lossy()
+                ))
+            })
     })
     .await?
 }
@@ -2027,6 +2061,8 @@ pub async fn local_commit(from: String, to: String, replace: bool) -> ApiResult<
                 .chain(Some(0))
                 .collect();
             // Flags=0 refuses replacement and preserves directory symlinks too.
+            // SAFETY: `from` and `to` are NUL-terminated UTF-16 buffers built just
+            // above and alive for the call; MoveFileExW only reads them.
             if unsafe {
                 windows_sys::Win32::Storage::FileSystem::MoveFileExW(from.as_ptr(), to.as_ptr(), 0)
             } == 0
@@ -2062,6 +2098,9 @@ pub async fn local_set_metadata(
                         tv_nsec: 0,
                     },
                 ];
+                // SAFETY: `path_c` is a NUL-terminated CString and `times` a
+                // two-element timespec array, both alive for the call; utimensat
+                // only reads them.
                 if unsafe {
                     libc::utimensat(
                         libc::AT_FDCWD,
@@ -2176,7 +2215,11 @@ pub async fn local_copy_file(from: tauri_plugin_fs::FilePath, to: String) -> Api
             .and_then(|_| carry_permissions(&source, &target));
         drop(target);
         if copied.is_err() {
-            let _ = std::fs::remove_file(&to);
+            // Clean up the partial copy; the copy error below is what the UI
+            // reports, and a leftover partial file is visible in the pane.
+            if let Err(e) = std::fs::remove_file(&to) {
+                log::warn!("local copy: failed to remove the partial file: {e}");
+            }
         }
         copied
     })
@@ -2238,24 +2281,23 @@ pub async fn local_list_dir(
         .await?
 }
 
-fn list_local_entries(
-    path: &str,
-    cancel: Option<&unissh_ffi::CancelToken>,
-) -> ApiResult<Vec<dto::LocalEntry>> {
+fn list_local_entries(path: &str, cancel: Option<&CancelToken>) -> ApiResult<Vec<dto::LocalEntry>> {
     let mut out = Vec::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
     for entry in std::fs::read_dir(path).map_err(ApiError::other)? {
-        if cancel.is_some_and(|token| token.is_cancelled()) {
+        if cancel.is_some_and(CancelToken::is_cancelled) {
             return Err(ApiError::other("transfer cancelled"));
         }
         if std::time::Instant::now() >= deadline {
             return Err(ApiError::other("directory listing deadline exceeded"));
         }
         let entry = entry.map_err(ApiError::other)?;
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| ApiError::other("Filename is not valid UTF-8"))?;
+        let name = entry.file_name().into_string().map_err(|name| {
+            ApiError::other(format!(
+                "Filename is not valid UTF-8: {}",
+                name.to_string_lossy()
+            ))
+        })?;
         let md = entry.metadata().map_err(ApiError::other)?;
         let is_dir = md.is_dir();
         let size = md.len();
@@ -2267,8 +2309,8 @@ fn list_local_entries(
             .as_secs();
         out.push(dto::LocalEntry {
             name,
-            is_symlink: md.is_symlink(),
             mode: local_mode(&md),
+            is_symlink: md.is_symlink(),
             is_dir,
             size,
             mtime,
@@ -2307,21 +2349,24 @@ fn local_entry(path: &str, follow: bool) -> ApiResult<Option<dto::LocalEntry>> {
             .to_str()
             .ok_or_else(|| ApiError::other("Filename is not valid UTF-8"))?
             .to_owned(),
-        is_dir: md.is_dir(),
-        is_symlink: md.is_symlink(),
         mode: local_mode(&md),
+        is_symlink: md.is_symlink(),
+        is_dir: md.is_dir(),
         size: md.len(),
         mtime: md
             .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+            .map_or(0, |d| d.as_secs()),
     }))
 }
 
 /// Create one directory. Not recursive: a missing parent or a taken name fails.
 #[tauri::command]
+#[expect(
+    clippy::create_dir,
+    reason = "the pane's New Folder must fail on a missing parent or a taken name, which create_dir_all would hide"
+)]
 pub async fn local_mkdir(path: String) -> ApiResult<()> {
     tauri::async_runtime::spawn_blocking(move || std::fs::create_dir(path).map_err(ApiError::other))
         .await?
@@ -2368,7 +2413,12 @@ pub async fn local_readlink(path: String) -> ApiResult<String> {
             .map_err(ApiError::other)?
             .into_os_string()
             .into_string()
-            .map_err(|_| ApiError::other("Symbolic link target is not valid UTF-8"))
+            .map_err(|target| {
+                ApiError::other(format!(
+                    "Symbolic link target is not valid UTF-8: {}",
+                    target.to_string_lossy()
+                ))
+            })
     })
     .await?
 }
@@ -2484,6 +2534,10 @@ pub async fn local_volumes() -> ApiResult<Vec<dto::LocalVolume>> {
     }
 }
 
+/// Where macOS and the Linux desktops mount secondary and external media.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+const MEDIA_ROOTS: &[&str] = &["/Volumes", "/media", "/run/media", "/mnt"];
+
 /// Whether a mount point is a "drive" in the sense the picker means: somewhere a
 /// person keeps files and would switch to on purpose.
 ///
@@ -2507,8 +2561,6 @@ fn is_browsable_volume(path: &str, removable: bool) -> bool {
     if removable {
         return true;
     }
-    // Where macOS and the Linux desktops mount secondary and external media.
-    const MEDIA_ROOTS: &[&str] = &["/Volumes", "/media", "/run/media", "/mnt"];
     MEDIA_ROOTS
         .iter()
         .any(|r| path.starts_with(&format!("{r}/")))
@@ -2896,7 +2948,7 @@ mod local_symlink_tests {
         tauri::async_runtime::block_on(async {
             let dir = tempfile::tempdir().unwrap();
             let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
-            std::fs::create_dir(path("lib")).unwrap();
+            std::fs::create_dir_all(path("lib")).unwrap();
             let md = super::local_stat(path("lib")).await.unwrap().unwrap();
             assert!(md.is_dir);
             assert_eq!(md.name, "lib");
@@ -2933,7 +2985,7 @@ mod local_symlink_tests {
         tauri::async_runtime::block_on(async {
             let dir = tempfile::tempdir().unwrap();
             let path = |name: &str| dir.path().join(name).to_str().unwrap().to_owned();
-            std::fs::create_dir(path("tree")).unwrap();
+            std::fs::create_dir_all(path("tree")).unwrap();
             std::fs::write(dir.path().join("tree").join("leaf"), b"leaf").unwrap();
             std::fs::write(path("file"), b"file").unwrap();
             super::local_remove(path("file"), false).await.unwrap();
@@ -3043,6 +3095,8 @@ mod local_symlink_tests {
         let dir = tempfile::tempdir().unwrap();
         let fifo = dir.path().join("fifo");
         let cpath = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `cpath` is a NUL-terminated CString that outlives the call;
+        // mkfifo only reads it.
         assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
         assert!(super::open_regular(fifo.to_str().unwrap()).is_err());
         match std::fs::write(
@@ -3061,7 +3115,7 @@ mod local_symlink_tests {
         tauri::async_runtime::block_on(async {
             let temp = tempfile::tempdir().unwrap();
             let path = |name: &str| temp.path().join(name).to_str().unwrap().to_owned();
-            std::fs::create_dir(path("lib")).unwrap();
+            std::fs::create_dir_all(path("lib")).unwrap();
             std::fs::write(path("data"), b"contents must survive").unwrap();
             for (name, target, is_dir) in [
                 ("lib64", "lib".to_owned(), true),

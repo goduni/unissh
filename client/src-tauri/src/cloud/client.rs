@@ -90,6 +90,10 @@ pub fn b64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
 }
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the decode error quotes an offending byte of the payload, which may be a token or key material"
+)]
 pub fn unb64(s: &str) -> ApiResult<Vec<u8>> {
     STANDARD.decode(s.trim()).map_err(|_| ApiError::Server {
         code: "malformed".into(),
@@ -116,7 +120,7 @@ pub fn enc_query(s: &str) -> String {
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
+                out.push(b as char);
             }
             _ => {
                 let _ = write!(out, "%{b:02X}");
@@ -170,7 +174,7 @@ pub fn validate_base_url(base_url: &str) -> ApiResult<()> {
 /// its base URL alone — there is no tenant header any more.
 pub fn headers(rb: RequestBuilder, bearer: Option<&str>) -> RequestBuilder {
     match bearer {
-        Some(tok) => rb.header(reqwest::header::AUTHORIZATION, format!("Bearer {tok}")),
+        Some(tok) => rb.header(AUTHORIZATION, format!("Bearer {tok}")),
         None => rb,
     }
 }
@@ -183,7 +187,9 @@ static REAUTH: OnceLock<Reauth> = OnceLock::new();
 
 /// Wire up token rotation. Called once during setup; later calls are ignored.
 pub fn set_reauth(f: Reauth) {
-    let _ = REAUTH.set(f);
+    if REAUTH.set(f).is_err() {
+        log::debug!("cloud: token refresher already installed; keeping the first one");
+    }
 }
 
 /// The fresh bearer for a request whose token the server has rejected, or None
@@ -195,7 +201,7 @@ fn reauth_header(req: &Request, reauth: &Reauth) -> Option<HeaderValue> {
         .to_str()
         .ok()?
         .strip_prefix("Bearer ")?
-        .to_string();
+        .to_owned();
     let fresh = reauth(&stale)?;
     HeaderValue::from_str(&format!("Bearer {fresh}")).ok()
 }
@@ -365,12 +371,12 @@ fn envelope_err(status: StatusCode, body: &[u8]) -> ApiError {
                 .get("code")
                 .and_then(|c| c.as_str())
                 .unwrap_or("internal")
-                .to_string();
+                .to_owned();
             let message = err
                 .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("")
-                .to_string();
+                .to_owned();
             return ApiError::Server { code, message };
         }
     }
@@ -391,20 +397,28 @@ fn missing(key: &str) -> ApiError {
 
 pub fn jstr(v: &Value, key: &str) -> ApiResult<String> {
     v.get(key)
-        .and_then(|x| x.as_str())
-        .map(|s| s.to_string())
+        .and_then(Value::as_str)
+        .map(str::to_owned)
         .ok_or_else(|| missing(key))
 }
 
 pub fn ju64(v: &Value, key: &str) -> ApiResult<u64> {
     v.get(key)
-        .and_then(|x| x.as_u64())
+        .and_then(Value::as_u64)
         .ok_or_else(|| missing(key))
+}
+
+/// A `u32` field; a value that does not fit is a malformed response, never truncated.
+pub fn ju32(v: &Value, key: &str) -> ApiResult<u32> {
+    u32::try_from(ju64(v, key)?).map_err(|e| ApiError::Server {
+        code: "malformed".into(),
+        message: format!("server response field '{key}' is out of range: {e}"),
+    })
 }
 
 pub fn ji64(v: &Value, key: &str) -> ApiResult<i64> {
     v.get(key)
-        .and_then(|x| x.as_i64())
+        .and_then(Value::as_i64)
         .ok_or_else(|| missing(key))
 }
 
@@ -462,7 +476,7 @@ mod tls_hint_tests {
     #[test]
     fn root_cause_is_appended_when_there_is_no_tls_hint() {
         #[derive(Debug)]
-        struct Err2(&'static str, Option<Box<Err2>>);
+        struct Err2(&'static str, Option<Box<Self>>);
         impl std::fmt::Display for Err2 {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str(self.0)
@@ -470,9 +484,8 @@ mod tls_hint_tests {
         }
         impl std::error::Error for Err2 {
             fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                self.1
-                    .as_deref()
-                    .map(|e| e as &(dyn std::error::Error + 'static))
+                let inner: &Self = self.1.as_deref()?;
+                Some(inner)
             }
         }
 
@@ -535,7 +548,7 @@ mod reauth_tests {
                         break;
                     }
                     if let Some(v) = line.to_ascii_lowercase().strip_prefix("authorization:") {
-                        auth = v.trim().to_string();
+                        auth = v.trim().to_owned();
                     }
                     if line == "\r\n" || line == "\n" {
                         break;
@@ -548,8 +561,9 @@ mod reauth_tests {
                     body.len()
                 );
                 let mut w = &stream;
-                let _ = w.write_all(reply.as_bytes());
-                let _ = w.flush();
+                w.write_all(reply.as_bytes())
+                    .expect("the test client reads the reply");
+                w.flush().expect("the test client reads the reply");
             }
         });
         (format!("http://127.0.0.1:{port}"), seen)
@@ -577,8 +591,8 @@ mod reauth_tests {
         let asked: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let asked2 = Arc::clone(&asked);
         let reauth: Reauth = Arc::new(move |stale: &str| {
-            asked2.lock().unwrap().push(stale.to_string());
-            Some("fresh-token".to_string())
+            asked2.lock().unwrap().push(stale.to_owned());
+            Some("fresh-token".to_owned())
         });
 
         let out = get(&base, "stale-token", Some(reauth)).expect("the retry must succeed");
@@ -589,7 +603,7 @@ mod reauth_tests {
             ["stale-token"],
             "the refresher is handed the token that was rejected, and asked once"
         );
-        let seen = seen.lock().unwrap();
+        let seen = seen.lock().unwrap().clone();
         assert_eq!(seen.len(), 2, "exactly one retry");
         assert_eq!(seen[0], "bearer stale-token");
         assert_eq!(
@@ -607,7 +621,7 @@ mod reauth_tests {
         let calls2 = Arc::clone(&calls);
         let reauth: Reauth = Arc::new(move |_| {
             calls2.fetch_add(1, Ordering::SeqCst);
-            Some("fresh-token".to_string())
+            Some("fresh-token".to_owned())
         });
 
         let err = get(&base, "stale-token", Some(reauth)).expect_err("must surface the 401");

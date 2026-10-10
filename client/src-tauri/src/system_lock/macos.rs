@@ -113,6 +113,8 @@ define_class!(
 impl LockObserver {
     fn new(app: AppHandle) -> Retained<Self> {
         let this = Self::alloc().set_ivars(Ivars { app });
+        // SAFETY: `this` is a freshly allocated instance with its ivars set, and
+        // NSObject's `init` is the designated initializer to call on it once.
         unsafe { msg_send![super(this), init] }
     }
 }

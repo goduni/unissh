@@ -102,7 +102,7 @@ pub struct SessionTokens {
 
 impl SessionTokens {
     fn from_value(v: &Value) -> ApiResult<Self> {
-        Ok(SessionTokens {
+        Ok(Self {
             access_token: client::jstr(v, "access_token")?,
             refresh_token: client::jstr(v, "refresh_token")?,
         })
@@ -124,7 +124,7 @@ fn join_outcome(v: &Value) -> ApiResult<JoinOutcome> {
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
-                .filter_map(|s| s.as_str().map(str::to_string))
+                .filter_map(|s| s.as_str().map(str::to_owned))
                 .collect()
         })
         .unwrap_or_default();
@@ -198,7 +198,7 @@ pub fn join_preview(http: &Client, base_url: &str, token: &str) -> ApiResult<Joi
     let instance_name = v
         .get("instance_name")
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .map(str::to_owned);
     let mut spaces = Vec::new();
     if let Some(arr) = v.get("spaces").and_then(Value::as_array) {
         for s in arr {
@@ -208,7 +208,7 @@ pub fn join_preview(http: &Client, base_url: &str, token: &str) -> ApiResult<Joi
                     .get("name")
                     .and_then(Value::as_str)
                     .unwrap_or("")
-                    .to_string(),
+                    .to_owned(),
                 role: client::jstr(s, "role")?,
             });
         }
@@ -232,7 +232,7 @@ pub fn instance_info(http: &Client, base_url: &str) -> ApiResult<InstanceInfo> {
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
-                .filter_map(|a| a.as_str().map(str::to_string))
+                .filter_map(|a| a.as_str().map(str::to_owned))
                 .collect()
         })
         .unwrap_or_default();
@@ -244,21 +244,21 @@ pub fn instance_info(http: &Client, base_url: &str) -> ApiResult<InstanceInfo> {
                 .get("issuer")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_string(),
+                .to_owned(),
             client_id: o
                 .get("client_id")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_string(),
+                .to_owned(),
         });
     Ok(InstanceInfo {
         claimed: v.get("claimed").and_then(Value::as_bool).unwrap_or(false),
-        name: v.get("name").and_then(Value::as_str).map(str::to_string),
+        name: v.get("name").and_then(Value::as_str).map(str::to_owned),
         version: v
             .get("version")
             .and_then(Value::as_str)
             .unwrap_or("")
-            .to_string(),
+            .to_owned(),
         instance_id: client::jstr(&v, "instance_id")?,
         auth,
         oidc,
@@ -291,7 +291,7 @@ pub fn oidc_callback(
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
-                .filter_map(|s| s.as_str().map(str::to_string))
+                .filter_map(|s| s.as_str().map(str::to_owned))
                 .collect()
         })
         .unwrap_or_default();
@@ -403,10 +403,13 @@ pub fn device_list(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec
         http.get(client::url(base_url, "/v1/devices")),
         Some(access),
     ))?;
-    let devices = v["devices"].as_array().ok_or_else(|| ApiError::Server {
-        code: "malformed".into(),
-        message: "devices response missing 'devices'".into(),
-    })?;
+    let devices = v
+        .get("devices")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::Server {
+            code: "malformed".into(),
+            message: "devices response missing 'devices'".into(),
+        })?;
     let mut out = Vec::with_capacity(devices.len());
     for d in devices {
         out.push(dto::DeviceInfo {
@@ -415,11 +418,11 @@ pub fn device_list(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec
                 .get("status")
                 .and_then(|x| x.as_str())
                 .unwrap_or("")
-                .to_string(),
-            registered_at: d.get("registered_at").and_then(|x| x.as_i64()).unwrap_or(0),
+                .to_owned(),
+            registered_at: d.get("registered_at").and_then(Value::as_i64).unwrap_or(0),
             active_sessions: d
                 .get("active_sessions")
-                .and_then(|x| x.as_i64())
+                .and_then(Value::as_i64)
                 .unwrap_or(0),
         });
     }
@@ -457,10 +460,13 @@ pub fn list_accounts(
         http.get(client::url(base_url, "/v1/accounts")),
         Some(access),
     ))?;
-    let accounts = v["accounts"].as_array().ok_or_else(|| ApiError::Server {
-        code: "malformed".into(),
-        message: "accounts response missing 'accounts'".into(),
-    })?;
+    let accounts = v
+        .get("accounts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::Server {
+            code: "malformed".into(),
+            message: "accounts response missing 'accounts'".into(),
+        })?;
     let to_hex_field = |a: &Value, key: &str| -> Option<String> {
         a.get(key)
             .and_then(|x| x.as_str())
@@ -474,17 +480,17 @@ pub fn list_accounts(
             display_name: a
                 .get("display_name")
                 .and_then(|x| x.as_str())
-                .map(str::to_string),
-            handle: a.get("handle").and_then(|x| x.as_str()).map(str::to_string),
-            is_admin: a.get("is_admin").and_then(|x| x.as_bool()).unwrap_or(false),
+                .map(str::to_owned),
+            handle: a.get("handle").and_then(|x| x.as_str()).map(str::to_owned),
+            is_admin: a.get("is_admin").and_then(Value::as_bool).unwrap_or(false),
             ed25519_pub_hex: to_hex_field(a, "member_pubkey"),
             x25519_pub_hex: to_hex_field(a, "x25519_pub"),
             status: a
                 .get("status")
                 .and_then(|x| x.as_str())
                 .unwrap_or("")
-                .to_string(),
-            device_count: a.get("device_count").and_then(|x| x.as_i64()).unwrap_or(0),
+                .to_owned(),
+            device_count: a.get("device_count").and_then(Value::as_i64).unwrap_or(0),
         });
     }
     Ok(out)
@@ -520,13 +526,18 @@ pub fn keyset_put(
 ) -> ApiResult<i64> {
     let mut body = json!({ "keyset_blob": client::b64(keyset_blob) });
     if let Some(e) = escrow {
-        body["escrow"] = json!({
-            "k_auth": client::b64(&e.k_auth),
-            "argon_salt": client::b64(&e.argon_salt),
-            "argon_mem_kib": e.argon_mem_kib,
-            "argon_iterations": e.argon_iterations,
-            "argon_parallelism": e.argon_parallelism,
-        });
+        if let Some(fields) = body.as_object_mut() {
+            fields.insert(
+                "escrow".to_owned(),
+                json!({
+                    "k_auth": client::b64(&e.k_auth),
+                    "argon_salt": client::b64(&e.argon_salt),
+                    "argon_mem_kib": e.argon_mem_kib,
+                    "argon_iterations": e.argon_iterations,
+                    "argon_parallelism": e.argon_parallelism,
+                }),
+            );
+        }
     }
     let v = client::send_json(
         client::headers(http.put(client::url(base_url, "/v1/keyset")), Some(access)).json(&body),
@@ -568,10 +579,10 @@ pub fn relay_post(
 ) -> ApiResult<()> {
     let mut body = serde_json::Map::new();
     body.insert(
-        "channel_id".to_string(),
-        Value::String(channel_id_b64.to_string()),
+        "channel_id".to_owned(),
+        Value::String(channel_id_b64.to_owned()),
     );
-    body.insert(slot.to_string(), Value::String(client::b64(msg)));
+    body.insert(slot.to_owned(), Value::String(client::b64(msg)));
     client::send_json(
         client::headers(
             http.post(client::url(base_url, &format!("/v1/relay/{slot}"))),
@@ -618,16 +629,19 @@ pub fn audit_query(
 ) -> ApiResult<Vec<dto::AuditEntry>> {
     let path = match since_seq {
         Some(s) => format!("/v1/audit?since_seq={s}"),
-        None => "/v1/audit".to_string(),
+        None => "/v1/audit".to_owned(),
     };
     let v = client::send_json(client::headers(
         http.get(client::url(base_url, &path)),
         Some(access),
     ))?;
-    let entries = v["entries"].as_array().ok_or_else(|| ApiError::Server {
-        code: "malformed".into(),
-        message: "audit response missing 'entries'".into(),
-    })?;
+    let entries = v
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::Server {
+            code: "malformed".into(),
+            message: "audit response missing 'entries'".into(),
+        })?;
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
         out.push(dto::AuditEntry {
@@ -636,12 +650,12 @@ pub fn audit_query(
                 .get("source")
                 .and_then(|x| x.as_str())
                 .unwrap_or("")
-                .to_string(),
-            recorded_at: e.get("recorded_at").and_then(|x| x.as_i64()).unwrap_or(0),
+                .to_owned(),
+            recorded_at: e.get("recorded_at").and_then(Value::as_i64).unwrap_or(0),
             author_pubkey: e
                 .get("author_pubkey")
                 .and_then(|x| x.as_str())
-                .map(str::to_string),
+                .map(str::to_owned),
         });
     }
     Ok(out)
@@ -682,7 +696,7 @@ pub fn invite(
     Ok(dto::InviteInfo {
         invite_id: client::jstr(&v, "invite_id")?,
         token: client::jstr(&v, "token")?,
-        url: v.get("url").and_then(Value::as_str).map(str::to_string),
+        url: v.get("url").and_then(Value::as_str).map(str::to_owned),
         expires_at: client::ji64(&v, "expires_at")?,
     })
 }
@@ -703,7 +717,7 @@ pub fn list_spaces(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_string(),
+                .to_owned(),
             role: client::jstr(s, "role")?,
         });
     }
@@ -758,18 +772,18 @@ pub fn directory(
     for a in rows {
         out.push(dto::DirectoryEntry {
             account_id: client::jstr(a, "account_id")?,
-            handle: a.get("handle").and_then(Value::as_str).map(str::to_string),
+            handle: a.get("handle").and_then(Value::as_str).map(str::to_owned),
             display_name: a
                 .get("display_name")
                 .and_then(Value::as_str)
-                .map(str::to_string),
+                .map(str::to_owned),
             ed25519_pub_hex: client::to_hex(&client::unb64(&client::jstr(a, "member_pubkey")?)?),
             x25519_pub_hex: client::to_hex(&client::unb64(&client::jstr(a, "x25519_pub")?)?),
             status: a
                 .get("status")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_string(),
+                .to_owned(),
         });
     }
     Ok(out)
@@ -804,8 +818,8 @@ pub fn pending(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec<dto
                 .get("source")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_string(),
-            proof: a.get("proof").and_then(Value::as_str).map(str::to_string),
+                .to_owned(),
+            proof: a.get("proof").and_then(Value::as_str).map(str::to_owned),
             created_at: a.get("created_at").and_then(Value::as_i64).unwrap_or(0),
         });
     }
@@ -888,9 +902,9 @@ pub fn escrow_params(http: &Client, base_url: &str, handle: &str) -> ApiResult<E
     ))?;
     Ok(EscrowParams {
         argon_salt: client::unb64(&client::jstr(&v, "argon_salt")?)?,
-        argon_mem_kib: client::ju64(&v, "argon_mem_kib")? as u32,
-        argon_iterations: client::ju64(&v, "argon_iterations")? as u32,
-        argon_parallelism: client::ju64(&v, "argon_parallelism")? as u32,
+        argon_mem_kib: client::ju32(&v, "argon_mem_kib")?,
+        argon_iterations: client::ju32(&v, "argon_iterations")?,
+        argon_parallelism: client::ju32(&v, "argon_parallelism")?,
     })
 }
 

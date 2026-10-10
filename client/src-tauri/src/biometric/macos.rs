@@ -121,18 +121,22 @@ fn key(k: CFStringRef) -> CFString {
 
 /// The attributes that name the item, plus "data-protection Keychain".
 fn item() -> Vec<(CFString, CFType)> {
-    // SAFETY: reading `extern` statics exported by Security.framework.
-    unsafe {
-        vec![
-            (key(kSecClass), key(kSecClassGenericPassword).into_CFType()),
-            (key(kSecAttrService), CFString::new(SERVICE).into_CFType()),
-            (key(kSecAttrAccount), CFString::new(ACCOUNT).into_CFType()),
-            (
-                key(kSecUseDataProtectionKeychain),
-                CFBoolean::true_value().into_CFType(),
-            ),
-        ]
-    }
+    // SAFETY: reading an `extern` static exported by Security.framework.
+    let class = unsafe { kSecClass };
+    // SAFETY: reading an `extern` static exported by Security.framework.
+    let generic_password = unsafe { kSecClassGenericPassword };
+    // SAFETY: reading an `extern` static exported by Security.framework.
+    let service = unsafe { kSecAttrService };
+    // SAFETY: reading an `extern` static exported by Security.framework.
+    let account = unsafe { kSecAttrAccount };
+    // SAFETY: reading an `extern` static exported by Security.framework.
+    let data_protection = unsafe { kSecUseDataProtectionKeychain };
+    vec![
+        (key(class), key(generic_password).into_CFType()),
+        (key(service), CFString::new(SERVICE).into_CFType()),
+        (key(account), CFString::new(ACCOUNT).into_CFType()),
+        (key(data_protection), CFBoolean::true_value().into_CFType()),
+    ]
 }
 
 fn yes(query: &mut Vec<(CFString, CFType)>, k: CFStringRef) {
@@ -144,10 +148,11 @@ fn yes(query: &mut Vec<(CFString, CFType)>, k: CFStringRef) {
 /// as long as the query lives.
 fn with_context(mut query: Vec<(CFString, CFType)>, ctx: &LAContext) -> Vec<(CFString, CFType)> {
     // SAFETY: `ctx` is a live Objective-C object; wrapping under the get rule
-    // takes our own +1, released when the CFType drops. The key is an `extern`
-    // static exported by Security.framework.
+    // takes our own +1, released when the CFType drops.
     let value = unsafe { CFType::wrap_under_get_rule(std::ptr::from_ref(ctx).cast()) };
-    query.push((key(unsafe { kSecUseAuthenticationContext }), value));
+    // SAFETY: reading an `extern` static exported by Security.framework.
+    let context_key = unsafe { kSecUseAuthenticationContext };
+    query.push((key(context_key), value));
     query
 }
 
@@ -157,6 +162,8 @@ fn copy_matching(query: &[(CFString, CFType)]) -> (i32, Option<CFType>) {
     // SAFETY: `dict` is a valid dictionary; `out` receives a +1 reference (or
     // stays null), which `wrap_under_create_rule` takes ownership of.
     let status = unsafe { SecItemCopyMatching(dict.as_concrete_TypeRef(), &mut out) };
+    // SAFETY: a non-null `out` is the +1 reference SecItemCopyMatching handed
+    // us; the create rule takes ownership of exactly that reference.
     let value = (!out.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(out) });
     (status, value)
 }
@@ -195,11 +202,11 @@ fn domain_hash(ctx: &LAContext) -> Option<Vec<u8>> {
         let hash = unsafe { ctx.domainState().biometry().stateHash() };
         (TAG_DOMAIN_STATE, hash?)
     } else {
-        // SAFETY: plain property read; the replacement above is not available.
         #[expect(
             deprecated,
             reason = "evaluatedPolicyDomainState is the only domain-state API before macOS 15; the domainState branch above handles 15+"
         )]
+        // SAFETY: plain property read; the replacement above is not available.
         let hash = unsafe { ctx.evaluatedPolicyDomainState() };
         (TAG_LEGACY, hash?)
     };
@@ -242,7 +249,11 @@ fn evaluate(ctx: &LAContext, reason: &str) -> Result<(), isize> {
             // SAFETY: LocalAuthentication passes a valid NSError when it fails.
             Err(unsafe { (*err).code() })
         };
-        let _ = tx.send(result);
+        // The receiver is gone only if `evaluate` already returned, in which
+        // case nobody is waiting for this answer.
+        if tx.send(result).is_err() {
+            log::debug!("biometric: Touch ID reply arrived after the waiter left");
+        }
     });
     // SAFETY: the reply block is `Send`-safe (it only owns an mpsc Sender), as
     // the method requires; the reason is a valid NSString.
@@ -312,22 +323,21 @@ impl DeviceSecretStore for TouchId {
         )
         .map_err(|e| SecretError::Failed(format!("access control: OSStatus {}", e.code())))?;
         let mut attrs = item();
-        // SAFETY: reading `extern` statics exported by Security.framework.
-        unsafe {
-            attrs.push((key(kSecAttrLabel), CFString::new(LABEL).into_CFType()));
-            attrs.push((key(kSecAttrAccessControl), access.into_CFType()));
-            if let Some(hash) = &enrolment {
-                attrs.push((
-                    key(kSecAttrGeneric),
-                    CFData::from_buffer(hash).into_CFType(),
-                ));
-            }
-            // The one copy we cannot zeroize: CFData owns its buffer.
-            attrs.push((
-                key(kSecValueData),
-                CFData::from_buffer(&secret).into_CFType(),
-            ));
+        // SAFETY: reading an `extern` static exported by Security.framework.
+        let label = unsafe { kSecAttrLabel };
+        // SAFETY: reading an `extern` static exported by Security.framework.
+        let access_control = unsafe { kSecAttrAccessControl };
+        // SAFETY: reading an `extern` static exported by Security.framework.
+        let generic = unsafe { kSecAttrGeneric };
+        // SAFETY: reading an `extern` static exported by Security.framework.
+        let value_data = unsafe { kSecValueData };
+        attrs.push((key(label), CFString::new(LABEL).into_CFType()));
+        attrs.push((key(access_control), access.into_CFType()));
+        if let Some(hash) = &enrolment {
+            attrs.push((key(generic), CFData::from_buffer(hash).into_CFType()));
         }
+        // The one copy we cannot zeroize: CFData owns its buffer.
+        attrs.push((key(value_data), CFData::from_buffer(&secret).into_CFType()));
         let dict = CFDictionary::from_CFType_pairs(&attrs);
         // SAFETY: valid attribute dictionary; no result is requested.
         match unsafe { SecItemAdd(dict.as_concrete_TypeRef(), std::ptr::null_mut()) } {
@@ -350,18 +360,17 @@ impl DeviceSecretStore for TouchId {
         evaluate(&ctx, reason).map_err(evaluation_error)?;
         let current = domain_hash(&ctx);
         let mut query = with_context(item(), &ctx);
-        // SAFETY: reading `extern` statics exported by Security.framework.
-        unsafe {
-            yes(&mut query, kSecReturnData);
-            yes(&mut query, kSecReturnAttributes);
-        }
+        // SAFETY: reading an `extern` static exported by Security.framework.
+        yes(&mut query, unsafe { kSecReturnData });
+        // SAFETY: reading an `extern` static exported by Security.framework.
+        yes(&mut query, unsafe { kSecReturnAttributes });
         let (status, value) = copy_matching(&query);
         match status {
             ERR_SEC_SUCCESS => {
                 let dict = value
                     .and_then(|v| v.downcast_into::<CFDictionary>())
                     .ok_or_else(|| SecretError::Failed("Keychain returned no item".into()))?;
-                // SAFETY: reading `extern` statics.
+                // SAFETY: reading an `extern` static exported by Security.framework.
                 let stored = dict_bytes(&dict, unsafe { kSecAttrGeneric });
                 if enrolment_changed(stored.as_deref(), current.as_deref()) {
                     return Err(SecretError::Invalidated);

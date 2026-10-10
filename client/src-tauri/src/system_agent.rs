@@ -114,12 +114,26 @@ impl Controller {
     /// screen not locked; otherwise does nothing. Called at boot (where the
     /// vault is still locked, so the first unlock starts it) and from
     /// [`resume_access`].
+    /// The live-listener record, for paths that cannot return an error (stop,
+    /// revoke, shutdown, background restarts). `Live` is two plain fields that
+    /// are never left half-updated, and a revoke must still go through after a
+    /// panic elsewhere, so a poisoned lock is recovered rather than skipped.
+    fn live(&self) -> std::sync::MutexGuard<'_, Live> {
+        self.live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn resume(self: &Arc<Self>) {
-        let epoch = self.live.lock().unwrap().epoch;
+        let epoch = self.live().epoch;
         let this = self.clone();
         tauri::async_runtime::spawn(async move { this.restart(epoch).await });
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the `running` guard serialises a restart against enable/stop for the whole start sequence"
+    )]
     async fn restart(self: &Arc<Self>, epoch: u64) {
         if crate::system_lock::is_screen_locked() {
             return;
@@ -132,10 +146,10 @@ impl Controller {
             return;
         }
         let mut running = self.running.lock().await;
-        if !load_settings(&self.settings_path).enabled || self.live.lock().unwrap().epoch != epoch {
+        if !load_settings(&self.settings_path).enabled || self.live().epoch != epoch {
             return;
         }
-        let serving = self.live.lock().unwrap().stop.is_some()
+        let serving = self.live().stop.is_some()
             && running
                 .as_ref()
                 .is_some_and(|r| !r.task.inner().is_finished());
@@ -172,7 +186,7 @@ impl Controller {
     /// Any start already under way sees the new epoch and stands down.
     fn revoke(&self) {
         let stop = {
-            let mut live = self.live.lock().unwrap();
+            let mut live = self.live();
             live.epoch += 1;
             live.stop.take()
         };
@@ -184,10 +198,16 @@ impl Controller {
     /// Records a freshly started listener as the live one — unless a revoke
     /// came in since `epoch` was read, in which case it is stopped right away.
     fn arm(&self, epoch: u64, stop: &CancellationToken) {
-        let mut live = self.live.lock().unwrap();
-        if live.epoch == epoch {
-            live.stop = Some(stop.clone());
-        } else {
+        let armed = {
+            let mut live = self.live();
+            let current = live.epoch == epoch;
+            if current {
+                live.stop = Some(stop.clone());
+            }
+            current
+        };
+        // Our own fresh token: cancelling it outside the lock races with nothing.
+        if !armed {
             stop.cancel();
         }
     }
@@ -195,7 +215,7 @@ impl Controller {
     /// Stops the listener held in `running`, waiting up to 2 s for it to
     /// remove its socket before aborting it, and withdraws its open prompts.
     async fn stop(&self, running: &mut Option<Running>) {
-        self.live.lock().unwrap().stop = None;
+        self.live().stop = None;
         if let Some(mut old) = running.take() {
             old.stop.cancel();
             if tokio::time::timeout(std::time::Duration::from_secs(2), &mut old.task)
@@ -203,18 +223,35 @@ impl Controller {
                 .is_err()
             {
                 old.task.abort();
-                let _ = old.task.await;
+                await_aborted(old.task).await;
             }
         }
         withdraw_prompts(&self.app);
     }
 
+    /// Records the status tag shown by `system_agent_status`. A tag holds no
+    /// invariant, so a poisoned slot is recovered and overwritten.
     fn set_error(&self, error: Option<&'static str>) {
-        *self.error.lock().unwrap() = error;
+        *self
+            .error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = error;
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the `running` guard serialises the stop/listen/save sequence against restarts and other enables"
+    )]
     async fn enable(self: &Arc<Self>, enabled: bool) -> ApiResult<()> {
-        let epoch = self.live.lock().unwrap().epoch;
+        let epoch = self
+            .live
+            .lock()
+            .map_err(|e| {
+                ApiError::other(format!(
+                    "internal error: system agent state is unavailable ({e}); restart UniSSH"
+                ))
+            })?
+            .epoch;
         let mut running = self.running.lock().await;
         self.stop(&mut running).await;
         // Every failure leaves a typed code in `error`; the UI words it from
@@ -242,9 +279,9 @@ impl Controller {
                 .is_err()
             {
                 task.abort();
-                let _ = task.await;
+                await_aborted(task).await;
                 #[cfg(unix)]
-                let _ = std::fs::remove_file(&path);
+                remove_socket(&path);
             }
             return Err(self.fail("save_failed"));
         }
@@ -270,7 +307,7 @@ impl Controller {
             return Err("path_too_long");
         }
         let dir = path.parent().ok_or("bind_failed")?;
-        endpoint::prepare_dir(dir).map_err(|_| "bind_failed")?;
+        endpoint::prepare_dir(dir).map_err(|e| bind_failed("socket directory", &e))?;
         endpoint::clear_stale_socket(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AddrInUse {
                 "in_use"
@@ -285,8 +322,10 @@ impl Controller {
             "bind_failed"
         })?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|_| "bind_failed")?;
-        listener.set_nonblocking(true).map_err(|_| "bind_failed")?;
+            .map_err(|e| bind_failed("socket permissions", &e))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| bind_failed("non-blocking mode", &e))?;
 
         let agent = self.core.system_agent();
         let stop = CancellationToken::new();
@@ -294,9 +333,13 @@ impl Controller {
         let error = self.error.clone();
         let socket = path.to_path_buf();
         let task = tauri::async_runtime::spawn(async move {
-            let Ok(listener) = tokio::net::UnixListener::from_std(listener) else {
-                *error.lock().unwrap() = Some("listener_failed");
-                return;
+            let listener = match tokio::net::UnixListener::from_std(listener) {
+                Ok(listener) => listener,
+                Err(e) => {
+                    log::warn!("system agent: listener registration failed: {e}");
+                    set_tag(&error, "listener_failed");
+                    return;
+                }
             };
             log::info!("system agent: listening");
             loop {
@@ -316,14 +359,14 @@ impl Controller {
                         }
                         Err(e) => {
                             log::warn!("system agent: accept failed: {e}");
-                            *error.lock().unwrap() = Some("listener_failed");
+                            set_tag(&error, "listener_failed");
                             break;
                         }
                     },
                 }
             }
             drop(listener);
-            let _ = std::fs::remove_file(&socket);
+            remove_socket(&socket);
             log::info!("system agent: stopped");
         });
         Ok((stop, task))
@@ -356,7 +399,7 @@ impl Controller {
             log::info!("system agent: listening");
             let mut server = first;
             let mut connections: Vec<tauri::async_runtime::JoinHandle<()>> = Vec::new();
-            let mut failures = 0u32;
+            let mut failures = 0_u32;
             loop {
                 // A persistent OS error must not turn this loop into a spin.
                 if failures >= 3 {
@@ -370,7 +413,7 @@ impl Controller {
                     Ok(next) => next,
                     Err(e) => {
                         log::warn!("system agent: pipe creation failed: {e}");
-                        *error.lock().unwrap() = Some("listener_failed");
+                        set_tag(&error, "listener_failed");
                         break;
                     }
                 };
@@ -395,7 +438,9 @@ impl Controller {
                     // Cut the client off rather than wait for it to close its
                     // end: an instance a client still holds keeps the name
                     // taken, and the next start needs it free.
-                    let _ = stream.disconnect();
+                    if let Err(e) = stream.disconnect() {
+                        log::debug!("system agent: pipe disconnect failed: {e}");
+                    }
                 }));
             }
             drop(server);
@@ -403,7 +448,9 @@ impl Controller {
             // the connections too, so the task finishes and status says so.
             token.cancel();
             for connection in connections {
-                let _ = connection.await;
+                if let Err(e) = connection.await {
+                    log::debug!("system agent: connection task ended with: {e}");
+                }
             }
             log::info!("system agent: stopped");
         });
@@ -441,19 +488,24 @@ impl Controller {
         }
     }
 
-    async fn status(&self) -> Value {
+    async fn status(&self) -> ApiResult<Value> {
         let running = self.running.lock().await;
         let online = running
             .as_ref()
             .is_some_and(|r| !r.task.inner().is_finished());
         drop(running);
-        json!({
+        let error = *self.error.lock().map_err(|e| {
+            ApiError::other(format!(
+                "internal error: system agent status is unavailable ({e}); restart UniSSH"
+            ))
+        })?;
+        Ok(json!({
             "supported": self.endpoint.is_some(),
             "enabled": load_settings(&self.settings_path).enabled,
             "running": online,
             "endpoint": self.endpoint.as_ref().map(|p| p.to_string_lossy().into_owned()),
-            "error": *self.error.lock().unwrap(),
-        })
+            "error": error,
+        }))
     }
 
     /// Stops the listener on exit so the socket does not outlive the app. Runs
@@ -463,7 +515,7 @@ impl Controller {
     /// touched; one revoked earlier removed its own.
     fn shutdown(&self) {
         let stop = {
-            let mut live = self.live.lock().unwrap();
+            let mut live = self.live();
             live.epoch += 1;
             live.stop.take()
         };
@@ -471,10 +523,44 @@ impl Controller {
             stop.cancel();
             #[cfg(unix)]
             if let Some(path) = &self.endpoint {
-                let _ = std::fs::remove_file(path);
+                remove_socket(path);
             }
         }
     }
+}
+
+/// Sets the status tag from the listener task, which cannot return an error.
+/// The slot holds only a tag, so a poisoned lock is recovered and overwritten.
+fn set_tag(slot: &Mutex<Option<&'static str>>, tag: &'static str) {
+    *slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tag);
+}
+
+/// Awaits a listener task after `abort()`, only to know it is gone; an error
+/// (cancelled) is the expected outcome.
+async fn await_aborted(task: tauri::async_runtime::JoinHandle<()>) {
+    if let Err(e) = task.await {
+        log::debug!("system agent: aborted listener task ended with: {e}");
+    }
+}
+
+/// Removes the agent socket. Absence is the goal; anything else is logged,
+/// since a stale socket makes the next start report `in_use`.
+#[cfg(unix)]
+fn remove_socket(path: &Path) {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            log::warn!("system agent: socket not removed: {e}");
+        }
+    }
+}
+
+/// Logs why binding failed and maps it to the `bind_failed` status code.
+#[cfg(unix)]
+fn bind_failed(step: &str, e: &std::io::Error) -> &'static str {
+    log::warn!("system agent: bind failed at {step}: {e}");
+    "bind_failed"
 }
 
 /// Stops the listener: vault lock, screen lock, sleep. Called with
@@ -513,7 +599,7 @@ pub fn shutdown(app: &tauri::AppHandle) {
 
 #[tauri::command]
 pub async fn system_agent_status(state: State<'_, Arc<Controller>>) -> ApiResult<Value> {
-    Ok(state.inner().status().await)
+    state.inner().status().await
 }
 
 #[tauri::command]

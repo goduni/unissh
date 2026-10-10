@@ -40,19 +40,19 @@ impl From<AuthMethod> for ffi::AuthMethod {
             AuthMethod::Agent {
                 vault_id,
                 key_item_id,
-            } => ffi::AuthMethod::Agent {
+            } => Self::Agent {
                 vault_id,
                 key_item_id,
             },
-            AuthMethod::Password { password } => ffi::AuthMethod::Password { password },
+            AuthMethod::Password { password } => Self::Password { password },
             AuthMethod::VaultPassword {
                 vault_id,
                 password_item_id,
-            } => ffi::AuthMethod::VaultPassword {
+            } => Self::VaultPassword {
                 vault_id,
                 password_item_id,
             },
-            AuthMethod::SystemAgent { public_key } => ffi::AuthMethod::SystemAgent { public_key },
+            AuthMethod::SystemAgent { public_key } => Self::SystemAgent { public_key },
         }
     }
 }
@@ -65,19 +65,19 @@ impl From<ffi::AuthMethod> for AuthMethod {
             ffi::AuthMethod::Agent {
                 vault_id,
                 key_item_id,
-            } => AuthMethod::Agent {
+            } => Self::Agent {
                 vault_id,
                 key_item_id,
             },
-            ffi::AuthMethod::Password { password } => AuthMethod::Password { password },
+            ffi::AuthMethod::Password { password } => Self::Password { password },
             ffi::AuthMethod::VaultPassword {
                 vault_id,
                 password_item_id,
-            } => AuthMethod::VaultPassword {
+            } => Self::VaultPassword {
                 vault_id,
                 password_item_id,
             },
-            ffi::AuthMethod::SystemAgent { public_key } => AuthMethod::SystemAgent { public_key },
+            ffi::AuthMethod::SystemAgent { public_key } => Self::SystemAgent { public_key },
         }
     }
 }
@@ -107,26 +107,26 @@ pub enum ProfileAuth {
 impl From<ProfileAuth> for ffi::ProfileAuth {
     fn from(a: ProfileAuth) -> Self {
         match a {
-            ProfileAuth::Key { key_item_id } => ffi::ProfileAuth::Key { key_item_id },
+            ProfileAuth::Key { key_item_id } => Self::Key { key_item_id },
             ProfileAuth::VaultPassword { password_item_id } => {
-                ffi::ProfileAuth::VaultPassword { password_item_id }
+                Self::VaultPassword { password_item_id }
             }
-            ProfileAuth::PromptPassword => ffi::ProfileAuth::PromptPassword,
-            ProfileAuth::Personal => ffi::ProfileAuth::Personal,
-            ProfileAuth::SystemAgent { public_key } => ffi::ProfileAuth::SystemAgent { public_key },
+            ProfileAuth::PromptPassword => Self::PromptPassword,
+            ProfileAuth::Personal => Self::Personal,
+            ProfileAuth::SystemAgent { public_key } => Self::SystemAgent { public_key },
         }
     }
 }
 impl From<ffi::ProfileAuth> for ProfileAuth {
     fn from(a: ffi::ProfileAuth) -> Self {
         match a {
-            ffi::ProfileAuth::Key { key_item_id } => ProfileAuth::Key { key_item_id },
+            ffi::ProfileAuth::Key { key_item_id } => Self::Key { key_item_id },
             ffi::ProfileAuth::VaultPassword { password_item_id } => {
-                ProfileAuth::VaultPassword { password_item_id }
+                Self::VaultPassword { password_item_id }
             }
-            ffi::ProfileAuth::PromptPassword => ProfileAuth::PromptPassword,
-            ffi::ProfileAuth::Personal => ProfileAuth::Personal,
-            ffi::ProfileAuth::SystemAgent { public_key } => ProfileAuth::SystemAgent { public_key },
+            ffi::ProfileAuth::PromptPassword => Self::PromptPassword,
+            ffi::ProfileAuth::Personal => Self::Personal,
+            ffi::ProfileAuth::SystemAgent { public_key } => Self::SystemAgent { public_key },
         }
     }
 }
@@ -139,7 +139,7 @@ pub struct HopRef {
 }
 impl From<HopRef> for ffi::HopRef {
     fn from(h: HopRef) -> Self {
-        ffi::HopRef {
+        Self {
             vault_id: h.vault_id,
             profile_uid: h.profile_uid,
         }
@@ -147,7 +147,7 @@ impl From<HopRef> for ffi::HopRef {
 }
 impl From<ffi::HopRef> for HopRef {
     fn from(h: ffi::HopRef) -> Self {
-        HopRef {
+        Self {
             vault_id: h.vault_id,
             profile_uid: h.profile_uid,
         }
@@ -167,7 +167,7 @@ pub struct JumpHost {
 
 impl From<JumpHost> for ffi::JumpHost {
     fn from(j: JumpHost) -> Self {
-        ffi::JumpHost {
+        Self {
             host: j.host,
             port: j.port,
             user: j.user,
@@ -180,7 +180,7 @@ impl From<JumpHost> for ffi::JumpHost {
 // (only Agent/VaultPassword are persistable) onto the dto AuthMethod.
 impl From<ffi::JumpHost> for JumpHost {
     fn from(j: ffi::JumpHost) -> Self {
-        JumpHost {
+        Self {
             host: j.host,
             port: j.port,
             user: j.user,
@@ -220,18 +220,18 @@ pub enum ProxyKind {
 impl From<ProxyKind> for ffi::ProxyKind {
     fn from(k: ProxyKind) -> Self {
         match k {
-            ProxyKind::Http => ffi::ProxyKind::Http,
-            ProxyKind::Socks4 => ffi::ProxyKind::Socks4,
-            ProxyKind::Socks5 => ffi::ProxyKind::Socks5,
+            ProxyKind::Http => Self::Http,
+            ProxyKind::Socks4 => Self::Socks4,
+            ProxyKind::Socks5 => Self::Socks5,
         }
     }
 }
 impl From<ffi::ProxyKind> for ProxyKind {
     fn from(k: ffi::ProxyKind) -> Self {
         match k {
-            ffi::ProxyKind::Http => ProxyKind::Http,
-            ffi::ProxyKind::Socks4 => ProxyKind::Socks4,
-            ffi::ProxyKind::Socks5 => ProxyKind::Socks5,
+            ffi::ProxyKind::Http => Self::Http,
+            ffi::ProxyKind::Socks4 => Self::Socks4,
+            ffi::ProxyKind::Socks5 => Self::Socks5,
         }
     }
 }
@@ -256,11 +256,11 @@ impl From<ProxyPassword> for ffi::ProxyPassword {
             ProxyPassword::Vault {
                 vault_id,
                 password_item_id,
-            } => ffi::ProxyPassword::Vault {
+            } => Self::Vault {
                 vault_id,
                 password_item_id,
             },
-            ProxyPassword::Inline { password } => ffi::ProxyPassword::Inline { password },
+            ProxyPassword::Inline { password } => Self::Inline { password },
         }
     }
 }
@@ -270,14 +270,14 @@ impl From<ffi::ProxyPassword> for ProxyPassword {
             ffi::ProxyPassword::Vault {
                 vault_id,
                 password_item_id,
-            } => ProxyPassword::Vault {
+            } => Self::Vault {
                 vault_id,
                 password_item_id,
             },
             // Never carries a real secret on the read-back path: an inline
             // password cannot be stored, so this arm is only ever a round-trip
             // of what the frontend itself just sent.
-            ffi::ProxyPassword::Inline { password } => ProxyPassword::Inline { password },
+            ffi::ProxyPassword::Inline { password } => Self::Inline { password },
         }
     }
 }
@@ -295,7 +295,7 @@ pub struct ProxyConfig {
 }
 impl From<ProxyConfig> for ffi::ProxyConfig {
     fn from(p: ProxyConfig) -> Self {
-        ffi::ProxyConfig {
+        Self {
             kind: p.kind.into(),
             host: p.host,
             port: p.port,
@@ -306,7 +306,7 @@ impl From<ProxyConfig> for ffi::ProxyConfig {
 }
 impl From<ffi::ProxyConfig> for ProxyConfig {
     fn from(p: ffi::ProxyConfig) -> Self {
-        ProxyConfig {
+        Self {
             kind: p.kind.into(),
             host: p.host,
             port: p.port,
@@ -338,21 +338,21 @@ impl From<AuthMethodOut> for AuthMethod {
             AuthMethodOut::Agent {
                 vault_id,
                 key_item_id,
-            } => AuthMethod::Agent {
+            } => Self::Agent {
                 vault_id,
                 key_item_id,
             },
-            AuthMethodOut::Password => AuthMethod::Password {
+            AuthMethodOut::Password => Self::Password {
                 password: String::new(),
             },
             AuthMethodOut::VaultPassword {
                 vault_id,
                 password_item_id,
-            } => AuthMethod::VaultPassword {
+            } => Self::VaultPassword {
                 vault_id,
                 password_item_id,
             },
-            AuthMethodOut::SystemAgent { public_key } => AuthMethod::SystemAgent { public_key },
+            AuthMethodOut::SystemAgent { public_key } => Self::SystemAgent { public_key },
         }
     }
 }
@@ -361,7 +361,7 @@ impl Serialize for AuthMethod {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         match self {
-            AuthMethod::Agent {
+            Self::Agent {
                 vault_id,
                 key_item_id,
             } => {
@@ -371,12 +371,12 @@ impl Serialize for AuthMethod {
                 st.serialize_field("keyItemId", key_item_id)?;
                 st.end()
             }
-            AuthMethod::Password { .. } => {
+            Self::Password { .. } => {
                 let mut st = s.serialize_struct("AuthMethod", 1)?;
                 st.serialize_field("type", "password")?;
                 st.end()
             }
-            AuthMethod::VaultPassword {
+            Self::VaultPassword {
                 vault_id,
                 password_item_id,
             } => {
@@ -386,7 +386,7 @@ impl Serialize for AuthMethod {
                 st.serialize_field("passwordItemId", password_item_id)?;
                 st.end()
             }
-            AuthMethod::SystemAgent { public_key } => {
+            Self::SystemAgent { public_key } => {
                 let mut st = s.serialize_struct("AuthMethod", 2)?;
                 st.serialize_field("type", "systemAgent")?;
                 st.serialize_field("publicKey", public_key)?;
@@ -431,7 +431,7 @@ pub struct ConnectionProfile {
 
 impl From<ConnectionProfile> for ffi::ConnectionProfile {
     fn from(p: ConnectionProfile) -> Self {
-        ffi::ConnectionProfile {
+        Self {
             profile_id: p.profile_id,
             uid: p.uid,
             label: p.label,
@@ -451,7 +451,7 @@ impl From<ConnectionProfile> for ffi::ConnectionProfile {
 }
 impl From<ffi::ConnectionProfile> for ConnectionProfile {
     fn from(p: ffi::ConnectionProfile) -> Self {
-        ConnectionProfile {
+        Self {
             profile_id: p.profile_id,
             uid: p.uid,
             label: p.label,
@@ -482,7 +482,7 @@ pub struct ServerGroup {
 }
 impl From<ServerGroup> for ffi::ServerGroup {
     fn from(g: ServerGroup) -> Self {
-        ffi::ServerGroup {
+        Self {
             group_id: g.group_id,
             label: g.label,
             member_ids: g.member_ids,
@@ -492,7 +492,7 @@ impl From<ServerGroup> for ffi::ServerGroup {
 }
 impl From<ffi::ServerGroup> for ServerGroup {
     fn from(g: ffi::ServerGroup) -> Self {
-        ServerGroup {
+        Self {
             group_id: g.group_id,
             label: g.label,
             member_ids: g.member_ids,
@@ -514,7 +514,7 @@ pub struct Identity {
 }
 impl From<Identity> for ffi::Identity {
     fn from(i: Identity) -> Self {
-        ffi::Identity {
+        Self {
             identity_id: i.identity_id,
             label: i.label,
             user: i.user,
@@ -525,7 +525,7 @@ impl From<Identity> for ffi::Identity {
 }
 impl From<ffi::Identity> for Identity {
     fn from(i: ffi::Identity) -> Self {
-        Identity {
+        Self {
             identity_id: i.identity_id,
             label: i.label,
             user: i.user,
@@ -545,7 +545,7 @@ pub struct IdentityBinding {
 }
 impl From<IdentityBinding> for ffi::IdentityBinding {
     fn from(b: IdentityBinding) -> Self {
-        ffi::IdentityBinding {
+        Self {
             team_vault_id: b.team_vault_id,
             profile_uid: b.profile_uid,
             identity_item_id: b.identity_item_id,
@@ -555,7 +555,7 @@ impl From<IdentityBinding> for ffi::IdentityBinding {
 }
 impl From<ffi::IdentityBinding> for IdentityBinding {
     fn from(b: ffi::IdentityBinding) -> Self {
-        IdentityBinding {
+        Self {
             team_vault_id: b.team_vault_id,
             profile_uid: b.profile_uid,
             identity_item_id: b.identity_item_id,
@@ -582,12 +582,12 @@ pub enum BindingResolution {
 impl From<ffi::BindingResolution> for BindingResolution {
     fn from(r: ffi::BindingResolution) -> Self {
         match r {
-            ffi::BindingResolution::Unbound => BindingResolution::Unbound,
+            ffi::BindingResolution::Unbound => Self::Unbound,
             ffi::BindingResolution::Matched { identity_item_id } => {
-                BindingResolution::Matched { identity_item_id }
+                Self::Matched { identity_item_id }
             }
             ffi::BindingResolution::Redirected { pinned, current } => {
-                BindingResolution::Redirected { pinned, current }
+                Self::Redirected { pinned, current }
             }
         }
     }
@@ -602,7 +602,7 @@ pub struct PersonalAuth {
 }
 impl From<ffi::PersonalAuth> for PersonalAuth {
     fn from(p: ffi::PersonalAuth) -> Self {
-        PersonalAuth {
+        Self {
             user: p.user,
             auth: p.auth.into(),
         }
@@ -626,7 +626,7 @@ pub struct MultiExecTarget {
 }
 impl From<MultiExecTarget> for ffi::MultiExecTarget {
     fn from(t: MultiExecTarget) -> Self {
-        ffi::MultiExecTarget {
+        Self {
             host: t.host,
             port: t.port,
             user: t.user,
@@ -657,7 +657,7 @@ pub struct VaultInfo {
 }
 impl From<ffi::VaultInfo> for VaultInfo {
     fn from(v: ffi::VaultInfo) -> Self {
-        VaultInfo {
+        Self {
             vault_id: v.vault_id,
             name: v.name,
             sync_target: v.sync_target.into(),
@@ -675,8 +675,8 @@ pub enum SyncTarget {
 impl From<ffi::FfiSyncTarget> for SyncTarget {
     fn from(t: ffi::FfiSyncTarget) -> Self {
         match t {
-            ffi::FfiSyncTarget::Local => SyncTarget::Local,
-            ffi::FfiSyncTarget::Cloud => SyncTarget::Cloud,
+            ffi::FfiSyncTarget::Local => Self::Local,
+            ffi::FfiSyncTarget::Cloud => Self::Cloud,
         }
     }
 }
@@ -693,7 +693,7 @@ pub struct SyncReport {
 }
 impl From<ffi::FfiSyncReport> for SyncReport {
     fn from(r: ffi::FfiSyncReport) -> Self {
-        SyncReport {
+        Self {
             applied: r.applied,
             skipped_stale: r.skipped_stale,
             conflicts: r.conflicts,
@@ -745,18 +745,18 @@ pub enum MemberRole {
 impl From<MemberRole> for ffi::FfiMemberRole {
     fn from(r: MemberRole) -> Self {
         match r {
-            MemberRole::Viewer => ffi::FfiMemberRole::Viewer,
-            MemberRole::Editor => ffi::FfiMemberRole::Editor,
-            MemberRole::Admin => ffi::FfiMemberRole::Admin,
+            MemberRole::Viewer => Self::Viewer,
+            MemberRole::Editor => Self::Editor,
+            MemberRole::Admin => Self::Admin,
         }
     }
 }
 impl From<ffi::FfiMemberRole> for MemberRole {
     fn from(r: ffi::FfiMemberRole) -> Self {
         match r {
-            ffi::FfiMemberRole::Viewer => MemberRole::Viewer,
-            ffi::FfiMemberRole::Editor => MemberRole::Editor,
-            ffi::FfiMemberRole::Admin => MemberRole::Admin,
+            ffi::FfiMemberRole::Viewer => Self::Viewer,
+            ffi::FfiMemberRole::Editor => Self::Editor,
+            ffi::FfiMemberRole::Admin => Self::Admin,
         }
     }
 }
@@ -771,7 +771,7 @@ pub struct MemberInfo {
 }
 impl From<ffi::MemberInfo> for MemberInfo {
     fn from(m: ffi::MemberInfo) -> Self {
-        MemberInfo {
+        Self {
             ed25519_pub_hex: m.ed25519_pub_hex,
             role: m.role.into(),
             fingerprint: m.fingerprint,
@@ -789,7 +789,7 @@ pub struct RemainingMember {
 }
 impl From<RemainingMember> for ffi::RemainingMember {
     fn from(r: RemainingMember) -> Self {
-        ffi::RemainingMember {
+        Self {
             ed25519_pub_hex: r.ed25519_pub_hex,
             x25519_pub_hex: r.x25519_pub_hex,
             role: r.role.into(),
@@ -975,7 +975,7 @@ pub struct ItemInfo {
 }
 impl From<ffi::ItemInfo> for ItemInfo {
     fn from(i: ffi::ItemInfo) -> Self {
-        ItemInfo {
+        Self {
             item_id: i.item_id,
             item_type: i.item_type,
             version: i.version,
@@ -994,7 +994,7 @@ pub struct PublicKeyInfo {
 }
 impl From<ffi::PublicKeyInfo> for PublicKeyInfo {
     fn from(p: ffi::PublicKeyInfo) -> Self {
-        PublicKeyInfo {
+        Self {
             openssh: p.openssh,
             fingerprint: p.fingerprint,
         }
@@ -1012,7 +1012,7 @@ pub struct KeyRotationLink {
 }
 impl From<ffi::KeyRotationLink> for KeyRotationLink {
     fn from(l: ffi::KeyRotationLink) -> Self {
-        KeyRotationLink {
+        Self {
             key_id: l.key_id,
             candidate_id: l.candidate_id,
             started_elsewhere: l.started_elsewhere,
@@ -1033,7 +1033,7 @@ pub struct KnownHostInfo {
 }
 impl From<ffi::KnownHostInfo> for KnownHostInfo {
     fn from(k: ffi::KnownHostInfo) -> Self {
-        KnownHostInfo {
+        Self {
             host: k.host,
             port: k.port,
             key: k.key,
@@ -1052,7 +1052,7 @@ pub struct KnownHostsImport {
 }
 impl From<ffi::KnownHostsImport> for KnownHostsImport {
     fn from(k: ffi::KnownHostsImport) -> Self {
-        KnownHostsImport {
+        Self {
             imported: k.imported,
             skipped_hashed: k.skipped_hashed,
             skipped_invalid: k.skipped_invalid,
@@ -1068,7 +1068,7 @@ pub struct HostImportReport {
 }
 impl From<ffi::HostImportReport> for HostImportReport {
     fn from(h: ffi::HostImportReport) -> Self {
-        HostImportReport {
+        Self {
             created_ids: h.created_ids,
             skipped: h.skipped,
         }
@@ -1084,7 +1084,7 @@ pub struct SshExecResult {
 }
 impl From<ffi::SshExecResult> for SshExecResult {
     fn from(r: ffi::SshExecResult) -> Self {
-        SshExecResult {
+        Self {
             stdout: r.stdout,
             stderr: r.stderr,
             exit_status: r.exit_status,
@@ -1105,7 +1105,7 @@ pub struct MultiExecResult {
 }
 impl From<ffi::MultiExecResult> for MultiExecResult {
     fn from(r: ffi::MultiExecResult) -> Self {
-        MultiExecResult {
+        Self {
             host: r.host,
             stdout: r.stdout,
             stderr: r.stderr,
@@ -1129,11 +1129,11 @@ pub enum ResolveStatus {
 impl From<ffi::ResolveStatus> for ResolveStatus {
     fn from(s: ffi::ResolveStatus) -> Self {
         match s {
-            ffi::ResolveStatus::Ok => ResolveStatus::Ok,
-            ffi::ResolveStatus::Dangling => ResolveStatus::Dangling,
-            ffi::ResolveStatus::PromptPassword => ResolveStatus::PromptPassword,
-            ffi::ResolveStatus::CycleSkipped => ResolveStatus::CycleSkipped,
-            ffi::ResolveStatus::Personal => ResolveStatus::Personal,
+            ffi::ResolveStatus::Ok => Self::Ok,
+            ffi::ResolveStatus::Dangling => Self::Dangling,
+            ffi::ResolveStatus::PromptPassword => Self::PromptPassword,
+            ffi::ResolveStatus::CycleSkipped => Self::CycleSkipped,
+            ffi::ResolveStatus::Personal => Self::Personal,
         }
     }
 }
@@ -1149,7 +1149,7 @@ pub struct GroupTargetPlan {
 }
 impl From<ffi::GroupTargetPlan> for GroupTargetPlan {
     fn from(p: ffi::GroupTargetPlan) -> Self {
-        GroupTargetPlan {
+        Self {
             member_id: p.member_id,
             host: p.host,
             port: p.port,
@@ -1169,7 +1169,7 @@ pub struct BroadcastHostStatus {
 }
 impl From<ffi::BroadcastHostStatus> for BroadcastHostStatus {
     fn from(s: ffi::BroadcastHostStatus) -> Self {
-        BroadcastHostStatus {
+        Self {
             host: s.host,
             index: s.index,
             connected: s.connected,
@@ -1190,7 +1190,7 @@ pub struct SftpEntry {
 }
 impl From<ffi::SftpEntry> for SftpEntry {
     fn from(e: ffi::SftpEntry) -> Self {
-        SftpEntry {
+        Self {
             filename: e.filename,
             is_dir: e.is_dir,
             size: e.size,
@@ -1239,7 +1239,7 @@ pub struct LocalVolume {
 }
 impl From<ffi::SftpFileStat> for SftpFileStat {
     fn from(s: ffi::SftpFileStat) -> Self {
-        SftpFileStat {
+        Self {
             size: s.size,
             size_known: s.size_known,
             is_dir: s.is_dir,
@@ -1293,7 +1293,7 @@ pub struct IntegrityIssue {
 }
 impl From<ffi::IntegrityIssueInfo> for IntegrityIssue {
     fn from(i: ffi::IntegrityIssueInfo) -> Self {
-        IntegrityIssue {
+        Self {
             item_id: i.item_id,
             version: i.version,
             tombstone: i.tombstone,
@@ -1311,7 +1311,7 @@ pub struct VaultIntegrityReport {
 }
 impl From<ffi::VaultIntegrityReport> for VaultIntegrityReport {
     fn from(r: ffi::VaultIntegrityReport) -> Self {
-        VaultIntegrityReport {
+        Self {
             ok: r.ok,
             checked: r.checked,
             issues: r.issues.into_iter().map(Into::into).collect(),
@@ -1353,7 +1353,7 @@ pub struct DbConsistencyIssue {
 }
 impl From<ffi::DbConsistencyIssue> for DbConsistencyIssue {
     fn from(i: ffi::DbConsistencyIssue) -> Self {
-        DbConsistencyIssue {
+        Self {
             kind: i.kind.into(),
             vault_id_hex: i.vault_id_hex,
             item_id_hex: i.item_id_hex,
@@ -1371,7 +1371,7 @@ pub struct DbConsistencyReport {
 }
 impl From<ffi::DbConsistencyReport> for DbConsistencyReport {
     fn from(r: ffi::DbConsistencyReport) -> Self {
-        DbConsistencyReport {
+        Self {
             ok: r.ok,
             integrity_ok: r.integrity_ok,
             issues: r.issues.into_iter().map(Into::into).collect(),
@@ -1438,7 +1438,7 @@ pub struct ImportedSshHost {
 
 impl From<ffi::ImportedSshHost> for ImportedSshHost {
     fn from(h: ffi::ImportedSshHost) -> Self {
-        ImportedSshHost {
+        Self {
             alias: h.alias,
             origin_file: h.origin_file,
         }
@@ -1459,7 +1459,7 @@ pub struct SshConfigReport {
 
 impl From<ffi::SshConfigReport> for SshConfigReport {
     fn from(r: ffi::SshConfigReport) -> Self {
-        SshConfigReport {
+        Self {
             hosts: r
                 .hosts
                 .into_iter()
@@ -1470,6 +1470,16 @@ impl From<ffi::SshConfigReport> for SshConfigReport {
                     port: h.port,
                     user: h.user,
                     identity_file: h.identity_file,
+                })
+                .collect(),
+            skipped: r
+                .skipped
+                .into_iter()
+                .map(|s| SkippedDirective {
+                    line: s.line,
+                    keyword: s.keyword,
+                    inside_match: s.inside_match,
+                    origin_file: s.origin_file,
                 })
                 .collect(),
             pending_includes: r
@@ -1486,16 +1496,6 @@ impl From<ffi::SshConfigReport> for SshConfigReport {
                 .map(|f| SshConfigFile {
                     path: f.path,
                     included_by: f.included_by,
-                })
-                .collect(),
-            skipped: r
-                .skipped
-                .into_iter()
-                .map(|s| SkippedDirective {
-                    line: s.line,
-                    keyword: s.keyword,
-                    inside_match: s.inside_match,
-                    origin_file: s.origin_file,
                 })
                 .collect(),
         }
@@ -1515,7 +1515,7 @@ pub struct Snippet {
 
 impl From<ffi::Snippet> for Snippet {
     fn from(s: ffi::Snippet) -> Self {
-        Snippet {
+        Self {
             snippet_id: s.snippet_id,
             label: s.label,
             command: s.command,
@@ -1526,7 +1526,7 @@ impl From<ffi::Snippet> for Snippet {
 
 impl From<Snippet> for ffi::Snippet {
     fn from(s: Snippet) -> Self {
-        ffi::Snippet {
+        Self {
             snippet_id: s.snippet_id,
             label: s.label,
             command: s.command,
@@ -1547,7 +1547,7 @@ pub struct RecordingRequest {
 
 impl From<RecordingRequest> for ffi::RecordingRequest {
     fn from(r: RecordingRequest) -> Self {
-        ffi::RecordingRequest {
+        Self {
             vault_id: r.vault_id,
             recording_id: r.recording_id,
             label: r.label,
@@ -1567,7 +1567,7 @@ pub struct LocalSpec {
 
 impl From<LocalSpec> for ffi::LocalSpec {
     fn from(s: LocalSpec) -> Self {
-        ffi::LocalSpec {
+        Self {
             program: s.program,
             args: s.args,
             cwd: s.cwd,
@@ -1586,7 +1586,7 @@ pub struct LocalShellInfo {
 
 impl From<ffi::LocalShellInfo> for LocalShellInfo {
     fn from(i: ffi::LocalShellInfo) -> Self {
-        LocalShellInfo {
+        Self {
             program: i.program,
             args: i.args,
             user: i.user,
@@ -1611,7 +1611,7 @@ pub struct RecordingMeta {
 
 impl From<ffi::RecordingMeta> for RecordingMeta {
     fn from(m: ffi::RecordingMeta) -> Self {
-        RecordingMeta {
+        Self {
             mcp: m.mcp,
             recording_id: m.recording_id,
             label: m.label,
@@ -1637,7 +1637,7 @@ pub struct SystemAgentKey {
 
 impl From<ffi::SystemAgentKeyFfi> for SystemAgentKey {
     fn from(k: ffi::SystemAgentKeyFfi) -> Self {
-        SystemAgentKey {
+        Self {
             public_key: k.public_key,
             comment: k.comment,
             algorithm: k.algorithm,
