@@ -70,7 +70,12 @@ fn channel_key_bytes(spake_key: &[u8]) -> Zeroizing<[u8; 32]> {
 
 /// Confirmation transcript: label ‖ msg1 ‖ msg2_pake.
 fn confirm_transcript(msg1: &[u8], msg2_pake: &[u8]) -> Vec<u8> {
-    let mut t = Vec::with_capacity(CONFIRM_TRANSCRIPT_LABEL.len() + msg1.len() + msg2_pake.len());
+    let mut t = Vec::with_capacity(
+        CONFIRM_TRANSCRIPT_LABEL
+            .len()
+            .saturating_add(msg1.len())
+            .saturating_add(msg2_pake.len()),
+    );
     t.extend_from_slice(CONFIRM_TRANSCRIPT_LABEL);
     t.extend_from_slice(msg1);
     t.extend_from_slice(msg2_pake);
@@ -151,10 +156,9 @@ impl OnboardInitiator {
         unlocked: &UnlockedKeyset,
         secret_key: &SecretKey,
     ) -> Result<Vec<u8>, KeychainError> {
-        if msg2.len() < CONFIRM_TAG_LEN {
+        let Some((msg2_pake, responder_tag)) = msg2.split_last_chunk::<CONFIRM_TAG_LEN>() else {
             return Err(KeychainError::ConfirmationFailed);
-        }
-        let (msg2_pake, responder_tag) = msg2.split_at(msg2.len() - CONFIRM_TAG_LEN);
+        };
 
         let spake_key = Zeroizing::new(
             self.spake
@@ -185,7 +189,7 @@ impl OnboardInitiator {
         let ckey = SymmetricKey::from_bytes(*channel_key_bytes(&spake_key));
         let sealed = aead_encrypt(&ckey, &secrets, &transfer_aad())?;
 
-        let mut msg3 = Vec::with_capacity(CONFIRM_TAG_LEN + sealed.len());
+        let mut msg3 = Vec::with_capacity(sealed.len().saturating_add(CONFIRM_TAG_LEN));
         msg3.extend_from_slice(&initiator_tag);
         msg3.extend_from_slice(&sealed);
         Ok(msg3)
@@ -215,7 +219,7 @@ impl OnboardResponder {
         let transcript = confirm_transcript(msg1, &msg2_pake);
         let responder_tag = confirm_tag(&spake_key, INFO_CONFIRM_RESPONDER, &transcript);
 
-        let mut msg2 = Vec::with_capacity(msg2_pake.len() + CONFIRM_TAG_LEN);
+        let mut msg2 = Vec::with_capacity(msg2_pake.len().saturating_add(CONFIRM_TAG_LEN));
         msg2.extend_from_slice(&msg2_pake);
         msg2.extend_from_slice(&responder_tag);
         Ok((

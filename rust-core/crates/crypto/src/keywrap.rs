@@ -20,7 +20,7 @@ use crate::keys::{SymmetricKey, SYMMETRIC_KEY_LEN};
 const KEYWRAP_DOMAIN: &[u8] = b"unissh-keywrap-v1";
 
 fn keywrap_aad(aad: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(KEYWRAP_DOMAIN.len() + aad.len());
+    let mut out = Vec::with_capacity(KEYWRAP_DOMAIN.len().saturating_add(aad.len()));
     out.extend_from_slice(KEYWRAP_DOMAIN);
     out.extend_from_slice(aad);
     out
