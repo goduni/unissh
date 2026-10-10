@@ -70,6 +70,23 @@ pub enum TransportError {
     #[error("authentication failed")]
     AuthFailed,
 
+    /// A key-only login ([`publickey_only`](crate::ConnectOptions::publickey_only))
+    /// was refused: the server does not accept this key for this user.
+    ///
+    /// Told apart from [`AuthFailed`](Self::AuthFailed) because such a login is
+    /// made to learn exactly this — a key rotation reads it as proof that the
+    /// old key no longer opens the machine. Only the target of a connection is
+    /// ever key-only, so a hop that fails still reports `AuthFailed`.
+    #[error("the server refused the key")]
+    KeyRefused,
+
+    /// A key-only login got as far as the server accepting the key and then
+    /// asking for another factor (`partial_success`). The login was not
+    /// completed and nothing was answered on the user's behalf; the variant only
+    /// carries the fact that the key itself is authorized.
+    #[error("the server accepted the key but requires further authentication")]
+    KeyAcceptedMoreAuthRequired,
+
     /// The core was locked while a connection was still being established — the
     /// user locked the app mid-handshake, so the keys the connection needs are
     /// gone.

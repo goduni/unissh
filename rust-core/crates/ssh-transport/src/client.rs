@@ -132,10 +132,14 @@ pub struct ConnectOptions {
     pub own_system_agent: Option<std::path::PathBuf>,
     /// Never escalate past the first method to keyboard-interactive (so no
     /// stored-password answer and no prompt to the user); a refusal of `auth`
-    /// is final, `AuthFailed`. It changes escalation only: `auth` itself is
-    /// still used as configured, so a password auth still sends its password.
-    /// Pair it with key auth for a login whose whole point is to prove that one
-    /// key is accepted, such as the verify step of a key rotation.
+    /// is final. It changes escalation only: `auth` itself is still used as
+    /// configured, so a password auth still sends its password. Pair it with
+    /// key auth for a login whose whole point is to prove that one key is
+    /// accepted, such as the verify step of a key rotation: a failure then
+    /// reports [`TransportError::KeyRefused`], or
+    /// [`TransportError::KeyAcceptedMoreAuthRequired`] when the server took the
+    /// key and asked for a second factor (the login is not completed either
+    /// way). With any other auth the failure stays `AuthFailed`.
     pub publickey_only: bool,
 }
 
@@ -1572,8 +1576,26 @@ async fn authenticate(
                 partial_success,
                 remaining_methods,
             );
-            Err(TransportError::AuthFailed)
+            let key_only = opts.publickey_only
+                && matches!(opts.auth, Auth::Agent { .. } | Auth::SystemAgent { .. });
+            Err(auth_failure(key_only, partial_success))
         }
+    }
+}
+
+/// The error for an authentication the server did not complete.
+///
+/// A key-only login exists to learn whether the server takes one key, so its
+/// failure says which way it went: `partial_success` after the publickey step
+/// means the signature was verified and the key is authorized — the server only
+/// wants a further factor, which a key-only login never supplies — and anything
+/// else is the key being refused. Every other login keeps the plain
+/// `AuthFailed`.
+const fn auth_failure(key_only: bool, partial_success: bool) -> TransportError {
+    match (key_only, partial_success) {
+        (false, _) => TransportError::AuthFailed,
+        (true, true) => TransportError::KeyAcceptedMoreAuthRequired,
+        (true, false) => TransportError::KeyRefused,
     }
 }
 
@@ -2020,8 +2042,8 @@ mod tests {
     #[cfg(unix)]
     use super::refuse_own_agent;
     use super::{
-        answer_from_password, require_loopback, should_escalate, AlgorithmPolicy, ClientHandler,
-        PromptField,
+        answer_from_password, auth_failure, require_loopback, should_escalate, AlgorithmPolicy,
+        ClientHandler, PromptField,
     };
     use crate::error::TransportError;
     use russh::client::AuthResult;
@@ -2050,6 +2072,23 @@ mod tests {
         };
         assert!(should_escalate(&offered(), false));
         assert!(!should_escalate(&offered(), true));
+    }
+
+    #[test]
+    fn key_only_failure_says_whether_the_key_was_accepted() {
+        // The client reads these two messages to tell the outcomes apart
+        // (client/src/support/keyRotation.ts, `keyLoginOutcome`).
+        let shown = |key_only, partial| auth_failure(key_only, partial).to_string();
+        assert_eq!(shown(true, false), "the server refused the key");
+        assert_eq!(
+            shown(true, true),
+            "the server accepted the key but requires further authentication"
+        );
+        // Any other login keeps the generic failure, partial success or not.
+        assert!(matches!(
+            auth_failure(false, true),
+            TransportError::AuthFailed
+        ));
     }
 
     #[test]
