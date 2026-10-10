@@ -210,6 +210,9 @@ pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -
     let mut bak = state.keyset_path.clone().into_os_string();
     bak.push(".pre-migration.bak");
     remove_if_present(&std::path::PathBuf::from(bak));
+    // A biometric prompt still up belongs to the instance that is now gone.
+    let attempts = state.unlock_attempts.clone();
+    blocking_ok(move || attempts.supersede()).await?;
     // Forget cloud links + the stale keychain Secret Key so re-onboarding is clean.
     // `clear_all` wipes every registry even when a lock is poisoned; any error it
     // reports is returned after the remaining best-effort steps have run, so one
@@ -363,7 +366,14 @@ pub async fn unlock(
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
     let core = state.core.clone();
-    blocking(move || core.unlock(password, secret_key_hex)).await?;
+    let attempts = state.unlock_attempts.clone();
+    blocking(move || {
+        // The user took the typed path: a biometric prompt still up is over,
+        // whatever it answers later and whether or not this unlock succeeds.
+        attempts.supersede();
+        core.unlock(password, secret_key_hex)
+    })
+    .await?;
     resume_after_unlock(&app);
     Ok(())
 }
@@ -378,7 +388,10 @@ pub async fn lock(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResul
     state.broadcasts.clear();
     state.exec_handles.clear();
     let core = state.core.clone();
-    let result = blocking_ok(move || core.lock()).await;
+    let attempts = state.unlock_attempts.clone();
+    // A biometric prompt answered after this lock must not undo it, and one
+    // already deriving keys is waited out and then locked (see `UnlockAttempts`).
+    let result = blocking_ok(move || attempts.locking(|| core.lock())).await;
     invalidate_sftp(&state);
     result
 }

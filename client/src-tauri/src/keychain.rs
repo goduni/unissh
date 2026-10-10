@@ -284,8 +284,13 @@ pub async fn keychain_unlock(
             .await?
             .ok_or_else(|| ApiError::other("no Secret Key stored in keychain"))?;
         let core = state.core.clone();
-        crate::commands::blocking(move || core.unlock(password, String::clone(&secret_key_hex)))
-            .await?;
+        let attempts = state.unlock_attempts.clone();
+        crate::commands::blocking(move || {
+            // Not the biometric path: a prompt still up is over (see `unlock`).
+            attempts.supersede();
+            core.unlock(password, String::clone(&secret_key_hex))
+        })
+        .await?;
         crate::commands::resume_after_unlock(&app);
         Ok(())
     }

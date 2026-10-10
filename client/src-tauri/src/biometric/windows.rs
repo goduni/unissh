@@ -42,6 +42,18 @@
 //! which blocks: the shared code only calls this from the blocking pool, never
 //! from the main thread that serves the window.
 //!
+//! **Taking the prompt down.** When an attempt is superseded (the user chose
+//! the password, the vault was locked, a newer prompt was asked for) the
+//! pending WinRT operation is cancelled (`IAsyncInfo::Cancel`). That is all
+//! Windows offers: neither `KeyCredential.RequestSignAsync` nor
+//! `UserConsentVerifier.RequestVerificationAsync` documents what a cancel does
+//! to the dialog, and there is no call that closes it. So the request is made,
+//! and nothing depends on it being honoured: if the dialog stays up and is
+//! answered later, the shared code drops that answer unread (see "One attempt,
+//! one result" in `biometric.rs`) — a late Hello can never unlock. Creating
+//! the credential (turning the feature on) is not cancellable and needs not
+//! be: it unlocks nothing.
+//!
 //! None of this is unit-testable — every path ends in a Hello prompt or a
 //! Credential Manager the test runner does not have. It is checked by hand on
 //! Windows.
@@ -57,7 +69,7 @@ use windows::Security::Cryptography::CryptographicBuffer;
 use windows::Storage::Streams::IBuffer;
 use zeroize::{Zeroize, Zeroizing};
 
-use super::{DeviceSecretStore, SecretError, SecretState};
+use super::{DeviceSecretStore, Prompt, SecretError, SecretState};
 
 /// The Hello key credential's name. One per Windows user and app.
 const CREDENTIAL_NAME: &str = "me.goduni.unissh.biometric-unlock";
@@ -123,12 +135,26 @@ fn challenge_entry() -> Result<keyring::Entry, SecretError> {
 }
 
 /// Sign `challenge` — this is the Hello prompt — and return the signature.
-fn sign(credential: &KeyCredential, challenge: &[u8]) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+/// If the attempt `prompt` stands for is superseded, the operation is asked to
+/// cancel (see the module note for what that does and does not promise).
+fn sign(
+    credential: &KeyCredential,
+    challenge: &[u8],
+    prompt: &Prompt<'_>,
+) -> Result<Zeroizing<Vec<u8>>, SecretError> {
     let data =
         CryptographicBuffer::CreateFromByteArray(challenge).map_err(|e| failed("sign", e))?;
-    let signed = credential
+    let signing = credential
         .RequestSignAsync(&data)
-        .and_then(|op| op.join())
+        .map_err(|e| failed("sign", e))?;
+    let pending = signing.clone();
+    let cancel = move || {
+        if let Err(e) = pending.Cancel() {
+            log::debug!("biometric: cancelling the Hello signature failed: {e}");
+        }
+    };
+    let signed = prompt
+        .wait(Box::new(cancel), || signing.join())
         .map_err(|e| failed("sign", e))?;
     let status = signed.Status().map_err(|e| failed("sign", e))?;
     if declined(status) {
@@ -194,10 +220,10 @@ impl DeviceSecretStore for WindowsHello {
             .set_secret(&challenge)
             .map_err(|e| failed("store challenge", e))?;
         // Signing prompts again: Hello verifies every use of the key.
-        sign(&credential, &challenge)
+        sign(&credential, &challenge, &Prompt::standalone())
     }
 
-    fn read(&self, _reason: &str) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+    fn read(&self, _reason: &str, prompt: &Prompt<'_>) -> Result<Zeroizing<Vec<u8>>, SecretError> {
         // Hello turned off by policy or not reachable right now: not a wipe.
         if !hello_supported() {
             return Err(SecretError::Unsupported);
@@ -213,7 +239,7 @@ impl DeviceSecretStore for WindowsHello {
             Err(keyring::Error::NoEntry) => return Err(SecretError::Invalidated),
             Err(e) => return Err(failed("read challenge", e)),
         };
-        sign(&credential, &challenge)
+        sign(&credential, &challenge, prompt)
     }
 
     fn delete(&self) -> Result<(), SecretError> {
@@ -249,9 +275,17 @@ impl DeviceSecretStore for WindowsHello {
 
     /// The Hello prompt with `reason` as its message; no key credential is
     /// made or used.
-    fn confirm_presence(&self, reason: &str) -> Result<(), SecretError> {
-        let result = UserConsentVerifier::RequestVerificationAsync(&HSTRING::from(reason))
-            .and_then(|op| op.join())
+    fn confirm_presence(&self, reason: &str, prompt: &Prompt<'_>) -> Result<(), SecretError> {
+        let verifying = UserConsentVerifier::RequestVerificationAsync(&HSTRING::from(reason))
+            .map_err(|e| failed("presence", e))?;
+        let pending = verifying.clone();
+        let cancel = move || {
+            if let Err(e) = pending.Cancel() {
+                log::debug!("biometric: cancelling the Hello verification failed: {e}");
+            }
+        };
+        let result = prompt
+            .wait(Box::new(cancel), || verifying.join())
             .map_err(|e| failed("presence", e))?;
         if result == UserConsentVerificationResult::Verified {
             Ok(())

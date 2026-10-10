@@ -42,12 +42,22 @@
 //! changed or replaced (a password change, a recovery, a pairing) — a password
 //! sealed for the old keyset must not outlive it.
 //!
+//! **One attempt, one result.** A prompt can outlive the moment it was asked
+//! for: the user gives up on it and types the password, the vault is unlocked
+//! and locked again, a second prompt is requested. [`UnlockAttempts`] numbers
+//! the attempts; starting one, cancelling one, a typed unlock and a lock each
+//! end the attempt before them. A result is looked at only while its attempt is
+//! still the current one and the vault is still locked — otherwise it is
+//! dropped unread: no unlock, no wipe. Where the platform can take a prompt
+//! down, ending the attempt does that too (see the adapters).
+//!
 //! Every call here may block (a Keychain query, a prompt the user is looking at,
 //! an Argon2id run), so each command does its work on the blocking pool, never on
 //! the main thread — the prompt is served by the very loop we would block.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
 use tauri::State;
@@ -68,6 +78,142 @@ mod windows;
 /// The sealed master password, next to the keyset. Ciphertext only: without the
 /// device secret, which never leaves the platform store, it opens to nothing.
 const BLOB_FILE: &str = "biometric-unlock.bin";
+
+/// Takes a prompt down from another thread. Called at most once.
+pub(crate) type Dismiss = Box<dyn FnOnce() + Send>;
+
+/// The attempt that may still unlock, and how to take its prompt down.
+#[derive(Default)]
+struct CurrentAttempt {
+    id: u64,
+    dismiss: Option<Dismiss>,
+}
+
+impl CurrentAttempt {
+    /// End the attempt under way: a new id, and the old prompt's dismisser (to
+    /// be called once the lock is released).
+    fn advance(&mut self) -> (u64, Option<Dismiss>) {
+        self.id = self.id.wrapping_add(1);
+        (self.id, self.dismiss.take())
+    }
+
+    /// Keep `dismiss` for attempt `id` while its prompt is up. An attempt that
+    /// is already over gets it straight back, to be called at once.
+    fn showing(&mut self, id: u64, dismiss: Dismiss) -> Option<Dismiss> {
+        if self.id == id {
+            self.dismiss = Some(dismiss);
+            None
+        } else {
+            Some(dismiss)
+        }
+    }
+
+    /// The prompt of attempt `id` has answered: nothing is left to take down.
+    fn answered(&mut self, id: u64) {
+        if self.id == id {
+            self.dismiss = None;
+        }
+    }
+}
+
+fn held<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    // Poisoning protects no invariant here: an id and an optional callback.
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Which biometric unlock attempt, if any, may still open the vault. See the
+/// module note ("One attempt, one result"). One per app, in `AppState`.
+#[derive(Default)]
+pub struct UnlockAttempts {
+    current: Mutex<CurrentAttempt>,
+    /// Held from "is this attempt still wanted" to the installed session, and
+    /// by a lock for as long as it takes: so a lock that arrives while a
+    /// biometric unlock is deriving keys waits and then locks what it opened,
+    /// instead of being overtaken by it.
+    installing: Mutex<()>,
+}
+
+impl UnlockAttempts {
+    /// End the attempt under way, if any — its result will be dropped, and its
+    /// prompt is taken down where the platform can — and name a new one.
+    /// Called for a new prompt, for "use the password instead", for a typed
+    /// unlock and for a lock. May block briefly (it talks to the platform).
+    pub(crate) fn supersede(&self) -> u64 {
+        let (id, dismiss) = held(&self.current).advance();
+        if let Some(dismiss) = dismiss {
+            dismiss();
+        }
+        id
+    }
+
+    /// Run `install` — look at the prompt's answer and unlock — only if attempt
+    /// `id` is still the current one; `None` when it was superseded. Nothing
+    /// can lock the vault between that check and the end of `install`.
+    fn conclude<T>(&self, id: u64, install: impl FnOnce() -> T) -> Option<T> {
+        let _installing = held(&self.installing);
+        let current = held(&self.current).id == id;
+        current.then(install)
+    }
+
+    /// Lock the vault (`lock`), ending any attempt first and waiting out an
+    /// unlock that is already past its check.
+    pub(crate) fn locking<T>(&self, lock: impl FnOnce() -> T) -> T {
+        self.supersede();
+        let _installing = held(&self.installing);
+        lock()
+    }
+}
+
+/// The attempt a prompt is shown for, as an adapter sees it: the one thing an
+/// adapter does with it is wrap its wait for the user in [`Prompt::wait`].
+pub(crate) struct Prompt<'a> {
+    attempt: Option<(&'a UnlockAttempts, u64)>,
+}
+
+impl<'a> Prompt<'a> {
+    const fn of(attempts: &'a UnlockAttempts, id: u64) -> Self {
+        Self {
+            attempt: Some((attempts, id)),
+        }
+    }
+}
+
+impl Prompt<'static> {
+    /// A prompt nothing supersedes: enabling, and confirming the presence gate
+    /// from Settings. They unlock nothing, so a late answer does no harm.
+    const fn standalone() -> Self {
+        Self { attempt: None }
+    }
+}
+
+impl Prompt<'_> {
+    /// Wait for the user (`answer` blocks until the prompt ends), with
+    /// `dismiss` able to end that wait from another thread if the attempt is
+    /// superseded meanwhile. An attempt that is already over has `dismiss`
+    /// called before `answer` runs, so the adapter must start its prompt in a
+    /// way that a dismissal made just before still ends it (both adapters do:
+    /// an invalidated `LAContext` refuses to evaluate, a cancelled WinRT
+    /// operation completes as cancelled).
+    #[cfg_attr(
+        all(not(any(target_os = "macos", target_os = "windows")), not(test)),
+        expect(
+            dead_code,
+            reason = "only the macOS/Windows adapters wait on a prompt; the tests do too"
+        )
+    )]
+    pub(crate) fn wait<T>(&self, dismiss: Dismiss, answer: impl FnOnce() -> T) -> T {
+        let Some((attempts, id)) = self.attempt else {
+            return answer();
+        };
+        let over = held(&attempts.current).showing(id, dismiss);
+        if let Some(dismiss) = over {
+            dismiss();
+        }
+        let answered = answer();
+        held(&attempts.current).answered(id);
+        answered
+    }
+}
 
 /// What the platform knows about its biometric-gated secret. Asking must never
 /// prompt.
@@ -130,21 +276,24 @@ pub(crate) enum SecretError {
 ///   credential is created and again on every signature.
 /// * `read` produces the same secret behind the prompt. `reason` is the localised
 ///   line for the prompt; a platform whose prompt takes no message ignores it.
+///   The wait for the user goes through [`Prompt::wait`], so that an attempt
+///   which is superseded takes its prompt down where the platform can.
 /// * `delete` is idempotent.
 /// * `presence_available` and `confirm_presence` are the presence gate: the
 ///   platform's own "is the owner here" prompt with nothing stored behind it.
 ///   Available never prompts; confirm prompts with `reason` (where the platform
-///   takes one) and creates or reads no secret.
+///   takes one) and creates or reads no secret. It waits through
+///   [`Prompt::wait`] like `read`.
 /// * The blob itself is stored by the shared code (a file beside the keyset),
 ///   on every platform: it is ciphertext only. Whatever else an adapter needs
 ///   to reproduce its secret (the Windows challenge) is the adapter's to keep.
 pub(crate) trait DeviceSecretStore {
     fn state(&self) -> SecretState;
     fn create(&self) -> Result<Zeroizing<Vec<u8>>, SecretError>;
-    fn read(&self, reason: &str) -> Result<Zeroizing<Vec<u8>>, SecretError>;
+    fn read(&self, reason: &str, prompt: &Prompt<'_>) -> Result<Zeroizing<Vec<u8>>, SecretError>;
     fn delete(&self) -> Result<(), SecretError>;
     fn presence_available(&self) -> bool;
-    fn confirm_presence(&self, reason: &str) -> Result<(), SecretError>;
+    fn confirm_presence(&self, reason: &str, prompt: &Prompt<'_>) -> Result<(), SecretError>;
 }
 
 /// This platform's adapter, or `None` where biometric unlock is not offered.
@@ -471,10 +620,35 @@ pub async fn biometric_disable(state: State<'_, AppState>) -> ApiResult<()> {
     .await
 }
 
+/// "Use the password instead": end the attempt whose prompt is up. Its result
+/// is dropped whatever it turns out to be, and the prompt is taken down where
+/// the platform can (see the adapters). A typed unlock and a lock do the same
+/// on their own; this is for the moment between giving up on the prompt and
+/// submitting the password.
+#[tauri::command]
+pub async fn biometric_cancel(state: State<'_, AppState>) -> ApiResult<()> {
+    let attempts = state.unlock_attempts.clone();
+    blocking_api(move || {
+        attempts.supersede();
+        Ok(())
+    })
+    .await
+}
+
+/// A result nobody is waiting for any more: the attempt was superseded (the
+/// password was chosen, a lock happened, a newer prompt was asked for) or the
+/// vault is open already. Reported as a plain cancel — nothing changed.
+fn discarded(why: &str) -> BiometricUnlockOutcome {
+    log::info!("biometric: an unlock attempt was discarded ({why})");
+    BiometricUnlockOutcome::Cancelled
+}
+
 /// Unlock with the biometric. Reads the device secret (the system prompt shows
 /// `reason`), unseals the password, and calls the same core unlock a typed
 /// password does, with the Secret Key this device remembers. The password
 /// exists only inside this function.
+///
+/// The answer counts only for the attempt that asked: see [`UnlockAttempts`].
 #[tauri::command]
 pub async fn biometric_unlock(
     app: tauri::AppHandle,
@@ -483,7 +657,9 @@ pub async fn biometric_unlock(
 ) -> ApiResult<BiometricUnlockOutcome> {
     let core = state.core.clone();
     let blob = blob_path(&state);
+    let attempts = state.unlock_attempts.clone();
     let outcome = blocking_api(move || {
+        let attempt = attempts.supersede();
         let store = platform_store().ok_or_else(unsupported)?;
         let sealed = std::fs::read(&blob).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -496,34 +672,44 @@ pub async fn biometric_unlock(
         let Some(secret_key_hex) = stored_secret_key_hex_now()? else {
             return Ok(BiometricUnlockOutcome::NoSecretKey);
         };
-        let invalidated = |why: &str| {
-            log::warn!("biometric unlock invalidated ({why}); material wiped");
-            forget_with(Some(store.as_ref()), &blob).map(|()| BiometricUnlockOutcome::Invalidated)
-        };
-        let secret = match store.read(&reason) {
-            Ok(secret) => secret,
-            Err(SecretError::Cancelled | SecretError::Unsupported) => {
-                return Ok(BiometricUnlockOutcome::Cancelled)
+        let read = store.read(&reason, &Prompt::of(&attempts, attempt));
+        // The prompt is over. Its answer is looked at — and acted on, wipes
+        // included — only if this is still the attempt the user is waiting for.
+        let concluded = attempts.conclude(attempt, || -> ApiResult<BiometricUnlockOutcome> {
+            if core.is_unlocked() {
+                return Ok(discarded("the vault is already unlocked"));
             }
-            Err(SecretError::Invalidated) => return invalidated("device secret gone"),
-            Err(e @ SecretError::Failed(_)) => return Err(secret_error(e)),
-        };
-        let Ok(mut material) = device_wrap::unwrap(&sealed, &secret) else {
-            return invalidated("blob does not open under the device secret");
-        };
-        let password = match String::from_utf8(std::mem::take(&mut *material)) {
-            Ok(password) => password,
-            Err(e) => {
-                e.into_bytes().zeroize();
-                return invalidated("material is not a password");
+            let invalidated = |why: &str| {
+                log::warn!("biometric unlock invalidated ({why}); material wiped");
+                forget_with(Some(store.as_ref()), &blob)
+                    .map(|()| BiometricUnlockOutcome::Invalidated)
+            };
+            let secret = match read {
+                Ok(secret) => secret,
+                Err(SecretError::Cancelled | SecretError::Unsupported) => {
+                    return Ok(BiometricUnlockOutcome::Cancelled)
+                }
+                Err(SecretError::Invalidated) => return invalidated("device secret gone"),
+                Err(e @ SecretError::Failed(_)) => return Err(secret_error(e)),
+            };
+            let Ok(mut material) = device_wrap::unwrap(&sealed, &secret) else {
+                return invalidated("blob does not open under the device secret");
+            };
+            let password = match String::from_utf8(std::mem::take(&mut *material)) {
+                Ok(password) => password,
+                Err(e) => {
+                    e.into_bytes().zeroize();
+                    return invalidated("material is not a password");
+                }
+            };
+            match core.unlock(Some(password), String::clone(&secret_key_hex)) {
+                Ok(()) => Ok(BiometricUnlockOutcome::Unlocked),
+                // The stored password no longer opens the keyset: it was changed.
+                Err(FfiError::InvalidCredentials) => invalidated("stored password no longer valid"),
+                Err(e) => Err(e.into()),
             }
-        };
-        match core.unlock(Some(password), String::clone(&secret_key_hex)) {
-            Ok(()) => Ok(BiometricUnlockOutcome::Unlocked),
-            // The stored password no longer opens the keyset: it was changed.
-            Err(FfiError::InvalidCredentials) => invalidated("stored password no longer valid"),
-            Err(e) => Err(e.into()),
-        }
+        });
+        concluded.unwrap_or_else(|| Ok(discarded("superseded")))
     })
     .await?;
     if matches!(outcome, BiometricUnlockOutcome::Unlocked) {
@@ -538,6 +724,8 @@ pub async fn biometric_unlock(
 /// behind the prompt; a dismissed or impossible prompt leaves the vault
 /// locked, and the unlock screen's manual path (the Secret Key from the
 /// Emergency Kit) still works.
+///
+/// The answer counts only for the attempt that asked: see [`UnlockAttempts`].
 #[tauri::command]
 pub async fn biometric_presence_unlock(
     app: tauri::AppHandle,
@@ -545,26 +733,37 @@ pub async fn biometric_presence_unlock(
     state: State<'_, AppState>,
 ) -> ApiResult<BiometricUnlockOutcome> {
     let core = state.core.clone();
+    let attempts = state.unlock_attempts.clone();
     let outcome = blocking_api(move || {
+        let attempt = attempts.supersede();
         let store = platform_store().ok_or_else(unsupported)?;
         // Before the prompt: one that cannot end in an unlock is not shown.
         let Some(secret_key_hex) = stored_secret_key_hex_now()? else {
             return Ok(BiometricUnlockOutcome::NoSecretKey);
         };
-        match store.confirm_presence(&reason) {
-            Ok(()) => {}
-            Err(SecretError::Cancelled | SecretError::Unsupported) => {
-                return Ok(BiometricUnlockOutcome::Cancelled)
+        let confirmed = store.confirm_presence(&reason, &Prompt::of(&attempts, attempt));
+        let concluded = attempts.conclude(attempt, || -> ApiResult<BiometricUnlockOutcome> {
+            if core.is_unlocked() {
+                return Ok(discarded("the vault is already unlocked"));
             }
-            Err(e) => return Err(secret_error(e)),
-        }
-        match core.unlock(None, String::clone(&secret_key_hex)) {
-            Ok(()) => Ok(BiometricUnlockOutcome::Unlocked),
-            // The remembered key no longer opens this vault (it belongs to
-            // another keyset): the same as having none — type it from the Kit.
-            Err(FfiError::InvalidCredentials) => Ok(BiometricUnlockOutcome::NoSecretKey),
-            Err(e) => Err(e.into()),
-        }
+            match confirmed {
+                Ok(()) => {}
+                Err(SecretError::Cancelled | SecretError::Unsupported) => {
+                    return Ok(BiometricUnlockOutcome::Cancelled)
+                }
+                Err(e @ (SecretError::Invalidated | SecretError::Failed(_))) => {
+                    return Err(secret_error(e))
+                }
+            }
+            match core.unlock(None, String::clone(&secret_key_hex)) {
+                Ok(()) => Ok(BiometricUnlockOutcome::Unlocked),
+                // The remembered key no longer opens this vault (it belongs to
+                // another keyset): the same as having none — type it from the Kit.
+                Err(FfiError::InvalidCredentials) => Ok(BiometricUnlockOutcome::NoSecretKey),
+                Err(e) => Err(e.into()),
+            }
+        });
+        concluded.unwrap_or_else(|| Ok(discarded("superseded")))
     })
     .await?;
     if matches!(outcome, BiometricUnlockOutcome::Unlocked) {
@@ -585,7 +784,7 @@ pub async fn biometric_confirm_presence(reason: String) -> ApiResult<PresenceChe
         if !store.presence_available() {
             return Ok(PresenceCheck::Unavailable);
         }
-        match store.confirm_presence(&reason) {
+        match store.confirm_presence(&reason, &Prompt::standalone()) {
             Ok(()) => Ok(PresenceCheck::Confirmed),
             Err(SecretError::Cancelled) => Ok(PresenceCheck::Cancelled),
             Err(SecretError::Unsupported | SecretError::Invalidated) => {
@@ -630,5 +829,41 @@ mod tests {
         let gate = status_from(Unsupported, false, true, true);
         assert!(gate.presence_supported && gate.secret_key_remembered);
         assert!(!status_from(Unsupported, false, false, true).secret_key_remembered);
+    }
+
+    // Ending an attempt takes its prompt down and makes its answer worthless;
+    // an attempt that is already over is dismissed before it can wait.
+    #[test]
+    fn superseded_attempt_is_dismissed_and_never_concluded() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let attempts = UnlockAttempts::default();
+        let dismissed = Arc::new(AtomicUsize::new(0));
+        let dismiss = || -> Dismiss {
+            let dismissed = dismissed.clone();
+            Box::new(move || {
+                dismissed.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+
+        // Superseded while the prompt is up (a lock, here).
+        let first = attempts.supersede();
+        Prompt::of(&attempts, first).wait(dismiss(), || attempts.locking(|| ()));
+        assert_eq!(dismissed.load(Ordering::SeqCst), 1);
+        assert!(attempts.conclude(first, || ()).is_none());
+
+        // Superseded before the prompt could be shown.
+        let second = attempts.supersede();
+        attempts.supersede();
+        Prompt::of(&attempts, second).wait(dismiss(), || ());
+        assert_eq!(dismissed.load(Ordering::SeqCst), 2);
+
+        // Left alone, an attempt concludes, and its prompt is not dismissed after it answered.
+        let third = attempts.supersede();
+        Prompt::of(&attempts, third).wait(dismiss(), || ());
+        assert_eq!(attempts.conclude(third, || 7), Some(7));
+        attempts.supersede();
+        assert_eq!(dismissed.load(Ordering::SeqCst), 2);
     }
 }

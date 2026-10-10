@@ -41,6 +41,16 @@
 //! Everything else — a closed lid, a lockout, `errSecMissingEntitlement`, an
 //! unmapped status — never wipes (see the module note in `biometric.rs`).
 //!
+//! **Taking the prompt down.** When an attempt is superseded (the user chose
+//! the password, the vault was locked, a newer prompt was asked for) its
+//! context is invalidated: `-[LAContext invalidate]` cancels the pending
+//! evaluation — the sheet closes and the reply arrives with `LAErrorAppCancel`
+//! — and a context invalidated before it was asked refuses with
+//! `LAErrorInvalidContext`. Both read as a cancel. The shared code drops the
+//! result of a superseded attempt unread either way, so nothing here is what
+//! keeps a late Touch ID from unlocking; this only stops the sheet from
+//! lingering.
+//!
 //! The raw `SecItem*` calls are used instead of security-framework's `passwords`
 //! helpers because those cannot attach an authentication context or return the
 //! attributes alongside the data. `keyring` is untouched and keeps serving the
@@ -81,7 +91,7 @@ use security_framework_sys::item::{
 use security_framework_sys::keychain_item::{SecItemAdd, SecItemCopyMatching, SecItemDelete};
 use zeroize::Zeroizing;
 
-use super::{DeviceSecretStore, SecretError, SecretState};
+use super::{DeviceSecretStore, Prompt, SecretError, SecretState};
 
 // `kSecAttrGeneric` (user-defined data on a generic password) is exported by
 // Security.framework but not declared by security-framework-sys 2.17.
@@ -124,6 +134,22 @@ const TAG_LEGACY: u8 = 0;
 const TAG_DOMAIN_STATE: u8 = 1;
 
 pub(super) struct TouchId;
+
+/// A context to invalidate from the thread that supersedes its attempt.
+struct Invalidate(Retained<LAContext>);
+
+// SAFETY: the wrapper is only ever used to send `-[LAContext invalidate]` and
+// to release its reference. `invalidate` exists to be called while another
+// thread waits on the same context's evaluation, and Objective-C reference
+// counting is atomic; no other state of the context is touched through it.
+unsafe impl Send for Invalidate {}
+
+impl Invalidate {
+    fn run(self) {
+        // SAFETY: `invalidate` has no preconditions and is idempotent.
+        unsafe { self.0.invalidate() };
+    }
+}
 
 /// `kSec*` keys are `CFStringRef` statics; wrap one for a dictionary.
 fn key(k: CFStringRef) -> CFString {
@@ -243,14 +269,18 @@ fn evaluation_error(code: isize) -> SecretError {
         c if LA_ERROR_UNAVAILABLE.contains(&c) => SecretError::Unsupported,
         // Failed match (-1), cancel (-2), fallback (-3), system/app cancel
         // (-4, -9), lockout (-8): the password, this time; keep everything.
-        -1 | -2 | -3 | -4 | -8 | -9 => SecretError::Cancelled,
+        // Invalid context (-10) is our own `invalidate` winning the race with
+        // the evaluation — a superseded attempt, a cancel like -9.
+        -1 | -2 | -3 | -4 | -8 | -9 | -10 => SecretError::Cancelled,
         c => SecretError::Failed(format!("Touch ID evaluation failed: LAError {c}")),
     }
 }
 
 /// Show the Touch ID prompt with `reason` on `ctx` and wait for the answer.
 /// Called on a blocking thread; the reply arrives on a LocalAuthentication queue.
-fn evaluate(ctx: &LAContext, reason: &str) -> Result<(), isize> {
+/// If the attempt `prompt` stands for is superseded, `ctx` is invalidated,
+/// which ends the wait with a cancel.
+fn evaluate(ctx: &Retained<LAContext>, reason: &str, prompt: &Prompt<'_>) -> Result<(), isize> {
     let (tx, rx) = mpsc::channel::<Result<(), isize>>();
     let reply = RcBlock::new(move |ok: Bool, err: *mut NSError| {
         let result = if ok.as_bool() {
@@ -273,16 +303,19 @@ fn evaluate(ctx: &LAContext, reason: &str) -> Result<(), isize> {
         reason
     };
     let reason = NSString::from_str(reason);
-    // SAFETY: the reply block is `Send`-safe (it only owns an mpsc Sender), as
-    // the method requires; the reason is a valid, non-empty NSString.
-    unsafe {
-        ctx.evaluatePolicy_localizedReason_reply(
-            LAPolicy::DeviceOwnerAuthenticationWithBiometrics,
-            &reason,
-            &reply,
-        );
-    }
-    rx.recv().unwrap_or(Err(0))
+    let invalidate = Invalidate(ctx.clone());
+    prompt.wait(Box::new(move || invalidate.run()), || {
+        // SAFETY: the reply block is `Send`-safe (it only owns an mpsc Sender), as
+        // the method requires; the reason is a valid, non-empty NSString.
+        unsafe {
+            ctx.evaluatePolicy_localizedReason_reply(
+                LAPolicy::DeviceOwnerAuthenticationWithBiometrics,
+                &reason,
+                &reply,
+            );
+        }
+        rx.recv().unwrap_or(Err(0))
+    })
 }
 
 impl DeviceSecretStore for TouchId {
@@ -367,7 +400,7 @@ impl DeviceSecretStore for TouchId {
         }
     }
 
-    fn read(&self, reason: &str) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+    fn read(&self, reason: &str, prompt: &Prompt<'_>) -> Result<Zeroizing<Vec<u8>>, SecretError> {
         // No prompt for an item that is provably dead or cannot be used here.
         match self.state() {
             SecretState::Unsupported => return Err(SecretError::Unsupported),
@@ -375,7 +408,7 @@ impl DeviceSecretStore for TouchId {
             SecretState::Present | SecretState::Unknown => {}
         }
         let ctx = new_context();
-        evaluate(&ctx, reason).map_err(evaluation_error)?;
+        evaluate(&ctx, reason, prompt).map_err(evaluation_error)?;
         let current = domain_hash(&ctx);
         let mut query = with_context(item(), &ctx);
         // SAFETY: reading an `extern` static exported by Security.framework.
@@ -426,7 +459,7 @@ impl DeviceSecretStore for TouchId {
     }
 
     /// The prompt and nothing else: no Keychain item is made or read.
-    fn confirm_presence(&self, reason: &str) -> Result<(), SecretError> {
-        evaluate(&new_context(), reason).map_err(evaluation_error)
+    fn confirm_presence(&self, reason: &str, prompt: &Prompt<'_>) -> Result<(), SecretError> {
+        evaluate(&new_context(), reason, prompt).map_err(evaluation_error)
     }
 }
