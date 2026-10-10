@@ -25,7 +25,8 @@
 // suspend open at all (see `macos.rs`), so on that target none of this is
 // compiled and the imports would be dead.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
