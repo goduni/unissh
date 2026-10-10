@@ -437,8 +437,7 @@ pub async fn submit_agent_approval(
     approved: bool,
     approver: State<'_, Arc<AppApprover>>,
 ) -> ApiResult<()> {
-    approver.answer(id, approved);
-    Ok(())
+    approver.answer(id, approved)
 }
 
 /// Keys the OS ssh-agent currently holds — the picker's data source.

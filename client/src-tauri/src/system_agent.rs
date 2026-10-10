@@ -110,10 +110,6 @@ impl Controller {
         })
     }
 
-    /// Starts the listener if the setting is on, the vault unlocked and the
-    /// screen not locked; otherwise does nothing. Called at boot (where the
-    /// vault is still locked, so the first unlock starts it) and from
-    /// [`resume_access`].
     /// The live-listener record, for paths that cannot return an error (stop,
     /// revoke, shutdown, background restarts). `Live` is two plain fields that
     /// are never left half-updated, and a revoke must still go through after a
@@ -124,6 +120,10 @@ impl Controller {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Starts the listener if the setting is on, the vault unlocked and the
+    /// screen not locked; otherwise does nothing. Called at boot (where the
+    /// vault is still locked, so the first unlock starts it) and from
+    /// [`resume_access`].
     pub fn resume(self: &Arc<Self>) {
         let epoch = self.live().epoch;
         let this = self.clone();

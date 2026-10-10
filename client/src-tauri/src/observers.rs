@@ -15,6 +15,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
+
+use crate::error::{ApiError, ApiResult};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 #[cfg(desktop)]
@@ -352,11 +354,23 @@ impl AppApprover {
         }
     }
 
-    pub fn answer(&self, id: u64, approved: bool) {
-        let pending = lock_map(&self.state).pending.remove(&id);
+    /// Called by the `submit_agent_approval` command. A poisoned map is an
+    /// error the UI sees; the waiting request then times out and is refused.
+    pub fn answer(&self, id: u64, approved: bool) -> ApiResult<()> {
+        let pending = self
+            .state
+            .lock()
+            .map_err(|e| {
+                ApiError::other(format!(
+                    "internal error: the agent approval registry is unavailable ({e}); restart UniSSH"
+                ))
+            })?
+            .pending
+            .remove(&id);
         if pending.is_some_and(|p| p.answer.send(approved).is_err()) {
             log::debug!("agent approval {id}: answered after the waiter gave up");
         }
+        Ok(())
     }
 
     /// Refuses `id` if it is still waiting, and tells the window to drop it.
@@ -382,10 +396,7 @@ impl AppApprover {
     /// Withdraws every system-agent prompt: its listener stopped (vault or
     /// screen lock, sleep, exit), so no answer could reach the caller anyway.
     pub fn cancel_system(&self) {
-        let ids: Vec<u64> = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        let ids: Vec<u64> = lock_map(&self.state)
             .pending
             .iter()
             .filter(|(_, p)| p.system)
