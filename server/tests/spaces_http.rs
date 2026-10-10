@@ -13,6 +13,10 @@ use unissh_server::ids::b64;
 use unissh_server::store::Val;
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end spaces lifecycle; the steps share state and read in order"
+)]
 async fn spaces_members_directory_lifecycle() {
     let app = spawn().await;
     let id = common::make_identity();
@@ -404,7 +408,7 @@ async fn members_add_enqueues_space_wide_grants() {
         .fetch_scalar_i64(
             "SELECT COUNT(*) FROM pending_actions \
              WHERE account_id = ? AND vault_id = ? AND kind = 'grant' AND state = 'pending'",
-            vec![Val::b((&*member.account_id)), Val::b(&vault_bytes[..])],
+            vec![Val::b(&*member.account_id), Val::b(&vault_bytes[..])],
         )
         .await
         .unwrap()

@@ -2,6 +2,11 @@
 //! over HTTP, end-to-end member lifecycle (vault → add member → sees via delta/
 //! grants → revoke+rotate → read-deny), plus the v2 join→grant delta-visibility
 //! proof (Task 11).
+#![expect(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -21,7 +26,7 @@ const VAULT: &[u8] = b"vault-zke2e-aaaa";
 // ---- object builders (open metadata + opaque blobs) ----
 
 fn put(out: &mut Vec<u8>, b: &[u8]) {
-    out.extend_from_slice(&(b.len() as u32).to_be_bytes());
+    out.extend_from_slice(&u32::try_from(b.len()).unwrap().to_be_bytes());
     out.extend_from_slice(b);
 }
 fn manifest_blob(epoch: u64, members: &[(Vec<u8>, u8)]) -> Vec<u8> {
@@ -29,10 +34,10 @@ fn manifest_blob(epoch: u64, members: &[(Vec<u8>, u8)]) -> Vec<u8> {
     ms.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = b"unissh-manifest-v1".to_vec();
     out.extend_from_slice(&epoch.to_be_bytes());
-    out.extend_from_slice(&(ms.len() as u32).to_be_bytes());
+    out.extend_from_slice(&u32::try_from(ms.len()).unwrap().to_be_bytes());
     for (ed, role) in &ms {
         out.push(*role);
-        out.extend_from_slice(&(ed.len() as u16).to_be_bytes());
+        out.extend_from_slice(&u16::try_from(ed.len()).unwrap().to_be_bytes());
         out.extend_from_slice(ed);
     }
     out
@@ -103,10 +108,10 @@ fn vault_obj(author: &[u8]) -> String {
 
 #[tokio::test]
 async fn zk_dump_contains_only_ciphertext() {
+    const MARKER: &[u8] = b"SUPERSECRET-PLAINTEXT-MUST-NOT-LEAK";
     let app = spawn().await;
     let s = app.seed_session("personal").await;
 
-    const MARKER: &[u8] = b"SUPERSECRET-PLAINTEXT-MUST-NOT-LEAK";
     // The client encrypts the content BEFORE sending; the server sees only ciphertext.
     let key = SymmetricKey::generate();
     let aad = AssociatedData::new(VAULT.to_vec(), b"i1".to_vec(), 1);
@@ -336,6 +341,7 @@ async fn delta_object_strings(app: &common::TestApp, tok: &str) -> Vec<String> {
 #[tokio::test]
 async fn e2e_v2_join_then_grant_flips_delta_visibility() {
     const E2E_VAULT: &[u8] = b"vault-v2e2e-aaaa";
+    const MARKER: &[u8] = b"V2-E2E-SECRET-ITEM-PLAINTEXT";
     let app = spawn().await;
 
     // --- Owner claims the instance + logs in. ---
@@ -413,7 +419,6 @@ async fn e2e_v2_join_then_grant_flips_delta_visibility() {
         .unwrap();
     assert_eq!(claim.status(), 200, "owner claims the cloud vault");
 
-    const MARKER: &[u8] = b"V2-E2E-SECRET-ITEM-PLAINTEXT";
     let key = SymmetricKey::generate();
     let aad = AssociatedData::new(E2E_VAULT.to_vec(), b"secret-item".to_vec(), 1);
     let ciphertext = aead_encrypt(&key, MARKER, &aad).unwrap();

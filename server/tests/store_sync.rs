@@ -1,5 +1,9 @@
 //! Store level §15.1: instance-wide monotonic/append-only server_seq, push
 //! idempotency, membership-filtered delta. SQLite in-memory.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_server::codec::parse_open;
 use unissh_server::store::sync_repo::PushObj;

@@ -11,6 +11,10 @@ use crate::error::AppResult;
 //   chain[n] = SHA-256( chain[n-1] ‖ record_bytes(n) ),  chain[-1] = 32 zeros.
 // Verify recomputes the chain and catches any edit to the body/order/deletion.
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "frozen chain encoding; every field arrives in a request capped by limits.max_body_bytes, far below 4 GiB"
+)]
 fn put_lp(buf: &mut Vec<u8>, b: &[u8]) {
     buf.extend_from_slice(&(b.len() as u32).to_be_bytes());
     buf.extend_from_slice(b);

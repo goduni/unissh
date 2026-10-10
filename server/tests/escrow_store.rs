@@ -1,6 +1,10 @@
 //! Escrow columns on keyset_blobs (Phase 2): set_escrow attaches the K_auth
 //! hash + Argon2id salt/params to an uploaded keyset row; get_escrow_by_handle
 //! resolves a handle → its latest keyset generation, returning blob + escrow.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_server::Store;
 use unissh_server::ids;
@@ -55,8 +59,8 @@ async fn escrow_round_trips_by_handle() {
     assert_eq!(row.keyset_bytes, blob);
     assert_eq!(row.generation, 1);
     assert_eq!(row.account_id, alice);
-    assert_eq!(row.k_auth_hash.as_deref(), Some((&*k_auth_hash)));
-    assert_eq!(row.argon_salt.as_deref(), Some((&*salt)));
+    assert_eq!(row.k_auth_hash.as_deref(), Some(&*k_auth_hash));
+    assert_eq!(row.argon_salt.as_deref(), Some(&*salt));
     assert_eq!(row.argon_mem_kib, Some(65536));
     assert_eq!(row.argon_iterations, Some(3));
     assert_eq!(row.argon_parallelism, Some(1));
@@ -84,7 +88,7 @@ async fn escrow_resolves_latest_generation() {
     let row = s.get_escrow_by_handle("alice").await.unwrap().unwrap();
     assert_eq!(row.generation, 2, "resolves MAX(generation)");
     assert_eq!(row.keyset_bytes, b"gen2");
-    assert_eq!(row.k_auth_hash.as_deref(), Some((&*k_auth_hash)));
+    assert_eq!(row.k_auth_hash.as_deref(), Some(&*k_auth_hash));
 }
 
 #[tokio::test]
@@ -96,6 +100,6 @@ async fn unknown_handle_is_none() {
 #[tokio::test]
 async fn account_without_keyset_is_none() {
     let s = store_v2().await;
-    let _ = mk_account(&s, "nobody").await;
+    drop(mk_account(&s, "nobody").await);
     assert!(s.get_escrow_by_handle("nobody").await.unwrap().is_none());
 }

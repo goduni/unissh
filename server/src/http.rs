@@ -20,13 +20,8 @@ use tower_http::trace::TraceLayer;
 /// full) and `next_cursor` (the last row's sequence, or the incoming `cursor` when the
 /// page is empty). The clamp bounds differ per call site (the two MAX limits differ)
 /// and stay at the call site — only this identical tail is shared.
-pub(crate) fn page<T>(
-    rows: &[T],
-    limit: usize,
-    cursor: i64,
-    key: impl Fn(&T) -> i64,
-) -> (bool, i64) {
-    let has_more = rows.len() == limit;
+pub(crate) fn page<T>(rows: &[T], limit: i64, cursor: i64, key: impl Fn(&T) -> i64) -> (bool, i64) {
+    let has_more = i64::try_from(rows.len()) == Ok(limit);
     let next_cursor = rows.last().map(key).unwrap_or(cursor);
     (has_more, next_cursor)
 }

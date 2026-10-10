@@ -294,7 +294,7 @@ async fn objects_list(
     let max = i64::from(state.config.limits.delta_max_page_size);
     let limit = q
         .limit
-        .unwrap_or(i64::from(state.config.limits.delta_page_size))
+        .unwrap_or_else(|| i64::from(state.config.limits.delta_page_size))
         .clamp(1, max);
     let vault = match &q.vault_id {
         Some(v) => Some(ids::unb64(v)?),
@@ -304,8 +304,7 @@ async fn objects_list(
         .store
         .admin_list_objects(q.tag, vault.as_deref(), cursor, limit)
         .await?;
-    let (has_more, next_cursor) =
-        crate::http::page(&rows, limit as usize, cursor, |r| r.server_seq);
+    let (has_more, next_cursor) = crate::http::page(&rows, limit, cursor, |r| r.server_seq);
     let out: Vec<Value> = rows
         .into_iter()
         .map(|o| {
@@ -501,7 +500,7 @@ async fn metrics_summary(
 async fn health(_owner: OwnerCtx, State(state): State<AppState>) -> AppResult<Json<Value>> {
     let db_ok = state.store.ping().await.is_ok();
     let (size, idle) = state.store.pool_stats();
-    let in_use = (i64::from(size) - idle as i64).max(0);
+    let in_use = (i64::from(size) - i64::try_from(idle).unwrap_or(i64::MAX)).max(0);
     let now = state.now();
     let uptime = (now - state.started_at_unix).max(0);
 

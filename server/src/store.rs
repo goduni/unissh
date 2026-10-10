@@ -107,7 +107,7 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn dialect(&self) -> Dialect {
+    pub const fn dialect(&self) -> Dialect {
         match &self.db {
             Db::Sqlite(_) => Dialect::Sqlite,
             Db::Postgres(_) => Dialect::Postgres,
@@ -314,7 +314,7 @@ pub enum Tx<'c> {
 }
 
 impl Tx<'_> {
-    pub fn dialect(&self) -> Dialect {
+    pub const fn dialect(&self) -> Dialect {
         match self {
             Tx::Sqlite(_) => Dialect::Sqlite,
             Tx::Postgres(_) => Dialect::Postgres,

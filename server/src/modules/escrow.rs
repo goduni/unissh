@@ -100,6 +100,11 @@ fn stored_params(row: &EscrowRow) -> Option<(Vec<u8>, i64, i64, i64)> {
 /// returns it), so an attacker could recompute the decoy and tell an enrolled
 /// account (real random salt) apart from an unenrolled one (salt == recomputed
 /// decoy), defeating enumeration resistance. The private secret closes that leak.
+#[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "HMAC-SHA256 takes a key of any length and its output is 32 bytes, so the 16-byte prefix is in range"
+)]
 fn decoy_salt(decoy_secret: &[u8], handle: &str) -> Vec<u8> {
     let mut key_material = Vec::with_capacity(decoy_secret.len() + DECOY_LABEL.len());
     key_material.extend_from_slice(decoy_secret);
@@ -184,8 +189,7 @@ async fn escrow_fetch(
     let enrolled = row.as_ref().and_then(|r| r.k_auth_hash.as_ref()).is_some();
     let matched = ct_eq(&got, &want);
 
-    if enrolled && matched {
-        let r = row.expect("enrolled => the escrow row is present");
+    if let (true, Some(r)) = (enrolled && matched, row) {
         return Ok(Json(FetchResp {
             keyset_blob: ids::b64(&r.keyset_bytes),
             generation: r.generation,

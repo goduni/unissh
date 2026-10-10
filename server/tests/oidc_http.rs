@@ -20,6 +20,11 @@
 //! JWKS cache), so token expiries here are computed from `SystemTime::now()`. The
 //! reassertion deadline, by contrast, is a TestClock quantity and is driven by
 //! `clock.advance`.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -112,7 +117,9 @@ fn real_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_secs() as i64
+        .as_secs()
+        .try_into()
+        .unwrap()
 }
 
 /// Stand up a second local axum server serving the JWKS (one RSA JWK, `kid` = KID) for
@@ -562,6 +569,14 @@ async fn boot_reconcile() -> (common::TestApp, [u8; 16], [u8; 16], [u8; 16]) {
 
 #[tokio::test]
 async fn oidc_deprovisions_dropped_groups_updates_role_and_keeps_manual() {
+    async fn role(app: &common::TestApp, space: &[u8], account_id: &[u8]) -> Option<String> {
+        app.state
+            .store
+            .space_member_role(space, account_id)
+            .await
+            .unwrap()
+    }
+
     let (app, space_a, space_b, space_c) = boot_reconcile().await;
     let id = common::make_identity();
 
@@ -573,13 +588,6 @@ async fn oidc_deprovisions_dropped_groups_updates_role_and_keeps_manual() {
     let b1: serde_json::Value = r1.json().await.unwrap();
     let account_id = ids::unb64(b1["account_id"].as_str().unwrap()).unwrap();
 
-    async fn role(app: &common::TestApp, space: &[u8], account_id: &[u8]) -> Option<String> {
-        app.state
-            .store
-            .space_member_role(space, account_id)
-            .await
-            .unwrap()
-    }
     assert_eq!(
         role(&app, &space_a, &account_id).await.as_deref(),
         Some("member"),

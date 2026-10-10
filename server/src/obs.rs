@@ -27,7 +27,7 @@ pub fn init_tracing(cfg: &ObsConfig) {
         registry.with(tracing_subscriber::fmt::layer()).try_init()
     };
     // try_init returns Err if a subscriber is already installed (a repeat call in tests) — fine.
-    let _ = result;
+    drop(result);
     // OTLP export is not compiled in (§13 seam) — don't stay silent if the operator set it.
     if !cfg.otel_endpoint.is_empty() {
         tracing::warn!(
@@ -71,10 +71,10 @@ impl MetricsHistory {
         }
     }
 
-    pub fn min_interval(&self) -> i64 {
+    pub const fn min_interval(&self) -> i64 {
         self.min_interval
     }
-    pub fn cap(&self) -> usize {
+    pub const fn cap(&self) -> usize {
         self.cap
     }
 
@@ -83,7 +83,11 @@ impl MetricsHistory {
     /// all label sets.
     pub fn observe(&self, prometheus_text: &str, now: i64) {
         let values = parse_unissh_metrics(prometheus_text);
-        let mut buf = self.buf.lock().unwrap();
+        // A sample buffer is display-only: a poisoned lock still holds usable points.
+        let mut buf = self
+            .buf
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let due = buf.back().is_none_or(|s| now - s.t >= self.min_interval);
         if !due {
             return;
@@ -92,12 +96,16 @@ impl MetricsHistory {
         while buf.len() > self.cap {
             buf.pop_front();
         }
+        drop(buf);
     }
 
     /// Projection into series: `{ "<metric>": [ {"t":<unix>,"v":<f64>}, ... ] }` over
     /// the union of all encountered metrics, in chronological order.
     pub fn series(&self) -> serde_json::Value {
-        let buf = self.buf.lock().unwrap();
+        let buf = self
+            .buf
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut names: BTreeSet<&str> = BTreeSet::new();
         for s in buf.iter() {
             names.extend(s.values.keys().map(String::as_str));
@@ -114,6 +122,7 @@ impl MetricsHistory {
                 .collect();
             series.insert(name.to_owned(), serde_json::Value::Array(points));
         }
+        drop(buf);
         serde_json::Value::Object(series)
     }
 }

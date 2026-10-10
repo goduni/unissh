@@ -4,6 +4,10 @@
 //! claim/join/oidc). This unblocks "log in on a fresh device via escrow": escrow
 //! unlocks the keyset, but a device with no session cannot use the Bearer-gated
 //! `/v1/devices/add`. Instance-scoped (v2), REAL core crypto.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -37,7 +41,7 @@ async fn device_count(app: &TestApp, account_id_b64: &str) -> i64 {
         .store
         .fetch_scalar_i64(
             "SELECT COUNT(*) FROM devices WHERE account_id = ?",
-            vec![Val::b((&*acct))],
+            vec![Val::b(&*acct)],
         )
         .await
         .unwrap()
@@ -128,7 +132,7 @@ async fn self_enroll_web_device_is_kind_web_and_expires() {
         .fetch_scalar_i64(
             "SELECT COUNT(*) FROM devices \
              WHERE device_id = ? AND kind = 'web' AND expires_at IS NOT NULL",
-            vec![Val::b((&*device_id))],
+            vec![Val::b(&*device_id)],
         )
         .await
         .unwrap()
@@ -301,7 +305,7 @@ async fn expired_device_cannot_log_in() {
         .store
         .exec(
             "UPDATE devices SET expires_at = ? WHERE device_id = ?",
-            vec![Val::I(1), Val::b((&*device_id))],
+            vec![Val::I(1), Val::b(&*device_id)],
         )
         .await
         .unwrap();
@@ -357,7 +361,7 @@ async fn expired_device_cannot_refresh() {
         .store
         .exec(
             "UPDATE devices SET expires_at = ? WHERE device_id = ?",
-            vec![Val::I(1), Val::b((&*device_id))],
+            vec![Val::I(1), Val::b(&*device_id)],
         )
         .await
         .unwrap();

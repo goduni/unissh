@@ -39,8 +39,8 @@ async fn push(
     State(state): State<AppState>,
     body: Bytes,
 ) -> AppResult<Json<PushResp>> {
-    let req: PushReq =
-        serde_json::from_slice(&body).map_err(|_| AppError::malformed("invalid JSON body"))?;
+    let req: PushReq = serde_json::from_slice(&body)
+        .map_err(|e| AppError::malformed(format!("invalid JSON body: {e}")))?;
 
     if req.objects.len() > state.max_objects_per_push() {
         return Err(AppError::payload_too_large("too many objects per push"));
@@ -189,8 +189,9 @@ async fn delta(
     // With `?vault=<hex>`, the same scope is applied but restricted to one vault.
     let rows = match q.vault.as_deref() {
         Some(vhex) => {
-            let vid = hex::decode(vhex.trim())
-                .map_err(|_| AppError::malformed("invalid vault id (expected hex)"))?;
+            let vid = hex::decode(vhex.trim()).map_err(|e| {
+                AppError::malformed(format!("invalid vault id (expected hex): {e}"))
+            })?;
             state
                 .store
                 .delta_since_vault(cursor, limit, auth.device_ed25519(), state.now(), &vid)
@@ -203,8 +204,7 @@ async fn delta(
                 .await?
         }
     };
-    let (has_more, next_cursor) =
-        crate::http::page(&rows, limit as usize, cursor, |r| r.server_seq);
+    let (has_more, next_cursor) = crate::http::page(&rows, limit, cursor, |r| r.server_seq);
     let items = rows
         .into_iter()
         .map(|r| DeltaItem {

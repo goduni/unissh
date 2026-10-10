@@ -1,5 +1,9 @@
 //! Regressions for fixes from the adversarial review: structural invariants on push,
 //! self-revoke guard, host-binding auth.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -85,11 +89,11 @@ async fn grants_publish_self_revoke_rejected() {
     blob.extend_from_slice(&5_u64.to_be_bytes());
     blob.extend_from_slice(&1_u32.to_be_bytes());
     blob.push(2);
-    blob.extend_from_slice(&(admin.len() as u16).to_be_bytes());
+    blob.extend_from_slice(&u16::try_from(admin.len()).unwrap().to_be_bytes());
     blob.extend_from_slice(&admin);
     let mut mobj = vec![3_u8];
     let put = |o: &mut Vec<u8>, b: &[u8]| {
-        o.extend_from_slice(&(b.len() as u32).to_be_bytes());
+        o.extend_from_slice(&u32::try_from(b.len()).unwrap().to_be_bytes());
         o.extend_from_slice(b);
     };
     put(&mut mobj, b"v-harden");

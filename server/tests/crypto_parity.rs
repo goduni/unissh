@@ -25,7 +25,7 @@ fn registration_verify_matches_core_and_rejects_tamper() {
     let sig = sign_registration(&k.signing, &core_payload).unwrap();
 
     let ours = sc::RegistrationPayload {
-        account_id: account_id.clone(),
+        account_id,
         x25519_pub: x,
         ed25519_pub: ed,
     };
@@ -38,7 +38,7 @@ fn registration_verify_matches_core_and_rejects_tamper() {
 
     // Wrong signing key (self-attested: a different ed in payload changes vk) → reject.
     let other = Ed25519Keypair::generate();
-    let mut wrong = ours.clone();
+    let mut wrong = ours;
     wrong.ed25519_pub = other.verifying.to_bytes();
     assert!(sc::verify_registration(&wrong, &sig).is_err());
 }
@@ -72,7 +72,7 @@ fn server_auth_verify_matches_core_and_rejects() {
     assert!(sc::verify_server_auth(&other.verifying.to_bytes(), &ours, &sig).is_err());
 
     // Tampered nonce.
-    let mut t = ours.clone();
+    let mut t = ours;
     t.nonce = b"nonce-xyz".to_vec();
     assert!(sc::verify_server_auth(&k.verifying.to_bytes(), &t, &sig).is_err());
 }

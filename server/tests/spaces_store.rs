@@ -1,4 +1,8 @@
 //! spaces + membership + directory (v2 staged schema).
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_server::Store;
 use unissh_server::ids;

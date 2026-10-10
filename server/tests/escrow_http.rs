@@ -78,9 +78,9 @@ async fn escrow_keyless_recovery_round_trip() {
     // 4. A FRESH client (no session, no device): rebuild the params from the GET,
     //    re-derive K_auth from (password, SecretKey), and fetch the keyset by handle.
     let params2 = KdfParams {
-        mem_kib: p["argon_mem_kib"].as_i64().unwrap() as u32,
-        iterations: p["argon_iterations"].as_i64().unwrap() as u32,
-        parallelism: p["argon_parallelism"].as_i64().unwrap() as u32,
+        mem_kib: u32::try_from(p["argon_mem_kib"].as_i64().unwrap()).unwrap(),
+        iterations: u32::try_from(p["argon_iterations"].as_i64().unwrap()).unwrap(),
+        parallelism: u32::try_from(p["argon_parallelism"].as_i64().unwrap()).unwrap(),
         salt: unb64(p["argon_salt"].as_str().unwrap()).unwrap(),
     };
     let argon_key2 = derive_key(password, &params2).unwrap();

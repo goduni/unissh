@@ -156,9 +156,9 @@ impl OidcConfig {
         for (i, gm) in self.group_map.iter().enumerate() {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(gm.space_id.as_bytes())
-                .map_err(|_| {
+                .map_err(|e| {
                     format!(
-                        "oidc.group_map[{i}].space_id is not valid base64: {:?}",
+                        "oidc.group_map[{i}].space_id is not valid base64 ({e}): {:?}",
                         gm.space_id
                     )
                 })?;
@@ -280,7 +280,7 @@ impl WebhookConfig {
     /// Boot-time validation: a malformed sink is a startup error, not a warning.
     pub fn validate(&self) -> Result<(), String> {
         let url = reqwest::Url::parse(&self.url)
-            .map_err(|_| "audit.webhook.url is not a valid URL".to_owned())?;
+            .map_err(|e| format!("audit.webhook.url is not a valid URL: {e}"))?;
         if url.scheme() != "https" && url.scheme() != "http" {
             return Err("audit.webhook.url must be http:// or https://".into());
         }
@@ -372,7 +372,7 @@ impl SyslogConfig {
         SYSLOG_FACILITIES
             .iter()
             .position(|f| f.eq_ignore_ascii_case(&self.facility))
-            .map(|i| i as u8)
+            .and_then(|i| u8::try_from(i).ok())
     }
 
     /// Boot-time validation. The address is checked for shape only (`host:port`
@@ -566,7 +566,7 @@ impl std::fmt::Debug for SetupConfig {
 }
 
 /// `***` for a non-empty secret, `<unset>` for an empty one (presence is not a secret).
-fn redacted(s: &str) -> &'static str {
+const fn redacted(s: &str) -> &'static str {
     if s.is_empty() { "<unset>" } else { "***" }
 }
 

@@ -1,5 +1,9 @@
 //! HTTP level §5.0/§5.1: middleware (auth/rate-limit) + sync endpoints
 //! (push/delta/version) via a real server. Instance-scoped (v2).
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 

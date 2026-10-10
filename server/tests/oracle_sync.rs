@@ -3,6 +3,11 @@
 //! core `sync_pull` engine against a live server. The server must produce
 //! identical observable results (assigned seqs, delta seq>cursor,
 //! report_version=max) and round-trip bytes verbatim.
+#![expect(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -35,6 +40,10 @@ impl HttpTransport {
 }
 
 impl SyncTransport for HttpTransport {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "SyncError::Format carries no source; the oracle only needs pass or fail"
+    )]
     fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError> {
         let objs: Vec<String> = objects
             .iter()

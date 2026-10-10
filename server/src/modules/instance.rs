@@ -43,14 +43,13 @@ struct InstanceInfo {
 
 async fn instance_info(State(state): State<AppState>) -> AppResult<Json<InstanceInfo>> {
     let row = state.store.instance().await?;
+    let oidc = state.config.oidc.enabled.then(|| OidcInfo {
+        issuer: state.config.oidc.issuer.clone(),
+        client_id: state.config.oidc.client_id.clone(),
+    });
     let mut auth = vec!["password"];
-    let mut oidc = None;
-    if state.config.oidc.enabled {
+    if oidc.is_some() {
         auth.push("oidc");
-        oidc = Some(OidcInfo {
-            issuer: state.config.oidc.issuer.clone(),
-            client_id: state.config.oidc.client_id.clone(),
-        });
     }
     Ok(Json(InstanceInfo {
         claimed: row.claimed != 0,

@@ -113,7 +113,7 @@ async fn audit_query(
     let limit = q.limit.unwrap_or(def).clamp(1, max);
 
     let rows = state.store.query_audit(since, limit).await?;
-    let has_more = rows.len() as i64 == limit;
+    let has_more = i64::try_from(rows.len()) == Ok(limit);
     let next_since = rows.last().map(|r| r.seq + 1).unwrap_or(since);
     let entries = rows
         .into_iter()
@@ -229,7 +229,7 @@ async fn audit_export(
             let mut buf = Vec::new();
             for r in &rows {
                 serde_json::to_writer(&mut buf, &ExportLine::from(r))
-                    .map_err(|_| AppError::internal("audit export serialisation"))?;
+                    .map_err(|e| AppError::internal(format!("audit export serialisation: {e}")))?;
                 buf.push(b'\n');
             }
             Ok::<_, AppError>(Some((Bytes::from(buf), last + 1)))

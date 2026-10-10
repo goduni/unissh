@@ -2,7 +2,7 @@
 //! grant reads, atomic grants_publish (revoke/add). Instance-scoped (v2).
 
 use super::models::{DeltaRow, GrantRow, ManifestRow};
-use super::sync_repo::{PushObj, alloc_seqs, insert_object, materialize};
+use super::sync_repo::{PushObj, alloc_seqs, count_i64, insert_object, materialize};
 use super::{Store, Val};
 use crate::codec::parse_open;
 use crate::error::{AppError, AppResult};
@@ -260,15 +260,14 @@ impl Store {
         revoke_epoch: Option<i64>,
         now: i64,
     ) -> AppResult<Vec<i64>> {
-        let n = (1 + grants.len()) as i64;
+        let n = count_i64(1 + grants.len())?;
         let mut tx = self.begin().await?;
         // Atomic seq allocation under a row write-lock (like push_objects).
         let base = alloc_seqs(&mut tx, n).await?;
 
-        let mut seqs = Vec::with_capacity(n as usize);
+        let mut seqs = Vec::with_capacity(1 + grants.len());
         // First the manifest of the new epoch, then the grants under VK' (§9.3).
-        for (i, obj) in std::iter::once(manifest).chain(grants.iter()).enumerate() {
-            let seq = base + 1 + i as i64;
+        for (seq, obj) in (base + 1..).zip(std::iter::once(manifest).chain(grants.iter())) {
             insert_object(&mut tx, seq, &obj.parsed, &obj.bytes, now).await?;
             materialize(&mut tx, seq, &obj.parsed, now).await?;
             seqs.push(seq);
@@ -277,7 +276,8 @@ impl Store {
         // A1b: re-emit the CURRENT vault set (the vault record + manifests of epochs < E +
         // live items) on FRESH seqs so a newly-added member whose cursor has already moved
         // past these objects still receives them.
-        let new_epoch = manifest.parsed.key_epoch.unwrap_or(0) as i64;
+        let new_epoch = i64::try_from(manifest.parsed.key_epoch.unwrap_or(0))
+            .map_err(|e| AppError::malformed(format!("manifest.key_epoch exceeds i64: {e}")))?;
         let reemit = tx
             .fetch_all_as::<DeltaRow>(
                 "SELECT server_seq, object_bytes FROM objects o \
@@ -296,10 +296,9 @@ impl Store {
             )
             .await?;
         if !reemit.is_empty() {
-            let m = reemit.len() as i64;
+            let m = count_i64(reemit.len())?;
             let rbase = alloc_seqs(&mut tx, m).await?;
-            for (i, row) in reemit.iter().enumerate() {
-                let seq = rbase + 1 + i as i64;
+            for (seq, row) in (rbase + 1..).zip(reemit.iter()) {
                 let parsed = parse_open(&row.object_bytes)?;
                 insert_object(&mut tx, seq, &parsed, &row.object_bytes, now).await?;
                 materialize(&mut tx, seq, &parsed, now).await?;

@@ -2,6 +2,11 @@
 //! server-auth signatures). Covers claim→challenge→verify→authenticated push,
 //! single-use nonce, keyset no-downgrade, PAKE relay verbatim, refresh rotation +
 //! reuse detection. Instance-scoped (v2).
+#![expect(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -235,14 +240,10 @@ async fn keyset_put_stores_optional_escrow() {
     );
     assert_ne!(
         row.k_auth_hash.as_deref(),
-        Some((&*k_auth_raw)),
+        Some(&*k_auth_raw),
         "the raw K_auth is never persisted"
     );
-    assert_eq!(
-        row.argon_salt.as_deref(),
-        Some((&*salt)),
-        "salt round-trips"
-    );
+    assert_eq!(row.argon_salt.as_deref(), Some(&*salt), "salt round-trips");
     assert_eq!(row.argon_mem_kib, Some(65536));
     assert_eq!(row.argon_iterations, Some(3));
     assert_eq!(row.argon_parallelism, Some(1));
@@ -486,7 +487,7 @@ async fn refresh_reuse_of_older_generation_revokes_session() {
 #[tokio::test]
 async fn refresh_rejects_malformed_and_unknown_tokens() {
     let app = spawn().await;
-    let _ = claim_and_tokens(&app).await;
+    drop(claim_and_tokens(&app).await);
 
     // Wrong length (not session_id(16)||secret(32)) → 401, no panic.
     assert_eq!(refresh(&app, &b64(b"too-short")).await.status(), 401);

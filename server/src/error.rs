@@ -27,7 +27,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub fn status(self) -> StatusCode {
+    pub const fn status(self) -> StatusCode {
         match self {
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
@@ -42,7 +42,7 @@ impl ErrorCode {
         }
     }
 
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unauthenticated => "unauthenticated",
             Self::Forbidden => "forbidden",
@@ -74,7 +74,7 @@ impl AppError {
             retry_after: None,
         }
     }
-    pub fn with_retry_after(mut self, secs: u64) -> Self {
+    pub const fn with_retry_after(mut self, secs: u64) -> Self {
         self.retry_after = Some(secs);
         self
     }

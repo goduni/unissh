@@ -1,6 +1,10 @@
 //! Postgres integration §15.1 (gated on UNISSH_TEST_PG): the same dual-dialect code
 //! on a live Postgres — the store level (seq/idempotency/claim) and the HTTP level
 //! (push/delta/version). Without the env var the test is skipped.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 

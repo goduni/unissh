@@ -1,5 +1,9 @@
 //! Phase 6 §5.5/§9/§10/§11: RBAC write-accept matrix, grants/publish + grants/get
 //! (read-deny + revoke), audit append (genesis) + admin-query.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 

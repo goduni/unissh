@@ -179,7 +179,7 @@ fn account_state_core_signature_verifies_on_server() {
     let obj = SyncObject::AccountState(AccountStateObject {
         author_pubkey: author,
         version: 9,
-        payload: payload.clone(),
+        payload,
         signature: sig,
     });
     let bytes = obj.to_bytes().unwrap();

@@ -12,6 +12,10 @@ use serde_json::{Value, json};
 use unissh_server::ids::b64;
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end join scenario; the steps share state and read in order"
+)]
 async fn join_new_then_existing_keyset_and_admin_gate() {
     let app = spawn().await;
 

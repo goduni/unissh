@@ -5,6 +5,11 @@
 //! This closes a Task-8 coverage gap: a joiner joining a `space_wide` cloud vault's
 //! space must surface a `grant` action to that vault's admin — carrying the joiner's
 //! member_pubkey + x25519_pub so the admin can wrap the VK and verify binding.
+#![expect(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -86,6 +91,10 @@ async fn publish(
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end pending-grant lifecycle; the steps share state and read in order"
+)]
 async fn pending_grant_surfaces_on_join_and_auto_done_on_publish_and_revoke_on_remove() {
     let app = spawn().await;
 

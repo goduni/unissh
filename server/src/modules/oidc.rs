@@ -320,6 +320,10 @@ fn jwks_cache() -> &'static Mutex<HashMap<String, (Resolution, i64)>> {
 /// A shared TLS client for JWKS fetches. Redirects are DISABLED so a hostile/misconfig
 /// redirect can never bounce the fetch to a foreign host (host-pinning by construction);
 /// a short timeout keeps a hung IdP from stalling the request.
+#[expect(
+    clippy::expect_used,
+    reason = "building a client with a fixed policy fails only if the TLS backend cannot initialise, which no request could recover from"
+)]
 fn http_client() -> &'static reqwest::Client {
     static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
     HTTP.get_or_init(|| {
@@ -400,6 +404,8 @@ fn key_algorithms(jwk: &Jwk) -> AppResult<Vec<Algorithm>> {
         AlgorithmParameters::OctetKeyPair(_) => Ok(vec![Algorithm::EdDSA]),
         // Symmetric key: never valid for JWKS-backed id_token verification.
         AlgorithmParameters::OctetKey(_) => Err(AppError::unauthenticated("invalid id_token")),
+        // A key type jsonwebtoken itself does not model has no vetted algorithm mapping.
+        AlgorithmParameters::Other(_) => Err(AppError::unauthenticated("invalid id_token")),
         // Same reasoning as the curve wildcard above: `AlgorithmParameters` is now
         // `#[non_exhaustive]`, and an unrecognized key type has no vetted algorithm mapping.
         _ => Err(AppError::unauthenticated("invalid id_token")),
@@ -515,6 +521,10 @@ async fn fetch_jwks(url: &str) -> AppResult<JwkSet> {
 /// Verify the id_token's signature (against the issuer JWKS) and its `iss`/`aud`/`exp`,
 /// then extract the fields the handler needs. ALL failures return an identical
 /// `unauthenticated("invalid id_token")` — the specific failed check is never leaked.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "every failure maps to one identical 401 so the client never learns which check failed"
+)]
 async fn verify_id_token(
     config: &OidcConfig,
     now: i64,
@@ -542,7 +552,10 @@ async fn verify_id_token(
     // so a cross-family list (RSA+EC+EdDSA) would reject *every* token. A symmetric JWK is
     // never valid for id_token verification and is refused outright.
     let algorithms = key_algorithms(&jwk)?;
-    let mut validation = Validation::new(algorithms[0]);
+    let first = *algorithms
+        .first()
+        .ok_or_else(|| AppError::unauthenticated("invalid id_token"))?;
+    let mut validation = Validation::new(first);
     validation.algorithms = algorithms;
     validation.validate_exp = true;
     validation.set_required_spec_claims(&["exp", "iss", "aud"]);
@@ -574,6 +587,10 @@ async fn verify_id_token(
         .map(String::from);
     // `exp` is required + validated in-future by `decode`; read it back to bound the
     // replay-guard row. `jti` is optional (keys the replay guard when present).
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a fractional `exp` is cut to whole seconds; float-to-int `as` saturates"
+    )]
     let exp = claims
         .get("exp")
         .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))

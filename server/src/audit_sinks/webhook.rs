@@ -41,13 +41,13 @@ impl WebhookSink {
         instance: String,
     ) -> Result<Self, String> {
         let url = reqwest::Url::parse(url)
-            .map_err(|_| "audit.webhook.url is not a valid URL".to_owned())?;
+            .map_err(|e| format!("audit.webhook.url is not a valid URL: {e}"))?;
         let client = reqwest::Client::builder()
             .timeout(timeout)
             // A redirect would re-POST the log somewhere the owner did not configure.
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| "audit.webhook: cannot build the HTTP client".to_owned())?;
+            .map_err(|e| format!("audit.webhook: cannot build the HTTP client: {e}"))?;
         Ok(Self {
             client,
             url,
@@ -83,6 +83,10 @@ impl WebhookSink {
 }
 
 /// `sha256=<hex HMAC-SHA256(secret, body)>`, the `X-UniSSH-Signature` value.
+#[expect(
+    clippy::expect_used,
+    reason = "HMAC-SHA256 accepts a key of any length, so new_from_slice cannot fail"
+)]
 pub fn signature(secret: &[u8], body: &[u8]) -> String {
     let mut mac = <Hmac<Sha256>>::new_from_slice(secret).expect("HMAC accepts any key length");
     mac.update(body);
@@ -112,6 +116,10 @@ impl Sink for WebhookSink {
                 instance: &self.instance,
                 entries: batch.rows().iter().map(ExportLine::from).collect(),
             };
+            #[expect(
+                clippy::map_err_ignore,
+                reason = "SinkError is a fixed loggable code by contract; the serde error could quote entry contents"
+            )]
             let body = serde_json::to_vec(&payload).map_err(|_| SinkError("serialise".into()))?;
             // Signed over the exact bytes that go on the wire.
             let sig = signature(&self.secret, &body);

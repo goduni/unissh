@@ -1,5 +1,9 @@
 //! Account identity §6.1: human identifiers (display_name/handle), instance-owner
 //! (promote/demote + anti-lockout), shared-keyset multi-device. Instance-scoped (v2).
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 

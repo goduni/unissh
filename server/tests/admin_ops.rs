@@ -2,6 +2,13 @@
 //! anti-lockout), devices/sessions/vaults/objects/relay/keysets listings, read-only
 //! config (masked), seq-bump, migrations, audit chain. All require the instance
 //! owner (OwnerCtx). ZK: metadata, not content. Instance-scoped (v2).
+#![expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::missing_assert_message,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -529,7 +536,7 @@ async fn audit_export_honours_seq_range() {
 /// fed only from the exported fields.
 fn exported_record_bytes(l: &Value) -> Vec<u8> {
     fn lp(b: &mut Vec<u8>, x: &[u8]) {
-        b.extend_from_slice(&(x.len() as u32).to_be_bytes());
+        b.extend_from_slice(&u32::try_from(x.len()).unwrap().to_be_bytes());
         b.extend_from_slice(x);
     }
     fn opt(b: &mut Vec<u8>, v: &Value) {
@@ -687,7 +694,7 @@ async fn spawn_hook_receiver(status: u16) -> (HookReceiver, String) {
     use axum::extract::State;
     let rx = HookReceiver {
         status: std::sync::Arc::new(std::sync::atomic::AtomicU16::new(status)),
-        seen: Default::default(),
+        seen: std::sync::Arc::default(),
     };
     let router = axum::Router::new()
         .route(
@@ -752,7 +759,7 @@ async fn audit_webhook_posts_signed_batches_and_advances_only_on_2xx() {
     assert_eq!(delivery.step().await, Step::Delivered { first, last });
     assert_eq!(store.audit_sink_cursor("webhook").await.unwrap(), last);
 
-    let seen = rx.seen.lock().unwrap();
+    let seen = rx.seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 2);
     let (headers, body) = &seen[1];
     // The signature verifies with the shared secret over the exact body bytes.
@@ -964,7 +971,8 @@ async fn audit_sink_status_reflects_a_delivered_batch_and_a_failing_sink() {
 
     let mut steps = Vec::new();
     let mut statuses = Vec::new();
-    for sink in [Arc::new(webhook) as Arc<dyn Sink>, Arc::new(syslog)] {
+    let sinks: [Arc<dyn Sink>; 2] = [Arc::new(webhook), Arc::new(syslog)];
+    for sink in sinks {
         let status: SharedSinkStatus = Arc::new(Mutex::new(SinkStatus {
             sink: sink.name().to_owned(),
             ..Default::default()

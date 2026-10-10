@@ -1,6 +1,11 @@
 //! Server-side changes backing the admin-panel handoff (P1.2/P1.3/P2.6/P2.8):
 //! /v1/admin/health, /v1/admin/metrics/summary, CORS, hot-reload limits.
 //! Instance-scoped (v2).
+#![expect(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -57,7 +62,7 @@ async fn admin_health_reports_uptime_pool_janitor_tls() {
 async fn admin_health_requires_owner() {
     let app = spawn().await;
     // Claimed, but no Authorization → 401 (OwnerCtx resolves the bearer first).
-    let _ = claim_admin(&app).await;
+    drop(claim_admin(&app).await);
     let r = app
         .client
         .get(format!("{}/v1/admin/health", app.base))

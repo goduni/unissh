@@ -71,6 +71,10 @@ impl FromRequestParts<AppState> for OwnerCtx {
 /// sha256 → `find_session_by_access_hash` → revoked/expiry → active (non-expired)
 /// device → active account. Instance-scoped: no per-space load. Returns the validated
 /// `(SessionRow, DeviceRow)`.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the client must not learn why the token failed; the 401 message is fixed"
+)]
 async fn resolve_bearer(parts: &mut Parts, state: &AppState) -> AppResult<(SessionRow, DeviceRow)> {
     let auth = parts
         .headers

@@ -1,6 +1,10 @@
 //! §2.4 server-side record-signature verification: with `validate_signatures=true`
 //! the server accepts records REALLY signed by the core and rejects forged/garbage ones.
 //! Signatures are built with the core `sign_version` with exact AAD/content (parity).
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
