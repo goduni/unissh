@@ -1631,6 +1631,9 @@ impl Core {
     }
 
     /// Unlocks the instance with a password (if needed) and the Secret Key (hex from the Emergency Kit).
+    ///
+    /// On an instance that is already unlocked the credentials are still verified
+    /// (wrong ones fail as always), but the open session is kept, not replaced.
     pub fn unlock(&self, password: Option<String>, secret_key_hex: String) -> Result<(), FfiError> {
         let password = password.map(Zeroizing::new);
         let (enc, secret_key) = self.open_keyset_inputs(Zeroizing::new(secret_key_hex))?;
@@ -1689,15 +1692,34 @@ impl Core {
         unissh_keychain::raise_keyset_gen_floor(&storage, accepted_gen)
             .map_err(map_keychain_err)?;
 
-        *self.locked_state() = Some(CoreState {
+        // The credentials were checked above without the state lock (Argon2id runs
+        // for a second), so another unlock may have finished first: a typed password
+        // racing a biometric prompt that was answered late. The session that is
+        // already open then stays exactly as it is — replacing it would drop its
+        // in-memory agent, its caches and the recordings in progress. The credentials
+        // just verified open this same keyset, so `Ok` is still the honest answer.
+        let fresh = CoreState {
             storage,
             keyset: unlocked,
             agent: InMemoryAgent::new(),
             vault_names: HashMap::new(),
             automation_recordings: HashMap::new(),
             recording_retention: Mutex::new(HashMap::new()),
-        });
-        log::info!("instance unlocked");
+        };
+        let kept = {
+            let mut state = self.locked_state();
+            if state.is_some() {
+                true
+            } else {
+                *state = Some(fresh);
+                false
+            }
+        };
+        if kept {
+            log::info!("unlock: already unlocked, the open session is kept");
+        } else {
+            log::info!("instance unlocked");
+        }
         Ok(())
     }
 

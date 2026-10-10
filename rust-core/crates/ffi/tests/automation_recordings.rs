@@ -110,6 +110,26 @@ fn lock_flushes_partial_capture_and_late_handle_cannot_write_after_unlock() {
         .is_err());
 }
 
+// A second unlock (a biometric prompt answered after the password was typed)
+// must not replace the open session: what is running in it keeps running.
+#[test]
+fn unlock_while_unlocked_keeps_the_open_session() {
+    let (_dir, core, kit) = setup();
+    let target = core.automation_target("v".into(), "h".into()).unwrap();
+    let rec = core
+        .automation_recording(&target, "kept", "Agent", "sleep 30", None)
+        .unwrap()
+        .unwrap();
+    rec.data(false, b"before the second unlock");
+    core.unlock(None, kit).unwrap();
+    assert_eq!(rec.status(), "recording");
+    // Still a credential check, not a free pass.
+    assert!(core.unlock(None, "00".repeat(32)).is_err());
+    rec.exited(Some(0));
+    rec.finish("completed");
+    assert_eq!(cast(&core, "kept")["unissh_mcp"]["outcome"], "completed");
+}
+
 #[test]
 fn preference_limits_and_failure_outcomes() {
     let (_dir, core, _) = setup();
