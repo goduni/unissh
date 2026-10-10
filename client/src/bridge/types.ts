@@ -644,11 +644,24 @@ export interface SyncReport {
   conflicts: number;
   rejected: number;
   pushed: number;
+  /** Items the server refuses as too large: NOT uploaded (everything else was).
+   *  Reported by every sync until the item changes or a manual sync gets it through. */
+  tooLarge: TooLargeItem[];
+}
+
+/** An item the sync server refuses as too large (over its `limits.max_object_bytes`). */
+export interface TooLargeItem {
+  vaultId: string;
+  vaultName: string;
+  itemId: string;
+  /** Size of the refused sync object, in bytes. */
+  bytes: number;
 }
 
 /** Result of moving a local vault to a server: the new cloud vault id (hex) and the
- *  first push — `push` on success, `pushError` when it failed (the move stands; the
- *  vault is bound and uploads on the next sync). */
+ *  first push — `push` on success (it may still name items the server refused as
+ *  too large), `pushError` when it failed (the move stands; the vault stays bound
+ *  and a later sync of its space uploads it). */
 export interface MovedVault {
   vaultId: string;
   push: SyncReport | null;

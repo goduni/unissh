@@ -49,6 +49,8 @@ import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
 import { isOwnedCloud, serverShortLabel, vaultServer } from "@/bridge/vaults";
 import { planMoveToServer } from "@/bridge/moveToServer";
+import { tooLargeSummary } from "@/bridge/syncReport";
+import { mcpStatus } from "@/bridge/mcp";
 import {
   apiErrorMessage,
   isServerErrorCode,
@@ -2106,9 +2108,12 @@ function SettingsVaults() {
   const syncNow = (s: ServerStatus) => {
     if (!s.serverId) return;
     void guard(async () => {
-      await api.serverSyncNow(s.serverId!);
+      // Asked for by hand: items the server refused as too large are offered again.
+      const r = await api.serverSyncNow(s.serverId!, true);
       await reload();
-      toast(t("vault.syncDone"), "ok");
+      const notUploaded = tooLargeSummary(r.tooLarge);
+      if (notUploaded) toast(t("serverCloud.syncTooLarge", { items: notUploaded }), "warn");
+      else toast(t("vault.syncDone"), "ok");
     });
   };
 
@@ -2621,8 +2626,9 @@ function SettingsVaults() {
 
 /** "Move to server…" confirmation for a local vault: target server (picked when
  *  several are signed in) and space (picked when the server has more than one you
- *  administer, fetched live as cloud-vault creation does), item counts by kind,
- *  and what the move does. "Export backup first" opens the regular backup export
+ *  administer, fetched live as cloud-vault creation does; the vault is registered
+ *  in that space on the server, or — with no space you administer — becomes a
+ *  personal vault of the account), item counts by kind, and what the move does. "Export backup first" opens the regular backup export
  *  for this vault and comes back here (picks kept) when it closes. Confirm
  *  converts the vault in the core and runs the first push; a failed push leaves
  *  the move in place. */
@@ -2656,6 +2662,23 @@ function MoveToServerModal({
   // The backup export replaces this dialog while it is open; this component stays
   // mounted underneath, so the server/space picks survive the round trip.
   const [exporting, setExporting] = useState(false);
+  // Hosts of this vault are picked for a local MCP integration: its access is
+  // paused by the move (as by any vault change) until it is confirmed again.
+  const [mcpAffected, setMcpAffected] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    mcpStatus()
+      .then((st) => {
+        const picked = [...(st.activity.saved_access ?? []), ...st.activity.grants];
+        if (alive) setMcpAffected(picked.some((a) => a.targets.some((tg) => tg.vault_id === vault.vaultId)));
+      })
+      .catch(() => {
+        /* MCP unavailable on this platform or never enabled: nothing to pause */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [vault.vaultId]);
 
   const plan = planMoveToServer(items, servers, { serverId, activeServerId, spaces, spaceId });
   const target = plan.server;
@@ -2711,12 +2734,22 @@ function MoveToServerModal({
     } catch (e) {
       toast(t("vault.toServerRefreshFailed", { reason: apiErrorMessage(e) }), "warn");
     }
+    const notUploaded = tooLargeSummary(res.push?.tooLarge ?? []);
     if (res.pushError) {
       const reason = apiErrorMessage(res.pushError);
       toast(
         nonPrimary && space
           ? t("vault.toServerPushFailedSpace", { reason, space: space.name || space.spaceId })
           : t("vault.toServerPushFailed", { reason }),
+        "warn",
+      );
+    } else if (notUploaded) {
+      // Everything else is on the server; these items are named, not dropped.
+      toast(
+        t(nonPrimary ? "vault.toServerTooLargeSpace" : "vault.toServerTooLarge", {
+          name: vault.name,
+          items: notUploaded,
+        }),
         "warn",
       );
     } else {
@@ -2775,7 +2808,7 @@ function MoveToServerModal({
           <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>{target ? serverShortLabel(target) : ""}</div>
         )}
       </Field>
-      <Field label={t("vault.toServerSpace")}>
+      <Field label={t("vault.toServerSpace")} hint={space ? t("vault.toServerSpaceHint") : undefined}>
         {plan.needsSpacePicker ? (
           <NHSelect
             value={space?.spaceId ?? ""}
@@ -2785,7 +2818,7 @@ function MoveToServerModal({
           />
         ) : (
           <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>
-            {spaces === null ? <Spinner size={14} /> : space ? space.name || space.spaceId : t("vault.toServerPrimarySpace")}
+            {spaces === null ? <Spinner size={14} /> : space ? space.name || space.spaceId : t("vault.toServerNoSpace")}
           </div>
         )}
       </Field>
@@ -2815,6 +2848,7 @@ function MoveToServerModal({
             {t("vault.toServerClosesSessions", { count: openCount })}
           </p>
         )}
+        {mcpAffected && <p style={{ margin: `${rem(6)} 0 0`, color: p.amber }}>{t("vault.toServerPausesMcp")}</p>}
       </div>
     </Modal>
   );
@@ -4869,9 +4903,12 @@ function SettingsCloud() {
 
   const doSync = async () => {
     await guard(async () => {
-      await syncNow();
+      await syncNow({ retryRefused: true });
       const r = useApp.getState().syncStatus.lastReport;
-      if (r) {
+      const notUploaded = tooLargeSummary(r?.tooLarge ?? []);
+      if (notUploaded) {
+        toast(t("serverCloud.syncTooLarge", { items: notUploaded }), "warn");
+      } else if (r) {
         toast(
           t("serverCloud.syncDone", {
             applied: r.applied,
@@ -5095,6 +5132,11 @@ function SettingsCloud() {
           <span>{t("serverCloud.syncReportConflicts", { count: syncStatus.lastReport.conflicts })}</span>
           <span>{t("serverCloud.syncReportRejected", { count: syncStatus.lastReport.rejected })}</span>
           <span>{t("serverCloud.syncReportSkipped", { count: syncStatus.lastReport.skippedStale })}</span>
+        </div>
+      )}
+      {!!syncStatus.lastReport?.tooLarge.length && (
+        <div role="status" style={{ fontSize: TEXT.small, color: p.amber, marginTop: rem(6), lineHeight: 1.5 }}>
+          {t("serverCloud.syncTooLarge", { items: tooLargeSummary(syncStatus.lastReport.tooLarge) })}
         </div>
       )}
 

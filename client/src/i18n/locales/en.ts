@@ -490,7 +490,9 @@ export const en = {
       "Sign in to a server in the “Cloud” section first — moving a vault needs a live session.",
     toServerServer: "Server",
     toServerSpace: "Space",
-    toServerPrimarySpace: "Primary space",
+    toServerNoSpace: "None — a personal vault of your account",
+    toServerSpaceHint:
+      "The vault is registered in this space on the server. Its members can open it only after you share it with them.",
     toServerContents: "What moves",
     toServerEmpty: "The vault is empty — only its name moves.",
     toServerReplaces:
@@ -500,7 +502,13 @@ export const en = {
     toServerBackupFirst: "Export backup first",
     toServerDone: "“{{name}}” moved to {{server}}",
     toServerPushFailed:
-      "Vault moved, but the first upload failed ({{reason}}). It uploads on the next sync.",
+      "Vault moved, but the first upload failed ({{reason}}). It is on this device only until a sync with this server succeeds; every sync tries again.",
+    toServerTooLarge:
+      "“{{name}}” moved, but the server refused these items as too large, so they are on this device only: {{items}}. Everything else is uploaded. Raise limits.max_object_bytes on the server, then press “Sync now”.",
+    toServerTooLargeSpace:
+      "“{{name}}” moved, but the server refused these items as too large, so they are on this device only: {{items}}. Everything else is uploaded.",
+    toServerPausesMcp:
+      "Hosts of this vault are selected for a local MCP integration. The move pauses that access until you confirm it again in the MCP section; the selection is kept.",
     toServerPushFailedSpace:
       "Vault moved to “{{space}}”, but the first upload failed ({{reason}}). Automatic sync covers this server's primary space only, so this vault stays on this device until it is uploaded.",
     toServerClosesSessions: "Moving the current vault closes {{count}} open connection(s).",
@@ -2161,6 +2169,7 @@ export const en = {
     "syncReportConflicts": "{{count}} conflicts",
     "syncReportRejected": "{{count}} rejected",
     "syncReportSkipped": "{{count}} skipped (stale)",
+    "syncTooLarge": "Not uploaded — too large for this server: {{items}}. Everything else is synced. Raise limits.max_object_bytes on the server, then press “Sync now”.",
     "refreshSession": "Refresh session",
     "sessionRefreshed": "Session refreshed",
     "signInAgain": "Sign in again",

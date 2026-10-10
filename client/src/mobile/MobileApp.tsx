@@ -13,6 +13,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { usePalette } from "@/theme/ThemeProvider";
 import { Icon, Btn, VaultBadge, type IconName } from "@/components/primitives";
 import { FlatAvatar, SyncBadge } from "@/components/mono";
+import { tooLargeSummary } from "@/bridge/syncReport";
 import { serverShortLabel, vaultLoc, vaultServer } from "@/bridge/vaults";
 import { BottomSheet } from "@/components/Modal";
 import { MONO, RADIUS, rem, SIZE, UI } from "@/theme/tokens";
@@ -88,6 +89,10 @@ function MTopBar({
   const ctx = useCtx();
   const servers = useApp((s) => s.servers);
   const syncStatus = useApp((s) => s.syncStatus);
+  // A sync that left items behind (too large for the server) is not "synced".
+  const syncNotUploaded = tooLargeSummary(syncStatus.lastReport?.tooLarge ?? []);
+  const syncProblem =
+    syncStatus.lastError ?? (syncNotUploaded ? t("serverCloud.syncTooLarge", { items: syncNotUploaded }) : null);
   // Landscape leaves ~244px of content height between this bar and the tab bar.
   // Drop to a single line there and give the height back to the screen.
   const land = useLandscape();
@@ -173,15 +178,15 @@ function MTopBar({
               {unbound && <Icon name="alert" size={10} color={p.amber} />}
               {vault.syncTarget === "cloud" && !unbound && (
                 <SyncBadge
-                  state={syncStatus.syncing ? "syncing" : syncStatus.lastError ? "error" : "synced"}
+                  state={syncStatus.syncing ? "syncing" : syncProblem ? "error" : "synced"}
                   label={
                     syncStatus.syncing
                       ? t("shell.syncing")
-                      : syncStatus.lastError
+                      : syncProblem
                         ? t("shell.syncError")
                         : t("shell.synced")
                   }
-                  title={syncStatus.lastError ?? undefined}
+                  title={syncProblem ?? undefined}
                 />
               )}
             </span>
