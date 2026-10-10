@@ -389,7 +389,7 @@ too_many_lines = "warn"
 cognitive_complexity = "warn"
 excessive_nesting = "warn"
 # Pedantic, picked by name (the group as a whole is documentation churn)
-needless_pass_by_value = "warn"
+needless_pass_by_value = "allow"            # deferred: 242 sites, 234 of them uniffi-exported fns whose by-value String params are the binding contract; follow-up
 semicolon_if_nothing_returned = "warn"
 explicit_iter_loop = "warn"
 manual_let_else = "warn"
