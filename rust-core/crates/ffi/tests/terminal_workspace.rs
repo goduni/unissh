@@ -1,3 +1,4 @@
+//! The terminal workspace layout: stored encrypted per instance and tied to its unlock.
 use unissh_ffi::{Core, FfiError};
 
 #[test]

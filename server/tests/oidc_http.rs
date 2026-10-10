@@ -20,6 +20,11 @@
 //! JWKS cache), so token expiries here are computed from `SystemTime::now()`. The
 //! reassertion deadline, by contrast, is a TestClock quantity and is driven by
 //! `clock.advance`.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -112,7 +117,9 @@ fn real_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_secs() as i64
+        .as_secs()
+        .try_into()
+        .unwrap()
 }
 
 /// Stand up a second local axum server serving the JWKS (one RSA JWK, `kid` = KID) for
@@ -155,7 +162,7 @@ fn nonce_for(id: &common::Identity) -> String {
 /// Sign an id_token with `pem` under `kid = KID`, `alg = RS256`, over `claims`.
 fn sign_token(pem: &str, claims: &serde_json::Value) -> String {
     let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some(KID.to_string());
+    header.kid = Some(KID.to_owned());
     let key = EncodingKey::from_rsa_pem(pem.as_bytes()).expect("load RSA signing PEM");
     encode(&header, claims, &key).expect("sign id_token")
 }
@@ -401,8 +408,8 @@ async fn second_callback_reuses_account() {
     .await;
     assert_eq!(r1.status(), 201, "first callback creates the account");
     let b1: serde_json::Value = r1.json().await.unwrap();
-    let account_1 = b1["account_id"].as_str().unwrap().to_string();
-    let device_1 = b1["device_id"].as_str().unwrap().to_string();
+    let account_1 = b1["account_id"].as_str().unwrap().to_owned();
+    let device_1 = b1["device_id"].as_str().unwrap().to_owned();
 
     // Same (iss, sub), a freshly signed token (new nonce is still this identity's).
     let r2 = post_callback(
@@ -455,7 +462,7 @@ async fn reassertion_gate_blocks_stale_refresh_then_fresh_callback_works() {
     .await;
     assert_eq!(r1.status(), 201);
     let b1: serde_json::Value = r1.json().await.unwrap();
-    let refresh = b1["refresh_token"].as_str().unwrap().to_string();
+    let refresh = b1["refresh_token"].as_str().unwrap().to_owned();
 
     // Within the reassertion window, refresh rotates fine.
     let ok = app
@@ -467,7 +474,7 @@ async fn reassertion_gate_blocks_stale_refresh_then_fresh_callback_works() {
         .unwrap();
     assert_eq!(ok.status(), 200, "oidc session refreshes inside its window");
     let rotated = ok.json::<serde_json::Value>().await.unwrap();
-    let refresh2 = rotated["refresh_token"].as_str().unwrap().to_string();
+    let refresh2 = rotated["refresh_token"].as_str().unwrap().to_owned();
 
     // Advance past max_reassertion_age (TestClock) → the OIDC reassertion gate trips.
     app.clock.advance(604_800 + 10);
@@ -515,9 +522,9 @@ async fn reassertion_gate_blocks_stale_refresh_then_fresh_callback_works() {
 /// membership can be seeded in C.
 async fn boot_reconcile() -> (common::TestApp, [u8; 16], [u8; 16], [u8; 16]) {
     let jwks_url = spawn_jwks().await;
-    let space_a = [0xa1u8; 16];
-    let space_b = [0xb2u8; 16];
-    let space_c = [0xc3u8; 16];
+    let space_a = [0xa1_u8; 16];
+    let space_b = [0xb2_u8; 16];
+    let space_c = [0xc3_u8; 16];
     let (a_b64, b_b64) = (ids::b64(&space_a), ids::b64(&space_b));
     let app = common::spawn_with(move |cfg| {
         cfg.oidc.enabled = true;
@@ -562,6 +569,14 @@ async fn boot_reconcile() -> (common::TestApp, [u8; 16], [u8; 16], [u8; 16]) {
 
 #[tokio::test]
 async fn oidc_deprovisions_dropped_groups_updates_role_and_keeps_manual() {
+    async fn role(app: &common::TestApp, space: &[u8], account_id: &[u8]) -> Option<String> {
+        app.state
+            .store
+            .space_member_role(space, account_id)
+            .await
+            .unwrap()
+    }
+
     let (app, space_a, space_b, space_c) = boot_reconcile().await;
     let id = common::make_identity();
 
@@ -573,13 +588,6 @@ async fn oidc_deprovisions_dropped_groups_updates_role_and_keeps_manual() {
     let b1: serde_json::Value = r1.json().await.unwrap();
     let account_id = ids::unb64(b1["account_id"].as_str().unwrap()).unwrap();
 
-    async fn role(app: &common::TestApp, space: &[u8], account_id: &[u8]) -> Option<String> {
-        app.state
-            .store
-            .space_member_role(space, account_id)
-            .await
-            .unwrap()
-    }
     assert_eq!(
         role(&app, &space_a, &account_id).await.as_deref(),
         Some("member"),

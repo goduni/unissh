@@ -1,5 +1,11 @@
 //! Cancellation during channel confirmation and SFTP negotiation must close the
 //! abandoned channel without disconnecting other users of the SSH transport.
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::missing_assert_message,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,7 +102,9 @@ async fn cancel_open(delay_confirmation: bool) {
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let session = server::run_stream(config, stream, handler).await.unwrap();
-        let _ = session.await;
+        if session.await.is_err() {
+            // How the client ended the session is not under test.
+        }
     });
     let opts = ConnectOptions::new(
         "127.0.0.1",

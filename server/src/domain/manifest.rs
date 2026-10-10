@@ -37,33 +37,68 @@ pub fn parse_member_set(blob: &[u8]) -> Result<MemberSet, AppError> {
     if blob.len() < dl + 8 + 4 {
         return Err(err());
     }
-    if &blob[..dl] != MANIFEST_DOMAIN {
+    let (domain, rest) = blob.split_at_checked(dl).ok_or_else(err)?;
+    if domain != MANIFEST_DOMAIN {
         return Err(err());
     }
-    let mut pos = dl;
-    let key_epoch = u64::from_be_bytes(blob[pos..pos + 8].try_into().map_err(|_| err())?);
-    pos += 8;
-    let count = u32::from_be_bytes(blob[pos..pos + 4].try_into().map_err(|_| err())?) as usize;
-    pos += 4;
+    let (epoch, rest) = rest.split_first_chunk::<8>().ok_or_else(err)?;
+    let key_epoch = u64::from_be_bytes(*epoch);
+    let (cnt, mut rest) = rest.split_first_chunk::<4>().ok_or_else(err)?;
+    let count = u32::from_be_bytes(*cnt) as usize;
 
     let mut members = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
-        if pos + 1 + 2 > blob.len() {
-            return Err(err());
-        }
-        let role = Role::from_u8(blob[pos]).ok_or_else(err)?;
-        pos += 1;
-        let ed_len = u16::from_be_bytes(blob[pos..pos + 2].try_into().map_err(|_| err())?) as usize;
-        pos += 2;
-        if pos + ed_len > blob.len() {
-            return Err(err());
-        }
-        let ed = blob[pos..pos + ed_len].to_vec();
-        pos += ed_len;
-        members.push((ed, role));
+        let (&[role_byte, l0, l1], tail) = rest.split_first_chunk::<3>().ok_or_else(err)?;
+        let role = Role::from_u8(role_byte).ok_or_else(err)?;
+        let ed_len = usize::from(u16::from_be_bytes([l0, l1]));
+        let (ed, tail) = tail.split_at_checked(ed_len).ok_or_else(err)?;
+        members.push((ed.to_vec(), role));
+        rest = tail;
     }
-    if pos != blob.len() {
+    if !rest.is_empty() {
         return Err(err()); // trailing bytes
     }
     Ok(MemberSet { key_epoch, members })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest_blob() -> Vec<u8> {
+        let mut b = MANIFEST_DOMAIN.to_vec();
+        b.extend_from_slice(&9_u64.to_be_bytes()); // key_epoch
+        b.extend_from_slice(&2_u32.to_be_bytes()); // count
+        for (role, ed) in [(2_u8, [0x01_u8; 32]), (0, [0x02; 32])] {
+            b.push(role);
+            b.extend_from_slice(&32_u16.to_be_bytes());
+            b.extend_from_slice(&ed);
+        }
+        b
+    }
+
+    #[test]
+    fn truncated_manifest_is_format_error() {
+        let full = manifest_blob();
+        let set = parse_member_set(&full).unwrap();
+        assert_eq!(set.key_epoch, 9, "key_epoch is read big-endian");
+        assert_eq!(
+            set.role_of(&[0x01; 32]),
+            Some(Role::Admin),
+            "first member is admin"
+        );
+        assert_eq!(
+            set.role_of(&[0x02; 32]),
+            Some(Role::Viewer),
+            "second member is viewer"
+        );
+        for cut in 0..full.len() {
+            let err = parse_member_set(&full[..cut]).unwrap_err();
+            assert_eq!(
+                err.code,
+                crate::error::ErrorCode::Malformed,
+                "cut at {cut}: {err}"
+            );
+        }
+    }
 }

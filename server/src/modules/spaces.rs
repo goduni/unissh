@@ -223,7 +223,7 @@ async fn spaces_list(auth: AuthCtx, State(state): State<AppState>) -> AppResult<
         spaces.push(SpaceMembership {
             space_id: ids::b64(&r.space_id),
             name: r.name,
-            role: role.to_string(),
+            role: role.to_owned(),
         });
     }
     Ok(Json(json!({ "spaces": spaces })))

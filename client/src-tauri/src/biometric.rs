@@ -73,7 +73,13 @@ const BLOB_FILE: &str = "biometric-unlock.bin";
 /// prompt.
 // Absent/Present/Unknown are constructed only by a platform adapter; on a
 // target without one (Linux) they exist for the shared code alone.
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    all(not(any(target_os = "macos", target_os = "windows")), not(test)),
+    expect(
+        dead_code,
+        reason = "Absent/Present/Unknown come only from the macOS/Windows adapters; the tests build them too"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SecretState {
     /// This device or build cannot do biometric unlock right now (no sensor,
@@ -91,7 +97,13 @@ pub(crate) enum SecretState {
 }
 
 /// Why the device secret could not be produced.
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows")),
+    expect(
+        dead_code,
+        reason = "only the macOS/Windows adapters construct a SecretError; elsewhere the shared code just matches on it"
+    )
+)]
 #[derive(Debug)]
 pub(crate) enum SecretError {
     /// The user dismissed the prompt, the biometric did not match, or it is
@@ -268,7 +280,13 @@ fn write_blob(path: &Path, blob: &[u8]) -> std::io::Result<()> {
         std::fs::rename(&tmp, path)
     };
     write().inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
+        // The write error is what the caller reports; a leftover temp file only
+        // costs disk space and is overwritten by the next enable.
+        if let Err(e) = std::fs::remove_file(&tmp) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("biometric: failed to remove the temporary blob: {e}");
+            }
+        }
     })
 }
 
@@ -372,8 +390,8 @@ fn status_now(
     blob: &Path,
     with_secret_key: bool,
 ) -> BiometricStatus {
-    let secret = store.map_or(SecretState::Unsupported, |s| s.state());
-    let presence = store.is_some_and(|s| s.presence_available());
+    let secret = store.map_or(SecretState::Unsupported, DeviceSecretStore::state);
+    let presence = store.is_some_and(DeviceSecretStore::presence_available);
     let stored = blob.exists();
     let usable = secret != SecretState::Unsupported;
     let ask = (stored && usable) || (with_secret_key && (usable || presence));
@@ -426,7 +444,11 @@ pub async fn biometric_enable(password: String, state: State<'_, AppState>) -> A
             })
             .and_then(|sealed| write_blob(&blob, &sealed).map_err(ApiError::other));
         if let Err(e) = enabled {
-            let _ = forget_with(Some(store.as_ref()), &blob);
+            // Report the enable failure; a failed cleanup is logged so the
+            // half-written material is diagnosable (Settings offers to forget it).
+            if let Err(cleanup) = forget_with(Some(store.as_ref()), &blob) {
+                log::warn!("biometric: cleanup after a failed enable failed: {cleanup:?}");
+            }
             return Err(e);
         }
         log::info!("biometric unlock enabled");
@@ -463,8 +485,13 @@ pub async fn biometric_unlock(
     let blob = blob_path(&state);
     let outcome = blocking_api(move || {
         let store = platform_store().ok_or_else(unsupported)?;
-        let sealed =
-            std::fs::read(&blob).map_err(|_| ApiError::other("biometric unlock is not enabled"))?;
+        let sealed = std::fs::read(&blob).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ApiError::other("biometric unlock is not enabled")
+            } else {
+                ApiError::other(format!("biometric unlock material is unreadable: {e}"))
+            }
+        })?;
         // Before the prompt: a Touch ID that cannot end in an unlock is not asked for.
         let Some(secret_key_hex) = stored_secret_key_hex_now()? else {
             return Ok(BiometricUnlockOutcome::NoSecretKey);

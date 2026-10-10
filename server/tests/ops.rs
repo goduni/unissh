@@ -1,5 +1,9 @@
 //! Break-glass ops surface (`/v1/ops/*`): token auth (`X-UniSSH-Ops-Token`),
 //! instance overview + anti-rollback seq-bump. Server-trusted, not a keyset.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 

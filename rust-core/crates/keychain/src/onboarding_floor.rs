@@ -58,7 +58,7 @@ pub fn unlock_account_checked(
     storage: &Storage,
 ) -> Result<UnlockedKeyset, KeychainError> {
     let floor = keyset_gen_floor(storage)?.unwrap_or(0);
-    let attempted = record.generation as u64;
+    let attempted = u64::from(record.generation);
     if attempted < floor {
         return Err(KeychainError::GenerationRollback { attempted, floor });
     }
@@ -75,5 +75,5 @@ pub fn raise_floor_after_change_password(
     storage: &Storage,
     new_record: &EncryptedKeyset,
 ) -> Result<(), KeychainError> {
-    raise_keyset_gen_floor(storage, new_record.generation as u64)
+    raise_keyset_gen_floor(storage, u64::from(new_record.generation))
 }

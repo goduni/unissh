@@ -8,7 +8,7 @@ use crate::error::StorageError;
 pub(crate) const SCHEMA_VERSION: i64 = 9;
 
 /// Version 1 DDL.
-const MIGRATION_V1: &str = r#"
+const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS meta (
     k TEXT PRIMARY KEY,
     v BLOB NOT NULL
@@ -48,18 +48,18 @@ CREATE TABLE IF NOT EXISTS known_hosts (
     added_at INTEGER NOT NULL,
     PRIMARY KEY (host, port)
 );
-"#;
+";
 
 /// Version 2 DDL: open (non-synced) item timestamps.
-const MIGRATION_V2: &str = r#"
+const MIGRATION_V2: &str = "
 ALTER TABLE items ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE items ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
-"#;
+";
 
 /// Version 3 DDL: item version history (archive of past secret versions). `hseq` is
 /// an autoincrement for ordering and retention; (vault_id, item_id, version)
 /// are unique (the same version is not archived twice).
-const MIGRATION_V3: &str = r#"
+const MIGRATION_V3: &str = "
 CREATE TABLE IF NOT EXISTS item_history (
     hseq             INTEGER PRIMARY KEY AUTOINCREMENT,
     vault_id         BLOB NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS item_history (
     UNIQUE (vault_id, item_id, version)
 );
 CREATE INDEX IF NOT EXISTS idx_history_item ON item_history (vault_id, item_id);
-"#;
+";
 
 /// Version 4 DDL (server prerequisites for Milestone 2). Storage of ciphertext and
 /// metadata only: signatures/epochs/membership are **not verified** at this layer — that
@@ -94,7 +94,7 @@ CREATE INDEX IF NOT EXISTS idx_history_item ON item_history (vault_id, item_id);
 ///   them back too. Protection against full snapshot-replay is a higher layer (a trusted last-seen
 ///   anchor outside the DB file, e.g. in keychain/secure-enclave; ⏳ Milestone 2+);
 /// - a seam for the CA orchestrator (`cert_meta`, item 15) — without CRUD logic for now.
-const MIGRATION_V4: &str = r#"
+const MIGRATION_V4: &str = "
 ALTER TABLE vaults ADD COLUMN key_epoch INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE vaults ADD COLUMN cache_policy INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE items ADD COLUMN key_epoch INTEGER NOT NULL DEFAULT 0;
@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS cert_meta (
     serial     BLOB,
     PRIMARY KEY (vault_id, item_id)
 );
-"#;
+";
 
 /// Version 5 DDL (1:1 binding of a cloud vault to a server). A cloud vault syncs
 /// with exactly ONE server, identified by its `tenant_id` (the same one that
@@ -160,9 +160,9 @@ CREATE TABLE IF NOT EXISTS cert_meta (
 /// or a local vault that never syncs). Filled for exactly
 /// one server via the one-shot `bind_unbound_cloud_vaults` migration on
 /// the client, when a single server is bound.
-const MIGRATION_V5: &str = r#"
+const MIGRATION_V5: &str = "
 ALTER TABLE vaults ADD COLUMN sync_tenant BLOB NOT NULL DEFAULT X'';
-"#;
+";
 
 /// Version 6 DDL: per-grant `not_after` (unix seconds; sentinel `<=0` = no
 /// expiry). WARNING: `not_after` enters the SIGNED grant content at a new
@@ -173,9 +173,9 @@ ALTER TABLE vaults ADD COLUMN sync_tenant BLOB NOT NULL DEFAULT X'';
 /// is safe here only because the schema is introduced before the first release (grants
 /// of the previous format do not exist in the wild); with old data present, a
 /// bump of `GRANT_DOMAIN` and an explicit re-issuance would be needed.
-const MIGRATION_V6: &str = r#"
+const MIGRATION_V6: &str = "
 ALTER TABLE membership_grants ADD COLUMN not_after INTEGER NOT NULL DEFAULT 0;
-"#;
+";
 
 /// Version 7 DDL: per-vault trusted anchor (genesis-owner). A vault created
 /// by ANOTHER account (a teammate) is verified against its creator-pubkey, not against
@@ -183,18 +183,18 @@ ALTER TABLE membership_grants ADD COLUMN not_after INTEGER NOT NULL DEFAULT 0;
 /// of the fingerprint), NOT taken from an untrusted transport: an injected self-consistent
 /// genesis manifest would otherwise become its own anchor. Absence of a row = own
 /// vault (fallback to the local keyset).
-const MIGRATION_V7: &str = r#"
+const MIGRATION_V7: &str = "
 CREATE TABLE IF NOT EXISTS vault_trust_anchor (
     vault_id             BLOB PRIMARY KEY,
     genesis_owner_pubkey BLOB NOT NULL,
     pinned_at            INTEGER NOT NULL
 );
-"#;
+";
 
 /// Version 8 DDL: per-account state (A3) — a signed+versioned,
 /// HPKE-self-sealed blob (pointer to the personal vault + account-default username).
 /// The key is the account's Ed25519 pubkey; LWW by `version` (enforced by the sync/ffi layer).
-const MIGRATION_V8: &str = r#"
+const MIGRATION_V8: &str = "
 CREATE TABLE IF NOT EXISTS account_state (
     author_pubkey BLOB PRIMARY KEY,
     version       INTEGER NOT NULL,
@@ -202,7 +202,7 @@ CREATE TABLE IF NOT EXISTS account_state (
     signature     BLOB NOT NULL,
     updated_at    INTEGER NOT NULL
 );
-"#;
+";
 
 /// Version 9 DDL: per-object sync dirty flag. Before this, `sync_push` re-sent ALL
 /// objects of bound cloud vaults on EVERY sync (the server deduplicated by version-LWW,
@@ -214,7 +214,7 @@ CREATE TABLE IF NOT EXISTS account_state (
 /// does not settle unsynced; after the first push the flag is cleared. account_state is NOT
 /// covered by the flag (it is broadcast to EVERY server) — its dirty-tracking is done by a
 /// per-tenant version cursor in `sync_state`.
-const MIGRATION_V9: &str = r#"
+const MIGRATION_V9: &str = "
 ALTER TABLE vaults ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE items ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE membership_manifests ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0;
@@ -224,7 +224,7 @@ UPDATE items SET dirty = 1;
 UPDATE membership_manifests SET dirty = 1;
 UPDATE membership_grants SET dirty = 1;
 CREATE INDEX IF NOT EXISTS idx_items_dirty ON items (vault_id, dirty);
-"#;
+";
 
 /// Applies migrations up to [`SCHEMA_VERSION`].
 ///
@@ -273,7 +273,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), StorageError> {
 fn run_step(conn: &Connection, ddl: &str, version: i64) -> Result<(), StorageError> {
     let batch = format!("BEGIN;\n{ddl}\nPRAGMA user_version = {version};\nCOMMIT;");
     conn.execute_batch(&batch).map_err(|e| {
-        let _ = conn.execute_batch("ROLLBACK");
+        drop(conn.execute_batch("ROLLBACK"));
         StorageError::from(e)
     })?;
     Ok(())

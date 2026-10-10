@@ -135,6 +135,6 @@ pub enum TransportError {
 // Required for russh::auth::Signer (type Error: From<russh::SendError>).
 impl From<russh::SendError> for TransportError {
     fn from(_e: russh::SendError) -> Self {
-        TransportError::Russh(russh::Error::SendError)
+        Self::Russh(russh::Error::SendError)
     }
 }

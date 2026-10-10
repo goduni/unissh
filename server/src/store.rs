@@ -50,11 +50,11 @@ pub enum Val {
 }
 
 impl Val {
-    pub fn b(v: impl Into<Vec<u8>>) -> Val {
-        Val::B(v.into())
+    pub fn b(v: impl Into<Vec<u8>>) -> Self {
+        Self::B(v.into())
     }
-    pub fn t(v: impl Into<String>) -> Val {
-        Val::T(v.into())
+    pub fn t(v: impl Into<String>) -> Self {
+        Self::T(v.into())
     }
 }
 
@@ -62,7 +62,7 @@ impl Val {
 /// literal `?` (guaranteed by the code — every `?` is a placeholder).
 pub(crate) fn to_pg(sql: &str) -> String {
     let mut out = String::with_capacity(sql.len() + 8);
-    let mut n = 0u32;
+    let mut n = 0_u32;
     for c in sql.chars() {
         if c == '?' {
             n += 1;
@@ -107,7 +107,7 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn dialect(&self) -> Dialect {
+    pub const fn dialect(&self) -> Dialect {
         match &self.db {
             Db::Sqlite(_) => Dialect::Sqlite,
             Db::Postgres(_) => Dialect::Postgres,
@@ -314,7 +314,7 @@ pub enum Tx<'c> {
 }
 
 impl Tx<'_> {
-    pub fn dialect(&self) -> Dialect {
+    pub const fn dialect(&self) -> Dialect {
         match self {
             Tx::Sqlite(_) => Dialect::Sqlite,
             Tx::Postgres(_) => Dialect::Postgres,

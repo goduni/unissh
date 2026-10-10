@@ -17,7 +17,6 @@
 //! `unissh-ffi` bridges [`PtySink`] to the recorder and to the UI's observer.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 mod shell;
 
@@ -190,13 +189,14 @@ impl LocalPty {
         let (reader, writer) = match (pair.master.try_clone_reader(), pair.master.take_writer()) {
             (Ok(reader), Ok(writer)) => (reader, writer),
             (reader, writer) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                // Best-effort cleanup on the error path: the open failure is what gets reported.
+                drop(child.kill());
+                drop(child.wait());
                 let e = reader
                     .err()
                     .or_else(|| writer.err())
                     .map(|e| e.to_string())
-                    .unwrap_or_else(|| "pty handles unavailable".to_string());
+                    .unwrap_or_else(|| "pty handles unavailable".to_owned());
                 return Err(LocalPtyError::Open(e));
             }
         };
@@ -219,7 +219,7 @@ impl LocalPty {
             exit_tx,
         );
 
-        Ok(LocalPty {
+        Ok(Self {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
@@ -235,7 +235,7 @@ impl LocalPty {
         let mut writer = self
             .writer
             .lock()
-            .map_err(|_| LocalPtyError::Gone("writer".to_string()))?;
+            .map_err(|e| LocalPtyError::Gone(format!("writer: {e}")))?;
         writer
             .write_all(data)
             .and_then(|()| writer.flush())
@@ -248,7 +248,7 @@ impl LocalPty {
         let master = self
             .master
             .lock()
-            .map_err(|_| LocalPtyError::Gone("pty".to_string()))?;
+            .map_err(|e| LocalPtyError::Gone(format!("pty: {e}")))?;
         master
             .resize(PtySize {
                 rows: rows.max(1),
@@ -275,7 +275,8 @@ impl LocalPty {
         // not a thing this should be capable of.
         if !self.reaped.load(Ordering::SeqCst) {
             if let Ok(mut killer) = self.killer.lock() {
-                let _ = killer.kill();
+                // Best-effort: the child may already be exiting on its own.
+                drop(killer.kill());
             }
         }
         // The waiter thread is what delivers on_close (and, through it, writes
@@ -293,7 +294,8 @@ impl LocalPty {
         if let Ok(mut waiter) = self.waiter.lock() {
             if let Some(handle) = waiter.take() {
                 if done {
-                    let _ = handle.join();
+                    // A panicked waiter has nothing left to report; joining only reclaims it.
+                    drop(handle.join());
                 } else {
                     // Timed out. Leaving the thread detached is the lesser evil:
                     // it is parked on a read from a pty something else is holding
@@ -333,7 +335,7 @@ fn spawn_reader(
         // Held only so that dropping it — when this thread ends — is what tells
         // the waiter the output has run dry.
         let _eof = eof;
-        let mut buf = vec![0u8; READ_BUF];
+        let mut buf = vec![0_u8; READ_BUF];
         loop {
             match reader.read(&mut buf) {
                 // EOF: every slave handle is closed, so nothing can write again.
@@ -344,7 +346,10 @@ fn spawn_reader(
                     if notified.load(Ordering::SeqCst) {
                         break;
                     }
-                    sink.on_data(buf[..n].to_vec());
+                    // `read` never reports more than the buffer it was given.
+                    if let Some(chunk) = buf.get(..n) {
+                        sink.on_data(chunk.to_vec());
+                    }
                 }
                 // On some platforms a closed pty surfaces as EIO rather than
                 // EOF; either way there is nothing left to read.
@@ -384,7 +389,7 @@ fn spawn_waiter(
             sink.on_close(code);
         }
         if reader.is_finished() {
-            let _ = reader.join();
+            drop(reader.join());
         }
     })
 }

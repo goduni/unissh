@@ -21,3 +21,6 @@ sha2 = "0.10"
 [dev-dependencies]
 unissh-keychain = { path = "../keychain" }
 unissh-crypto = { path = "../crypto" }
+
+[lints]
+workspace = true

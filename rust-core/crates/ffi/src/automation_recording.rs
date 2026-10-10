@@ -9,13 +9,14 @@ use zeroize::Zeroize;
 
 // Raw bytes plus JSON/base64 and a readable preview stay below the existing
 // recording envelope's 8 MiB budget. Event count also bounds tiny-packet overhead.
-const MAX_BYTES: usize = 512 * 1024;
+const MAX_BYTES: u32 = 512 * 1024;
 const MAX_EVENTS: usize = 8192;
 
 /// Device-local native preferences. No MCP tool may change capture or retention.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RecordingPreferences {
+    /// Per-recording capture budget in bytes (16 KiB to 512 KiB).
     pub max_bytes: u32,
     /// None keeps recordings until explicitly deleted. Cleanup runs on list/save.
     pub retention_days: Option<u32>,
@@ -23,7 +24,7 @@ pub struct RecordingPreferences {
 impl Default for RecordingPreferences {
     fn default() -> Self {
         Self {
-            max_bytes: MAX_BYTES as u32,
+            max_bytes: MAX_BYTES,
             retention_days: None,
         }
     }
@@ -36,17 +37,20 @@ fn preferences(state: &CoreState) -> Result<RecordingPreferences, FfiError> {
         .map_err(FfiError::other)?
         .map(|bytes| serde_json::from_slice(&bytes).map_err(FfiError::other))
         .transpose()
-        .map(|p| p.unwrap_or_default())
+        .map(Option::unwrap_or_default)
 }
 impl Core {
+    /// Current MCP recording preferences (defaults when never set); errors when locked.
     pub fn mcp_recording_preferences(&self) -> Result<RecordingPreferences, FfiError> {
         self.with_state(preferences)
     }
+    /// Validates and stores the MCP recording preferences; errors when a value is out
+    /// of range, the core is locked or the write fails.
     pub fn set_mcp_recording_preferences(
         &self,
         value: RecordingPreferences,
     ) -> Result<(), FfiError> {
-        if !(16 * 1024..=MAX_BYTES as u32).contains(&value.max_bytes)
+        if !(16 * 1024..=MAX_BYTES).contains(&value.max_bytes)
             || value
                 .retention_days
                 .is_some_and(|days| !(1..=3650).contains(&days))
@@ -87,6 +91,10 @@ pub(super) struct RetentionSweep {
 
 /// Save-time cleanup is incremental: at most four payloads per minute per vault.
 /// Listing already reads every recording and applies retention in that same pass.
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the sweep cursor borrowed from the guard is advanced while the page is processed"
+)]
 fn prune(state: &CoreState, vault: &Vault<'_>, vault_key: &[u8]) -> Result<(), FfiError> {
     let Some(cutoff) = retention_cutoff(state)? else {
         return Ok(());
@@ -135,10 +143,13 @@ struct Buffer {
     cwd: Option<Zeroizing<String>>,
 }
 
+/// A native recording of one MCP command run, saved into the target's vault when it finishes.
 pub struct CommandRecording {
     state: Weak<Mutex<Option<CoreState>>>,
+    /// Vault the recording is saved into.
     pub vault_id: String,
     vault_key: Vec<u8>,
+    /// Item id of the recording inside the vault.
     pub recording_id: String,
     application: String,
     label: String,
@@ -175,7 +186,14 @@ impl Core {
 
     /// Capture all immutable inputs before registering the recorder, so a
     /// concurrent Core lock cannot persist a partially initialized transcript.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per audited run attribute, matching the automation Executor::record contract"
+    )]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the revision check, the existence checks and the registration atomically"
+    )]
     pub fn automation_recording_with_input(
         &self,
         target: &automation::Target,
@@ -219,7 +237,6 @@ impl Core {
         }
         let max_bytes = preferences(state)?.max_bytes as usize;
         let recording = Arc::new(CommandRecording {
-            max_bytes,
             state: Arc::downgrade(&self.state),
             vault_id,
             vault_key,
@@ -245,6 +262,7 @@ impl Core {
                 env: Environment(env.clone()),
                 cwd: cwd.map(|s| Zeroizing::new(s.into())),
             }),
+            max_bytes,
         });
         state
             .automation_recordings
@@ -265,20 +283,26 @@ impl CommandRecording {
             b.truncated = true;
             return;
         }
+        // `keep <= bytes.len()` by the `min` above.
+        let Some(kept) = bytes.get(..keep) else {
+            return;
+        };
         b.truncated |= keep < bytes.len();
         b.bytes += keep;
         b.events.push(Event {
             time: self.start.elapsed().as_secs_f64(),
             stderr,
-            bytes: Zeroizing::new(bytes[..keep].to_vec()),
+            bytes: Zeroizing::new(kept.to_vec()),
         });
     }
+    /// Records the command's exit status (the first one wins).
     pub fn exited(&self, code: Option<u32>) {
         let mut b = lock_recover(&self.buffer);
         if b.status == "recording" && b.exit.is_none() {
             b.exit = Some(code);
         }
     }
+    /// Recording state: `recording`, `saved` or `failed`.
     pub fn status(&self) -> &'static str {
         lock_recover(&self.buffer).status
     }
@@ -313,8 +337,8 @@ impl CommandRecording {
             None => fallback,
         };
         let meta = McpRecordingMeta {
-            application: self.application.clone(),
             command: Some(b.command.to_string()),
+            application: self.application.clone(),
             outcome: outcome.into(),
             exit_code: b.exit.flatten(),
         };
@@ -326,7 +350,7 @@ impl CommandRecording {
                 "unissh_mcp": { "version": 1, "application": self.application,
                     "host": self.host, "port": self.port, "user": self.user,
                     "stdin": b.stdin.as_ref().map(|s| s.as_str()), "env": &*b.env,
-                    "command": b.command.as_str(), "cwd": b.cwd.as_deref().map(|s| s.as_str()),
+                    "command": b.command.as_str(), "cwd": b.cwd.as_deref().map(String::as_str),
                     "outcome": outcome, "exit_code": meta.exit_code,
                     "truncated": b.truncated, "duration_secs": duration,
                     "events": b.events.iter().map(|e| serde_json::json!({
@@ -339,12 +363,17 @@ impl CommandRecording {
         cast.push('\n');
         // A normal asciicast player sees only readable output. Independent UTF-8
         // decoders preserve split characters even when stderr interleaves.
-        let mut pending = [Vec::new(), Vec::new()];
+        let (mut stdout_pending, mut stderr_pending) = (Vec::new(), Vec::new());
         for e in &b.events {
-            let text = preview(&mut pending[usize::from(e.stderr)], &e.bytes, false);
+            let pending = if e.stderr {
+                &mut stderr_pending
+            } else {
+                &mut stdout_pending
+            };
+            let text = preview(pending, &e.bytes, false);
             append_preview(&mut cast, e.time, &text);
         }
-        for p in &mut pending {
+        for p in [&mut stdout_pending, &mut stderr_pending] {
             append_preview(&mut cast, duration, &preview(p, &[], true));
         }
         let mut stored = StoredRecording {
@@ -354,8 +383,8 @@ impl CommandRecording {
             started_unix: self.started_unix,
             duration_secs: duration,
             truncated: b.truncated,
-            asciicast: std::mem::take(&mut *cast),
             mcp: Some(meta),
+            asciicast: std::mem::take(&mut *cast),
             extra: BTreeMap::new(),
         };
         let result = (|| -> Result<(), FfiError> {
@@ -408,16 +437,18 @@ fn preview(pending: &mut Vec<u8>, bytes: &[u8], final_chunk: bool) -> String {
     pending.extend_from_slice(bytes);
     let mut text = String::new();
     let mut offset = 0;
-    while offset < pending.len() {
-        match std::str::from_utf8(&pending[offset..]) {
+    while let Some(rest) = pending.get(offset..).filter(|rest| !rest.is_empty()) {
+        match std::str::from_utf8(rest) {
             Ok(valid) => {
                 text.push_str(valid);
                 offset = pending.len();
             }
             Err(e) => {
-                let end = offset + e.valid_up_to();
-                text.push_str(std::str::from_utf8(&pending[offset..end]).expect("valid prefix"));
-                offset = end;
+                // The prefix up to `valid_up_to()` is valid UTF-8, so the lossy
+                // conversion borrows it unchanged.
+                let valid = rest.get(..e.valid_up_to()).unwrap_or_default();
+                text.push_str(&String::from_utf8_lossy(valid));
+                offset += e.valid_up_to();
                 if let Some(len) = e.error_len() {
                     text.push('\u{fffd}');
                     offset += len;
@@ -456,7 +487,7 @@ impl std::ops::Deref for Environment {
 impl Environment {
     fn zeroize(&mut self) {
         for value in self.0.values_mut() {
-            zeroize::Zeroize::zeroize(value);
+            Zeroize::zeroize(value);
         }
         self.0.clear();
     }
@@ -505,7 +536,7 @@ mod tests {
             Some("legacy command")
         );
         core.set_mcp_recording_preferences(RecordingPreferences {
-            max_bytes: MAX_BYTES as u32,
+            max_bytes: MAX_BYTES,
             retention_days: Some(30),
         })
         .unwrap();
@@ -527,7 +558,7 @@ mod tests {
         core.create_account(None).unwrap();
         core.create_vault("v".into(), "Vault".into()).unwrap();
         core.set_mcp_recording_preferences(RecordingPreferences {
-            max_bytes: MAX_BYTES as u32,
+            max_bytes: MAX_BYTES,
             retention_days: Some(30),
         })
         .unwrap();

@@ -1,6 +1,10 @@
 //! Postgres integration §15.1 (gated on UNISSH_TEST_PG): the same dual-dialect code
 //! on a live Postgres — the store level (seq/idempotency/claim) and the HTTP level
 //! (push/delta/version). Without the env var the test is skipped.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -19,8 +23,8 @@ fn audit(tag: u8) -> PushObj {
     let o = SyncObject::Audit(AuditObject {
         vault_id: vec![],
         entry_blob: vec![tag],
-        signature: vec![1u8; 67],
-        author_pubkey: vec![2u8; 32],
+        signature: vec![1_u8; 67],
+        author_pubkey: vec![2_u8; 32],
     });
     let bytes = o.to_bytes().unwrap();
     let parsed = parse_open(&bytes).unwrap();
@@ -71,7 +75,7 @@ async fn postgres_store_parity() {
             wrapped_vk: vec![2],
             version: 1,
             tombstone: false,
-            signature: vec![9u8; 67],
+            signature: vec![9_u8; 67],
             author_pubkey: vec![owner; 32],
             key_epoch: 1,
             cache_policy: unissh_storage::CachePolicy::OfflineAllowed,

@@ -27,33 +27,33 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub fn status(self) -> StatusCode {
+    pub const fn status(self) -> StatusCode {
         match self {
-            ErrorCode::Unauthenticated => StatusCode::UNAUTHORIZED,
-            ErrorCode::Forbidden => StatusCode::FORBIDDEN,
-            ErrorCode::NotFound => StatusCode::NOT_FOUND,
-            ErrorCode::Conflict => StatusCode::CONFLICT,
-            ErrorCode::Gone => StatusCode::GONE,
-            ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-            ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            ErrorCode::Malformed => StatusCode::BAD_REQUEST,
-            ErrorCode::RollbackDetected => StatusCode::CONFLICT,
-            ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Unauthenticated => StatusCode::UNAUTHORIZED,
+            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Conflict => StatusCode::CONFLICT,
+            Self::Gone => StatusCode::GONE,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::Malformed => StatusCode::BAD_REQUEST,
+            Self::RollbackDetected => StatusCode::CONFLICT,
+            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            ErrorCode::Unauthenticated => "unauthenticated",
-            ErrorCode::Forbidden => "forbidden",
-            ErrorCode::NotFound => "not_found",
-            ErrorCode::Conflict => "conflict",
-            ErrorCode::Gone => "gone",
-            ErrorCode::RateLimited => "rate_limited",
-            ErrorCode::PayloadTooLarge => "payload_too_large",
-            ErrorCode::Malformed => "malformed",
-            ErrorCode::RollbackDetected => "rollback_detected",
-            ErrorCode::Internal => "internal",
+            Self::Unauthenticated => "unauthenticated",
+            Self::Forbidden => "forbidden",
+            Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
+            Self::Gone => "gone",
+            Self::RateLimited => "rate_limited",
+            Self::PayloadTooLarge => "payload_too_large",
+            Self::Malformed => "malformed",
+            Self::RollbackDetected => "rollback_detected",
+            Self::Internal => "internal",
         }
     }
 }
@@ -74,7 +74,7 @@ impl AppError {
             retry_after: None,
         }
     }
-    pub fn with_retry_after(mut self, secs: u64) -> Self {
+    pub const fn with_retry_after(mut self, secs: u64) -> Self {
         self.retry_after = Some(secs);
         self
     }
@@ -159,13 +159,13 @@ impl std::error::Error for AppError {}
 
 impl From<sqlx::Error> for AppError {
     fn from(e: sqlx::Error) -> Self {
-        AppError::internal(format!("db error: {e}"))
+        Self::internal(format!("db error: {e}"))
     }
 }
 
 impl From<anyhow::Error> for AppError {
     fn from(e: anyhow::Error) -> Self {
-        AppError::internal(format!("{e}"))
+        Self::internal(format!("{e}"))
     }
 }
 

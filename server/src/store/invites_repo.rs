@@ -8,7 +8,10 @@ const SEL: &str = "SELECT invite_id, token_hash, space_intents, vault_intents, e
                    state, redeemed_by, redeemed_at, created_by, created_at FROM invites";
 
 impl Store {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per column bound into the invites row; a params struct would only restate the SQL bind list"
+    )]
     pub async fn create_invite_v2(
         &self,
         invite_id: &[u8],
@@ -28,7 +31,7 @@ impl Store {
                 Val::t(space_intents_json),
                 Val::t(vault_intents_json),
                 Val::I(expires_at),
-                Val::OptB(created_by.map(|b| b.to_vec())),
+                Val::OptB(created_by.map(<[u8]>::to_vec)),
                 Val::I(now),
             ],
         )

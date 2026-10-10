@@ -1,3 +1,16 @@
+//! Broker authorization, approval, session and output behaviour against a counting fake executor.
+#![expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unwrap_in_result,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
+#![expect(
+    clippy::significant_drop_tightening,
+    reason = "each test keeps its broker alive to the end so the background sweep runs during every assertion"
+)]
+
 use serde_json::{json, Value};
 use std::{
     sync::{
@@ -1314,7 +1327,7 @@ impl Executor for DurableFake {
         Ok(self
             .fingerprint
             .load(Ordering::SeqCst)
-            .to_le_bytes()
+            .to_be_bytes()
             .to_vec())
     }
 }
@@ -1558,7 +1571,7 @@ async fn native_search_matches_full_commands_and_host_context_without_executing_
     let other = target(&b, "b").await;
     let command = format!("{} ПрИвЕт [prod]", "x".repeat(300));
     let run = call(&b, "a", "run_command", json!({"session_id":null,"target_id":t,"command":command,"cwd":"/srv/reports","stdin":"hidden-stdin","env":{"PRIVATE":"hidden-value"},"request_key":"search"})).await.unwrap();
-    let rid = run["run_id"].as_str().unwrap().to_string();
+    let rid = run["run_id"].as_str().unwrap().to_owned();
     call(&b, "b", "run_command", json!({"session_id":null,"target_id":other,"command":"other app only","request_key":"search"})).await.unwrap();
     for query in [
         "ПРИВЕТ",

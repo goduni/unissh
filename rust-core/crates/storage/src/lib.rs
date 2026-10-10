@@ -22,7 +22,6 @@
 //! Network sync (there is no server), VK/sharing/encryption (the `vault` layer).
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 mod error;
 mod records;

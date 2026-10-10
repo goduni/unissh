@@ -31,7 +31,7 @@ impl Store {
             vec![
                 Val::b(space_id),
                 Val::t(name),
-                Val::OptB(created_by.map(|b| b.to_vec())),
+                Val::OptB(created_by.map(<[u8]>::to_vec)),
                 Val::I(now),
             ],
         )
@@ -77,7 +77,7 @@ impl Store {
                 Val::b(space_id),
                 Val::b(account_id),
                 Val::t(role),
-                Val::OptB(added_by.map(|b| b.to_vec())),
+                Val::OptB(added_by.map(<[u8]>::to_vec)),
                 Val::I(now),
             ],
         )

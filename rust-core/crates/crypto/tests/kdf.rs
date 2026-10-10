@@ -102,7 +102,7 @@ fn from_blob_rejects_oversized_params() {
         mem_kib: u32::MAX,
         iterations: 3,
         parallelism: 1,
-        salt: vec![0u8; 16],
+        salt: vec![0_u8; 16],
     };
     let blob = evil.to_blob().unwrap();
     assert!(KdfParams::from_blob(&blob).is_err());
@@ -112,7 +112,7 @@ fn from_blob_rejects_oversized_params() {
         mem_kib: 65536,
         iterations: 1_000_000,
         parallelism: 1,
-        salt: vec![0u8; 16],
+        salt: vec![0_u8; 16],
     };
     assert!(KdfParams::from_blob(&evil_iter.to_blob().unwrap()).is_err());
 

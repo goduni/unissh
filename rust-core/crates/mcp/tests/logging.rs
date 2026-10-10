@@ -1,4 +1,8 @@
 //! Exercise the SDK with tracing-to-log enabled, as in the native application.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use unissh_mcp::{
@@ -65,10 +69,10 @@ async fn sdk_payloads_never_reach_the_embedding_log_sink() {
         response["result"]["structuredContent"]["sentinel"],
         "OUTPUT_SENTINEL_518a"
     );
-    let _ = client.post(&url).bearer_auth("TOKEN_SENTINEL_9c31")
+    drop(client.post(&url).bearer_auth("TOKEN_SENTINEL_9c31")
         .header("Accept", "application/json, text/event-stream")
         .json(&json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"NOTIFICATION_SENTINEL_b21f","progress":1}}))
-        .send().await.unwrap();
+        .send().await.unwrap());
     stop.cancel();
     task.await.unwrap().unwrap();
     let logs = LOG.0.lock().unwrap().join("\n");

@@ -5,6 +5,10 @@
 //! Binding is explicit and always loopback-only. Nothing starts on library load.
 
 #![forbid(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "public API docs are a documentation follow-up; the MCP contract is documented in rust-core/crates/mcp/README.md"
+)]
 
 pub mod contract;
 pub mod credentials;

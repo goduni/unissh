@@ -100,6 +100,11 @@ fn stored_params(row: &EscrowRow) -> Option<(Vec<u8>, i64, i64, i64)> {
 /// returns it), so an attacker could recompute the decoy and tell an enrolled
 /// account (real random salt) apart from an unenrolled one (salt == recomputed
 /// decoy), defeating enumeration resistance. The private secret closes that leak.
+#[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "HMAC-SHA256 takes a key of any length and its output is 32 bytes, so the 16-byte prefix is in range"
+)]
 fn decoy_salt(decoy_secret: &[u8], handle: &str) -> Vec<u8> {
     let mut key_material = Vec::with_capacity(decoy_secret.len() + DECOY_LABEL.len());
     key_material.extend_from_slice(decoy_secret);
@@ -170,7 +175,7 @@ async fn escrow_fetch(
     // so the constant-time compare below still runs and denies.
     let got: [u8; 32] = match ids::unb64(&req.k_auth) {
         Ok(bytes) => ids::sha256(&bytes),
-        Err(_) => [0u8; 32],
+        Err(_) => [0_u8; 32],
     };
     let row = state.store.get_escrow_by_handle(&req.handle).await?;
 
@@ -180,12 +185,11 @@ async fn escrow_fetch(
     let want: Vec<u8> = row
         .as_ref()
         .and_then(|r| r.k_auth_hash.clone())
-        .unwrap_or_else(|| vec![0u8; 32]);
+        .unwrap_or_else(|| vec![0_u8; 32]);
     let enrolled = row.as_ref().and_then(|r| r.k_auth_hash.as_ref()).is_some();
     let matched = ct_eq(&got, &want);
 
-    if enrolled && matched {
-        let r = row.expect("enrolled => the escrow row is present");
+    if let (true, Some(r)) = (enrolled && matched, row) {
         return Ok(Json(FetchResp {
             keyset_blob: ids::b64(&r.keyset_bytes),
             generation: r.generation,
@@ -207,9 +211,9 @@ mod tests {
     #[test]
     fn decoy_shape_equals_recommended() {
         let r = KdfParams::recommended();
-        assert_eq!(RECOMMENDED_MEM_KIB, r.mem_kib as i64);
-        assert_eq!(RECOMMENDED_ITERATIONS, r.iterations as i64);
-        assert_eq!(RECOMMENDED_PARALLELISM, r.parallelism as i64);
+        assert_eq!(RECOMMENDED_MEM_KIB, i64::from(r.mem_kib));
+        assert_eq!(RECOMMENDED_ITERATIONS, i64::from(r.iterations));
+        assert_eq!(RECOMMENDED_PARALLELISM, i64::from(r.parallelism));
         assert_eq!(RECOMMENDED_SALT_LEN, r.salt.len());
     }
 }

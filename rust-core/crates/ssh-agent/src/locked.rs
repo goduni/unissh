@@ -27,8 +27,11 @@ impl LockedBuffer {
     }
 
     /// Whether the memory was successfully locked into RAM.
-    #[allow(dead_code)]
-    pub(crate) fn is_locked(&self) -> bool {
+    #[expect(
+        dead_code,
+        reason = "diagnostic accessor for the best-effort mlock result; no caller reads it yet"
+    )]
+    pub(crate) const fn is_locked(&self) -> bool {
         self.locked
     }
 }

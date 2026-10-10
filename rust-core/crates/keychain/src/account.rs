@@ -26,7 +26,7 @@ const META_ACCOUNT_ID: &str = "account_id";
 
 /// Generates a new random account-id (a public identifier).
 pub fn generate_account_id() -> [u8; ACCOUNT_ID_LEN] {
-    let mut id = [0u8; ACCOUNT_ID_LEN];
+    let mut id = [0_u8; ACCOUNT_ID_LEN];
     OsRng.fill_bytes(&mut id);
     id
 }

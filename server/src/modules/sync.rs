@@ -39,8 +39,8 @@ async fn push(
     State(state): State<AppState>,
     body: Bytes,
 ) -> AppResult<Json<PushResp>> {
-    let req: PushReq =
-        serde_json::from_slice(&body).map_err(|_| AppError::malformed("invalid JSON body"))?;
+    let req: PushReq = serde_json::from_slice(&body)
+        .map_err(|e| AppError::malformed(format!("invalid JSON body: {e}")))?;
 
     if req.objects.len() > state.max_objects_per_push() {
         return Err(AppError::payload_too_large("too many objects per push"));
@@ -104,8 +104,10 @@ async fn push(
     for it in &items {
         let is_acl = matches!(
             it.parsed.tag(),
-            Some(crate::codec::ObjectTag::MembershipManifest)
-                | Some(crate::codec::ObjectTag::MembershipGrant)
+            Some(
+                crate::codec::ObjectTag::MembershipManifest
+                    | crate::codec::ObjectTag::MembershipGrant
+            )
         );
         if is_acl || validate {
             crate::crypto::verify_record_sig(&it.bytes)?;
@@ -178,8 +180,8 @@ async fn delta(
     Query(q): Query<DeltaQuery>,
 ) -> AppResult<Json<DeltaResp>> {
     let cursor = q.cursor.unwrap_or(0).max(0);
-    let max = state.config.limits.delta_max_page_size as i64;
-    let def = state.config.limits.delta_page_size as i64;
+    let max = i64::from(state.config.limits.delta_max_page_size);
+    let def = i64::from(state.config.limits.delta_page_size);
     let limit = q.limit.unwrap_or(def).clamp(1, max);
 
     // A1: membership-scoped — a device sees only vaults where it is owner/member.
@@ -187,8 +189,9 @@ async fn delta(
     // With `?vault=<hex>`, the same scope is applied but restricted to one vault.
     let rows = match q.vault.as_deref() {
         Some(vhex) => {
-            let vid = hex::decode(vhex.trim())
-                .map_err(|_| AppError::malformed("invalid vault id (expected hex)"))?;
+            let vid = hex::decode(vhex.trim()).map_err(|e| {
+                AppError::malformed(format!("invalid vault id (expected hex): {e}"))
+            })?;
             state
                 .store
                 .delta_since_vault(cursor, limit, auth.device_ed25519(), state.now(), &vid)
@@ -201,8 +204,7 @@ async fn delta(
                 .await?
         }
     };
-    let (has_more, next_cursor) =
-        crate::http::page(&rows, limit as usize, cursor, |r| r.server_seq);
+    let (has_more, next_cursor) = crate::http::page(&rows, limit, cursor, |r| r.server_seq);
     let items = rows
         .into_iter()
         .map(|r| DeltaItem {

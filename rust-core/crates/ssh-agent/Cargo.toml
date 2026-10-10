@@ -56,3 +56,6 @@ ed25519-dalek = "2.2"
 unissh-vault = { path = "../vault" }
 unissh-keychain = { path = "../keychain" }
 unissh-storage = { path = "../storage" }
+
+[lints]
+workspace = true

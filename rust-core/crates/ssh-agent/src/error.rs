@@ -52,6 +52,6 @@ pub enum AgentError {
 
 impl From<ssh_key::Error> for AgentError {
     fn from(e: ssh_key::Error) -> Self {
-        AgentError::Ssh(e.to_string())
+        Self::Ssh(e.to_string())
     }
 }

@@ -27,7 +27,7 @@ async fn attestations_put_list_guard_and_upsert() {
     let app = spawn().await;
     let id = common::make_identity();
     let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
     let owner_tok = common::login_v2(
         &app,
         &id,
@@ -58,7 +58,7 @@ async fn attestations_put_list_guard_and_upsert() {
     let team_id = r.json::<Value>().await.unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     // --- second account (via the store seam) added to Team as a plain member ---
     let member = app.seed_session("").await;
@@ -74,7 +74,7 @@ async fn attestations_put_list_guard_and_upsert() {
     assert_eq!(r.status(), 204, "admin adds the member");
 
     let blob1 = b64(b"attestation-blob-one");
-    let sig1 = b64(&[0x11u8; 64]);
+    let sig1 = b64(&[0x11_u8; 64]);
 
     // --- owner (admin sharing Team with the target) attests the member → 204 ---
     let r = post(
@@ -135,7 +135,7 @@ async fn attestations_put_list_guard_and_upsert() {
 
     // --- re-attest (same owner+target) UPSERTS: list stays length 1, new blob ---
     let blob2 = b64(b"attestation-blob-two-rotated");
-    let sig2 = b64(&[0x22u8; 64]);
+    let sig2 = b64(&[0x22_u8; 64]);
     let r = post(
         "attestations",
         &owner_tok,

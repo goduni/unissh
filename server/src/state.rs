@@ -103,10 +103,11 @@ impl AppStateInner {
     /// the `append_audit_server_observed(..).await` tail. Errors are swallowed
     /// (audit is best-effort and must never fail a request).
     pub async fn audit_event(&self, ev: &serde_json::Value, vault_id: Option<&[u8]>) {
-        let _ = self
-            .store
-            .append_audit_server_observed(ev, vault_id, self.now())
-            .await;
+        drop(
+            self.store
+                .append_audit_server_observed(ev, vault_id, self.now())
+                .await,
+        );
     }
 
     /// Live value of the defense-in-depth signature check (§2.4), hot-reloadable.

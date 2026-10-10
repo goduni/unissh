@@ -21,19 +21,19 @@ pub enum ObjectTag {
 }
 
 impl ObjectTag {
-    pub fn from_u8(b: u8) -> Option<Self> {
+    pub const fn from_u8(b: u8) -> Option<Self> {
         match b {
-            1 => Some(ObjectTag::Vault),
-            2 => Some(ObjectTag::Item),
-            3 => Some(ObjectTag::MembershipManifest),
-            4 => Some(ObjectTag::MembershipGrant),
-            5 => Some(ObjectTag::Audit),
-            6 => Some(ObjectTag::Keyset),
-            7 => Some(ObjectTag::AccountState),
+            1 => Some(Self::Vault),
+            2 => Some(Self::Item),
+            3 => Some(Self::MembershipManifest),
+            4 => Some(Self::MembershipGrant),
+            5 => Some(Self::Audit),
+            6 => Some(Self::Keyset),
+            7 => Some(Self::AccountState),
             _ => None,
         }
     }
-    pub fn as_u8(self) -> u8 {
+    pub const fn as_u8(self) -> u8 {
         self as u8
     }
 }
@@ -43,7 +43,7 @@ struct Reader<'a> {
     b: &'a [u8],
 }
 impl<'a> Reader<'a> {
-    fn new(b: &'a [u8]) -> Self {
+    const fn new(b: &'a [u8]) -> Self {
         Reader { b }
     }
     fn u8(&mut self) -> Result<u8, AppError> {
@@ -61,11 +61,13 @@ impl<'a> Reader<'a> {
     }
     fn u32(&mut self) -> Result<u32, AppError> {
         let s = self.take(4)?;
-        Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+        let mut a = [0_u8; 4];
+        a.copy_from_slice(s);
+        Ok(u32::from_be_bytes(a))
     }
     fn u64(&mut self) -> Result<u64, AppError> {
         let s = self.take(8)?;
-        let mut a = [0u8; 8];
+        let mut a = [0_u8; 8];
         a.copy_from_slice(s);
         Ok(u64::from_be_bytes(a))
     }
@@ -123,7 +125,7 @@ pub struct ParsedObject {
 }
 
 impl ParsedObject {
-    pub fn tag(&self) -> Option<ObjectTag> {
+    pub const fn tag(&self) -> Option<ObjectTag> {
         ObjectTag::from_u8(self.tag_u8)
     }
 }
@@ -195,7 +197,8 @@ pub fn parse_open(bytes: &[u8]) -> Result<ParsedObject, AppError> {
                 return Err(fmt_err());
             }
             p.role = Some(role);
-            p.not_after = Some(r.u64()? as i64); // 8 BE bytes after role
+            // 8 BE bytes after role, read as a two's-complement i64.
+            p.not_after = Some(i64::from_be_bytes(r.u64()?.to_be_bytes()));
             p.wrapped_vk = Some(r.bytes()?);
             p.signature = Some(r.bytes()?);
             p.author_pubkey = Some(r.bytes()?);
@@ -231,9 +234,9 @@ mod tests {
 
     // Minimal valid Keyset blob: tag(6) + put(len-prefixed payload).
     fn keyset_blob() -> Vec<u8> {
-        let mut b = vec![6u8];
-        let payload = [1u8, 2, 3];
-        b.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        let mut b = vec![6_u8];
+        let payload = [1_u8, 2, 3];
+        b.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
         b.extend_from_slice(&payload);
         b
     }
@@ -248,9 +251,44 @@ mod tests {
         bad.push(0);
         assert!(parse_open(&bad).is_err());
         // truncation → format error
-        let mut trunc = b.clone();
+        let mut trunc = b;
         trunc.truncate(trunc.len() - 1);
         assert!(parse_open(&trunc).is_err());
+    }
+
+    fn put(b: &mut Vec<u8>, v: &[u8]) {
+        b.extend_from_slice(&u32::try_from(v.len()).unwrap().to_be_bytes());
+        b.extend_from_slice(v);
+    }
+
+    /// Valid grant blob (tag 4): exercises the u8, u32-length, u64 and i64 readers.
+    fn grant_blob() -> Vec<u8> {
+        let mut b = vec![4_u8];
+        put(&mut b, &[0xaa; 16]); // vault_id
+        put(&mut b, &[0xbb; 32]); // member_pubkey
+        b.extend_from_slice(&3_u64.to_be_bytes()); // key_epoch
+        b.push(1); // role
+        b.extend_from_slice(&(-1_i64).to_be_bytes()); // not_after
+        put(&mut b, &[0xcc; 8]); // wrapped_vk
+        put(&mut b, &[0xdd; 67]); // sig
+        put(&mut b, &[0xee; 32]); // author
+        b
+    }
+
+    #[test]
+    fn truncated_blob_is_format_error() {
+        let full = grant_blob();
+        let p = parse_open(&full).unwrap();
+        assert_eq!(p.not_after, Some(-1), "not_after keeps its sign");
+        assert_eq!(p.key_epoch, Some(3), "key_epoch is read big-endian");
+        for cut in 0..full.len() {
+            let err = parse_open(&full[..cut]).unwrap_err();
+            assert_eq!(
+                err.code,
+                crate::error::ErrorCode::Malformed,
+                "cut at {cut}: {err}"
+            );
+        }
     }
 
     #[test]

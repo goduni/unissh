@@ -6,6 +6,10 @@
 //!    the already-trusted one (anti-equivocation → Conflict, not a silent UPSERT);
 //! 3. manifest happy-path + forged/broken-chain (previously uncovered);
 //! 4. grant happy-path + author-not-admin / recipient-not-member.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_crypto::{KdfParams, SymmetricKey};
 use unissh_keychain::{create_account, keyset_gen_floor, UnlockedKeyset};
@@ -24,7 +28,7 @@ fn test_params() -> KdfParams {
         mem_kib: 19 * 1024,
         iterations: 2,
         parallelism: 1,
-        salt: vec![1u8; 16],
+        salt: vec![1_u8; 16],
     }
 }
 
@@ -55,7 +59,7 @@ fn ctx(unlocked: &UnlockedKeyset) -> SyncContext {
 // ---------------------------------------------------------------------------
 #[test]
 fn tampered_keyset_generation_does_not_poison_gen_floor() {
-    let (sb, _kb) = account(&[20u8; 32]);
+    let (sb, _kb) = account(&[20_u8; 32]);
     // A fresh victim account + its genuine keyset blob (generation == 1).
     let (_sk, enc, victim) = create_account(Some(b"pw"), test_params()).unwrap();
     let mut blob = enc.to_bytes().unwrap();
@@ -95,7 +99,7 @@ fn tampered_keyset_generation_does_not_poison_gen_floor() {
 // ---------------------------------------------------------------------------
 #[test]
 fn equivocating_manifest_does_not_overwrite_trusted() {
-    let (sb, _kb) = account(&[21u8; 32]);
+    let (sb, _kb) = account(&[21_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let vid = b"vault-eq".to_vec();
     let gen = genesis(&owner);
@@ -115,7 +119,7 @@ fn equivocating_manifest_does_not_overwrite_trusted() {
                 role: MemberRole::Admin,
             },
             Member {
-                ed25519_pub: member_pub.clone(),
+                ed25519_pub: member_pub,
                 role: MemberRole::Editor,
             },
         ],
@@ -140,7 +144,7 @@ fn equivocating_manifest_does_not_overwrite_trusted() {
         &vid,
         1,
         &[Member {
-            ed25519_pub: gen.clone(),
+            ed25519_pub: gen,
             role: MemberRole::Admin,
         }],
     )
@@ -149,7 +153,7 @@ fn equivocating_manifest_does_not_overwrite_trusted() {
 
     // The same transport t: the new object gets seq > cursor B → it is actually
     // delivered in the next pull's delta.
-    t.push_objects(&[SyncObject::MembershipManifest(equivocating.clone())])
+    t.push_objects(&[SyncObject::MembershipManifest(equivocating)])
         .unwrap();
     let r2 = sync_pull(&mut t, &sb, &ctx(&owner)).unwrap();
 
@@ -173,7 +177,7 @@ fn equivocating_manifest_does_not_overwrite_trusted() {
 // ---------------------------------------------------------------------------
 #[test]
 fn manifest_happy_path_applied() {
-    let (sb, _kb) = account(&[22u8; 32]);
+    let (sb, _kb) = account(&[22_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let vid = b"vault-hp".to_vec();
     let gen = genesis(&owner);
@@ -183,14 +187,14 @@ fn manifest_happy_path_applied() {
         &vid,
         1,
         &[Member {
-            ed25519_pub: gen.clone(),
+            ed25519_pub: gen,
             role: MemberRole::Admin,
         }],
     )
     .unwrap();
 
     let mut t = InMemoryTransport::new();
-    t.push_objects(&[SyncObject::MembershipManifest(m.clone())])
+    t.push_objects(&[SyncObject::MembershipManifest(m)])
         .unwrap();
     let r = sync_pull(&mut t, &sb, &ctx(&owner)).unwrap();
     assert_eq!(r.applied, 1, "report={:?}", r);
@@ -207,7 +211,7 @@ fn manifest_happy_path_applied() {
 #[test]
 fn teammate_vault_applied_only_after_anchor_pin() {
     // Local puller: keyset kb (≠ owner). ctx.genesis_owner = kb.
-    let (sb, kb) = account(&[41u8; 32]);
+    let (sb, kb) = account(&[41_u8; 32]);
     // The teammate who created the vault: a different account.
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let vid = b"vault-teammate".to_vec();
@@ -258,7 +262,7 @@ fn teammate_vault_applied_only_after_anchor_pin() {
 // ---------------------------------------------------------------------------
 #[test]
 fn applying_manifest_arms_epoch_floor() {
-    let (sb, _kb) = account(&[43u8; 32]);
+    let (sb, _kb) = account(&[43_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let vid = b"vault-floor-arm".to_vec();
     let gen = genesis(&owner);
@@ -293,13 +297,13 @@ fn applying_manifest_arms_epoch_floor() {
 // ---------------------------------------------------------------------------
 #[test]
 fn pinned_vault_rejects_out_of_chain_record() {
-    let (sb, _kb) = account(&[44u8; 32]);
+    let (sb, _kb) = account(&[44_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let vid = b"vault-pin-nochain".to_vec();
     let owner_pub = genesis(&owner);
 
     // the owner creates a vault → its VaultRecord (single-owner, without a manifest).
-    let sx = Storage::open_in_memory(&[45u8; 32]).unwrap();
+    let sx = Storage::open_in_memory(&[45_u8; 32]).unwrap();
     Vault::create(&sx, &owner, vid.clone(), b"name").unwrap();
     let rec = sx.get_vault(&vid).unwrap().unwrap();
 
@@ -324,7 +328,7 @@ fn pinned_vault_rejects_out_of_chain_record() {
 // ---------------------------------------------------------------------------
 #[test]
 fn manifest_below_epoch_floor_rejected() {
-    let (sb, _kb) = account(&[27u8; 32]);
+    let (sb, _kb) = account(&[27_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let vid = b"vault-floor".to_vec();
     let gen = genesis(&owner);
@@ -363,7 +367,7 @@ fn manifest_below_epoch_floor_rejected() {
 // ---------------------------------------------------------------------------
 #[test]
 fn manifest_forged_genesis_rejected() {
-    let (sb, _kb) = account(&[23u8; 32]);
+    let (sb, _kb) = account(&[23_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     // The attacker signs a "genesis" manifest@1 with THEIR OWN key — author != owner.
     let (_sk2, _enc2, attacker) = create_account(Some(b"x"), test_params()).unwrap();
@@ -410,7 +414,7 @@ fn manifest_forged_genesis_rejected() {
 // ---------------------------------------------------------------------------
 #[test]
 fn manifest_broken_chain_rejected() {
-    let (sb, _kb) = account(&[24u8; 32]);
+    let (sb, _kb) = account(&[24_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let vid = b"vault-gap".to_vec();
     let gen = genesis(&owner);
@@ -446,7 +450,7 @@ fn manifest_broken_chain_rejected() {
 // ---------------------------------------------------------------------------
 #[test]
 fn grant_happy_path_applied() {
-    let (sb, _kb) = account(&[25u8; 32]);
+    let (sb, _kb) = account(&[25_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let gen = genesis(&owner);
 
@@ -467,7 +471,7 @@ fn grant_happy_path_applied() {
         1,
         &[
             Member {
-                ed25519_pub: gen.clone(),
+                ed25519_pub: gen,
                 role: MemberRole::Admin,
             },
             Member {
@@ -506,7 +510,7 @@ fn grant_happy_path_applied() {
 // ---------------------------------------------------------------------------
 #[test]
 fn grant_author_not_admin_rejected() {
-    let (sb, _kb) = account(&[27u8; 32]);
+    let (sb, _kb) = account(&[27_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let gen = genesis(&owner);
 
@@ -524,7 +528,7 @@ fn grant_author_not_admin_rejected() {
         1,
         &[
             Member {
-                ed25519_pub: gen.clone(),
+                ed25519_pub: gen,
                 role: MemberRole::Admin,
             },
             Member {
@@ -568,7 +572,7 @@ fn grant_author_not_admin_rejected() {
 // ---------------------------------------------------------------------------
 #[test]
 fn grant_recipient_not_member_rejected() {
-    let (sb, _kb) = account(&[29u8; 32]);
+    let (sb, _kb) = account(&[29_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     let gen = genesis(&owner);
 
@@ -585,7 +589,7 @@ fn grant_recipient_not_member_rejected() {
         &vid,
         1,
         &[Member {
-            ed25519_pub: gen.clone(),
+            ed25519_pub: gen,
             role: MemberRole::Admin,
         }],
     )
@@ -641,7 +645,7 @@ fn signed_audit(ks: &UnlockedKeyset, entry: &[u8]) -> AuditObject {
 // ---------------------------------------------------------------------------
 #[test]
 fn audit_from_owner_applied_attacker_rejected() {
-    let (sb, _kb) = account(&[31u8; 32]);
+    let (sb, _kb) = account(&[31_u8; 32]);
     let (_sk, _enc, owner) = create_account(Some(b"pw"), test_params()).unwrap();
     // The attacker is a different keyset; their entry is validly self-signed, but the author is not the owner.
     let (_sk2, _enc2, attacker) = create_account(Some(b"x"), test_params()).unwrap();
@@ -674,7 +678,7 @@ fn audit_from_owner_applied_attacker_rejected() {
 // ---------------------------------------------------------------------------
 #[test]
 fn account_state_applied_and_lww() {
-    let (sb, kb) = account(&[50u8; 32]);
+    let (sb, kb) = account(&[50_u8; 32]);
     let author = genesis(&kb);
     let payload = b"opaque-hpke-blob".to_vec();
 
@@ -722,24 +726,20 @@ fn account_state_equal_version_tiebreak_converges() {
     let obj_a = AccountStateObject {
         author_pubkey: author.clone(),
         version: 5,
-        payload: pa.clone(),
+        payload: pa,
         signature: sig_a.clone(),
     };
     let obj_b = AccountStateObject {
         author_pubkey: author.clone(),
         version: 5,
-        payload: pb.clone(),
+        payload: pb,
         signature: sig_b.clone(),
     };
-    let winner_sig = if sig_a > sig_b {
-        sig_a.clone()
-    } else {
-        sig_b.clone()
-    };
+    let winner_sig = if sig_a > sig_b { sig_a } else { sig_b };
 
     // Apply both in the given order on FRESH storage (the same keyset kb).
     let apply_both = |first: &AccountStateObject, second: &AccountStateObject| -> Vec<u8> {
-        let sb = Storage::open_in_memory(&[52u8; 32]).unwrap();
+        let sb = Storage::open_in_memory(&[52_u8; 32]).unwrap();
         let mut t = InMemoryTransport::new();
         t.push_objects(&[SyncObject::AccountState(first.clone())])
             .unwrap();
@@ -759,7 +759,7 @@ fn account_state_equal_version_tiebreak_converges() {
 // circuited on the author check, never reaching the signature branch (engine.rs:668).
 #[test]
 fn account_state_bad_signature_rejected() {
-    let (sb, kb) = account(&[53u8; 32]);
+    let (sb, kb) = account(&[53_u8; 32]);
     let author = genesis(&kb);
     let payload = b"p".to_vec();
     let mut sig = sign_account_state(&kb, 5, &payload).unwrap();
@@ -787,7 +787,7 @@ fn account_state_bad_signature_rejected() {
 
 #[test]
 fn account_state_wrong_author_rejected() {
-    let (sb, kb) = account(&[51u8; 32]);
+    let (sb, kb) = account(&[51_u8; 32]);
     let (_s, _e, other) = create_account(Some(b"pw"), test_params()).unwrap();
     // Signed by a DIFFERENT account → author != ctx.genesis_owner(kb) → AuthorityFailed.
     let payload = b"x".to_vec();
@@ -814,7 +814,7 @@ fn account_state_wrong_author_rejected() {
 // (Malformed), WITHOUT dropping the whole pull; a valid object in the same pull applies.
 #[test]
 fn account_state_oversized_version_rejected_not_pull_abort() {
-    let (sb, kb) = account(&[52u8; 32]);
+    let (sb, kb) = account(&[52_u8; 32]);
     let author = genesis(&kb);
     let payload = b"p".to_vec();
 

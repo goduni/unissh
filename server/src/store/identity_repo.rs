@@ -9,7 +9,10 @@ use crate::error::{AppError, AppResult};
 impl Store {
     /// Create an account with a canonical keyset (= member-id) + human-readable
     /// identifiers + owner flag.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per column bound into the accounts row; a params struct would only restate the SQL bind list"
+    )]
     pub async fn create_account(
         &self,
         account_id: &[u8],
@@ -40,9 +43,9 @@ impl Store {
                 Val::I(now),
                 Val::b(ed25519_pub),
                 Val::b(x25519_pub),
-                Val::OptT(display_name.map(|s| s.to_string())),
-                Val::OptT(handle.map(|s| s.to_string())),
-                Val::I(is_owner as i64),
+                Val::OptT(display_name.map(str::to_owned)),
+                Val::OptT(handle.map(str::to_owned)),
+                Val::I(i64::from(is_owner)),
                 Val::b(reg_payload),
                 Val::b(reg_signature),
                 Val::OptT(external_issuer.map(String::from)),
@@ -57,7 +60,10 @@ impl Store {
     /// panel); `label` is an optional short human tag; `expires_at` auto-expires web
     /// devices (`None` = never expires). Callers other than self-enroll pass
     /// `"app", None, None` (the pre-existing default behaviour).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per column bound into the devices row; a params struct would only restate the SQL bind list"
+    )]
     pub async fn create_device(
         &self,
         account_id: &[u8],
@@ -80,7 +86,7 @@ impl Store {
                 Val::b(ed25519_pub),
                 Val::b(x25519_pub),
                 Val::t(kind),
-                Val::OptT(label.map(|s| s.to_string())),
+                Val::OptT(label.map(str::to_owned)),
                 Val::I(now),
                 Val::OptI(expires_at),
             ],
@@ -98,7 +104,10 @@ impl Store {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per column bound into the sessions row; a params struct would only restate the SQL bind list"
+    )]
     pub async fn create_session(
         &self,
         session_id: &[u8],
@@ -161,7 +170,6 @@ impl Store {
     /// current `refresh_hash` still equals the presented one. Returns the number
     /// of rows changed (1 = rotated, 0 = the token was already rotated by a
     /// concurrent/replayed refresh).
-    #[allow(clippy::too_many_arguments)]
     pub async fn rotate_session(
         &self,
         session_id: &[u8],
@@ -200,7 +208,7 @@ impl Store {
              VALUES (?, ?, ?, 0)",
             vec![
                 Val::b(nonce),
-                Val::OptB(device_id.map(|d| d.to_vec())),
+                Val::OptB(device_id.map(<[u8]>::to_vec)),
                 Val::I(expires_at),
             ],
         )
@@ -231,7 +239,6 @@ impl Store {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn put_keyset(
         &self,
         account_id: &[u8],
@@ -273,7 +280,10 @@ impl Store {
     /// uploaded): `sha256(K_auth)` + the Argon2id salt/params a fresh device needs
     /// to re-derive `K_auth`. Enables password+SecretKey escrow sign-in for this
     /// generation.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per escrow column set on the keyset_blobs row; a params struct would only restate the SQL bind list"
+    )]
     pub async fn set_escrow(
         &self,
         account_id: &[u8],
@@ -414,7 +424,10 @@ impl Tx<'_> {
 
     /// Transactional mirror of [`Store::create_account`] — same columns, same binds,
     /// same order — for use inside the claim transaction.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "transactional mirror of Store::create_account: one argument per column bound into the accounts row"
+    )]
     pub async fn create_account(
         &mut self,
         account_id: &[u8],
@@ -440,9 +453,9 @@ impl Tx<'_> {
                 Val::I(now),
                 Val::b(ed25519_pub),
                 Val::b(x25519_pub),
-                Val::OptT(display_name.map(|s| s.to_string())),
-                Val::OptT(handle.map(|s| s.to_string())),
-                Val::I(is_owner as i64),
+                Val::OptT(display_name.map(str::to_owned)),
+                Val::OptT(handle.map(str::to_owned)),
+                Val::I(i64::from(is_owner)),
                 Val::b(reg_payload),
                 Val::b(reg_signature),
                 Val::OptT(external_issuer.map(String::from)),
@@ -454,7 +467,10 @@ impl Tx<'_> {
     }
 
     /// Transactional mirror of [`Store::create_device`].
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "transactional mirror of Store::create_device: one argument per column bound into the devices row"
+    )]
     pub async fn create_device(
         &mut self,
         account_id: &[u8],
@@ -477,7 +493,7 @@ impl Tx<'_> {
                 Val::b(ed25519_pub),
                 Val::b(x25519_pub),
                 Val::t(kind),
-                Val::OptT(label.map(|s| s.to_string())),
+                Val::OptT(label.map(str::to_owned)),
                 Val::I(now),
                 Val::OptI(expires_at),
             ],

@@ -272,3 +272,159 @@ custom-protocol = ["tauri/custom-protocol"]
 [dev-dependencies]
 # Live cloud integration tests (ignored by default): temp instance dirs + server DB.
 tempfile = "3"
+
+# Copy of the root workspace's lint policy (separate Cargo root — cannot inherit).
+# Three documented differences: `unsafe_code = "allow"` (JNI, Security.framework,
+# LocalAuthentication bindings live here; every block still needs a `// SAFETY:`
+# comment), `missing_docs = "allow"` (binary crate) and `clippy::unreachable = "allow"`
+# (it fires inside the `#[tauri::command]` expansion). Keep the rest identical to
+# ../../Cargo.toml.
+[lints.rust]
+# Safety
+unsafe_code = "allow"                     # JNI, Security.framework, LocalAuthentication bindings; every block still needs `// SAFETY:`
+# Hidden behaviour
+ambiguous_negative_literals = "warn"      # `-1.abs()` is `-(1.abs())`
+deref_into_dyn_supertrait = "warn"
+let_underscore_drop = "warn"              # `let _ = guard;` drops the guard right away
+meta_variable_misuse = "warn"
+non_ascii_idents = "warn"
+unstable_features = "warn"
+# Public API
+missing_docs = "allow"                    # binary crate
+unnameable_types = "warn"
+# Dead code
+explicit_outlives_requirements = "warn"
+macro_use_extern_crate = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unit_bindings = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+# No panics in shipped code (tests may: see clippy.toml allow-*-in-tests)
+unwrap_used = "deny"
+expect_used = "deny"                      # a true invariant keeps `.expect()` under `#[expect(clippy::expect_used, reason)]`
+panic = "deny"
+unreachable = "allow"                     # fires inside #[tauri::command] expansion (209 sites); our own code has no unreachable!()
+todo = "deny"
+unimplemented = "deny"
+panic_in_result_fn = "deny"
+unwrap_in_result = "deny"
+indexing_slicing = "deny"                 # `get()` on hostile input; frozen codecs change only the access, never the bytes
+string_slice = "deny"                     # panics off a char boundary
+unchecked_time_subtraction = "deny"
+cast_abs_to_unsigned = "deny"
+missing_assert_message = "warn"
+exit = "warn"
+# Numbers and casts (as_conversions is too blunt; these are the dangerous casts)
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_possible_wrap = "warn"
+cast_lossless = "warn"
+fn_to_numeric_cast_any = "warn"
+host_endian_bytes = "warn"                # wire and blob formats are big-endian
+little_endian_bytes = "warn"              # storage automation_fingerprint (LE since v1) and the server sink jitter expect it on site
+# Documented unsafe
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+mem_forget = "warn"
+# No debug output (second layer under scripts/check-log-redaction.py)
+dbg_macro = "deny"
+print_stdout = "warn"                     # cli expects it crate-wide; server setup-code output expects it on site
+print_stderr = "warn"
+use_debug = "warn"                        # catches {:?} in print/write macros; log/tracing calls rely on scripts/check-log-redaction.py and review
+pointer_format = "warn"
+# Handled errors
+map_err_ignore = "warn"                   # crypto/vault/keychain expect it: error-cause erasure there is deliberate (no oracle)
+try_err = "warn"
+unused_result_ok = "warn"
+# Suppressions are explicit and explained
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+# Control flow
+wildcard_enum_match_arm = "warn"          # a new variant must break the match, not fall into `_`
+infinite_loop = "warn"
+mixed_read_write_in_expression = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+unneeded_field_pattern = "warn"
+# Modules
+mod_module_files = "deny"                 # `foo.rs` over `foo/mod.rs`
+# Idiomatic std
+iter_over_hash_type = "warn"              # hash order is per-process; canonical encodings must never depend on it
+create_dir = "warn"
+filetype_is_file = "warn"
+verbose_file_reads = "warn"
+pathbuf_init_then_push = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+mutex_atomic = "warn"
+mutex_integer = "warn"
+str_to_string = "warn"
+string_add = "warn"
+if_then_some_else_none = "warn"
+needless_raw_strings = "warn"
+string_lit_chars_any = "warn"
+map_with_unused_argument_over_ranges = "warn"
+return_and_then = "warn"
+deref_by_slicing = "warn"
+# Consistent style
+redundant_type_annotations = "warn"
+unseparated_literal_suffix = "warn"
+semicolon_inside_block = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets = "warn"
+large_include_file = "warn"
+doc_include_without_cfg = "warn"
+doc_paragraphs_missing_punctuation = "warn"
+# Complexity (thresholds in clippy.toml; ratchet them down release by release)
+too_many_lines = "warn"
+cognitive_complexity = "warn"
+excessive_nesting = "warn"
+# Pedantic, picked by name (the group as a whole is documentation churn)
+needless_pass_by_value = "allow"            # deferred: 242 sites, 234 of them uniffi-exported fns whose by-value String params are the binding contract; follow-up
+semicolon_if_nothing_returned = "warn"
+explicit_iter_loop = "warn"
+manual_let_else = "warn"
+match_wildcard_for_single_variants = "warn"
+unnested_or_patterns = "warn"
+redundant_closure_for_method_calls = "warn"
+cloned_instead_of_copied = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+large_types_passed_by_value = "warn"
+manual_string_new = "warn"
+needless_continue = "warn"
+range_plus_one = "warn"
+ref_option = "warn"
+unused_self = "warn"
+used_underscore_binding = "warn"
+items_after_statements = "warn"
+inconsistent_struct_constructor = "warn"
+trivially_copy_pass_by_ref = "warn"
+default_trait_access = "warn"
+# Nursery, picked by name (toolchain is pinned, so the set is stable)
+significant_drop_tightening = "warn"      # Tauri holds mutexes longer than it needs to
+redundant_clone = "warn"
+needless_collect = "warn"
+use_self = "warn"
+iter_on_single_items = "warn"
+iter_on_empty_collections = "warn"
+equatable_if_let = "warn"
+or_fun_call = "warn"
+string_lit_as_bytes = "warn"
+trait_duplication_in_bounds = "warn"
+type_repetition_in_bounds = "warn"
+collection_is_never_read = "warn"
+useless_let_if_seq = "warn"
+derive_partial_eq_without_eq = "warn"
+missing_const_for_fn = "warn"

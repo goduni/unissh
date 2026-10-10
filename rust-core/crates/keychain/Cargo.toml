@@ -25,3 +25,6 @@ sha2 = "0.10"
 zeroize = { version = "1.8", features = ["derive"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 thiserror = "2"
+
+[lints]
+workspace = true

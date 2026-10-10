@@ -18,14 +18,33 @@
 //!                     --proxy socks5://127.0.0.1:1080                         # http/socks4/socks5 proxy
 //! ```
 
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "a CLI writes its output and errors to the terminal by design"
+)]
+
 use std::error::Error;
+use std::io::BufRead;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use unissh_ffi::{
     AuthMethod, Core, JumpHost, MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword,
-    SessionObserver,
+    ResolveStatus, SessionObserver,
 };
+
+/// Label of a group member's dry-run resolution status: the variant name, as the
+/// dry-run output has always printed it.
+const fn status_label(status: ResolveStatus) -> &'static str {
+    match status {
+        ResolveStatus::Ok => "Ok",
+        ResolveStatus::Dangling => "Dangling",
+        ResolveStatus::PromptPassword => "PromptPassword",
+        ResolveStatus::CycleSkipped => "CycleSkipped",
+        ResolveStatus::Personal => "Personal",
+    }
+}
 
 /// Authentication method from flags: `--password` takes precedence over `--item`.
 /// `--item <id>` — a key from the vault; `--item pw:<id>` — a password item from the vault.
@@ -60,12 +79,12 @@ fn print_multi(results: Vec<unissh_ffi::MultiExecResult>) {
 fn item_auth(vault: &str, item: &str) -> AuthMethod {
     match item.strip_prefix("pw:") {
         Some(id) => AuthMethod::VaultPassword {
-            vault_id: vault.to_string(),
-            password_item_id: id.to_string(),
+            vault_id: vault.to_owned(),
+            password_item_id: id.to_owned(),
         },
         None => AuthMethod::Agent {
-            vault_id: vault.to_string(),
-            key_item_id: item.to_string(),
+            vault_id: vault.to_owned(),
+            key_item_id: item.to_owned(),
         },
     }
 }
@@ -497,15 +516,26 @@ struct SftpTarget {
 
 /// Session observer: prints PTY output to stdout, signals on close.
 struct StdoutObserver {
-    done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    done: Arc<std::sync::atomic::AtomicBool>,
+    /// Set once a stdout write failure has been reported, so it is not repeated per chunk.
+    write_failed: std::sync::atomic::AtomicBool,
 }
 
 impl SessionObserver for StdoutObserver {
     fn on_data(&self, data: Vec<u8>) {
         use std::io::Write;
         let mut out = std::io::stdout();
-        let _ = out.write_all(&data);
-        let _ = out.flush();
+        if let Err(e) = out.write_all(&data).and_then(|()| out.flush()) {
+            // A closed pipe (`unissh … | head`) is expected; other failures are
+            // reported once, not per chunk.
+            if e.kind() != std::io::ErrorKind::BrokenPipe
+                && !self
+                    .write_failed
+                    .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                eprintln!("[stdout write failed: {e}]");
+            }
+        }
     }
     fn on_close(&self, exit_status: i32) {
         self.done.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -523,6 +553,14 @@ struct UnlockArgs {
     password: Option<String>,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one short, independent match arm per subcommand; splitting would only move the dispatch table"
+)]
+#[expect(
+    clippy::infinite_loop,
+    reason = "the local-forward subcommand serves until the user presses Ctrl-C, which ends the process"
+)]
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     let core = Core::new(cli.db.clone(), cli.keyset.clone());
@@ -609,13 +647,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut targets = Vec::new();
             for h in &hosts {
                 let parts: Vec<&str> = h.split(':').collect();
-                if parts.len() != 3 {
+                let &[host, port, user] = parts.as_slice() else {
                     return Err(format!("bad --host '{h}', expected host:port:user").into());
-                }
+                };
                 targets.push(MultiExecTarget {
-                    host: parts[0].to_string(),
-                    port: parts[1].parse()?,
-                    user: parts[2].to_string(),
+                    host: host.to_owned(),
+                    port: port.parse()?,
+                    user: user.to_owned(),
                     auth: build_auth(&vault, item.clone(), ssh_password.clone())?,
                     jumps: vec![],
                     proxy: None,
@@ -691,8 +729,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             do_unlock(&core, &unlock)?;
             for p in core.dry_run_group(vault, group)? {
                 println!(
-                    "{}\t{}:{}@{}\t{:?}",
-                    p.member_id, p.user, p.host, p.port, p.status
+                    "{}\t{}:{}@{}\t{}",
+                    p.member_id,
+                    p.user,
+                    p.host,
+                    p.port,
+                    status_label(p.status)
                 );
             }
         }
@@ -742,8 +784,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let jumps = parse_jumps(&vault, &jumps)?;
             let proxy = parse_proxy(proxy.as_deref())?;
             let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let observer: Arc<dyn SessionObserver> =
-                Arc::new(StdoutObserver { done: done.clone() });
+            let observer: Arc<dyn SessionObserver> = Arc::new(StdoutObserver {
+                done: done.clone(),
+                write_failed: std::sync::atomic::AtomicBool::new(false),
+            });
             let session = core.open_session(
                 host,
                 port,
@@ -751,7 +795,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 auth,
                 jumps,
                 proxy,
-                "xterm-256color".to_string(),
+                "xterm-256color".to_owned(),
                 80,
                 24,
                 observer,
@@ -764,7 +808,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 false,
             )?;
             // line-by-line input from stdin (no raw mode — this is a harness)
-            use std::io::BufRead;
             for line in std::io::stdin().lock().lines() {
                 if done.load(std::sync::atomic::Ordering::SeqCst) {
                     break;
@@ -781,7 +824,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
-            let _ = session.close();
+            if let Err(e) = session.close() {
+                eprintln!("close failed: {e}");
+            }
         }
         Cmd::RenameVault {
             unlock,
@@ -894,8 +939,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     unissh_ffi::ProfileAuth::VaultPassword { password_item_id } => {
                         format!("pw:{password_item_id}")
                     }
-                    unissh_ffi::ProfileAuth::PromptPassword => "(password)".to_string(),
-                    unissh_ffi::ProfileAuth::Personal => "(personal)".to_string(),
+                    unissh_ffi::ProfileAuth::PromptPassword => "(password)".to_owned(),
+                    unissh_ffi::ProfileAuth::Personal => "(personal)".to_owned(),
                     unissh_ffi::ProfileAuth::SystemAgent { public_key } => {
                         // Just the comment/type, not the whole blob: a listing
                         // wants to be readable, and the key is not a secret but
@@ -1029,18 +1074,18 @@ fn parse_proxy(spec: Option<&str>) -> Result<Option<ProxyConfig>, Box<dyn Error>
     let (username, password) = match userinfo {
         Some(u) => match u.split_once(':') {
             Some((name, pass)) => (
-                Some(name.to_string()),
+                Some(name.to_owned()),
                 Some(ProxyPassword::Inline {
-                    password: pass.to_string(),
+                    password: pass.to_owned(),
                 }),
             ),
-            None => (Some(u.to_string()), None),
+            None => (Some(u.to_owned()), None),
         },
         None => (None, None),
     };
     Ok(Some(ProxyConfig {
         kind,
-        host: host.to_string(),
+        host: host.to_owned(),
         port: port.parse()?,
         username,
         password,
@@ -1051,17 +1096,17 @@ fn parse_jumps(vault: &str, specs: &[String]) -> Result<Vec<JumpHost>, Box<dyn E
     let mut out = Vec::new();
     for s in specs {
         let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 4 {
+        let &[host, port, user, item] = parts.as_slice() else {
             return Err(format!(
                 "bad --jump '{s}', expected host:port:user:<keyitem|pw:passworditem>"
             )
             .into());
-        }
+        };
         out.push(JumpHost {
-            host: parts[0].to_string(),
-            port: parts[1].parse()?,
-            user: parts[2].to_string(),
-            auth: item_auth(vault, parts[3]),
+            host: host.to_owned(),
+            port: port.parse()?,
+            user: user.to_owned(),
+            auth: item_auth(vault, item),
             hop_ref: None,
         });
     }

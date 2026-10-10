@@ -34,8 +34,14 @@ struct ServerProc {
 
 impl Drop for ServerProc {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Test teardown: the server may already have exited, so a failed kill is
+        // expected; wait() then reaps it either way.
+        if let Err(e) = self.child.kill() {
+            eprintln!("test server already gone: {e}");
+        }
+        if let Err(e) = self.child.wait() {
+            eprintln!("test server not reaped: {e}");
+        }
     }
 }
 
@@ -170,9 +176,8 @@ fn account_pubkeys(accounts: &[crate::dto::AccountInfo], account_id: &str) -> (S
 #[test]
 #[ignore = "needs `cargo build -p unissh-server` + free TCP ports"]
 fn live_e2e_claim_invite_join_and_two_device_sync() {
-    let srv = match spawn_server() {
-        Some(s) => s,
-        None => return, // skipped (binary absent)
+    let Some(srv) = spawn_server() else {
+        return; // skipped (binary absent)
     };
     let base = &srv.base_url;
     let http = client::http();
@@ -324,10 +329,10 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
 
     let transport_a2: Arc<dyn unissh_ffi::FfiSyncTransport> = Arc::new(HttpSyncTransport::new(
         base.clone(),
-        session_a2.access_token.clone(),
+        session_a2.access_token,
     ));
     let report_a2 = core_a2
-        .sync_now(transport_a2, space.clone())
+        .sync_now(transport_a2, space)
         .expect("A2 sync_now should succeed");
     assert!(
         report_a2.applied >= 1,
@@ -339,7 +344,7 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
         "A2 sees the shared cloud vault after pull"
     );
     let pw = core_a2
-        .get_password(vid.clone(), "db-pw".into())
+        .get_password(vid, "db-pw".into())
         .expect("A2 reads the secret synced into the cloud vault");
     assert_eq!(pw, "s3cr3t", "the synced secret must match byte-for-byte");
 
@@ -358,9 +363,8 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
 #[test]
 #[ignore = "needs `cargo build -p unissh-server` + free TCP ports"]
 fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
-    let srv = match spawn_server() {
-        Some(s) => s,
-        None => return, // skipped (binary absent)
+    let Some(srv) = spawn_server() else {
+        return; // skipped (binary absent)
     };
     let base = srv.base_url.clone();
     let http = client::http();
@@ -395,7 +399,6 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
         let base = base.clone();
         let channel_id = channel_id.clone();
         let oob = oob.clone();
-        let core_a = core_a.clone();
         let secret_a = secret_a.clone();
         std::thread::spawn(move || {
             crate::cloud::onboard::initiator_complete(
@@ -433,7 +436,7 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
     // would FAIL if B had minted its own discarded key (the bug this flow fixes).
     let core_b2 = new_core(dir_b.path(), "b");
     core_b2
-        .unlock(Some("pw-b".into()), secret_a.clone())
+        .unlock(Some("pw-b".into()), secret_a)
         .expect("B re-unlocks its persisted keyset with the SHARED Secret Key");
     assert!(core_b2.is_unlocked());
 
@@ -452,9 +455,8 @@ fn live_e2e_path_b_pake_onboarding_shares_account_secret_key() {
 #[test]
 #[ignore = "needs `cargo build -p unissh-server` + free TCP ports"]
 fn live_e2e_escrow_recovery() {
-    let srv = match spawn_server() {
-        Some(s) => s,
-        None => return, // skipped (binary absent)
+    let Some(srv) = spawn_server() else {
+        return; // skipped (binary absent)
     };
     let base = &srv.base_url;
     let http = client::http();
@@ -553,7 +555,7 @@ fn live_e2e_escrow_recovery() {
         "escrow resolves the account the keyset belongs to (A's)"
     );
     core_c
-        .unlock_from_server_blob(recovered, Some("pw-a".into()), secret_a.clone())
+        .unlock_from_server_blob(recovered, Some("pw-a".into()), secret_a)
         .expect("C unlocks from the escrowed keyset blob");
 
     // C holds A's account keyset (shared) but is a BRAND-NEW device with no server-side
@@ -578,12 +580,10 @@ fn live_e2e_escrow_recovery() {
     // C authenticates as that NEW device (the recovered keyset signs the challenge) and syncs.
     let session_c = identity::login(http, base, &core_c, &out_a.account_id, &device_c)
         .expect("C login with the freshly self-enrolled device should succeed");
-    let transport_c: Arc<dyn unissh_ffi::FfiSyncTransport> = Arc::new(HttpSyncTransport::new(
-        base.clone(),
-        session_c.access_token.clone(),
-    ));
+    let transport_c: Arc<dyn unissh_ffi::FfiSyncTransport> =
+        Arc::new(HttpSyncTransport::new(base.clone(), session_c.access_token));
     let report_c = core_c
-        .sync_now(transport_c, space.clone())
+        .sync_now(transport_c, space)
         .expect("C sync_now should succeed");
     assert!(
         report_c.applied >= 1,
@@ -597,7 +597,7 @@ fn live_e2e_escrow_recovery() {
         "C sees the shared cloud vault after recovery + pull"
     );
     let pw = core_c
-        .get_password(vid.clone(), "db-pw".into())
+        .get_password(vid, "db-pw".into())
         .expect("C reads the secret from the recovered vault");
     assert_eq!(
         pw, "s3cr3t",

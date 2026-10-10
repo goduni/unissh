@@ -48,11 +48,19 @@
 //! `mlock` is best-effort (see [`locked`]).
 
 #![deny(unsafe_op_in_unsafe_fn)]
-#![warn(missing_docs)]
+// Hostile input is parsed here: every +,-,*,<< must say what happens on overflow.
+#![warn(clippy::arithmetic_side_effects)]
 
 mod agent;
 mod error;
 mod import;
+#[cfg_attr(
+    unix,
+    expect(
+        unsafe_code,
+        reason = "mlock/madvise over key pages in `locked.rs`; every block carries a SAFETY comment"
+    )
+)]
 mod locked;
 
 pub use agent::{

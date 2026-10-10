@@ -34,7 +34,8 @@
 //! (no plaintext leaves), CRDT merge (LWW; CRDT — ⏳ LATER).
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
+// Hostile input is parsed here: every +,-,*,<< must say what happens on overflow.
+#![warn(clippy::arithmetic_side_effects)]
 
 mod engine;
 mod error;

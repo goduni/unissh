@@ -229,7 +229,7 @@ impl Core {
             let key_id = candidate_id
                 .strip_suffix(CANDIDATE_SUFFIX)
                 .ok_or(FfiError::NotFound)?
-                .to_string();
+                .to_owned();
             let linked = match links.get(&key_id) {
                 Some(l) if l.candidate_id == candidate_id => Some(linked_candidate(&vault, l)?),
                 _ => None,

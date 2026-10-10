@@ -43,8 +43,8 @@ pub struct CatalogEntry {
 }
 
 impl HttpSyncTransport {
-    pub fn new(base_url: String, bearer: String) -> Self {
-        HttpSyncTransport { base_url, bearer }
+    pub const fn new(base_url: String, bearer: String) -> Self {
+        Self { base_url, bearer }
     }
 
     /// `GET /v1/vaults` — the member-facing catalog of vaults this caller can access.
@@ -69,15 +69,24 @@ impl HttpSyncTransport {
             msg: format!("list vaults: bad JSON: {e}"),
         })?;
         let mut out = Vec::new();
-        if let Some(arr) = v["vaults"].as_array() {
-            for it in arr {
-                if let Some(vid) = it["vault_id"].as_str() {
-                    out.push(CatalogEntry {
-                        vault_id: vid.to_string(),
-                        latest_version: it["latest_version"].as_i64().unwrap_or(0),
-                        tombstone: it["tombstone"].as_bool().unwrap_or(false),
-                    });
-                }
+        for it in v
+            .get("vaults")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(vid) = it.get("vault_id").and_then(Value::as_str) {
+                out.push(CatalogEntry {
+                    vault_id: vid.to_owned(),
+                    latest_version: it
+                        .get("latest_version")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
+                    tombstone: it
+                        .get("tombstone")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                });
             }
         }
         Ok(out)
@@ -106,19 +115,14 @@ impl HttpSyncTransport {
                 Ok(v) => v,
                 Err(_) => break,
             };
-            if let Some(items) = v["items"].as_array() {
-                for item in items {
-                    if let Some(obj_b64) = item["object"].as_str() {
-                        if let Ok(bytes) = client::unb64(obj_b64) {
-                            out.push(bytes);
-                        }
-                    }
-                }
-            }
-            if v["has_more"].as_bool().unwrap_or(false) {
-                cur = v["next_cursor"].as_u64().unwrap_or(cur);
-            } else {
-                break;
+            out.extend(
+                items_of(&v)
+                    .filter_map(|item| item.get("object").and_then(Value::as_str))
+                    .filter_map(|obj_b64| client::unb64(obj_b64).ok()),
+            );
+            match next_page(&v, cur) {
+                Some(next) => cur = next,
+                None => break,
             }
         }
         out
@@ -157,13 +161,14 @@ impl FfiSyncTransport for HttpSyncTransport {
         let v: Value = serde_json::from_slice(&bytes).map_err(|e| FfiError::Other {
             msg: format!("sync push: bad JSON: {e}"),
         })?;
-        let seqs = v["server_seq"]
-            .as_array()
+        let seqs = v
+            .get("server_seq")
+            .and_then(Value::as_array)
             .ok_or_else(|| FfiError::Other {
                 msg: "sync push: response missing 'server_seq'".into(),
             })?
             .iter()
-            .filter_map(|x| x.as_u64())
+            .filter_map(Value::as_u64)
             .collect();
         Ok(seqs)
     }
@@ -189,24 +194,18 @@ impl FfiSyncTransport for HttpSyncTransport {
                 Ok(v) => v,
                 Err(_) => break,
             };
-            if let Some(items) = v["items"].as_array() {
-                for item in items {
-                    if let (Some(seq), Some(obj_b64)) =
-                        (item["server_seq"].as_u64(), item["object"].as_str())
-                    {
-                        if let Ok(bytes) = client::unb64(obj_b64) {
-                            out.push(SyncDeltaItem {
-                                server_seq: seq,
-                                object: bytes,
-                            });
-                        }
-                    }
-                }
-            }
-            if v["has_more"].as_bool().unwrap_or(false) {
-                cur = v["next_cursor"].as_u64().unwrap_or(cur);
-            } else {
-                break;
+            out.extend(items_of(&v).filter_map(|item| {
+                let seq = item.get("server_seq").and_then(Value::as_u64)?;
+                let obj_b64 = item.get("object").and_then(Value::as_str)?;
+                let object = client::unb64(obj_b64).ok()?;
+                Some(SyncDeltaItem {
+                    server_seq: seq,
+                    object,
+                })
+            }));
+            match next_page(&v, cur) {
+                Some(next) => cur = next,
+                None => break,
             }
         }
         out
@@ -228,7 +227,7 @@ impl FfiSyncTransport for HttpSyncTransport {
                 if let Some(v) = r
                     .json::<Value>()
                     .ok()
-                    .and_then(|v| v["report_version"].as_u64())
+                    .and_then(|v| v.get("report_version").and_then(Value::as_u64))
                 {
                     return v;
                 }
@@ -241,6 +240,44 @@ impl FfiSyncTransport for HttpSyncTransport {
     }
 }
 
+/// The `items` array of a delta page; a missing or non-array field is empty.
+fn items_of(page: &Value) -> impl Iterator<Item = &Value> {
+    page.get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+/// Paging of a delta page: the cursor to request next, or `None` to stop.
+///
+/// A page that says `has_more` but carries no usable `next_cursor` (absent or not
+/// a `u64`) counts as the LAST page: re-requesting the same cursor would loop
+/// forever and append the same items every round. Stopping is safe — the engine
+/// verifies what it has and the next sync resumes from the persisted cursor.
+///
+/// A `next_cursor` that does not advance past `cur` stops the same way: the
+/// server returns rows with `server_seq > cursor` in ascending order and sets
+/// `has_more` only on a full page, so an honest `next_cursor` is always greater
+/// than the cursor that was requested.
+fn next_page(page: &Value, cur: u64) -> Option<u64> {
+    let has_more = page
+        .get("has_more")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !has_more {
+        return None;
+    }
+    let Some(next) = page.get("next_cursor").and_then(Value::as_u64) else {
+        log::warn!("cloud: delta page has more items but no usable next_cursor; stopping");
+        return None;
+    };
+    if next <= cur {
+        log::warn!("cloud: delta page next_cursor does not advance; stopping");
+        return None;
+    }
+    Some(next)
+}
+
 /// Extract the server error code/message for a failed push (best-effort).
 fn push_error_message(status: reqwest::StatusCode, body: &[u8]) -> String {
     if let Ok(v) = serde_json::from_slice::<Value>(body) {
@@ -251,4 +288,35 @@ fn push_error_message(status: reqwest::StatusCode, body: &[u8]) -> String {
         }
     }
     format!("sync push http {}", status.as_u16())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::next_page;
+
+    #[test]
+    fn next_page_stops_unless_more_pages_come_with_a_cursor() {
+        assert_eq!(
+            next_page(&json!({ "has_more": true, "next_cursor": 7 }), 0),
+            Some(7),
+            "more pages with a cursor continue from it"
+        );
+        assert_eq!(
+            next_page(&json!({ "has_more": true }), 0),
+            None,
+            "more pages without a cursor stop instead of re-requesting forever"
+        );
+        assert_eq!(
+            next_page(&json!({ "has_more": false, "next_cursor": 7 }), 0),
+            None,
+            "the last page stops"
+        );
+        assert_eq!(
+            next_page(&json!({ "has_more": true, "next_cursor": 7 }), 7),
+            None,
+            "a cursor that does not advance stops instead of re-requesting forever"
+        );
+    }
 }

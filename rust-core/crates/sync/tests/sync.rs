@@ -1,5 +1,9 @@
 //! Integration tests for the sync engine: happy-path + mandatory negatives.
 //! The transport is forced to lie (forged/stale/below-cursor/equal-version).
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_crypto::KdfParams;
 use unissh_keychain::{create_account, UnlockedKeyset};
@@ -24,7 +28,7 @@ fn test_params() -> KdfParams {
         mem_kib: 19 * 1024,
         iterations: 2,
         parallelism: 1,
-        salt: vec![1u8; 16],
+        salt: vec![1_u8; 16],
     }
 }
 
@@ -59,9 +63,9 @@ fn seed_vault(storage: &Storage, ks: &UnlockedKeyset) -> Vec<u8> {
 #[test]
 fn happy_path_two_devices() {
     // A creates, pushes; B pulls → sees the vault+item, everything verifies.
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     // B is the same ownership: WE USE THE SAME keyset (one account, two devices).
-    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[2_u8; 32]).unwrap();
     let _vid = seed_vault(&sa, &ka);
 
     let mut t = InMemoryTransport::new();
@@ -80,7 +84,7 @@ fn dirty_tracking_pushes_only_changes() {
     // The regression this feature fixes: sync_push used to re-send the whole bound
     // vault on every call. Now it sends only DIRTY objects and clears them, so a push
     // with no local changes sends nothing.
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     let vid = seed_vault(&sa, &ka); // cloud vault + 1 item, bound to TENANT (both dirty)
     let mut t = InMemoryTransport::new();
 
@@ -118,12 +122,12 @@ fn pulled_vault_is_born_bound_to_source_tenant() {
     // unbound — otherwise it looks like a legacy unbound vault, the auto-bind
     // rebinds + re-dirties it, and it re-pushes as a server-side duplicate
     // (root cause of the mass-duplication incident).
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     seed_vault(&sa, &ka);
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
 
-    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[2_u8; 32]).unwrap();
     sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
 
     let v = sb.get_vault(b"vault-1").unwrap().unwrap();
@@ -145,12 +149,12 @@ fn repull_binds_a_vault_that_landed_unbound() {
     // equal" to its bound server copy. The equal-version check therefore returns
     // early, before the born-bound stamp — so the one action a user has to fix this
     // is precisely the action that can never fix it.
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     seed_vault(&sa, &ka);
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
 
-    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[2_u8; 32]).unwrap();
     sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
 
     // Reproduce the state: same vault, same version, sync_tenant empty. This is not
@@ -183,12 +187,12 @@ fn apply_pulled_objects_materializes_without_advancing_cursor() {
     // "Pull this vault": objects fetched out-of-band (via ?vault=<id>) are applied
     // through the same verify-before-apply path, materialize born-bound, and DO NOT
     // advance the per-tenant pull cursor.
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     seed_vault(&sa, &ka);
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
 
-    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[2_u8; 32]).unwrap();
     let objs = t.delta_since(0); // Vec<(u64, SyncObject)> — the vault's objects
     let report = apply_pulled_objects(&sb, &ctx(&ka), objs).unwrap();
 
@@ -219,12 +223,12 @@ fn apply_pulled_objects_materializes_without_advancing_cursor() {
 fn pulled_objects_are_not_re_pushed() {
     // Objects applied by sync_pull go through low-level put_* (not the vault layer),
     // so they never get marked dirty and are never bounced back to the server.
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     seed_vault(&sa, &ka);
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
 
-    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[2_u8; 32]).unwrap();
     let r = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
     assert!(r.applied >= 2, "B receives vault + item");
     // The pulled vault is born bound to the tenant it came from (no manual
@@ -245,15 +249,15 @@ fn repull_after_cursor_reset_recovers_owner_vault() {
     // advances the pull cursor. When the device later becomes the OWNER (re-attach),
     // an incremental pull returns nothing (cursor is stale) and the owner can never
     // recover the vault it can now decrypt. reset_pull_cursor must fix that.
-    let (sa, ka) = account(&[1u8; 32]); // owner
-    let (_sb2, kb) = account(&[9u8; 32]); // some OTHER identity (was on the device first)
+    let (sa, ka) = account(&[1_u8; 32]); // owner
+    let (_sb2, kb) = account(&[9_u8; 32]); // some OTHER identity (was on the device first)
     seed_vault(&sa, &ka);
 
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
 
     // The device (sb) first pulls as the WRONG identity → vault rejected, cursor burned.
-    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[2_u8; 32]).unwrap();
     let r1 = sync_pull(&mut t, &sb, &ctx(&kb)).unwrap();
     assert_eq!(r1.applied, 0);
     assert!(!r1.rejected.is_empty(), "wrong identity → authority reject");
@@ -268,7 +272,7 @@ fn repull_after_cursor_reset_recovers_owner_vault() {
     assert!(sb.get_vault(b"vault-1").unwrap().is_none());
 
     // Reset the pull cursor → full re-pull as owner → the vault is recovered.
-    unissh_sync::reset_pull_cursor(&sb, b"oracle-tenant").unwrap();
+    reset_pull_cursor(&sb, b"oracle-tenant").unwrap();
     let r3 = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
     assert!(
         r3.applied >= 2,
@@ -292,13 +296,13 @@ fn restore_recovers_a_locally_deleted_vault_still_live_on_server() {
     // now OLDER than the local tombstone (skipped_stale under LWW) and list_vaults
     // hides tombstones. Purging the local record + resetting the cursor lets the
     // re-pull re-materialize the server copy — this is what the "restore" action does.
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     seed_vault(&sa, &ka);
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
 
     // device B (same owner keyset) pulls → has the vault + item.
-    let sb = Storage::open_in_memory(&[2u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[2_u8; 32]).unwrap();
     assert!(sync_pull(&mut t, &sb, &ctx(&ka)).unwrap().applied >= 2);
     assert!(sb.get_vault(b"vault-1").unwrap().is_some());
 
@@ -312,7 +316,7 @@ fn restore_recovers_a_locally_deleted_vault_still_live_on_server() {
         .all(|v| v.vault_id != b"vault-1"));
 
     // a plain re-pull can't bring it back — the server copy is stale vs the tombstone.
-    unissh_sync::reset_pull_cursor(&sb, b"oracle-tenant").unwrap();
+    reset_pull_cursor(&sb, b"oracle-tenant").unwrap();
     let r2 = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
     assert_eq!(r2.applied, 0, "LWW keeps the newer local tombstone");
     assert!(sb.get_vault(b"vault-1").unwrap().unwrap().tombstone);
@@ -320,7 +324,7 @@ fn restore_recovers_a_locally_deleted_vault_still_live_on_server() {
     // restore = purge the local record + reset cursor + re-pull → vault recovered.
     assert_eq!(sb.list_tombstoned_cloud_vaults().unwrap().len(), 1);
     sb.purge_vault_data(b"vault-1").unwrap();
-    unissh_sync::reset_pull_cursor(&sb, b"oracle-tenant").unwrap();
+    reset_pull_cursor(&sb, b"oracle-tenant").unwrap();
     let r3 = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
     assert!(
         r3.applied >= 2,
@@ -343,16 +347,16 @@ fn restore_recovers_a_locally_deleted_vault_still_live_on_server() {
 
 #[test]
 fn forged_unauthorized_object_rejected_not_applied() {
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     seed_vault(&sa, &ka);
-    let sb = Storage::open_in_memory(&[3u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[3_u8; 32]).unwrap();
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
 
     // attacker is a DIFFERENT account. Signs an item in someone else's vault-1 validly
     // under THEIR OWN key, but authority under genesis A will fail.
     let (_s2, _e2, attacker) = create_account(Some(b"x"), test_params()).unwrap();
-    let sx = Storage::open_in_memory(&[8u8; 32]).unwrap();
+    let sx = Storage::open_in_memory(&[8_u8; 32]).unwrap();
     let vx = Vault::create(&sx, &attacker, b"vault-1".to_vec(), b"evil").unwrap();
     vx.put_item(b"evil-item", 1, b"payload").unwrap();
     let evil = sx.get_item(b"vault-1", b"evil-item").unwrap().unwrap();
@@ -374,9 +378,9 @@ fn forged_unauthorized_object_rejected_not_applied() {
 
 #[test]
 fn epoch_below_floor_rejected() {
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     seed_vault(&sa, &ka);
-    let sb = Storage::open_in_memory(&[4u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[4_u8; 32]).unwrap();
     // Raise the vault epoch floor on B higher than that of the incoming records (key_epoch=0).
     sb.set_vault_epoch_floor(b"vault-1", 5).unwrap();
     let mut t = InMemoryTransport::new();
@@ -395,9 +399,9 @@ fn epoch_below_floor_rejected() {
 
 #[test]
 fn stale_version_is_skipped_not_crash() {
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     seed_vault(&sa, &ka);
-    let sb = Storage::open_in_memory(&[5u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[5_u8; 32]).unwrap();
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
     // B receives v1 of the vault+item.
@@ -433,9 +437,9 @@ fn stale_version_is_skipped_not_crash() {
 
 #[test]
 fn equal_version_different_content_is_conflict() {
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     let vid = seed_vault(&sa, &ka);
-    let sb = Storage::open_in_memory(&[6u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[6_u8; 32]).unwrap();
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
     sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
@@ -443,7 +447,7 @@ fn equal_version_different_content_is_conflict() {
     // A SECOND valid item version=1 with DIFFERENT content, the same (vault,item).
     // Emulates an independent mint of version 1 on another device — both validly
     // signed by the owner (the same keyset ka), but the content differs.
-    let sc = Storage::open_in_memory(&[7u8; 32]).unwrap();
+    let sc = Storage::open_in_memory(&[7_u8; 32]).unwrap();
     let vc = Vault::create(&sc, &ka, vid.clone(), b"name").unwrap();
     vc.put_item(b"item-1", 1, b"DIFFERENT").unwrap();
     let conflicting = sc.get_item(&vid, b"item-1").unwrap().unwrap();
@@ -462,9 +466,9 @@ fn equal_version_different_content_is_conflict() {
 
 #[test]
 fn transport_below_cursor_rejected_and_rollback() {
-    let (sa, ka) = account(&[1u8; 32]);
+    let (sa, ka) = account(&[1_u8; 32]);
     seed_vault(&sa, &ka);
-    let sb = Storage::open_in_memory(&[10u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[10_u8; 32]).unwrap();
     let mut t = InMemoryTransport::new();
     sync_push(&mut t, &sa, TENANT).unwrap();
     sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
@@ -517,10 +521,10 @@ fn malformed_object_rejected_rest_processed() {
 fn keyset_generation_below_floor_rejected() {
     use unissh_keychain::{create_account, raise_keyset_gen_floor};
     let (_sk, enc, _u) = create_account(Some(b"pw"), test_params()).unwrap();
-    let sb = Storage::open_in_memory(&[11u8; 32]).unwrap();
+    let sb = Storage::open_in_memory(&[11_u8; 32]).unwrap();
     // raise the floor above the record's generation (enc.generation == 1)
     raise_keyset_gen_floor(&sb, 5).unwrap();
-    let (_s, ka) = account(&[12u8; 32]);
+    let (_s, ka) = account(&[12_u8; 32]);
     let mut t = InMemoryTransport::new();
     t.push_objects(&[SyncObject::Keyset(enc.to_bytes().unwrap())])
         .unwrap();
@@ -537,7 +541,7 @@ fn keyset_generation_below_floor_rejected() {
 #[test]
 fn no_plaintext_in_sync_objects() {
     // SyncObject carries only ciphertext/signatures — NOT the secret's plaintext.
-    let (sa, ka) = account(&[13u8; 32]);
+    let (sa, ka) = account(&[13_u8; 32]);
     let v = Vault::create(&sa, &ka, b"vault-x".to_vec(), b"name").unwrap();
     let secret = b"SUPER_SECRET_PLAINTEXT_MARKER";
     v.put_item(b"i", 1, secret).unwrap();
@@ -556,9 +560,9 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 /// servers, and check that `sync_push(tenant)` hands off exactly "its own" vault.
 #[test]
 fn cloud_vault_pushed_only_to_its_bound_tenant() {
-    let (sa, ka) = account(&[20u8; 32]);
     const TENANT_A: &[u8] = b"tenant-A";
     const TENANT_B: &[u8] = b"tenant-B";
+    let (sa, ka) = account(&[20_u8; 32]);
 
     // Vault A → bound to server A.
     Vault::create_with_target(&sa, &ka, b"vault-A".to_vec(), b"a", SyncTarget::Cloud).unwrap();
@@ -603,9 +607,12 @@ fn cloud_vault_pushed_only_to_its_bound_tenant() {
 fn pushed_vault_ids(t: &InMemoryTransport) -> Vec<Vec<u8>> {
     t.delta_since(0)
         .into_iter()
-        .filter_map(|(_, o)| match o {
-            SyncObject::Vault(v) => Some(v.vault_id),
-            _ => None,
+        .filter_map(|(_, o)| {
+            if let SyncObject::Vault(v) = o {
+                Some(v.vault_id)
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -613,7 +620,7 @@ fn pushed_vault_ids(t: &InMemoryTransport) -> Vec<Vec<u8>> {
 /// A3.2: sync_push hands off the local account-state (reconstructs it from the storage row).
 #[test]
 fn sync_push_emits_local_account_state() {
-    let (sa, ka) = account(&[9u8; 32]);
+    let (sa, ka) = account(&[9_u8; 32]);
     let author = genesis(&ka);
     let payload = b"sealed-blob".to_vec();
     let sig = sign_account_state(&ka, 7, &payload).unwrap();

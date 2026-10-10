@@ -85,7 +85,7 @@ pub fn format_message(h: &Header, row: &AuditExportRow) -> String {
     );
     for (name, value) in [
         ("seq", row.seq.to_string()),
-        ("event", event.to_string()),
+        ("event", event.to_owned()),
         ("space_id", b64(&row.space_id)),
         ("vault_id", b64(&row.vault_id)),
     ] {
@@ -94,7 +94,11 @@ pub fn format_message(h: &Header, row: &AuditExportRow) -> String {
     m.push_str("] ");
     match entry {
         serde_json::Value::String(s) => m.push_str(&s),
-        other => m.push_str(&other.to_string()),
+        other @ (serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::Array(_)
+        | serde_json::Value::Object(_)) => m.push_str(&other.to_string()),
     }
     m
 }
@@ -167,13 +171,13 @@ impl SyslogSink {
     pub fn from_config(cfg: &SyslogConfig, public_url: &str) -> Result<Self, String> {
         let facility = cfg
             .facility_code()
-            .ok_or_else(|| "audit.syslog.facility is not a syslog facility".to_string())?;
+            .ok_or_else(|| "audit.syslog.facility is not a syslog facility".to_owned())?;
         let hostname = reqwest::Url::parse(public_url)
             .ok()
             // RFC 5424 wants an IPv6 HOSTNAME bare, without URL brackets.
             .and_then(|u| {
                 u.host_str()
-                    .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
+                    .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_owned())
             })
             .filter(|h| (1..=255).contains(&h.len()) && h.bytes().all(|b| (33..=126).contains(&b)))
             .unwrap_or_else(|| "-".into());
@@ -206,7 +210,9 @@ impl SyslogSink {
         if slot.is_none() {
             *slot = Some(udp_connect(&self.address).await?);
         }
-        let sock = slot.as_ref().expect("set above");
+        let Some(sock) = slot.as_ref() else {
+            return Err(SinkError("connect".into()));
+        };
         let max = match sock.peer_addr() {
             Ok(a) if a.is_ipv6() => UDP_MAX_PAYLOAD_V6,
             _ => UDP_MAX_PAYLOAD_V4,
@@ -230,6 +236,7 @@ impl SyslogSink {
                 return Err(SinkError("udp_send".into()));
             }
         }
+        drop(slot);
         Ok(())
     }
 
@@ -249,35 +256,44 @@ impl SyslogSink {
             *slot = None;
         }
         if slot.is_none() {
+            #[expect(
+                clippy::map_err_ignore,
+                reason = "SinkError is a fixed loggable code by contract; the code names the whole cause"
+            )]
             let conn = tokio::time::timeout(IO_TIMEOUT, TcpStream::connect(self.address.as_str()))
                 .await
                 .map_err(|_| SinkError("timeout".into()))?
                 .map_err(|_| SinkError("connect".into()))?;
             *slot = Some(conn);
         }
-        let stream = slot.as_mut().expect("set above");
+        let Some(stream) = slot.as_mut() else {
+            return Err(SinkError("connect".into()));
+        };
         let written = tokio::time::timeout(IO_TIMEOUT, async {
             stream.write_all(&frames).await?;
             stream.flush().await
         })
         .await;
-        match written {
+        let result = match written {
             Ok(Ok(())) => Ok(()),
-            // A half-written frame would corrupt the stream: always reconnect.
-            Ok(Err(_)) => {
-                *slot = None;
-                Err(SinkError("write".into()))
-            }
-            Err(_) => {
-                *slot = None;
-                Err(SinkError("timeout".into()))
-            }
+            Ok(Err(_)) => Err(SinkError("write".into())),
+            Err(_) => Err(SinkError("timeout".into())),
+        };
+        // A half-written frame would corrupt the stream: always reconnect.
+        if result.is_err() {
+            *slot = None;
         }
+        drop(slot);
+        result
     }
 }
 
 /// A connected UDP socket of the collector's address family. Connecting lets the
 /// kernel report "port unreachable" as a send error.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "SinkError is a fixed loggable code by contract; the code names the whole cause"
+)]
 async fn udp_connect(address: &str) -> Result<UdpSocket, SinkError> {
     let target = tokio::net::lookup_host(address)
         .await
@@ -303,7 +319,7 @@ async fn udp_connect(address: &str) -> Result<UdpSocket, SinkError> {
 /// checked before each batch. A collector never sends on a syslog stream, so
 /// readable data is unexpected but harmless.
 fn tcp_alive(s: &TcpStream) -> bool {
-    let mut buf = [0u8; 64];
+    let mut buf = [0_u8; 64];
     match s.try_read(&mut buf) {
         Ok(0) => false,
         Ok(_) => true,
@@ -387,7 +403,7 @@ mod tests {
             rows: vec![row(1, vec![0; 49_200]), row(2, b"small".to_vec())],
         };
         assert_eq!(sink.deliver(&batch).await, Ok(()));
-        let mut buf = vec![0u8; 70_000];
+        let mut buf = vec![0_u8; 70_000];
         let n = collector.recv(&mut buf).await.unwrap();
         assert!(
             std::str::from_utf8(&buf[..n])

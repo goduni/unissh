@@ -23,3 +23,6 @@ log = "0.4"
 [dev-dependencies]
 unissh-crypto = { path = "../crypto" }
 unissh-keychain = { path = "../keychain" }
+
+[lints]
+workspace = true

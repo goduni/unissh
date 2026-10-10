@@ -51,9 +51,13 @@ const CONFIRM_TAG_LEN: usize = 32;
 type HmacSha256 = Hmac<Sha256>;
 
 /// Derives a 32-byte subkey from the shared SPAKE2 key using `info` (HKDF-SHA256).
+#[expect(
+    clippy::expect_used,
+    reason = "HKDF-SHA256 expand fails only for outputs over 255*32 bytes; the output here is a fixed 32"
+)]
 fn derive_subkey(spake_key: &[u8], info: &[u8]) -> Zeroizing<[u8; 32]> {
     let hk = Hkdf::<Sha256>::new(None, spake_key);
-    let mut okm = Zeroizing::new([0u8; 32]);
+    let mut okm = Zeroizing::new([0_u8; 32]);
     hk.expand(info, okm.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
     okm
@@ -66,7 +70,12 @@ fn channel_key_bytes(spake_key: &[u8]) -> Zeroizing<[u8; 32]> {
 
 /// Confirmation transcript: label ‖ msg1 ‖ msg2_pake.
 fn confirm_transcript(msg1: &[u8], msg2_pake: &[u8]) -> Vec<u8> {
-    let mut t = Vec::with_capacity(CONFIRM_TRANSCRIPT_LABEL.len() + msg1.len() + msg2_pake.len());
+    let mut t = Vec::with_capacity(
+        CONFIRM_TRANSCRIPT_LABEL
+            .len()
+            .saturating_add(msg1.len())
+            .saturating_add(msg2_pake.len()),
+    );
     t.extend_from_slice(CONFIRM_TRANSCRIPT_LABEL);
     t.extend_from_slice(msg1);
     t.extend_from_slice(msg2_pake);
@@ -74,12 +83,16 @@ fn confirm_transcript(msg1: &[u8], msg2_pake: &[u8]) -> Vec<u8> {
 }
 
 /// HMAC tag of the transcript under the directional confirm key.
+#[expect(
+    clippy::expect_used,
+    reason = "HMAC-SHA256 new_from_slice accepts keys of any length, so it cannot fail"
+)]
 fn confirm_tag(spake_key: &[u8], info: &[u8], transcript: &[u8]) -> [u8; CONFIRM_TAG_LEN] {
     let key = derive_subkey(spake_key, info);
     let mut mac = HmacSha256::new_from_slice(key.as_ref()).expect("HMAC accepts any key length");
     mac.update(transcript);
     let out = mac.finalize().into_bytes();
-    let mut tag = [0u8; CONFIRM_TAG_LEN];
+    let mut tag = [0_u8; CONFIRM_TAG_LEN];
     tag.copy_from_slice(&out);
     tag
 }
@@ -143,10 +156,9 @@ impl OnboardInitiator {
         unlocked: &UnlockedKeyset,
         secret_key: &SecretKey,
     ) -> Result<Vec<u8>, KeychainError> {
-        if msg2.len() < CONFIRM_TAG_LEN {
+        let Some((msg2_pake, responder_tag)) = msg2.split_last_chunk::<CONFIRM_TAG_LEN>() else {
             return Err(KeychainError::ConfirmationFailed);
-        }
-        let (msg2_pake, responder_tag) = msg2.split_at(msg2.len() - CONFIRM_TAG_LEN);
+        };
 
         let spake_key = Zeroizing::new(
             self.spake
@@ -177,7 +189,7 @@ impl OnboardInitiator {
         let ckey = SymmetricKey::from_bytes(*channel_key_bytes(&spake_key));
         let sealed = aead_encrypt(&ckey, &secrets, &transfer_aad())?;
 
-        let mut msg3 = Vec::with_capacity(CONFIRM_TAG_LEN + sealed.len());
+        let mut msg3 = Vec::with_capacity(sealed.len().saturating_add(CONFIRM_TAG_LEN));
         msg3.extend_from_slice(&initiator_tag);
         msg3.extend_from_slice(&sealed);
         Ok(msg3)
@@ -207,7 +219,7 @@ impl OnboardResponder {
         let transcript = confirm_transcript(msg1, &msg2_pake);
         let responder_tag = confirm_tag(&spake_key, INFO_CONFIRM_RESPONDER, &transcript);
 
-        let mut msg2 = Vec::with_capacity(msg2_pake.len() + CONFIRM_TAG_LEN);
+        let mut msg2 = Vec::with_capacity(msg2_pake.len().saturating_add(CONFIRM_TAG_LEN));
         msg2.extend_from_slice(&msg2_pake);
         msg2.extend_from_slice(&responder_tag);
         Ok((
@@ -248,14 +260,21 @@ impl OnboardResponder {
         let mut plaintext = Zeroizing::new(aead_decrypt(&ckey, sealed, &transfer_aad())?);
         // payload v2: version(1) || keypairs(64) || secret_key(16). Length check is
         // first so the `[0]` version read can't index an empty buffer.
-        if plaintext.len() != TRANSFERRED_PAYLOAD_V2_LEN || plaintext[0] != TRANSFER_PAYLOAD_VERSION
+        if plaintext.len() != TRANSFERRED_PAYLOAD_V2_LEN
+            || plaintext.first() != Some(&TRANSFER_PAYLOAD_VERSION)
         {
             return Err(KeychainError::Format);
         }
-        let mut secrets = Zeroizing::new([0u8; TRANSFERRED_SECRETS_LEN]);
-        secrets.copy_from_slice(&plaintext[1..1 + TRANSFERRED_SECRETS_LEN]);
-        let secret_key = SecretKey::from_slice(&plaintext[1 + TRANSFERRED_SECRETS_LEN..])
-            .map_err(|_| KeychainError::Format)?;
+        let mut secrets = Zeroizing::new([0_u8; TRANSFERRED_SECRETS_LEN]);
+        secrets.copy_from_slice(
+            plaintext
+                .get(1..=TRANSFERRED_SECRETS_LEN)
+                .ok_or(KeychainError::Format)?,
+        );
+        let tail = plaintext
+            .get(1 + TRANSFERRED_SECRETS_LEN..)
+            .ok_or(KeychainError::Format)?;
+        let secret_key = SecretKey::from_slice(tail).map_err(|_| KeychainError::Format)?;
         plaintext.zeroize();
 
         install_transferred_keyset(&secrets, secret_key, password, params)
@@ -268,7 +287,7 @@ mod tests {
 
     #[test]
     fn matching_keys_confirm_tag_verifies() {
-        let spake_key = [9u8; 32];
+        let spake_key = [9_u8; 32];
         let t = confirm_transcript(b"m1", b"m2");
         let tag = confirm_tag(&spake_key, INFO_CONFIRM_RESPONDER, &t);
         verify_confirm_tag(&spake_key, INFO_CONFIRM_RESPONDER, &t, &tag).unwrap();
@@ -277,16 +296,16 @@ mod tests {
     #[test]
     fn different_spake_key_confirm_tag_fails() {
         let t = confirm_transcript(b"m1", b"m2");
-        let tag = confirm_tag(&[9u8; 32], INFO_CONFIRM_RESPONDER, &t);
+        let tag = confirm_tag(&[9_u8; 32], INFO_CONFIRM_RESPONDER, &t);
         assert_eq!(
-            verify_confirm_tag(&[8u8; 32], INFO_CONFIRM_RESPONDER, &t, &tag).unwrap_err(),
+            verify_confirm_tag(&[8_u8; 32], INFO_CONFIRM_RESPONDER, &t, &tag).unwrap_err(),
             KeychainError::ConfirmationFailed
         );
     }
 
     #[test]
     fn directional_subkeys_differ() {
-        let k = [3u8; 32];
+        let k = [3_u8; 32];
         let r = derive_subkey(&k, INFO_CONFIRM_RESPONDER);
         let i = derive_subkey(&k, INFO_CONFIRM_INITIATOR);
         assert_ne!(r.as_ref(), i.as_ref());

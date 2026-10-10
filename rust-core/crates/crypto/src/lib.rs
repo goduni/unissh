@@ -38,7 +38,12 @@
 //! the PQ hybrid are only reserved in the registry, not implemented.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#![expect(
+    clippy::map_err_ignore,
+    reason = "error causes are erased on purpose: a decrypt or parse failure must not become an oracle"
+)]
+// Hostile input is parsed here: every +,-,*,<< must say what happens on overflow.
+#![warn(clippy::arithmetic_side_effects)]
 
 mod error;
 

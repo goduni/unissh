@@ -156,9 +156,9 @@ impl OidcConfig {
         for (i, gm) in self.group_map.iter().enumerate() {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(gm.space_id.as_bytes())
-                .map_err(|_| {
+                .map_err(|e| {
                     format!(
-                        "oidc.group_map[{i}].space_id is not valid base64: {:?}",
+                        "oidc.group_map[{i}].space_id is not valid base64 ({e}): {:?}",
                         gm.space_id
                     )
                 })?;
@@ -280,7 +280,7 @@ impl WebhookConfig {
     /// Boot-time validation: a malformed sink is a startup error, not a warning.
     pub fn validate(&self) -> Result<(), String> {
         let url = reqwest::Url::parse(&self.url)
-            .map_err(|_| "audit.webhook.url is not a valid URL".to_string())?;
+            .map_err(|e| format!("audit.webhook.url is not a valid URL: {e}"))?;
         if url.scheme() != "https" && url.scheme() != "http" {
             return Err("audit.webhook.url must be http:// or https://".into());
         }
@@ -369,10 +369,10 @@ impl SyslogConfig {
 
     /// The numeric facility (0..=23), or `None` for an unknown keyword.
     pub fn facility_code(&self) -> Option<u8> {
-        SYSLOG_FACILITIES
+        let i = SYSLOG_FACILITIES
             .iter()
-            .position(|f| f.eq_ignore_ascii_case(&self.facility))
-            .map(|i| i as u8)
+            .position(|f| f.eq_ignore_ascii_case(&self.facility))?;
+        u8::try_from(i).ok()
     }
 
     /// Boot-time validation. The address is checked for shape only (`host:port`
@@ -566,21 +566,21 @@ impl std::fmt::Debug for SetupConfig {
 }
 
 /// `***` for a non-empty secret, `<unset>` for an empty one (presence is not a secret).
-fn redacted(s: &str) -> &'static str {
+const fn redacted(s: &str) -> &'static str {
     if s.is_empty() { "<unset>" } else { "***" }
 }
 
 impl Config {
     /// Load: defaults → TOML (if a path is given and exists) → env (`UNISSH__`).
     pub fn load(toml_path: Option<&Path>) -> Result<Self, Box<figment::Error>> {
-        let mut fig = Figment::from(Serialized::defaults(Config::default()));
+        let mut fig = Figment::from(Serialized::defaults(Self::default()));
         if let Some(p) = toml_path {
             if p.exists() {
                 fig = fig.merge(Toml::file(p));
             }
         }
         fig = fig.merge(Env::prefixed("UNISSH__").split("__"));
-        let mut config: Config = fig.extract().map_err(Box::new)?;
+        let mut config: Self = fig.extract().map_err(Box::new)?;
         config.audit.normalize();
         // Fail fast on a bad OIDC group_map so no per-login SSO path can be broken by
         // one malformed entry (see `OidcConfig::validate`).
@@ -619,7 +619,7 @@ mod oidc_validate_tests {
     }
 
     fn b64_16() -> String {
-        base64::engine::general_purpose::STANDARD.encode([0x5au8; 16])
+        base64::engine::general_purpose::STANDARD.encode([0x5a_u8; 16])
     }
 
     #[test]
@@ -647,7 +647,7 @@ mod oidc_validate_tests {
 
     #[test]
     fn wrong_length_space_id_fails() {
-        let short = base64::engine::general_purpose::STANDARD.encode([0u8; 8]);
+        let short = base64::engine::general_purpose::STANDARD.encode([0_u8; 8]);
         let c = OidcConfig {
             group_map: vec![gm(&short, "member")],
             ..Default::default()

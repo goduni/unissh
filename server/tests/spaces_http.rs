@@ -13,11 +13,15 @@ use unissh_server::ids::b64;
 use unissh_server::store::Val;
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end spaces lifecycle; the steps share state and read in order"
+)]
 async fn spaces_members_directory_lifecycle() {
     let app = spawn().await;
     let id = common::make_identity();
     let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
     let tok = common::login_v2(
         &app,
         &id,
@@ -60,7 +64,7 @@ async fn spaces_members_directory_lifecycle() {
     let backend_id = r.json::<Value>().await.unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     let spaces: Value = get("/v1/spaces".into(), &tok)
         .await
@@ -88,7 +92,7 @@ async fn spaces_members_directory_lifecycle() {
     assert_eq!(r.status(), 400, "invalid role → malformed");
 
     // --- admin guard: owner is NOT admin of an unknown space → 403 ---
-    let fake_space = b64(&[9u8; 16]);
+    let fake_space = b64(&[9_u8; 16]);
     let r = post(
         "spaces/members",
         &tok,
@@ -258,7 +262,7 @@ async fn member_add_unknown_404_and_last_admin_protected() {
     let app = spawn().await;
     let id = common::make_identity();
     let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
     let tok = common::login_v2(
         &app,
         &id,
@@ -284,11 +288,11 @@ async fn member_add_unknown_404_and_last_admin_protected() {
         .unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     // FIX 2: adding a member with a random NONEXISTENT account_id → 404 (not 500). The
     // admin guard runs first, so this is reached only because the caller IS an admin.
-    let ghost = b64(&[7u8; 16]);
+    let ghost = b64(&[7_u8; 16]);
     let r = post(
         "spaces/members",
         json!({ "space_id": solo_id, "account_id": ghost, "role": "member" }),
@@ -343,7 +347,7 @@ async fn members_add_enqueues_space_wide_grants() {
     let app = spawn().await;
     let id = common::make_identity();
     let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
     let tok = common::login_v2(
         &app,
         &id,
@@ -369,8 +373,8 @@ async fn members_add_enqueues_space_wide_grants() {
         .unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
-    let vault_bytes = [3u8; 16];
+        .to_owned();
+    let vault_bytes = [3_u8; 16];
     let r = post(
         "vaults/claim",
         &tok,
@@ -404,7 +408,7 @@ async fn members_add_enqueues_space_wide_grants() {
         .fetch_scalar_i64(
             "SELECT COUNT(*) FROM pending_actions \
              WHERE account_id = ? AND vault_id = ? AND kind = 'grant' AND state = 'pending'",
-            vec![Val::b(&member.account_id[..]), Val::b(&vault_bytes[..])],
+            vec![Val::b(&*member.account_id), Val::b(&vault_bytes[..])],
         )
         .await
         .unwrap()
@@ -422,7 +426,7 @@ async fn members_add_existing_conflicts() {
     let app = spawn().await;
     let id = common::make_identity();
     let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
     let tok = common::login_v2(
         &app,
         &id,
@@ -447,7 +451,7 @@ async fn members_add_existing_conflicts() {
         .unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
     let member = app.seed_session("").await;
     let member_acct = b64(&member.account_id);
 
@@ -477,7 +481,7 @@ async fn instance_owner_protected_from_coadmin_eviction() {
     let app = spawn().await;
     let id = common::make_identity();
     let claimed = claim_owner(&app, &id.payload_b64, &id.sig_b64).await;
-    let owner_acct = claimed["account_id"].as_str().unwrap().to_string();
+    let owner_acct = claimed["account_id"].as_str().unwrap().to_owned();
     let owner_tok = common::login_v2(
         &app,
         &id,
@@ -503,7 +507,7 @@ async fn instance_owner_protected_from_coadmin_eviction() {
         .unwrap()["space_id"]
         .as_str()
         .unwrap()
-        .to_string();
+        .to_owned();
 
     // A distinct principal is added as a co-admin of Backend.
     let coadmin = app.seed_session("").await;

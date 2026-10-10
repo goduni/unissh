@@ -1,6 +1,10 @@
 //! §2.4 server-side record-signature verification: with `validate_signatures=true`
 //! the server accepts records REALLY signed by the core and rejects forged/garbage ones.
 //! Signatures are built with the core `sign_version` with exact AAD/content (parity).
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -88,7 +92,7 @@ fn grant_obj(kp: &Ed25519Keypair) -> SyncObject {
     let wrapped_vk = vec![0x44; 16];
     let mut content = GRANT_DOMAIN.to_vec();
     content.push(1); // MemberRole::Editor -> 1
-    content.extend_from_slice(&0i64.to_be_bytes()); // not_after (8 BE) — matches new signed content
+    content.extend_from_slice(&0_i64.to_be_bytes()); // not_after (8 BE) — matches new signed content
     content.extend_from_slice(&wrapped_vk);
     let sig = sig_over(kp, VID, &member, 3, &content);
     SyncObject::MembershipGrant(MembershipGrant {
@@ -213,8 +217,8 @@ async fn passthrough_accepts_unsigned_when_validate_off() {
         wrapped_item_key: vec![4],
         version: 1,
         tombstone: false,
-        signature: vec![7u8; 67],
-        author_pubkey: vec![8u8; 32],
+        signature: vec![7_u8; 67],
+        author_pubkey: vec![8_u8; 32],
         created_at: 0,
         updated_at: 0,
         key_epoch: 1,

@@ -4,6 +4,11 @@
 //! `vault_id+item_id+version`; the change is signed (Ed25519) with rollback detection;
 //! the VK can be handed to another member under their X25519 key (HPKE).
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
+
 use unissh_crypto::{
     aead_decrypt, aead_encrypt, derive_key, open_key_with_secret, seal_key_to_public, sign_version,
     unwrap_key, verify_no_rollback, AssociatedData, Ed25519Keypair, KdfParams, SymmetricKey,
@@ -15,7 +20,7 @@ fn fast_params() -> KdfParams {
         mem_kib: 8 * 1024,
         iterations: 1,
         parallelism: 1,
-        salt: vec![9u8; 16],
+        salt: vec![9_u8; 16],
     }
 }
 

@@ -12,5 +12,5 @@ fn main() {
     if std::env::var_os("APPIMAGE").is_some() && std::env::var_os("GDK_BACKEND").is_none() {
         std::env::set_var("GDK_BACKEND", "x11");
     }
-    unissh_lib::run()
+    unissh_lib::run();
 }

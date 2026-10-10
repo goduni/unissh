@@ -95,12 +95,12 @@ pub fn discover(http: &Client, issuer: &str) -> ApiResult<OidcEndpoints> {
         .get("authorization_endpoint")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::other("OIDC discovery is missing authorization_endpoint"))?
-        .to_string();
+        .to_owned();
     let token_endpoint = doc
         .get("token_endpoint")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::other("OIDC discovery is missing token_endpoint"))?
-        .to_string();
+        .to_owned();
     Ok(OidcEndpoints {
         authorization_endpoint,
         token_endpoint,
@@ -183,7 +183,7 @@ pub fn exchange_code(
     }
     body.get("id_token")
         .and_then(Value::as_str)
-        .map(str::to_string)
+        .map(str::to_owned)
         .ok_or_else(|| ApiError::other("OIDC token response is missing id_token"))
 }
 
@@ -238,8 +238,14 @@ pub fn wait_for_redirect(listener: TcpListener, expected_state: &str) -> ApiResu
 fn handle_connection(mut stream: TcpStream, expected_state: &str) -> Option<ApiResult<String>> {
     // The listener runs non-blocking (for the accept-timeout loop); force the accepted
     // stream blocking so the read below honours the timeout instead of erroring EAGAIN.
-    let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+    // A failure here only degrades the read below to an early error, which the
+    // caller treats as "not the callback yet" and keeps waiting.
+    if let Err(e) = stream.set_nonblocking(false) {
+        log::debug!("oidc: loopback stream stays non-blocking: {e}");
+    }
+    if let Err(e) = stream.set_read_timeout(Some(READ_TIMEOUT)) {
+        log::debug!("oidc: loopback read timeout not set: {e}");
+    }
     let mut reader = BufReader::new(
         stream
             .try_clone()
@@ -324,8 +330,14 @@ fn respond(stream: &mut TcpStream, message: &str) {
          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.flush();
+    // The browser may already have closed the tab; the sign-in result does not
+    // depend on this courtesy page arriving.
+    if let Err(e) = stream
+        .write_all(response.as_bytes())
+        .and_then(|()| stream.flush())
+    {
+        log::debug!("oidc: loopback reply not delivered: {e}");
+    }
     // Drop closes the socket (Connection: close) — no need to drain the request body,
     // which could otherwise block up to the read timeout after we already have the code.
 }
@@ -348,16 +360,21 @@ fn url_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let hi = (bytes[i + 1] as char).to_digit(16);
-                let lo = (bytes[i + 2] as char).to_digit(16);
-                if let (Some(hi), Some(lo)) = (hi, lo) {
-                    out.push((hi * 16 + lo) as u8);
+    while let Some(&byte) = bytes.get(i) {
+        match byte {
+            b'%' => {
+                let hex_digit = |at: usize| {
+                    let &d = bytes.get(at)?;
+                    char::from(d).to_digit(16)
+                };
+                let decoded = hex_digit(i + 1)
+                    .zip(hex_digit(i + 2))
+                    .and_then(|(hi, lo)| u8::try_from(hi * 16 + lo).ok());
+                if let Some(decoded) = decoded {
+                    out.push(decoded);
                     i += 3;
                 } else {
-                    out.push(bytes[i]);
+                    out.push(byte);
                     i += 1;
                 }
             }
@@ -377,6 +394,14 @@ fn url_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_decode_keeps_truncated_and_malformed_escapes_verbatim() {
+        assert_eq!(url_decode("a%41+b"), "aA b");
+        for cut in ["%", "%4", "x%", "x%4", "%zz", "%+F"] {
+            assert_eq!(url_decode(cut), cut.replace('+', " "), "input {cut:?}");
+        }
+    }
 
     #[test]
     fn pkce_challenge_is_s256_of_verifier() {

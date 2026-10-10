@@ -9,7 +9,10 @@ const SEL: &str = "SELECT action_id, kind, vault_id, account_id, crypto_role, so
                    state, created_at, done_at, done_epoch FROM pending_actions";
 
 impl Store {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the caller's transaction plus one argument per column bound into the pending_actions row; a params struct would only restate the SQL bind list"
+    )]
     pub async fn pending_enqueue(
         &self,
         tx: &mut Tx<'_>,
@@ -32,7 +35,7 @@ impl Store {
                 Val::b(account_id),
                 Val::OptI(crypto_role),
                 Val::t(source),
-                Val::OptB(proof.map(|b| b.to_vec())),
+                Val::OptB(proof.map(<[u8]>::to_vec)),
                 Val::I(now),
             ],
         )
@@ -70,7 +73,7 @@ impl Store {
         epoch: i64,
         now: i64,
     ) -> AppResult<u64> {
-        let mut total = 0u64;
+        let mut total = 0_u64;
         for ed in member_eds {
             total += tx
                 .exec(
@@ -104,7 +107,7 @@ impl Store {
                 vec![Val::b(vault_id)],
             )
             .await?;
-        let mut total = 0u64;
+        let mut total = 0_u64;
         for r in rows {
             let ed: Option<Vec<u8>> = tx
                 .fetch_optional_as::<crate::store::models::EdOnly>(

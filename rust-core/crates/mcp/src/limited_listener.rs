@@ -32,6 +32,10 @@ impl axum::serve::Listener for LimitedListener {
     type Addr = SocketAddr;
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
+            #[expect(
+                clippy::expect_used,
+                reason = "the listener owns the semaphore and never closes it, so acquiring cannot fail"
+            )]
             let slot = self
                 .slots
                 .clone()

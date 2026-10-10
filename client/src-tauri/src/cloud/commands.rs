@@ -44,7 +44,7 @@ fn persist_refresh(server_id: &str, token: &str) {
 fn require_config(state: &AppState, server_id: Option<&str>) -> ApiResult<ServerConfig> {
     state
         .cloud
-        .config_for(server_id)
+        .config_for(server_id)?
         .ok_or_else(|| ApiError::Server {
             code: "not_connected".into(),
             message: "no server is linked".into(),
@@ -55,7 +55,7 @@ fn require_config(state: &AppState, server_id: Option<&str>) -> ApiResult<Server
 fn require_access(state: &AppState, server_id: Option<&str>) -> ApiResult<String> {
     state
         .cloud
-        .access_token_for(server_id)
+        .access_token_for(server_id)?
         .ok_or_else(|| ApiError::Server {
             code: "unauthenticated".into(),
             message: "no active session — sign in to the server".into(),
@@ -69,28 +69,48 @@ fn require_access(state: &AppState, server_id: Option<&str>) -> ApiResult<String
 /// swallowed: the snapshot just keeps the prior/empty list rather than failing the
 /// otherwise-successful login.
 async fn refresh_spaces_cache(state: &AppState, server_id: &str) {
-    let (base_url, access) = match (
-        state.cloud.config_for(Some(server_id)),
-        state.cloud.access_token_for(Some(server_id)),
-    ) {
-        (Some(cfg), Some(access)) => (cfg.base_url, access),
-        _ => return,
+    if let Err(e) = try_refresh_spaces_cache(state, server_id).await {
+        log::debug!("cloud: space list refresh skipped for server {server_id}: {e:?}");
+    }
+}
+
+/// Body of [`refresh_spaces_cache`]; no linked config or no session is `Ok`.
+async fn try_refresh_spaces_cache(state: &AppState, server_id: &str) -> ApiResult<()> {
+    let (Some(cfg), Some(access)) = (
+        state.cloud.config_for(Some(server_id))?,
+        state.cloud.access_token_for(Some(server_id))?,
+    ) else {
+        return Ok(());
     };
-    let fetched = blocking_api(move || {
+    let base_url = cfg.base_url;
+    let spaces = blocking_api(move || {
         let http = client::http();
         identity::list_spaces(http, &base_url, &access)
     })
+    .await?;
+    let entries = spaces
+        .into_iter()
+        .map(|s| SpaceEntry {
+            space_id: s.space_id,
+            name: s.name,
+            role: s.role,
+        })
+        .collect();
+    state.cloud.set_spaces_for(Some(server_id), Some(entries))
+}
+
+/// Best-effort server-side logout before a link or session is dropped locally.
+/// The local drop happens either way, so a failure (offline server, expired
+/// session) is only logged; the server-side session then expires on its own.
+async fn best_effort_logout(cfg: ServerConfig, access: String) {
+    let sid = cfg.server_id.clone();
+    let result = blocking_api(move || {
+        let http = client::http();
+        identity::logout(http, &cfg.base_url, &access)
+    })
     .await;
-    if let Ok(spaces) = fetched {
-        let entries = spaces
-            .into_iter()
-            .map(|s| SpaceEntry {
-                space_id: s.space_id,
-                name: s.name,
-                role: s.role,
-            })
-            .collect();
-        state.cloud.set_spaces_for(Some(server_id), Some(entries));
+    if let Err(e) = result {
+        log::debug!("cloud: best-effort logout failed for server {sid}: {e:?}");
     }
 }
 
@@ -100,7 +120,7 @@ pub async fn server_status(
     server_id: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<ServerStatus> {
-    Ok(state.cloud.status_for(server_id.as_deref()))
+    state.cloud.status_for(server_id.as_deref())
 }
 
 /// Public, session-less probe of a server instance (`GET /v1/instance`): its name,
@@ -132,7 +152,7 @@ pub async fn server_instance_info(base_url: String) -> ApiResult<dto::InstanceIn
 /// The full list of linked servers + the active id.
 #[tauri::command]
 pub async fn server_list(state: State<'_, AppState>) -> ApiResult<ServerList> {
-    Ok(state.cloud.list())
+    state.cloud.list()
 }
 
 /// Switch the active server (the one argument-less commands resolve to).
@@ -142,7 +162,7 @@ pub async fn server_set_active(
     state: State<'_, AppState>,
 ) -> ApiResult<ServerList> {
     state.cloud.set_active(&server_id)?;
-    Ok(state.cloud.list())
+    state.cloud.list()
 }
 
 /// Forget ONE server link (config entry + tokens) after a best-effort logout.
@@ -152,27 +172,31 @@ pub async fn server_remove(server_id: String, state: State<'_, AppState>) -> Api
     // Space of the server being removed — to unbind its cloud vaults so they
     // aren't left orphaned pointing at a now-gone server (they become reclaimable
     // via re-link or manual bind).
-    let removed_space = state.cloud.config_for(Some(&server_id)).map(|c| c.space_id);
+    let removed_space = state
+        .cloud
+        .config_for(Some(&server_id))?
+        .map(|c| c.space_id);
     if let (Some(cfg), Some(access)) = (
-        state.cloud.config_for(Some(&server_id)),
-        state.cloud.access_token_for(Some(&server_id)),
+        state.cloud.config_for(Some(&server_id))?,
+        state.cloud.access_token_for(Some(&server_id))?,
     ) {
-        let _ = blocking_api(move || {
-            let http = client::http();
-            identity::logout(http, &cfg.base_url, &access)
-        })
-        .await;
+        best_effort_logout(cfg, access).await;
     }
     state.cloud.remove(&server_id)?;
     if let Some(space) = removed_space {
         let core = state.core.clone();
-        let _ = blocking_api(move || {
+        let unbound = blocking_api(move || {
             core.clear_cloud_vault_binding(space)
                 .map_err(ApiError::from)
         })
         .await;
+        if let Err(e) = unbound {
+            // The link is already gone; its vaults stay bound to the old space
+            // until re-linked or rebound by hand, which the UI still offers.
+            log::warn!("cloud: failed to unbind vaults of removed server {server_id}: {e:?}");
+        }
     }
-    Ok(state.cloud.list())
+    state.cloud.list()
 }
 
 /// Join an instance with an invite token. Learns the instance id (`GET /v1/instance`),
@@ -219,7 +243,7 @@ pub async fn server_join(
     let space_id = outcome.spaces.first().cloned().unwrap_or_default();
     let server_id = state
         .cloud
-        .find_by_identity(&base_url, &instance.instance_id, &outcome.account_id)
+        .find_by_identity(&base_url, &instance.instance_id, &outcome.account_id)?
         .unwrap_or_else(new_server_id);
     let account_id = outcome.account_id;
     let device_id = outcome.device_id;
@@ -245,10 +269,10 @@ pub async fn server_join(
     .await?;
     state
         .cloud
-        .set_access_token_for(Some(&server_id), Some(session.access_token));
+        .set_access_token_for(Some(&server_id), Some(session.access_token))?;
     persist_refresh(&server_id, &session.refresh_token);
     refresh_spaces_cache(&state, &server_id).await;
-    Ok(state.cloud.status_for(Some(&server_id)))
+    state.cloud.status_for(Some(&server_id))
 }
 
 /// Claim an unclaimed instance and become its owner. The `setup_code` (printed by
@@ -289,7 +313,7 @@ pub async fn server_claim(
     // existing link id (via find_by_identity) rather than minting a duplicate.
     let server_id = state
         .cloud
-        .find_by_identity(&base_url, &outcome.instance_id, &outcome.account_id)
+        .find_by_identity(&base_url, &outcome.instance_id, &outcome.account_id)?
         .unwrap_or_else(new_server_id);
     let account_id = outcome.account_id;
     let device_id = outcome.device_id;
@@ -314,10 +338,10 @@ pub async fn server_claim(
     .await?;
     state
         .cloud
-        .set_access_token_for(Some(&server_id), Some(session.access_token));
+        .set_access_token_for(Some(&server_id), Some(session.access_token))?;
     persist_refresh(&server_id, &session.refresh_token);
     refresh_spaces_cache(&state, &server_id).await;
-    Ok(state.cloud.status_for(Some(&server_id)))
+    state.cloud.status_for(Some(&server_id))
 }
 
 /// Sign in with SSO (OIDC Authorization Code + PKCE). Probes the instance (SSO must be
@@ -400,7 +424,7 @@ pub async fn server_oidc_login(
     let space_id = outcome.spaces.first().cloned().unwrap_or_default();
     let server_id = state
         .cloud
-        .find_by_identity(&base_url, &instance.instance_id, &outcome.account_id)
+        .find_by_identity(&base_url, &instance.instance_id, &outcome.account_id)?
         .unwrap_or_else(new_server_id);
     state.cloud.upsert_config(ServerConfig {
         server_id: server_id.clone(),
@@ -415,10 +439,10 @@ pub async fn server_oidc_login(
     })?;
     state
         .cloud
-        .set_access_token_for(Some(&server_id), Some(session.access_token));
+        .set_access_token_for(Some(&server_id), Some(session.access_token))?;
     persist_refresh(&server_id, &session.refresh_token);
     refresh_spaces_cache(&state, &server_id).await;
-    Ok(state.cloud.status_for(Some(&server_id)))
+    state.cloud.status_for(Some(&server_id))
 }
 
 /// Re-authenticate using a stored config (e.g. on app boot). Requires the core
@@ -438,10 +462,10 @@ pub async fn server_login(
     .await?;
     state
         .cloud
-        .set_access_token_for(Some(&sid), Some(session.access_token));
+        .set_access_token_for(Some(&sid), Some(session.access_token))?;
     persist_refresh(&sid, &session.refresh_token);
     refresh_spaces_cache(&state, &sid).await;
-    Ok(state.cloud.status_for(Some(&sid)))
+    state.cloud.status_for(Some(&sid))
 }
 
 /// Rotate tokens via the stored refresh token (no keyset needed). Defaults to active.
@@ -463,10 +487,10 @@ pub async fn server_refresh_session(
     .await?;
     state
         .cloud
-        .set_access_token_for(Some(&sid), Some(session.access_token));
+        .set_access_token_for(Some(&sid), Some(session.access_token))?;
     persist_refresh(&sid, &session.refresh_token);
     refresh_spaces_cache(&state, &sid).await;
-    Ok(state.cloud.status_for(Some(&sid)))
+    state.cloud.status_for(Some(&sid))
 }
 
 /// Revoke the current session (best-effort) and drop local session state. Keeps
@@ -478,17 +502,13 @@ pub async fn server_logout(
 ) -> ApiResult<ServerStatus> {
     let sid = require_config(&state, server_id.as_deref())?.server_id;
     if let (Some(cfg), Some(access)) = (
-        state.cloud.config_for(Some(&sid)),
-        state.cloud.access_token_for(Some(&sid)),
+        state.cloud.config_for(Some(&sid))?,
+        state.cloud.access_token_for(Some(&sid))?,
     ) {
-        let _ = blocking_api(move || {
-            let http = client::http();
-            identity::logout(http, &cfg.base_url, &access)
-        })
-        .await;
+        best_effort_logout(cfg, access).await;
     }
-    state.cloud.drop_session(Some(&sid));
-    Ok(state.cloud.status_for(Some(&sid)))
+    state.cloud.drop_session(Some(&sid))?;
+    state.cloud.status_for(Some(&sid))
 }
 
 /// Forget the server link entirely (config + tokens), after a best-effort logout.
@@ -500,17 +520,13 @@ pub async fn server_disconnect(
 ) -> ApiResult<ServerList> {
     let sid = require_config(&state, server_id.as_deref())?.server_id;
     if let (Some(cfg), Some(access)) = (
-        state.cloud.config_for(Some(&sid)),
-        state.cloud.access_token_for(Some(&sid)),
+        state.cloud.config_for(Some(&sid))?,
+        state.cloud.access_token_for(Some(&sid))?,
     ) {
-        let _ = blocking_api(move || {
-            let http = client::http();
-            identity::logout(http, &cfg.base_url, &access)
-        })
-        .await;
+        best_effort_logout(cfg, access).await;
     }
     state.cloud.remove(&sid)?;
-    Ok(state.cloud.list())
+    state.cloud.list()
 }
 
 /// Preview an invite before joining (does not consume it): the instance name and
@@ -597,7 +613,7 @@ pub async fn server_account_profile(
         cfg.handle = handle;
         state.cloud.set_config(cfg)?;
     }
-    Ok(state.cloud.status_for(Some(&sid)))
+    state.cloud.status_for(Some(&sid))
 }
 
 // ---------- cloud vaults + sync ----------
@@ -1330,11 +1346,11 @@ async fn self_enroll_login_and_persist(
     // prior flag → false, matching join/oidc: recovery confers no NEW ownership).
     let server_id = state
         .cloud
-        .find_by_identity(&base_url, &instance.instance_id, &account_id)
+        .find_by_identity(&base_url, &instance.instance_id, &account_id)?
         .unwrap_or_else(new_server_id);
     let owned = state
         .cloud
-        .config_for(Some(&server_id))
+        .config_for(Some(&server_id))?
         .map(|c| c.owned)
         .unwrap_or(false);
     state.cloud.upsert_config(ServerConfig {
@@ -1349,10 +1365,10 @@ async fn self_enroll_login_and_persist(
     })?;
     state
         .cloud
-        .set_access_token_for(Some(&server_id), Some(session.access_token));
+        .set_access_token_for(Some(&server_id), Some(session.access_token))?;
     persist_refresh(&server_id, &session.refresh_token);
     refresh_spaces_cache(state, &server_id).await;
-    Ok(state.cloud.status_for(Some(&server_id)))
+    state.cloud.status_for(Some(&server_id))
 }
 
 /// Sign in with an existing identity via a server's ESCROW: recover this device's keyset
@@ -1530,7 +1546,10 @@ pub async fn server_onboard_complete(
 /// (New device) Join via a pairing payload: run the responder PAKE, install the
 /// sealed keyset (opens the instance), persist a new cloud link (active), sign in.
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
+)]
 pub async fn server_onboard_join(
     base_url: String,
     instance_id: String,
@@ -1563,7 +1582,7 @@ pub async fn server_onboard_join(
     // instance id + primary space are inherited from the initiator's pairing payload.
     let server_id = state
         .cloud
-        .find_by_identity(&base_url, &instance_id, &account_id)
+        .find_by_identity(&base_url, &instance_id, &account_id)?
         .unwrap_or_else(new_server_id);
     state.cloud.upsert_config(ServerConfig {
         server_id: server_id.clone(),
@@ -1587,10 +1606,10 @@ pub async fn server_onboard_join(
     .await?;
     state
         .cloud
-        .set_access_token_for(Some(&server_id), Some(session.access_token));
+        .set_access_token_for(Some(&server_id), Some(session.access_token))?;
     persist_refresh(&server_id, &session.refresh_token);
     refresh_spaces_cache(&state, &server_id).await;
-    Ok(state.cloud.status_for(Some(&server_id)))
+    state.cloud.status_for(Some(&server_id))
 }
 
 // ---------- audit (read-only) ----------

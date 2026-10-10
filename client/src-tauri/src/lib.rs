@@ -3,8 +3,12 @@
 mod biometric;
 mod cloud;
 mod commands;
-mod dto;
-mod error;
+// `pub` only so the DTOs (and the `ApiError` one of them carries) are nameable:
+// several have `From` impls into public `unissh_ffi` types, which makes them
+// reachable from outside the crate (rustc `unnameable_types`). The frontend
+// contract is their serde shape, which visibility does not touch.
+pub mod dto;
+pub mod error;
 mod keychain;
 #[cfg(desktop)]
 mod mcp;
@@ -41,7 +45,7 @@ fn log_filter_from_env() -> (log::LevelFilter, Vec<(String, log::LevelFilter)>) 
         if let Some((module, level)) = part.split_once('=') {
             let module = module.trim();
             if let (false, Ok(lf)) = (module.is_empty(), level.trim().parse::<log::LevelFilter>()) {
-                overrides.push((module.to_string(), lf));
+                overrides.push((module.to_owned(), lf));
             }
         } else if let Ok(lf) = part.parse::<log::LevelFilter>() {
             global = lf;
@@ -50,7 +54,175 @@ fn log_filter_from_env() -> (log::LevelFilter, Vec<(String, log::LevelFilter)>) 
     (global, overrides)
 }
 
+/// Tauri `setup`: open the instance, register the observers and controllers,
+/// manage the app state, wire token rotation and apply the per-OS window tweaks.
+#[cfg_attr(
+    desktop,
+    expect(
+        clippy::significant_drop_tightening,
+        reason = "each controller must resume before it is moved into app.manage, so its binding cannot end earlier"
+    )
+)]
+fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // One local instance = two files in the app-data dir: the SQLCipher DB
+    // and the encrypted keyset sidecar. The DB key is derived from the
+    // unlocked keyset, so neither opens without unlocking.
+    let dir = app.path().app_data_dir()?;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        // Not fatal here: opening the instance then fails with its own error,
+        // which the onboarding/unlock screen shows.
+        log::error!("app data dir {} could not be created: {e}", dir.display());
+    }
+    let db_path = dir.join("instance.db");
+    let keyset_path = dir.join("instance.keyset.bin");
+    let core: std::sync::Arc<Core> = Core::new(
+        db_path.to_string_lossy().to_string(),
+        keyset_path.to_string_lossy().to_string(),
+    );
+    // Registered before anything can connect: a server may demand a
+    // second factor on the very first connection, and a prompter wired
+    // up later would miss it.
+    let prompter = std::sync::Arc::new(observers::AppPrompter::new(app.handle().clone()));
+    core.set_auth_prompter(Some(prompter.clone()));
+    #[cfg(desktop)]
+    {
+        let controller = mcp::Controller::new(core.clone(), prompter.clone(), dir.join("mcp.json"));
+        controller.resume();
+        app.manage(controller);
+        let agent = system_agent::Controller::new(
+            app.handle(),
+            core.clone(),
+            dir.join("system-agent.json"),
+        );
+        agent.resume();
+        app.manage(agent);
+    }
+    app.manage(prompter);
+    // Registered up front for the same reason: a forwarded agent that
+    // finds no approver refuses every signature, which is safe but looks
+    // like a broken feature.
+    let approver = std::sync::Arc::new(observers::AppApprover::new(app.handle().clone()));
+    core.set_agent_approver(Some(approver.clone()));
+    app.manage(approver);
+    let app_state = AppState::new(core, db_path, keyset_path);
+    // Token rotation, wired before any request can be made. The HTTP
+    // layer is where an expired access token is discovered — including
+    // on the sync transport, which never passes through a command — and
+    // this is what it calls to get a fresh one instead of surfacing
+    // "access token expired" and waiting for the user to press Refresh.
+    let cloud = app_state.cloud.clone();
+    cloud::client::set_reauth(std::sync::Arc::new(move |stale: &str| {
+        cloud.rotate_expired_access(stale)
+    }));
+    app.manage(app_state);
+
+    #[cfg(target_os = "macos")]
+    compact_window_controls(app);
+    #[cfg(target_os = "ios")]
+    edge_to_edge_webview(app);
+
+    // Follow the OS out of the room: a screen lock or a suspend locks
+    // the vault the same way the lock button does. Best-effort by
+    // design — a desktop that emits neither signal simply behaves as it
+    // did before. Desktop-only; nothing is registered on mobile.
+    #[cfg(desktop)]
+    system_lock::start(app.handle());
+
+    Ok(())
+}
+
+/// macOS 26 (Tahoe): an app built against SDK 26 gets the redesigned,
+/// noticeably larger control-size metrics — the traffic lights render
+/// ~16pt instead of the classic ~14pt and read as oversized next to
+/// the toolbar. Opt back into compact metrics on the window's ROOT
+/// view (the content view's superview, the frame that also hosts the
+/// titlebar): the property propagates down a view's subtree, so
+/// setting it on the content view alone never reached the buttons.
+/// The selector only exists on macOS 26+, so probe first: older
+/// systems never show the large controls and the call is skipped.
+#[cfg(target_os = "macos")]
+fn compact_window_controls(app: &tauri::App) {
+    use objc2::runtime::AnyObject;
+    use objc2::{msg_send, sel};
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(ns_win) = window.ns_window() else {
+        return;
+    };
+    let ns_win = ns_win.cast::<AnyObject>();
+    if ns_win.is_null() {
+        return;
+    }
+    // SAFETY: `ns_win` is the live, non-nil NSWindow tao owns for this window;
+    // `contentView` takes no arguments and returns an NSView or nil.
+    let content: *mut AnyObject = unsafe { msg_send![ns_win, contentView] };
+    if content.is_null() {
+        return;
+    }
+    // SAFETY: `content` is a non-nil NSView; `superview` returns its parent or nil.
+    let root: *mut AnyObject = unsafe { msg_send![content, superview] };
+    if root.is_null() {
+        return;
+    }
+    // SAFETY: `root` is a non-nil NSObject, and every NSObject implements
+    // `respondsToSelector:`.
+    let responds: bool =
+        unsafe { msg_send![root, respondsToSelector: sel!(setPrefersCompactControlSizeMetrics:)] };
+    if responds {
+        // SAFETY: `root` just confirmed it implements this BOOL setter.
+        let _: () = unsafe { msg_send![root, setPrefersCompactControlSizeMetrics: true] };
+    }
+}
+
+/// iOS: by default WKWebView adjusts its scroll-view content insets for
+/// the safe area, which confines the web layout to (screen − safe
+/// insets) — e.g. 839 of a 932px screen — and leaves a dead band below
+/// the bottom tab bar that CSS can't paint into (the layout viewport,
+/// and even position:fixed, stop at the inset edge). Setting the inset
+/// adjustment to `.never` makes the webview lay out edge-to-edge; the
+/// notch/home-indicator are then handled purely by CSS
+/// env(safe-area-inset-*) padding on the shell and tab bar.
+#[cfg(target_os = "ios")]
+fn edge_to_edge_webview(app: &tauri::App) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let applied = window.with_webview(|wv| {
+        let wk = wv.inner().cast::<AnyObject>(); // the WKWebView
+        if wk.is_null() {
+            return;
+        }
+        // SAFETY: `wk` is the live, non-nil WKWebView; `scrollView` takes no
+        // arguments and returns its UIScrollView or nil.
+        let scroll: *mut AnyObject = unsafe { msg_send![wk, scrollView] };
+        if !scroll.is_null() {
+            // UIScrollViewContentInsetAdjustmentBehavior::Never == 2
+            // SAFETY: `scroll` is a non-nil UIScrollView, which implements this
+            // NSInteger setter on every supported iOS version.
+            let _: () = unsafe { msg_send![scroll, setContentInsetAdjustmentBehavior: 2_isize] };
+        }
+    });
+    if let Err(e) = applied {
+        log::warn!("ios: webview inset adjustment not applied: {e}");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "most of the body is the generate_handler! registry, one line per #[tauri::command]; the setup itself lives in setup_app"
+)]
+#[expect(
+    clippy::expect_used,
+    reason = "mobile_entry_point requires `fn run()`, and a failed Tauri build leaves no app to report to, so aborting with the message is the only outcome"
+)]
+#[expect(
+    clippy::exit,
+    reason = "the process::exit is inside the tauri::generate_context! expansion, not in our code"
+)]
 pub fn run() {
     // Logging first, so every later plugin/command is captured. Sinks: stdout,
     // a rotating file in the per-OS app log dir, and the webview console.
@@ -120,152 +292,42 @@ pub fn run() {
     }
 
     builder
-        .setup(|app| {
-            // One local instance = two files in the app-data dir: the SQLCipher DB
-            // and the encrypted keyset sidecar. The DB key is derived from the
-            // unlocked keyset, so neither opens without unlocking.
-            let dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&dir).ok();
-            let db_path = dir.join("instance.db");
-            let keyset_path = dir.join("instance.keyset.bin");
-            let core: std::sync::Arc<Core> = Core::new(
-                db_path.to_string_lossy().to_string(),
-                keyset_path.to_string_lossy().to_string(),
-            );
-            // Registered before anything can connect: a server may demand a
-            // second factor on the very first connection, and a prompter wired
-            // up later would miss it.
-            let prompter =
-                std::sync::Arc::new(crate::observers::AppPrompter::new(app.handle().clone()));
-            core.set_auth_prompter(Some(prompter.clone()));
-            #[cfg(desktop)]
-            {
-                let controller = mcp::Controller::new(core.clone(), prompter.clone(), dir.join("mcp.json"));
-                controller.resume();
-                app.manage(controller);
-                let agent = system_agent::Controller::new(
-                    app.handle(),
-                    core.clone(),
-                    dir.join("system-agent.json"),
-                );
-                agent.resume();
-                app.manage(agent);
-            }
-            app.manage(prompter);
-            // Registered up front for the same reason: a forwarded agent that
-            // finds no approver refuses every signature, which is safe but looks
-            // like a broken feature.
-            let approver =
-                std::sync::Arc::new(crate::observers::AppApprover::new(app.handle().clone()));
-            core.set_agent_approver(Some(approver.clone()));
-            app.manage(approver);
-            let app_state = AppState::new(core, db_path, keyset_path);
-            // Token rotation, wired before any request can be made. The HTTP
-            // layer is where an expired access token is discovered — including
-            // on the sync transport, which never passes through a command — and
-            // this is what it calls to get a fresh one instead of surfacing
-            // "access token expired" and waiting for the user to press Refresh.
-            let cloud = app_state.cloud.clone();
-            crate::cloud::client::set_reauth(std::sync::Arc::new(move |stale: &str| {
-                cloud.rotate_expired_access(stale)
-            }));
-            app.manage(app_state);
-
-            // macOS 26 (Tahoe): an app built against SDK 26 gets the redesigned,
-            // noticeably larger control-size metrics — the traffic lights render
-            // ~16pt instead of the classic ~14pt and read as oversized next to
-            // the toolbar. Opt back into compact metrics on the window's ROOT
-            // view (the content view's superview, the frame that also hosts the
-            // titlebar): the property propagates down a view's subtree, so
-            // setting it on the content view alone never reached the buttons.
-            // The selector only exists on macOS 26+, so probe first: older
-            // systems never show the large controls and the call is skipped.
-            #[cfg(target_os = "macos")]
-            {
-                use objc2::runtime::AnyObject;
-                use objc2::{msg_send, sel};
-                if let Some(window) = app.get_webview_window("main") {
-                    if let Ok(ns_win) = window.ns_window() {
-                        let ns_win = ns_win as *mut AnyObject;
-                        if !ns_win.is_null() {
-                            unsafe {
-                                let content: *mut AnyObject = msg_send![ns_win, contentView];
-                                let root: *mut AnyObject = if content.is_null() {
-                                    content
-                                } else {
-                                    msg_send![content, superview]
-                                };
-                                let responds: bool = if root.is_null() {
-                                    false
-                                } else {
-                                    msg_send![root, respondsToSelector: sel!(setPrefersCompactControlSizeMetrics:)]
-                                };
-                                if responds {
-                                    let _: () = msg_send![root, setPrefersCompactControlSizeMetrics: true];
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // iOS: by default WKWebView adjusts its scroll-view content insets for
-            // the safe area, which confines the web layout to (screen − safe
-            // insets) — e.g. 839 of a 932px screen — and leaves a dead band below
-            // the bottom tab bar that CSS can't paint into (the layout viewport,
-            // and even position:fixed, stop at the inset edge). Setting the inset
-            // adjustment to `.never` makes the webview lay out edge-to-edge; the
-            // notch/home-indicator are then handled purely by CSS
-            // env(safe-area-inset-*) padding on the shell and tab bar.
-            #[cfg(target_os = "ios")]
-            {
-                use objc2::msg_send;
-                use objc2::runtime::AnyObject;
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.with_webview(|wv| {
-                        let wk = wv.inner() as *mut AnyObject; // the WKWebView
-                        if wk.is_null() {
-                            return;
-                        }
-                        // UIScrollViewContentInsetAdjustmentBehavior::Never == 2
-                        unsafe {
-                            let scroll: *mut AnyObject = msg_send![wk, scrollView];
-                            if !scroll.is_null() {
-                                let _: () =
-                                    msg_send![scroll, setContentInsetAdjustmentBehavior: 2isize];
-                            }
-                        }
-                    });
-                }
-            }
-
-            // Follow the OS out of the room: a screen lock or a suspend locks
-            // the vault the same way the lock button does. Best-effort by
-            // design — a desktop that emits neither signal simply behaves as it
-            // did before. Desktop-only; nothing is registered on mobile.
-            #[cfg(desktop)]
-            crate::system_lock::start(app.handle());
-
-            Ok(())
-        })
+        .setup(setup_app)
         .invoke_handler(tauri::generate_handler![
-            #[cfg(desktop)] mcp::mcp_status,
-            #[cfg(desktop)] mcp::mcp_set_enabled,
-            #[cfg(desktop)] mcp::mcp_create_integration,
-            #[cfg(desktop)] mcp::mcp_rotate_integration,
-            #[cfg(desktop)] mcp::mcp_delete_integration,
-            #[cfg(desktop)] mcp::mcp_grant,
-            #[cfg(desktop)] mcp::mcp_revoke,
-            #[cfg(desktop)] mcp::mcp_approve,
-            #[cfg(desktop)] mcp::mcp_targets,
-            #[cfg(desktop)] mcp::mcp_close_session,
-            #[cfg(desktop)] mcp::mcp_cancel_command,
-            #[cfg(desktop)] mcp::mcp_inspect_command,
-            #[cfg(desktop)] mcp::mcp_search_commands,
-            #[cfg(desktop)] system_agent::system_agent_status,
-            #[cfg(desktop)] system_agent::system_agent_set_enabled,
-            #[cfg(desktop)] system_agent::system_agent_shared_keys,
-            #[cfg(desktop)] system_agent::system_agent_set_shared,
+            #[cfg(desktop)]
+            mcp::mcp_status,
+            #[cfg(desktop)]
+            mcp::mcp_set_enabled,
+            #[cfg(desktop)]
+            mcp::mcp_create_integration,
+            #[cfg(desktop)]
+            mcp::mcp_rotate_integration,
+            #[cfg(desktop)]
+            mcp::mcp_delete_integration,
+            #[cfg(desktop)]
+            mcp::mcp_grant,
+            #[cfg(desktop)]
+            mcp::mcp_revoke,
+            #[cfg(desktop)]
+            mcp::mcp_approve,
+            #[cfg(desktop)]
+            mcp::mcp_targets,
+            #[cfg(desktop)]
+            mcp::mcp_close_session,
+            #[cfg(desktop)]
+            mcp::mcp_cancel_command,
+            #[cfg(desktop)]
+            mcp::mcp_inspect_command,
+            #[cfg(desktop)]
+            mcp::mcp_search_commands,
+            #[cfg(desktop)]
+            system_agent::system_agent_status,
+            #[cfg(desktop)]
+            system_agent::system_agent_set_enabled,
+            #[cfg(desktop)]
+            system_agent::system_agent_shared_keys,
+            #[cfg(desktop)]
+            system_agent::system_agent_set_shared,
             // account / instance
             commands::instance_status,
             commands::terminal_workspace_load,
@@ -523,7 +585,10 @@ pub fn run() {
         .expect("error while building UniSSH")
         .run(|app, event| {
             #[cfg(desktop)]
-            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
                 mcp::revoke(app);
                 system_agent::shutdown(app);
             }

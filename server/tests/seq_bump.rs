@@ -1,5 +1,9 @@
 //! Anti-rollback restore runbook (§14.3): instance-wide seq-bump raises next_seq and
 //! NEVER lowers it — otherwise clients get report_version < cursor → TransportRollback.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use unissh_server::store::Store;
 

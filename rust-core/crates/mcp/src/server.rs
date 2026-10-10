@@ -8,7 +8,7 @@ use std::{
 use axum::serve::Listener;
 use axum::{
     extract::{Request, State},
-    http::{header, request::Parts, StatusCode},
+    http::{header, request::Parts, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     Router,
@@ -64,6 +64,10 @@ impl LocalServer {
 
     /// The owner must revoke broker grants BEFORE shutting down this HTTP listener.
     /// Dropped HTTP requests never stand in for cancellation of broker-owned runs.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "`service` and `stop` are moved into the spawned connection task; there is no earlier point to drop them"
+    )]
     pub async fn serve(self, cancellation: CancellationToken) -> io::Result<()> {
         let authority = self.listener.local_addr()?.to_string();
         let config = StreamableHttpServerConfig::default()
@@ -112,7 +116,10 @@ impl LocalServer {
                             biased;
                             _ = stop.cancelled() => {
                                 connection.as_mut().graceful_shutdown();
-                                let _ = connection.await;
+                                if connection.await.is_err() {
+                                    // Shutting down: a protocol error on a closing
+                                    // connection has nobody left to report to.
+                                }
                             },
                             _ = &mut connection => {},
                         }
@@ -166,15 +173,14 @@ async fn authorize(State(guard): State<Guard>, mut request: Request, next: Next)
     let Ok(_slot) = guard.requests.try_acquire() else {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
-    let mut response =
-        match tokio::time::timeout(std::time::Duration::from_secs(35), next.run(request)).await {
-            Ok(response) => response,
-            Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
-        };
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        "no-store".parse().expect("literal header"),
-    );
+    let mut response = match tokio::time::timeout(Duration::from_secs(35), next.run(request)).await
+    {
+        Ok(response) => response,
+        Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
 }
 
@@ -241,8 +247,11 @@ impl ServerHandler for Handler {
                 biased;
                 result = &mut operation => break result,
                 _ = ticks.tick(), if token.is_some() => {
+                    let Some(progress_token) = token.clone() else {
+                        continue;
+                    };
                     let notification = rmcp::model::ProgressNotificationParam::new(
-                        token.clone().expect("guarded token"), started.elapsed().as_secs_f64(),
+                        progress_token, started.elapsed().as_secs_f64(),
                     ).with_message("Waiting for SSH operation; progress counts elapsed seconds.");
                     // A slow/disconnected consumer must not delay the operation.
                     let send = context.peer.notify_progress(notification);

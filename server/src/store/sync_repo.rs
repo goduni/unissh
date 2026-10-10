@@ -46,29 +46,27 @@ pub struct AccessibleVault {
 fn opt_u64(o: Option<u64>) -> AppResult<Val> {
     match o {
         None => Ok(Val::OptI(None)),
-        Some(v) => {
-            Ok(Val::OptI(Some(i64::try_from(v).map_err(|_| {
-                AppError::malformed("integer exceeds i64")
-            })?)))
-        }
+        Some(v) => Ok(Val::OptI(Some(i64::try_from(v).map_err(|e| {
+            AppError::malformed(format!("integer exceeds i64: {e}"))
+        })?))),
     }
 }
 fn opt_u32(o: Option<u32>) -> Val {
-    Val::OptI(o.map(|v| v as i64))
+    Val::OptI(o.map(i64::from))
 }
 fn opt_u8(o: Option<u8>) -> Val {
-    Val::OptI(o.map(|v| v as i64))
+    Val::OptI(o.map(i64::from))
 }
 fn opt_bool(o: Option<bool>) -> Val {
-    Val::OptI(o.map(|b| b as i64))
+    Val::OptI(o.map(i64::from))
 }
-fn opt_b(o: &Option<Vec<u8>>) -> Val {
-    Val::OptB(o.clone())
+fn opt_b(o: Option<&[u8]>) -> Val {
+    Val::OptB(o.map(<[u8]>::to_vec))
 }
 fn idem_result(rec: &IdempotencyRow, req_hash: &[u8]) -> AppResult<PushResult> {
     if rec.request_hash == req_hash {
         let seqs: Vec<i64> = serde_json::from_slice(&rec.response_blob)
-            .map_err(|_| AppError::internal("corrupt idempotency record"))?;
+            .map_err(|e| AppError::internal(format!("corrupt idempotency record: {e}")))?;
         Ok(PushResult {
             server_seq: seqs,
             replayed: true,
@@ -80,9 +78,14 @@ fn idem_result(rec: &IdempotencyRow, req_hash: &[u8]) -> AppResult<PushResult> {
     }
 }
 
+/// A row/batch count as the i64 the seq arithmetic uses.
+pub(crate) fn count_i64(n: usize) -> AppResult<i64> {
+    i64::try_from(n).map_err(|e| AppError::internal(format!("batch size exceeds i64: {e}")))
+}
+
 fn req_u64(o: Option<u64>, what: &str) -> AppResult<i64> {
     let v = o.ok_or_else(|| AppError::malformed(format!("missing {what}")))?;
-    i64::try_from(v).map_err(|_| AppError::malformed(format!("{what} exceeds i64")))
+    i64::try_from(v).map_err(|e| AppError::malformed(format!("{what} exceeds i64: {e}")))
 }
 
 impl Store {
@@ -229,7 +232,7 @@ impl Store {
             }
         }
 
-        let n = items.len() as i64;
+        let n = count_i64(items.len())?;
         let mut tx = self.begin().await?;
 
         // Atomic seq allocation: increment RELATIVE to the current value under a
@@ -238,8 +241,7 @@ impl Store {
         let base = alloc_seqs(&mut tx, n).await?;
 
         let mut seqs = Vec::with_capacity(items.len());
-        for (i, it) in items.iter().enumerate() {
-            let seq = base + 1 + i as i64;
+        for (seq, it) in (base + 1..).zip(items.iter()) {
             insert_object(&mut tx, seq, &it.parsed, &it.bytes, now).await?;
             materialize(&mut tx, seq, &it.parsed, now).await?;
             seqs.push(seq);
@@ -247,7 +249,7 @@ impl Store {
 
         if let Some(k) = idem {
             let resp = serde_json::to_vec(&seqs)
-                .map_err(|_| AppError::internal("serialize idempotency response"))?;
+                .map_err(|e| AppError::internal(format!("serialize idempotency response: {e}")))?;
             // ON CONFLICT DO NOTHING: the unique key is the race arbiter of concurrent
             // first pushes with the same idem key.
             let inserted = tx
@@ -322,11 +324,11 @@ pub(crate) async fn insert_object(
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         vec![
             Val::I(seq),
-            Val::I(p.tag_u8 as i64),
+            Val::I(i64::from(p.tag_u8)),
             Val::b(bytes),
-            opt_b(&p.vault_id),
-            opt_b(&p.item_id),
-            opt_b(&p.member_pubkey),
+            opt_b(p.vault_id.as_deref()),
+            opt_b(p.item_id.as_deref()),
+            opt_b(p.member_pubkey.as_deref()),
             opt_u64(p.obj_version)?,
             opt_u64(p.key_epoch)?,
             opt_bool(p.tombstone),
@@ -334,11 +336,108 @@ pub(crate) async fn insert_object(
             opt_u8(p.sync_target),
             opt_u8(p.cache_policy),
             opt_u8(p.role),
-            opt_b(&p.author_pubkey),
+            opt_b(p.author_pubkey.as_deref()),
             Val::I(now),
         ],
     )
     .await?;
+    Ok(())
+}
+
+/// Vault (tag 1) arm of [`materialize`]: claim the vault on first sight, then keep
+/// version/epoch monotonic and let only a strictly newer record set the snapshot.
+async fn materialize_vault(tx: &mut Tx<'_>, p: &ParsedObject, now: i64) -> AppResult<()> {
+    let vault_id = p
+        .vault_id
+        .clone()
+        .ok_or_else(|| AppError::malformed("vault: missing vault_id"))?;
+    let author = p
+        .author_pubkey
+        .clone()
+        .ok_or_else(|| AppError::malformed("vault: missing author"))?;
+    let version = req_u64(p.obj_version, "vault.version")?;
+    let epoch = req_u64(p.key_epoch, "vault.key_epoch")?;
+    let st = i64::from(p.sync_target.unwrap_or(1));
+    let cp = i64::from(p.cache_policy.unwrap_or(0));
+    let tomb = i64::from(p.tombstone.unwrap_or(false));
+
+    let existing = tx
+        .fetch_optional_as::<VaultOwner>(
+            "SELECT owner_pubkey, latest_version, latest_epoch, sync_target, \
+             cache_policy, tombstone FROM vaults WHERE vault_id = ?",
+            vec![Val::b(vault_id.clone())],
+        )
+        .await?;
+    match existing {
+        None => {
+            // A push-materialized vault is personal (no space_id): bind
+            // owner_account_id to the account that owns this keyset (author ==
+            // owner_pubkey) so `can_admin_vault`'s personal branch
+            // (owner_account_id == account_id) recognizes the owner — parity
+            // with POST /v1/vaults/claim, which sets it. Without this, the owner
+            // of a push-created personal vault cannot attach a selective
+            // vault_intent to an invite for their own vault. An author with no
+            // account row (e.g. synthetic test pushes) resolves to NULL, exactly
+            // the previous behaviour.
+            let owner_account_id = tx
+                .fetch_optional_as::<crate::store::models::AccountIdOnly>(
+                    "SELECT account_id FROM accounts WHERE ed25519_pub = ?",
+                    vec![Val::b(author.as_slice())],
+                )
+                .await?
+                .map(|r| r.account_id);
+            tx.exec(
+                "INSERT INTO vaults (vault_id, owner_account_id, owner_pubkey, \
+                 latest_version, latest_epoch, sync_target, cache_policy, tombstone, \
+                 created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                vec![
+                    Val::b(vault_id),
+                    Val::OptB(owner_account_id),
+                    Val::b(author),
+                    Val::I(version),
+                    Val::I(epoch),
+                    Val::I(st),
+                    Val::I(cp),
+                    Val::I(tomb),
+                    Val::I(now),
+                ],
+            )
+            .await?;
+        }
+        Some(row) => {
+            // Claim-rule: owner immutable. A different owner → conflict (§4.4/§8.2).
+            if row.owner_pubkey != author {
+                return Err(AppError::conflict(
+                    "vault_id owned by a different author (claim-rule)",
+                ));
+            }
+            let nv = row.latest_version.max(version);
+            let ne = row.latest_epoch.max(epoch);
+            // LWW: only a strictly-newer record decides the snapshot fields
+            // (sync_target / cache_policy / tombstone). A stale or replayed push
+            // at a lower-or-equal version keeps the stored snapshot — otherwise an
+            // old delete would tombstone a live vault (mass-tombstone incident).
+            // version/epoch stay monotonic (max) regardless.
+            let (st, cp, tomb) = if version > row.latest_version {
+                (st, cp, tomb)
+            } else {
+                (row.sync_target, row.cache_policy, row.tombstone)
+            };
+            tx.exec(
+                "UPDATE vaults SET latest_version = ?, latest_epoch = ?, sync_target = ?, \
+                 cache_policy = ?, tombstone = ? WHERE vault_id = ?",
+                vec![
+                    Val::I(nv),
+                    Val::I(ne),
+                    Val::I(st),
+                    Val::I(cp),
+                    Val::I(tomb),
+                    Val::b(vault_id),
+                ],
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -354,99 +453,7 @@ pub(crate) async fn materialize(
     now: i64,
 ) -> AppResult<()> {
     match p.tag() {
-        Some(ObjectTag::Vault) => {
-            let vault_id = p
-                .vault_id
-                .clone()
-                .ok_or_else(|| AppError::malformed("vault: missing vault_id"))?;
-            let author = p
-                .author_pubkey
-                .clone()
-                .ok_or_else(|| AppError::malformed("vault: missing author"))?;
-            let version = req_u64(p.obj_version, "vault.version")?;
-            let epoch = req_u64(p.key_epoch, "vault.key_epoch")?;
-            let st = p.sync_target.unwrap_or(1) as i64;
-            let cp = p.cache_policy.unwrap_or(0) as i64;
-            let tomb = p.tombstone.unwrap_or(false) as i64;
-
-            let existing = tx
-                .fetch_optional_as::<VaultOwner>(
-                    "SELECT owner_pubkey, latest_version, latest_epoch, sync_target, \
-                     cache_policy, tombstone FROM vaults WHERE vault_id = ?",
-                    vec![Val::b(vault_id.clone())],
-                )
-                .await?;
-            match existing {
-                None => {
-                    // A push-materialized vault is personal (no space_id): bind
-                    // owner_account_id to the account that owns this keyset (author ==
-                    // owner_pubkey) so `can_admin_vault`'s personal branch
-                    // (owner_account_id == account_id) recognizes the owner — parity
-                    // with POST /v1/vaults/claim, which sets it. Without this, the owner
-                    // of a push-created personal vault cannot attach a selective
-                    // vault_intent to an invite for their own vault. An author with no
-                    // account row (e.g. synthetic test pushes) resolves to NULL, exactly
-                    // the previous behaviour.
-                    let owner_account_id = tx
-                        .fetch_optional_as::<crate::store::models::AccountIdOnly>(
-                            "SELECT account_id FROM accounts WHERE ed25519_pub = ?",
-                            vec![Val::b(author.as_slice())],
-                        )
-                        .await?
-                        .map(|r| r.account_id);
-                    tx.exec(
-                        "INSERT INTO vaults (vault_id, owner_account_id, owner_pubkey, \
-                         latest_version, latest_epoch, sync_target, cache_policy, tombstone, \
-                         created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                        vec![
-                            Val::b(vault_id),
-                            Val::OptB(owner_account_id),
-                            Val::b(author),
-                            Val::I(version),
-                            Val::I(epoch),
-                            Val::I(st),
-                            Val::I(cp),
-                            Val::I(tomb),
-                            Val::I(now),
-                        ],
-                    )
-                    .await?;
-                }
-                Some(row) => {
-                    // Claim-rule: owner immutable. A different owner → conflict (§4.4/§8.2).
-                    if row.owner_pubkey != author {
-                        return Err(AppError::conflict(
-                            "vault_id owned by a different author (claim-rule)",
-                        ));
-                    }
-                    let nv = row.latest_version.max(version);
-                    let ne = row.latest_epoch.max(epoch);
-                    // LWW: only a strictly-newer record decides the snapshot fields
-                    // (sync_target / cache_policy / tombstone). A stale or replayed push
-                    // at a lower-or-equal version keeps the stored snapshot — otherwise an
-                    // old delete would tombstone a live vault (mass-tombstone incident).
-                    // version/epoch stay monotonic (max) regardless.
-                    let (st, cp, tomb) = if version > row.latest_version {
-                        (st, cp, tomb)
-                    } else {
-                        (row.sync_target, row.cache_policy, row.tombstone)
-                    };
-                    tx.exec(
-                        "UPDATE vaults SET latest_version = ?, latest_epoch = ?, sync_target = ?, \
-                         cache_policy = ?, tombstone = ? WHERE vault_id = ?",
-                        vec![
-                            Val::I(nv),
-                            Val::I(ne),
-                            Val::I(st),
-                            Val::I(cp),
-                            Val::I(tomb),
-                            Val::b(vault_id),
-                        ],
-                    )
-                    .await?;
-                }
-            }
-        }
+        Some(ObjectTag::Vault) => materialize_vault(tx, p, now).await?,
         Some(ObjectTag::MembershipManifest) => {
             // Anti-equivocation: one manifest per (vault,epoch); the first one wins.
             let vault_id = p.vault_id.clone().unwrap_or_default();
@@ -478,7 +485,7 @@ pub(crate) async fn materialize(
             let vault_id = p.vault_id.clone().unwrap_or_default();
             let member = p.member_pubkey.clone().unwrap_or_default();
             let epoch = req_u64(p.key_epoch, "grant.key_epoch")?;
-            let role = p.role.unwrap_or(0) as i64;
+            let role = i64::from(p.role.unwrap_or(0));
             let wrapped = p.wrapped_vk.clone().unwrap_or_default();
             let sig = p.signature.clone().unwrap_or_default();
             let author = p.author_pubkey.clone().unwrap_or_default();

@@ -3,6 +3,10 @@
 //! An untrusted ciphertext store + device/member sync + membership/sharing/
 //! revocation + audit. SSH traffic does NOT pass through the server. The server sees only
 //! encrypted blobs and open metadata (spec §1, ARCH §2).
+#![expect(
+    missing_docs,
+    reason = "public API docs are a documentation follow-up; the HTTP contract is documented in server/README.md and CLIENT.md"
+)]
 
 pub mod audit_sinks;
 pub mod codec;
@@ -35,7 +39,7 @@ pub async fn build_state(
     let store = Store::connect(&config.db).await?;
     store.migrate().await?;
     // v2 boot order (Task-2 review finding): the singleton `instance` row MUST
-    // exist before anything reads it — `Store::instance()` panics otherwise.
+    // exist before anything reads it — `Store::instance()` errors otherwise.
     let now = clock.now_unix();
     let instance_row = store.ensure_instance(now).await?;
     // Load the server-PRIVATE escrow-decoy secret (set once by `ensure_instance`,
@@ -43,8 +47,38 @@ pub async fn build_state(
     // read instance row — the decoy in `GET /v1/escrow/params` is keyed from THIS,
     // never from the PUBLIC `instance_id`.
     let escrow_decoy_secret = store.escrow_decoy_secret().await?;
+    announce_setup_code(&store, &config, &instance_row).await?;
+    // Whole-DB-snapshot anti-rollback (§16): refuse to come up if
+    // the instance-generation (instance.next_seq) has fallen below the
+    // operator-anchored floor. Checked HERE (not only in `main`) so that
+    // in-process/embedded deployments also get a fatal refusal when a stale
+    // snapshot is restored — otherwise anti-rollback degrades to "not checked".
+    let generation = store.instance_generation().await?;
+    let floor = config.sync.min_instance_generation;
+    rollback_guard(generation, floor)?;
+    tracing::info!(generation, floor, "anti-rollback check passed");
+    Ok(AppStateInner::new(
+        store,
+        config,
+        instance_row.instance_id,
+        escrow_decoy_secret,
+        clock,
+        metrics,
+    ))
+}
+
+/// Publish (or keep) the first-run setup code of an unclaimed instance.
+#[expect(
+    clippy::print_stdout,
+    reason = "operator-facing first-boot output: stdout is the only channel the freshly minted setup code is shown on; the log never carries it"
+)]
+async fn announce_setup_code(
+    store: &Store,
+    config: &Config,
+    instance_row: &store::models::InstanceRow,
+) -> AppResult<()> {
     // Unclaimed: publish a setup code so a client can claim this instance. We store
-    // only sha256(code); the human code is printed to logs (never persisted).
+    // only sha256(code); the human code is printed to stdout (never persisted).
     //
     // Stability across restarts (docker-restart model): a fresh code was previously
     // minted on EVERY unclaimed boot, silently invalidating a code an operator may
@@ -54,11 +88,14 @@ pub async fn build_state(
     //     regenerate — we only have its hash, not the plaintext).
     //   * empty + no hash yet (first-ever boot) → mint one and print it exactly once.
     //
-    // The log carries the plaintext ONLY when we minted it, because then the log is
-    // the sole channel it exists on. An operator-pinned code is already in their
-    // hands (env/config/IaC secret store), so printing it would only copy a live
-    // credential into `docker compose logs`, journald and every log shipper
-    // downstream — a leak that buys nothing.
+    // The plaintext goes to stdout ONLY, and ONLY when we minted it: then stdout is
+    // the sole channel it exists on. It never goes through `tracing` — structured
+    // logs carry metadata only (SECURITY.md, "Logging and redaction"), and with
+    // `log_format = json` a field there lands in every log shipper downstream. The
+    // tracing line only points the operator at the `SETUP CODE:` stdout line. An
+    // operator-pinned code is already in their hands (env/config/IaC secret store),
+    // so printing it at all would only copy a live credential into `docker compose
+    // logs`, journald and the like — a leak that buys nothing.
     if instance_row.claimed == 0 {
         if !config.setup.code.is_empty() {
             store
@@ -80,28 +117,14 @@ pub async fn build_state(
                  /app/config.toml`) — no data is touched"
             );
         } else {
-            let code = rotate_setup_code(&store).await?;
-            tracing::warn!(%code, "server unclaimed — claim it from a client with this setup code");
+            let code = rotate_setup_code(store).await?;
+            tracing::warn!(
+                "server unclaimed — a setup code was issued; see the `SETUP CODE:` line on stdout"
+            );
             println!("SETUP CODE: {code}");
         }
     }
-    // Whole-DB-snapshot anti-rollback (§16): refuse to come up if
-    // the instance-generation (instance.next_seq) has fallen below the
-    // operator-anchored floor. Checked HERE (not only in `main`) so that
-    // in-process/embedded deployments also get a fatal refusal when a stale
-    // snapshot is restored — otherwise anti-rollback degrades to "not checked".
-    let generation = store.instance_generation().await?;
-    let floor = config.sync.min_instance_generation;
-    rollback_guard(generation, floor)?;
-    tracing::info!(generation, floor, "anti-rollback check passed");
-    Ok(AppStateInner::new(
-        store,
-        config,
-        instance_row.instance_id,
-        escrow_decoy_secret,
-        clock,
-        metrics,
-    ))
+    Ok(())
 }
 
 /// Build the router from a ready state.
@@ -178,7 +201,7 @@ async fn put_setup_code_hash(store: &Store, want: &[u8]) -> AppResult<()> {
 /// effect immediately: the claim handler reads the hash per request, so a running
 /// server needs no restart. Refuses on a claimed instance.
 pub async fn rotate_setup_code(store: &Store) -> AppResult<String> {
-    let mut rnd = [0u8; 6];
+    let mut rnd = [0_u8; 6];
     ids::fill_random(&mut rnd);
     let code = ids::generate_setup_code(&rnd);
     put_setup_code_hash(store, &ids::sha256(code.as_bytes())).await?;
@@ -221,7 +244,7 @@ pub fn tls_plan(server: &config::ServerConfig) -> Result<TlsPlan, String> {
         return Err(
             "server.acme=true: in-process ACME is not built in — terminate TLS at a \
              reverse proxy (Caddy/nginx/Traefik) or set server.tls_cert + server.tls_key"
-                .to_string(),
+                .to_owned(),
         );
     }
     if !server.tls_cert.is_empty() && !server.tls_key.is_empty() {
@@ -284,5 +307,66 @@ mod rollback_guard_tests {
     fn at_or_above_floor_ok() {
         assert!(rollback_guard(10, 10).is_ok());
         assert!(rollback_guard(11, 10).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod announce_setup_code_tests {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    use super::announce_setup_code;
+    use crate::{Config, Store, ids};
+
+    /// A `tracing` writer that keeps everything written to it.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_poisoned| io::Error::other("log capture poisoned"))?
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_minted_setup_code_never_reaches_the_log() {
+        let store = Store::connect_sqlite(":memory:", 1).await.unwrap();
+        store.migrate().await.unwrap();
+        store.ensure_instance(1000).await.unwrap();
+        let row = store.instance().await.unwrap();
+
+        let log = Captured::default();
+        let sink = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || sink.clone())
+            .with_ansi(false)
+            .finish();
+        // `#[tokio::test]` runs on one thread, so a thread-local default sees the event.
+        let guard = tracing::subscriber::set_default(subscriber);
+        announce_setup_code(&store, &Config::default(), &row)
+            .await
+            .unwrap();
+        drop(guard);
+
+        // The plaintext exists only on stdout, so look for it the only way the test
+        // can: hash every code-shaped token of the log against the stored hash.
+        let hash = store.instance().await.unwrap().setup_code_hash.unwrap();
+        let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            text.contains("SETUP CODE:"),
+            "the log points the operator at stdout: {text}"
+        );
+        let leaked = text
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .any(|token| ids::sha256(token.as_bytes()).as_slice() == hash.as_slice());
+        assert!(!leaked, "the minted setup code must not appear in the log");
     }
 }

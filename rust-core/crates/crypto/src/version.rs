@@ -45,12 +45,12 @@ impl AlgId {
     }
 
     /// Parses an identifier. An unknown/reserved id → error.
-    pub fn from_u16(v: u16) -> Result<Self, CryptoError> {
+    pub const fn from_u16(v: u16) -> Result<Self, CryptoError> {
         Ok(match v {
-            0x0001 => AlgId::XChaCha20Poly1305,
-            0x0010 => AlgId::HpkeX25519HkdfSha256ChaCha20,
-            0x0020 => AlgId::Ed25519,
-            0x0030 => AlgId::Argon2idParams,
+            0x0001 => Self::XChaCha20Poly1305,
+            0x0010 => Self::HpkeX25519HkdfSha256ChaCha20,
+            0x0020 => Self::Ed25519,
+            0x0030 => Self::Argon2idParams,
             other => return Err(CryptoError::UnsupportedAlgorithm(other)),
         })
     }
@@ -65,22 +65,21 @@ pub(crate) fn write_header(out: &mut Vec<u8>, alg: AlgId) {
 /// Header bytes `[format_version, alg_id_be]` — for cryptographically binding the version and
 /// algorithm into the AEAD associated data (protection against downgrade/confusion when adding
 /// new AlgIds).
-pub(crate) fn header_bytes(alg: AlgId) -> [u8; HEADER_LEN] {
+pub(crate) const fn header_bytes(alg: AlgId) -> [u8; HEADER_LEN] {
     let a = alg.to_u16().to_be_bytes();
     [FORMAT_VERSION, a[0], a[1]]
 }
 
 /// Parses the header: checks the version, parses the alg_id, returns `(alg, body)`.
 pub(crate) fn parse_header(blob: &[u8]) -> Result<(AlgId, &[u8]), CryptoError> {
-    if blob.len() < HEADER_LEN {
+    let [version, alg_hi, alg_lo, body @ ..] = blob else {
         return Err(CryptoError::Format);
+    };
+    if *version != FORMAT_VERSION {
+        return Err(CryptoError::UnsupportedVersion(*version));
     }
-    let version = blob[0];
-    if version != FORMAT_VERSION {
-        return Err(CryptoError::UnsupportedVersion(version));
-    }
-    let alg = AlgId::from_u16(u16::from_be_bytes([blob[1], blob[2]]))?;
-    Ok((alg, &blob[HEADER_LEN..]))
+    let alg = AlgId::from_u16(u16::from_be_bytes([*alg_hi, *alg_lo]))?;
+    Ok((alg, body))
 }
 
 /// Parses the header and requires a specific algorithm; otherwise `UnsupportedAlgorithm`.
@@ -118,6 +117,17 @@ mod tests {
             parse_header(&[0x01, 0x00]).unwrap_err(),
             CryptoError::Format
         );
+    }
+
+    #[test]
+    fn truncated_header_is_format_error() {
+        let mut full = Vec::new();
+        write_header(&mut full, AlgId::Ed25519);
+        for cut in 0..full.len() {
+            let err = parse_header(&full[..cut]).unwrap_err();
+            assert!(matches!(err, CryptoError::Format), "cut at {cut}: {err:?}");
+        }
+        assert!(parse_header(&full).is_ok(), "a bare header parses");
     }
 
     #[test]

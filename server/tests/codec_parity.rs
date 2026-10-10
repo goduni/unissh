@@ -17,7 +17,7 @@ fn vault() -> VaultRecord {
         wrapped_vk: vec![5, 6, 7],
         version: 7,
         tombstone: true,
-        signature: vec![9u8; 67],
+        signature: vec![9_u8; 67],
         author_pubkey: vec![0xaa; 32],
         key_epoch: 5,
         cache_policy: CachePolicy::OnlineOnly,
@@ -34,7 +34,7 @@ fn item() -> ItemRecord {
         wrapped_item_key: vec![6, 7],
         version: 9,
         tombstone: false,
-        signature: vec![8u8; 67],
+        signature: vec![8_u8; 67],
         author_pubkey: vec![0xbb; 32],
         created_at: 0,
         updated_at: 0,
@@ -54,7 +54,7 @@ fn vault_open_columns_match_core() {
     assert_eq!(p.sync_target, Some(1)); // Cloud
     assert_eq!(p.cache_policy, Some(1)); // OnlineOnly
     assert_eq!(p.author_pubkey.as_deref(), Some([0xaa; 32].as_slice()));
-    assert_eq!(p.signature.as_deref(), Some([9u8; 67].as_slice()));
+    assert_eq!(p.signature.as_deref(), Some([9_u8; 67].as_slice()));
     assert_eq!(p.item_id, None);
     assert_eq!(p.member_pubkey, None);
     assert_eq!(p.role, None);
@@ -82,7 +82,7 @@ fn manifest_open_columns_match_core() {
         vault_id: b"vault-uuid-1".to_vec(),
         key_epoch: 6,
         manifest_blob: vec![1, 2, 3],
-        signature: vec![4u8; 67],
+        signature: vec![4_u8; 67],
         author_pubkey: vec![0xcc; 32],
     };
     let bytes = SyncObject::MembershipManifest(m).to_bytes().unwrap();
@@ -104,7 +104,7 @@ fn grant_open_columns_match_core() {
         role: MemberRole::Editor,
         not_after: 0,
         wrapped_vk: vec![1, 2, 3],
-        signature: vec![4u8; 67],
+        signature: vec![4_u8; 67],
         author_pubkey: vec![0xee; 32],
     };
     let bytes = SyncObject::MembershipGrant(g).to_bytes().unwrap();
@@ -122,7 +122,7 @@ fn audit_and_keyset_open_columns_match_core() {
     let a = AuditObject {
         vault_id: vec![],
         entry_blob: vec![1, 2, 3],
-        signature: vec![4u8; 67],
+        signature: vec![4_u8; 67],
         author_pubkey: vec![0x11; 32],
     };
     let bytes = SyncObject::Audit(a).to_bytes().unwrap();
@@ -170,7 +170,7 @@ fn account_state_core_signature_verifies_on_server() {
         mem_kib: 19 * 1024,
         iterations: 2,
         parallelism: 1,
-        salt: vec![1u8; 16],
+        salt: vec![1_u8; 16],
     };
     let (_sk, _enc, keyset) = create_account(Some(b"pw"), params).unwrap();
     let author = keyset.signing.verifying.to_bytes().to_vec();
@@ -179,7 +179,7 @@ fn account_state_core_signature_verifies_on_server() {
     let obj = SyncObject::AccountState(AccountStateObject {
         author_pubkey: author,
         version: 9,
-        payload: payload.clone(),
+        payload,
         signature: sig,
     });
     let bytes = obj.to_bytes().unwrap();

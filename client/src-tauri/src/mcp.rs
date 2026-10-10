@@ -65,11 +65,7 @@ pub struct Controller {
 impl Controller {
     pub fn new(core: Arc<Core>, prompts: Arc<AppPrompter>, path: PathBuf) -> Arc<Self> {
         let credentials = Credentials::load(path).ok().map(Arc::new);
-        let error = if credentials.is_none() {
-            Some("configuration_invalid")
-        } else {
-            None
-        };
+        let error = credentials.is_none().then_some("configuration_invalid");
         let broker = Broker::new(Arc::new(CoreExecutor {
             core: core.clone(),
             prompts: Arc::new(Prompts(prompts)),
@@ -96,10 +92,18 @@ impl Controller {
         if enabled {
             let this = self.clone();
             tauri::async_runtime::spawn(async move {
-                let _ = this.enable(true, port).await;
+                // Nothing awaits this boot-time resume; the failure is already
+                // recorded in `error` for mcp_status, and logged here.
+                if let Err(e) = this.enable(true, port).await {
+                    log::warn!("mcp: resuming the local server failed: {e:?}");
+                }
             });
         }
     }
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the `running` guard serialises the whole stop/bind/start sequence against concurrent enable calls"
+    )]
     async fn enable(self: &Arc<Self>, enabled: bool, port: u16) -> ApiResult<()> {
         let mut running = self.running.lock().await;
         let broker = self.broker.clone();
@@ -112,21 +116,26 @@ impl Controller {
                 .is_err()
             {
                 old.task.abort();
-                let _ = old.task.await;
+                // Awaited only to know it is gone; after abort() an error
+                // (cancelled) is the expected outcome.
+                if let Err(e) = old.task.await {
+                    log::debug!("mcp: stopped listener task ended with: {e}");
+                }
             }
         }
         let store = self.credentials()?;
         if !enabled {
             store
                 .set_enabled(false, port)
-                .map_err(|_| ApiError::other("Cannot save MCP settings."))?;
-            *self.error.lock().unwrap() = None;
+                .map_err(|e| ApiError::other(format!("Cannot save MCP settings: {e}")))?;
+            *self.error_slot()? = None;
             return Ok(());
         }
         let server = match LocalServer::bind(port, store.clone(), self.broker.clone()).await {
             Ok(server) => server,
-            Err(_) => {
-                *self.error.lock().unwrap() = Some("port_unavailable");
+            Err(e) => {
+                log::warn!("mcp: binding port {port} failed: {e}");
+                *self.error_slot()? = Some("port_unavailable");
                 return Err(ApiError::other(
                     "MCP port is unavailable. Choose another local port.",
                 ));
@@ -134,18 +143,24 @@ impl Controller {
         };
         let port = server
             .local_addr()
-            .map_err(|_| ApiError::other("MCP listener failed."))?
+            .map_err(|e| ApiError::other(format!("MCP listener failed: {e}")))?
             .port();
         store
             .set_enabled(true, port)
-            .map_err(|_| ApiError::other("Cannot save MCP settings."))?;
+            .map_err(|e| ApiError::other(format!("Cannot save MCP settings: {e}")))?;
         let stop = CancellationToken::new();
         let token = stop.clone();
         let weak = Arc::downgrade(self);
         let task = tauri::async_runtime::spawn(async move {
             if server.serve(token).await.is_err() {
                 if let Some(this) = weak.upgrade() {
-                    *this.error.lock().unwrap() = Some("listener_failed");
+                    // A background task cannot return the error; the slot holds
+                    // only a status tag, so recovering a poisoned lock is safe.
+                    *this
+                        .error
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some("listener_failed");
                     this.broker.suspend();
                 }
             }
@@ -154,8 +169,16 @@ impl Controller {
         if !crate::system_lock::is_screen_locked() {
             self.broker.resume_if_current(resume_epoch);
         }
-        *self.error.lock().unwrap() = None;
+        *self.error_slot()? = None;
         Ok(())
+    }
+    /// The status-tag slot, with a poisoned lock surfaced as an error to the UI.
+    fn error_slot(&self) -> ApiResult<std::sync::MutexGuard<'_, Option<&'static str>>> {
+        self.error.lock().map_err(|e| {
+            ApiError::other(format!(
+                "internal error: MCP status is unavailable ({e}); restart UniSSH"
+            ))
+        })
     }
     /// Called natively before screen lock/suspend/exit, independent of the webview.
     pub fn revoke(&self) {
@@ -171,13 +194,13 @@ impl Controller {
         let online = running
             .as_ref()
             .is_some_and(|r| !r.task.inner().is_finished());
+        drop(running);
         let integrations = self
             .credentials
             .as_ref()
             .map(|c| c.list())
             .unwrap_or_default();
-        let error = *self.error.lock().unwrap();
-        drop(running);
+        let error = *self.error_slot()?;
         let broker = self.broker.clone();
         let review = tauri::async_runtime::spawn_blocking(move || broker.review()).await?;
         Ok(
@@ -192,6 +215,10 @@ pub fn revoke(app: &tauri::AppHandle) {
     }
 }
 
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the controller handle is moved into the spawned task, so it cannot be dropped earlier"
+)]
 pub fn resume_access(app: &tauri::AppHandle) {
     if let Some(controller) = app.try_state::<Arc<Controller>>() {
         let controller = controller.inner().clone();
@@ -230,7 +257,7 @@ pub async fn mcp_create_integration(
     let store = state.credentials()?;
     let (id, token) = store
         .create(label)
-        .map_err(|_| ApiError::other("Cannot create MCP integration."))?;
+        .map_err(|e| ApiError::other(format!("Cannot create MCP integration: {e}")))?;
     Ok(json!({"id":id,"token":token}))
 }
 #[tauri::command]
@@ -247,7 +274,7 @@ pub async fn mcp_rotate_integration(
     let (id, token) = state
         .credentials()?
         .rotate(&id)
-        .map_err(|_| ApiError::other("Cannot rotate MCP token."))?;
+        .map_err(|e| ApiError::other(format!("Cannot rotate MCP token: {e}")))?;
     Ok(json!({"id":id,"token":token}))
 }
 #[tauri::command]
@@ -264,7 +291,7 @@ pub async fn mcp_delete_integration(
     state
         .credentials()?
         .delete(&id)
-        .map_err(|_| ApiError::other("Cannot remove MCP integration."))
+        .map_err(|e| ApiError::other(format!("Cannot remove MCP integration: {e}")))
 }
 #[derive(Deserialize)]
 pub struct TargetRef {
@@ -272,6 +299,10 @@ pub struct TargetRef {
     profile_id: String,
 }
 #[tauri::command]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the `running` guard keeps MCP from being disabled while the grant is recorded"
+)]
 pub async fn mcp_grant(
     state: State<'_, Arc<Controller>>,
     id: String,

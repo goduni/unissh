@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
@@ -57,8 +57,8 @@ fn canonical_base_url(base_url: &str) -> String {
 fn identity_key(base_url: &str, instance_id: &str, account_id: &str) -> (String, String, String) {
     (
         canonical_base_url(base_url),
-        instance_id.to_string(),
-        account_id.to_string(),
+        instance_id.to_owned(),
+        account_id.to_owned(),
     )
 }
 
@@ -152,8 +152,8 @@ pub struct ServerStatus {
 }
 
 impl ServerStatus {
-    fn disconnected() -> Self {
-        ServerStatus {
+    const fn disconnected() -> Self {
+        Self {
             server_id: None,
             connected: false,
             active: false,
@@ -244,7 +244,7 @@ impl CloudState {
             Some(id) if servers.contains_key(&id) => Some(id),
             _ => servers.keys().next().cloned(),
         };
-        let state = CloudState {
+        let state = Self {
             config_path,
             servers: Mutex::new(servers),
             access_tokens: Mutex::new(HashMap::new()),
@@ -281,7 +281,9 @@ impl CloudState {
         // so the id is STABLE across boots — otherwise every launch re-mints it
         // and `server_login` leaks a new keychain refresh-token entry.
         if migrated || deduped {
-            let _ = state.persist();
+            if let Err(e) = state.persist() {
+                log::warn!("cloud: failed to persist the migrated cloud.json: {e:?}");
+            }
         }
         state
     }
@@ -294,13 +296,16 @@ impl CloudState {
 
     /// Resolve a `ServerConfig` by id, defaulting to the active server when
     /// `id` is `None` (back-compat for argument-less commands).
-    pub fn config_for(&self, id: Option<&str>) -> Option<ServerConfig> {
-        let servers = self.servers.lock().unwrap();
+    pub fn config_for(&self, id: Option<&str>) -> ApiResult<Option<ServerConfig>> {
+        let servers = locked(&self.servers, "server")?;
         let key = match id {
-            Some(id) => id.to_string(),
-            None => self.active.lock().unwrap().clone()?,
+            Some(id) => id.to_owned(),
+            None => match locked(&self.active, "active-server")?.clone() {
+                Some(k) => k,
+                None => return Ok(None),
+            },
         };
-        servers.get(&key).cloned()
+        Ok(servers.get(&key).cloned())
     }
 
     /// Find an already-linked server with the same canonical identity (normalized
@@ -312,14 +317,12 @@ impl CloudState {
         base_url: &str,
         instance_id: &str,
         account_id: &str,
-    ) -> Option<ServerId> {
+    ) -> ApiResult<Option<ServerId>> {
         let want = identity_key(base_url, instance_id, account_id);
-        self.servers
-            .lock()
-            .unwrap()
+        Ok(locked(&self.servers, "server")?
             .values()
             .find(|c| identity_key(&c.base_url, &c.instance_id, &c.account_id) == want)
-            .map(|c| c.server_id.clone())
+            .map(|c| c.server_id.clone()))
     }
 
     /// Insert/replace a server entry, persist the whole set, and make it active.
@@ -329,7 +332,7 @@ impl CloudState {
         let want = identity_key(&cfg.base_url, &cfg.instance_id, &cfg.account_id);
         let mut dropped: Vec<ServerId> = Vec::new();
         {
-            let mut servers = self.servers.lock().unwrap();
+            let mut servers = locked(&self.servers, "server")?;
             // Enforce "one link per server identity" at insert time, not only at
             // boot: drop any OTHER link that resolves to the same identity (a
             // phantom from a pre-idempotent registration, or the same server typed
@@ -349,11 +352,11 @@ impl CloudState {
             }
             servers.insert(id.clone(), cfg);
         }
-        *self.active.lock().unwrap() = Some(id.clone());
+        *locked(&self.active, "active-server")? = Some(id.clone());
         // Clear the collapsed phantoms' in-memory access + keychain refresh so they
         // don't linger as orphaned sessions. Best-effort (boot collapse does the same).
         if !dropped.is_empty() {
-            let mut toks = self.access_tokens.lock().unwrap();
+            let mut toks = locked(&self.access_tokens, "session-token")?;
             for sid in &dropped {
                 toks.remove(sid);
             }
@@ -371,52 +374,50 @@ impl CloudState {
     /// `cloud.json`, and best-effort drop each server's keychain refresh token.
     /// Used by the full instance reset ("can't unlock → start over") so the fresh
     /// onboarding doesn't inherit stale links pointing at the old account.
-    pub fn clear_all(&self) {
-        let ids: Vec<ServerId> = {
-            let mut servers = self.servers.lock().unwrap();
-            let ids = servers.keys().cloned().collect();
+    pub fn clear_all(&self) -> ApiResult<()> {
+        let mut ids: Vec<ServerId> = Vec::new();
+        wipe(&self.servers, |servers| {
+            ids = servers.keys().cloned().collect();
             servers.clear();
-            ids
-        };
-        self.access_tokens.lock().unwrap().clear();
-        self.spaces.lock().unwrap().clear();
-        *self.active.lock().unwrap() = None;
-        let _ = std::fs::remove_file(&self.config_path);
+        });
+        wipe(&self.access_tokens, HashMap::clear);
+        wipe(&self.spaces, HashMap::clear);
+        wipe(&self.active, |active| *active = None);
+        remove_sidecar(&self.config_path);
         for id in &ids {
             if let Err(e) = tokens::delete_refresh(id) {
                 log::warn!("cloud: failed to drop refresh token on reset for {id}: {e}");
             }
         }
+        Ok(())
     }
 
     /// Persist an in-place edit of an existing server's config (no active change).
     pub fn set_config(&self, cfg: ServerConfig) -> ApiResult<()> {
-        {
-            let mut servers = self.servers.lock().unwrap();
-            servers.insert(cfg.server_id.clone(), cfg);
-        }
+        locked(&self.servers, "server")?.insert(cfg.server_id.clone(), cfg);
         self.persist()
     }
 
     /// Switch the active server. Errors if the id is not linked.
     pub fn set_active(&self, id: &str) -> ApiResult<()> {
-        if !self.servers.lock().unwrap().contains_key(id) {
+        if !locked(&self.servers, "server")?.contains_key(id) {
             return Err(ApiError::Server {
                 code: "not_connected".into(),
                 message: "no such linked server".into(),
             });
         }
-        *self.active.lock().unwrap() = Some(id.to_string());
+        *locked(&self.active, "active-server")? = Some(id.to_owned());
         self.persist()
     }
 
     /// The access token for a server (defaults to the active server).
-    pub fn access_token_for(&self, id: Option<&str>) -> Option<String> {
-        let key = match id {
-            Some(id) => id.to_string(),
-            None => self.active.lock().unwrap().clone()?,
+    pub fn access_token_for(&self, id: Option<&str>) -> ApiResult<Option<String>> {
+        let Some(key) = self.key_or_active(id)? else {
+            return Ok(None);
         };
-        self.access_tokens.lock().unwrap().get(&key).cloned()
+        Ok(locked(&self.access_tokens, "session-token")?
+            .get(&key)
+            .cloned())
     }
 
     /// Swaps an access token the server has just rejected for a fresh one.
@@ -433,82 +434,99 @@ impl CloudState {
     ///
     /// Every failure returns None, which leaves the original 401 to surface
     /// exactly as it did before. Rotating is an optimisation on top of "ask the
-    /// user to sign in again", never a replacement for it.
+    /// user to sign in again", never a replacement for it. A poisoned registry
+    /// lock is one of those failures: it is logged and the 401 reaches the UI.
     pub fn rotate_expired_access(&self, stale: &str) -> Option<String> {
-        let sid = {
-            let toks = self.access_tokens.lock().unwrap();
-            toks.iter()
-                .find(|(_, v)| v.as_str() == stale)
-                .map(|(k, _)| k.clone())?
-        };
-        let _gate = self.refresh_gate.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(cur) = self.access_tokens.lock().unwrap().get(&sid) {
-            if cur != stale {
-                return Some(cur.clone());
+        match self.try_rotate_expired_access(stale) {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                log::warn!("cloud: token rotation skipped: {e:?}");
+                None
             }
         }
-        let base_url = self.servers.lock().unwrap().get(&sid)?.base_url.clone();
-        let refresh_token = tokens::load_refresh(&sid)?;
+    }
+
+    /// Body of [`Self::rotate_expired_access`]; `Err` only for a poisoned lock.
+    fn try_rotate_expired_access(&self, stale: &str) -> ApiResult<Option<String>> {
+        let found = locked(&self.access_tokens, "session-token")?
+            .iter()
+            .find(|(_, v)| v.as_str() == stale)
+            .map(|(k, _)| k.clone());
+        let Some(sid) = found else {
+            return Ok(None);
+        };
+        // The gate guards no data (it is `Mutex<()>`), so a poisoned gate still
+        // serialises rotation correctly; recovering it is safe.
+        let _gate = self
+            .refresh_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(cur) = locked(&self.access_tokens, "session-token")?.get(&sid) {
+            if cur != stale {
+                return Ok(Some(cur.clone()));
+            }
+        }
+        let base_url = match locked(&self.servers, "server")?.get(&sid) {
+            Some(cfg) => cfg.base_url.clone(),
+            None => return Ok(None),
+        };
+        let Some(refresh_token) = tokens::load_refresh(&sid) else {
+            return Ok(None);
+        };
         // No Bearer on this request, so it cannot recurse back into here.
         let session = match identity::refresh(client::http(), &base_url, &refresh_token) {
             Ok(s) => s,
             Err(e) => {
                 log::warn!("cloud: token rotation failed for server {sid}: {e:?}");
-                return None;
+                return Ok(None);
             }
         };
-        self.access_tokens
-            .lock()
-            .unwrap()
+        locked(&self.access_tokens, "session-token")?
             .insert(sid.clone(), session.access_token.clone());
         if let Err(e) = tokens::save_refresh(&sid, &session.refresh_token) {
             // The new refresh token is live on the server either way; failing to
             // store it costs a re-login after restart, not this session.
             log::warn!("cloud: rotated refresh token not persisted (server {sid}): {e}");
         }
-        Some(session.access_token)
+        Ok(Some(session.access_token))
     }
 
     /// Set/clear a server's in-memory access token (defaults to the active server).
-    pub fn set_access_token_for(&self, id: Option<&str>, token: Option<String>) {
-        let key = match id {
-            Some(id) => id.to_string(),
-            None => match self.active.lock().unwrap().clone() {
-                Some(k) => k,
-                None => return,
-            },
+    pub fn set_access_token_for(&self, id: Option<&str>, token: Option<String>) -> ApiResult<()> {
+        let Some(key) = self.key_or_active(id)? else {
+            return Ok(());
         };
-        let mut toks = self.access_tokens.lock().unwrap();
         match token {
             Some(t) => {
-                toks.insert(key, t);
+                locked(&self.access_tokens, "session-token")?.insert(key, t);
             }
             None => {
-                toks.remove(&key);
+                locked(&self.access_tokens, "session-token")?.remove(&key);
             }
         }
+        Ok(())
     }
 
     /// Set/replace a server's cached space list (defaults to the active server).
     /// `None` clears it. Populated by the session-establishing commands from
     /// `GET /v1/spaces`; read back into `ServerStatus.spaces`.
-    pub fn set_spaces_for(&self, id: Option<&str>, spaces: Option<Vec<SpaceEntry>>) {
-        let key = match id {
-            Some(id) => id.to_string(),
-            None => match self.active.lock().unwrap().clone() {
-                Some(k) => k,
-                None => return,
-            },
+    pub fn set_spaces_for(
+        &self,
+        id: Option<&str>,
+        spaces: Option<Vec<SpaceEntry>>,
+    ) -> ApiResult<()> {
+        let Some(key) = self.key_or_active(id)? else {
+            return Ok(());
         };
-        let mut map = self.spaces.lock().unwrap();
         match spaces {
             Some(s) => {
-                map.insert(key, s);
+                locked(&self.spaces, "space")?.insert(key, s);
             }
             None => {
-                map.remove(&key);
+                locked(&self.spaces, "space")?.remove(&key);
             }
         }
+        Ok(())
     }
 
     /// Forget ONE server link entirely: its entry + in-memory access + keychain
@@ -519,14 +537,14 @@ impl CloudState {
         // hold `active` while taking `servers`. Compute the next active under the
         // servers lock, then assign it separately.
         let next_active = {
-            let mut servers = self.servers.lock().unwrap();
+            let mut servers = locked(&self.servers, "server")?;
             servers.remove(id);
             servers.keys().next().cloned()
         };
-        self.access_tokens.lock().unwrap().remove(id);
-        self.spaces.lock().unwrap().remove(id);
+        locked(&self.access_tokens, "session-token")?.remove(id);
+        locked(&self.spaces, "space")?.remove(id);
         {
-            let mut active = self.active.lock().unwrap();
+            let mut active = locked(&self.active, "active-server")?;
             if active.as_deref() == Some(id) {
                 *active = next_active;
             }
@@ -538,47 +556,41 @@ impl CloudState {
     }
 
     /// Drop the live session (access + refresh) for one server but keep the link.
-    pub fn drop_session(&self, id: Option<&str>) {
-        let key = match id {
-            Some(id) => id.to_string(),
-            None => match self.active.lock().unwrap().clone() {
-                Some(k) => k,
-                None => return,
-            },
+    pub fn drop_session(&self, id: Option<&str>) -> ApiResult<()> {
+        let Some(key) = self.key_or_active(id)? else {
+            return Ok(());
         };
-        self.access_tokens.lock().unwrap().remove(&key);
+        locked(&self.access_tokens, "session-token")?.remove(&key);
         // The cached spaces were session-scoped; a re-login refetches them.
-        self.spaces.lock().unwrap().remove(&key);
+        locked(&self.spaces, "space")?.remove(&key);
         if let Err(e) = tokens::delete_refresh(&key) {
             log::warn!("cloud: failed to delete refresh token from keychain (server {key}): {e}");
         }
+        Ok(())
     }
 
     /// Snapshot of ONE server (defaults to the active server) for the frontend.
-    pub fn status_for(&self, id: Option<&str>) -> ServerStatus {
-        let active_id = self.active.lock().unwrap().clone();
-        let key = match id {
-            Some(id) => Some(id.to_string()),
-            None => active_id.clone(),
+    pub fn status_for(&self, id: Option<&str>) -> ApiResult<ServerStatus> {
+        let active_id = locked(&self.active, "active-server")?.clone();
+        let Some(key) = id.map(str::to_owned).or_else(|| active_id.clone()) else {
+            return Ok(ServerStatus::disconnected());
         };
-        let key = match key {
-            Some(k) => k,
-            None => return ServerStatus::disconnected(),
-        };
-        match self.servers.lock().unwrap().get(&key) {
-            Some(c) => self.status_of(c, active_id.as_deref()),
-            None => ServerStatus::disconnected(),
+        let cfg = locked(&self.servers, "server")?.get(&key).cloned();
+        match cfg {
+            Some(c) => self.status_of(&c, active_id.as_deref()),
+            None => Ok(ServerStatus::disconnected()),
         }
     }
 
     /// The whole linked-server list + active id, for the frontend.
-    pub fn list(&self) -> ServerList {
-        let active = self.active.lock().unwrap().clone();
-        let servers = self.servers.lock().unwrap();
-        let mut out: Vec<ServerStatus> = servers
-            .values()
+    pub fn list(&self) -> ApiResult<ServerList> {
+        let active = locked(&self.active, "active-server")?.clone();
+        let configs: Vec<ServerConfig> =
+            locked(&self.servers, "server")?.values().cloned().collect();
+        let mut out = configs
+            .iter()
             .map(|c| self.status_of(c, active.as_deref()))
-            .collect();
+            .collect::<ApiResult<Vec<ServerStatus>>>()?;
         // Stable, deterministic order: by base_url then id (HashMap iteration
         // order is otherwise random across runs).
         out.sort_by(|a, b| {
@@ -586,28 +598,29 @@ impl CloudState {
                 .cmp(&b.base_url)
                 .then_with(|| a.server_id.cmp(&b.server_id))
         });
-        ServerList {
+        Ok(ServerList {
             servers: out,
             active,
+        })
+    }
+
+    /// The explicit id, or the active server's id when `id` is `None`.
+    fn key_or_active(&self, id: Option<&str>) -> ApiResult<Option<ServerId>> {
+        match id {
+            Some(id) => Ok(Some(id.to_owned())),
+            None => Ok(locked(&self.active, "active-server")?.clone()),
         }
     }
 
     /// Build a `ServerStatus` for a config, marking active + session presence and
     /// attaching the last-fetched space list (empty until a session fetched it).
-    fn status_of(&self, c: &ServerConfig, active_id: Option<&str>) -> ServerStatus {
-        let has_session = self
-            .access_tokens
-            .lock()
-            .unwrap()
-            .contains_key(&c.server_id);
-        let spaces = self
-            .spaces
-            .lock()
-            .unwrap()
+    fn status_of(&self, c: &ServerConfig, active_id: Option<&str>) -> ApiResult<ServerStatus> {
+        let has_session = locked(&self.access_tokens, "session-token")?.contains_key(&c.server_id);
+        let spaces = locked(&self.spaces, "space")?
             .get(&c.server_id)
             .cloned()
             .unwrap_or_default();
-        ServerStatus {
+        Ok(ServerStatus {
             server_id: Some(c.server_id.clone()),
             connected: true,
             active: active_id == Some(c.server_id.as_str()),
@@ -620,7 +633,7 @@ impl CloudState {
             owned: c.owned,
             space_id: (!c.space_id.is_empty()).then(|| c.space_id.clone()),
             spaces,
-        }
+        })
     }
 
     /// Atomically write the whole set ({ servers, active }) to the sidecar.
@@ -628,8 +641,8 @@ impl CloudState {
         // Snapshot servers+active with both locks held (order servers→active) so
         // a concurrent mutation can't make us persist a torn { servers, active }.
         let (servers, active) = {
-            let servers_g = self.servers.lock().unwrap();
-            let active_g = self.active.lock().unwrap();
+            let servers_g = locked(&self.servers, "server")?;
+            let active_g = locked(&self.active, "active-server")?;
             (
                 servers_g.values().cloned().collect::<Vec<ServerConfig>>(),
                 active_g.clone(),
@@ -638,7 +651,7 @@ impl CloudState {
         // If nothing is linked, remove the sidecar entirely (matches the old
         // single-server `forget()` behavior of leaving no file behind).
         if servers.is_empty() {
-            let _ = std::fs::remove_file(&self.config_path);
+            remove_sidecar(&self.config_path);
             return Ok(());
         }
         let doc = CloudDoc { servers, active };
@@ -646,15 +659,44 @@ impl CloudState {
     }
 }
 
+/// Lock one of the registry maps. A poisoned lock means an earlier panic left
+/// the map possibly half-updated; it becomes an error the UI shows rather than
+/// a panic or a silent recovery onto that state.
+fn locked<'a, T>(m: &'a Mutex<T>, what: &str) -> ApiResult<MutexGuard<'a, T>> {
+    m.lock().map_err(|e| {
+        ApiError::other(format!(
+            "internal error: the cloud {what} registry is unavailable ({e}); restart UniSSH"
+        ))
+    })
+}
+
+/// Resets a registry during a wipe, even when its lock is poisoned.
+fn wipe<T>(m: &Mutex<T>, reset: impl FnOnce(&mut T)) {
+    // Recovery is correct here: the reset overwrites the whole value, so whatever
+    // a panicking holder left half-done is discarded, and the lock is healthy again.
+    reset(&mut m.lock().unwrap_or_else(PoisonError::into_inner));
+    m.clear_poison();
+}
+
+/// Best-effort removal of the `cloud.json` sidecar. Absence is the goal, so
+/// `NotFound` is success; any other failure is logged (a stale file is re-read
+/// on the next boot, which is the old behaviour).
+fn remove_sidecar(path: &Path) {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            log::warn!("cloud: failed to remove {}: {e}", path.display());
+        }
+    }
+}
+
 /// Load the persisted doc, applying the legacy single-object migration shim.
 /// Returns the loaded doc and whether it was migrated (fresh ids minted), which
 /// the caller must persist to stabilize those ids.
 fn load_doc(path: &Path) -> (CloudDoc, bool) {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return (CloudDoc::default(), false),
+    let Ok(bytes) = std::fs::read(path) else {
+        return (CloudDoc::default(), false);
     };
-    migrate_doc(&bytes).unwrap_or((CloudDoc::default(), false))
+    migrate_doc(&bytes).unwrap_or_default()
 }
 
 /// Parse `cloud.json` into a `CloudDoc`, accepting either the new
@@ -713,13 +755,13 @@ mod config_tests {
 
     fn cfg(id: &str, base: &str) -> ServerConfig {
         ServerConfig {
-            server_id: id.to_string(),
-            base_url: base.to_string(),
-            instance_id: "dGVuYW50".to_string(),
-            space_id: "c3BhY2U=".to_string(),
-            account_id: "YWNjb3VudA==".to_string(),
-            device_id: "ZGV2aWNl".to_string(),
-            handle: Some("jane".to_string()),
+            server_id: id.to_owned(),
+            base_url: base.to_owned(),
+            instance_id: "dGVuYW50".to_owned(),
+            space_id: "c3BhY2U=".to_owned(),
+            account_id: "YWNjb3VudA==".to_owned(),
+            device_id: "ZGV2aWNl".to_owned(),
+            handle: Some("jane".to_owned()),
             owned: false,
         }
     }
@@ -784,7 +826,7 @@ mod config_tests {
 
         // Reload from disk: both servers present, active preserved.
         let reloaded = CloudState::new(path);
-        let list = reloaded.list();
+        let list = reloaded.list().unwrap();
         assert_eq!(list.servers.len(), 2);
         assert_eq!(list.active.as_deref(), Some("AAAA"));
     }
@@ -804,8 +846,8 @@ mod config_tests {
         state.remove("AAAA").unwrap();
         // Active moved to the remaining server; B's config survives.
         assert_eq!(state.active_id().as_deref(), Some("BBBB"));
-        assert!(state.config_for(Some("BBBB")).is_some());
-        assert!(state.config_for(Some("AAAA")).is_none());
+        assert!(state.config_for(Some("BBBB")).unwrap().is_some());
+        assert!(state.config_for(Some("AAAA")).unwrap().is_none());
     }
 
     #[test]
@@ -820,6 +862,7 @@ mod config_tests {
         assert_eq!(
             state
                 .find_by_identity("https://a.example", "dGVuYW50", "YWNjb3VudA==")
+                .unwrap()
                 .as_deref(),
             Some("AAAA"),
             "same identity reuses the existing link id"
@@ -827,6 +870,7 @@ mod config_tests {
         assert!(
             state
                 .find_by_identity("https://b.example", "dGVuYW50", "YWNjb3VudA==")
+                .unwrap()
                 .is_none(),
             "a different base_url is a different server"
         );
@@ -848,7 +892,7 @@ mod config_tests {
         }"#;
         std::fs::write(&path, doc).unwrap();
         let state = CloudState::new(path);
-        let list = state.list();
+        let list = state.list().unwrap();
         assert_eq!(
             list.servers.len(),
             1,
@@ -875,7 +919,7 @@ mod config_tests {
         std::fs::write(&path, doc).unwrap();
         let state = CloudState::new(path);
         assert_eq!(
-            state.list().servers.len(),
+            state.list().unwrap().servers.len(),
             2,
             "different base_urls stay separate"
         );
@@ -916,6 +960,7 @@ mod config_tests {
         assert_eq!(
             state
                 .find_by_identity("HTTPS://A.example/", "dGVuYW50", "YWNjb3VudA==")
+                .unwrap()
                 .as_deref(),
             Some("AAAA"),
             "trailing slash / host casing must not mint a new identity"
@@ -937,7 +982,7 @@ mod config_tests {
         state
             .upsert_config(cfg("CCCC", "https://a.example/"))
             .unwrap();
-        let list = state.list();
+        let list = state.list().unwrap();
         assert_eq!(
             list.servers.len(),
             1,
@@ -948,7 +993,10 @@ mod config_tests {
             Some("CCCC"),
             "the freshly upserted link survives and is active"
         );
-        assert!(state.config_for(Some("AAAA")).is_none(), "phantom removed");
+        assert!(
+            state.config_for(Some("AAAA")).unwrap().is_none(),
+            "phantom removed"
+        );
     }
 
     #[test]
@@ -962,12 +1010,16 @@ mod config_tests {
         state
             .upsert_config(cfg("BBBB", "https://b.example"))
             .unwrap();
-        assert_eq!(state.list().servers.len(), 2);
-        state.clear_all();
-        assert_eq!(state.list().servers.len(), 0, "all links forgotten");
+        assert_eq!(state.list().unwrap().servers.len(), 2);
+        state.clear_all().unwrap();
+        assert_eq!(
+            state.list().unwrap().servers.len(),
+            0,
+            "all links forgotten"
+        );
         assert!(state.active_id().is_none(), "no active server after reset");
         assert!(!path.exists(), "cloud.json removed");
         // A reload from disk stays empty.
-        assert_eq!(CloudState::new(path).list().servers.len(), 0);
+        assert_eq!(CloudState::new(path).list().unwrap().servers.len(), 0);
     }
 }

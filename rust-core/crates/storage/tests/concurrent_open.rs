@@ -12,15 +12,14 @@ use unissh_storage::Storage;
 
 #[test]
 fn concurrent_first_opens_do_not_race_sqlcipher_init() {
-    const THREADS: usize = 8;
-    let barrier = Arc::new(Barrier::new(THREADS));
+    const THREADS: u8 = 8;
+    let barrier = Arc::new(Barrier::new(usize::from(THREADS)));
     let handles: Vec<_> = (0..THREADS)
         .map(|i| {
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
                 barrier.wait();
-                let storage =
-                    Storage::open_in_memory(&[i as u8 + 1; 32]).expect("concurrent first open");
+                let storage = Storage::open_in_memory(&[i + 1; 32]).expect("concurrent first open");
                 storage.set_meta("probe", b"v").expect("write after open");
             })
         })

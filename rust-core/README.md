@@ -81,7 +81,8 @@ Part of the [`goduni/unissh`](https://github.com/goduni/unissh) monorepo: the ro
 Cargo workspace builds the core together with the server, and tasks are orchestrated by `just`
 (`just build`, `just test`, `just lint`). CI at the repository root runs rustfmt,
 clippy, and the tests on every push/PR (Linux, with a local `sshd` for the integration
-tests) plus cargo-deny.
+tests) plus cargo-deny. The lint policy is described in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md#lint-policy).
 
 ## End-to-end scenario (local, no server)
 

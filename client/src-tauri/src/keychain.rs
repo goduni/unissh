@@ -116,7 +116,13 @@ const UNKNOWN: u8 = 0;
 const NO: u8 = 1;
 const YES: u8 = 2;
 
-#[cfg_attr(not(native_keychain), allow(dead_code))]
+#[cfg_attr(
+    not(native_keychain),
+    expect(
+        dead_code,
+        reason = "only the native keychain paths record an answer; Android's no-op stubs never call it"
+    )
+)]
 fn note_remembered(answer: Option<bool>) {
     let v = match answer {
         None => UNKNOWN,
@@ -163,8 +169,8 @@ pub(crate) fn carry_over_from_keyutils(account: &str) -> Option<String> {
         keyring::keyutils::KeyutilsCredential::new_with_target(None, SERVICE, account).ok()?;
     let value = old.get_password().ok()?;
     if keyring::Entry::new(SERVICE, account).is_ok_and(|e| e.set_password(&value).is_ok()) {
-        let _ = old.delete_credential();
         log::info!("keychain: moved {account} from keyutils to the Secret Service");
+        purge_keyutils_entry(&old, account);
     }
     Some(value)
 }
@@ -182,10 +188,20 @@ pub(crate) fn carry_over_from_keyutils(_account: &str) -> Option<String> {
 /// see. Called by the delete paths in this module and in `cloud::tokens`.
 #[cfg(target_os = "linux")]
 pub(crate) fn purge_keyutils(account: &str) {
-    use keyring::credential::CredentialApi;
     if let Ok(old) = keyring::keyutils::KeyutilsCredential::new_with_target(None, SERVICE, account)
     {
-        let _ = old.delete_credential();
+        purge_keyutils_entry(&old, account);
+    }
+}
+
+/// Delete one keyutils entry. Absence is success; any other failure is logged,
+/// because a copy left in that store is still readable until the next reboot.
+#[cfg(target_os = "linux")]
+fn purge_keyutils_entry(old: &keyring::keyutils::KeyutilsCredential, account: &str) {
+    use keyring::credential::CredentialApi;
+    match old.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => {}
+        Err(e) => log::warn!("keychain: failed to drop the keyutils copy of {account}: {e}"),
     }
 }
 
@@ -217,6 +233,10 @@ pub(crate) fn delete_secret_key_now() -> ApiResult<()> {
 // ---------- commands ----------
 
 #[tauri::command]
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "a #[tauri::command] is only ever called through the generated IPC wrapper, where const buys nothing"
+)]
 pub fn keychain_available() -> bool {
     cfg!(native_keychain)
 }

@@ -18,7 +18,7 @@ impl Clock for SystemClock {
     fn now_unix(&self) -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
+            .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
             .unwrap_or(0)
     }
 }
@@ -30,7 +30,7 @@ pub struct TestClock {
 }
 
 impl TestClock {
-    pub fn new(start: i64) -> Self {
+    pub const fn new(start: i64) -> Self {
         Self {
             now: AtomicI64::new(start),
         }

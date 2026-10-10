@@ -51,12 +51,12 @@ impl InMemoryTransport {
     }
 
     /// Force it to hand off all objects with a fixed seq (misbehave).
-    pub fn force_seq_floor(&mut self, seq: u64) {
+    pub const fn force_seq_floor(&mut self, seq: u64) {
         self.forced_seq_floor = Some(seq);
     }
 
     /// Force `report_version` to return the given value (misbehave).
-    pub fn force_report_version(&mut self, v: u64) {
+    pub const fn force_report_version(&mut self, v: u64) {
         self.forced_report_version = Some(v);
     }
 
@@ -66,7 +66,17 @@ impl InMemoryTransport {
     }
 
     /// Direct access for tests: the real max seq.
-    pub fn real_max_seq(&self) -> u64 {
+    pub const fn real_max_seq(&self) -> u64 {
+        self.next_seq
+    }
+
+    /// Advances to, and returns, the next real `server_seq`.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "next_seq starts at 0 and is incremented only here, once per element pushed into self.objects, so it never exceeds objects.len() <= isize::MAX < u64::MAX"
+    )]
+    const fn bump_seq(&mut self) -> u64 {
+        self.next_seq += 1;
         self.next_seq
     }
 }
@@ -75,9 +85,9 @@ impl SyncTransport for InMemoryTransport {
     fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError> {
         let mut assigned = Vec::with_capacity(objects.len());
         for o in objects {
-            self.next_seq += 1;
-            self.objects.push((self.next_seq, o.clone()));
-            assigned.push(self.next_seq);
+            let seq = self.bump_seq();
+            self.objects.push((seq, o.clone()));
+            assigned.push(seq);
         }
         Ok(assigned)
     }
@@ -115,14 +125,14 @@ impl SyncTransport for InMemoryTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::{AuditObject, SyncObject};
+    use crate::object::AuditObject;
 
     fn audit(tag: u8) -> SyncObject {
         SyncObject::Audit(AuditObject {
             vault_id: vec![tag],
             entry_blob: vec![tag],
-            signature: vec![1u8; 67],
-            author_pubkey: vec![2u8; 32],
+            signature: vec![1_u8; 67],
+            author_pubkey: vec![2_u8; 32],
         })
     }
 

@@ -50,10 +50,9 @@ impl Store {
     }
 
     pub async fn instance(&self) -> AppResult<InstanceRow> {
-        Ok(self
-            .fetch_optional_as::<InstanceRow>(SEL, vec![])
+        self.fetch_optional_as::<InstanceRow>(SEL, vec![])
             .await?
-            .expect("instance row exists after ensure_instance"))
+            .ok_or_else(|| AppError::internal("instance row missing: ensure_instance has not run"))
     }
 
     pub async fn set_setup_code_hash(&self, hash: &[u8]) -> AppResult<()> {

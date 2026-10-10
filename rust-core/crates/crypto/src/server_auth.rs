@@ -31,7 +31,11 @@ impl ServerAuthChallenge {
             if f.len() > u16::MAX as usize {
                 return Err(CryptoError::InvalidLength);
             }
-            out.extend_from_slice(&(f.len() as u16).to_be_bytes());
+            out.extend_from_slice(
+                &u16::try_from(f.len())
+                    .map_err(|_| CryptoError::InvalidLength)?
+                    .to_be_bytes(),
+            );
             out.extend_from_slice(f);
             Ok(())
         }
@@ -97,7 +101,7 @@ mod tests {
         let k = Ed25519Keypair::generate();
         let c = challenge();
         let sig = sign_server_auth(&k.signing, &c).unwrap();
-        let mut tampered = c.clone();
+        let mut tampered = c;
         tampered.nonce = b"nonce-xyz".to_vec();
         assert_eq!(
             verify_server_auth(&k.verifying, &tampered, &sig).unwrap_err(),

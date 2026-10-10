@@ -12,22 +12,22 @@ pub enum Role {
 }
 
 impl Role {
-    pub fn from_u8(b: u8) -> Option<Self> {
+    pub const fn from_u8(b: u8) -> Option<Self> {
         match b {
-            0 => Some(Role::Viewer),
-            1 => Some(Role::Editor),
-            2 => Some(Role::Admin),
+            0 => Some(Self::Viewer),
+            1 => Some(Self::Editor),
+            2 => Some(Self::Admin),
             _ => None,
         }
     }
-    pub fn as_u8(self) -> u8 {
+    pub const fn as_u8(self) -> u8 {
         self as u8
     }
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Role::Viewer => "viewer",
-            Role::Editor => "editor",
-            Role::Admin => "admin",
+            Self::Viewer => "viewer",
+            Self::Editor => "editor",
+            Self::Admin => "admin",
         }
     }
 }

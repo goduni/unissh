@@ -1,5 +1,9 @@
 //! Phase 6 §5.5/§9/§10/§11: RBAC write-accept matrix, grants/publish + grants/get
 //! (read-deny + revoke), audit append (genesis) + admin-query.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 mod common;
 
@@ -15,35 +19,35 @@ use unissh_server::modules::policy::write_accept;
 use unissh_server::store::sync_repo::PushObj;
 
 fn manifest_obj(vault: &[u8], epoch: u64, blob: &[u8], author: &[u8]) -> Vec<u8> {
-    let mut out = vec![3u8];
+    let mut out = vec![3_u8];
     put(&mut out, vault);
     out.extend_from_slice(&epoch.to_be_bytes());
     put(&mut out, blob);
-    put(&mut out, &[1u8; 67]);
+    put(&mut out, &[1_u8; 67]);
     put(&mut out, author);
     out
 }
 
 fn item_obj(vault: &[u8], item: &[u8], epoch: u64, author: &[u8]) -> Vec<u8> {
-    let mut out = vec![2u8];
+    let mut out = vec![2_u8];
     put(&mut out, vault);
     put(&mut out, item);
-    out.extend_from_slice(&1u32.to_be_bytes()); // item_type
-    put(&mut out, &[5u8; 8]); // content
-    put(&mut out, &[6u8; 8]); // wrapped_item_key
-    out.extend_from_slice(&1u64.to_be_bytes()); // version
+    out.extend_from_slice(&1_u32.to_be_bytes()); // item_type
+    put(&mut out, &[5_u8; 8]); // content
+    put(&mut out, &[6_u8; 8]); // wrapped_item_key
+    out.extend_from_slice(&1_u64.to_be_bytes()); // version
     out.push(0); // tombstone
-    put(&mut out, &[7u8; 67]); // sig
+    put(&mut out, &[7_u8; 67]); // sig
     put(&mut out, author);
     out.extend_from_slice(&epoch.to_be_bytes()); // key_epoch
     out
 }
 
 fn audit_obj(author: &[u8]) -> Vec<u8> {
-    let mut out = vec![5u8];
+    let mut out = vec![5_u8];
     put(&mut out, &[]); // vault_id (empty in v1)
     put(&mut out, b"audit-event"); // entry_blob
-    put(&mut out, &[1u8; 67]); // sig
+    put(&mut out, &[1_u8; 67]); // sig
     put(&mut out, author);
     out
 }
@@ -58,13 +62,13 @@ const VAULT: &[u8] = b"vault-policy-aaa";
 #[tokio::test]
 async fn write_accept_rbac_matrix() {
     let app = spawn().await;
-    let admin = vec![0xA0u8; 32];
-    let editor = vec![0xE0u8; 32];
-    let viewer = vec![0x70u8; 32];
-    let stranger = vec![0x5Au8; 32];
+    let admin = vec![0xA0_u8; 32];
+    let editor = vec![0xE0_u8; 32];
+    let viewer = vec![0x70_u8; 32];
+    let stranger = vec![0x5A_u8; 32];
 
     // genesis owner = admin; org tier.
-    app.seed_device(&admin, &[1u8; 32], "org", true).await;
+    app.seed_device(&admin, &[1_u8; 32], "org", true).await;
     // owner claims the vault namespace (admin == owner).
     app.state
         .store
@@ -157,12 +161,12 @@ async fn write_accept_rbac_matrix() {
 #[tokio::test]
 async fn write_accept_acl_only_enforces_membership_authorship() {
     let app = spawn().await;
-    let admin = vec![0xA1u8; 32];
-    let editor = vec![0xB2u8; 32];
-    let stranger = vec![0xE5u8; 32];
+    let admin = vec![0xA1_u8; 32];
+    let editor = vec![0xB2_u8; 32];
+    let stranger = vec![0xE5_u8; 32];
     // genesis owner = admin (claims the instance); then admin claims the vault — otherwise
     // author_role grants Admin to anyone ("the first push establishes ownership").
-    app.seed_device(&admin, &[1u8; 32], "org", true).await;
+    app.seed_device(&admin, &[1_u8; 32], "org", true).await;
     app.state
         .store
         .claim_vault(
@@ -213,10 +217,10 @@ async fn grants_publish_get_and_revoke() {
     let app = spawn().await;
     let admin_kp = Ed25519Keypair::generate();
     let admin = admin_kp.verifying.to_bytes().to_vec();
-    let member = vec![0xB2u8; 32];
+    let member = vec![0xB2_u8; 32];
 
-    let (_acc, _dev, admin_bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
-    let (_acc2, _dev2, member_bearer) = app.seed_device(&member, &[2u8; 32], "org", false).await;
+    let (_acc, _dev, admin_bearer) = app.seed_device(&admin, &[1_u8; 32], "org", true).await;
+    let (_acc2, _dev2, member_bearer) = app.seed_device(&member, &[2_u8; 32], "org", false).await;
     app.state
         .store
         .claim_vault(
@@ -326,9 +330,9 @@ async fn grants_get_hides_existence_from_non_member() {
     let app = spawn().await;
     let admin_kp = Ed25519Keypair::generate();
     let admin = admin_kp.verifying.to_bytes().to_vec();
-    let stranger = vec![0xC3u8; 32];
-    let (_a, _d, admin_bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
-    let (_s, _sd, stranger_bearer) = app.seed_device(&stranger, &[2u8; 32], "org", false).await;
+    let stranger = vec![0xC3_u8; 32];
+    let (_a, _d, admin_bearer) = app.seed_device(&admin, &[1_u8; 32], "org", true).await;
+    let (_s, _sd, stranger_bearer) = app.seed_device(&stranger, &[2_u8; 32], "org", false).await;
     app.state
         .store
         .claim_vault(
@@ -374,7 +378,7 @@ async fn grants_get_hides_existence_from_non_member() {
         .await
         .unwrap();
     // A non-existent vault → the SAME 403 (previously a 404 "no manifest for vault").
-    let ghost_id = vec![0x99u8; 32];
+    let ghost_id = vec![0x99_u8; 32];
     let ghost = app
         .client
         .get(format!(
@@ -404,16 +408,16 @@ async fn grants_get_hides_existence_from_non_member() {
 #[tokio::test]
 async fn grants_publish_rejects_non_vault_admin() {
     let app = spawn().await;
-    let owner = vec![0xA1u8; 32];
+    let owner = vec![0xA1_u8; 32];
     // A real keypair: the manifest must pass verify_record_sig (a valid
     // self-signature) to reach the author_role check and get a 403 — otherwise
     // the test would catch a 400 on the signature, not a role refusal.
     let delegated_kp = Ed25519Keypair::generate();
     let delegated = delegated_kp.verifying.to_bytes().to_vec();
     // The vault owner (also an instance-admin) + claim.
-    let (_a, _d, _owner_bearer) = app.seed_device(&owner, &[1u8; 32], "org", true).await;
+    let (_a, _d, _owner_bearer) = app.seed_device(&owner, &[1_u8; 32], "org", true).await;
     // A delegated instance-admin (is_admin=true), but NOT a member/owner of the vault.
-    let (_a2, _d2, delegated_bearer) = app.seed_device(&delegated, &[4u8; 32], "org", true).await;
+    let (_a2, _d2, delegated_bearer) = app.seed_device(&delegated, &[4_u8; 32], "org", true).await;
     app.state
         .store
         .claim_vault(
@@ -459,9 +463,9 @@ async fn grants_publish_rejects_forged_manifest_signature() {
     let app = spawn().await;
     let owner_kp = Ed25519Keypair::generate();
     let owner = owner_kp.verifying.to_bytes().to_vec();
-    let attacker = vec![0xEEu8; 32];
+    let attacker = vec![0xEE_u8; 32];
     // The attacker is an instance-admin (is_admin), but NOT the vault owner.
-    let (_a, _d, attacker_bearer) = app.seed_device(&attacker, &[7u8; 32], "org", true).await;
+    let (_a, _d, attacker_bearer) = app.seed_device(&attacker, &[7_u8; 32], "org", true).await;
     app.state
         .store
         .claim_vault(
@@ -503,8 +507,8 @@ async fn grants_publish_rejects_forged_manifest_signature() {
 #[tokio::test]
 async fn audit_append_genesis_and_admin_query() {
     let app = spawn().await;
-    let admin = vec![0xC3u8; 32];
-    let (_a, _d, admin_bearer) = app.seed_device(&admin, &[1u8; 32], "org", true).await;
+    let admin = vec![0xC3_u8; 32];
+    let (_a, _d, admin_bearer) = app.seed_device(&admin, &[1_u8; 32], "org", true).await;
 
     // genesis-authored audit append → ok
     let ok = app
@@ -522,7 +526,7 @@ async fn audit_append_genesis_and_admin_query() {
         .client
         .post(format!("{}/v1/audit", app.base))
         .header("Authorization", format!("Bearer {admin_bearer}"))
-        .json(&json!({ "audit_object": b64(&audit_obj(&[0xFFu8; 32])) }))
+        .json(&json!({ "audit_object": b64(&audit_obj(&[0xFF_u8; 32])) }))
         .send()
         .await
         .unwrap();
@@ -551,8 +555,8 @@ async fn audit_append_genesis_and_admin_query() {
 #[tokio::test]
 async fn audit_query_admin_only() {
     let app = spawn_with(|_| {}).await;
-    let member = vec![0xD4u8; 32];
-    let (_a, _d, member_bearer) = app.seed_device(&member, &[2u8; 32], "org", false).await;
+    let member = vec![0xD4_u8; 32];
+    let (_a, _d, member_bearer) = app.seed_device(&member, &[2_u8; 32], "org", false).await;
     let r = app
         .client
         .get(format!("{}/v1/audit?since_seq=0", app.base))

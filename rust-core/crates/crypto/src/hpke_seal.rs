@@ -47,7 +47,11 @@ pub fn seal_key_to_public(
     .map_err(|_| CryptoError::Hpke)?;
 
     let enc = encapped.to_bytes();
-    let mut out = Vec::with_capacity(HEADER_LEN + enc.len() + ciphertext.len());
+    let mut out = Vec::with_capacity(
+        HEADER_LEN
+            .saturating_add(enc.len())
+            .saturating_add(ciphertext.len()),
+    );
     write_header(&mut out, AlgId::HpkeX25519HkdfSha256ChaCha20);
     out.extend_from_slice(enc.as_slice());
     out.extend_from_slice(&ciphertext);
@@ -96,7 +100,7 @@ pub fn open_key_with_secret(
 /// Without the epoch the server could pass off an old `Enc(VK_old, member_pub)` as a fresh one.
 ///
 /// `b"unissh-vkwrap-v1" || len(vault_id):u16 || vault_id ||
-///  len(member_pubkey):u16 || member_pubkey || key_epoch:u64 be`
+///  len(member_pubkey):u16 || member_pubkey || key_epoch:u64 be`.
 ///
 /// Passed as `info` to [`seal_key_to_public`]/[`open_key_with_secret`];
 /// any mismatch (vault/recipient/epoch) → `Hpke` on open.
@@ -106,15 +110,28 @@ pub fn vk_wrap_info(
     key_epoch: u64,
 ) -> Result<Vec<u8>, CryptoError> {
     const DOMAIN: &[u8] = b"unissh-vkwrap-v1";
+    /// Domain plus the two `u16` length prefixes and the `u64` epoch.
+    const FIXED_LEN: usize = DOMAIN.len() + 2 + 2 + 8;
     if vault_id.len() > u16::MAX as usize || member_pubkey.len() > u16::MAX as usize {
         return Err(CryptoError::InvalidLength);
     }
-    let mut out =
-        Vec::with_capacity(DOMAIN.len() + 2 + vault_id.len() + 2 + member_pubkey.len() + 8);
+    let mut out = Vec::with_capacity(
+        FIXED_LEN
+            .saturating_add(vault_id.len())
+            .saturating_add(member_pubkey.len()),
+    );
     out.extend_from_slice(DOMAIN);
-    out.extend_from_slice(&(vault_id.len() as u16).to_be_bytes());
+    out.extend_from_slice(
+        &u16::try_from(vault_id.len())
+            .map_err(|_| CryptoError::InvalidLength)?
+            .to_be_bytes(),
+    );
     out.extend_from_slice(vault_id);
-    out.extend_from_slice(&(member_pubkey.len() as u16).to_be_bytes());
+    out.extend_from_slice(
+        &u16::try_from(member_pubkey.len())
+            .map_err(|_| CryptoError::InvalidLength)?
+            .to_be_bytes(),
+    );
     out.extend_from_slice(member_pubkey);
     out.extend_from_slice(&key_epoch.to_be_bytes());
     Ok(out)
@@ -123,7 +140,7 @@ pub fn vk_wrap_info(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keys::{SymmetricKey, X25519Keypair};
+    use crate::keys::X25519Keypair;
 
     #[test]
     fn vk_wrap_roundtrip_same_epoch() {

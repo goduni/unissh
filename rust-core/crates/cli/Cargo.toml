@@ -15,3 +15,6 @@ path = "src/main.rs"
 [dependencies]
 unissh-ffi = { path = "../ffi" }
 clap = { version = "4", features = ["derive"] }
+
+[lints]
+workspace = true
