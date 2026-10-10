@@ -1,8 +1,13 @@
 // Guided key rotation: show the plan, then on each machine deploy the candidate
-// key, verify a login with it, and remove the old key only where that login
-// passed; finish (commit the candidate into the key item) when satisfied. The
-// plan and the per-machine state machine are the pure `support/keyRotation`;
-// this view runs each step over SSH and feeds the result back.
+// key, verify a login with it, remove the old key only where that login passed,
+// and confirm that the old key is then refused; finish (commit the candidate
+// into the key item) when satisfied. The plan and the per-machine state machine
+// are the pure `support/keyRotation`; this view runs each step over SSH and
+// feeds the result back.
+//
+// Nothing about a run outlives the dialog — no progress is stored. Reopening it
+// for a rotation in progress starts every machine over; the steps are
+// idempotent, so that is how the per-machine state is found out again.
 
 import { useRef, useState } from "react";
 import { useTranslation } from "@/i18n";
@@ -14,7 +19,7 @@ import { useApp } from "@/store/app";
 import { useCtx } from "@/store/ctx";
 import { useIsMobile } from "@/store/responsive";
 import * as api from "@/bridge/api";
-import { apiErrorMessage, type MultiExecTarget } from "@/bridge/types";
+import { apiErrorMessage, type MultiExecResult, type MultiExecTarget } from "@/bridge/types";
 import {
   authorizedKeysAppendCmd,
   authorizedKeysRemoveCmd,
@@ -26,6 +31,8 @@ import { confirmFinishRotation } from "./finishRotation";
 import {
   beginStep,
   cancelRun,
+  finishOutlook,
+  keyLoginOutcome,
   planRotation,
   recordStep,
   retryTarget,
@@ -42,7 +49,12 @@ import {
   type TargetState,
 } from "@/support/keyRotation";
 
-const STEP_KEY = { deploy: "keyRotation.stepDeploy", verify: "keyRotation.stepVerify", remove: "keyRotation.stepRemove" } as const;
+const STEP_KEY = {
+  deploy: "keyRotation.stepDeploy",
+  verify: "keyRotation.stepVerify",
+  remove: "keyRotation.stepRemove",
+  confirm: "keyRotation.stepConfirm",
+} as const;
 const SKIP_KEY: Record<RotationSkipReason, "keyRotation.skipPersonal" | "keyRotation.skipSystemAgent" | "keyRotation.skipPassword"> = {
   personal: "keyRotation.skipPersonal",
   systemAgent: "keyRotation.skipSystemAgent",
@@ -55,6 +67,7 @@ type StepView = "waiting" | "running" | "done" | "failed";
 function stepView(s: TargetState, step: RotationStep): StepView {
   const i = ROTATION_STEPS.indexOf(step);
   if (s.kind === "switched") return "done";
+  if (s.kind === "unconfirmed") return step === "confirm" ? "waiting" : "done";
   if (s.kind === "keptOld") return s.after !== null && i <= ROTATION_STEPS.indexOf(s.after) ? "done" : "waiting";
   const at = ROTATION_STEPS.indexOf(s.step);
   if (i < at) return "done";
@@ -101,37 +114,76 @@ export function KeyRotationModal({
     setRun(runRef.current);
   };
 
-  const exec = async (args: MultiExecTarget, cmd: string, step: RotationStep): Promise<StepResult> => {
+  /** One command on one target. A call that throws (the vault locked mid-run)
+   *  reads as that target's connection error. */
+  const exec = async (args: MultiExecTarget, cmd: string): Promise<MultiExecResult | null> => {
     try {
-      const r = (await api.sshExecMulti([args], cmd, 0, EXEC_TIMEOUT_SECS))[0];
-      if (!r) return { ok: false, error: t("error.generic") };
-      if (r.timedOut) return { ok: false, error: t("keyRotation.timedOut") };
-      if (r.error) return { ok: false, error: r.error };
-      if (step === "remove" && r.exitStatus === REMOVE_EXIT_STILL_PRESENT)
-        return { ok: false, error: t("keyRotation.oldKeyStillPresent") };
-      if (step === "remove" && r.exitStatus === REMOVE_EXIT_NO_FILE)
-        return { ok: false, error: t("keyRotation.noAuthorizedKeys") };
-      if (r.exitStatus !== 0) return { ok: false, error: r.stderr.trim() || `exit ${r.exitStatus}` };
-      return { ok: true };
+      return (await api.sshExecMulti([args], cmd, 0, EXEC_TIMEOUT_SECS))[0] ?? null;
     } catch (e) {
-      return { ok: false, error: apiErrorMessage(e) };
+      return { host: args.host, stdout: "", stderr: "", exitStatus: -1, error: apiErrorMessage(e), durationMs: 0, timedOut: false };
     }
+  };
+
+  /** A command's result as a step result: only a clean exit passes. */
+  const ran = (r: MultiExecResult | null, step: RotationStep): StepResult => {
+    if (!r) return { ok: false, error: t("error.generic") };
+    if (r.timedOut) return { ok: false, error: t("keyRotation.timedOut") };
+    if (r.error) return { ok: false, error: r.error };
+    if (step === "remove" && r.exitStatus === REMOVE_EXIT_STILL_PRESENT)
+      return { ok: false, error: t("keyRotation.oldKeyStillPresent") };
+    if (step === "remove" && r.exitStatus === REMOVE_EXIT_NO_FILE)
+      return { ok: false, error: t("keyRotation.noAuthorizedKeys") };
+    if (r.exitStatus !== 0) return { ok: false, error: r.stderr.trim() || `exit ${r.exitStatus}` };
+    return { ok: true };
   };
 
   const execStep = async (cid: string, id: string, step: RotationStep): Promise<StepResult> => {
     const r = runRef.current;
     const keys = keysRef.current;
     if (!r || !keys) return { ok: false, error: t("error.generic") };
-    if (step === "verify") return exec(stepConnect(plan, r, id, "verify", cid), "true", step);
-    if (step === "remove")
-      return exec(stepConnect(plan, r, id, "remove", cid), authorizedKeysRemoveCmd(keys.old, keys.cand), step);
+    const connect = (as: RotationStep) => stepConnect(plan, r, id, as, cid);
+    /** Does the machine still take the OLD key? A key-only login with it. */
+    const oldKey = async () => {
+      const res = await exec(connect("confirm"), "true");
+      return { login: keyLoginOutcome(res), error: res?.error ?? t("error.generic") };
+    };
+
+    if (step === "verify") {
+      const res = await exec(connect("verify"), "true");
+      // The server took the candidate and wants a second factor on top: the key
+      // is proven. The login is not completed — nothing answers that prompt.
+      return keyLoginOutcome(res) === "acceptedNeedsMore" ? { ok: true } : ran(res, step);
+    }
+    if (step === "remove") {
+      const res = await exec(connect("remove"), authorizedKeysRemoveCmd(keys.old, keys.cand));
+      if (keyLoginOutcome(res) !== "acceptedNeedsMore") return ran(res, step);
+      // A second factor stands between the candidate and a shell, so the line
+      // cannot be removed from here. Once it was removed by hand the old key is
+      // refused, and that is all this step is for.
+      return (await oldKey()).login === "refused"
+        ? { ok: true }
+        : { ok: false, error: t("keyRotation.removeNeedsSecondFactor") };
+    }
+    if (step === "confirm") {
+      const old = await oldKey();
+      if (old.login === "refused") return { ok: true };
+      return {
+        ok: false,
+        error:
+          old.login === "unknown"
+            ? t("keyRotation.oldKeyCheckFailed", { error: old.error })
+            : t("keyRotation.oldKeyStillAccepted"),
+      };
+    }
     const append = authorizedKeysAppendCmd(keys.cand);
-    const res = await exec(stepConnect(plan, r, id, "deploy", cid), append, step);
-    // Continuing a rotation: a machine switched by an earlier run no longer takes
-    // the old key, but the candidate already there logs in just as well.
-    if (res.ok || !resumeCandidate) return res;
-    const again = await exec(stepConnect(plan, r, id, "verify", cid), append, step);
-    return again.ok ? again : res;
+    if (resumeCandidate) {
+      // Continuing a rotation: a machine an earlier run got to already takes the
+      // candidate — and may no longer take the old key, which would only earn a
+      // password prompt. Key-only, so a machine without it just says no.
+      const res = await exec(connect("verify"), append);
+      if (keyLoginOutcome(res) === "acceptedNeedsMore" || ran(res, step).ok) return { ok: true };
+    }
+    return ran(await exec(connect("deploy"), append), step);
   };
 
   // Round after round of whatever may start now, a bounded pool per round, until
@@ -186,18 +238,20 @@ export function KeyRotationModal({
   const settled = run !== null && runSettled(run);
   // Machines the new key has not been proven on: after finish they refuse the
   // key until they get it. Separately, machines where it was proven but the old
-  // line was not removed: they keep working and still accept the old key.
-  const notSwitched = run ? plan.targets.filter((tg) => !run.verified[tg.id]) : [];
-  const stillOld = run
-    ? plan.targets.filter((tg) => run.verified[tg.id] && run.states[tg.id]?.kind !== "switched")
-    : [];
+  // key was not seen refused: they keep working and may still accept the old key.
+  const { unproven: notSwitched, oldNotRefused: stillOld } = run
+    ? finishOutlook(plan, run)
+    : { unproven: [], oldNotRefused: [] };
+  // Hosts that reach the key only through target `id` as a hop: they follow it.
+  const dependentsOf = (id: string) =>
+    plan.dependents.filter((d) => d.targetIds.includes(id)).map((d) => d.host.label);
   const finish = () => {
     if (!candidateId) return;
     confirmFinishRotation(ctx, {
       vault,
       keyId: keyItemId,
       candidateId,
-      danger: notSwitched.length > 0,
+      lockedOut: [...new Set(notSwitched.flatMap((tg) => [targetLabel(tg), ...dependentsOf(tg.id)]))],
       onDone: onClose,
     });
   };
@@ -205,11 +259,8 @@ export function KeyRotationModal({
     const s = run?.states[tg.id];
     return s?.kind === "failed"
       ? t("keyRotation.failedAt", { step: t(STEP_KEY[s.step]), error: s.error })
-      : t("keyRotation.keptOld");
+      : t(s?.kind === "unconfirmed" ? "keyRotation.unconfirmed" : "keyRotation.keptOld");
   };
-  // Hosts that reach the key only through target `id` as a hop: they follow it.
-  const dependentsOf = (id: string) =>
-    plan.dependents.filter((d) => d.targetIds.includes(id)).map((d) => d.host.label);
   const labelOf = (id: string) => {
     const tg = plan.targets.find((x) => x.id === id);
     return tg ? targetLabel(tg) : id;
@@ -305,6 +356,8 @@ export function KeyRotationModal({
                       {tg.user}@{tg.host}
                       {tg.port !== 22 ? `:${tg.port}` : ""}
                       {tg.via ? ` · ${t("keyRotation.hopOf", { host: tg.via.label })}` : ""}
+                      {tg.route.length > 0 ? ` · ${t("keyRotation.routeVia", { route: tg.route.join(" → ") })}` : ""}
+                      {tg.proxy ? ` · ${t("keyRotation.routeProxy", { proxy: `${tg.proxy.host}:${tg.proxy.port}` })}` : ""}
                     </div>
                   </div>
                   {s.kind === "switched" && (
@@ -312,6 +365,9 @@ export function KeyRotationModal({
                   )}
                   {s.kind === "keptOld" && (
                     <span style={{ fontSize: TEXT.small, fontWeight: 600, color: p.amber }}>{t("keyRotation.keptOld")}</span>
+                  )}
+                  {s.kind === "unconfirmed" && (
+                    <span style={{ fontSize: TEXT.small, fontWeight: 600, color: p.amber }}>{t("keyRotation.unconfirmed")}</span>
                   )}
                   {s.kind === "failed" && !run?.cancelled && (
                     <Btn

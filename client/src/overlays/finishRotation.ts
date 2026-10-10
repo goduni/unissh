@@ -1,5 +1,7 @@
-// Finish a staged key rotation behind the one confirm both entry points use
-// (the Secrets key row and the guided-rotation dialog).
+// Finish a staged key rotation behind a confirm. The only way in is the
+// guided-rotation dialog after a run: the confirm has to say which machines
+// would be locked out, and only a run knows that. There is deliberately no
+// variant that finishes without that list.
 
 import { i18n } from "@/i18n";
 import * as api from "@/bridge/api";
@@ -13,21 +15,27 @@ export function confirmFinishRotation(
     vault,
     keyId,
     candidateId,
-    danger = false,
+    lockedOut,
     onDone,
   }: {
     vault: string;
     keyId: string;
     candidateId: string;
-    /** Some machine has not switched: finishing can lock it out. */
-    danger?: boolean;
+    /** Machines (and the hosts that hop through them) the candidate was not
+     *  proven on in the run just made: finishing locks them out. Empty when
+     *  the candidate logged in everywhere. */
+    lockedOut: string[];
     onDone?: () => void;
   },
 ) {
+  const body = i18n.t("secrets.finishRotationBody", { item: keyId, candidate: candidateId });
   ctx.confirm({
     title: i18n.t("secrets.finishRotationTitle"),
-    body: i18n.t("secrets.finishRotationBody", { item: keyId, candidate: candidateId }),
-    danger,
+    body:
+      lockedOut.length > 0
+        ? `${i18n.t("secrets.finishRotationLockout", { hosts: lockedOut.join(", ") })} ${body}`
+        : body,
+    danger: lockedOut.length > 0,
     confirmLabel: i18n.t("secrets.finishRotationConfirm"),
     icon: "refresh",
     onConfirm: async () => {
