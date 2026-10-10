@@ -279,9 +279,22 @@ neither offered nor attempted.
 - **Stale material outliving the password.** Changing, adding or removing the
   master password wipes the material, as does any path that replaces this
   device's keyset (Emergency-Kit or escrow recovery, device pairing, a keyset
-  pulled from a server, a new account) and resetting the instance. A password
+  pulled from a server, a new account) and resetting the instance — also when
+  such a change fails after the keyset on disk was already rewritten. A password
   the keyset no longer accepts is also wiped when it is next tried. Turning the
-  setting off wipes both halves at once.
+  setting off wipes both halves at once. A wipe that fails is not passed over:
+  the app says so, and Settings offers to forget whatever is still stored,
+  including on a vault that no longer has a password (which never tries the
+  biometric again, so nothing else would remove it).
+- **A prompt answered after you moved on.** A biometric result counts only for
+  the attempt that asked for it. Choosing the password instead, a typed unlock,
+  a lock and a newer prompt each end the attempt before them: its answer is
+  dropped unread, so a Touch ID or Hello confirmation that arrives late cannot
+  reopen a vault you have locked again, or replace a session opened with the
+  password. On macOS the abandoned evaluation is cancelled, which closes its
+  sheet; on Windows the request is cancelled too, but Windows does not promise
+  to close the Hello dialog — one left on screen is harmless, its answer goes
+  nowhere.
 
 **Does not protect against:**
 
