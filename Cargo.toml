@@ -23,7 +23,7 @@ repository = "https://github.com/goduni/unissh"
 # carries a copy of this block; keep the two in sync.
 [workspace.lints.rust]
 # Safety
-unsafe_code = "deny"                      # crypto/keychain/vault/... forbid it at crate root; ssh-agent (mlock) expects it
+unsafe_code = "deny"                      # crypto/keychain/vault/... forbid it at crate root; ssh-agent (mlock) expects it on unix
 # Hidden behaviour
 ambiguous_negative_literals = "warn"      # `-1.abs()` is `-(1.abs())`
 deref_into_dyn_supertrait = "warn"

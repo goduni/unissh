@@ -74,6 +74,30 @@ cargo test --workspace
 - If you touched the admin panel, also run `just build-ui` to confirm the wasm bundle and SPA still build.
 - Keep PRs focused on one component / one concern where you can — it makes review (and the security story) much easier.
 
+### Lint policy
+
+Lints are configured once, in the root `Cargo.toml` (`[workspace.lints]`) and
+`clippy.toml`; every crate inherits them with `[lints] workspace = true`.
+`client/src-tauri` is a separate Cargo root and carries a copy — keep the two in
+sync; it differs only where its header comment says (`unsafe_code`,
+`missing_docs`, `clippy::unreachable` are allowed there). CI runs clippy with
+`-D warnings`, so every listed lint is a gate.
+
+- Shipped code does not panic: `unwrap`/`expect`/`panic!`/indexing are denied
+  outside tests. Propagate errors; for a genuine invariant keep `.expect("…")`
+  under `#[expect(clippy::expect_used, reason = "…")]`.
+- Suppress with `#[expect(lint, reason = "…")]`, never `#[allow]`. `expect`
+  fails when the finding disappears, so stale suppressions cannot accumulate.
+  For cfg-gated items use `#[cfg_attr(<cfg>, expect(…))]`.
+- Every `unsafe` block carries its own `// SAFETY:` line.
+- Tests may unwrap, index, panic and print (`clippy.toml` `allow-*-in-tests`).
+  That covers only `#[test]` fns and `#[cfg(test)]` modules, so integration-test
+  files whose helpers panic carry a file-level
+  `#![expect(…, reason = "integration-test helpers; …")]`.
+- Complexity thresholds (`too-many-lines`, `cognitive-complexity`,
+  `excessive-nesting` in `clippy.toml`) are ratcheted down release by release;
+  do not raise them to fit new code.
+
 ### Changelog entries
 
 Add a line to the `## [Unreleased]` section of [`CHANGELOG.md`](CHANGELOG.md) if
