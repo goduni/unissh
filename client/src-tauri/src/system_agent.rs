@@ -15,8 +15,12 @@
 //! connection open at a revoke is cut with the listener.
 //!
 //! The endpoint is a Unix socket on macOS and Linux (`endpoint`, `peer`) and
-//! the named pipe `\\.\pipe\unissh-agent` on Windows (`pipe`). Both are
-//! served by the same `SystemAgent::serve`.
+//! a per-user named pipe, `\\.\pipe\unissh-agent-<user SID>`, on Windows
+//! (`pipe`). Both are served by the same `SystemAgent::serve`, which also
+//! bounds what a caller can hold: the number of connections, how long one may
+//! idle, and the prompts waiting. The listener itself survives an accept that
+//! fails for want of resources; one it cannot survive ends it, cuts its
+//! connections and shows in the status.
 
 #[cfg(unix)]
 mod endpoint;
@@ -94,7 +98,13 @@ impl Controller {
         // the transport always dials OpenSSH's own pipe, never this one. The
         // name is still handed over, so the core knows it either way.
         #[cfg(windows)]
-        let endpoint = Some(PathBuf::from(pipe::NAME));
+        let endpoint = match pipe::name() {
+            Ok(name) => Some(PathBuf::from(name)),
+            Err(e) => {
+                log::warn!("system agent: the pipe name could not be derived: {e}");
+                None
+            }
+        };
         // Whether or not the listener is on: a host using "system agent" auth
         // with SSH_AUTH_SOCK pointed here is misconfigured either way, and gets
         // a typed error saying so instead of a loop (or a bare "not found").
@@ -135,14 +145,7 @@ impl Controller {
         reason = "the `running` guard serialises a restart against enable/stop for the whole start sequence"
     )]
     async fn restart(self: &Arc<Self>, epoch: u64) {
-        if crate::system_lock::is_screen_locked() {
-            return;
-        }
-        let core = self.core.clone();
-        let unlocked = tauri::async_runtime::spawn_blocking(move || core.is_unlocked())
-            .await
-            .unwrap_or(false);
-        if !unlocked {
+        if !self.may_serve().await {
             return;
         }
         let mut running = self.running.lock().await;
@@ -166,11 +169,7 @@ impl Controller {
                 // Checked again now that it is bound: a lock that landed while
                 // binding must not leave it serving. (A lock revokes before it
                 // locks the core, so either the epoch or this check sees it.)
-                let core = self.core.clone();
-                let unlocked = tauri::async_runtime::spawn_blocking(move || core.is_unlocked())
-                    .await
-                    .unwrap_or(false);
-                if unlocked {
+                if self.core_unlocked().await {
                     self.arm(epoch, &stop);
                 } else {
                     stop.cancel();
@@ -180,6 +179,21 @@ impl Controller {
             }
             Err(code) => self.set_error(Some(code)),
         }
+    }
+
+    /// Whether the vault is unlocked; a core that cannot be asked counts as
+    /// locked.
+    async fn core_unlocked(&self) -> bool {
+        let core = self.core.clone();
+        tauri::async_runtime::spawn_blocking(move || core.is_unlocked())
+            .await
+            .unwrap_or(false)
+    }
+
+    /// The condition for a listener to exist at all: the vault unlocked and
+    /// the screen not locked.
+    async fn may_serve(&self) -> bool {
+        !crate::system_lock::is_screen_locked() && self.core_unlocked().await
     }
 
     /// Stops the listener now and cuts its connections, keeping the setting.
@@ -266,6 +280,17 @@ impl Controller {
         let Some(path) = self.endpoint.clone() else {
             return Err(self.fail("unsupported"));
         };
+        // Checked here rather than trusted to the caller: nothing listens
+        // while the vault or the screen is locked, whoever asks. The setting
+        // is saved all the same, so the next unlock starts the listener
+        // (`resume_access`), exactly as after a restart of the app.
+        if !self.may_serve().await {
+            if save_settings(&self.settings_path, &Settings { enabled: true }).is_err() {
+                return Err(self.fail("save_failed"));
+            }
+            self.set_error(None);
+            return Ok(());
+        }
         let (stop, mut task) = match self.listen(&path).await {
             Ok(started) => started,
             Err(code) => return Err(self.fail(code)),
@@ -285,7 +310,13 @@ impl Controller {
             }
             return Err(self.fail("save_failed"));
         }
-        self.arm(epoch, &stop);
+        // Checked again now that it is bound, as in `restart`: a lock that
+        // landed meanwhile must not leave it serving.
+        if self.core_unlocked().await {
+            self.arm(epoch, &stop);
+        } else {
+            stop.cancel();
+        }
         *running = Some(Running { stop, task });
         self.set_error(None);
         Ok(())
@@ -342,31 +373,55 @@ impl Controller {
                 }
             };
             log::info!("system agent: listening");
+            // Whether the last accept failed, so a shortage is logged once.
+            let mut starved = false;
             loop {
-                tokio::select! {
+                let accepted = tokio::select! {
                     _ = token.cancelled() => break,
-                    accepted = listener.accept() => match accepted {
-                        Ok((stream, _)) => {
-                            let agent = agent.clone();
-                            let token = token.clone();
-                            tauri::async_runtime::spawn(async move {
-                                let caller = peer::caller(&stream);
-                                tokio::select! {
-                                    _ = token.cancelled() => {}
-                                    _ = agent.serve(stream, caller) => {}
-                                }
-                            });
+                    accepted = listener.accept() => accepted,
+                };
+                match accepted {
+                    Ok((stream, _)) => {
+                        starved = false;
+                        let agent = agent.clone();
+                        let token = token.clone();
+                        // `serve` closes a connection beyond its limit, and
+                        // one that idles, by returning.
+                        tauri::async_runtime::spawn(async move {
+                            let caller = peer::caller(&stream);
+                            tokio::select! {
+                                _ = token.cancelled() => {}
+                                _ = agent.serve(stream, caller) => {}
+                            }
+                        });
+                    }
+                    // Out of descriptors or memory, or a client that left
+                    // before it was accepted: the listener is fine. Out of
+                    // descriptors the connection stays queued and accept
+                    // fails again at once, hence the pause.
+                    Err(e) if endpoint::accept_error_is_transient(&e) => {
+                        if !starved {
+                            log::warn!("system agent: accept failed, still listening: {e}");
                         }
-                        Err(e) => {
-                            log::warn!("system agent: accept failed: {e}");
-                            set_tag(&error, "listener_failed");
-                            break;
+                        starved = true;
+                        tokio::select! {
+                            _ = token.cancelled() => break,
+                            _ = tokio::time::sleep(ACCEPT_RETRY) => {}
                         }
-                    },
+                    }
+                    Err(e) => {
+                        log::warn!("system agent: accept failed: {e}");
+                        set_tag(&error, "listener_failed");
+                        break;
+                    }
                 }
             }
             drop(listener);
             remove_socket(&socket);
+            // Already cancelled on a stop. After a listener failure this cuts
+            // the open connections too (each withdraws its prompt), so nothing
+            // is still served behind a status that says it stopped.
+            token.cancel();
             log::info!("system agent: stopped");
         });
         Ok((stop, task))
@@ -431,6 +486,8 @@ impl Controller {
                 let token = token.clone();
                 connections.push(tauri::async_runtime::spawn(async move {
                     let caller = pipe::caller(&stream);
+                    // `serve` gives up a connection beyond its limit, and one
+                    // that idles, by returning; the disconnect below closes it.
                     tokio::select! {
                         _ = token.cancelled() => {}
                         _ = agent.serve(&mut stream, caller) => {}
@@ -528,6 +585,11 @@ impl Controller {
         }
     }
 }
+
+/// How long the accept loop waits after an accept that failed for want of
+/// resources before trying again.
+#[cfg(unix)]
+const ACCEPT_RETRY: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Sets the status tag from the listener task, which cannot return an error.
 /// The slot holds only a tag, so a poisoned lock is recovered and overwritten.
