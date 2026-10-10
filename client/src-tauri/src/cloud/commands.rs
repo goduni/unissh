@@ -1264,12 +1264,16 @@ pub async fn server_keyset_pull_and_unlock(
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
     // The installed keyset may be wrapped under another password.
-    blocking_api(crate::biometric::installing_keyset(&state, move || {
-        let http = client::http();
-        let (blob, _generation) = identity::keyset_get(http, &cfg.base_url, &access)?;
-        core.unlock_from_server_blob(blob, password, secret_key_hex)
-            .map_err(ApiError::from)
-    }))
+    blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || {
+            let http = client::http();
+            let (blob, _generation) = identity::keyset_get(http, &cfg.base_url, &access)?;
+            core.unlock_from_server_blob(blob, password, secret_key_hex)
+                .map_err(ApiError::from)
+        },
+    ))
     .await?;
     crate::commands::resume_after_unlock(&app);
     Ok(())
@@ -1400,10 +1404,10 @@ pub async fn server_escrow_fetch_and_unlock(
     let core = state.core.clone();
     let base = base_url.clone();
     let hd = handle.clone();
-    let bio_blob = crate::biometric::blob_path(&state);
 
     // Recover + unlock the keyset in one blocking pass, then hand off to the shared tail.
-    let account_id = blocking_api(move || {
+    // The recovered keyset may be wrapped under another password (see `installing_keyset`).
+    let install = crate::biometric::installing_keyset(&app, &state, move || {
         let http = client::http();
         // 1–2. Enrolled Argon2id params → re-derive K_auth with THOSE params (enroll/fetch
         //       symmetry). password/secret_key only enter the core here.
@@ -1427,11 +1431,10 @@ pub async fn server_escrow_fetch_and_unlock(
             password,
             secret_key_hex,
             crate::keychain::save_secret_key_now,
-            &bio_blob,
         )?;
         Ok(account_id)
-    })
-    .await?;
+    });
+    let (account_id, _) = blocking_api(install).await?;
 
     // Keep escrow's fetched account id as the link identity and its handle on the link.
     crate::commands::resume_after_unlock(&app);
@@ -1460,20 +1463,23 @@ pub async fn server_import_keyset_and_unlock(
 ) -> ApiResult<ServerStatus> {
     client::validate_base_url(&base_url)?;
     let core = state.core.clone();
-    let bio_blob = crate::biometric::blob_path(&state);
     // Install + unlock the keyset from the file blob (blocking; the raw bytes + credentials enter
     // ONLY the core here). Unlike escrow there is no fetch to learn the account id from — the
     // follow-up self-enroll returns it (the same keyset resolves the same account).
-    blocking_api(move || {
-        super::recovery::install_keyset(
-            &core,
-            keyset_blob,
-            password,
-            secret_key_hex,
-            crate::keychain::save_secret_key_now,
-            &bio_blob,
-        )
-    })
+    // The imported keyset may be wrapped under another password (see `installing_keyset`).
+    blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || {
+            super::recovery::install_keyset(
+                &core,
+                keyset_blob,
+                password,
+                secret_key_hex,
+                crate::keychain::save_secret_key_now,
+            )
+        },
+    ))
     .await?;
     // Offline import carries no handle (escrow keys off one); the account's handle syncs later.
     crate::commands::resume_after_unlock(&app);
@@ -1551,6 +1557,7 @@ pub async fn server_onboard_complete(
     reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
 )]
 pub async fn server_onboard_join(
+    app: tauri::AppHandle,
     base_url: String,
     instance_id: String,
     space_id: String,
@@ -1569,12 +1576,16 @@ pub async fn server_onboard_join(
     let base = base_url.clone();
     let channel = channel_id.clone();
     // A keyset from another device: nothing sealed here before may open it.
-    blocking_api(crate::biometric::installing_keyset(&state, move || {
-        let http = client::http();
-        let code = client::unb64(&oob_code)?;
-        onboard::responder_join(&core_pake, http, &base, &channel, code, password)?;
-        Ok(())
-    }))
+    blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || {
+            let http = client::http();
+            let code = client::unb64(&oob_code)?;
+            onboard::responder_join(&core_pake, http, &base, &channel, code, password)?;
+            Ok(())
+        },
+    ))
     .await?;
 
     // 2) Persist a cloud link for the new device and make it active. Idempotent:

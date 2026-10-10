@@ -346,14 +346,17 @@ pub fn reveal_log_dir(_app: tauri::AppHandle) -> ApiResult<()> {
 
 #[tauri::command]
 pub async fn create_account(
+    app: tauri::AppHandle,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
     // A new keyset: nothing left from an earlier instance may unlock it.
-    let (secret_key, _) = blocking_api(crate::biometric::installing_keyset(&state, move || {
-        Ok(core.create_account(password)?)
-    }))
+    let (secret_key, _) = blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || Ok(core.create_account(password)?),
+    ))
     .await?;
     Ok(secret_key)
 }
@@ -504,21 +507,26 @@ pub async fn set_algorithm_policy(modern: bool, state: State<'_, AppState>) -> A
     Ok(())
 }
 
-/// Change, add or remove the master password. On success the biometric unlock
-/// material sealed for the old password is wiped; the answer says whether there
-/// was any and whether the wipe worked, so Settings can ask for it to be turned
-/// on again (with the new password, in this session) or say it failed.
+/// Change, add or remove the master password. The biometric unlock material
+/// sealed for the old password is wiped — also when the change fails after the
+/// keyset was already rewritten. The answer says whether there was any and
+/// whether the wipe worked, so Settings can ask for it to be turned on again
+/// (with the new password, in this session); a wipe that failed is reported to
+/// the window by `installing_keyset`, like for every other keyset install.
 #[tauri::command]
 pub async fn change_password(
+    app: tauri::AppHandle,
     old_password: Option<String>,
     new_password: Option<String>,
     secret_key_hex: String,
     state: State<'_, AppState>,
 ) -> ApiResult<crate::biometric::KeysetWipe> {
     let core = state.core.clone();
-    let ((), wipe) = blocking_api(crate::biometric::installing_keyset(&state, move || {
-        Ok(core.change_password(old_password, new_password, secret_key_hex)?)
-    }))
+    let ((), wipe) = blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || Ok(core.change_password(old_password, new_password, secret_key_hex)?),
+    ))
     .await?;
     Ok(wipe)
 }

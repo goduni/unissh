@@ -60,7 +60,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, State};
 use unissh_ffi::FfiError;
 use unissh_keychain::device_wrap;
 use zeroize::{Zeroize, Zeroizing};
@@ -78,6 +78,11 @@ mod windows;
 /// The sealed master password, next to the keyset. Ciphertext only: without the
 /// device secret, which never leaves the platform store, it opens to nothing.
 const BLOB_FILE: &str = "biometric-unlock.bin";
+
+/// Emitted (no payload) when stored material should have been wiped after this
+/// device's keyset changed and could not be. One event for every path that
+/// installs a keyset, so each of them tells the user the same way.
+const WIPE_FAILED_EVENT: &str = "biometric-wipe-failed";
 
 /// Takes a prompt down from another thread. Called at most once.
 pub(crate) type Dismiss = Box<dyn FnOnce() + Send>;
@@ -372,9 +377,11 @@ pub enum KeysetWipe {
     Nothing,
     /// Both halves are gone: biometric unlock must be turned on again.
     Erased,
-    /// Material was stored and could not be (fully) removed. It no longer
-    /// opens anything — the core refuses the old password — and the next
-    /// biometric attempt wipes it; the UI must not call it erased.
+    /// Material was stored and could not be (fully) removed. Nothing promises
+    /// it is harmless or that it goes on its own — the new keyset may still
+    /// take the same password, and a vault left without one never tries the
+    /// biometric again — so the UI must not call it erased: the user is told
+    /// ([`WIPE_FAILED_EVENT`]) and Settings offers to forget it.
     Failed,
 }
 
@@ -472,20 +479,21 @@ pub(crate) fn forget_now(blob: &Path) -> ApiResult<()> {
 /// halves are wiped and biometric unlock has to be turned on again, with the
 /// password of the keyset now on disk. Says what happened (so the UI can say
 /// "turn it on again", or that the wipe failed). Best-effort and blocking: the
-/// keyset change has already happened and is not undone by a wipe that fails;
-/// a stale password left behind is still caught (and wiped) by the next
-/// biometric unlock, which the core then refuses.
+/// keyset change has already happened and is not undone by a wipe that fails.
+/// A failed wipe is not left to sort itself out — a vault whose password was
+/// removed never tries the biometric again, so nothing would ever notice the
+/// old password still sealed on disk: [`installing_keyset`] reports it.
 ///
-/// Not called directly by commands: a keyset is installed either through
-/// `cloud::recovery::install_keyset`, which wipes, or inside
-/// [`installing_keyset`]. Both make the wipe part of the install, so a new
-/// keyset-installing command cannot forget it.
+/// Not called directly by commands: every keyset install runs inside
+/// [`installing_keyset`], which makes the wipe (and the report of a failed
+/// one) part of the install, so a new keyset-installing command cannot forget
+/// either.
 ///
 /// Without a blob there is no password to outlive the keyset, so the platform
 /// store is not touched at all (a device secret alone opens nothing, and the
 /// next enable replaces it): no Keychain or Windows Hello call on every new
 /// account or pairing.
-pub(crate) fn forget_after_keyset_change(blob: &Path) -> KeysetWipe {
+fn forget_after_keyset_change(blob: &Path) -> KeysetWipe {
     if !blob.exists() {
         return KeysetWipe::Nothing;
     }
@@ -498,17 +506,61 @@ pub(crate) fn forget_after_keyset_change(blob: &Path) -> KeysetWipe {
     }
 }
 
+/// The keyset record on disk — ciphertext, a few hundred bytes — for telling
+/// whether an install touched it. `None` when there is none or it cannot be
+/// read.
+fn keyset_record(keyset: &Path) -> Option<Vec<u8>> {
+    std::fs::read(keyset).ok()
+}
+
+/// Run `install` and wipe biometric unlock if the keyset on disk may have
+/// changed: always when it succeeded, and when it failed **after** rewriting
+/// the keyset (the core writes the new record before its last fallible steps,
+/// so "it returned an error" does not mean "the old password still stands").
+/// A failure that left the keyset as it was wipes nothing.
+fn wipe_around_install<T>(
+    keyset: &Path,
+    blob: &Path,
+    install: impl FnOnce() -> ApiResult<T>,
+) -> (ApiResult<T>, KeysetWipe) {
+    // Without stored material no outcome leaves anything behind: skip the reads.
+    let before = blob.exists().then(|| keyset_record(keyset));
+    let installed = install();
+    let rewritten = match (&installed, before) {
+        (Ok(_), _) => true,
+        (Err(_), Some(before)) => keyset_record(keyset) != before,
+        (Err(_), None) => false,
+    };
+    let wipe = if rewritten {
+        forget_after_keyset_change(blob)
+    } else {
+        KeysetWipe::Nothing
+    };
+    (installed, wipe)
+}
+
 /// Wrap a blocking `install` that re-wraps or replaces this device's keyset
-/// (create, change password, pull, pairing) so that biometric unlock is wiped
-/// right after it succeeds, in the same blocking pass. For `blocking_api`.
+/// (create, change password, pull, recovery, pairing) so that biometric unlock
+/// is wiped in the same blocking pass — see [`wipe_around_install`] for when —
+/// and a wipe that failed reaches the user ([`WIPE_FAILED_EVENT`]), whichever
+/// command it was and whether or not the install itself succeeded. For
+/// `blocking_api`.
 pub(crate) fn installing_keyset<T: Send + 'static>(
+    app: &tauri::AppHandle,
     state: &AppState,
     install: impl FnOnce() -> ApiResult<T> + Send + 'static,
 ) -> impl FnOnce() -> ApiResult<(T, KeysetWipe)> + Send + 'static {
+    let app = app.clone();
+    let keyset = state.keyset_path.clone();
     let blob = blob_path(state);
     move || {
-        let installed = install()?;
-        Ok((installed, forget_after_keyset_change(&blob)))
+        let (installed, wipe) = wipe_around_install(&keyset, &blob, install);
+        if wipe == KeysetWipe::Failed {
+            if let Err(e) = app.emit(WIPE_FAILED_EVENT, ()) {
+                log::warn!("biometric: the failed wipe could not be reported to the window: {e}");
+            }
+        }
+        installed.map(|installed| (installed, wipe))
     }
 }
 
@@ -892,6 +944,28 @@ mod tests {
         let status = status_now(Some(&platform), &dir.path().join(BLOB_FILE), false);
         assert!(!platform.0.load(std::sync::atomic::Ordering::SeqCst));
         assert!(!status.stored && !status.enabled && !status.secret_key_remembered);
+    }
+
+    // A change that fails after the core has rewritten the keyset has still
+    // changed the password: what was sealed for the old one goes. A failure
+    // that left the keyset alone keeps it.
+    #[test]
+    fn failed_install_wipes_only_when_it_rewrote_the_keyset() {
+        let dir = tempfile::tempdir().unwrap();
+        let keyset = dir.path().join("instance.keyset.bin");
+        let blob = dir.path().join(BLOB_FILE);
+        std::fs::write(&keyset, b"old record").unwrap();
+        std::fs::write(&blob, b"sealed").unwrap();
+
+        let (untouched, wipe) =
+            wipe_around_install(&keyset, &blob, || -> ApiResult<()> { Err(unsupported()) });
+        assert!(untouched.is_err() && wipe == KeysetWipe::Nothing && blob.exists());
+
+        let (rewritten, wipe) = wipe_around_install(&keyset, &blob, || -> ApiResult<()> {
+            std::fs::write(&keyset, b"new record").unwrap();
+            Err(unsupported())
+        });
+        assert!(rewritten.is_err() && wipe == KeysetWipe::Erased && !blob.exists());
     }
 
     // Ending an attempt takes its prompt down and makes its answer worthless;
