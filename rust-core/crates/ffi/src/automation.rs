@@ -74,16 +74,58 @@ impl ConnectionPolicy {
     }
 }
 
+/// Meta slot of the saved MCP consents (a JSON list owned by the automation
+/// broker; see `automation_access_load`).
+const ACCESS_KEY: &str = "mcp.access.v1";
+
+/// Re-points the hosts selected for local MCP integrations at a vault that
+/// changed id (a local vault moved to a server): each saved target names its
+/// host as `(vault_id, profile_id)`, and the profile ids are unchanged. The
+/// consents stay bound to the fingerprint of the vault data they were given
+/// for, so the move — like any other vault change — leaves them paused until
+/// the user confirms them again; this keeps the selection they confirm from
+/// pointing at a vault that no longer exists. Edits the JSON in place, so
+/// fields this code does not know survive. Run inside the move's transaction.
+pub(super) fn rehome_access(storage: &Storage, old: &str, new: &str) -> Result<(), FfiError> {
+    let Some(bytes) = storage.get_meta(ACCESS_KEY)? else {
+        return Ok(());
+    };
+    // A blob the broker itself could not read is not this operation's to fix.
+    let Ok(mut saved) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Ok(());
+    };
+    let mut changed = false;
+    let targets = saved
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .filter_map(|consent| consent.get_mut("targets")?.as_array_mut())
+        .flatten();
+    for target in targets {
+        if let Some(vault_id) = target.get_mut("vault_id") {
+            if vault_id.as_str() == Some(old) {
+                *vault_id = new.into();
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        let bytes = serde_json::to_vec(&saved).map_err(FfiError::other)?;
+        storage.set_meta(ACCESS_KEY, &bytes)?;
+    }
+    Ok(())
+}
+
 impl Core {
     /// Device-local permissions live inside SQLCipher and are never vault-synced.
     pub fn automation_access_load(&self) -> Result<Option<Vec<u8>>, FfiError> {
-        self.with_state(|s| s.storage.get_meta("mcp.access.v1").map_err(FfiError::other))
+        self.with_state(|s| s.storage.get_meta(ACCESS_KEY).map_err(FfiError::other))
     }
     /// Stores the device-local MCP consent blob; errors when locked or the write fails.
     pub fn automation_access_save(&self, bytes: &[u8]) -> Result<(), FfiError> {
         self.with_state(|s| {
             s.storage
-                .set_meta("mcp.access.v1", bytes)
+                .set_meta(ACCESS_KEY, bytes)
                 .map_err(FfiError::other)
         })
     }

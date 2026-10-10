@@ -150,6 +150,24 @@ pub(crate) fn forget(state: &CoreState, vault_id: &str, item_id: Option<&str>) {
     }
 }
 
+/// Re-points the entries of a vault that changed id (a local vault moved to a
+/// server: `old` is the id it was shared under, `new` the cloud vault's). The
+/// keys are the same keys under the same item ids, so they stay shared. Run
+/// inside the move's transaction; unlike [`forget`] a failure is returned, so
+/// the move rolls back instead of dropping the shares.
+pub(crate) fn rehome(state: &CoreState, old: &str, new: &str) -> Result<(), FfiError> {
+    let mut entries = read_entries(state)?;
+    let mut changed = false;
+    for entry in entries.iter_mut().filter(|e| e.vault_id == old) {
+        new.clone_into(&mut entry.vault_id);
+        changed = true;
+    }
+    if changed {
+        write_entries(state, &entries)?;
+    }
+    Ok(())
+}
+
 /// A shared entry whose key is still the one it was shared for.
 struct Resolved {
     entry: Entry,

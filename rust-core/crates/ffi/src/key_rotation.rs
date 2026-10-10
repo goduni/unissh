@@ -91,6 +91,20 @@ fn save_links(
         .map_err(FfiError::other)
 }
 
+/// Carries this device's rotation links over to a vault that changed id (a
+/// local vault moved to a server keeps its item ids and key material, so each
+/// link still names its candidate and that candidate's fingerprint). Without
+/// it the candidate would read as started on another device — abandon-only.
+/// Run inside the move's transaction.
+pub(super) fn rehome(state: &CoreState, old_vid: &[u8], new_vid: &[u8]) -> Result<(), FfiError> {
+    let links = load_links(state, old_vid)?;
+    if links.is_empty() {
+        return Ok(());
+    }
+    save_links(state, new_vid, &links)?;
+    save_links(state, old_vid, &BTreeMap::new())
+}
+
 /// SHA256 fingerprint of an SSH key item's public half.
 fn public_fingerprint(item: &DecryptedItem) -> Result<String, FfiError> {
     let mut tmp = InMemoryAgent::new();
