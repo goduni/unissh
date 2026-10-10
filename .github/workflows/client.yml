@@ -356,6 +356,17 @@ jobs:
         run: cargo test --locked --release --lib commands::local_symlink_tests -- --test-threads=1
         working-directory: client/src-tauri
 
+      # The platform-independent half of biometric unlock: what the status
+      # says, which attempt's answer still counts, and when stored material is
+      # wiped around a keyset change. Linux only: there the platform store is
+      # absent by design, so a wipe touches nothing but the temp directory; on
+      # macOS and Windows the same code would reach the runner's real Keychain
+      # and Windows Hello. Reuses the test binary the two steps above built.
+      - name: Test biometric unlock logic (Tauri crate)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: cargo test --locked --release --lib biometric::tests
+        working-directory: client/src-tauri
+
       - name: Build & bundle (Tauri)
         uses: tauri-apps/tauri-action@v1
         env:
