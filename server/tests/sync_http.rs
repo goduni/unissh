@@ -297,3 +297,30 @@ async fn rate_limit_429() {
     assert_ne!(s2, 429);
     assert_eq!(s3, 429, "burst=2 → 3rd request rate-limited");
 }
+
+/// The default limits admit the largest object a client legitimately pushes (a
+/// full session recording) in a request of its own, and nothing bigger.
+/// Regression: the default object limit was 1 MiB, and whatever
+/// `limits.max_body_bytes` said, a body over 2 MiB never reached the handler.
+#[tokio::test]
+async fn default_limits_admit_the_largest_client_object_and_nothing_bigger() {
+    let app = spawn().await;
+    let s = app.seed_session("personal").await;
+    let bearer = format!("Bearer {}", s.access_token_b64);
+    let largest = unissh_sync::LARGEST_CLIENT_OBJECT_BYTES;
+
+    // Size is checked before the object is parsed: zeros of a permitted size
+    // get as far as the parser, which rejects them as malformed (400).
+    for (len, expected) in [(largest, 400), (largest + 1, 413)] {
+        let status = app
+            .client
+            .post(format!("{}/v1/sync/push", app.base))
+            .header("Authorization", &bearer)
+            .json(&json!({ "objects": [ids::b64(&vec![0_u8; len])] }))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, expected, "an object of {len} bytes");
+    }
+}

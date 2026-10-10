@@ -6,7 +6,7 @@ pub mod ratelimit;
 use crate::modules;
 use crate::state::AppState;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -76,6 +76,10 @@ pub fn build_router(state: AppState) -> Router {
             HeaderName::from_static("unissh-api-version"),
             HeaderValue::from_static("1"),
         ))
+        // `limits.max_body_bytes` is the one request-size limit. Without the
+        // first layer the extractors (`Bytes`, `Json`) apply axum's own 2 MiB
+        // default before the configured value is ever reached.
+        .layer(DefaultBodyLimit::max(max_body))
         .layer(RequestBodyLimitLayer::new(max_body))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
