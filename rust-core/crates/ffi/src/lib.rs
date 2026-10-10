@@ -26,8 +26,6 @@
 //! an unlock). SSH sessions are launched through the embedded agent (the key lives in the agent,
 //! not in the UI).
 
-#![allow(clippy::arc_with_non_send_sync)]
-
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
@@ -141,6 +139,36 @@ fn attached_certificate(
 /// [`Core`] state and the session/pool/tunnel types.
 fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Discards the outcome of a best-effort step whose failure has no remedy: tearing
+/// down (close, disconnect) a session that is being abandoned anyway, or one leg of a
+/// fan-out where a dead host must not fail the others.
+fn best_effort<T, E>(result: Result<T, E>) {
+    if result.is_err() {
+        // Deliberately ignored; see the doc comment.
+    }
+}
+
+/// A count or index for the UI as `u32`, saturating instead of wrapping.
+fn count_u32(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// A remote exit status for the UI: `-1` when there was none (or it does not fit).
+fn exit_status_i32(status: Option<u32>) -> i32 {
+    status.and_then(|c| i32::try_from(c).ok()).unwrap_or(-1)
+}
+
+/// Removes a file this core created on a path that is already failing. The caller
+/// returns the original error, which is the one worth reporting; a leftover file is
+/// only logged (by error kind, never by path).
+fn remove_partial_file(path: &std::path::Path) {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            log::warn!("could not remove a partially written file: {}", e.kind());
+        }
+    }
 }
 
 /// Asserts that the caller is **not** inside any tokio task.
@@ -280,7 +308,7 @@ pub enum FfiSyncTarget {
 }
 
 impl FfiSyncTarget {
-    fn from_core(t: SyncTarget) -> Self {
+    const fn from_core(t: SyncTarget) -> Self {
         match t {
             SyncTarget::Local => Self::Local,
             SyncTarget::Cloud => Self::Cloud,
@@ -520,11 +548,19 @@ pub enum BindingResolution {
     Unbound,
     /// A binding exists and the current destination matched the pinned one — one may
     /// log in with the personal identity `identity_item_id`.
-    Matched { identity_item_id: String },
+    Matched {
+        /// Personal-identity item to log in with.
+        identity_item_id: String,
+    },
     /// A binding exists, but the current destination DIFFERS from the pinned one: the host
     /// may have been re-pointed (an in-place edit of host or the username template) →
     /// REFUSE to send the personal credential; an explicit re-bind is required.
-    Redirected { pinned: String, current: String },
+    Redirected {
+        /// Destination pinned when the binding was made.
+        pinned: String,
+        /// Destination the host renders to now.
+        current: String,
+    },
 }
 
 /// Pure anti-redirect logic: checks the currently rendered destination against
@@ -556,7 +592,8 @@ fn binding_item_id(team_vault_id: &str, profile_uid: &str) -> String {
     h.update((team_vault_id.len() as u64).to_be_bytes());
     h.update(team_vault_id.as_bytes());
     h.update(profile_uid.as_bytes());
-    format!("binding:{}", hex::encode(&h.finalize()[..16]))
+    let digest: [u8; 32] = h.finalize().into();
+    format!("binding:{}", hex::encode(&digest[..16]))
 }
 
 /// Resolved personal authentication for connecting to a shared host: a concrete
@@ -806,6 +843,27 @@ struct StoredRecordingMeta {
     truncated: bool,
     #[serde(default)]
     mcp: Option<McpRecordingMeta>,
+}
+
+/// The command of a legacy MCP recording, which kept it only in the asciicast
+/// header's `unissh_mcp` object; `None` when the record or header does not parse.
+fn legacy_mcp_command(content: &[u8]) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct CommandHeader {
+        unissh_mcp: Option<CommandText>,
+    }
+    #[derive(serde::Deserialize)]
+    struct CommandText {
+        command: Option<String>,
+    }
+    let legacy = serde_json::from_slice::<StoredRecording>(content).ok()?;
+    legacy
+        .asciicast
+        .lines()
+        .next()
+        .and_then(|line| serde_json::from_str::<CommandHeader>(line).ok())
+        .and_then(|header| header.unissh_mcp)
+        .and_then(|m| m.command)
 }
 
 /// Serializable body of a host-chain reference (B2.2).
@@ -1265,14 +1323,14 @@ pub enum FfiMemberRole {
 }
 
 impl FfiMemberRole {
-    fn to_core(self) -> MemberRole {
+    const fn to_core(self) -> MemberRole {
         match self {
             Self::Viewer => MemberRole::Viewer,
             Self::Editor => MemberRole::Editor,
             Self::Admin => MemberRole::Admin,
         }
     }
-    fn from_core(r: MemberRole) -> Self {
+    const fn from_core(r: MemberRole) -> Self {
         match r {
             MemberRole::Viewer => Self::Viewer,
             MemberRole::Editor => Self::Editor,
@@ -1293,13 +1351,13 @@ pub enum FfiCachePolicy {
 }
 
 impl FfiCachePolicy {
-    fn to_core(self) -> CachePolicy {
+    const fn to_core(self) -> CachePolicy {
         match self {
             Self::OfflineAllowed => CachePolicy::OfflineAllowed,
             Self::OnlineOnly => CachePolicy::OnlineOnly,
         }
     }
-    fn from_core(c: CachePolicy) -> Self {
+    const fn from_core(c: CachePolicy) -> Self {
         match c {
             CachePolicy::OfflineAllowed => Self::OfflineAllowed,
             CachePolicy::OnlineOnly => Self::OnlineOnly,
@@ -1393,13 +1451,19 @@ impl Drop for CoreState {
     }
 }
 
+/// MCP details of a recorded command run, stored with the recording.
 #[derive(Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct McpRecordingMeta {
+    /// The exact command; `None` in legacy recordings that kept it only in the
+    /// asciicast header (listing fills it in from there).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Integration (application) that ran the command.
     pub application: String,
+    /// Final run outcome, e.g. `completed`, `failed` or `cancelled`.
     pub outcome: String,
+    /// Remote exit status, when the command reported one.
     pub exit_code: Option<u32>,
 }
 
@@ -1463,6 +1527,10 @@ pub struct EscrowCreds {
 impl Core {
     /// Creates the facade over the DB and keyset-sidecar paths (not yet unlocked).
     #[uniffi::constructor]
+    #[expect(
+        clippy::expect_used,
+        reason = "the uniffi constructor is infallible by contract; without a runtime (no OS threads) the core cannot work at all"
+    )]
     pub fn new(db_path: String, keyset_path: String) -> Arc<Self> {
         Arc::new(Self {
             sftp_epoch: std::sync::atomic::AtomicU64::new(0),
@@ -1512,7 +1580,7 @@ impl Core {
         let has_password = password.is_some();
         let password = password.map(Zeroizing::new);
         let (secret_key, enc, unlocked) = create_account(
-            password.as_deref().map(std::string::String::as_bytes),
+            password.as_deref().map(String::as_bytes),
             KdfParams::recommended(),
         )
         .map_err(FfiError::other)?;
@@ -1523,7 +1591,7 @@ impl Core {
         // creating the DB we roll back the files so that a retry starts clean.
         let db_key = derive_db_key(&unlocked);
         let storage = Storage::open(&self.db_path, &db_key[..]).map_err(|e| {
-            let _ = std::fs::remove_file(&self.db_path);
+            remove_partial_file(&self.db_path);
             FfiError::other(e)
         })?;
 
@@ -1532,8 +1600,8 @@ impl Core {
                 use std::io::Write;
                 if let Err(e) = f.write_all(&enc_bytes) {
                     drop(storage);
-                    let _ = std::fs::remove_file(&self.keyset_path);
-                    let _ = std::fs::remove_file(&self.db_path);
+                    remove_partial_file(&self.keyset_path);
+                    remove_partial_file(&self.db_path);
                     return Err(FfiError::other(e));
                 }
             }
@@ -1541,12 +1609,12 @@ impl Core {
                 // Race: the keyset appeared between the check and the write. We just
                 // created the DB ourselves — remove it, and don't touch the other instance.
                 drop(storage);
-                let _ = std::fs::remove_file(&self.db_path);
+                remove_partial_file(&self.db_path);
                 return Err(FfiError::AlreadyExists);
             }
             Err(e) => {
                 drop(storage);
-                let _ = std::fs::remove_file(&self.db_path);
+                remove_partial_file(&self.db_path);
                 return Err(FfiError::other(e));
             }
         }
@@ -1575,12 +1643,9 @@ impl Core {
         // via a probe and returned re-wrapped under the current scheme (`migrated`). This
         // fixes "invalid secret key/master password" for those who created an account on
         // earlier builds. Persisting the re-wrap is below, AFTER opening storage and the floor check.
-        let (unlocked, migrated) = unlock_account_migrating(
-            &enc,
-            password.as_deref().map(std::string::String::as_bytes),
-            &secret_key,
-        )
-        .map_err(map_keychain_err)?;
+        let (unlocked, migrated) =
+            unlock_account_migrating(&enc, password.as_deref().map(String::as_bytes), &secret_key)
+                .map_err(map_keychain_err)?;
 
         let db_key = derive_db_key(&unlocked);
         let storage = Storage::open(&self.db_path, &db_key[..]).map_err(FfiError::other)?;
@@ -1658,6 +1723,10 @@ impl Core {
     }
 
     /// Locks the instance (in-memory secrets are zeroized on Drop).
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the epoch bump, the state reset and the hand-off of the SFTP sessions atomically"
+    )]
     pub fn lock(&self) {
         log::info!("instance locked");
         let sessions = {
@@ -1733,7 +1802,7 @@ impl Core {
                 .storage
                 .bind_unbound_cloud_vaults(tenant_b64.as_bytes())
                 .map_err(FfiError::other)?;
-            Ok(n as u32)
+            Ok(count_u32(n))
         })
     }
 
@@ -1749,7 +1818,7 @@ impl Core {
                 .storage
                 .clear_binding_for_tenant(tenant_b64.as_bytes())
                 .map_err(FfiError::other)?;
-            Ok(n as u32)
+            Ok(count_u32(n))
         })
     }
 
@@ -1758,6 +1827,10 @@ impl Core {
     /// moving an already-bound vault to a different server (the label is
     /// overwritten unconditionally, and the vault is re-dirtied so it re-pushes
     /// to the new server).
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn bind_cloud_vault(&self, vault_id: String, tenant_b64: String) -> Result<(), FfiError> {
         if tenant_b64.is_empty() {
             return Err(FfiError::Other {
@@ -1778,6 +1851,10 @@ impl Core {
     /// binding label so it stops syncing. The vault and its data stay on this
     /// device; any server-side copy is left orphaned. Returns true if a vault
     /// was unbound (false if the id matched no cloud vault).
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn unbind_cloud_vault(&self, vault_id: String) -> Result<bool, FfiError> {
         let vid = hex::decode(vault_id.trim()).map_err(|_| FfiError::other("invalid vault id"))?;
         self.with_state(|state| {
@@ -1842,7 +1919,7 @@ impl Core {
                 role: role.to_core(),
             });
 
-            let x25519_by_ed = vec![(owner_ed.clone(), owner_x), (member_ed.clone(), member_x)];
+            let x25519_by_ed = vec![(owner_ed, owner_x), (member_ed.clone(), member_x)];
             vault
                 .establish_or_extend_membership(&state.keyset, &members, &x25519_by_ed)
                 .map_err(map_vault_err)?;
@@ -1856,13 +1933,12 @@ impl Core {
         let vid = decode_vid(&vault_id)?;
         self.with_state_mut(|state| {
             let owner_ed = state.keyset.signing.verifying.to_bytes().to_vec();
-            let latest = match state
+            let Some(latest) = state
                 .storage
                 .latest_membership_epoch(&vid)
                 .map_err(FfiError::other)?
-            {
-                Some(l) => l,
-                None => return Ok(Vec::new()),
+            else {
+                return Ok(Vec::new());
             };
             let verified = verify_chain_to_epoch(&state.storage, &vid, latest, &owner_ed)
                 .map_err(map_vault_err)?;
@@ -1935,6 +2011,10 @@ impl Core {
     /// bindings are written into it, and a shared (multi-member) vault would sync them to the whole
     /// team (a leak of personal credentials + the fact/target of the binding). >1 member → refused;
     /// a local vault has no membership chain (0 members) → passes.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover resolving the vault and its membership check"
+    )]
     pub fn set_personal_vault(&self, vault_id: String) -> Result<(), FfiError> {
         let vid = {
             let mut guard = self.locked_state();
@@ -2126,7 +2206,6 @@ impl Core {
     /// Signs a server challenge with the keyset's Ed25519 key (server-tz §2.2,
     /// domain `unissh-server-auth-v1`). Returns the signature blob (NOT a secret);
     /// the private key never leaves. Nonce/expiry checking is done by the server.
-    #[allow(clippy::too_many_arguments)]
     pub fn sign_server_challenge(
         &self,
         host: String,
@@ -2156,7 +2235,6 @@ impl Core {
     /// (`ids::unb64` → `ServerAuthChallenge::canonical`). The string variant
     /// would sign the string's UTF-8 bytes → mismatch. Returns the signature blob (NOT
     /// a secret); nonce/expiry checking is done by the server.
-    #[allow(clippy::too_many_arguments)]
     pub fn sign_server_challenge_raw(
         &self,
         host: Vec<u8>,
@@ -2213,6 +2291,10 @@ impl Core {
     /// seq. Signing/verification is done by a higher layer — the FFI carries opaque
     /// blobs. `vault_id`/`author_pubkey` are hex. (vault_id is not stored in storage-audit v1
     /// — it is an instance-level log; accepted for future vault-scoping.)
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn audit_append(
         &self,
         vault_id: String,
@@ -2261,6 +2343,14 @@ impl Core {
     /// opening the DB, then raising the generation floor to the accepted record (TOFU on
     /// the first onboarding; the floor cannot be lowered). v1 honest gap: confidentiality
     /// is present, freshness relative to the server is at a higher layer.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "one guard for the whole method: it serializes the unlock and installs the state, and the mutex is not reentrant"
+    )]
     pub fn unlock_from_server_blob(
         &self,
         keyset_blob: Vec<u8>,
@@ -2282,12 +2372,9 @@ impl Core {
         // migrate-on-open: a legacy blob (before round 2) from an old device is opened
         // via a probe and immediately re-wrapped under the current scheme — the local sidecar
         // will hold a v3 record (`migrated`), and offline unlock will proceed without probing.
-        let (unlocked, migrated) = unlock_account_migrating(
-            &enc,
-            password.as_deref().map(std::string::String::as_bytes),
-            &secret_key,
-        )
-        .map_err(map_keychain_err)?;
+        let (unlocked, migrated) =
+            unlock_account_migrating(&enc, password.as_deref().map(String::as_bytes), &secret_key)
+                .map_err(map_keychain_err)?;
 
         // the db key is derived from the unwrapped keyset, so the floor (in storage-meta)
         // is available only AFTER unlock+open. The raw-crypto unwrap (AEAD verification
@@ -2368,6 +2455,10 @@ impl Core {
     /// generates FRESH recommended params + a fresh salt; the enroll flow must persist the
     /// escrow block and THESE params together (and ensure the wrapped keyset the device
     /// recovers is consistent with them). Fetch simply re-runs this with the stored salt.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn derive_escrow_credentials(
         &self,
         password: Option<String>,
@@ -2414,6 +2505,10 @@ impl Core {
     /// `argon_*` inputs are then irrelevant), exactly as `derive_escrow_credentials`.
     ///
     /// A **pure derivation** — nothing is persisted and no unlocked state is required.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn derive_escrow_auth_with_params(
         &self,
         password: Option<String>,
@@ -2423,6 +2518,15 @@ impl Core {
         argon_iterations: u32,
         argon_parallelism: u32,
     ) -> Result<Vec<u8>, FfiError> {
+        // Bound the SERVER-PROVIDED Argon2id cost before running the KDF: the escrow
+        // params come from an untrusted `GET /v1/escrow/params`, so a malicious server
+        // could otherwise pin absurd mem/time/lanes and force a huge Argon2 allocation
+        // (memory-exhaustion / DoS) on a recovering device. These ceilings sit far above
+        // the recommended enroll params (64 MiB, t=3, p=1), so a genuine fetch is
+        // unaffected; anything past them is a hostile response → reject (checked below).
+        const MAX_ESCROW_MEM_KIB: u32 = 1024 * 1024; // 1 GiB
+        const MAX_ESCROW_ITERATIONS: u32 = 10;
+        const MAX_ESCROW_PARALLELISM: u32 = 4;
         let password = password.map(Zeroizing::new);
         let secret_key_hex = Zeroizing::new(secret_key_hex);
         let sk_bytes = Zeroizing::new(
@@ -2431,15 +2535,6 @@ impl Core {
         let secret_key =
             SecretKey::from_slice(&sk_bytes).map_err(|_| FfiError::InvalidCredentials)?;
 
-        // Bound the SERVER-PROVIDED Argon2id cost before running the KDF: the escrow
-        // params come from an untrusted `GET /v1/escrow/params`, so a malicious server
-        // could otherwise pin absurd mem/time/lanes and force a huge Argon2 allocation
-        // (memory-exhaustion / DoS) on a recovering device. These ceilings sit far above
-        // the recommended enroll params (64 MiB, t=3, p=1), so a genuine fetch is
-        // unaffected; anything past them is a hostile response → reject.
-        const MAX_ESCROW_MEM_KIB: u32 = 1024 * 1024; // 1 GiB
-        const MAX_ESCROW_ITERATIONS: u32 = 10;
-        const MAX_ESCROW_PARALLELISM: u32 = 4;
         if argon_mem_kib > MAX_ESCROW_MEM_KIB
             || argon_iterations > MAX_ESCROW_ITERATIONS
             || argon_parallelism > MAX_ESCROW_PARALLELISM
@@ -2485,6 +2580,10 @@ impl Core {
     /// `secret_key_hex` is THIS device's Secret Key (read by the Tauri layer from the
     /// keychain; the Core does not hold the key in memory) so that all of the account's devices
     /// share a single key (the 1Password model).
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn onboard_confirm_and_seal(
         &self,
         handle: Arc<OnboardInitiatorHandle>,
@@ -2512,6 +2611,10 @@ impl Core {
     /// `password`, persists the keyset sidecar and opens the instance DB. Returns
     /// the shared Secret Key (hex) so the Tauri layer can store it in the device keychain
     /// for future unlocks. Does not require any prior state. One-shot.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "one guard for the whole method: it serializes the install and installs the state, and the mutex is not reentrant"
+    )]
     pub fn onboard_finish_install(
         &self,
         handle: Arc<OnboardResponderHandle>,
@@ -2530,14 +2633,14 @@ impl Core {
         let (secret_key, enc, unlocked) = resp
             .finish_install(
                 &msg3,
-                password.as_deref().map(std::string::String::as_bytes),
+                password.as_deref().map(String::as_bytes),
                 KdfParams::recommended(),
             )
             .map_err(map_keychain_err)?;
 
         let db_key = derive_db_key(&unlocked);
         let storage = Storage::open(&self.db_path, &db_key[..]).map_err(|e| {
-            let _ = std::fs::remove_file(&self.db_path);
+            remove_partial_file(&self.db_path);
             FfiError::other(e)
         })?;
         let enc_bytes = enc.to_bytes().map_err(FfiError::other)?;
@@ -2547,14 +2650,14 @@ impl Core {
                 use std::io::Write;
                 if let Err(e) = f.write_all(&enc_bytes) {
                     drop(storage);
-                    let _ = std::fs::remove_file(&self.keyset_path);
-                    let _ = std::fs::remove_file(&self.db_path);
+                    remove_partial_file(&self.keyset_path);
+                    remove_partial_file(&self.db_path);
                     return Err(FfiError::other(e));
                 }
             }
             Err(e) => {
                 drop(storage);
-                let _ = std::fs::remove_file(&self.db_path);
+                remove_partial_file(&self.db_path);
                 return Err(FfiError::other(e));
             }
         }
@@ -2621,8 +2724,8 @@ impl Core {
             Ok(FfiSyncReport {
                 applied: pull.applied,
                 skipped_stale: pull.skipped_stale,
-                conflicts: pull.conflicts.len() as u32,
-                rejected: pull.rejected.len() as u32,
+                conflicts: count_u32(pull.conflicts.len()),
+                rejected: count_u32(pull.rejected.len()),
                 pushed: push.pushed,
             })
         })
@@ -2656,8 +2759,8 @@ impl Core {
             Ok(FfiSyncReport {
                 applied: report.applied,
                 skipped_stale: report.skipped_stale,
-                conflicts: report.conflicts.len() as u32,
-                rejected: report.rejected.len() as u32,
+                conflicts: count_u32(report.conflicts.len()),
+                rejected: count_u32(report.rejected.len()),
                 pushed: 0,
             })
         })
@@ -2938,6 +3041,10 @@ impl Core {
     /// `HostKeyMismatch` is returned with the actual fingerprint (no pinning happens).
     /// Direct hosts only (no ProxyJump): for jump targets — `forget_host` +
     /// a normal reconnection (TOFU again).
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only the variants the UI treats specially are singled out; every other error maps generically by design"
+    )]
     pub fn trust_host(
         &self,
         host: String,
@@ -2984,6 +3091,10 @@ impl Core {
     /// Only the keyset **wrapper** changes: the Secret Key, the keyset secrets and the DB key
     /// do not change, so the current unlocked session (if any) stays
     /// valid. This is a re-wrap, NOT a key rotation (VK rotation is ⏳ LATER).
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard serializes the keyset read-compute-write against a concurrent unlock or password change"
+    )]
     pub fn change_password(
         &self,
         old_password: Option<String>,
@@ -2999,8 +3110,8 @@ impl Core {
 
         let new_enc = change_password(
             &enc,
-            old_password.as_deref().map(std::string::String::as_bytes),
-            new_password.as_deref().map(std::string::String::as_bytes),
+            old_password.as_deref().map(String::as_bytes),
+            new_password.as_deref().map(String::as_bytes),
             &secret_key,
             KdfParams::recommended(),
         )
@@ -3022,7 +3133,7 @@ impl Core {
         } else {
             let unlocked = unlock_account(
                 &enc,
-                old_password.as_deref().map(std::string::String::as_bytes),
+                old_password.as_deref().map(String::as_bytes),
                 &secret_key,
             )
             .map_err(map_keychain_err)?;
@@ -3058,6 +3169,8 @@ impl Core {
                 // UTF-8 string (round-trips via `as_bytes`), returned as-is.
                 let vault_id = match record.sync_target {
                     SyncTarget::Cloud => hex::encode(&record.vault_id),
+                    SyncTarget::Local => String::from_utf8_lossy(&record.vault_id).to_string(),
+                    // non_exhaustive: a future target is treated like a local id.
                     _ => String::from_utf8_lossy(&record.vault_id).to_string(),
                 };
                 // sync_tenant is stored as the bytes of the base64 tenant_id string (an opaque
@@ -3118,7 +3231,7 @@ impl Core {
             // an `Encrypted` error is returned — the UI will prompt for a password and retry.
             let normalized = unissh_ssh_agent::normalize_private_key_with_passphrase(
                 &openssh_private,
-                passphrase.as_deref().map(std::string::String::as_str),
+                passphrase.as_deref().map(String::as_str),
             )
             .map_err(FfiError::ssh)?;
             // validate and extract the public key via a temporary agent
@@ -3156,6 +3269,10 @@ impl Core {
     /// Attaches an OpenSSH user certificate to the key `key_item_id` (stored as
     /// the item `<key_item_id>.cert`). At connect time authentication will use the
     /// certificate (the agent does the signing, the private key never leaves the core).
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn import_ssh_certificate(
         &self,
         vault_id: String,
@@ -3238,6 +3355,10 @@ impl Core {
     /// requested export of their own data. The returned string crosses
     /// the FFI boundary and is not zeroized — the UI is responsible for its fate (warn,
     /// don't log, write to a file, not to the shared clipboard by default).
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn export_ssh_key(&self, vault_id: String, item_id: String) -> Result<String, FfiError> {
         self.with_state_mut(|state| {
             let vault = Vault::open(
@@ -3362,7 +3483,10 @@ impl Core {
 
     /// Connects over SSH (optionally through a ProxyJump chain) and runs
     /// a command. Keys are loaded from the vault into the agent; they are not handed out.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     pub fn ssh_exec(
         &self,
         host: String,
@@ -3380,19 +3504,22 @@ impl Core {
             .rt
             .block_on(client.exec(&command))
             .map_err(FfiError::ssh)?;
-        let _ = self.rt.block_on(client.disconnect());
+        best_effort(self.rt.block_on(client.disconnect()));
 
         Ok(SshExecResult {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_status: output.exit_status.map(|c| c as i32).unwrap_or(-1),
+            exit_status: exit_status_i32(output.exit_status),
         })
     }
 
     /// Streaming exec (no PTY): stdout/stderr are streamed to `observer` separately,
     /// the exit code via `on_exit`. Returns a handle for stdin/closing/polling
     /// for completion. The Core lock is held only for the duration of the connect.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     pub fn ssh_exec_stream(
         &self,
         host: String,
@@ -3442,7 +3569,10 @@ impl Core {
     /// Opens an interactive PTY session. Terminal output is streamed to
     /// `observer` (a callback). Returns a session object for input/resize/close.
     /// The Core lock is held only for the connect, not for the duration of the session.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     pub fn open_session(
         &self,
         host: String,
@@ -3520,7 +3650,6 @@ impl Core {
     /// window, and a recording (which does need the vault) fails on its own terms
     /// if the core is locked. Nothing reachable from the network can call this:
     /// spawning a process happens only on a user action in the UI.
-    #[allow(clippy::too_many_arguments)]
     pub fn open_local_session(
         &self,
         spec: LocalSpec,
@@ -3607,7 +3736,10 @@ impl Core {
     /// times with linear backoff (`backoff_ms`). Credentials are re-resolved from the vault on
     /// each attempt; `HostKeyMismatch` is not reconnected. The initial connect also
     /// uses retries; the error after exhausting attempts is returned.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     pub fn open_reconnecting_session(
         &self,
         host: String,
@@ -3719,7 +3851,7 @@ impl Core {
                     // commands at once (acquire_owned doesn't fail: the semaphore is not
                     // closed).
                     let _permit = match &sem {
-                        Some(s) => Some(s.clone().acquire_owned().await.expect("semaphore open")),
+                        Some(s) => s.clone().acquire_owned().await.ok(),
                         None => None,
                     };
                     let started = std::time::Instant::now();
@@ -3728,8 +3860,8 @@ impl Core {
                         Some(d) => tokio::time::timeout(d, client.exec(&cmd)).await.ok(),
                         None => Some(client.exec(&cmd).await),
                     };
-                    let elapsed = started.elapsed().as_millis() as u64;
-                    let _ = client.disconnect().await;
+                    let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    best_effort(client.disconnect().await);
                     (host, outcome, elapsed)
                 });
             }
@@ -3748,7 +3880,7 @@ impl Core {
                     host,
                     stdout: String::from_utf8_lossy(&o.stdout).to_string(),
                     stderr: String::from_utf8_lossy(&o.stderr).to_string(),
-                    exit_status: o.exit_status.map(|c| c as i32).unwrap_or(-1),
+                    exit_status: exit_status_i32(o.exit_status),
                     error: None,
                     duration_ms,
                     timed_out: false,
@@ -3826,7 +3958,9 @@ impl Core {
                         });
                     }
                 }
-                _ => out.push(profile_to_target(&vault_id, p)),
+                ProfileAuth::Key { .. }
+                | ProfileAuth::VaultPassword { .. }
+                | ProfileAuth::SystemAgent { .. } => out.push(profile_to_target(&vault_id, p)),
             }
         }
         Ok(out)
@@ -3834,7 +3968,6 @@ impl Core {
 
     /// Runs a command on all profiles with matching tags (see
     /// [`Core::select_targets_by_tags`] and [`Core::ssh_exec_multi`]).
-    #[allow(clippy::too_many_arguments)]
     pub fn ssh_exec_by_tags(
         &self,
         vault_id: String,
@@ -3853,7 +3986,6 @@ impl Core {
     /// exists" error is swallowed). Connects are sequential (under the Core
     /// lock), the write is concurrent with `max_concurrency`/per-host `timeout_secs`.
     /// An error on one host does not fail the others — it is in the `error` of its result.
-    #[allow(clippy::too_many_arguments)]
     pub fn sftp_put_multi(
         &self,
         targets: Vec<MultiExecTarget>,
@@ -3899,7 +4031,7 @@ impl Core {
                 let sem = sem.clone();
                 set.spawn(async move {
                     let _permit = match &sem {
-                        Some(s) => Some(s.clone().acquire_owned().await.expect("semaphore open")),
+                        Some(s) => s.clone().acquire_owned().await.ok(),
                         None => None,
                     };
                     // The whole put (open_sftp+mkdir+write) is under a single timeout.
@@ -3917,7 +4049,7 @@ impl Core {
                         }
                         None => sftp_put_one(&client, &path, &data, make_parent_dirs).await,
                     };
-                    let _ = client.disconnect().await;
+                    best_effort(client.disconnect().await);
                     (host, res)
                 });
             }
@@ -3954,7 +4086,7 @@ impl Core {
         let mut sessions: Vec<(SshClient, ShellHandle)> = Vec::new();
         let mut statuses: Vec<BroadcastHostStatus> = Vec::new();
         for (i, t) in targets.iter().enumerate() {
-            let index = i as u32;
+            let index = count_u32(i);
             match self.connect_session(
                 &t.auth,
                 &t.jumps,
@@ -3979,7 +4111,7 @@ impl Core {
                             });
                         }
                         Err(e) => {
-                            let _ = self.rt.block_on(client.disconnect());
+                            best_effort(self.rt.block_on(client.disconnect()));
                             statuses.push(BroadcastHostStatus {
                                 host: t.host.clone(),
                                 index,
@@ -4135,52 +4267,33 @@ impl Core {
                 if m.item_type != ITEM_TYPE_RECORDING {
                     continue;
                 }
-                if let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? {
-                    if let Ok(mut r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content)
-                    {
-                        if r.mcp.is_some() && cutoff.is_some_and(|cutoff| r.started_unix < cutoff) {
-                            vault.delete_item(&m.item_id).map_err(map_vault_err)?;
-                            continue;
-                        }
-                        if let Some(meta) = r.mcp.as_mut().filter(|m| m.command.is_none()) {
-                            #[derive(serde::Deserialize)]
-                            struct CommandHeader {
-                                unissh_mcp: Option<CommandText>,
-                            }
-                            #[derive(serde::Deserialize)]
-                            struct CommandText {
-                                command: Option<String>,
-                            }
-                            if let Ok(legacy) =
-                                serde_json::from_slice::<StoredRecording>(&item.content)
-                            {
-                                meta.command = legacy
-                                    .asciicast
-                                    .lines()
-                                    .next()
-                                    .and_then(|line| {
-                                        serde_json::from_str::<CommandHeader>(line).ok()
-                                    })
-                                    .and_then(|header| header.unissh_mcp)
-                                    .and_then(|m| m.command);
-                            }
-                        }
-                        out.push(RecordingMeta {
-                            recording_id: String::from_utf8_lossy(&m.item_id).to_string(),
-                            mcp: r.mcp,
-                            label: r.label,
-                            host: r.host,
-                            user: r.user,
-                            started_unix: r.started_unix,
-                            duration_secs: r.duration_secs,
-                            truncated: r.truncated,
-                            // The stored record's size, not the asciicast's: the
-                            // body is deliberately not parsed here, and this is
-                            // what the recording actually costs on disk anyway.
-                            size_bytes: item.content.len() as u64,
-                        });
-                    }
+                let Some(item) = vault.get_item(&m.item_id).map_err(FfiError::other)? else {
+                    continue;
+                };
+                let Ok(mut r) = serde_json::from_slice::<StoredRecordingMeta>(&item.content) else {
+                    continue;
+                };
+                if r.mcp.is_some() && cutoff.is_some_and(|cutoff| r.started_unix < cutoff) {
+                    vault.delete_item(&m.item_id).map_err(map_vault_err)?;
+                    continue;
                 }
+                if let Some(meta) = r.mcp.as_mut().filter(|m| m.command.is_none()) {
+                    meta.command = legacy_mcp_command(&item.content);
+                }
+                out.push(RecordingMeta {
+                    mcp: r.mcp,
+                    recording_id: String::from_utf8_lossy(&m.item_id).to_string(),
+                    label: r.label,
+                    host: r.host,
+                    user: r.user,
+                    started_unix: r.started_unix,
+                    duration_secs: r.duration_secs,
+                    truncated: r.truncated,
+                    // The stored record's size, not the asciicast's: the
+                    // body is deliberately not parsed here, and this is
+                    // what the recording actually costs on disk anyway.
+                    size_bytes: item.content.len() as u64,
+                });
             }
             out.sort_by_key(|recording| std::cmp::Reverse(recording.started_unix));
             Ok(out)
@@ -4456,7 +4569,10 @@ impl Core {
     /// Local forward: listens on `local_bind` (e.g. `127.0.0.1:0`) and
     /// tunnels to `remote_host:remote_port` from the server side. The tunnel lives
     /// as long as the returned object lives (or until `close`).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     pub fn open_local_forward(
         &self,
         host: String,
@@ -4485,7 +4601,10 @@ impl Core {
 
     /// Dynamic forward (SOCKS5) on `local_bind`. **The address must be
     /// loopback** (SOCKS5 without authentication). The tunnel lives until `close`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     pub fn open_dynamic_forward(
         &self,
         host: String,
@@ -4513,7 +4632,10 @@ impl Core {
     /// Remote forward: the server listens on `remote_bind:remote_port` and delivers
     /// incoming connections to the local `local_host:local_port`. `bind_address` returns
     /// `remote_bind:<actual port>`. The tunnel lives until `close`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     pub fn open_remote_forward(
         &self,
         host: String,
@@ -4544,11 +4666,18 @@ impl Core {
 
     /// Opens an SFTP session to a host (optionally through ProxyJump). The session lives as
     /// long as the returned object lives (or until `close`).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     /// `parallelism` — how many SFTP channels to keep over a single connection for
     /// parallel transfers (K from settings). Clamped to [1, 16]; 1 = the previous strictly
     /// sequential behavior. The first channel opens immediately, the rest —
     /// lazily on demand (see [`SftpFfi`]).
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the core guard must stay held from the epoch check until the session is registered, or a concurrent lock could miss it"
+    )]
     pub fn open_sftp(
         &self,
         host: String,
@@ -4572,7 +4701,7 @@ impl Core {
             .rt
             .block_on(client.open_sftp())
             .map_err(map_transport_err)?;
-        let max = (parallelism.clamp(1, 16)) as usize;
+        let max = parallelism.clamp(1, 16) as usize;
         let authority = self.locked_state();
         if authority.is_none() || epoch != self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst)
         {
@@ -4583,11 +4712,6 @@ impl Core {
         }
         let session = Arc::new(SftpFfi {
             shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            prompter: self.prompter.clone(),
-            approver: self.approver.clone(),
-            own_system_agent: self.own_system_agent.clone(),
-            // SFTP runs no program on the far side that would look for an agent.
-            agent_forward: false,
             client: Mutex::new(Some(client)),
             pool: Mutex::new(SftpPool {
                 idle: vec![sftp],
@@ -4599,6 +4723,11 @@ impl Core {
             pool_cv: Condvar::new(),
             rt: self.rt.clone(),
             state: self.state.clone(),
+            prompter: self.prompter.clone(),
+            approver: self.approver.clone(),
+            own_system_agent: self.own_system_agent.clone(),
+            // SFTP runs no program on the far side that would look for an agent.
+            agent_forward: false,
             host,
             port,
             user,
@@ -5114,6 +5243,8 @@ impl Core {
                     if item.item_type == ITEM_TYPE_BINDING && !item.tombstone {
                         return Ok(Some(match rec.sync_target {
                             SyncTarget::Cloud => hex::encode(&rec.vault_id),
+                            SyncTarget::Local => String::from_utf8_lossy(&rec.vault_id).to_string(),
+                            // non_exhaustive: a future target is treated like a local id.
                             _ => String::from_utf8_lossy(&rec.vault_id).to_string(),
                         }));
                     }
@@ -5361,12 +5492,9 @@ impl Core {
                     skipped_hashed += 1;
                     continue;
                 }
-                let key_bytes = match canonical_host_key(&format!("{keytype} {keyblob}")) {
-                    Ok(b) => b,
-                    Err(_) => {
-                        skipped_invalid += 1;
-                        continue;
-                    }
+                let Ok(key_bytes) = canonical_host_key(&format!("{keytype} {keyblob}")) else {
+                    skipped_invalid += 1;
+                    continue;
                 };
                 let mut any = false;
                 for entry in hosts.split(',') {
@@ -5443,16 +5571,16 @@ impl Core {
                 let jumps = if s.proxy_method == 6 && !s.proxy_host.is_empty() {
                     vec![StoredJump {
                         host: s.proxy_host.clone(),
-                        port: if s.proxy_port == 0 {
-                            22
-                        } else {
-                            s.proxy_port as u16
-                        },
+                        // Out of port range is a corrupt .reg: default rather than truncate.
+                        port: u16::try_from(s.proxy_port)
+                            .ok()
+                            .filter(|p| *p != 0)
+                            .unwrap_or(22),
                         user: s.proxy_user.clone(),
                         key_item_id: None,
                         password_item_id: None,
-                        extra: BTreeMap::new(),
                         hop_ref: None,
+                        extra: BTreeMap::new(),
                     }]
                 } else {
                     Vec::new()
@@ -5487,7 +5615,8 @@ impl Core {
                     uid: Some(mint_profile_uid()),
                     label: s.name.clone(),
                     host: s.host.clone(),
-                    port: if s.port == 0 { 22 } else { s.port as u16 },
+                    // Out of port range is a corrupt .reg: default rather than truncate.
+                    port: u16::try_from(s.port).ok().filter(|p| *p != 0).unwrap_or(22),
                     user: s.user.clone(),
                     key_item_id: None,
                     password_item_id: None,
@@ -5566,6 +5695,10 @@ impl Core {
     /// with the passphrase key, items are re-encrypted under the new VK and re-signed
     /// by the current owner. A wrong passphrase/corruption → an error. Does not overwrite
     /// an existing vault.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn import_vault(
         &self,
         backup: Vec<u8>,
@@ -5811,8 +5944,9 @@ impl VaultMove<'_> {
                 segment
                     .split('>')
                     .map(|token| {
-                        let hop = token.strip_prefix("via=").unwrap_or(token);
-                        let lead = &token[..token.len() - hop.len()];
+                        let (lead, hop) = token
+                            .strip_prefix("via=")
+                            .map_or(("", token), |hop| ("via=", hop));
                         let uid = hop
                             .strip_prefix("ref=")
                             .and_then(|r| r.strip_prefix(self.old)?.strip_prefix('/'));
@@ -6161,6 +6295,10 @@ impl Core {
     /// Key, and also for an instance without a master password (there is nothing
     /// to remember). The state lock is held throughout, serialising against a
     /// concurrent `change_password`, which rewrites the same record.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the check is defined against the unlocked instance; the guard keeps a concurrent lock or unlock from interleaving"
+    )]
     pub fn verify_unlock_password(
         &self,
         password: String,
@@ -6186,6 +6324,10 @@ impl Core {
     /// The shared prelude of every call that opens the keyset with a Secret Key:
     /// the on-disk record and the parsed key. A missing record is `NotFound`; a
     /// Secret Key that is not hex or not the right length is `InvalidCredentials`.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     fn open_keyset_inputs(
         &self,
         secret_key_hex: Zeroizing<String>,
@@ -6212,6 +6354,10 @@ impl Core {
     /// `let guard = self.locked_state(); let state = guard.as_ref().ok_or(Locked)?;`
     /// prologue. The lock is held for exactly the duration of `f` (same scope as the
     /// hand-written prologue — the guard drops when `f` returns).
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the closure runs on state borrowed from the guard"
+    )]
     fn with_state<R>(
         &self,
         f: impl FnOnce(&CoreState) -> Result<R, FfiError>,
@@ -6223,6 +6369,10 @@ impl Core {
 
     /// Mutable-state counterpart of [`Self::with_state`]. Same lock scope as the
     /// hand-written `let mut guard = ...; let state = guard.as_mut().ok_or(Locked)?;`.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the closure runs on state borrowed from the guard"
+    )]
     fn with_state_mut<R>(
         &self,
         f: impl FnOnce(&mut CoreState) -> Result<R, FfiError>,
@@ -6286,7 +6436,10 @@ impl Core {
     /// As [`Self::connect_session`], but able to serve a forwarded agent. Only
     /// the interactive session paths use it — forwarding exists so that a shell
     /// on the remote host can sign, and only a shell asks.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the UI contract; a params struct would be a binding change"
+    )]
     fn connect_session_forwarding(
         &self,
         auth: &AuthMethod,
@@ -6315,6 +6468,10 @@ impl Core {
 
     /// Reveal of a specific version of a UTF-8 secret from history, type-gated to
     /// `expected_type` (another type — including a key — is not read through this path).
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     fn read_item_version(
         &self,
         vault_id: &str,
@@ -6375,7 +6532,8 @@ impl Core {
         for pid in member_ids {
             let p = profiles_map
                 .get(&pid)
-                .expect("flattened member is a profile");
+                // flatten_group_members only returns ids of `profiles_set`.
+                .ok_or(FfiError::NotFound)?;
             match &p.auth {
                 // No password known in advance → it doesn't go into the batch (interactive).
                 ProfileAuth::PromptPassword => {
@@ -6436,7 +6594,9 @@ impl Core {
                         }
                     }
                 }
-                _ => {
+                ProfileAuth::Key { .. }
+                | ProfileAuth::VaultPassword { .. }
+                | ProfileAuth::SystemAgent { .. } => {
                     plans.push(GroupTargetPlan {
                         member_id: pid,
                         host: p.host.clone(),
@@ -6474,6 +6634,14 @@ struct StateKnownHosts {
 }
 
 impl unissh_ssh_transport::KnownHosts for StateKnownHosts {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a failed connection-policy check is reported as CoreLocked by design; TransportError has no variant carrying it"
+    )]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the connection-policy check and the guarded read, write or signature atomically"
+    )]
     fn get(
         &self,
         host: &str,
@@ -6487,6 +6655,14 @@ impl unissh_ssh_transport::KnownHosts for StateKnownHosts {
         Ok(st.storage.get_known_host(host, port)?)
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a failed connection-policy check is reported as CoreLocked by design; TransportError has no variant carrying it"
+    )]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the connection-policy check and the guarded read, write or signature atomically"
+    )]
     fn put(
         &self,
         host: &str,
@@ -6510,27 +6686,37 @@ struct StateKeySource {
 
 impl unissh_ssh_transport::KeySource for StateKeySource {
     fn public_key_openssh(&self, key_id: &[u8]) -> Option<String> {
-        let guard = lock_recover(&self.state);
-        let st = guard.as_ref()?;
-        if let Some(policy) = &self.policy {
-            policy.check(st).ok()?;
-        }
-        st.agent
-            .public_key(key_id)
-            .and_then(|k| k.to_openssh().ok())
+        let key = {
+            let guard = lock_recover(&self.state);
+            let st = guard.as_ref()?;
+            if let Some(policy) = &self.policy {
+                policy.check(st).ok()?;
+            }
+            st.agent.public_key(key_id)?
+        };
+        key.to_openssh().ok()
     }
 
     fn certificate_openssh(&self, key_id: &[u8]) -> Option<String> {
-        let guard = lock_recover(&self.state);
-        let st = guard.as_ref()?;
-        if let Some(policy) = &self.policy {
-            policy.check(st).ok()?;
-        }
-        st.agent
-            .certificate(key_id)
-            .and_then(|c| c.to_openssh().ok())
+        let certificate = {
+            let guard = lock_recover(&self.state);
+            let st = guard.as_ref()?;
+            if let Some(policy) = &self.policy {
+                policy.check(st).ok()?;
+            }
+            st.agent.certificate(key_id)?
+        };
+        certificate.to_openssh().ok()
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a failed connection-policy check is reported as CoreLocked by design; TransportError has no variant carrying it"
+    )]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the connection-policy check and the guarded read, write or signature atomically"
+    )]
     fn sign(
         &self,
         key_id: &[u8],
@@ -6548,7 +6734,7 @@ impl unissh_ssh_transport::KeySource for StateKeySource {
 }
 
 /// The core was locked while a connection was still being established.
-fn locked_mid_connect() -> unissh_ssh_transport::TransportError {
+const fn locked_mid_connect() -> unissh_ssh_transport::TransportError {
     unissh_ssh_transport::TransportError::CoreLocked
 }
 
@@ -6563,7 +6749,10 @@ fn locked_mid_connect() -> unissh_ssh_transport::TransportError {
 /// and live under this lock, and the TOFU host-key check touches `storage` right during
 /// the handshake. For a single-user client connects are sequential anyway,
 /// so moving the network out from under the lock would require Sync storage.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "signature mirrors the UI contract; a params struct would be a binding change"
+)]
 fn connect_with_state(
     state: &Arc<Mutex<Option<CoreState>>>,
     rt: &tokio::runtime::Runtime,
@@ -6595,7 +6784,10 @@ fn connect_with_state(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "signature mirrors the UI contract; a params struct would be a binding change"
+)]
 fn connect_with_policy(
     state: &Arc<Mutex<Option<CoreState>>>,
     rt: &tokio::runtime::Runtime,
@@ -6631,7 +6823,10 @@ fn connect_with_policy(
 
 /// As [`connect_with_policy`], plus `publickey_only` for the target (see
 /// [`MultiExecTarget::publickey_only`]).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "signature mirrors the UI contract; a params struct would be a binding change"
+)]
 fn connect_with_options(
     state: &Arc<Mutex<Option<CoreState>>>,
     rt: &tokio::runtime::Runtime,
@@ -6744,7 +6939,7 @@ fn connect_with_options(
         // Copied out first: attaching the forward consumes `target`.
         let forwardable_key = match &target.auth {
             Auth::Agent { key_id } => Some(key_id.clone()),
-            _ => None,
+            Auth::Password { .. } | Auth::SystemAgent { .. } => None,
         };
         match (forwardable_key, approver) {
             (Some(key_id), Some(approver)) => {
@@ -6758,7 +6953,7 @@ fn connect_with_options(
                             keys,
                             key_id,
                             public_openssh: public,
-                            host: host.clone(),
+                            host,
                             approval: Arc::new(ApprovalBridge { inner: approver }),
                         }));
                 }
@@ -6934,6 +7129,10 @@ fn read_password_item(
 /// Reads the UTF-8 content of an item of a given type (password/note). Type-gate: an item
 /// of another type (including a private key) is not read through this path — the invariant
 /// "plaintext keys never cross the FFI" is preserved. The content is in `Zeroizing`.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+)]
 fn read_utf8_item(
     state: &CoreState,
     vault_id: &str,
@@ -6971,7 +7170,8 @@ async fn sftp_put_one(
     let mut sftp = client.open_sftp().await.map_err(|e| e.to_string())?;
     if make_parent_dirs {
         if let Some(parent) = parent_dir(remote_path) {
-            let _ = sftp.mkdir(&parent).await;
+            // An existing parent fails mkdir; the write below reports any real problem.
+            best_effort(sftp.mkdir(&parent).await);
         }
     }
     sftp.write_file(remote_path, data)
@@ -6982,11 +7182,11 @@ async fn sftp_put_one(
 /// The parent directory of a path (one level). `None` if there is no parent.
 fn parent_dir(path: &str) -> Option<String> {
     let p = path.trim_end_matches('/');
-    p.rfind('/').map(|i| {
-        if i == 0 {
+    p.rsplit_once('/').map(|(head, _)| {
+        if head.is_empty() {
             "/".to_owned()
         } else {
-            p[..i].to_string()
+            head.to_owned()
         }
     })
 }
@@ -7128,6 +7328,10 @@ fn with_prompter(opts: ConnectOptions, prompter: Option<&Arc<dyn AuthPrompter>>)
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only the variants the UI treats specially are singled out; every other error maps generically by design"
+)]
 fn map_transport_err(e: unissh_ssh_transport::TransportError) -> FfiError {
     match e {
         unissh_ssh_transport::TransportError::HostUntrusted => FfiError::HostUntrusted,
@@ -7219,6 +7423,10 @@ fn drop_certificate(vault: &Vault, key_id: &str) -> Result<(), FfiError> {
 }
 
 /// Mapping of vault errors: not-found/already-exists are singled out for the UI.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only the variants the UI treats specially are singled out; every other error maps generically by design"
+)]
 fn map_vault_err(e: unissh_vault::VaultError) -> FfiError {
     match e {
         unissh_vault::VaultError::NotFound => FfiError::NotFound,
@@ -7247,6 +7455,10 @@ impl AccountStatePayload {
         out
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "every parse failure maps to the one malformed-payload error by design; FfiError is a uniffi contract"
+    )]
     fn decode(b: &[u8]) -> Result<Self, FfiError> {
         let fmt = || FfiError::Other {
             msg: "malformed account-state payload".into(),
@@ -7269,6 +7481,10 @@ impl AccountStatePayload {
 }
 
 /// Mapping of keychain errors: invalid credentials/generation rollback — singled out for the UI.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only the variants the UI treats specially are singled out; every other error maps generically by design"
+)]
 fn map_keychain_err(e: unissh_keychain::KeychainError) -> FfiError {
     use unissh_keychain::KeychainError as K;
     match e {
@@ -7283,6 +7499,10 @@ fn map_sync_err(e: unissh_sync::SyncError) -> FfiError {
 }
 
 /// Decodes a hex `vault_id` (a cloud UUIDv4) into raw bytes. Broken hex → Other.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+)]
 fn decode_vid(vault_id_hex: &str) -> Result<Vec<u8>, FfiError> {
     hex::decode(vault_id_hex.trim()).map_err(|_| FfiError::other("invalid hex vault_id"))
 }
@@ -7304,6 +7524,10 @@ fn resolve_vid(storage: &Storage, vault_id: &str) -> Vec<u8> {
 }
 
 /// Decodes a fixed-length hex pubkey (32 bytes, Ed25519/X25519). Otherwise Other.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+)]
 fn decode_pubkey32(label: &str, hex_str: &str) -> Result<Vec<u8>, FfiError> {
     let b =
         hex::decode(hex_str.trim()).map_err(|_| FfiError::other(format!("invalid hex {label}")))?;
@@ -7347,6 +7571,11 @@ fn integrity_report_to_ffi(report: unissh_vault::IntegrityReport) -> VaultIntegr
                         IntegrityFailureKind::AuthorMismatch
                     }
                     unissh_vault::IntegrityFailure::Malformed => IntegrityFailureKind::Malformed,
+                    // No dedicated FFI kind (adding one changes the bindings): an
+                    // unauthorized author reports as Malformed, as it did before.
+                    unissh_vault::IntegrityFailure::NotAuthorized => {
+                        IntegrityFailureKind::Malformed
+                    }
                     // non_exhaustive: a future reason → conservatively Malformed.
                     _ => IntegrityFailureKind::Malformed,
                 },
@@ -7387,13 +7616,14 @@ fn write_keyset_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), FfiEr
         f.sync_all().map_err(FfiError::other)?;
     }
     if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
+        remove_partial_file(&tmp);
         return Err(FfiError::other(e));
     }
     // fsync the directory — so the rename record reaches the disk.
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         if let Ok(d) = std::fs::File::open(dir) {
-            let _ = d.sync_all();
+            // Durability hint only: the rename itself already succeeded.
+            best_effort(d.sync_all());
         }
     }
     Ok(())
@@ -7600,7 +7830,8 @@ fn legacy_profile_uid(vault_id: &str, item_id: &str) -> String {
     h.update((vault_id.len() as u64).to_be_bytes());
     h.update(vault_id.as_bytes());
     h.update(item_id.as_bytes());
-    hex::encode(&h.finalize()[..16])
+    let digest: [u8; 32] = h.finalize().into();
+    hex::encode(&digest[..16])
 }
 
 fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> ConnectionProfile {
@@ -7610,17 +7841,12 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| legacy_profile_uid(vault_id, &profile_id));
     ConnectionProfile {
-        uid,
         profile_id,
+        uid,
         label: s.label,
         host: s.host,
         port: s.port,
         user: s.user,
-        tags: s.tags,
-        startup_snippet_ids: s.startup_snippet_ids,
-        record_sessions: s.record_sessions,
-        agent_forward: s.agent_forward,
-        username_template: s.username_template,
         // Personal takes priority over key/password references (Personal has none anyway).
         auth: if let Some(public_key) = s.system_agent_public_key {
             ProfileAuth::SystemAgent { public_key }
@@ -7633,6 +7859,7 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
                 (None, None) => ProfileAuth::PromptPassword,
             }
         },
+        username_template: s.username_template,
         jumps: s
             .jumps
             .into_iter()
@@ -7666,6 +7893,10 @@ fn stored_to_profile(vault_id: &str, profile_id: String, s: StoredProfile) -> Co
             })
             .collect(),
         proxy: s.proxy.map(|p| stored_proxy_to_config(vault_id, p)),
+        tags: s.tags,
+        startup_snippet_ids: s.startup_snippet_ids,
+        record_sessions: s.record_sessions,
+        agent_forward: s.agent_forward,
     }
 }
 
@@ -7719,6 +7950,10 @@ fn backup_aad(vault_id: &[u8], kdf_blob: &[u8]) -> AssociatedData {
 }
 
 /// Appends a length-prefixed (u32 BE) blob.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "framed fields are vault ids, names and item bodies, all far below 4 GiB; the u32 prefix is the stored format"
+)]
 fn put_len_bytes(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(&(b.len() as u32).to_be_bytes());
     out.extend_from_slice(b);
@@ -7731,7 +7966,7 @@ struct ByteReader<'a> {
 }
 
 impl<'a> ByteReader<'a> {
-    fn new(buf: &'a [u8]) -> Self {
+    const fn new(buf: &'a [u8]) -> Self {
         Self { buf, pos: 0 }
     }
     fn take(&mut self, n: usize) -> Result<&'a [u8], FfiError> {
@@ -7739,19 +7974,24 @@ impl<'a> ByteReader<'a> {
             .pos
             .checked_add(n)
             .ok_or_else(|| FfiError::other("backup overflow"))?;
-        if end > self.buf.len() {
-            return Err(FfiError::other("truncated backup"));
-        }
-        let s = &self.buf[self.pos..end];
+        let s = self
+            .buf
+            .get(self.pos..end)
+            .ok_or_else(|| FfiError::other("truncated backup"))?;
         self.pos = end;
         Ok(s)
     }
     fn u8(&mut self) -> Result<u8, FfiError> {
-        Ok(self.take(1)?[0])
+        let &[b] = self.take(1)? else {
+            return Err(FfiError::other("truncated backup"));
+        };
+        Ok(b)
     }
     fn u32(&mut self) -> Result<u32, FfiError> {
-        let b = self.take(4)?;
-        Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+        let &[b0, b1, b2, b3] = self.take(4)? else {
+            return Err(FfiError::other("truncated backup"));
+        };
+        Ok(u32::from_be_bytes([b0, b1, b2, b3]))
     }
     fn bytes(&mut self) -> Result<&'a [u8], FfiError> {
         let n = self.u32()? as usize;
@@ -7785,8 +8025,8 @@ fn parse_putty_reg(text: &str) -> Vec<PuttySession> {
             if let Some(s) = cur.take() {
                 out.push(s);
             }
-            if let Some(idx) = rest.find("\\Sessions\\") {
-                let name_enc = rest[idx + "\\Sessions\\".len()..].trim_end_matches(']');
+            if let Some((_, name_enc)) = rest.split_once("\\Sessions\\") {
+                let name_enc = name_enc.trim_end_matches(']');
                 cur = Some(PuttySession {
                     name: putty_unescape(name_enc),
                     ..Default::default()
@@ -7838,15 +8078,20 @@ fn putty_unescape(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+    while let Some(&byte) = bytes.get(i) {
+        if byte == b'%' && i + 2 < bytes.len() {
+            // `get` (not `[..]`): a multi-byte character after `%` is not a char
+            // boundary, and is simply not an escape.
+            if let Some(b) = s
+                .get(i + 1..i + 3)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
                 out.push(b);
                 i += 3;
                 continue;
             }
         }
-        out.push(bytes[i]);
+        out.push(byte);
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
@@ -7891,8 +8136,8 @@ fn parse_proxy_jump(spec: Option<&str>) -> Vec<StoredJump> {
             user,
             key_item_id: None,
             password_item_id: None,
-            extra: BTreeMap::new(),
             hop_ref: None,
+            extra: BTreeMap::new(),
         });
     }
     out
@@ -7938,6 +8183,7 @@ pub struct SystemAgentKeyFfi {
 /// A recorded session, without its body — for listing.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct RecordingMeta {
+    /// MCP command details when the recording was captured for an MCP run.
     pub mcp: Option<McpRecordingMeta>,
     /// Item id in the vault.
     pub recording_id: String,
@@ -8142,13 +8388,14 @@ fn ssh_config_report_of(cfg: &SshConfig, files_read: Vec<SshConfigFile>) -> SshC
             .into_iter()
             .map(|h| {
                 let s = cfg.resolve(&h.alias);
+                let hostname = s.hostname.unwrap_or_else(|| h.alias.clone());
                 SshConfigHost {
-                    hostname: s.hostname.unwrap_or_else(|| h.alias.clone()),
+                    alias: h.alias,
+                    origin_file: h.origin,
+                    hostname,
                     port: s.port.unwrap_or(22),
                     user: s.user,
                     identity_file: s.identity_file,
-                    alias: h.alias,
-                    origin_file: h.origin,
                 }
             })
             .collect(),
@@ -8330,15 +8577,10 @@ impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
 /// Anything that does not parse returns `None` rather than a guess.
 fn userauth_login(blob: &[u8]) -> Option<(String, String)> {
     fn take<'a>(input: &mut &'a [u8]) -> Option<&'a [u8]> {
-        if input.len() < 4 {
-            return None;
-        }
-        let n = u32::from_be_bytes([input[0], input[1], input[2], input[3]]) as usize;
-        if input.len() < 4 + n {
-            return None;
-        }
-        let (s, rest) = input[4..].split_at(n);
-        *input = rest;
+        let (len, rest) = input.split_first_chunk::<4>()?;
+        let n = usize::try_from(u32::from_be_bytes(*len)).ok()?;
+        let s = rest.get(..n)?;
+        *input = rest.get(n..)?;
         Some(s)
     }
     let mut b = blob;
@@ -8347,7 +8589,7 @@ fn userauth_login(blob: &[u8]) -> Option<(String, String)> {
         // Not SSH_MSG_USERAUTH_REQUEST — a git signature, say.
         return None;
     }
-    b = &b[1..];
+    b = b.get(1..)?;
     let user = std::str::from_utf8(take(&mut b)?).ok()?;
     let service = std::str::from_utf8(take(&mut b)?).ok()?;
     Some((user.to_owned(), service.to_owned()))
@@ -8492,8 +8734,11 @@ fn split_utf8(bytes: Vec<u8>) -> (String, Vec<u8>) {
             match e.error_len() {
                 // Incomplete tail: keep it for the next chunk.
                 None => {
-                    let head = String::from_utf8_lossy(&bytes[..valid]).into_owned();
-                    (head, bytes[valid..].to_vec())
+                    // `valid_up_to()` never exceeds the input, so the split cannot fail.
+                    let (head, tail) = bytes
+                        .split_at_checked(valid)
+                        .unwrap_or((bytes.as_slice(), &[]));
+                    (String::from_utf8_lossy(head).into_owned(), tail.to_vec())
                 }
                 // A real decoding error somewhere in the middle: replace it and
                 // carry on with the rest.
@@ -8571,6 +8816,10 @@ struct RecordingSaver {
 }
 
 impl RecordingSaver {
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the vault handle borrows the guarded state through the write"
+    )]
     fn save(&self, recorder: &SessionRecorder) {
         debug_assert_off_the_runtime("session-recording write");
         let (body, truncated, duration) = recorder.finish();
@@ -8581,8 +8830,8 @@ impl RecordingSaver {
             started_unix: self.started_unix,
             duration_secs: duration,
             truncated,
-            asciicast: body,
             mcp: None,
+            asciicast: body,
             extra: BTreeMap::new(),
         };
         let json = match serde_json::to_vec(&stored) {
@@ -8675,7 +8924,7 @@ impl OutputSink for ObserverSink {
         self.0.on_data(data);
     }
     fn on_close(&self, exit_status: Option<u32>) {
-        self.0.on_close(exit_status.map(|c| c as i32).unwrap_or(-1));
+        self.0.on_close(exit_status_i32(exit_status));
     }
 }
 
@@ -8697,7 +8946,7 @@ impl PtySink for PtySinkBridge {
         // UI as -1 — its signal for "the link dropped, offer to reconnect". A
         // local shell has no link to drop, so it always carries a real code, and
         // `max(0)` makes that structural rather than a promise.
-        self.0.on_close(Some(exit_status.max(0) as u32));
+        self.0.on_close(Some(exit_status.max(0).unsigned_abs()));
     }
 }
 
@@ -8722,7 +8971,7 @@ impl unissh_ssh_transport::ExecSink for ExecSinkBridge {
         self.0.on_stderr(data);
     }
     fn on_exit(&self, exit_status: Option<u32>) {
-        self.0.on_exit(exit_status.map(|c| c as i32).unwrap_or(-1));
+        self.0.on_exit(exit_status_i32(exit_status));
     }
 }
 
@@ -8750,7 +8999,7 @@ impl OutputSink for TaggedSink {
     }
     fn on_close(&self, exit_status: Option<u32>) {
         self.observer
-            .on_close(self.index, exit_status.map(|c| c as i32).unwrap_or(-1));
+            .on_close(self.index, exit_status_i32(exit_status));
     }
 }
 
@@ -8967,8 +9216,8 @@ impl ReconnectingSession {
         let _enter = self.rt.enter();
         let mut guard = lock_recover(&self.current);
         if let Some((client, shell)) = guard.take() {
-            let _ = self.rt.block_on(shell.close());
-            let _ = self.rt.block_on(client.disconnect());
+            best_effort(self.rt.block_on(shell.close()));
+            best_effort(self.rt.block_on(client.disconnect()));
         }
     }
 }
@@ -9041,20 +9290,28 @@ impl BroadcastSession {
 
     /// Sends input to all active sessions (best-effort: a dead host does not
     /// block the others).
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the fan-out iterates the session list held by the guard"
+    )]
     pub fn write_all(&self, data: Vec<u8>) -> Result<(), FfiError> {
         let guard = lock_recover(&self.inner);
         for (_client, shell) in guard.iter() {
-            let _ = self.rt.block_on(shell.write(&data));
+            best_effort(self.rt.block_on(shell.write(&data)));
         }
         Ok(())
     }
 
     /// Resizes all active sessions (`cols`/`rows` > 0). Best-effort.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the fan-out iterates the session list held by the guard"
+    )]
     pub fn resize_all(&self, cols: u32, rows: u32) -> Result<(), FfiError> {
         check_term_size(cols, rows)?;
         let guard = lock_recover(&self.inner);
         for (_client, shell) in guard.iter() {
-            let _ = self.rt.block_on(shell.resize(cols, rows));
+            best_effort(self.rt.block_on(shell.resize(cols, rows)));
         }
         Ok(())
     }
@@ -9066,8 +9323,8 @@ impl BroadcastSession {
         let _enter = self.rt.enter();
         let mut guard = lock_recover(&self.inner);
         for (client, shell) in guard.drain(..) {
-            let _ = self.rt.block_on(shell.close());
-            let _ = self.rt.block_on(client.disconnect());
+            best_effort(self.rt.block_on(shell.close()));
+            best_effort(self.rt.block_on(client.disconnect()));
         }
     }
 }
@@ -9105,9 +9362,9 @@ impl SshTunnel {
         // SshClient/ForwardGuard drop safely outside the runtime; block_on itself
         // enters the runtime context (so no separate enter — otherwise a nested
         // block_on panics).
-        let _ = lock_recover(&self.guard).take();
+        drop(lock_recover(&self.guard).take());
         if let Some(c) = lock_recover(&self.client).take() {
-            let _ = self.rt.block_on(c.disconnect());
+            best_effort(self.rt.block_on(c.disconnect()));
         }
     }
 }
@@ -9117,8 +9374,8 @@ impl Drop for SshTunnel {
         // Deterministically stop the listener (ForwardGuard.abort on Drop).
         // SshClient (= Arc<Handle>) drops safely outside the runtime; a clean
         // disconnect is done only by close() (we don't call block_on in Drop here).
-        let _ = lock_recover(&self.guard).take();
-        let _ = lock_recover(&self.client).take();
+        drop(lock_recover(&self.guard).take());
+        drop(lock_recover(&self.client).take());
     }
 }
 
@@ -9218,6 +9475,10 @@ struct ForeignTransportAdapter {
 }
 
 impl SyncTransport for ForeignTransportAdapter {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "SyncError::Format carries no source; the encode failure is reported as a format error by design"
+    )]
     fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, unissh_sync::SyncError> {
         let mut blobs = Vec::with_capacity(objects.len());
         for o in objects {
@@ -9406,6 +9667,10 @@ async fn wait_sftp_cancelled(cancel: Option<&CancelToken>) {
     }
 }
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+)]
 async fn await_sftp_open(
     cancel: Option<&CancelToken>,
     open: impl std::future::Future<Output = Result<SftpSession, unissh_ssh_transport::TransportError>>,
@@ -9433,9 +9698,9 @@ impl SftpFfi {
     where
         F: FnOnce(&Arc<tokio::runtime::Runtime>, &mut SftpSession) -> Result<T, FfiError>,
     {
-        Ok(self
-            .with_sftp_cancel(None, f)?
-            .expect("a non-cancellable lease always returns a channel"))
+        // A lease without a cancel token always yields a channel; `None` is unreachable.
+        self.with_sftp_cancel(None, f)?
+            .ok_or_else(|| FfiError::other("sftp operation cancelled"))
     }
 
     /// None means the caller cancelled before starting channel I/O. Metadata
@@ -9452,9 +9717,11 @@ impl SftpFfi {
             return Ok(None);
         };
         ch.set_lifetime_cancel(Arc::new(CancelBridge(self.shutdown.clone())));
-        ch.set_operation_cancel(cancel.map(|c| {
-            Arc::new(CancelBridge(c.flag.clone())) as Arc<dyn unissh_ssh_transport::SftpCancel>
-        }));
+        ch.set_operation_cancel(
+            cancel.map(|c| -> Arc<dyn unissh_ssh_transport::SftpCancel> {
+                Arc::new(CancelBridge(c.flag.clone()))
+            }),
+        );
         // Cancellation may have arrived while opening/acquiring the channel.
         // Return that healthy lease without running the transfer closure.
         let r = if cancel.is_some_and(CancelToken::is_cancelled) {
@@ -9535,9 +9802,7 @@ impl SftpFfi {
                             // another thread may have returned its own and its notify went to waste
                             // — we go back to the start of the loop, where idle.pop() under the same
                             // lock either takes a channel or goes into wait without a race.
-                            if p.max > p.created {
-                                p.max = p.created;
-                            }
+                            p.max = p.max.min(p.created);
                             continue;
                         }
                         // Not a single live channel to fall back to. Usually the refusal is transient:
@@ -9605,6 +9870,10 @@ impl SftpFfi {
     /// within a runtime context (panic) — here we are on a blocking thread, there is no context.
     /// Bounded by a timeout: a silently-dead connection (keepalive off, no RST) would otherwise
     /// wait for OPEN-CONFIRM forever.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the channel opens on the client borrowed from the guard, which also serializes openers with reconnect"
+    )]
     fn open_channel_cancel(
         &self,
         cancel: Option<&CancelToken>,
@@ -9714,7 +9983,7 @@ impl SftpFfi {
         };
         self.pool_cv.notify_all();
         drop(old_idle);
-        let _ = lock_recover(&self.client).take();
+        drop(lock_recover(&self.client).take());
     }
 }
 
@@ -9759,15 +10028,20 @@ impl SftpFfi {
         // predictable file in a shared temporary directory, even after SIGKILL.
         let scratch = tempfile::tempfile().map_err(FfiError::other)?;
         let reader = scratch.try_clone().map_err(FfiError::other)?;
-        let cancellation = cancel.as_ref().map(|c| {
-            Arc::new(CancelBridge(c.flag.clone())) as Arc<dyn unissh_ssh_transport::SftpCancel>
-        });
-        let download_progress = progress.clone().map(|p| {
-            Arc::new(RelayProgress {
-                observer: p,
-                base: 0,
-            }) as Arc<dyn unissh_ssh_transport::SftpProgress>
-        });
+        let cancellation = cancel
+            .as_ref()
+            .map(|c| -> Arc<dyn unissh_ssh_transport::SftpCancel> {
+                Arc::new(CancelBridge(c.flag.clone()))
+            });
+        let download_progress =
+            progress
+                .clone()
+                .map(|p| -> Arc<dyn unissh_ssh_transport::SftpProgress> {
+                    Arc::new(RelayProgress {
+                        observer: p,
+                        base: 0,
+                    })
+                });
         let downloaded = self.with_sftp_cancel(cancel.as_deref(), |rt, s| {
             rt.block_on(s.download_to_file(
                 &remote,
@@ -9781,11 +10055,11 @@ impl SftpFfi {
             return Ok(false);
         }
         let length = reader.metadata().map_err(FfiError::other)?.len();
-        let upload_progress = progress.map(|p| {
+        let upload_progress = progress.map(|p| -> Arc<dyn unissh_ssh_transport::SftpProgress> {
             Arc::new(RelayProgress {
                 observer: p,
                 base: length,
-            }) as Arc<dyn unissh_ssh_transport::SftpProgress>
+            })
         });
         let uploaded = target.with_sftp_cancel(cancel.as_deref(), |rt, s| {
             rt.block_on(s.upload_file(
@@ -9889,8 +10163,8 @@ impl SftpFfi {
             Ok(SftpFileStat {
                 size: stat.size,
                 size_known: stat.size_known,
-                mode: stat.mode,
                 is_dir: stat.is_dir,
+                mode: stat.mode,
                 mtime: stat.mtime,
             })
         })?
@@ -9994,11 +10268,14 @@ impl SftpFfi {
         progress: Option<Arc<dyn SftpProgressObserver>>,
         cancel: Option<Arc<CancelToken>>,
     ) -> Result<bool, FfiError> {
-        let prog = progress
-            .map(|p| Arc::new(ProgressBridge(p)) as Arc<dyn unissh_ssh_transport::SftpProgress>);
-        let canc = cancel.as_ref().map(|c| {
-            Arc::new(CancelBridge(c.flag.clone())) as Arc<dyn unissh_ssh_transport::SftpCancel>
+        let prog = progress.map(|p| -> Arc<dyn unissh_ssh_transport::SftpProgress> {
+            Arc::new(ProgressBridge(p))
         });
+        let canc = cancel
+            .as_ref()
+            .map(|c| -> Arc<dyn unissh_ssh_transport::SftpCancel> {
+                Arc::new(CancelBridge(c.flag.clone()))
+            });
         self.with_sftp_cancel(cancel.as_deref(), move |rt, s| {
             let outcome = rt
                 .block_on(s.download_to(&remote_path, &local_path, offset, known_size, prog, canc))
@@ -10018,11 +10295,14 @@ impl SftpFfi {
         progress: Option<Arc<dyn SftpProgressObserver>>,
         cancel: Option<Arc<CancelToken>>,
     ) -> Result<bool, FfiError> {
-        let prog = progress
-            .map(|p| Arc::new(ProgressBridge(p)) as Arc<dyn unissh_ssh_transport::SftpProgress>);
-        let canc = cancel.as_ref().map(|c| {
-            Arc::new(CancelBridge(c.flag.clone())) as Arc<dyn unissh_ssh_transport::SftpCancel>
+        let prog = progress.map(|p| -> Arc<dyn unissh_ssh_transport::SftpProgress> {
+            Arc::new(ProgressBridge(p))
         });
+        let canc = cancel
+            .as_ref()
+            .map(|c| -> Arc<dyn unissh_ssh_transport::SftpCancel> {
+                Arc::new(CancelBridge(c.flag.clone()))
+            });
         self.with_sftp_cancel(cancel.as_deref(), move |rt, s| {
             let outcome = rt
                 .block_on(s.upload_from(&local_path, &remote_path, offset, prog, canc))
@@ -10080,10 +10360,12 @@ impl SftpFfi {
         })
     }
 
+    /// Target of the symbolic link at `path`; errors when it is not a link or the SFTP call fails.
     pub fn readlink(&self, path: String) -> Result<String, FfiError> {
         self.with_sftp(|rt, s| rt.block_on(s.readlink(&path)).map_err(map_transport_err))
     }
 
+    /// Creates a symbolic link at `path` pointing to `target`; errors when the SFTP call fails.
     pub fn symlink(&self, target: String, path: String) -> Result<(), FfiError> {
         self.with_sftp(|rt, s| {
             rt.block_on(s.symlink(&target, &path))
@@ -10142,6 +10424,10 @@ impl Drop for SftpFfi {
 /// unique across vaults (e.g. everyone names a key `id_ed25519`). Without a namespace the second
 /// `load` would short-circuit on `contains()` and sign with the WRONG key. The length
 /// prefix on vault_id guarantees uniqueness. The same id builds `Auth::Agent`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a vault id is a short identifier, far below 4 GiB; the u32 prefix is the agent key-id format"
+)]
 fn agent_key_id(vault_id: &str, key_item_id: &str) -> Vec<u8> {
     let v = vault_id.as_bytes();
     let k = key_item_id.as_bytes();
@@ -10204,6 +10490,10 @@ fn load_key_into_agent(
 /// The SQLCipher key is derived from the keyset secrets (an unlock is needed to
 /// open the DB). HKDF-SHA256 over the private X25519+Ed25519. All intermediate
 /// copies of the secrets and the key itself are in `Zeroizing`, zeroized on exit/Drop.
+#[expect(
+    clippy::expect_used,
+    reason = "HKDF-SHA256 accepts any output length up to 8160 bytes, so expanding 32 cannot fail"
+)]
 fn derive_db_key(keyset: &unissh_keychain::UnlockedKeyset) -> Zeroizing<[u8; 32]> {
     let x_secret = Zeroizing::new(keyset.encryption.secret.expose_to_bytes());
     let e_secret = Zeroizing::new(keyset.signing.signing.expose_to_bytes());
@@ -10321,6 +10611,26 @@ mod sftp_pool_tests {
         }
     }
 
+    /// One download or upload on `session` that only `token` can end.
+    fn cancellable_transfer(
+        session: &SftpFfi,
+        download: bool,
+        token: Arc<CancelToken>,
+    ) -> Result<bool, FfiError> {
+        if download {
+            session.sftp_download(
+                "/remote".into(),
+                "/unused".into(),
+                0,
+                Some(1),
+                None,
+                Some(token),
+            )
+        } else {
+            session.sftp_upload("/unused".into(), "/remote".into(), 0, None, Some(token))
+        }
+    }
+
     #[test]
     fn transfers_cancel_while_waiting_for_a_busy_pool() {
         for download in [true, false] {
@@ -10339,25 +10649,10 @@ mod sftp_pool_tests {
                     let session_ref = &session;
                     let token_for_worker = token.clone();
                     let worker = scope.spawn(move || {
-                        let result = if download {
-                            session_ref.sftp_download(
-                                "/remote".into(),
-                                "/unused".into(),
-                                0,
-                                Some(1),
-                                None,
-                                Some(token_for_worker),
-                            )
-                        } else {
-                            session_ref.sftp_upload(
-                                "/unused".into(),
-                                "/remote".into(),
-                                0,
-                                None,
-                                Some(token_for_worker),
-                            )
-                        };
-                        let _ = tx.send(result);
+                        let result = cancellable_transfer(session_ref, download, token_for_worker);
+                        if tx.send(result).is_err() {
+                            // Receiver gone: the test has already failed on its own.
+                        }
                     });
                     assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
                     if shared {
@@ -10491,6 +10786,62 @@ mod recorder_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncated_userauth_blob_yields_no_login() {
+        let string = |out: &mut Vec<u8>, s: &[u8]| {
+            out.extend_from_slice(&u32::try_from(s.len()).unwrap().to_be_bytes());
+            out.extend_from_slice(s);
+        };
+        let mut full = Vec::new();
+        string(&mut full, b"session-id");
+        full.push(50);
+        string(&mut full, b"deploy");
+        string(&mut full, b"ssh-connection");
+        let parsed_end = full.len();
+        string(&mut full, b"publickey");
+        for cut in 0..parsed_end {
+            assert_eq!(userauth_login(&full[..cut]), None, "cut at {cut}");
+        }
+        assert_eq!(
+            userauth_login(&full),
+            Some(("deploy".to_owned(), "ssh-connection".to_owned()))
+        );
+    }
+
+    #[test]
+    fn putty_unescape_never_panics_on_truncated_or_multibyte_escapes() {
+        let full = "a%20b%C3%A9%é%aé%";
+        for cut in 0..=full.len() {
+            if let Some(prefix) = full.get(..cut) {
+                assert!(
+                    !putty_unescape(prefix).is_empty() || cut == 0,
+                    "cut at {cut}"
+                );
+            }
+        }
+        assert_eq!(putty_unescape("a%20b%C3%A9"), "a bé");
+        assert_eq!(putty_unescape("%é%"), "%é%");
+        // Used to panic: the escape's second byte is inside a multi-byte character.
+        assert_eq!(putty_unescape("%aé"), "%aé");
+    }
+
+    #[test]
+    fn truncated_backup_framing_is_rejected() {
+        let mut full = vec![7_u8];
+        put_len_bytes(&mut full, b"payload");
+        for cut in 0..full.len() {
+            let mut r = ByteReader::new(&full[..cut]);
+            let err = r.u8().and_then(|_| r.bytes()).unwrap_err();
+            assert!(
+                matches!(&err, FfiError::Other { msg } if msg == "truncated backup"),
+                "cut at {cut}: {err:?}"
+            );
+        }
+        let mut r = ByteReader::new(&full);
+        assert_eq!(r.u8().unwrap(), 7);
+        assert_eq!(r.bytes().unwrap(), b"payload");
+    }
 
     /// `derive_escrow_credentials` returns a 256-bit K_auth, a 16-byte salt and the
     /// recommended Argon2id params; and re-deriving K_auth from the RETURNED params
@@ -10740,6 +11091,10 @@ mod tests {
     /// agent_key_id(vault,item) it was loaded with — otherwise remove is a no-op and
     /// a revoked/replaced key stays alive and signing until the end of the session.
     #[test]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the test inspects state borrowed from the guard while it holds it"
+    )]
     fn revoking_key_evicts_it_from_agent() {
         let dir = tempfile::tempdir().unwrap();
         let core = Core::new(
@@ -10853,7 +11208,6 @@ mod tests {
     #[test]
     fn vault_password_profile_roundtrip() {
         let prof = ConnectionProfile {
-            proxy: None,
             profile_id: "p".to_owned(),
             uid: "uid-fixed".to_owned(),
             label: "L".to_owned(),
@@ -10874,6 +11228,7 @@ mod tests {
                 },
                 hop_ref: None,
             }],
+            proxy: None,
             tags: vec!["prod".to_owned()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
@@ -10887,7 +11242,6 @@ mod tests {
             | ProfileAuth::SystemAgent { .. } => (None, None),
         };
         let stored = StoredProfile {
-            proxy: None,
             uid: Some(prof.uid.clone()),
             label: prof.label.clone(),
             host: prof.host.clone(),
@@ -10903,12 +11257,13 @@ mod tests {
                 .into_iter()
                 .map(|j| jump_to_stored(j).unwrap())
                 .collect(),
-            tags: prof.tags.clone(),
-            extra: BTreeMap::new(),
+            proxy: None,
+            tags: prof.tags,
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             agent_forward: false,
             system_agent_public_key: None,
+            extra: BTreeMap::new(),
         };
         let json = serde_json::to_string(&stored).unwrap();
         let back: StoredProfile = serde_json::from_str(&json).unwrap();
@@ -10985,7 +11340,6 @@ mod tests {
         let stored = jump_to_stored(j).unwrap();
         assert!(stored.hop_ref.is_some());
         let sp = StoredProfile {
-            proxy: None,
             uid: Some("u".into()),
             label: "L".into(),
             host: "h".into(),
@@ -10996,12 +11350,13 @@ mod tests {
             personal: false,
             username_template: None,
             jumps: vec![stored],
+            proxy: None,
             tags: vec![],
-            extra: BTreeMap::new(),
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
             agent_forward: false,
             system_agent_public_key: None,
+            extra: BTreeMap::new(),
         };
         let prof = stored_to_profile("va", "p".into(), sp);
         let hr = prof.jumps[0].hop_ref.as_ref().unwrap();
@@ -11011,6 +11366,10 @@ mod tests {
 
     /// B2.2: resolve_profile_by_uid finds a bastion profile by its uid.
     #[test]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the test inspects state borrowed from the guard while it holds it"
+    )]
     fn resolve_profile_by_uid_finds_bastion() {
         let dir = tempfile::tempdir().unwrap();
         let core = Core::new(
@@ -11022,7 +11381,6 @@ mod tests {
         core.save_connection(
             "v".into(),
             ConnectionProfile {
-                proxy: None,
                 profile_id: "bastion".into(),
                 uid: String::new(),
                 label: "B".into(),
@@ -11032,6 +11390,7 @@ mod tests {
                 auth: ProfileAuth::PromptPassword,
                 username_template: None,
                 jumps: vec![],
+                proxy: None,
                 tags: vec![],
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
@@ -11211,6 +11570,10 @@ mod tests {
     /// B7: an edit of a profile by a client that does NOT know a future-version field PRESERVES it
     /// (merge-on-save) — no silent LWW downgrade.
     #[test]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the test inspects state borrowed from the guard while it holds it"
+    )]
     fn save_connection_preserves_future_fields_on_edit() {
         let dir = tempfile::tempdir().unwrap();
         let core = Core::new(
@@ -11222,7 +11585,6 @@ mod tests {
         core.save_connection(
             "v".into(),
             ConnectionProfile {
-                proxy: None,
                 profile_id: "p".into(),
                 uid: String::new(),
                 label: "L".into(),
@@ -11232,6 +11594,7 @@ mod tests {
                 auth: ProfileAuth::PromptPassword,
                 username_template: None,
                 jumps: vec![],
+                proxy: None,
                 tags: vec![],
                 startup_snippet_ids: Vec::new(),
                 record_sessions: false,
@@ -11306,7 +11669,7 @@ mod tests {
         b2.identity_item_id = "ident2".into();
         core.set_binding("personal".into(), b2, false).unwrap();
         // A re-pin to a DIFFERENT destination without allow_rebind — refused.
-        let mut b3 = b.clone();
+        let mut b3 = b;
         b3.destination_pin = "evil:22".into();
         assert!(core
             .set_binding("personal".into(), b3.clone(), false)
@@ -11554,19 +11917,18 @@ mod tests {
             .resolve_personal_auth("team".into(), "uidW".into(), "corp:22".into(), "fb".into())
             .unwrap();
         assert_eq!(pa.user, "alice-work");
-        match &pa.auth {
-            AuthMethod::Agent {
-                vault_id,
-                key_item_id,
-            } => {
-                assert_eq!(
-                    vault_id, work,
-                    "creds from the Work vault, not a 'personal' one"
-                );
-                assert_eq!(key_item_id, "workkey");
-            }
-            _ => panic!("expected Agent auth"),
-        }
+        let AuthMethod::Agent {
+            vault_id,
+            key_item_id,
+        } = &pa.auth
+        else {
+            panic!("expected Agent auth");
+        };
+        assert_eq!(
+            vault_id, work,
+            "creds from the Work vault, not a 'personal' one"
+        );
+        assert_eq!(key_item_id, "workkey");
     }
 
     /// B4: resolve_personal_auth unwraps the personal credential ONLY for
@@ -11658,7 +12020,6 @@ mod tests {
         core.create_account(None).unwrap();
         core.create_vault("v".into(), "V".into()).unwrap();
         let mk = |id: &str, host: &str, auth: ProfileAuth| ConnectionProfile {
-            proxy: None,
             profile_id: id.into(),
             uid: String::new(),
             label: id.into(),
@@ -11668,6 +12029,7 @@ mod tests {
             auth,
             username_template: None,
             jumps: vec![],
+            proxy: None,
             tags: vec!["prod".into()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
@@ -11739,7 +12101,6 @@ mod tests {
         )
         .unwrap();
         let mk = |id: &str, host: &str, auth: ProfileAuth| ConnectionProfile {
-            proxy: None,
             profile_id: id.into(),
             uid: String::new(),
             label: id.into(),
@@ -11749,6 +12110,7 @@ mod tests {
             auth,
             username_template: None,
             jumps: vec![],
+            proxy: None,
             tags: vec!["prod".into()],
             startup_snippet_ids: Vec::new(),
             record_sessions: false,
@@ -11782,7 +12144,7 @@ mod tests {
             pv.into(),
             IdentityBinding {
                 team_vault_id: "v".into(),
-                profile_uid: ph.uid.clone(),
+                profile_uid: ph.uid,
                 identity_item_id: "ident1".into(),
                 destination_pin: dest,
             },
@@ -11874,7 +12236,7 @@ mod tests {
     fn flatten_group_members_respects_depth_limit() {
         use std::collections::{HashMap, HashSet};
         // A chain g0->g1->...->g40, each with the next group + a terminal profile.
-        let profiles: HashSet<String> = ["p_end".to_owned()].into_iter().collect();
+        let profiles = HashSet::from(["p_end".to_owned()]);
         let mut groups: HashMap<String, Vec<String>> = HashMap::new();
         for i in 0..40 {
             groups.insert(format!("g{i}"), vec![format!("g{}", i + 1)]);
@@ -11892,10 +12254,8 @@ mod tests {
     #[test]
     fn flatten_group_members_dedup_cycle_depth() {
         use std::collections::HashMap;
-        let profiles: std::collections::HashSet<String> = ["p1", "p2", "p3"]
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect();
+        let profiles: std::collections::HashSet<String> =
+            ["p1", "p2", "p3"].iter().map(ToString::to_string).collect();
         let mut groups: HashMap<String, Vec<String>> = HashMap::new();
         // A → [p1, B, p2]; B → [p2, p3, A(cycle)]
         groups.insert("A".to_owned(), vec!["p1".into(), "B".into(), "p2".into()]);
@@ -11945,6 +12305,10 @@ mod tests {
     /// The items before it have already been re-encrypted into the new cloud vault
     /// when its signature check fails mid-copy.
     #[test]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the test inspects state borrowed from the guard while it holds it"
+    )]
     fn convert_vault_to_cloud_rolls_back_on_mid_copy_failure() {
         let dir = tempfile::tempdir().unwrap();
         let core = Core::new(

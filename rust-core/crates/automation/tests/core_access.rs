@@ -1,24 +1,44 @@
-#![cfg(feature = "core")]
+//! Saved native consent restored through the real Core adapter (needs the `core` feature).
+// Items carry the cfg instead of the crate so this doc survives a build without the feature.
+#![cfg_attr(
+    feature = "core",
+    expect(
+        clippy::panic,
+        reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+    )
+)]
+
+#[cfg(feature = "core")]
 use std::{sync::Arc, time::Instant};
+#[cfg(feature = "core")]
 use unissh_automation::{
     core::{CoreExecutor, PromptFactory},
     ApprovalMode, Broker, Cancel,
 };
+#[cfg(feature = "core")]
 use unissh_ffi::{AuthPrompter, ConnectionProfile, Core, ProfileAuth};
 
+#[cfg(feature = "core")]
 struct NoPrompts;
+#[cfg(feature = "core")]
 impl PromptFactory for NoPrompts {
     fn for_connection(&self, _: &str, _: Cancel, _: Instant) -> Arc<dyn AuthPrompter> {
         panic!("Restoring consent must not connect or request credentials")
     }
 }
+#[cfg(feature = "core")]
 fn broker(core: Arc<Core>) -> Arc<Broker> {
     Broker::new(Arc::new(CoreExecutor {
         core,
         prompts: Arc::new(NoPrompts),
     }))
 }
+#[cfg(feature = "core")]
 #[test]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the reopened broker is used until the final assertion"
+)]
 fn encrypted_native_consent_restores_only_unchanged_targets_and_is_revocable() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("db").to_str().unwrap().to_owned();

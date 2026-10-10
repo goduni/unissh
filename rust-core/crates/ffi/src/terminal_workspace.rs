@@ -24,6 +24,10 @@ impl Core {
     }
 
     /// Save only within the unlock lifetime that supplied the layout.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn terminal_workspace_save(&self, epoch: u64, document: String) -> Result<(), FfiError> {
         self.with_state(|s| {
             // A queued UI write from a previous unlock must not replace the new

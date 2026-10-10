@@ -5,16 +5,27 @@ use std::time::{Duration, Instant};
 /// Immutable saved-target snapshot. Credential references remain private to Core.
 #[derive(Clone)]
 pub struct Target {
+    /// Vault holding the host profile.
     pub vault_id: String,
+    /// Host profile id inside the vault.
     pub profile_id: String,
+    /// Vault display name.
     pub vault: String,
+    /// Labels of the groups (and their ancestors) the profile belongs to.
     pub groups: Vec<String>,
+    /// Profile tags.
     pub tags: Vec<String>,
+    /// Profile display label.
     pub label: String,
+    /// Destination host name or address.
     pub host: String,
+    /// Destination SSH port.
     pub port: u16,
+    /// Effective remote user name (username template applied).
     pub user: String,
+    /// Automation revision the snapshot was taken at.
     pub revision: [u64; 2],
+    /// Whether the profile asks for its sessions to be recorded.
     pub record_sessions: bool,
     auth: AuthMethod,
     prompt_password: bool,
@@ -25,8 +36,11 @@ pub struct Target {
 /// A lifetime independent of the HTTP request that created it.
 #[derive(Clone)]
 pub struct ConnectionPolicy {
+    /// Automation revision the connection is valid for; any change revokes it.
     pub revision: [u64; 2],
+    /// Cancels the connection and everything running on it.
     pub cancel: Arc<CancelToken>,
+    /// Hard end of the connection's lifetime, if any.
     pub deadline: Option<Instant>,
 }
 
@@ -65,6 +79,7 @@ impl Core {
     pub fn automation_access_load(&self) -> Result<Option<Vec<u8>>, FfiError> {
         self.with_state(|s| s.storage.get_meta("mcp.access.v1").map_err(FfiError::other))
     }
+    /// Stores the device-local MCP consent blob; errors when locked or the write fails.
     pub fn automation_access_save(&self, bytes: &[u8]) -> Result<(), FfiError> {
         self.with_state(|s| {
             s.storage
@@ -72,6 +87,7 @@ impl Core {
                 .map_err(FfiError::other)
         })
     }
+    /// Identity of the unlocked account that saved MCP consents are bound to; errors when locked.
     pub fn automation_access_fingerprint(&self) -> Result<Vec<u8>, FfiError> {
         self.with_state(|s| s.storage.automation_fingerprint().map_err(FfiError::other))
     }
@@ -147,11 +163,11 @@ impl Core {
             return Err(FfiError::Locked);
         }
         Ok(Target {
+            vault_id,
+            profile_id,
             vault,
             groups,
             tags: p.tags,
-            vault_id,
-            profile_id,
             label: p.label,
             host: p.host,
             port: p.port,
@@ -175,10 +191,9 @@ impl Core {
         if target.revision != policy.revision {
             return Err(FfiError::Locked);
         }
-        let mut auth = target.auth.clone();
         // Password prompting uses the trusted native prompter, never an MCP argument.
-        if target.prompt_password {
-            let answer = prompter
+        let mut auth = if target.prompt_password {
+            let [password] = prompter
                 .as_ref()
                 .and_then(|p| {
                     p.prompt(AuthPromptRequest {
@@ -193,12 +208,12 @@ impl Core {
                         }],
                     })
                 })
-                .filter(|a| a.len() == 1)
+                .and_then(|answers| <[String; 1]>::try_from(answers).ok())
                 .ok_or(FfiError::InvalidCredentials)?;
-            auth = AuthMethod::Password {
-                password: answer.into_iter().next().expect("one answer"),
-            };
-        }
+            AuthMethod::Password { password }
+        } else {
+            target.auth.clone()
+        };
         let result = connect_with_policy(
             &self.state,
             &self.rt,
@@ -251,11 +266,13 @@ impl Core {
                 };
                 if !valid {
                     connection.policy.cancel.cancel();
-                    let _ = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        connection.client.disconnect(),
-                    )
-                    .await;
+                    if tokio::time::timeout(Duration::from_secs(2), connection.client.disconnect())
+                        .await
+                        .is_err()
+                    {
+                        // Best effort: the cancel above already fences the connection,
+                        // so a disconnect that fails or times out changes nothing.
+                    }
                     break;
                 }
             }
@@ -274,6 +291,7 @@ pub struct ManagedConnection {
 }
 
 impl ManagedConnection {
+    /// Whether the connection is open and its policy (revision, cancel, deadline) still holds.
     pub fn is_valid(&self) -> bool {
         let state = lock_recover(&self.state);
         !self.client.is_closed() && state.as_ref().is_some_and(|s| self.policy.check(s).is_ok())
@@ -291,6 +309,16 @@ impl ManagedConnection {
         self.exec_with_input(command, None, observer, command_cancel, deadline)
     }
 
+    /// [`Self::exec`] with optional stdin, sent before EOF; errors when the policy no
+    /// longer holds, the command was cancelled or past `deadline`, or dispatch fails.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the admission and state guards must cover the policy check and the dispatch atomically"
+    )]
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
+    )]
     pub fn exec_with_input(
         &self,
         command: &str,
@@ -345,9 +373,16 @@ impl ManagedConnection {
     pub fn close(&self) {
         self.policy.cancel.cancel();
         let _admission = lock_recover(&self.admission);
-        let _ = self.rt.block_on(async {
-            tokio::time::timeout(Duration::from_secs(2), self.client.disconnect()).await
-        });
+        if self
+            .rt
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(2), self.client.disconnect()).await
+            })
+            .is_err()
+        {
+            // Best effort: the cancel above already fences the connection, so a
+            // disconnect that fails or times out changes nothing.
+        }
     }
 }
 
@@ -356,22 +391,37 @@ impl Drop for ManagedConnection {
         self.policy.cancel.cancel();
         let client = self.client.clone();
         self.rt.spawn(async move {
-            let _ = tokio::time::timeout(Duration::from_secs(2), client.disconnect()).await;
+            if tokio::time::timeout(Duration::from_secs(2), client.disconnect())
+                .await
+                .is_err()
+            {
+                // Best effort while dropping: the connection is already cancelled.
+            }
         });
     }
 }
 
+/// A command started on a [`ManagedConnection`].
 pub struct ManagedExec {
     handle: ExecHandle,
     rt: Arc<tokio::runtime::Runtime>,
 }
 impl ManagedExec {
+    /// Whether the remote command has exited.
     pub fn has_exited(&self) -> bool {
         self.handle.has_exited()
     }
+    /// Closes the command's channel, waiting at most two seconds.
     pub fn close(&self) {
-        let _ = self.rt.block_on(async {
-            tokio::time::timeout(Duration::from_secs(2), self.handle.close()).await
-        });
+        if self
+            .rt
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(2), self.handle.close()).await
+            })
+            .is_err()
+        {
+            // Best effort: a close that times out leaves the channel to the
+            // connection's own teardown.
+        }
     }
 }

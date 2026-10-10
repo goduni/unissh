@@ -131,6 +131,10 @@ pub enum InvalidRequest {
 
 /// Return only fixed errors: serde error messages can contain caller-supplied secrets.
 pub fn parse(name: &str, arguments: JsonObject) -> Result<ToolRequest, InvalidRequest> {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "serde error messages can quote caller-supplied secrets, so only the fixed error leaves"
+    )]
     fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, InvalidRequest> {
         serde_json::from_value(value).map_err(|_| InvalidRequest::InvalidArguments)
     }
@@ -213,6 +217,10 @@ fn valid_command(
         && timeout.is_none_or(|ms| (1..=86_400_000).contains(&ms))
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "a schemars schema always serializes to a JSON object; failure is a build-time bug"
+)]
 fn tool<T: JsonSchema>(name: &'static str, description: &'static str, read: bool) -> Tool {
     let mut schema = serde_json::to_value(schemars::schema_for!(T))
         .expect("schemas serialize")
@@ -231,6 +239,10 @@ fn tool<T: JsonSchema>(name: &'static str, description: &'static str, read: bool
 }
 
 /// Stable ordering; no target inventory, credential names or user text in discovery.
+#[expect(
+    clippy::expect_used,
+    reason = "a schemars schema always serializes to a JSON object; failure is a build-time bug"
+)]
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         tool::<ListRequest>("get_access_status", "Inspect this application's native grant, approval mode, expiry and execution limits. Works while UniSSH is locked; never unlocks or grants access. Cursor is unsupported.", true),
@@ -346,7 +358,7 @@ pub struct CommandOutputResult {
 }
 
 impl ToolError {
-    pub fn message(self) -> &'static str {
+    pub const fn message(self) -> &'static str {
         match self {
             Self::TimeoutLimit => "The requested timeout exceeds the native grant limit. Check get_access_status or change access in UniSSH.",
             Self::RequestConflict => "The request key was already used for different arguments.",

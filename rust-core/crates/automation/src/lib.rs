@@ -26,7 +26,9 @@ mod output;
 pub use access::SavedAccess;
 mod working_directory;
 
+/// Result of a broker operation; errors are the fixed MCP wire errors.
 pub type Result<T> = std::result::Result<T, ToolError>;
+/// Shared cancellation flag: set once, observed by every party of a session or run.
 pub type Cancel = Arc<AtomicBool>;
 fn cancelled(c: &Cancel) -> bool {
     c.load(Ordering::SeqCst)
@@ -40,35 +42,81 @@ fn id() -> String {
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+/// What indexing a missing key of a JSON value yields, without the panicking `Index`.
+static NULL: Value = Value::Null;
+/// Reads `key` of a JSON object, or `null` when the key or the object is absent.
+fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
+    value.get(key).unwrap_or(&NULL)
+}
+/// Sets `key` on a JSON object; the broker only calls it on objects it built itself.
+fn set_field(value: &mut Value, key: &str, field: Value) {
+    if let Value::Object(fields) = value {
+        fields.insert(key.to_owned(), field);
+    }
+}
+/// Milliseconds of `elapsed` for JSON, saturating instead of truncating.
+fn millis(elapsed: Duration) -> u64 {
+    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+}
+/// The snake_case wire code of an error (`ToolError` serializes to a plain string).
+fn error_code(error: ToolError) -> String {
+    serde_json::to_value(error)
+        .ok()
+        .and_then(|code| code.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
 
+/// Display and audit description of a granted target; never contains credentials.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TargetInfo {
+    /// Vault holding the host profile.
     pub vault_id: String,
+    /// Host profile id inside the vault.
     pub profile_id: String,
+    /// Vault display name.
     pub vault: String,
+    /// Group names the profile belongs to.
     pub groups: Vec<String>,
+    /// Profile tags.
     pub tags: Vec<String>,
+    /// Profile display label.
     pub label: String,
+    /// Destination host name or address.
     pub host: String,
+    /// Destination SSH port.
     pub port: u16,
+    /// Remote user name.
     pub user: String,
 }
 
+/// A resolved target: its description, the vault revision it was resolved at, and
+/// the executor's opaque connection payload.
 #[derive(Clone)]
 pub struct Target {
+    /// What the native UI and the audit log show.
     pub info: TargetInfo,
+    /// Vault revision at resolution; a later mutation invalidates the grant.
     pub revision: [u64; 2],
+    /// Executor-specific connection data, opaque to the broker.
     pub payload: Arc<dyn Any + Send + Sync>,
 }
 
+/// Receiver of a running command's output.
 pub trait Output: Send + Sync {
+    /// Delivers a chunk of stdout (`stderr == false`) or stderr output.
     fn data(&self, stderr: bool, bytes: Vec<u8>);
+    /// Reports the command's exit; `None` when the remote side sent no status.
     fn exited(&self, code: Option<u32>);
 }
+/// Handle of a started remote command.
 pub trait Command: Send + Sync {
+    /// Closes the command's channel.
     fn close(&self);
 }
+/// A live SSH connection owned by the broker.
 pub trait Connection: Send + Sync {
+    /// Starts `command` with optional stdin, streaming output to `sink`; errors when
+    /// the channel cannot be opened or the run is cancelled or past `deadline`.
     fn exec(
         &self,
         command: &str,
@@ -77,27 +125,42 @@ pub trait Connection: Send + Sync {
         cancel: Cancel,
         deadline: Instant,
     ) -> Result<Arc<dyn Command>>;
+    /// Whether the connection is still usable.
     fn valid(&self) -> bool;
+    /// Closes the connection.
     fn close(&self);
 }
 /// A native recording remains independent of output retention and HTTP polling.
 pub trait Recording: Send + Sync {
+    /// Appends a chunk of stdout or stderr output.
     fn data(&self, stderr: bool, bytes: &[u8]);
+    /// Records the command's exit status.
     fn exited(&self, code: Option<u32>);
+    /// Seals the recording with the run's final outcome.
     fn finish(&self, outcome: &str);
+    /// Summary of the recording for the native review UI.
     fn review(&self) -> Value;
 }
+/// The native side of the broker: vault access, persistence and SSH execution.
 pub trait Executor: Send + Sync + 'static {
+    /// Loads the saved consents; errors when the store cannot be read.
     fn load_access(&self) -> Result<Vec<SavedAccess>> {
         Ok(Vec::new())
     }
+    /// Persists the saved consents; errors when the store cannot be written.
     fn save_access(&self, _access: &[SavedAccess]) -> Result<()> {
         Ok(())
     }
+    /// Identity of the unlocked account that saved consents are bound to; errors when locked.
     fn access_fingerprint(&self) -> Result<Vec<u8>> {
         Ok(Vec::new())
     }
-    #[allow(clippy::too_many_arguments)]
+    /// Starts a native recording of a run, or `None` when recording is off; errors
+    /// when a required recording cannot be created.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per audited run attribute; a params struct would duplicate Run"
+    )]
     fn record(
         &self,
         _target: &Target,
@@ -110,8 +173,12 @@ pub trait Executor: Send + Sync + 'static {
     ) -> Result<Option<Arc<dyn Recording>>> {
         Ok(None)
     }
+    /// Current vault revision; errors when the vault is locked.
     fn revision(&self) -> Result<[u64; 2]>;
+    /// Resolves a host profile to a target; errors when it is missing or locked.
     fn resolve(&self, vault: &str, profile: &str) -> Result<Target>;
+    /// Opens an SSH connection to `target`; errors on authentication, host-key or
+    /// transport failure, cancellation or an elapsed deadline.
     fn connect(
         &self,
         target: &Target,
@@ -126,11 +193,14 @@ struct LiveConnection {
     _slot: OwnedSemaphorePermit,
     _owner_slot: OwnedSemaphorePermit,
 }
+/// How commands under a grant are approved.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalMode {
+    /// Every command waits for the user's confirmation in the native UI.
     #[default]
     Manual,
+    /// The user trusts the application: commands start without confirmation.
     Trusted,
 }
 
@@ -201,6 +271,7 @@ const RECORDS_PER_GRANT: usize = 128;
 const RECORDS_TOTAL: usize = 256;
 const GRANTS_TOTAL: usize = 32;
 
+/// The native authorization broker: owns grants, SSH sessions and command runs.
 pub struct Broker {
     weak: Weak<Self>,
     executor: Arc<dyn Executor>,
@@ -213,6 +284,7 @@ pub struct Broker {
 }
 
 impl Broker {
+    /// Creates a broker over `executor` and starts its background expiry sweep.
     pub fn new(executor: Arc<dyn Executor>) -> Arc<Self> {
         let broker = Arc::new_cyclic(|weak| Self {
             weak: weak.clone(),
@@ -255,6 +327,10 @@ impl Broker {
 
     /// Native picker revision, not an authorization credential. A later lock,
     /// revoke or target mutation invalidates an already displayed grant form.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "ToolError is the fixed MCP wire error set and carries no source by design"
+    )]
     pub fn grant_ticket(&self) -> Result<String> {
         let generation = self.revocation_epoch.load(Ordering::SeqCst);
         let revision = self.executor.revision()?;
@@ -273,6 +349,8 @@ impl Broker {
         self.grant_with_ticket(owner, label, targets, seconds, &ticket)
     }
 
+    /// Grants with manual approval against a previously issued ticket; errors when the
+    /// ticket is stale or the targets cannot be resolved.
     pub fn grant_with_ticket(
         &self,
         owner: &str,
@@ -312,7 +390,16 @@ impl Broker {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Grants with an explicit approval policy and timeout ceiling; errors when the
+    /// limits are out of range, the ticket is stale or a target cannot be resolved.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature mirrors the native grant UI contract; a params struct would be an API change"
+    )]
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "ToolError is the fixed MCP wire error set and carries no source by design"
+    )]
     pub fn grant_with_limits(
         &self,
         owner: &str,
@@ -455,6 +542,10 @@ impl Broker {
         }
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "connection leases must stay held until the connections are closed after the state lock is released"
+    )]
     fn sweep(&self) {
         let revision = self.executor.revision().ok();
         let now = Instant::now();
@@ -472,6 +563,10 @@ impl Broker {
         self.restore_access();
         // Never call Core while holding the broker state: exec callbacks acquire
         // this mutex while Core serializes dispatch with vault mutation.
+        #[expect(
+            clippy::needless_collect,
+            reason = "collecting releases the state lock before `valid()` calls into Core"
+        )]
         let connections: Vec<_> = lock(&self.state)
             .sessions
             .iter()
@@ -527,6 +622,18 @@ impl Broker {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "sequential protocol dispatch; splitting hides the state machine"
+    )]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the state guard must cover the grant check and the tool's state change atomically"
+    )]
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "ToolError is the fixed MCP wire error set and carries no source by design"
+    )]
     fn request(self: &Arc<Self>, owner: String, request: ToolRequest) -> Result<Value> {
         self.sweep();
         if let ToolRequest::GetAccessStatus(r) = &request {
@@ -544,7 +651,7 @@ impl Broker {
                 .or_else(|| grant.is_none().then_some(ToolError::GrantRequired));
             let max = grant.map_or(600_000, |g| g.max_timeout_ms);
             return Ok(
-                json!({"status": error.map_or("ready".to_owned(), |e| serde_json::to_value(e).unwrap().as_str().unwrap().to_owned()),
+                json!({"status": error.map_or_else(|| "ready".to_owned(), error_code),
                 "message": error.map_or("Access is ready.", ToolError::message),
                 "approval_mode": grant.map(|g| g.approval_mode),
                 "remaining_seconds": grant.and_then(|g| g.until).map(|d| d.saturating_duration_since(Instant::now()).as_secs()),
@@ -555,18 +662,15 @@ impl Broker {
         }
         // Authentication alone never unlocks Core or creates a grant.
         let revision = self.executor.revision()?;
-        let _admission = if matches!(
+        let _admission = matches!(
             &request,
             ToolRequest::CloseSession(_) | ToolRequest::CancelCommand(_)
-        ) {
-            Some(
-                self.admission
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            )
-        } else {
-            None
-        };
+        )
+        .then(|| {
+            self.admission
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
         let mut state = lock(&self.state);
         let grant = state.grants.get(&owner).ok_or(ToolError::GrantRequired)?;
         if grant.revision != revision || grant.until.is_some_and(|until| Instant::now() >= until) {
@@ -574,7 +678,8 @@ impl Broker {
         }
         let epoch = grant.epoch.clone();
         match request {
-            ToolRequest::GetAccessStatus(_) => unreachable!("handled before grant gate"),
+            // Answered before the grant gate above; kept total without a panic.
+            ToolRequest::GetAccessStatus(_) => Err(ToolError::TargetUnavailable),
             ToolRequest::ListCommands(r) => {
                 if r.cursor.is_some() {
                     return Err(ToolError::TargetUnavailable);
@@ -582,10 +687,10 @@ impl Broker {
                 Ok(
                     json!({"commands": state.runs.iter().filter(|(_, r)| r.owner == owner).map(|(id,r)| {
                     let mut value = run_json(id,r);
-                    value["request_key"] = json!(r.key);
-                    value["command_preview"] = json!(r.command.chars().take(256).collect::<String>());
-                    value["exit_code"] = json!(r.exit_code);
-                    value["elapsed_ms"] = json!(r.started_at.map_or(0, |start| r.finished_at.unwrap_or_else(Instant::now).saturating_duration_since(start).as_millis() as u64));
+                    set_field(&mut value, "request_key", json!(r.key));
+                    set_field(&mut value, "command_preview", json!(r.command.chars().take(256).collect::<String>()));
+                    set_field(&mut value, "exit_code", json!(r.exit_code));
+                    set_field(&mut value, "elapsed_ms", json!(r.started_at.map_or(0, |start| millis(r.finished_at.unwrap_or_else(Instant::now).saturating_duration_since(start)))));
                     value
                 }).collect::<Vec<_>>()}),
                 )
@@ -647,31 +752,29 @@ impl Broker {
                     .map_err(|_| ToolError::Busy)?;
                 let sid = id();
                 let stop = Arc::new(AtomicBool::new(false));
-                state.sessions.insert(
-                    sid.clone(),
-                    Session {
-                        created_unix_ms: unix_ms(),
-                        connected_at: None,
-                        connected_unix_ms: None,
-                        owner: owner.clone(),
-                        epoch,
-                        target: r.target_id,
-                        request_key: r.request_key,
-                        state: "connecting",
-                        error: None,
-                        cancel: stop.clone(),
-                        connection: None,
-                        idle: Instant::now(),
-                        expires_at: deadline.map(|deadline| {
-                            SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs()
-                                + deadline.saturating_duration_since(Instant::now()).as_secs()
-                        }),
-                    },
-                );
-                let result = session_json(&sid, &state.sessions[&sid]);
+                let session = Session {
+                    created_unix_ms: unix_ms(),
+                    connected_at: None,
+                    connected_unix_ms: None,
+                    owner: owner.clone(),
+                    epoch,
+                    target: r.target_id,
+                    request_key: r.request_key,
+                    state: "connecting",
+                    error: None,
+                    cancel: stop.clone(),
+                    connection: None,
+                    idle: Instant::now(),
+                    expires_at: deadline.map(|deadline| {
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            + deadline.saturating_duration_since(Instant::now()).as_secs()
+                    }),
+                };
+                let result = session_json(&sid, &session);
+                state.sessions.insert(sid.clone(), session);
                 let broker = self.clone();
                 std::thread::spawn(move || {
                     let connection = broker.connect(&target, stop.clone(), deadline, &attribution);
@@ -751,7 +854,8 @@ impl Broker {
                             s.target.clone(),
                             r.command,
                             r.request_key,
-                            r.timeout_ms.unwrap_or(120_000.min(grant.max_timeout_ms)),
+                            r.timeout_ms
+                                .unwrap_or_else(|| 120_000.min(grant.max_timeout_ms)),
                             r.cwd,
                             r.stdin,
                             r.env,
@@ -762,7 +866,8 @@ impl Broker {
                         r.target_id,
                         r.command,
                         r.request_key,
-                        r.timeout_ms.unwrap_or(120_000.min(grant.max_timeout_ms)),
+                        r.timeout_ms
+                            .unwrap_or_else(|| 120_000.min(grant.max_timeout_ms)),
                         r.cwd,
                         r.stdin,
                         r.env,
@@ -798,7 +903,7 @@ impl Broker {
                     return Err(ToolError::TargetUnavailable);
                 }
                 if let Some(sid) = &session {
-                    if state.sessions[sid].state != "ready" {
+                    if state.sessions.get(sid).is_none_or(|s| s.state != "ready") {
                         return Err(ToolError::SessionNotReady);
                     }
                     if state
@@ -846,8 +951,8 @@ impl Broker {
                         approval_until: Instant::now() + Duration::from_secs(120),
                         finished_at: None,
                         started_at: None,
-                        recording: None,
                         exit_code: None,
+                        recording: None,
                         output: output::OutputBuffer::default(),
                         bytes: 0,
                         truncated: false,
@@ -917,6 +1022,7 @@ impl Broker {
         )
     }
 
+    /// Cancels a run from the native UI on behalf of its owner; errors when the run is unknown.
     pub fn cancel_command(self: &Arc<Self>, id: &str) -> Result<Value> {
         let owner = lock(&self.state)
             .runs
@@ -929,23 +1035,82 @@ impl Broker {
         )
     }
 
+    /// Snapshot of saved consents, live grants, sessions and runs for the native review UI.
     pub fn review(&self) -> Value {
         self.sweep();
         let saved_access = self.saved_access_review();
         let state = lock(&self.state);
+        let target_of = |owner: &str, target: &str| {
+            state
+                .grants
+                .get(owner)
+                .and_then(|g| g.targets.get(target))
+                .map_or(Value::Null, |t| json!(&t.info))
+        };
+        let grants = state.grants.iter().map(|(owner, g)| {
+            json!({
+                "integration_id": owner,
+                "label": g.label,
+                "approval_mode": g.approval_mode,
+                "max_timeout_ms": g.max_timeout_ms,
+                "remaining_seconds": g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),
+                "targets": g.targets.values().map(|t| &t.info).collect::<Vec<_>>()
+            })
+        });
+        let sessions = state.sessions.iter().map(|(id, s)| {
+            let mut v = session_json(id, s);
+            set_field(&mut v, "created_unix_ms", json!(s.created_unix_ms));
+            set_field(&mut v, "connected_unix_ms", json!(s.connected_unix_ms));
+            set_field(
+                &mut v,
+                "connected_elapsed_ms",
+                json!(s
+                    .connected_at
+                    .filter(|_| s.state == "ready")
+                    .map(|at| millis(at.elapsed()))),
+            );
+            set_field(&mut v, "integration_id", json!(s.owner));
+            set_field(&mut v, "target", target_of(&s.owner, &s.target));
+            set_field(
+                &mut v,
+                "idle_seconds",
+                json!(Duration::from_secs(300)
+                    .saturating_sub(s.idle.elapsed())
+                    .as_secs()),
+            );
+            v
+        });
+        let runs = state.runs.iter().map(|(id, r)| {
+            let mut v = native_run_json(id, r);
+            set_field(&mut v, "integration_id", json!(r.owner));
+            set_field(
+                &mut v,
+                "recording",
+                r.recording.as_ref().map_or(Value::Null, |r| r.review()),
+            );
+            set_field(&mut v, "target", target_of(&r.owner, &r.target));
+            if r.state == "awaiting_approval" {
+                set_field(&mut v, "stdin", json!(r.stdin.as_ref().map(|s| s.as_str())));
+                set_field(&mut v, "env", json!(&*r.env));
+                set_field(&mut v, "cwd", json!(r.cwd.as_ref().map(|cwd| cwd.as_str())));
+                set_field(&mut v, "command", json!(&*r.command));
+                set_field(&mut v, "timeout_ms", json!(r.timeout_ms));
+                set_field(
+                    &mut v,
+                    "approval_remaining_seconds",
+                    json!(r
+                        .approval_until
+                        .saturating_duration_since(Instant::now())
+                        .as_secs()),
+                );
+            }
+            v
+        });
         json!({
-            "saved_access":saved_access,
-            "grants":state.grants.iter().map(|(owner,g)|json!({"integration_id":owner,"label":g.label,"approval_mode":g.approval_mode,"max_timeout_ms":g.max_timeout_ms,"remaining_seconds":g.until.map(|until| until.saturating_duration_since(Instant::now()).as_secs()),"targets":g.targets.values().map(|t|&t.info).collect::<Vec<_>>()})).collect::<Vec<_>>(),
-            "sessions":state.sessions.iter().map(|(id,s)|{let mut v=session_json(id,s);v["created_unix_ms"]=json!(s.created_unix_ms);v["connected_unix_ms"]=json!(s.connected_unix_ms);v["connected_elapsed_ms"]=json!(s.connected_at.filter(|_| s.state=="ready").map(|at|at.elapsed().as_millis() as u64));v["integration_id"]=json!(s.owner);v["target"]=state.grants.get(&s.owner).and_then(|g|g.targets.get(&s.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);v["idle_seconds"]=json!(Duration::from_secs(300).saturating_sub(s.idle.elapsed()).as_secs());v}).collect::<Vec<_>>(),
-            "runs":state.runs.iter().map(|(id,r)|{
-                let mut v=native_run_json(id,r);v["integration_id"]=json!(r.owner);
-                v["recording"]=r.recording.as_ref().map(|r|r.review()).unwrap_or(Value::Null);
-                v["target"]=state.grants.get(&r.owner).and_then(|g|g.targets.get(&r.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);
-                if r.state=="awaiting_approval" {
-                    v["stdin"]=json!(r.stdin.as_ref().map(|s|s.as_str()));v["env"]=json!(&*r.env);v["cwd"]=json!(r.cwd.as_ref().map(|cwd| cwd.as_str()));v["command"]=json!(&*r.command);v["timeout_ms"]=json!(r.timeout_ms);v["approval_remaining_seconds"]=json!(r.approval_until.saturating_duration_since(Instant::now()).as_secs());
-                    v["target"]=state.grants.get(&r.owner).and_then(|g|g.targets.get(&r.target)).map(|t|json!(&t.info)).unwrap_or(Value::Null);
-                } v
-            }).collect::<Vec<_>>()
+            "saved_access": saved_access,
+            "grants": grants.collect::<Vec<_>>(),
+            "sessions": sessions.collect::<Vec<_>>(),
+            "runs": runs.collect::<Vec<_>>()
         })
     }
 
@@ -1033,28 +1198,49 @@ impl Broker {
             }
             Err(e) => return Err(e),
         };
-        value["has_more"] = json!(
-            value["output_error"].is_null()
-                && run
-                    .output
-                    .has_more(value["next_cursor"].as_str().unwrap_or("0"))
+        let has_more = field(&value, "output_error").is_null()
+            && run
+                .output
+                .has_more(field(&value, "next_cursor").as_str().unwrap_or("0"));
+        set_field(&mut value, "has_more", json!(has_more));
+        set_field(&mut value, "command", json!(&*run.command));
+        set_field(
+            &mut value,
+            "cwd",
+            json!(run.cwd.as_deref().map(String::as_str)),
         );
-        value["command"] = json!(&*run.command);
-        value["cwd"] = json!(run.cwd.as_deref().map(std::string::String::as_str));
-        value["stdin"] = json!(run.stdin.as_deref().map(std::string::String::as_str));
-        value["env"] = json!(&*run.env);
-        value["timeout_ms"] = json!(run.timeout_ms);
-        value["state"] = json!(run.state);
-        value["error"] = json!(run.error);
-        value["run_id"] = json!(run_id);
-        value["exit_code"] = json!(run.exit_code);
+        set_field(
+            &mut value,
+            "stdin",
+            json!(run.stdin.as_deref().map(String::as_str)),
+        );
+        set_field(&mut value, "env", json!(&*run.env));
+        set_field(&mut value, "timeout_ms", json!(run.timeout_ms));
+        set_field(&mut value, "state", json!(run.state));
+        set_field(&mut value, "error", json!(run.error));
+        set_field(&mut value, "run_id", json!(run_id));
+        set_field(&mut value, "exit_code", json!(run.exit_code));
         Ok(value)
     }
 
+    /// Records the user's decision on a run awaiting manual approval and starts it when
+    /// allowed; errors when the approval has expired or the grant no longer covers it.
     pub fn approve(self: &Arc<Self>, run_id: &str, allowed: bool) -> Result<()> {
         self.start_run(run_id, allowed, ApprovalMode::Manual)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "sequential authorize-connect-exec-publish steps; splitting hides the state machine"
+    )]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "connection leases and the state guard must span the authorization and the run's publication"
+    )]
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "ToolError is the fixed MCP wire error set and carries no source by design"
+    )]
     fn start_run(self: &Arc<Self>, run_id: &str, allowed: bool, mode: ApprovalMode) -> Result<()> {
         self.sweep();
         let mut state = lock(&self.state);
@@ -1072,7 +1258,10 @@ impl Broker {
         }
         if !allowed {
             finish(
-                state.runs.get_mut(run_id).unwrap(),
+                state
+                    .runs
+                    .get_mut(run_id)
+                    .ok_or(ToolError::ApprovalExpired)?,
                 "denied",
                 Some(ToolError::ApprovalDenied),
             );
@@ -1138,7 +1327,10 @@ impl Broker {
             &run.env,
         );
         let rid = run_id.to_owned();
-        let run = state.runs.get_mut(run_id).unwrap();
+        let run = state
+            .runs
+            .get_mut(run_id)
+            .ok_or(ToolError::ApprovalExpired)?;
         run.state = if connection.is_none() {
             "connecting"
         } else {
@@ -1171,18 +1363,20 @@ impl Broker {
                 run.recording = recording.clone();
             }
             let implicit = connection.is_none();
-            let connection = match connection {
-                Some(c) => Ok(c),
-                None => broker
+            let connection = match (connection, slot) {
+                (Some(c), _) => Ok(c),
+                (None, Some((slot, owner_slot))) => broker
                     .connect(&target, stop.clone(), Some(deadline), &attribution)
                     .map(|c| {
-                        let (slot, owner_slot) = slot.expect("implicit slots");
                         Arc::new(LiveConnection {
                             inner: c,
                             _slot: slot,
                             _owner_slot: owner_slot,
                         })
                     }),
+                // A one-shot run always reserves its slots above; without them there
+                // is nothing to connect with.
+                (None, None) => Err(ToolError::OutcomeUnknown),
             };
             let result = (|| -> Result<()> {
                 let c = connection.as_ref().map_err(|e| *e)?;
@@ -1205,9 +1399,9 @@ impl Broker {
                     &command,
                     stdin.as_ref().map(|s| s.as_str()),
                     Arc::new(RunSink {
+                        recording: recording.clone(),
                         broker: Arc::downgrade(&broker),
                         run: rid.clone(),
-                        recording: recording.clone(),
                     }),
                     stop.clone(),
                     deadline,
@@ -1268,22 +1462,33 @@ impl Broker {
     }
 }
 
+/// What an MCP call with `wait_ms` keeps polling for after the first answer.
+enum Wait {
+    Session,
+    Run,
+    Output(unissh_mcp::contract::GetCommand),
+}
+
 impl Backend for Broker {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "ToolError is the fixed MCP wire error set and carries no source by design"
+    )]
     fn call(&self, integration: IntegrationId, request: ToolRequest) -> BackendResult<'_> {
         let broker = self.weak.upgrade();
         Box::pin(async move {
             let broker = broker.ok_or(ToolError::GrantExpired)?;
-            enum Wait {
-                Session,
-                Run,
-                Output(unissh_mcp::contract::GetCommand),
-            }
             let (wait, ms) = match &request {
                 ToolRequest::OpenSession(r) => (Some(Wait::Session), r.wait_ms),
                 ToolRequest::RunCommand(RunCommand::Existing(r)) => (Some(Wait::Run), r.wait_ms),
                 ToolRequest::RunCommand(RunCommand::OneShot(r)) => (Some(Wait::Run), r.wait_ms),
                 ToolRequest::GetCommand(r) => (Some(Wait::Output(r.clone())), r.wait_ms),
-                _ => (None, None),
+                ToolRequest::GetAccessStatus(_)
+                | ToolRequest::ListCommands(_)
+                | ToolRequest::ListTargets(_)
+                | ToolRequest::ListSessions(_)
+                | ToolRequest::CloseSession(_)
+                | ToolRequest::CancelCommand(_) => (None, None),
             };
             let until = tokio::time::Instant::now() + Duration::from_millis(ms.unwrap_or(0).into());
             let call_broker = broker.clone();
@@ -1298,22 +1503,24 @@ impl Backend for Broker {
             };
             let done = |result: &Value| {
                 matches!(
-                    result["state"].as_str(),
+                    field(result, "state").as_str(),
                     Some("completed" | "failed" | "cancelled" | "denied")
                 )
             };
             match &wait {
-                Wait::Session if first["state"] != "connecting" => return Ok(first),
-                Wait::Run if first["state"] == "awaiting_approval" || done(&first) => {
+                Wait::Session if field(&first, "state") != "connecting" => return Ok(first),
+                Wait::Run if field(&first, "state") == "awaiting_approval" || done(&first) => {
                     return Ok(first)
                 }
                 Wait::Output(_)
-                    if first["chunks"].as_array().is_some_and(|c| !c.is_empty())
+                    if field(&first, "chunks")
+                        .as_array()
+                        .is_some_and(|c| !c.is_empty())
                         || done(&first) =>
                 {
                     return Ok(first)
                 }
-                _ => {}
+                Wait::Session | Wait::Run | Wait::Output(_) => {}
             }
             loop {
                 tokio::time::sleep_until(
@@ -1327,7 +1534,7 @@ impl Backend for Broker {
                         cursor: None,
                     }),
                     Wait::Run => ToolRequest::GetCommand(unissh_mcp::contract::GetCommand {
-                        run_id: first["run_id"]
+                        run_id: field(&first, "run_id")
                             .as_str()
                             .ok_or(ToolError::OutcomeUnknown)?
                             .into(),
@@ -1341,16 +1548,16 @@ impl Backend for Broker {
                     .map_err(|_| ToolError::OutcomeUnknown)??;
                 let ready = match &wait {
                     Wait::Session => {
-                        result = result["sessions"]
+                        result = field(&result, "sessions")
                             .as_array()
                             .and_then(|sessions| {
                                 sessions
                                     .iter()
-                                    .find(|s| s["session_id"] == first["session_id"])
+                                    .find(|s| field(s, "session_id") == field(&first, "session_id"))
                             })
                             .cloned()
                             .ok_or(ToolError::SessionClosed)?;
-                        result["state"] != "connecting"
+                        field(&result, "state") != "connecting"
                     }
                     Wait::Run => done(&result),
                     Wait::Output(_) => result != first,
@@ -1377,23 +1584,36 @@ fn finish(run: &mut Run, state: &'static str, error: Option<ToolError>) {
     run.finished_at = Some(Instant::now());
 }
 fn unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    millis(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default(),
+    )
 }
 fn native_run_json(id: &str, run: &Run) -> Value {
     let mut value = run_json(id, run);
-    value["command_preview"] = json!(run.command.chars().take(256).collect::<String>());
-    value["cwd"] = json!(run.cwd.as_deref().map(std::string::String::as_str));
-    value["created_unix_ms"] = json!(run.created_unix_ms);
-    value["started_unix_ms"] = json!(run.started_unix_ms);
-    value["elapsed_ms"] = json!(run.started_at.map(|at| run
-        .finished_at
-        .unwrap_or_else(Instant::now)
-        .saturating_duration_since(at)
-        .as_millis() as u64));
-    value["exit_code"] = json!(run.exit_code);
+    set_field(
+        &mut value,
+        "command_preview",
+        json!(run.command.chars().take(256).collect::<String>()),
+    );
+    set_field(
+        &mut value,
+        "cwd",
+        json!(run.cwd.as_deref().map(String::as_str)),
+    );
+    set_field(&mut value, "created_unix_ms", json!(run.created_unix_ms));
+    set_field(&mut value, "started_unix_ms", json!(run.started_unix_ms));
+    set_field(
+        &mut value,
+        "elapsed_ms",
+        json!(run.started_at.map(|at| millis(
+            run.finished_at
+                .unwrap_or_else(Instant::now)
+                .saturating_duration_since(at)
+        ))),
+    );
+    set_field(&mut value, "exit_code", json!(run.exit_code));
     value
 }
 fn session_json(id: &str, s: &Session) -> Value {
@@ -1436,7 +1656,10 @@ impl Output for RunSink {
             .len()
             .min(remaining)
             .min(OUTPUT_PER_RUN.saturating_sub(run.bytes));
-        let saved = run.output.push(stderr, &bytes[..kept]);
+        let Some(kept_bytes) = bytes.get(..kept) else {
+            return;
+        };
+        let saved = run.output.push(stderr, kept_bytes);
         run.bytes += saved;
         run.truncated |= saved < bytes.len();
         state.retained_bytes += saved;
@@ -1506,11 +1729,11 @@ mod deadlines {
         fn resolve(&self, v: &str, p: &str) -> Result<Target> {
             Ok(Target {
                 info: TargetInfo {
+                    vault_id: v.into(),
+                    profile_id: p.into(),
                     vault: "Test vault".into(),
                     groups: vec![],
                     tags: vec![],
-                    vault_id: v.into(),
-                    profile_id: p.into(),
                     label: "fixture".into(),
                     host: "localhost".into(),
                     port: 22,
@@ -1558,11 +1781,15 @@ mod deadlines {
     fn native_approval_deadline_cannot_be_extended_by_polling() {
         let (b, rid) = pending();
         lock(&b.state).runs.get_mut(&rid).unwrap().approval_until =
-            Instant::now() - Duration::from_secs(1);
+            Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
         assert_eq!(b.approve(&rid, true), Err(ToolError::ApprovalExpired));
         assert_eq!(b.review()["runs"][0]["state"], "denied");
     }
     #[test]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard deliberately spans both mutations of the run"
+    )]
     fn output_survives_elapsed_time_and_preserves_cursors_until_revocation() {
         let (b, rid) = pending();
         let sink = RunSink {
@@ -1575,7 +1802,11 @@ mod deadlines {
             let mut state = lock(&b.state);
             let run = state.runs.get_mut(&rid).unwrap();
             finish(run, "failed", Some(ToolError::OutcomeUnknown));
-            run.finished_at = Some(Instant::now() - Duration::from_secs(24 * 3600));
+            run.finished_at = Some(
+                Instant::now()
+                    .checked_sub(Duration::from_secs(24 * 3600))
+                    .unwrap(),
+            );
         }
         let details = b.inspect_command("a", &rid, None).unwrap();
         assert_eq!(details["error"], "outcome_unknown");
@@ -1599,7 +1830,7 @@ mod deadlines {
     fn expired_lease_drops_output_before_housekeeping_runs() {
         let (b, rid) = pending();
         lock(&b.state).grants.get_mut("a").unwrap().until =
-            Some(Instant::now() - Duration::from_secs(1));
+            Some(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
         RunSink {
             recording: None,
             broker: Arc::downgrade(&b),
@@ -1611,6 +1842,10 @@ mod deadlines {
         assert!(b.review()["grants"].as_array().unwrap().is_empty());
     }
     #[test]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "`b` is the broker under test and is used until the last assertion"
+    )]
     fn stale_expiry_work_cannot_revoke_replaced_or_currently_valid_grants() {
         let b = Broker::new(Arc::new(ExecutorFixture));
         b.grant("a", "old".into(), vec![("v".into(), "p".into())], 30)
@@ -1630,7 +1865,7 @@ mod deadlines {
         assert_eq!(b.review()["grants"][0]["label"], "replacement");
         // Genuine expiration is still enforced by that same admission path.
         lock(&b.state).grants.get_mut("a").unwrap().until =
-            Some(Instant::now() - Duration::from_secs(1));
+            Some(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
         b.revoke_expired("a", &current);
         assert!(b.review()["grants"].as_array().unwrap().is_empty());
     }

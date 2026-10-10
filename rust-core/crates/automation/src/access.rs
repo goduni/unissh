@@ -1,6 +1,8 @@
 //! Saved native consent, separate from live grants and SSH execution.
 use super::*;
 
+/// A user's saved consent for one integration, persisted by the executor and
+/// restored into a live grant after unlock when its targets are unchanged.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SavedAccess {
@@ -19,7 +21,10 @@ fn now() -> u64 {
         .as_secs()
 }
 impl Broker {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per persisted consent attribute; a params struct would duplicate SavedAccess"
+    )]
     pub(super) fn save_grant(
         &self,
         owner: &str,
@@ -75,6 +80,7 @@ impl Broker {
     pub fn resume(&self) {
         self.resume_if_current(self.lifecycle_epoch());
     }
+    /// Current lock/revocation generation, to pass to [`Self::resume_if_current`].
     pub fn lifecycle_epoch(&self) -> u64 {
         self.revocation_epoch.load(Ordering::SeqCst)
     }
@@ -160,23 +166,25 @@ impl Broker {
             grants.push((
                 consent.integration_id,
                 Grant {
-                    label: consent.label,
-                    approval_mode: consent.approval_mode,
                     max_timeout_ms: consent.max_timeout_ms,
+                    approval_mode: consent.approval_mode,
+                    slots: Arc::new(Semaphore::new(4)),
+                    epoch: id(),
+                    label: consent.label,
+                    revision,
                     until,
                     targets,
-                    revision,
-                    epoch: id(),
-                    slots: Arc::new(Semaphore::new(4)),
                 },
             ));
         }
         if self.executor.revision().ok() != Some(revision) {
             return;
         }
-        let mut state = lock(&self.state);
-        for (owner, grant) in grants.into_iter().take(GRANTS_TOTAL) {
-            state.grants.entry(owner).or_insert(grant);
+        {
+            let mut state = lock(&self.state);
+            for (owner, grant) in grants.into_iter().take(GRANTS_TOTAL) {
+                state.grants.entry(owner).or_insert(grant);
+            }
         }
         *restored = Some(revision);
     }

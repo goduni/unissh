@@ -1,3 +1,8 @@
+//! Native MCP command recordings: capture, retention and saving into the vault.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 use base64::{engine::general_purpose::STANDARD, Engine};
 use unissh_ffi::{ConnectionProfile, Core, ProfileAuth};
 
@@ -84,9 +89,7 @@ fn lock_flushes_partial_capture_and_late_handle_cannot_write_after_unlock() {
             "sleep 30",
             None,
             Some("saved input"),
-            &[("VALUE".into(), "saved environment".into())]
-                .into_iter()
-                .collect(),
+            &std::collections::BTreeMap::from([("VALUE".into(), "saved environment".into())]),
         )
         .unwrap()
         .unwrap();
@@ -231,7 +234,7 @@ fn native_capture_preferences_persist_and_inputs_remain_in_encrypted_recordings(
             "cat",
             None,
             Some("hello"),
-            &[("VALUE".into(), "literal".into())].into_iter().collect(),
+            &std::collections::BTreeMap::from([("VALUE".into(), "literal".into())]),
         )
         .unwrap()
         .unwrap();

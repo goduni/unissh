@@ -1,4 +1,4 @@
-use super::{run_json, Result, Run, ToolError, PAGE_BYTES};
+use super::{run_json, set_field, Result, Run, ToolError, PAGE_BYTES};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 
@@ -25,27 +25,39 @@ impl OutputBuffer {
         if self.chunks.len() >= 4094 || bytes.is_empty() {
             return 0;
         }
-        let stream = usize::from(stderr);
-        let mut data = std::mem::take(&mut self.pending[stream]);
+        let [stdout_pending, stderr_pending] = &mut self.pending;
+        let pending = if stderr {
+            stderr_pending
+        } else {
+            stdout_pending
+        };
+        let mut data = std::mem::take(pending);
         let prior = data.len();
         data.extend_from_slice(bytes);
         let mut offset = 0;
         while offset < data.len() && self.chunks.len() < 4094 {
             let end = (offset + 16 * 1024).min(data.len());
-            let part = &data[offset..end];
+            // `offset < end <= data.len()`, so the range is always in bounds.
+            let Some(part) = data.get(offset..end) else {
+                break;
+            };
             let complete = match std::str::from_utf8(part) {
                 Err(error) if error.error_len().is_none() => error.valid_up_to(),
-                _ => part.len(),
+                Err(_) | Ok(_) => part.len(),
             };
             if complete == 0 {
                 // At most three bytes, only at the end of the input; otherwise
                 // the full 16 KiB slice necessarily contains a complete scalar.
-                self.pending[stream].extend_from_slice(part);
+                pending.extend_from_slice(part);
                 offset = end;
             } else {
+                // `valid_up_to()` never exceeds the slice it was computed on.
+                let Some(text) = part.get(..complete) else {
+                    break;
+                };
                 self.chunks.push(Chunk {
                     stderr,
-                    data: part[..complete].to_vec(),
+                    data: text.to_vec(),
                 });
                 offset += complete;
             }
@@ -64,6 +76,10 @@ impl OutputBuffer {
     }
 }
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "an unparsable cursor is reported as the fixed OutputExpired wire error"
+)]
 pub(super) fn page(id: &str, run: &Run, cursor: Option<&str>) -> Result<Value> {
     let cursor = cursor
         .unwrap_or("0")
@@ -91,10 +107,10 @@ pub(super) fn page(id: &str, run: &Run, cursor: Option<&str>) -> Result<Value> {
         next += 1;
     }
     let mut result = run_json(id, run);
-    result["chunks"] = json!(chunks);
-    result["next_cursor"] = json!(next.to_string());
-    result["truncated"] = json!(run.truncated);
-    result["exit_code"] = json!(run.exit_code);
+    set_field(&mut result, "chunks", json!(chunks));
+    set_field(&mut result, "next_cursor", json!(next.to_string()));
+    set_field(&mut result, "truncated", json!(run.truncated));
+    set_field(&mut result, "exit_code", json!(run.exit_code));
     Ok(result)
 }
 

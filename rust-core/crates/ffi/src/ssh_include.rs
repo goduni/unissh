@@ -146,7 +146,7 @@ impl IncludeLoader {
         if spec.is_empty() {
             return Vec::new();
         }
-        let resolved = match spec.strip_prefix("~/").or(spec.strip_prefix("~\\")) {
+        let resolved = match spec.strip_prefix("~/").or_else(|| spec.strip_prefix("~\\")) {
             // `~user/...` is not resolved: it needs the passwd database, and
             // guessing a sibling of $HOME would read the wrong person's files.
             Some(rest) => match &self.home {

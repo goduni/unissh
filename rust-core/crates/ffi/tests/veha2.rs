@@ -3,6 +3,12 @@
 //!
 //! Hard constraint: the new methods do NOT hand out plaintext private
 //! keys — only public keys/fingerprints/signatures/opaque blobs.
+#![expect(
+    clippy::unwrap_used,
+    clippy::unwrap_in_result,
+    clippy::missing_assert_message,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::sync::Arc;
 use unissh_ffi::{Core, FfiMemberRole};
@@ -59,12 +65,12 @@ fn membership_add_list_fingerprint_pin() {
     core.add_member(
         vid.clone(),
         member_ed.clone(),
-        member_x.clone(),
+        member_x,
         FfiMemberRole::Editor,
     )
     .unwrap();
 
-    let members = core.list_members(vid.clone()).unwrap();
+    let members = core.list_members(vid).unwrap();
     // owner (Admin) + new member (Editor)
     assert_eq!(members.len(), 2);
     assert!(members
@@ -111,7 +117,7 @@ fn set_personal_vault_rejects_shared_vault() {
     )
     .unwrap();
     assert_eq!(core.list_members(vid.clone()).unwrap().len(), 2);
-    assert!(core.set_personal_vault(vid.clone()).is_err());
+    assert!(core.set_personal_vault(vid).is_err());
 }
 
 #[test]
@@ -146,13 +152,8 @@ fn rotate_vk_and_purge_cloud_vault() {
     // owner (Admin) + bob (Editor)
     let bob_ed = "44".repeat(32);
     let bob_x = "55".repeat(32);
-    core.add_member(
-        vid.clone(),
-        bob_ed.clone(),
-        bob_x.clone(),
-        FfiMemberRole::Editor,
-    )
-    .unwrap();
+    core.add_member(vid.clone(), bob_ed.clone(), bob_x, FfiMemberRole::Editor)
+        .unwrap();
 
     // rotation: keep ONLY the owner (revoke bob). The owner is always retained
     // by the core as Admin → we pass an empty list of "additional remaining members".
@@ -168,7 +169,7 @@ fn rotate_vk_and_purge_cloud_vault() {
     assert!(members.iter().all(|m| m.ed25519_pub_hex != bob_ed));
 
     // purge → the vault disappears from the list
-    core.purge_vault(vid.clone()).unwrap();
+    core.purge_vault(vid).unwrap();
     let vaults = core.list_vaults().unwrap();
     assert!(vaults.iter().all(|v| v.name != "R"));
 }
@@ -193,7 +194,7 @@ fn identity_account_id_registration_and_server_auth() {
     let sig = core
         .sign_server_challenge(
             "vault.example.com".to_owned(),
-            aid1.clone(),
+            aid1,
             "device-1".to_owned(),
             "key-1".to_owned(),
             b"server-nonce".to_vec(),
@@ -240,7 +241,7 @@ fn cache_policy_get_set_and_audit() {
     let entry = b"signed-audit-event".to_vec();
     let sig = vec![7_u8; 67];
     let author = "66".repeat(32);
-    core.audit_append(vid.clone(), entry.clone(), sig.clone(), author.clone())
+    core.audit_append(vid, entry.clone(), sig, author.clone())
         .unwrap();
     let entries = core.audit_query(0).unwrap();
     assert_eq!(entries.len(), 1);
@@ -454,9 +455,7 @@ fn local_unlock_rejects_stale_sidecar() {
     // with the correct old password → refused as a rollback (FfiError::Other), not InvalidCredentials.
     core.lock();
     std::fs::write(dir.path().join("keyset.bin"), &stale_blob).unwrap();
-    let err = core
-        .unlock(Some("pw1".to_owned()), secret.clone())
-        .unwrap_err();
+    let err = core.unlock(Some("pw1".to_owned()), secret).unwrap_err();
     assert!(
         matches!(err, unissh_ffi::FfiError::Other { .. }),
         "a stale sidecar must be rejected (rollback), got {err:?}"
@@ -504,9 +503,7 @@ fn onboarding_path_b_pake_device_to_device() {
     // And the keyset B wrote to disk really unlocks with this shared key after a
     // "restart" (a fresh Core on the same files) — otherwise the device would be locked out.
     let core_b2 = new_core(dir_b.path());
-    core_b2
-        .unlock(Some("pw-b".to_owned()), sk_b.clone())
-        .unwrap();
+    core_b2.unlock(Some("pw-b".to_owned()), sk_b).unwrap();
     assert!(core_b2.is_unlocked());
 
     // wrong code → ConfirmationFailed somewhere along the confirm path
@@ -520,10 +517,13 @@ fn onboarding_path_b_pake_device_to_device() {
     let init3 = OnboardInitiatorHandle::start(code.clone());
     let resp3 = OnboardResponderHandle::respond(code, init3.msg()).unwrap();
     let m2b = resp3.msg();
-    let _ = core_a.onboard_confirm_and_seal(init3.clone(), m2b.clone(), sk_a.clone());
-    assert!(core_a
-        .onboard_confirm_and_seal(init3, m2b, sk_a.clone())
-        .is_err());
+    if core_a
+        .onboard_confirm_and_seal(init3.clone(), m2b.clone(), sk_a.clone())
+        .is_err()
+    {
+        // Only the consumption of the handle matters here, not this outcome.
+    }
+    assert!(core_a.onboard_confirm_and_seal(init3, m2b, sk_a).is_err());
 }
 
 mod sync_backend {
@@ -647,7 +647,7 @@ fn new_ffi_methods_never_return_private_key_material() {
     // Returns of the new methods — public/opaque material.
     let aid = core.account_id().unwrap();
     let reg = core.build_registration().unwrap();
-    let members = core.list_members(vid.clone()).unwrap();
+    let members = core.list_members(vid).unwrap();
     let fp = core.member_fingerprint("11".repeat(32)).unwrap();
     let sig = core
         .sign_server_challenge(
@@ -668,7 +668,7 @@ fn new_ffi_methods_never_return_private_key_material() {
     let resp = OnboardResponderHandle::respond(code, msg1).unwrap();
     let msg2 = resp.msg();
     let msg3 = core
-        .onboard_confirm_and_seal(init, msg2, secret_hex.clone())
+        .onboard_confirm_and_seal(init, msg2, secret_hex)
         .unwrap();
 
     // The OpenSSH private-key marker appears in none of the returns (incl. msg3).
@@ -751,10 +751,7 @@ fn new_methods_require_unlock() {
     ));
     assert!(matches!(core.account_id(), Err(FfiError::Locked)));
     assert!(matches!(core.build_registration(), Err(FfiError::Locked)));
-    assert!(matches!(
-        core.get_cache_policy(vid.clone()),
-        Err(FfiError::Locked)
-    ));
+    assert!(matches!(core.get_cache_policy(vid), Err(FfiError::Locked)));
     assert!(matches!(core.audit_query(0), Err(FfiError::Locked)));
     assert!(matches!(
         core.sign_server_challenge(
@@ -828,13 +825,8 @@ fn e2e_cloud_membership_lifecycle() {
         FfiMemberRole::Admin,
     )
     .unwrap();
-    core.add_member(
-        vid.clone(),
-        bob_ed.clone(),
-        bob_x.clone(),
-        FfiMemberRole::Editor,
-    )
-    .unwrap();
+    core.add_member(vid.clone(), bob_ed.clone(), bob_x, FfiMemberRole::Editor)
+        .unwrap();
 
     // 3) list: owner + alice + bob, fingerprints present
     let members = core.list_members(vid.clone()).unwrap();
@@ -850,7 +842,7 @@ fn e2e_cloud_membership_lifecycle() {
             vid.clone(),
             vec![unissh_ffi::RemainingMember {
                 ed25519_pub_hex: alice_ed.clone(),
-                x25519_pub_hex: alice_x.clone(),
+                x25519_pub_hex: alice_x,
                 role: FfiMemberRole::Admin,
             }],
         )
@@ -938,7 +930,7 @@ fn sign_server_challenge_raw_matches_string_variant_and_accepts_non_utf8() {
         .sign_server_challenge_raw(
             non_utf8.clone(),
             non_utf8.clone(),
-            non_utf8.clone(),
+            non_utf8,
             b"k".to_vec(),
             b"nonce".to_vec(),
             42,
@@ -1094,7 +1086,16 @@ fn sign_user_cert(user_pub: &str) -> String {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "one end-to-end scenario: building the vault graph and checking every moved reference is a single story"
+)]
 fn local_vault_moves_to_server_with_every_item_and_reference() {
+    // A Personal-auth host in the moved vault lives next to an identity in this
+    // private vault and a host in OTHER (see below).
+    const ME: &str = "me";
+    const OTHER: &str = "other";
     use std::collections::BTreeMap;
     use std::sync::Mutex;
     use sync_backend::AppTransport;
@@ -1208,8 +1209,6 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     // A Personal-auth host in the moved vault, reached through the bastion, bound to
     // an identity in another private vault; and a host in a third vault whose hop
     // goes through the moved vault's bastion.
-    const ME: &str = "me";
-    const OTHER: &str = "other";
     core.create_vault(s(ME), s("Me")).unwrap();
     core.save_password(s(ME), s("my-pw"), s("mine")).unwrap();
     core.save_identity(
@@ -1276,7 +1275,7 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
         host(
             "inner",
             ProfileAuth::PromptPassword,
-            vec![via_bastion.clone()],
+            vec![via_bastion],
             vec![],
         ),
     )
@@ -1405,6 +1404,12 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
                     pushed_items.insert(String::from_utf8(i.item_id).unwrap(), i.item_type);
                 }
             }
+            SyncObject::MembershipManifest(_)
+            | SyncObject::MembershipGrant(_)
+            | SyncObject::Audit(_)
+            | SyncObject::Keyset(_)
+            | SyncObject::AccountState(_) => {}
+            // non_exhaustive: nothing else is expected from this push either.
             _ => {}
         }
     }
@@ -1513,7 +1518,7 @@ fn moved_vault_rekeys_its_own_binding() {
         .unwrap();
 
     let binding = core
-        .get_binding(new_id.clone(), new_id.clone(), db.uid.clone())
+        .get_binding(new_id.clone(), new_id.clone(), db.uid)
         .unwrap()
         .expect("the binding is keyed by the new vault id");
     assert_eq!(binding.team_vault_id, new_id);

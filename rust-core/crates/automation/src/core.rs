@@ -5,7 +5,10 @@ use unissh_ffi::{
     AuthPrompter, CancelToken, Core, ExecObserver, FfiError,
 };
 
+/// Creates the native authentication prompter used while a broker connection is opened.
 pub trait PromptFactory: Send + Sync {
+    /// Returns a prompter attributed to `attribution` that gives up when `cancel` is
+    /// set or `deadline` passes.
     fn for_connection(
         &self,
         attribution: &str,
@@ -14,10 +17,17 @@ pub trait PromptFactory: Send + Sync {
     ) -> Arc<dyn AuthPrompter>;
 }
 
+/// [`Executor`] backed by the application's [`Core`].
 pub struct CoreExecutor {
+    /// The application's core facade.
     pub core: Arc<Core>,
+    /// Source of native authentication prompts for broker connections.
     pub prompts: Arc<dyn PromptFactory>,
 }
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "every other core failure deliberately collapses to TargetUnavailable; raw core errors never cross the MCP boundary"
+)]
 fn error(e: FfiError) -> ToolError {
     match e {
         FfiError::Locked => ToolError::Locked,
@@ -26,6 +36,10 @@ fn error(e: FfiError) -> ToolError {
         _ => ToolError::TargetUnavailable,
     }
 }
+#[expect(
+    clippy::map_err_ignore,
+    reason = "ToolError is the fixed MCP wire error set and carries no source by design"
+)]
 impl Executor for CoreExecutor {
     fn load_access(&self) -> Result<Vec<SavedAccess>> {
         self.core
@@ -33,7 +47,7 @@ impl Executor for CoreExecutor {
             .map_err(error)?
             .map(|bytes| serde_json::from_slice(&bytes).map_err(|_| ToolError::TargetUnavailable))
             .transpose()
-            .map(std::option::Option::unwrap_or_default)
+            .map(Option::unwrap_or_default)
     }
     fn save_access(&self, access: &[SavedAccess]) -> Result<()> {
         let bytes = serde_json::to_vec(access).map_err(|_| ToolError::TargetUnavailable)?;
@@ -58,7 +72,7 @@ impl Executor for CoreExecutor {
             .ok_or(ToolError::TargetUnavailable)?;
         self.core
             .automation_recording_with_input(target, run_id, application, command, cwd, stdin, env)
-            .map(|r| r.map(|r| r as Arc<dyn Recording>))
+            .map(|r| r.map(|r| -> Arc<dyn Recording> { r }))
             .map_err(error)
     }
     fn revision(&self) -> Result<[u64; 2]> {
@@ -71,11 +85,11 @@ impl Executor for CoreExecutor {
             .map_err(error)?;
         Ok(Target {
             info: TargetInfo {
+                vault_id: t.vault_id.clone(),
+                profile_id: t.profile_id.clone(),
                 vault: t.vault.clone(),
                 groups: t.groups.clone(),
                 tags: t.tags.clone(),
-                vault_id: t.vault_id.clone(),
-                profile_id: t.profile_id.clone(),
                 label: t.label.clone(),
                 host: t.host.clone(),
                 port: t.port,
@@ -114,11 +128,15 @@ impl Executor for CoreExecutor {
                 },
                 Some(prompt),
             )
-            .map(|c| Arc::new(CoreConnection(c)) as Arc<dyn Connection>)
+            .map(|c| -> Arc<dyn Connection> { Arc::new(CoreConnection(c)) })
             .map_err(error)
     }
 }
 struct CoreConnection(Arc<ManagedConnection>);
+#[expect(
+    clippy::map_err_ignore,
+    reason = "ToolError is the fixed MCP wire error set and carries no source by design"
+)]
 impl Connection for CoreConnection {
     fn exec(
         &self,
@@ -136,7 +154,7 @@ impl Connection for CoreConnection {
                 CancelToken::from_shared(cancel),
                 deadline,
             )
-            .map(|c| Arc::new(CoreCommand(c)) as Arc<dyn Command>)
+            .map(|c| -> Arc<dyn Command> { Arc::new(CoreCommand(c)) })
             .map_err(|_| ToolError::OutcomeUnknown)
     }
     fn valid(&self) -> bool {

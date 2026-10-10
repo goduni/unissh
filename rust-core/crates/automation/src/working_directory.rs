@@ -47,7 +47,7 @@ mod tests {
     fn real_shell_uses_literal_directory_and_does_not_keep_cwd() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("space ' $(touch injected); $HOME");
-        std::fs::create_dir(&dir).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
         let source = command("pwd", dir.to_str());
         let result = std::process::Command::new("sh")
             .arg("-c")
@@ -79,9 +79,7 @@ mod env_tests {
     #[test]
     fn shell_environment_is_literal_and_export_errors_prevent_execution() {
         let value = "hello ' $(echo injected); $HOME\nworld";
-        let env = [("VALUE".to_owned(), value.to_owned())]
-            .into_iter()
-            .collect();
+        let env = std::collections::BTreeMap::from([("VALUE".to_owned(), value.to_owned())]);
         let source = with_env("printf '%s' \"$VALUE\"", None, &env);
         let output = std::process::Command::new("sh")
             .args(["-c", &source])
@@ -89,7 +87,7 @@ mod env_tests {
             .unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, value.as_bytes());
-        let env = [("UID".to_owned(), "123".to_owned())].into_iter().collect();
+        let env = std::collections::BTreeMap::from([("UID".to_owned(), "123".to_owned())]);
         let source = with_env("printf should-not-run", None, &env);
         let output = std::process::Command::new("bash")
             .args(["-c", &source])

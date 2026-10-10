@@ -4,6 +4,14 @@
 //!
 //! Plus a check of a hard constraint: the private key never leaks to disk in
 //! plaintext and is never handed out.
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::missing_assert_message,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::net::TcpStream as StdTcp;
 use std::process::{Child, Command, Stdio};
@@ -13,6 +21,14 @@ use unissh_ffi::{
     AgentApprover, AgentCaller, AgentSignOrigin, AgentSignRequest, AuthMethod, Core, JumpHost,
     MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword, SystemAgent,
 };
+
+/// Discards the outcome of best-effort fixture plumbing (cleanup, proxying, killing a
+/// helper process): a failure there shows up in the test's own assertions.
+fn best_effort<T, E>(result: Result<T, E>) {
+    if result.is_err() {
+        // See the doc comment.
+    }
+}
 
 fn agent_auth(vault_id: &str, key_item_id: &str) -> AuthMethod {
     AuthMethod::Agent {
@@ -66,7 +82,7 @@ impl TestSshd {
             .expect("ssh-keygen")
             .success());
         std::fs::write(p.join("authorized_keys"), format!("{authorized_pubkey}\n")).unwrap();
-        let _ = std::fs::create_dir_all("/run/sshd");
+        best_effort(std::fs::create_dir_all("/run/sshd"));
         let cfg = p.join("sshd_config");
         std::fs::write(
             &cfg,
@@ -120,7 +136,7 @@ impl TestSshd {
             .expect("ssh-keygen")
             .success());
         std::fs::write(p.join("authorized_keys"), format!("{authorized_pubkey}\n")).unwrap();
-        let _ = std::fs::create_dir_all("/run/sshd");
+        best_effort(std::fs::create_dir_all("/run/sshd"));
         let port = free_port();
         let cfg = p.join("sshd_config");
         std::fs::write(
@@ -177,7 +193,7 @@ impl TestSshd {
             .expect("ssh-keygen")
             .success());
         std::fs::write(p.join("ca.pub"), format!("{ca_pubkey}\n")).unwrap();
-        let _ = std::fs::create_dir_all("/run/sshd");
+        best_effort(std::fs::create_dir_all("/run/sshd"));
         let port = free_port();
         let cfg = p.join("sshd_config");
         std::fs::write(
@@ -218,8 +234,8 @@ impl TestSshd {
 
 impl Drop for TestSshd {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        best_effort(self.child.kill());
+        best_effort(self.child.wait());
     }
 }
 
@@ -374,12 +390,12 @@ fn fake_socks5_counted(
                 let mut s2 = s.try_clone().unwrap();
                 let mut up2 = up.try_clone().unwrap();
                 let t = std::thread::spawn(move || {
-                    let _ = std::io::copy(&mut s2, &mut up2);
-                    let _ = up2.shutdown(std::net::Shutdown::Write);
+                    best_effort(std::io::copy(&mut s2, &mut up2));
+                    best_effort(up2.shutdown(std::net::Shutdown::Write));
                 });
-                let _ = std::io::copy(&mut up, &mut s);
-                let _ = s.shutdown(std::net::Shutdown::Write);
-                let _ = t.join();
+                best_effort(std::io::copy(&mut up, &mut s));
+                best_effort(s.shutdown(std::net::Shutdown::Write));
+                best_effort(t.join());
             });
         }
     });
@@ -1463,14 +1479,13 @@ fn local_forward_e2e() {
     let echo_port = echo.local_addr().unwrap().port();
     std::thread::spawn(move || {
         for stream in echo.incoming() {
-            let mut s = match stream {
-                Ok(s) => s,
-                Err(_) => break,
+            let Ok(mut s) = stream else {
+                break;
             };
             std::thread::spawn(move || {
                 let mut buf = [0_u8; 256];
                 if let Ok(n) = s.read(&mut buf) {
-                    let _ = s.write_all(&buf[..n]);
+                    best_effort(s.write_all(&buf[..n]));
                 }
             });
         }
@@ -1535,8 +1550,8 @@ fn sftp_e2e() {
         .unwrap();
 
     let base = format!("/tmp/unissh-ffi-sftp-{}", sshd.port);
-    let _ = sftp.remove(format!("{base}/f.bin"));
-    let _ = sftp.rmdir(base.clone());
+    best_effort(sftp.remove(format!("{base}/f.bin")));
+    best_effort(sftp.rmdir(base.clone()));
     sftp.mkdir(base.clone()).unwrap();
 
     let data = b"ffi sftp payload".repeat(1000);
@@ -1720,6 +1735,13 @@ mod pwserver {
     use russh::server::{self, Auth as ServerAuth, Msg, Session};
     use russh::{Channel, ChannelId};
 
+    /// Serves one accepted connection until the client leaves.
+    async fn serve(config: Arc<server::Config>, stream: tokio::net::TcpStream, handler: PwHandler) {
+        if let Ok(session) = server::run_stream(config, stream, handler).await {
+            super::best_effort(session.await);
+        }
+    }
+
     struct PwHandler {
         password: String,
     }
@@ -1811,11 +1833,7 @@ mod pwserver {
                     let handler = PwHandler {
                         password: password.clone(),
                     };
-                    tokio::spawn(async move {
-                        if let Ok(session) = server::run_stream(config, stream, handler).await {
-                            let _ = session.await;
-                        }
-                    });
+                    tokio::spawn(serve(config, stream, handler));
                 }
             });
             port
@@ -2090,6 +2108,13 @@ mod fleetserver {
     use russh::server::{self, Auth as ServerAuth, Msg, Session};
     use russh::{Channel, ChannelId};
 
+    /// Serves one accepted connection until the client leaves.
+    async fn serve(config: Arc<server::Config>, stream: tokio::net::TcpStream, handler: H) {
+        if let Ok(session) = server::run_stream(config, stream, handler).await {
+            super::best_effort(session.await);
+        }
+    }
+
     #[derive(Clone, Copy)]
     pub enum Mode {
         /// Sleep N ms on the server side, then echo + exit 0.
@@ -2206,11 +2231,7 @@ mod fleetserver {
                         mode,
                         counters: counters.clone(),
                     };
-                    tokio::spawn(async move {
-                        if let Ok(session) = server::run_stream(config, stream, handler).await {
-                            let _ = session.await;
-                        }
-                    });
+                    tokio::spawn(serve(config, stream, handler));
                 }
             });
             port
@@ -2273,7 +2294,7 @@ fn multi_exec_concurrency_is_capped() {
     let (_rt, port) = fleetserver::start("pw", fleetserver::Mode::Sleep(200), counters.clone());
 
     // 5 targets on the same port, limit 2 → no more than 2 run concurrently.
-    let targets: Vec<_> = (0..5).map(|_| pw_target(port)).collect();
+    let targets: Vec<_> = std::iter::repeat_with(|| pw_target(port)).take(5).collect();
     let results = core
         .ssh_exec_multi(targets, "echo hi".to_owned(), 2, 0)
         .unwrap();
@@ -2401,7 +2422,7 @@ fn save_profile(core: &Core, id: &str, host: &str, port: u16, key_item: &str, ta
                 key_item_id: key_item.to_owned(),
             },
             jumps: vec![],
-            tags: tags.iter().map(std::string::ToString::to_string).collect(),
+            tags: tags.iter().map(ToString::to_string).collect(),
             startup_snippet_ids: vec![],
             record_sessions: false,
             agent_forward: false,
@@ -2527,11 +2548,8 @@ fn group(id: &str, members: &[&str], parent: Option<&str>) -> unissh_ffi::Server
     unissh_ffi::ServerGroup {
         group_id: id.to_owned(),
         label: id.to_owned(),
-        member_ids: members
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect(),
-        parent_id: parent.map(|s| s.to_owned()),
+        member_ids: members.iter().map(ToString::to_string).collect(),
+        parent_id: parent.map(str::to_owned),
     }
 }
 
@@ -3518,7 +3536,7 @@ fn vault_backup_export_import_round_trip() {
         .is_err());
 
     // corrupted backup → error
-    let mut tampered = backup.clone();
+    let mut tampered = backup;
     let n = tampered.len();
     tampered[n - 1] ^= 0x01;
     assert!(core_b
@@ -3633,10 +3651,14 @@ fn sftp_pool_parallel_downloads() {
 
     // 8 files with distinguishable contents; upload sequentially.
     let n = 8_usize;
+    #[expect(
+        clippy::needless_collect,
+        reason = "every upload must finish before the parallel downloads start"
+    )]
     let remotes: Vec<(String, Vec<u8>)> = (0..n)
         .map(|i| {
             let content: Vec<u8> = (0..50_000_u32)
-                .map(|b| ((b as usize + i) % 251) as u8)
+                .map(|b| u8::try_from((b as usize + i) % 251).unwrap())
                 .collect();
             let src = dir.path().join(format!("src{i}.bin"));
             std::fs::write(&src, &content).unwrap();
@@ -3710,10 +3732,14 @@ fn sftp_pool_degrades_on_max_sessions() {
         .unwrap();
 
     let n = 6_usize;
+    #[expect(
+        clippy::needless_collect,
+        reason = "every upload must finish before the parallel downloads start"
+    )]
     let remotes: Vec<(String, Vec<u8>)> = (0..n)
         .map(|i| {
             let content: Vec<u8> = (0..30_000_u32)
-                .map(|b| ((b as usize + i) % 251) as u8)
+                .map(|b| u8::try_from((b as usize + i) % 251).unwrap())
                 .collect();
             let src = dir.path().join(format!("src{i}.bin"));
             std::fs::write(&src, &content).unwrap();
@@ -3800,7 +3826,7 @@ fn backup_tampered_kdf_params_fail() {
         .unwrap();
 
     // a byte inside kdf_blob (after magic(4)+version(1)+len(4)) — now covered by AAD
-    let mut tampered = backup.clone();
+    let mut tampered = backup;
     tampered[12] ^= 0x01;
     let dir2 = tempfile::tempdir().unwrap();
     let core2 = new_core(dir2.path());
@@ -4099,7 +4125,7 @@ fn profile_carries_its_startup_snippets() {
         "order matters — these are typed in sequence"
     );
 
-    p.uid = read.uid.clone();
+    p.uid = read.uid;
     p.startup_snippet_ids.clear();
     core.save_connection("v".to_owned(), p).unwrap();
     let cleared = core
@@ -4384,12 +4410,10 @@ fn profile_round_trips_a_system_agent_identity() {
         .into_iter()
         .find(|c| c.profile_id == "gw")
         .expect("saved profile");
-    match read.auth {
-        unissh_ffi::ProfileAuth::SystemAgent { public_key } => {
-            assert_eq!(public_key, pub_line);
-        }
-        _ => panic!("expected ProfileAuth::SystemAgent"),
-    }
+    let unissh_ffi::ProfileAuth::SystemAgent { public_key } = read.auth else {
+        panic!("expected ProfileAuth::SystemAgent");
+    };
+    assert_eq!(public_key, pub_line);
 }
 
 /// With no agent reachable, a system-agent connect fails with a message that
@@ -4408,11 +4432,9 @@ fn system_agent_without_an_agent_reports_the_agent() {
     // Point SSH_AUTH_SOCK at nothing so the lookup fails deterministically
     // rather than depending on whatever the test machine happens to run.
     let missing = dir.path().join("no-such-agent.sock");
-    // SAFETY: single-threaded test setup; no other thread reads the environment
+    // Environment mutation: single-threaded test setup; no other thread reads the environment
     // between the set and the call below.
-    unsafe {
-        std::env::set_var("SSH_AUTH_SOCK", &missing);
-    }
+    std::env::set_var("SSH_AUTH_SOCK", &missing);
 
     let err = core.system_agent_keys().expect_err("no agent is listening");
     let msg = err.to_string();
@@ -4636,7 +4658,7 @@ impl TestAgent {
             .output()
             .ok()?;
         if !added.status.success() {
-            let _ = Command::new("kill").arg(&pid).status();
+            best_effort(Command::new("kill").arg(&pid).status());
             return None;
         }
         Some(Self {
@@ -4649,7 +4671,7 @@ impl TestAgent {
 
 impl Drop for TestAgent {
     fn drop(&mut self) {
-        let _ = Command::new("kill").arg(&self.pid).status();
+        best_effort(Command::new("kill").arg(&self.pid).status());
     }
 }
 
@@ -4685,10 +4707,8 @@ fn system_agent_authenticates_end_to_end() {
         eprintln!("ssh-agent/ssh-add unavailable — skipping");
         return;
     };
-    // SAFETY: single-threaded test setup, before any core call reads it.
-    unsafe {
-        std::env::set_var("SSH_AUTH_SOCK", &agent.sock);
-    }
+    // Environment mutation: single-threaded test setup, before any core call reads it.
+    std::env::set_var("SSH_AUTH_SOCK", &agent.sock);
 
     let core = new_core(dir.path());
     core.create_account(None).unwrap();
@@ -4773,9 +4793,8 @@ fn system_agent_missing_key_is_named() {
     let Some(agent) = TestAgent::start(&held) else {
         return;
     };
-    unsafe {
-        std::env::set_var("SSH_AUTH_SOCK", &agent.sock);
-    }
+    // Environment mutation: test setup, serialized by AGENT_ENV.
+    std::env::set_var("SSH_AUTH_SOCK", &agent.sock);
 
     // A different key, never added to the agent.
     let other = dir.path().join("other");
@@ -4806,7 +4825,7 @@ fn system_agent_missing_key_is_named() {
         sshd.port,
         "root".to_owned(),
         AuthMethod::SystemAgent {
-            public_key: other_pub.clone(),
+            public_key: other_pub,
         },
         vec![],
         None,
@@ -4844,10 +4863,8 @@ fn system_agent_auth_refuses_the_endpoint_set_on_the_core() {
         .unwrap();
     let own = dir.path().join("agent.sock"); // the listener is off: no file
     core.set_system_agent_endpoint(Some(own.clone()));
-    // SAFETY: single-threaded test setup, serialized by AGENT_ENV.
-    unsafe {
-        std::env::set_var("SSH_AUTH_SOCK", &own);
-    }
+    // Environment mutation: single-threaded test setup, serialized by AGENT_ENV.
+    std::env::set_var("SSH_AUTH_SOCK", &own);
 
     let sshd = TestSshd::start(&public);
     let observer = std::sync::Arc::new(CollectObserver {
@@ -4974,7 +4991,7 @@ fn local_session_records_into_the_vault() {
             },
             80,
             24,
-            obs.clone(),
+            obs,
             Some(unissh_ffi::RecordingRequest {
                 vault_id: "v".to_owned(),
                 recording_id: "rec-local".to_owned(),
@@ -5043,7 +5060,7 @@ fn local_session_rejects_a_zero_terminal_size() {
 
     // `LocalSession` is not Debug (nor is `SshSession`), so unwrap the error by
     // hand rather than through expect_err.
-    let err = match core.open_local_session(
+    let Err(err) = core.open_local_session(
         unissh_ffi::LocalSpec {
             program: "/bin/sh".to_owned(),
             args: vec![],
@@ -5053,9 +5070,8 @@ fn local_session_rejects_a_zero_terminal_size() {
         24,
         Arc::new(Obs),
         None,
-    ) {
-        Ok(_) => panic!("a 0-column terminal is not a terminal"),
-        Err(e) => e,
+    ) else {
+        panic!("a 0-column terminal is not a terminal");
     };
     assert!(format!("{err}").contains("non-zero"), "got: {err}");
 }
@@ -5303,7 +5319,7 @@ fn system_agent_request(agent: &SystemAgent, request: &[u8], caller: AgentCaller
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
-    let mut frame = (request.len() as u32).to_be_bytes().to_vec();
+    let mut frame = u32::try_from(request.len()).unwrap().to_be_bytes().to_vec();
     frame.extend_from_slice(request);
     rt.block_on(async {
         let (mut client, server) = tokio::io::duplex(64 * 1024);
@@ -5334,12 +5350,12 @@ fn system_agent_identities(core: &Core) -> Vec<(Vec<u8>, String)> {
     assert_eq!(reply[0], 12, "IDENTITIES_ANSWER");
     let count = u32::from_be_bytes(reply[1..5].try_into().unwrap());
     let mut rest = &reply[5..];
-    (0..count)
-        .map(|_| {
-            let blob = take_ssh_string(&mut rest);
-            (blob, String::from_utf8(take_ssh_string(&mut rest)).unwrap())
-        })
-        .collect()
+    std::iter::repeat_with(|| {
+        let blob = take_ssh_string(&mut rest);
+        (blob, String::from_utf8(take_ssh_string(&mut rest)).unwrap())
+    })
+    .take(usize::try_from(count).unwrap())
+    .collect()
 }
 
 fn openssh_blob(public: &str) -> Vec<u8> {
@@ -5397,8 +5413,8 @@ struct RecordingApprover {
 impl RecordingApprover {
     fn new(meanwhile: impl Fn() + Send + Sync + 'static) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Self {
-            asked: Default::default(),
-            cancelled: Default::default(),
+            asked: std::sync::Mutex::default(),
+            cancelled: std::sync::Mutex::default(),
             meanwhile: Box::new(meanwhile),
         })
     }
@@ -5434,7 +5450,7 @@ fn core_sharing_work() -> (std::sync::Arc<Core>, tempfile::TempDir, String) {
 fn sign_request(public: &str, data: &[u8]) -> Vec<u8> {
     let mut request = vec![13]; // SIGN_REQUEST
     for field in [openssh_blob(public).as_slice(), data] {
-        request.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        request.extend_from_slice(&u32::try_from(field.len()).unwrap().to_be_bytes());
         request.extend_from_slice(field);
     }
     request.extend_from_slice(&0_u32.to_be_bytes()); // flags
@@ -5465,6 +5481,10 @@ fn verify_sign_response(reply: &[u8], public: &str, data: &[u8]) {
 /// covers loading it on approval. The prompt names the key, its vault and the
 /// caller, and the signature verifies against the shared public key.
 #[test]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the assertions read the recorded prompts under the guard"
+)]
 fn system_agent_signs_with_a_shared_key_once_approved() {
     let (core, _dir, work) = core_sharing_work();
     let approver = RecordingApprover::new(|| {});
@@ -5589,22 +5609,22 @@ fn system_agent_refuses_a_sign_request_beyond_the_open_prompt_cap() {
     let approver = RecordingApprover::new(move || {
         let (open, wake) = &*held;
         let open = open.lock().unwrap();
-        let _ = wake
-            .wait_timeout_while(open, Duration::from_secs(30), |open| !*open)
-            .unwrap();
+        // Wait for the gate, then release its lock straight away.
+        drop(
+            wake.wait_timeout_while(open, Duration::from_secs(30), |open| !*open)
+                .unwrap(),
+        );
     });
     core.set_agent_approver(Some(approver.clone()));
     let agent = core.system_agent();
     let request = sign_request(&work, b"to-sign");
 
-    let pending: Vec<_> = (0..CAP)
-        .map(|_| {
-            let (agent, request) = (agent.clone(), request.clone());
-            std::thread::spawn(move || {
-                system_agent_request(&agent, &request, AgentCaller::default())
-            })
-        })
-        .collect();
+    let pending: Vec<_> = std::iter::repeat_with(|| {
+        let (agent, request) = (agent.clone(), request.clone());
+        std::thread::spawn(move || system_agent_request(&agent, &request, AgentCaller::default()))
+    })
+    .take(CAP)
+    .collect();
     let deadline = Instant::now() + Duration::from_secs(30);
     while approver.asked.lock().unwrap().len() < CAP {
         assert!(Instant::now() < deadline, "the first prompts never opened");
@@ -5681,7 +5701,7 @@ fn system_agent_withdraws_the_prompt_of_a_client_that_hangs_up() {
     core.set_agent_approver(Some(approver.clone()));
     let agent = core.system_agent();
     let request = sign_request(&work, b"to-sign");
-    let mut frame = (request.len() as u32).to_be_bytes().to_vec();
+    let mut frame = u32::try_from(request.len()).unwrap().to_be_bytes().to_vec();
     frame.extend_from_slice(&request);
 
     let rt = tokio::runtime::Builder::new_current_thread()

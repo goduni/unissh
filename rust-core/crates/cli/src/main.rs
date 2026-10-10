@@ -25,13 +25,25 @@
 )]
 
 use std::error::Error;
+use std::io::BufRead;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use unissh_ffi::{
     AuthMethod, Core, JumpHost, MultiExecTarget, ProxyConfig, ProxyKind, ProxyPassword,
-    SessionObserver,
+    ResolveStatus, SessionObserver,
 };
+
+/// Human-readable label of a group member's dry-run resolution status.
+const fn status_label(status: ResolveStatus) -> &'static str {
+    match status {
+        ResolveStatus::Ok => "ok",
+        ResolveStatus::Dangling => "dangling",
+        ResolveStatus::PromptPassword => "prompt-password",
+        ResolveStatus::CycleSkipped => "cycle-skipped",
+        ResolveStatus::Personal => "personal",
+    }
+}
 
 /// Authentication method from flags: `--password` takes precedence over `--item`.
 /// `--item <id>` — a key from the vault; `--item pw:<id>` — a password item from the vault.
@@ -510,8 +522,9 @@ impl SessionObserver for StdoutObserver {
     fn on_data(&self, data: Vec<u8>) {
         use std::io::Write;
         let mut out = std::io::stdout();
-        let _ = out.write_all(&data);
-        let _ = out.flush();
+        if let Err(e) = out.write_all(&data).and_then(|()| out.flush()) {
+            eprintln!("[stdout write failed: {e}]");
+        }
     }
     fn on_close(&self, exit_status: i32) {
         self.done.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -529,6 +542,10 @@ struct UnlockArgs {
     password: Option<String>,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one short, independent match arm per subcommand; splitting would only move the dispatch table"
+)]
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     let core = Core::new(cli.db.clone(), cli.keyset.clone());
@@ -615,13 +632,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut targets = Vec::new();
             for h in &hosts {
                 let parts: Vec<&str> = h.split(':').collect();
-                if parts.len() != 3 {
+                let &[host, port, user] = parts.as_slice() else {
                     return Err(format!("bad --host '{h}', expected host:port:user").into());
-                }
+                };
                 targets.push(MultiExecTarget {
-                    host: parts[0].to_owned(),
-                    port: parts[1].parse()?,
-                    user: parts[2].to_owned(),
+                    host: host.to_owned(),
+                    port: port.parse()?,
+                    user: user.to_owned(),
                     auth: build_auth(&vault, item.clone(), ssh_password.clone())?,
                     jumps: vec![],
                     proxy: None,
@@ -697,8 +714,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             do_unlock(&core, &unlock)?;
             for p in core.dry_run_group(vault, group)? {
                 println!(
-                    "{}\t{}:{}@{}\t{:?}",
-                    p.member_id, p.user, p.host, p.port, p.status
+                    "{}\t{}:{}@{}\t{}",
+                    p.member_id,
+                    p.user,
+                    p.host,
+                    p.port,
+                    status_label(p.status)
                 );
             }
         }
@@ -770,7 +791,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 false,
             )?;
             // line-by-line input from stdin (no raw mode — this is a harness)
-            use std::io::BufRead;
             for line in std::io::stdin().lock().lines() {
                 if done.load(std::sync::atomic::Ordering::SeqCst) {
                     break;
@@ -787,7 +807,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
-            let _ = session.close();
+            if let Err(e) = session.close() {
+                eprintln!("close failed: {e}");
+            }
         }
         Cmd::RenameVault {
             unlock,
@@ -974,6 +996,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 remote_port,
             )?;
             println!("listening on {} (Ctrl-C to stop)", tunnel.bind_address());
+            #[expect(
+                clippy::infinite_loop,
+                reason = "the tunnel serves until the user presses Ctrl-C, which ends the process"
+            )]
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(3600));
             }
@@ -1057,17 +1083,17 @@ fn parse_jumps(vault: &str, specs: &[String]) -> Result<Vec<JumpHost>, Box<dyn E
     let mut out = Vec::new();
     for s in specs {
         let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 4 {
+        let &[host, port, user, item] = parts.as_slice() else {
             return Err(format!(
                 "bad --jump '{s}', expected host:port:user:<keyitem|pw:passworditem>"
             )
             .into());
-        }
+        };
         out.push(JumpHost {
-            host: parts[0].to_owned(),
-            port: parts[1].parse()?,
-            user: parts[2].to_owned(),
-            auth: item_auth(vault, parts[3]),
+            host: host.to_owned(),
+            port: port.parse()?,
+            user: user.to_owned(),
+            auth: item_auth(vault, item),
             hop_ref: None,
         });
     }

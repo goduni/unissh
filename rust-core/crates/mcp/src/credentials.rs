@@ -46,6 +46,10 @@ pub struct Credentials {
     config: Mutex<Config>,
 }
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "every failure maps to the one fixed, content-free configuration error; serde messages could quote the file"
+)]
 impl Credentials {
     pub fn load(path: PathBuf) -> io::Result<Self> {
         let config = match fs::metadata(&path) {
@@ -72,6 +76,10 @@ impl Credentials {
             config: Mutex::new(config),
         })
     }
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the guard must cover the read, the file write and the in-memory swap atomically so concurrent edits are not lost"
+    )]
     fn mutate<T>(&self, f: impl FnOnce(&mut Config) -> io::Result<T>) -> io::Result<T> {
         let mut guard = self.config.lock().map_err(|_| invalid())?;
         let mut config = guard.clone();

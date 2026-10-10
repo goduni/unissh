@@ -1,4 +1,8 @@
 //! Real HTTP -> credentials -> broker lifecycle; SSH execution is a counting fake.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -70,6 +74,10 @@ async fn rpc(url: &str, token: &str, name: &str, args: Value) -> Value {
         .send().await.unwrap().json().await.unwrap()
 }
 #[tokio::test]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the broker serves the HTTP endpoint until the server is stopped at the end"
+)]
 async fn reconnect_retry_native_approval_and_rotation_preserve_authority() {
     let dir = tempfile::tempdir().unwrap();
     let credentials = Arc::new(Credentials::load(dir.path().join("mcp.json")).unwrap());
@@ -144,6 +152,10 @@ async fn reconnect_retry_native_approval_and_rotation_preserve_authority() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the broker serves the HTTP endpoint until the server is stopped at the end"
+)]
 async fn trusted_http_wait_returns_utf8_and_cannot_elevate_manual_policy() {
     let dir = tempfile::tempdir().unwrap();
     let credentials = Arc::new(Credentials::load(dir.path().join("mcp.json")).unwrap());

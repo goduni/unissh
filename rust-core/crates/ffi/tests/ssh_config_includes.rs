@@ -7,6 +7,10 @@
 //! unreadable — belong to the parser and are covered in the `ssh-transport`
 //! config tests; what is exercised here is the loader that turns a path into
 //! files, and the wiring that carries the result into a vault.
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration-test helpers; allow-*-in-tests covers only #[test] fns and cfg(test) modules"
+)]
 
 use std::fs;
 use std::path::{Path, PathBuf};

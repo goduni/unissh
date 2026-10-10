@@ -5,6 +5,10 @@
 //! Binding is explicit and always loopback-only. Nothing starts on library load.
 
 #![forbid(unsafe_code)]
+#![expect(
+    missing_docs,
+    reason = "public API docs are a tracked follow-up; the MCP contract is documented in CLIENT.md/README"
+)]
 
 pub mod contract;
 pub mod credentials;
