@@ -34,14 +34,15 @@ use unissh_ffi::{
     ResolveStatus, SessionObserver,
 };
 
-/// Human-readable label of a group member's dry-run resolution status.
+/// Label of a group member's dry-run resolution status: the variant name, as the
+/// dry-run output has always printed it.
 const fn status_label(status: ResolveStatus) -> &'static str {
     match status {
-        ResolveStatus::Ok => "ok",
-        ResolveStatus::Dangling => "dangling",
-        ResolveStatus::PromptPassword => "prompt-password",
-        ResolveStatus::CycleSkipped => "cycle-skipped",
-        ResolveStatus::Personal => "personal",
+        ResolveStatus::Ok => "Ok",
+        ResolveStatus::Dangling => "Dangling",
+        ResolveStatus::PromptPassword => "PromptPassword",
+        ResolveStatus::CycleSkipped => "CycleSkipped",
+        ResolveStatus::Personal => "Personal",
     }
 }
 
@@ -516,6 +517,8 @@ struct SftpTarget {
 /// Session observer: prints PTY output to stdout, signals on close.
 struct StdoutObserver {
     done: Arc<std::sync::atomic::AtomicBool>,
+    /// Set once a stdout write failure has been reported, so it is not repeated per chunk.
+    write_failed: std::sync::atomic::AtomicBool,
 }
 
 impl SessionObserver for StdoutObserver {
@@ -523,7 +526,15 @@ impl SessionObserver for StdoutObserver {
         use std::io::Write;
         let mut out = std::io::stdout();
         if let Err(e) = out.write_all(&data).and_then(|()| out.flush()) {
-            eprintln!("[stdout write failed: {e}]");
+            // A closed pipe (`unissh … | head`) is expected; other failures are
+            // reported once, not per chunk.
+            if e.kind() != std::io::ErrorKind::BrokenPipe
+                && !self
+                    .write_failed
+                    .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                eprintln!("[stdout write failed: {e}]");
+            }
         }
     }
     fn on_close(&self, exit_status: i32) {
@@ -773,8 +784,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let jumps = parse_jumps(&vault, &jumps)?;
             let proxy = parse_proxy(proxy.as_deref())?;
             let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let observer: Arc<dyn SessionObserver> =
-                Arc::new(StdoutObserver { done: done.clone() });
+            let observer: Arc<dyn SessionObserver> = Arc::new(StdoutObserver {
+                done: done.clone(),
+                write_failed: std::sync::atomic::AtomicBool::new(false),
+            });
             let session = core.open_session(
                 host,
                 port,

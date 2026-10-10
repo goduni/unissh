@@ -211,8 +211,9 @@ pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -
     bak.push(".pre-migration.bak");
     remove_if_present(&std::path::PathBuf::from(bak));
     // Forget cloud links + the stale keychain Secret Key so re-onboarding is clean.
-    // A poisoned cloud registry is reported after the remaining best-effort steps
-    // have run, so one failure does not leave the keychain and biometric half-reset.
+    // `clear_all` wipes every registry even when a lock is poisoned; any error it
+    // reports is returned after the remaining best-effort steps have run, so one
+    // failure does not leave the keychain and biometric half-reset.
     let cloud_cleared = state.cloud.clear_all();
     if let Err(e) = crate::keychain::keychain_delete_secret_key().await {
         log::warn!("reset: failed to delete the keychain Secret Key: {e:?}");

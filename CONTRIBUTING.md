@@ -88,7 +88,11 @@ sync; it differs only where its header comment says (`unsafe_code`,
   under `#[expect(clippy::expect_used, reason = "…")]`.
 - Suppress with `#[expect(lint, reason = "…")]`, never `#[allow]`. `expect`
   fails when the finding disappears, so stale suppressions cannot accumulate.
-  For cfg-gated items use `#[cfg_attr(<cfg>, expect(…))]`.
+  For cfg-gated items use `#[cfg_attr(<cfg>, expect(…))]`. The one exception
+  is a shared test module compiled into many test binaries
+  (`server/tests/common/mod.rs`): it may keep a reasoned
+  `#![allow(dead_code, reason = "…")]`, because an `expect` would be unfulfilled
+  in whichever binary uses every helper.
 - Every `unsafe` block carries its own `// SAFETY:` line.
 - Tests may unwrap, index, panic and print (`clippy.toml` `allow-*-in-tests`).
   That covers only `#[test]` fns and `#[cfg(test)]` modules, so integration-test

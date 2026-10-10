@@ -48,17 +48,17 @@
 //! `mlock` is best-effort (see [`locked`]).
 
 #![deny(unsafe_op_in_unsafe_fn)]
-#![cfg_attr(
+
+mod agent;
+mod error;
+mod import;
+#[cfg_attr(
     unix,
     expect(
         unsafe_code,
         reason = "mlock/madvise over key pages in `locked.rs`; every block carries a SAFETY comment"
     )
 )]
-
-mod agent;
-mod error;
-mod import;
 mod locked;
 
 pub use agent::{

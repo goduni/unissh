@@ -423,6 +423,28 @@ pub fn ji64(v: &Value, key: &str) -> ApiResult<i64> {
 }
 
 #[cfg(test)]
+mod field_tests {
+    use super::ju32;
+    use crate::error::ApiError;
+    use serde_json::json;
+
+    /// A hostile server must not wrap a value (e.g. `argon_mem_kib`) under a cap.
+    #[test]
+    fn ju32_rejects_a_value_above_u32_max() {
+        let v = json!({ "argon_mem_kib": u64::from(u32::MAX) + 1 });
+        let err = ju32(&v, "argon_mem_kib").unwrap_err();
+        assert!(matches!(&err, ApiError::Server { code, .. } if code == "malformed"));
+    }
+
+    #[test]
+    fn ju32_accepts_a_value_in_range() {
+        let v = json!({ "argon_mem_kib": 65_536, "max": u32::MAX });
+        assert_eq!(ju32(&v, "argon_mem_kib").unwrap(), 65_536);
+        assert_eq!(ju32(&v, "max").unwrap(), u32::MAX);
+    }
+}
+
+#[cfg(test)]
 mod base_url_tests {
     use super::validate_base_url;
 

@@ -32,7 +32,7 @@ meta_variable_misuse = "warn"
 non_ascii_idents = "warn"
 unstable_features = "warn"
 # Public API
-missing_docs = "warn"                     # public API is documented; crates with large doc debt expect it at crate root with a tracking note (done in follow-up tasks)
+missing_docs = "warn"                     # public API is documented; server and mcp expect it at crate root pending a documentation follow-up
 unnameable_types = "warn"
 # Dead code
 explicit_outlives_requirements = "warn"
@@ -72,7 +72,7 @@ cast_possible_wrap = "warn"
 cast_lossless = "warn"
 fn_to_numeric_cast_any = "warn"
 host_endian_bytes = "warn"                # wire and blob formats are big-endian
-little_endian_bytes = "warn"              # the storage consistency digest is the one LE exception (expected on site)
+little_endian_bytes = "warn"              # storage automation_fingerprint (LE since v1) and the server sink jitter expect it on site
 # Documented unsafe
 undocumented_unsafe_blocks = "warn"
 multiple_unsafe_ops_per_block = "warn"
@@ -83,7 +83,7 @@ mem_forget = "warn"
 dbg_macro = "deny"
 print_stdout = "warn"                     # cli expects it crate-wide; server setup-code output expects it on site
 print_stderr = "warn"
-use_debug = "warn"                        # `{:?}` of a struct holding a secret is a redaction hole
+use_debug = "warn"                        # catches {:?} in print/write macros; log/tracing calls rely on scripts/check-log-redaction.py and review
 pointer_format = "warn"
 # Handled errors
 map_err_ignore = "warn"                   # crypto/vault/keychain expect it: error-cause erasure there is deliberate (no oracle)

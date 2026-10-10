@@ -7,7 +7,7 @@
 #![forbid(unsafe_code)]
 #![expect(
     missing_docs,
-    reason = "public API docs are a tracked follow-up; the MCP contract is documented in rust-core/crates/mcp/README.md"
+    reason = "public API docs are a documentation follow-up; the MCP contract is documented in rust-core/crates/mcp/README.md"
 )]
 
 pub mod contract;

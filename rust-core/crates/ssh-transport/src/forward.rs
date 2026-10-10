@@ -414,8 +414,15 @@ where
                         agent.hang_up();
                         return;
                     }
-                    // `read` never reports more than the buffer it was given.
-                    Ok(n) => inbox.extend_from_slice(chunk.get(..n).unwrap_or_default()),
+                    Ok(n) => {
+                        // `read` never reports more than the buffer it was given;
+                        // if it ever did, hang up rather than drop bytes silently.
+                        let Some(got) = chunk.get(..n) else {
+                            agent.hang_up();
+                            return;
+                        };
+                        inbox.extend_from_slice(got);
+                    }
                 },
             }
         };
@@ -443,8 +450,15 @@ async fn fill<S: tokio::io::AsyncRead + Unpin>(
         if n == 0 {
             return Err(std::io::ErrorKind::UnexpectedEof.into());
         }
-        // `read` never reports more than the buffer it was given.
-        inbox.extend_from_slice(chunk.get(..n).unwrap_or_default());
+        // `read` never reports more than the buffer it was given; refuse rather
+        // than drop bytes silently if it ever did.
+        let got = chunk.get(..n).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "read reported more bytes than the buffer holds",
+            )
+        })?;
+        inbox.extend_from_slice(got);
     }
     Ok(())
 }

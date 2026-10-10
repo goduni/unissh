@@ -5,7 +5,7 @@
 //! encrypted blobs and open metadata (spec §1, ARCH §2).
 #![expect(
     missing_docs,
-    reason = "public API docs are a tracked follow-up; the HTTP contract is documented in server/README.md and CLIENT.md"
+    reason = "public API docs are a documentation follow-up; the HTTP contract is documented in server/README.md and CLIENT.md"
 )]
 
 pub mod audit_sinks;

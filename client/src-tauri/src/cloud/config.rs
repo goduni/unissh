@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
@@ -375,15 +375,14 @@ impl CloudState {
     /// Used by the full instance reset ("can't unlock → start over") so the fresh
     /// onboarding doesn't inherit stale links pointing at the old account.
     pub fn clear_all(&self) -> ApiResult<()> {
-        let ids: Vec<ServerId> = {
-            let mut servers = locked(&self.servers, "server")?;
-            let ids = servers.keys().cloned().collect();
+        let mut ids: Vec<ServerId> = Vec::new();
+        wipe(&self.servers, |servers| {
+            ids = servers.keys().cloned().collect();
             servers.clear();
-            ids
-        };
-        locked(&self.access_tokens, "session-token")?.clear();
-        locked(&self.spaces, "space")?.clear();
-        *locked(&self.active, "active-server")? = None;
+        });
+        wipe(&self.access_tokens, HashMap::clear);
+        wipe(&self.spaces, HashMap::clear);
+        wipe(&self.active, |active| *active = None);
         remove_sidecar(&self.config_path);
         for id in &ids {
             if let Err(e) = tokens::delete_refresh(id) {
@@ -669,6 +668,14 @@ fn locked<'a, T>(m: &'a Mutex<T>, what: &str) -> ApiResult<MutexGuard<'a, T>> {
             "internal error: the cloud {what} registry is unavailable ({e}); restart UniSSH"
         ))
     })
+}
+
+/// Resets a registry during a wipe, even when its lock is poisoned.
+fn wipe<T>(m: &Mutex<T>, reset: impl FnOnce(&mut T)) {
+    // Recovery is correct here: the reset overwrites the whole value, so whatever
+    // a panicking holder left half-done is discarded, and the lock is healthy again.
+    reset(&mut m.lock().unwrap_or_else(PoisonError::into_inner));
+    m.clear_poison();
 }
 
 /// Best-effort removal of the `cloud.json` sidecar. Absence is the goal, so
