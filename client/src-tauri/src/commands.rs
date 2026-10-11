@@ -62,6 +62,14 @@ pub(crate) fn resume_after_unlock(app: &tauri::AppHandle) {
 
 /// The counterpart for lock, reset, screen lock and sleep: pause MCP and
 /// system-agent access.
+///
+/// A resume acts only on an open vault, and only if no revoke came after it
+/// was asked for. So whoever locks the core revokes twice, on either side of
+/// it (`lock`, `reset_instance`): the first so that nothing is served while
+/// the vault closes, the second for a resume that was asked for after the
+/// first and saw the vault still open — it is undone, or stands down on
+/// finding a revoke newer than itself. Once that second revoke has returned,
+/// a resume finds the vault locked and does nothing.
 pub(crate) fn revoke_agent_access(app: &tauri::AppHandle) {
     #[cfg(desktop)]
     {
@@ -198,6 +206,8 @@ pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -
     revoke_agent_access(&app);
     let core = state.core.clone();
     let attempts = state.unlock_attempts.clone();
+    let db_path = state.db_path.clone();
+    let keyset_path = state.keyset_path.clone();
     let unlocked = blocking_ok(move || {
         // First of all, before anything is deleted: a biometric prompt still up
         // belongs to the instance that is about to go, and its answer must not
@@ -208,10 +218,28 @@ pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -
             return true;
         }
         // Locked, and it stays so: counted as a lock, so that an unlock already
-        // deriving its keys (biometric or typed) installs nothing over the
-        // files removed below.
+        // deriving its keys (biometric or typed) installs nothing.
         core.lock();
-        false
+        // The files go while no unlock is under way. One that had read the
+        // keyset and was still deriving its keys would otherwise open — that
+        // is, create — the database after it was removed, and leave an empty
+        // one behind (it installs nothing, but the file stays); the core has
+        // it finish first, and one that comes later finds no keyset and
+        // creates nothing.
+        core.while_no_unlock_runs(|| {
+            // An unlock that began after the lock above and got through
+            // before the files could go: the instance is open, and stays.
+            if core.is_unlocked() {
+                return true;
+            }
+            remove_if_present(&db_path);
+            remove_if_present(&keyset_path);
+            // The pre-migration keyset backup (`<keyset>.pre-migration.bak`), if present.
+            let mut bak = keyset_path.into_os_string();
+            bak.push(".pre-migration.bak");
+            remove_if_present(&std::path::PathBuf::from(bak));
+            false
+        })
     })
     .await?;
     if unlocked {
@@ -219,12 +247,8 @@ pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -
             "refusing to reset an unlocked instance — lock it first",
         ));
     }
-    remove_if_present(&state.db_path);
-    remove_if_present(&state.keyset_path);
-    // The pre-migration keyset backup (`<keyset>.pre-migration.bak`), if present.
-    let mut bak = state.keyset_path.clone().into_os_string();
-    bak.push(".pre-migration.bak");
-    remove_if_present(&std::path::PathBuf::from(bak));
+    // Again, now that the core is locked for good: see `revoke_agent_access`.
+    revoke_agent_access(&app);
     // Forget cloud links + the stale keychain Secret Key so re-onboarding is clean.
     // `clear_all` wipes every registry even when a lock is poisoned; any error it
     // reports is returned after the remaining best-effort steps have run, so one
@@ -411,6 +435,9 @@ pub async fn lock(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResul
     // unlock of any kind that is already deriving keys is refused by the core
     // (see `Core::unlock`).
     let result = blocking_ok(move || attempts.locking(|| core.lock())).await;
+    // Again, now that the core is locked: a resume asked for since the revoke
+    // above saw the vault still open (see `revoke_agent_access`).
+    revoke_agent_access(&app);
     invalidate_sftp(&state);
     result
 }

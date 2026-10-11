@@ -166,7 +166,16 @@ impl Controller {
             }
         });
         *running = Some(Running { stop, task, port });
-        if !crate::system_lock::is_screen_locked() {
+        // Served only over an open vault, like `resume_access`: at boot the
+        // vault is still locked, and the first unlock resumes the broker. A
+        // lock that lands after this check has revoked since `resume_epoch`
+        // was read, or will once the core is locked (`commands::lock` revokes
+        // on both sides of it), so the resume below never outlives it.
+        let core = self.core.clone();
+        let unlocked = tauri::async_runtime::spawn_blocking(move || core.is_unlocked())
+            .await
+            .unwrap_or(false);
+        if unlocked && !crate::system_lock::is_screen_locked() {
             self.broker.resume_if_current(resume_epoch);
         }
         *self.error_slot()? = None;
