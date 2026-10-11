@@ -46,7 +46,11 @@
 //! for: the user gives up on it and types the password, the vault is unlocked
 //! and locked again, a second prompt is requested. [`UnlockAttempts`] numbers
 //! the attempts; starting one, cancelling one, a typed unlock, a lock and a
-//! reset each end the attempt before them. A result is acted on only while its
+//! reset each end the attempt before them. The unlock screen is handed the
+//! number first (`biometric_begin`) and names it both when it asks for the
+//! prompt and when it gives up on it — so giving up works even on a prompt
+//! that has not been shown yet: its number is over, and no prompt appears for
+//! it afterwards (see `biometric_cancel`). A result is acted on only while its
 //! attempt is still the current one and the vault is still locked — otherwise
 //! it is discarded: no unlock, no wipe, and a secret the prompt released is
 //! zeroized unused; the command reports `Superseded`, which the unlock screen
@@ -136,14 +140,31 @@ impl UnlockAttempts {
 
     /// End the attempt under way, if any — its result will be discarded, and
     /// its prompt is taken down where the platform can — and name a new one.
-    /// Called for a new prompt, for "use the password instead", for a typed
-    /// unlock and for a reset. May block briefly (it talks to the platform).
+    /// Called for a new prompt, for a typed unlock and for a reset. May block
+    /// briefly (it talks to the platform).
     pub(crate) fn supersede(&self) -> u64 {
         let (id, dismiss) = self.end();
         if let Some(dismiss) = dismiss {
             dismiss();
         }
         id
+    }
+
+    /// End attempt `id` — and only that one: if it is already over, whatever
+    /// replaced it is left alone. "Use the password instead". May block
+    /// briefly, like [`Self::supersede`].
+    pub(crate) fn cancel(&self, id: u64) {
+        let mut current = held(&self.current);
+        if current.id != id {
+            drop(current);
+            return;
+        }
+        current.id = current.id.wrapping_add(1);
+        let dismiss = current.dismiss.take();
+        drop(current);
+        if let Some(dismiss) = dismiss {
+            dismiss();
+        }
     }
 
     /// Whether attempt `id` is still the one whose answer counts.
@@ -685,10 +706,68 @@ pub async fn biometric_status(
     .await
 }
 
+/// Seal `password` behind the biometric once `verify` has confirmed it against
+/// the keyset on disk, and leave nothing stored unless that keyset is still
+/// the one on disk afterwards.
+///
+/// The password is checked first and stored a prompt later (Windows Hello
+/// prompts when its credential is created), and nothing can be held across
+/// that prompt to keep a keyset install — a password change — out. So the
+/// install is detected instead: `keyset_digest` (the core's digest of the
+/// record on disk) is read before the check and again after the blob is
+/// written, and a difference wipes what was written and fails the enable.
+/// Why that is enough, with W the blob write, D the second read, K the
+/// install's keyset write and C its wipe ([`wipe_around_install`], always
+/// after K, and it looks for the blob only then):
+/// * K before D: the digests differ, and this wipes.
+/// * K after D: then C comes after W, finds the blob and wipes it.
+///
+/// The first read comes before the check, not after: read after it, a K
+/// between the two would let a password verified against the old record be
+/// sealed beside two equal digests of the new one.
+///
+/// A failure at any step leaves the feature OFF, not half-on: a new secret
+/// beside an old blob would read as "invalidated", and an old secret is
+/// replaced by `create` anyway.
+fn seal_password(
+    store: &dyn DeviceSecretStore,
+    keyset_digest: impl Fn() -> Option<[u8; 32]>,
+    blob: &Path,
+    password: &str,
+    verify: impl FnOnce() -> ApiResult<()>,
+) -> ApiResult<()> {
+    let before = keyset_digest();
+    verify()?;
+    let enabled = store
+        .create()
+        .map_err(secret_error)
+        .and_then(|secret| device_wrap::wrap(password.as_bytes(), &secret).map_err(ApiError::other))
+        .and_then(|sealed| write_blob(blob, &sealed).map_err(ApiError::other))
+        .and_then(|()| {
+            if before.is_some() && keyset_digest() == before {
+                Ok(())
+            } else {
+                Err(ApiError::other(
+                    "the master password changed while biometric unlock was being turned on; turn it on again",
+                ))
+            }
+        });
+    if let Err(e) = enabled {
+        // Report the enable failure; a failed cleanup is logged so the
+        // half-written material is diagnosable (Settings offers to forget it).
+        if let Err(cleanup) = forget_with(Some(store), blob) {
+            log::warn!("biometric: cleanup after a failed enable failed: {cleanup:?}");
+        }
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// Remember the master password behind the biometric. Only while unlocked, and
 /// only after the core has confirmed `password` against the keyset with the
 /// Secret Key this device remembers — so enabling proves the password is held,
-/// and a mistyped one is never stored.
+/// and a mistyped one is never stored. A password that was changed while this
+/// ran is not stored either: see [`seal_password`].
 #[tauri::command]
 pub async fn biometric_enable(password: String, state: State<'_, AppState>) -> ApiResult<()> {
     let password = Zeroizing::new(password);
@@ -701,25 +780,16 @@ pub async fn biometric_enable(password: String, state: State<'_, AppState>) -> A
         }
         let secret_key_hex = stored_secret_key_hex_now()?
             .ok_or_else(|| ApiError::other("the Secret Key is not remembered on this device"))?;
-        core.verify_unlock_password(password.to_string(), String::clone(&secret_key_hex))?;
-        // From here on a failure must leave the feature OFF, not half-on: a new
-        // secret beside an old blob would read as "invalidated", and an old
-        // secret is replaced by `create` anyway.
-        let enabled = store
-            .create()
-            .map_err(secret_error)
-            .and_then(|secret| {
-                device_wrap::wrap(password.as_bytes(), &secret).map_err(ApiError::other)
-            })
-            .and_then(|sealed| write_blob(&blob, &sealed).map_err(ApiError::other));
-        if let Err(e) = enabled {
-            // Report the enable failure; a failed cleanup is logged so the
-            // half-written material is diagnosable (Settings offers to forget it).
-            if let Err(cleanup) = forget_with(Some(store.as_ref()), &blob) {
-                log::warn!("biometric: cleanup after a failed enable failed: {cleanup:?}");
-            }
-            return Err(e);
-        }
+        seal_password(
+            store.as_ref(),
+            || core.keyset_record_digest(),
+            &blob,
+            &password,
+            || {
+                Ok(core
+                    .verify_unlock_password(password.to_string(), String::clone(&secret_key_hex))?)
+            },
+        )?;
         log::info!("biometric unlock enabled");
         Ok(())
     })
@@ -740,23 +810,61 @@ pub async fn biometric_disable(state: State<'_, AppState>) -> ApiResult<()> {
     .await
 }
 
-/// "Use the password instead": end the attempt whose prompt is up. Its result
-/// is discarded whatever it turns out to be, and the prompt is taken down
-/// where the platform can (see the adapters). A typed unlock and a lock do the
-/// same on their own; this is for the moment between giving up on the prompt
-/// and submitting the password.
+/// The unlock screen is about to ask for a prompt: end the attempt before it,
+/// if any, and answer the number of the new one. The screen passes it to
+/// `biometric_unlock` / `biometric_presence_unlock`, and to
+/// [`biometric_cancel`] if the user gives up.
 ///
-/// It names no attempt: it ends whichever is current. The unlock screen
-/// therefore asks for a new prompt only after this has answered, so it can
-/// never end the prompt that replaced the one given up on.
+/// Why the number goes to the screen first instead of being taken when the
+/// prompt is asked for. Each command does its work as a job on the blocking
+/// pool, and jobs are not run in the order they were asked for. Were the
+/// number taken inside the prompt's own job, a "use the password instead"
+/// whose job ran first would end nothing — and the prompt would appear after
+/// the user had turned it down, ready to unlock on a touch. With the number in
+/// hand before either job exists, the order no longer matters: a cancel that
+/// runs first ends that number, and the prompt's job, finding its number over,
+/// shows nothing ([`attempt_outcome`]); a cancel that runs second takes the
+/// prompt down. The screen holds the number Rust gave it and counts nothing
+/// itself — Rust stays the only one that says which attempt is current.
 #[tauri::command]
-pub async fn biometric_cancel(state: State<'_, AppState>) -> ApiResult<()> {
+pub async fn biometric_begin(state: State<'_, AppState>) -> ApiResult<u64> {
+    let attempts = state.unlock_attempts.clone();
+    blocking_api(move || Ok(attempts.supersede())).await
+}
+
+/// "Use the password instead": end `attempt`, the one the screen was handed by
+/// [`biometric_begin`]. Its result is discarded whatever it turns out to be,
+/// its prompt is taken down where the platform can (see the adapters) — or
+/// never shown, if it was not up yet. A typed unlock and a lock end the
+/// attempt on their own; this is for the moment between giving up on the
+/// prompt and submitting the password.
+///
+/// It ends that attempt only: one that has since replaced it is left alone.
+#[tauri::command]
+pub async fn biometric_cancel(attempt: u64, state: State<'_, AppState>) -> ApiResult<()> {
     let attempts = state.unlock_attempts.clone();
     blocking_api(move || {
-        attempts.supersede();
+        attempts.cancel(attempt);
         Ok(())
     })
     .await
+}
+
+/// Run `unlock` — the prompt and what follows it — for the attempt `prompt`
+/// stands for, and say what the command answers ([`reported`]). An attempt
+/// that is over before its prompt was ever asked for (the user gave up on it
+/// while this job was still waiting to run) shows no prompt at all. One that
+/// ends between this check and the prompt is caught by [`Prompt::wait`].
+fn attempt_outcome(
+    prompt: &Prompt<'_>,
+    unlock: impl FnOnce() -> ApiResult<BiometricUnlockOutcome>,
+) -> ApiResult<BiometricUnlockOutcome> {
+    let found = if prompt.current() {
+        unlock()
+    } else {
+        Ok(BiometricUnlockOutcome::Superseded)
+    };
+    reported(prompt, found)
 }
 
 /// What the command answers for `found`, the result of the attempt `prompt`
@@ -884,12 +992,14 @@ fn unlock_behind_presence(
 /// `reason`), unseals the password, and calls the same core unlock a typed
 /// password does, with the Secret Key this device remembers.
 ///
-/// The answer counts only for the attempt that asked: see [`UnlockAttempts`].
+/// `attempt` is the number [`biometric_begin`] gave the screen. The answer
+/// counts only while it is still the current one: see [`UnlockAttempts`].
 /// `Unlocked` is reported — and agent access resumed — only when the core said
 /// the vault is open.
 #[tauri::command]
 pub async fn biometric_unlock(
     app: tauri::AppHandle,
+    attempt: u64,
     reason: String,
     state: State<'_, AppState>,
 ) -> ApiResult<BiometricUnlockOutcome> {
@@ -897,15 +1007,17 @@ pub async fn biometric_unlock(
     let blob = blob_path(&state);
     let attempts = state.unlock_attempts.clone();
     let outcome = blocking_api(move || {
-        // The attempt begins here, before its prompt, and a lock from now on
-        // wins. A lock ends the current id and then bumps the core's epoch;
-        // with the id taken first here, a lock that came too late to be seen
-        // in the epoch read below has ended this id, and one that ends it
-        // after the "still current" check bumps the epoch after this read.
-        let prompt = Prompt::of(&attempts, attempts.supersede());
+        // A lock from now on wins — the number was taken before this, in
+        // `biometric_begin`. A lock ends the current id and then bumps the
+        // core's epoch; with the id taken before the epoch is read here, a
+        // lock that came too late to be seen in that read has ended this id,
+        // and one that ends it after the "still current" check bumps the
+        // epoch after this read.
+        let prompt = Prompt::of(&attempts, attempt);
         let began = core.lock_epoch();
-        let found = unlock_with_stored_password(&core, &blob, &reason, &prompt, began);
-        reported(&prompt, found)
+        attempt_outcome(&prompt, || {
+            unlock_with_stored_password(&core, &blob, &reason, &prompt, began)
+        })
     })
     .await?;
     if matches!(outcome, BiometricUnlockOutcome::Unlocked) {
@@ -921,21 +1033,24 @@ pub async fn biometric_unlock(
 /// locked, and the unlock screen's manual path (the Secret Key from the
 /// Emergency Kit) still works.
 ///
-/// The answer counts only for the attempt that asked: see [`UnlockAttempts`].
+/// `attempt` is the number [`biometric_begin`] gave the screen; the answer
+/// counts only while it is still the current one: see [`UnlockAttempts`].
 #[tauri::command]
 pub async fn biometric_presence_unlock(
     app: tauri::AppHandle,
+    attempt: u64,
     reason: String,
     state: State<'_, AppState>,
 ) -> ApiResult<BiometricUnlockOutcome> {
     let core = state.core.clone();
     let attempts = state.unlock_attempts.clone();
     let outcome = blocking_api(move || {
-        // The attempt begins here, as in `biometric_unlock`.
-        let prompt = Prompt::of(&attempts, attempts.supersede());
+        // As in `biometric_unlock`: the number first, then the lock epoch.
+        let prompt = Prompt::of(&attempts, attempt);
         let began = core.lock_epoch();
-        let found = unlock_behind_presence(&core, &reason, &prompt, began);
-        reported(&prompt, found)
+        attempt_outcome(&prompt, || {
+            unlock_behind_presence(&core, &reason, &prompt, began)
+        })
     })
     .await?;
     if matches!(outcome, BiometricUnlockOutcome::Unlocked) {
@@ -1003,12 +1118,13 @@ mod tests {
         assert!(!status_from(Unsupported, false, false, true).secret_key_remembered);
     }
 
-    /// A platform that records being asked anything at all, and whose delete
-    /// can be made to fail.
+    /// A platform that records being asked anything at all, whose delete can
+    /// be made to fail, and which creates a secret only when given one.
     #[derive(Default)]
     struct Watched {
         touched: std::sync::atomic::AtomicBool,
         delete_fails: bool,
+        secret: Option<Vec<u8>>,
     }
 
     impl Watched {
@@ -1025,7 +1141,10 @@ mod tests {
         }
         fn create(&self) -> Result<Zeroizing<Vec<u8>>, SecretError> {
             self.touch();
-            Err(SecretError::Unsupported)
+            self.secret
+                .clone()
+                .map(Zeroizing::new)
+                .ok_or(SecretError::Unsupported)
         }
         fn read(&self, _: &str, _: &Prompt<'_>) -> Result<Zeroizing<Vec<u8>>, SecretError> {
             self.touch();
@@ -1108,6 +1227,48 @@ mod tests {
             forget_after_keyset_change(Some(&platform), &blob),
             KeysetWipe::Failed
         );
+    }
+
+    // A password change that lands while biometric unlock is being turned on
+    // (between the password check and the write — on Windows there is a prompt
+    // in between) must not leave the old password sealed: nothing stays stored.
+    #[test]
+    fn enable_overtaken_by_a_keyset_change_stores_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let blob = dir.path().join(BLOB_FILE);
+        let platform = Watched {
+            secret: Some(vec![7; 32]),
+            ..Watched::default()
+        };
+
+        let steady = seal_password(&platform, || Some([0; 32]), &blob, "password", || Ok(()));
+        assert!(steady.is_ok() && blob.exists());
+
+        // The record reads differently the second time: it was rewritten.
+        let rewritten = std::cell::Cell::new(false);
+        let digest = || Some([u8::from(rewritten.replace(true)); 32]);
+        let overtaken = seal_password(&platform, digest, &blob, "password", || Ok(()));
+        assert!(overtaken.is_err() && !blob.exists());
+    }
+
+    // "Use the password instead" on a prompt whose job has not run yet: when
+    // it does run, no prompt is shown. And it ends that attempt only — not the
+    // one that has replaced it since.
+    #[test]
+    fn attempt_cancelled_before_its_prompt_shows_none() {
+        let attempts = UnlockAttempts::default();
+        let given_up = attempts.supersede();
+        attempts.cancel(given_up);
+        let prompted = std::cell::Cell::new(false);
+        let outcome = attempt_outcome(&Prompt::of(&attempts, given_up), || {
+            prompted.set(true);
+            Ok(BiometricUnlockOutcome::Unlocked)
+        });
+        assert!(matches!(outcome, Ok(BiometricUnlockOutcome::Superseded)) && !prompted.get());
+
+        let next = attempts.supersede();
+        attempts.cancel(given_up);
+        assert!(attempts.is_current(next));
     }
 
     // Ending an attempt takes its prompt down and makes its answer worthless;

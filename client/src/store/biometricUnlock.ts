@@ -44,8 +44,10 @@
 // answered, and that is ignored here in every phase. So a prompt given up on
 // cannot, when it finally answers, knock the next one off the screen, and
 // there is no second count of attempts on this side to drift from Rust's.
-// (The screen asks for a new prompt only after Rust has ended the old one:
-// see Entry.tsx.) "unlocked" is never stale: Rust says it only when the vault
+// (The screen is handed each attempt's number by Rust before the prompt and
+// only passes it back — to the prompt, and to the cancel on "skip" — so a
+// skip also holds for a prompt Rust had not got round to showing: see
+// Entry.tsx.) "unlocked" is never stale: Rust says it only when the vault
 // is open, and the screen follows, whichever phase it is in.
 //
 // Kept free of React and of the bridge so that the transitions are tested as

@@ -788,17 +788,22 @@ export const biometricStatus = (withSecretKey: boolean) =>
   invoke<BiometricStatus>("biometric_status", { withSecretKey });
 export const biometricEnable = (password: string) => invoke<void>("biometric_enable", { password });
 export const biometricDisable = () => invoke<void>("biometric_disable");
-/** `reason` is the localised line the system prompt shows under the app name. */
-export const biometricUnlock = (reason: string) =>
-  invoke<BiometricUnlockOutcome>("biometric_unlock", { reason });
-/** End the biometric attempt whose prompt is up ("use the password instead"):
- *  its result is discarded in Rust and the prompt is closed where the OS can.
- *  It names no attempt, so a new prompt is asked for only after it resolved. */
-export const biometricCancel = () => invoke<void>("biometric_cancel");
+/** Before a prompt is asked for: Rust ends the attempt before it and names the
+ *  new one. The number is Rust's — it is only handed back, to the prompt and,
+ *  if the user gives up on it, to `biometricCancel`. */
+export const biometricBegin = () => invoke<number>("biometric_begin");
+/** `attempt` is from `biometricBegin`; `reason` is the localised line the
+ *  system prompt shows under the app name. */
+export const biometricUnlock = (attempt: number, reason: string) =>
+  invoke<BiometricUnlockOutcome>("biometric_unlock", { attempt, reason });
+/** End that biometric attempt ("use the password instead"): its result is
+ *  discarded in Rust and its prompt is closed where the OS can — or never
+ *  shown, if it was not up yet. An attempt that replaced it is left alone. */
+export const biometricCancel = (attempt: number) => invoke<void>("biometric_cancel", { attempt });
 /** The Secret-Key-only startup gate: the presence prompt, then the remembered-
  *  key unlock, both in Rust. Nothing is stored behind the prompt. */
-export const biometricPresenceUnlock = (reason: string) =>
-  invoke<BiometricUnlockOutcome>("biometric_presence_unlock", { reason });
+export const biometricPresenceUnlock = (attempt: number, reason: string) =>
+  invoke<BiometricUnlockOutcome>("biometric_presence_unlock", { attempt, reason });
 /** Show the presence prompt once, before the startup gate is turned on.
  *  Unlocks and stores nothing. */
 export const biometricConfirmPresence = (reason: string) =>

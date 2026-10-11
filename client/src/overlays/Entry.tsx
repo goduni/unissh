@@ -739,10 +739,15 @@ function Unlock() {
   // A prompt skipped from the view may still unlock later, beside a manual
   // unlock: the steps after unlocking run once.
   const finished = useRef(false);
+  // The attempt on screen, as Rust numbered it (`biometric_begin`): asked for
+  // before the prompt, handed to the prompt, and to the cancel if the user
+  // gives up on it. Rust does not run the three in the order they were asked
+  // for, and with the number it need not: a cancel that gets there before the
+  // prompt leaves that prompt unshown.
+  const attempt = useRef<Promise<number> | null>(null);
   // Rust ending the prompt that was given up on ("use the password instead").
-  // That call names no attempt — it ends whichever is current — so the next
-  // prompt is asked for only once it has answered: it can then never end the
-  // prompt that replaced the one it was meant for.
+  // The next attempt begins only once that has answered, so the attempts are
+  // begun and ended strictly in turn.
   const ending = useRef<Promise<void>>(Promise.resolve());
   // Under the presence gate: whether this device remembers the Secret Key, as
   // Rust answered — or will, if the answer is still on its way after the grace.
@@ -829,8 +834,10 @@ function Unlock() {
       const reason = t(key).trim() || t(key, { lng: "en" });
       // After Rust has ended the prompt given up on, if there was one: which
       // prompt a result belongs to is Rust's to say (see biometricUnlock.ts).
-      ending.current
-        .then(() => (gate ? api.biometricPresenceUnlock(reason) : api.biometricUnlock(reason)))
+      const begun = ending.current.then(() => api.biometricBegin());
+      attempt.current = begun;
+      begun
+        .then((id) => (gate ? api.biometricPresenceUnlock(id, reason) : api.biometricUnlock(id, reason)))
         .then((outcome) => {
           dispatchBio({ type: "outcome", outcome });
           if (outcome === "unlocked") {
@@ -872,7 +879,14 @@ function Unlock() {
   // vault the user has since opened and locked again by hand.
   const skipPrompt = () => {
     dispatchBio({ type: "skip" });
-    ending.current = api.biometricCancel().catch((e) => logWarn(`biometric cancel failed: ${apiErrorMessage(e)}`));
+    // Only what was begun can be ended; a prompt still waiting for a sign of
+    // the user (see above) has not been asked for at all.
+    const begun = attempt.current;
+    attempt.current = null;
+    if (!begun) return;
+    ending.current = begun
+      .then((id) => api.biometricCancel(id))
+      .catch((e) => logWarn(`biometric cancel failed: ${apiErrorMessage(e)}`));
   };
 
   // Everything after the core said yes, whichever way it was asked.
