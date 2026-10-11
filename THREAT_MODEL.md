@@ -447,8 +447,10 @@ boundary, so what crosses it is spelled out here.
   unlock above), or wake if the vault is still unlocked, when the setting is
   on. A vault lock does the same to forwarded agents' requests, in the core
   itself and so on every platform: the open prompt is withdrawn and every
-  request in line is refused, whichever agent it came through, so nothing
-  asked before a lock is shown after the unlock that follows. A screen lock or
+  request in line is refused, whichever agent it came through, and a request
+  arriving while the vault is locked (on an SSH session that outlived the
+  lock) is refused without a prompt, so nothing asked before or during a lock
+  is shown after the unlock that follows. A screen lock or
   sleep that leaves the vault unlocked (the "lock with the screen" setting off,
   or its grace period still running) stops only the system agent: SSH sessions
   stay up, and a forwarded request is still put to the window, which the
