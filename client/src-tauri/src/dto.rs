@@ -1102,6 +1102,8 @@ pub struct MultiExecResult {
     pub error: Option<String>,
     pub duration_ms: u64,
     pub timed_out: bool,
+    /// What a failed key-only login learned about the key; `None` otherwise.
+    pub key_login: Option<KeyLoginFailure>,
 }
 impl From<ffi::MultiExecResult> for MultiExecResult {
     fn from(r: ffi::MultiExecResult) -> Self {
@@ -1113,6 +1115,22 @@ impl From<ffi::MultiExecResult> for MultiExecResult {
             error: r.error,
             duration_ms: r.duration_ms,
             timed_out: r.timed_out,
+            key_login: r.key_login.map(Into::into),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyLoginFailure {
+    Refused,
+    AcceptedNeedsMore,
+}
+impl From<ffi::KeyLoginFailure> for KeyLoginFailure {
+    fn from(k: ffi::KeyLoginFailure) -> Self {
+        match k {
+            ffi::KeyLoginFailure::Refused => Self::Refused,
+            ffi::KeyLoginFailure::AcceptedNeedsMore => Self::AcceptedNeedsMore,
         }
     }
 }

@@ -352,7 +352,10 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{evict_replaced_agent_keys, load_key_into_agent};
+    use crate::{
+        evict_replaced_agent_keys, load_key_into_agent, map_transport_err, KeyLoginFailure,
+    };
+    use unissh_ssh_transport::TransportError;
 
     /// An unlocked core with vault `v` holding the SSH key `key`.
     fn fixture(dir: &std::path::Path) -> std::sync::Arc<Core> {
@@ -439,6 +442,24 @@ mod tests {
         // The retired key can no longer sign for a live forwarded agent; the
         // untouched one still serves the sessions that forward it.
         assert_eq!(loaded, [false, true]);
+    }
+
+    #[test]
+    fn a_key_only_login_failure_carries_its_outcome_as_a_value() {
+        let outcome = |e| KeyLoginFailure::of(&map_transport_err(e));
+        assert_eq!(
+            [
+                outcome(TransportError::KeyRefused),
+                outcome(TransportError::KeyAcceptedMoreAuthRequired),
+                // A failure that says nothing about the key.
+                outcome(TransportError::AuthFailed),
+            ],
+            [
+                Some(KeyLoginFailure::Refused),
+                Some(KeyLoginFailure::AcceptedNeedsMore),
+                None,
+            ]
+        );
     }
 
     #[test]

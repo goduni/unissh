@@ -3,12 +3,14 @@ import {
   beginStep,
   cancelRun,
   finishOutlook,
-  keyLoginOutcome,
+  hasSharedEndpoint,
+  keyRowRotationActions,
   planRotation,
   recordStep,
   retryTarget,
-  rotationRowActions,
+  rotationCommitted,
   runSettled,
+  runStep,
   startableSteps,
   startRun,
   stepConnect,
@@ -16,7 +18,7 @@ import {
   type RotationStep,
   type StepResult,
 } from "./keyRotation";
-import type { ConnectionProfile, JumpHost, ProfileAuth } from "@/bridge/types";
+import type { ConnectionProfile, JumpHost, MultiExecResult, ProfileAuth } from "@/bridge/types";
 
 const KEY: ProfileAuth = { type: "key", keyItemId: "k" };
 
@@ -90,6 +92,7 @@ describe("planRotation", () => {
       ["app", [J]],
       ["cache", [J]],
     ]);
+    expect(hasSharedEndpoint(plan)).toBe(false);
   });
 
   it("keeps the same login behind different routes as separate machines, and one route as one", () => {
@@ -120,6 +123,8 @@ describe("planRotation", () => {
       ["ops@inner.example:22 via ops@prod-bastion.example:22", "app", ["prod-bastion.example"], null],
       ["ops@inner.example:22 via ops@stage-bastion.example:22", "stage-app", ["stage-bastion.example"], null],
     ]);
+    // The dialog says so: one machine reached two ways is reported per route.
+    expect(hasSharedEndpoint(plan)).toBe(true);
   });
 
   it("skips hosts that log in with Personal, the system agent or a password, naming the reason", () => {
@@ -289,22 +294,111 @@ describe("finishing", () => {
     ]);
   });
 
-  it("never offers to finish a rotation from the key row, only to go back into the dialog", () => {
-    expect([rotationRowActions(false), rotationRowActions(true)]).toEqual([["continue", "abandon"], ["abandon"]]);
+  it("offers a key in a rotation only the way back into the dialog or abandon, never finish or replace", () => {
+    expect([
+      keyRowRotationActions(undefined),
+      keyRowRotationActions({ startedElsewhere: false }),
+      keyRowRotationActions({ startedElsewhere: true }),
+    ]).toEqual([["start", "replace"], ["continue", "abandon"], ["abandon"]]);
+  });
+
+  it("recognises an interrupted finish: the key item already holds the candidate's key", () => {
+    expect([
+      rotationCommitted("ssh-ed25519 AAAANEW user@laptop", "ssh-ed25519 AAAANEW rotation\n"),
+      rotationCommitted("ssh-ed25519 AAAAOLD user@laptop", "ssh-ed25519 AAAANEW rotation\n"),
+    ]).toEqual([true, false]);
   });
 });
 
-describe("keyLoginOutcome", () => {
-  it("tells a refused key from one that was accepted, with or without a second factor", () => {
-    const outcome = (error?: string) => keyLoginOutcome({ error });
+describe("runStep", () => {
+  const res = (over: Partial<MultiExecResult> = {}): MultiExecResult => ({
+    host: "h",
+    stdout: "",
+    stderr: "",
+    exitStatus: 0,
+    durationMs: 0,
+    timedOut: false,
+    ...over,
+  });
+  const failedLogin = (error: string, keyLogin?: MultiExecResult["keyLogin"]) => res({ exitStatus: -1, error, keyLogin });
+  const REFUSED = failedLogin("the server refused the key", "refused");
+  const NEEDS_MORE = failedLogin("the server accepted the key but requires further authentication", "acceptedNeedsMore");
+  // A hop that failed, the network, a lock: says nothing about the key.
+  const UNREACHABLE = failedLogin("connection reset");
+  const KEYS = { old: "ssh-ed25519 AAAAOLD", cand: "ssh-ed25519 AAAACAND" };
+  const PASSED = { ok: true };
+  const fails = (failure: object) => ({ ok: false, failure });
+
+  /** Run `step`, answering each exec by the login it was made with. */
+  async function run(step: RotationStep, answers: Partial<Record<RotationStep, MultiExecResult>>, resumed = false) {
+    const logins: RotationStep[] = [];
+    const out = await runStep(step, KEYS, {
+      resumed,
+      exec: async (as) => {
+        logins.push(as);
+        return answers[as] ?? null;
+      },
+    });
+    return { out, logins };
+  }
+
+  it("counts the candidate as proven when the server takes it and asks for a second factor", async () => {
+    const verify = async (r: MultiExecResult) => (await run("verify", { verify: r })).out;
+    expect([await verify(res()), await verify(NEEDS_MORE), await verify(REFUSED)]).toEqual([
+      PASSED,
+      PASSED,
+      fails({ kind: "error", message: "the server refused the key" }),
+    ]);
+  });
+
+  it("says what a remove left behind, and makes no old-key login of its own", async () => {
+    const remove = async (r: MultiExecResult) => run("remove", { remove: r });
+    const clean = await remove(res());
     expect([
-      outcome(),
-      outcome("ssh error: the server accepted the key but requires further authentication"),
-      outcome("ssh error: the server refused the key"),
-      // a hop that failed, the network, a lock: says nothing about the key
-      outcome("ssh error: authentication failed"),
-      keyLoginOutcome(undefined),
-    ]).toEqual(["accepted", "acceptedNeedsMore", "refused", "unknown", "unknown"]);
+      clean.out,
+      clean.logins,
+      (await remove(res({ exitStatus: 3 }))).out,
+      (await remove(res({ exitStatus: 4 }))).out,
+      (await remove(res({ exitStatus: 1, stderr: "new key is not in authorized_keys\n" }))).out,
+    ]).toEqual([
+      PASSED,
+      ["remove"],
+      fails({ kind: "oldKeyStillPresent" }),
+      fails({ kind: "noAuthorizedKeys" }),
+      fails({ kind: "error", message: "new key is not in authorized_keys" }),
+    ]);
+  });
+
+  it("on a host that wants a second factor, passes remove only once the old key is refused", async () => {
+    const remove = async (oldKey: MultiExecResult) => (await run("remove", { remove: NEEDS_MORE, confirm: oldKey })).out;
+    expect([await remove(REFUSED), await remove(NEEDS_MORE), await remove(UNREACHABLE)]).toEqual([
+      PASSED,
+      fails({ kind: "removeNeedsSecondFactor" }),
+      // Not "remove it by hand": nobody learned whether the old key still works.
+      fails({ kind: "oldKeyCheckFailed", message: "connection reset" }),
+    ]);
+  });
+
+  it("passes the old-key check only on a refusal, and tells a key still accepted from a check that did not run", async () => {
+    const confirm = async (r: MultiExecResult) => (await run("confirm", { confirm: r })).out;
+    expect([await confirm(REFUSED), await confirm(res()), await confirm(NEEDS_MORE), await confirm(UNREACHABLE)]).toEqual([
+      PASSED,
+      fails({ kind: "oldKeyStillAccepted" }),
+      fails({ kind: "oldKeyStillAccepted" }),
+      fails({ kind: "oldKeyCheckFailed", message: "connection reset" }),
+    ]);
+  });
+
+  it("when continuing, deploys with the old key only where the candidate is not accepted yet", async () => {
+    expect([
+      await run("deploy", { verify: NEEDS_MORE }, true),
+      await run("deploy", { verify: REFUSED, deploy: res() }, true),
+      await run("deploy", { deploy: res() }),
+    ]).toEqual([
+      { out: PASSED, logins: ["verify"] },
+      { out: PASSED, logins: ["verify", "deploy"] },
+      { out: PASSED, logins: ["deploy"] },
+    ]);
   });
 });
 

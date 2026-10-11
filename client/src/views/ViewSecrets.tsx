@@ -25,7 +25,7 @@ import { isDesktopOs } from "@/bridge/platform";
 import { systemAgentSetShared, systemAgentSharedKeys, systemAgentStatus } from "@/bridge/systemAgent";
 import { guard } from "@/store/action";
 import { isKeyOld, keyUsage, keyUsageCount } from "@/support/keyHygiene";
-import { rotationRowActions } from "@/support/keyRotation";
+import { keyRowRotationActions, type KeyRowRotationAction } from "@/support/keyRotation";
 import { useFmt } from "@/i18n/format";
 
 type SecretTab = "keys" | "passwords" | "notes" | "identities";
@@ -308,7 +308,7 @@ function KeyRow({
   // Continuing reopens it for the candidate this device already began — from
   // either row of the pair, always for the original key. It is also the only
   // way to finish: the row itself cannot know which machines already take the
-  // new key (see `rotationRowActions`).
+  // new key (see `keyRowRotationActions`).
   const onStartRotation = () =>
     ctx.openModal({ kind: "keyRotation", keyItemId: item.itemId, hasCertificate: item.hasCertificate });
   const onContinueRotation = () => {
@@ -371,6 +371,13 @@ function KeyRow({
         }
       },
     });
+  };
+
+  const rotationMenu: Record<KeyRowRotationAction, { label: string; icon: "refresh" | "x"; onClick: () => void }> = {
+    start: { label: t("secrets.startRotation"), icon: "refresh", onClick: onStartRotation },
+    replace: { label: t("secrets.rotateKey"), icon: "refresh", onClick: onRotate },
+    continue: { label: t("secrets.continueRotation"), icon: "refresh", onClick: onContinueRotation },
+    abandon: { label: t("secrets.abandonRotation"), icon: "x", onClick: onAbandonRotation },
   };
 
   const onDelete = () => {
@@ -542,16 +549,7 @@ function KeyRow({
                     ctx.openModal({ kind: "copyKeyToServer", openssh, keyItemId: item.itemId });
                 },
               },
-              ...(rotation
-                ? rotationRowActions(rotation.link.startedElsewhere).map((a) =>
-                    a === "continue"
-                      ? { label: t("secrets.continueRotation"), icon: "refresh" as const, onClick: onContinueRotation }
-                      : { label: t("secrets.abandonRotation"), icon: "x" as const, onClick: onAbandonRotation },
-                  )
-                : [
-                    { label: t("secrets.startRotation"), icon: "refresh" as const, onClick: onStartRotation },
-                    { label: t("secrets.rotateKey"), icon: "refresh" as const, onClick: onRotate },
-                  ]),
+              ...keyRowRotationActions(rotation?.link).map((a) => rotationMenu[a]),
               { label: t("secrets.exportPrivateKey"), icon: "download", onClick: onExport },
             ]}
           />

@@ -249,6 +249,15 @@ pub enum FfiError {
     /// that is not a key: a password would stand in for the key it must prove.
     #[error("a key-only login needs key authentication")]
     PublickeyOnlyNeedsKey,
+    /// A key-only login (`publickey_only`) was refused: the server did not
+    /// accept the key — neither its certificate, when it has one, nor the plain
+    /// key. Says nothing about any other way into the account.
+    #[error("the server refused the key")]
+    KeyRefused,
+    /// A key-only login got as far as the server accepting the key and asking
+    /// for a further factor. The login was not completed; the key is authorized.
+    #[error("the server accepted the key but requires further authentication")]
+    KeyAcceptedMoreAuthRequired,
     /// SSH error.
     #[error("ssh error: {msg}")]
     Ssh {
@@ -1285,6 +1294,31 @@ pub struct GroupTargetPlan {
     pub status: ResolveStatus,
 }
 
+/// What a key-only login ([`MultiExecTarget::publickey_only`]) that did not
+/// establish a session learned about the key. Any other failure — a hop, the
+/// network, a locked core — says nothing about the key and carries no value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum KeyLoginFailure {
+    /// The server did not accept the key ([`FfiError::KeyRefused`]).
+    Refused,
+    /// The server accepted the key and wants a further factor
+    /// ([`FfiError::KeyAcceptedMoreAuthRequired`]).
+    AcceptedNeedsMore,
+}
+
+impl KeyLoginFailure {
+    /// The key-login outcome a connect error stands for, if it is one.
+    const fn of(e: &FfiError) -> Option<Self> {
+        if matches!(e, FfiError::KeyRefused) {
+            Some(Self::Refused)
+        } else if matches!(e, FfiError::KeyAcceptedMoreAuthRequired) {
+            Some(Self::AcceptedNeedsMore)
+        } else {
+            None
+        }
+    }
+}
+
 /// Result of multi-exec for a single host.
 #[derive(uniffi::Record)]
 pub struct MultiExecResult {
@@ -1303,6 +1337,9 @@ pub struct MultiExecResult {
     /// The command exceeded the per-host timeout (`timeout_secs`). In that case `error`
     /// is also set and `exit_status == -1`.
     pub timed_out: bool,
+    /// Set when the target was a key-only login that failed with an answer
+    /// about the key itself; `None` for every other result, failed or not.
+    pub key_login: Option<KeyLoginFailure>,
 }
 
 // === Milestone 2: FFI types (cloud/membership/identity/cache/audit/sync) ===
@@ -3837,6 +3874,7 @@ impl Core {
                     error: Some(e.to_string()),
                     duration_ms: 0,
                     timed_out: false,
+                    key_login: KeyLoginFailure::of(&e),
                 }),
             }
         }
@@ -3889,6 +3927,7 @@ impl Core {
                     error: None,
                     duration_ms,
                     timed_out: false,
+                    key_login: None,
                 }),
                 Some(Err(e)) => results.push(MultiExecResult {
                     host,
@@ -3898,6 +3937,7 @@ impl Core {
                     error: Some(e.to_string()),
                     duration_ms,
                     timed_out: false,
+                    key_login: None,
                 }),
                 None => results.push(MultiExecResult {
                     host,
@@ -3907,6 +3947,7 @@ impl Core {
                     error: Some(format!("command timed out after {timeout_secs}s")),
                     duration_ms,
                     timed_out: true,
+                    key_login: None,
                 }),
             }
         }
@@ -4502,6 +4543,7 @@ impl Core {
                 error: Some(msg.to_owned()),
                 duration_ms: 0,
                 timed_out: false,
+                key_login: None,
             });
         }
         Ok(results)
@@ -7353,6 +7395,12 @@ fn map_transport_err(e: unissh_ssh_transport::TransportError) -> FfiError {
         // with Locked, and dressing it as an SSH failure would send them looking
         // at the host.
         unissh_ssh_transport::TransportError::CoreLocked => FfiError::Locked,
+        // The two answers a key-only login exists to get: kept as variants so a
+        // caller reads the outcome off the type, never off the message.
+        unissh_ssh_transport::TransportError::KeyRefused => FfiError::KeyRefused,
+        unissh_ssh_transport::TransportError::KeyAcceptedMoreAuthRequired => {
+            FfiError::KeyAcceptedMoreAuthRequired
+        }
         unissh_ssh_transport::TransportError::HostKeyMismatch {
             host,
             port,

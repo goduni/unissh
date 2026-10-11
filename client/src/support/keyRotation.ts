@@ -1,7 +1,9 @@
 // Guided key rotation: the plan (which machines get the candidate key, which
-// hosts merely follow, which are out of scope) and the per-target state machine
-// deploy → verify → remove → confirm. Pure — no I/O. The view runs each step
-// over SSH and feeds the result back in; this module decides what may run next.
+// hosts merely follow, which are out of scope), the per-target state machine
+// deploy → verify → remove → confirm, and what each step runs and when it
+// counts as passed (`runStep`). No I/O of its own: the view hands in the SSH
+// exec and feeds each step's result back; this module decides what may run
+// next and what a result means.
 //
 // The safety rule lives here: `remove` (dropping the old public key from a
 // machine) is reachable only from a passed `verify` (a login with the candidate
@@ -10,7 +12,13 @@
 // key was attempted and refused. A line gone from `~/.ssh/authorized_keys` does
 // not prove that — sshd may accept the key from another file, a command or a CA.
 
-import type { ConnectionProfile, JumpHost, MultiExecTarget, ProxyConfig } from "@/bridge/types";
+import type { ConnectionProfile, JumpHost, MultiExecResult, MultiExecTarget, ProxyConfig } from "@/bridge/types";
+import {
+  authorizedKeysAppendCmd,
+  authorizedKeysRemoveCmd,
+  REMOVE_EXIT_NO_FILE,
+  REMOVE_EXIT_STILL_PRESENT,
+} from "./authorizedKeys";
 import { keyMatcher } from "./keyHygiene";
 
 export type RotationStep = "deploy" | "verify" | "remove" | "confirm";
@@ -159,16 +167,27 @@ export function planRotation(
   return { hosts, vaultId, keyItemId, targets: [...targets.values()], dependents, skipped };
 }
 
+/** Whether two targets of the plan are the same login reached over different
+ *  routes. They may well be one machine (a bastion with two ways in): each
+ *  route is then switched and reported on its own, so a route that fails is
+ *  listed as not switched although the machine behind it already is. */
+export function hasSharedEndpoint(plan: RotationPlan): boolean {
+  const endpoints = plan.targets.map((t) => endpointId(t.user, t.host, t.port));
+  return new Set(endpoints).size < endpoints.length;
+}
+
 // ── run state machine ──────────────────────────────────────────
 
 /** One target's place in a run:
  *   pending  — waiting to run `step`;
  *   running  — `step` is in flight;
- *   failed   — `step` failed with `error`. Up to `remove` the old key is still
- *              authorized: a failed remove either did not rewrite the file at
- *              all (the rewrite is atomic), or removed the plain lines and
- *              found the old key still there behind an options prefix
- *              (`REMOVE_EXIT_STILL_PRESENT`). A failed `confirm` means the old
+ *   failed   — `step` failed with `error`. Up to `remove` the old key has to
+ *              be taken as still authorized: a failed remove either did not
+ *              rewrite the file at all (the rewrite is atomic), or removed the
+ *              plain lines and found the old key's blob still in the file —
+ *              behind an options prefix, say (`REMOVE_EXIT_STILL_PRESENT`). On
+ *              a host that wants a second factor it means the old key was not
+ *              seen refused. A failed `confirm` means the old
  *              line is gone from `~/.ssh/authorized_keys` but the old key was
  *              not seen refused: it still logs in, or the check did not run;
  *   switched — the candidate logs in and the old key was refused;
@@ -305,38 +324,141 @@ export function finishOutlook(plan: RotationPlan, run: RotationRun): FinishOutlo
   };
 }
 
-/** What a key row offers for a rotation in progress. Finishing is deliberately
- *  not one of them: which machines already take the candidate is known only to
- *  a run of the rotation dialog, and that knowledge is gone once the dialog
- *  closes, the app restarts or the vault locks. So the row leads back into the
- *  dialog, which tries every machine again before it offers to finish. A
- *  rotation started on another device can only be abandoned here. */
-export type RotationRowAction = "continue" | "abandon";
-export const rotationRowActions = (startedElsewhere: boolean): RotationRowAction[] =>
-  startedElsewhere ? ["abandon"] : ["continue", "abandon"];
+/** The rotation entries of a key row's menu. Finishing is deliberately not one
+ *  of them: which machines already take the candidate is known only to a run of
+ *  the rotation dialog, and that knowledge is gone once the dialog closes, the
+ *  app restarts or the vault locks. So a key in a rotation leads back into the
+ *  dialog, which tries every machine again before it offers to finish — and it
+ *  offers neither a second rotation nor the in-place replace, which would
+ *  discard the key the machines already switched now expect. A rotation started
+ *  on another device can only be abandoned here. */
+export type KeyRowRotationAction = "start" | "replace" | "continue" | "abandon";
+export function keyRowRotationActions(
+  rotation: { startedElsewhere: boolean } | null | undefined,
+): KeyRowRotationAction[] {
+  if (!rotation) return ["start", "replace"];
+  return rotation.startedElsewhere ? ["abandon"] : ["continue", "abandon"];
+}
+
+/** Whether the key item already holds the candidate's key: a finish was
+ *  interrupted after its first write. There is no old key left to move
+ *  machines off — a run would deploy and "check" the candidate against itself —
+ *  so the only thing to do is complete that finish. Compared by key type and
+ *  blob; the comment is not part of a key. */
+export function rotationCommitted(keyOpenssh: string, candidateOpenssh: string): boolean {
+  const key = (line: string) => line.trim().split(/\s+/).slice(0, 2).join(" ");
+  return key(keyOpenssh) === key(candidateOpenssh);
+}
 
 /** How a key-only login (`publickeyOnly`) with one key ended:
- *   accepted         — the session was established;
+ *   accepted         — the session was established and the command ran;
  *   acceptedNeedsMore — the server took the key and asked for a second factor;
  *                       the login was not completed, the key is authorized;
  *   refused          — the server does not accept the key;
  *   unknown          — the attempt failed for another reason and says nothing. */
 export type KeyLogin = "accepted" | "acceptedNeedsMore" | "refused" | "unknown";
 
-// The core's messages for the two key-only failures: the transport's
-// `TransportError::KeyRefused` / `KeyAcceptedMoreAuthRequired` (pinned by a
-// test in rust-core/crates/ssh-transport/src/client.rs) as the FFI's
-// `FfiError::Ssh` shows them. If they ever drift apart both outcomes read as
-// `unknown`, which claims nothing.
-const KEY_REFUSED = "ssh error: the server refused the key";
-const KEY_NEEDS_MORE = "ssh error: the server accepted the key but requires further authentication";
-
-/** Read a key-only login's outcome off the exec result of its target. A command
- *  that then failed or timed out still ran inside an established session. */
-export function keyLoginOutcome(r: { error?: string | null } | null | undefined): KeyLogin {
+/** Read a key-only login's outcome off the exec result of its target. The two
+ *  answers about the key come from the core as a value (`keyLogin`), never from
+ *  the error text. Any other error — a hop, the network, a lock, a command that
+ *  timed out or could not be run — reads as `unknown`, which claims nothing. */
+function keyLoginOutcome(r: Pick<MultiExecResult, "error" | "keyLogin"> | null | undefined): KeyLogin {
   if (!r) return "unknown";
   if (!r.error) return "accepted";
-  return r.error === KEY_REFUSED ? "refused" : r.error === KEY_NEEDS_MORE ? "acceptedNeedsMore" : "unknown";
+  return r.keyLogin ?? "unknown";
+}
+
+/** Why a step did not pass. The view words it. */
+export type StepFailure =
+  /** Nothing came back for the target. */
+  | { kind: "noResult" }
+  | { kind: "timedOut" }
+  /** The connection or the command failed, in its own words. */
+  | { kind: "error"; message: string }
+  /** Remove: the old key's blob is still in the file (`REMOVE_EXIT_STILL_PRESENT`). */
+  | { kind: "oldKeyStillPresent" }
+  | { kind: "noAuthorizedKeys" }
+  /** Remove: the candidate cannot get a shell without a second factor, and the
+   *  old key is still accepted — its line has to be removed by hand. */
+  | { kind: "removeNeedsSecondFactor" }
+  /** Confirm: the old key still logs in. */
+  | { kind: "oldKeyStillAccepted" }
+  /** The old-key login failed for a reason that says nothing about the key. */
+  | { kind: "oldKeyCheckFailed"; message: string | null };
+
+export type StepOutcome = { ok: true } | { ok: false; failure: StepFailure };
+
+const PASSED: StepOutcome = { ok: true };
+const failed = (failure: StepFailure): StepOutcome => ({ ok: false, failure });
+
+/** A command's result as a step outcome: only a clean exit passes. */
+function ran(r: MultiExecResult | null, step: RotationStep): StepOutcome {
+  if (!r) return failed({ kind: "noResult" });
+  if (r.timedOut) return failed({ kind: "timedOut" });
+  if (r.error) return failed({ kind: "error", message: r.error });
+  if (step === "remove" && r.exitStatus === REMOVE_EXIT_STILL_PRESENT) return failed({ kind: "oldKeyStillPresent" });
+  if (step === "remove" && r.exitStatus === REMOVE_EXIT_NO_FILE) return failed({ kind: "noAuthorizedKeys" });
+  if (r.exitStatus !== 0) return failed({ kind: "error", message: r.stderr.trim() || `exit ${r.exitStatus}` });
+  return PASSED;
+}
+
+/** What `runStep` needs from the view. */
+export interface StepIo {
+  /** Run `cmd` on the target, connected the way `stepConnect` says for step
+   *  `as`. Resolves to null when nothing came back for the target. */
+  exec(as: RotationStep, cmd: string): Promise<MultiExecResult | null>;
+  /** Continuing a rotation begun earlier (see `runStep`, deploy). */
+  resumed: boolean;
+}
+
+/** Run one step on one target and say whether it passed.
+ *
+ *  deploy  — append the candidate, logged in with the old key. When continuing
+ *            a rotation, first with the candidate, key-only: a machine an
+ *            earlier run got to already takes it — and may no longer take the
+ *            old key, which would only earn a password prompt — while one
+ *            without it just says no and gets the old-key deploy.
+ *  verify  — a key-only login with the candidate. A server that takes the key
+ *            and wants a second factor on top has accepted it: the key is
+ *            proven, the login is not completed (nothing answers that prompt).
+ *  remove  — drop the old line, logged in with the candidate. Where a second
+ *            factor stands between the candidate and a shell the line cannot be
+ *            removed from here; the step then passes only if the old key is
+ *            already refused (it was removed by hand).
+ *  confirm — a key-only login with the OLD key, which must be refused. A login
+ *            that failed for any other reason proves nothing and is reported
+ *            apart from one where the old key was accepted. */
+export async function runStep(
+  step: RotationStep,
+  keys: { old: string; cand: string },
+  io: StepIo,
+): Promise<StepOutcome> {
+  /** Passes only when the machine refuses the old key; `accepted` is the
+   *  failure for a machine that still takes it. */
+  const oldKeyRefused = async (accepted: StepFailure): Promise<StepOutcome> => {
+    const r = await io.exec("confirm", "true");
+    const login = keyLoginOutcome(r);
+    if (login === "refused") return PASSED;
+    return failed(login === "unknown" ? { kind: "oldKeyCheckFailed", message: r?.error ?? null } : accepted);
+  };
+
+  if (step === "verify") {
+    const r = await io.exec("verify", "true");
+    return keyLoginOutcome(r) === "acceptedNeedsMore" ? PASSED : ran(r, step);
+  }
+  if (step === "remove") {
+    const r = await io.exec("remove", authorizedKeysRemoveCmd(keys.old, keys.cand));
+    if (keyLoginOutcome(r) !== "acceptedNeedsMore") return ran(r, step);
+    return oldKeyRefused({ kind: "removeNeedsSecondFactor" });
+  }
+  if (step === "confirm") return oldKeyRefused({ kind: "oldKeyStillAccepted" });
+
+  const append = authorizedKeysAppendCmd(keys.cand);
+  if (io.resumed) {
+    const r = await io.exec("verify", append);
+    if (keyLoginOutcome(r) === "acceptedNeedsMore" || ran(r, step).ok) return PASSED;
+  }
+  return ran(await io.exec("deploy", append), step);
 }
 
 /** How to reach target `id` for `step`. The target itself logs in with the old
