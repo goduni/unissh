@@ -8,6 +8,7 @@ import * as api from "@/bridge/api";
 import { apiErrorMessage, type SftpEntry } from "@/bridge/types";
 import type { Entry, LocationRef, SftpSession } from "@/store/sftp-types";
 import { breadcrumbSegments, isSafeName, isPortableWindowsName, remoteJoin, remoteParent, type Crumb } from "@/sftp/paths";
+import { isWindows } from "@/bridge/platform";
 import { dirname, join } from "@tauri-apps/api/path";
 
 /** An error that looks like the SFTP channel/connection dropped (server reaped
@@ -35,7 +36,74 @@ export function isSftpDisconnect(msg: string): boolean {
   ].some((k) => m.includes(k));
 }
 
+/** The status code of an SFTP error as the core words it — "sftp error: status
+ *  N", optionally followed by ": " and the server's own text — or null for any
+ *  other failure. Anchored to that prefix on purpose: everything after the code
+ *  is supplied by the server, and a message or file name in it that happens to
+ *  read "status 2" must not be taken for one. */
+export function sftpStatus(message: string): number | null {
+  const match = /^sftp error: status (\d+)(?::|$)/.exec(message);
+  return match ? Number(match[1]) : null;
+}
+
+/** SSH_FX_NO_SUCH_FILE: the one answer that means "this path is not there". */
+export const isNoSuchFile = (message: string): boolean => sftpStatus(message) === 2;
+
+/** Whether a refused rename on a remote source means "these two paths cannot be
+ *  joined by a rename", so a move has to copy and then remove — as opposed to a
+ *  rename that was simply not allowed, or never reached the other end.
+ *
+ *  An SFTP server has no status for "across filesystems": OpenSSH reports EXDEV
+ *  as the generic SSH_FX_FAILURE (4), which cannot be narrowed further, and a
+ *  server without the operation answers SSH_FX_OP_UNSUPPORTED (8). Permission
+ *  denied (3), no such file (2) and a dropped channel are none of these, and
+ *  copying would only hide them — and re-create the file under the user's own
+ *  owner and group. Neither is the core's "server does not support atomic
+ *  replacement": the copy path ends in the very same replacing commit, so it
+ *  cannot succeed where this one was refused, and the refusal is the answer. */
+export function remoteRenameNeedsCopy(message: string): boolean {
+  const status = sftpStatus(message);
+  return status === 4 || status === 8;
+}
+
+/** The local counterpart of remoteRenameNeedsCopy. It mirrors `local_commit`
+ *  in client/src-tauri/src/commands.rs, and has to change with it:
+ *
+ *  - A replacing commit and a folder rename are one rename(2) / MoveFileExW.
+ *    Only "across filesystems" qualifies: EXDEV, errno 18 on Linux, macOS,
+ *    Android and iOS, and ERROR_NOT_SAME_DEVICE (17) on Windows.
+ *  - A commit onto a free name (`exclusive`) is, on unix, link(2) followed by
+ *    removing the old name, and link(2) is refused by filesystems that have no
+ *    hard links although source and destination are on the same one: EPERM (1)
+ *    on FAT/exFAT and many FUSE and SMB mounts (and under Linux
+ *    protected_hardlinks), EOPNOTSUPP (95, Linux) or ENOTSUP (45, macOS), and
+ *    EMLINK (31) once the inode has no link left to give. Each of these also
+ *    takes the copy path. That path publishes with the same exclusive commit
+ *    and removes the source only after its own checks, so it can neither
+ *    overwrite nor delete anything the rename could not have. On Windows the
+ *    exclusive commit is MoveFileExW too, and nothing is added.
+ *
+ *  The number is read from the suffix the OS error carries, because the text in
+ *  front of it is localised. The same numbers mean other things on the other
+ *  family (17 is EEXIST on unix), hence `windows`. */
+export function localRenameNeedsCopy(message: string, windows: boolean, exclusive: boolean): boolean {
+  const code = /\(os error (\d+)\)/.exec(message)?.[1];
+  if (code === undefined) return false;
+  if (windows) return code === "17";
+  return code === "18" || (exclusive && ["1", "31", "45", "95"].includes(code));
+}
+
 export interface FileSource {
+  /** Paths on this source follow Windows rules: a backslash separates, and
+   *  names compare without regard to case. Known from the platform the app runs on,
+   *  never guessed from the look of a path — a unix file name may hold a
+   *  backslash or start with "c:". Absent means no. */
+  windows?: boolean;
+  /** Whether a failed in-place move (`rename`, or `commit` of an entry that is
+   *  already here) means the two paths cannot be joined by a rename, so the
+   *  move has to copy and then remove. `exclusive` says the request was a
+   *  `commit(…, false)` of a file. Any other failure is the move's failure. */
+  renameNeedsCopy(error: unknown, exclusive: boolean): boolean;
   sameFile?(from: string, to: string): Promise<boolean>;
   withCancelToken?(id: string): FileSource;
   kind: "local" | "remote";
@@ -105,8 +173,10 @@ function fileKind(mode?: number): Entry["fileKind"] {
   }
 }
 
-function baseName(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
+// `windows`: whether a backslash separates names here. Elsewhere it is an
+// ordinary character of a name — on a remote side and on a unix local one.
+function baseName(path: string, windows: boolean): string {
+  const parts = path.split(windows ? /[\\/]/ : "/").filter(Boolean);
   return parts.length ? parts[parts.length - 1] : path;
 }
 
@@ -137,6 +207,56 @@ class RemoteSource implements FileSource {
       if (signal?.aborted) throw e;
       return await fn(); // single retry — a truly dead SSH connection still throws
     }
+  }
+  /** withReopen for a request that takes something away (REMOVE, RMDIR). The
+   *  channel can die after the server acted but before its reply arrived, and
+   *  the second try then finds nothing: "no such file" on the SECOND try means
+   *  the first one did it, so it is success. On the first try it stays an
+   *  error. Repeating is safe either way — the request names one path, is never
+   *  recursive, and can remove at most the entry the caller meant.
+   *
+   *  What this cannot tell apart: a first try that died before it was sent, for
+   *  a path that was never there. That too ends as "no such file" on the second
+   *  try and is reported as removed. For a removal the outcome is the same —
+   *  the path is not there — but a caller must not read it as "there was
+   *  something, and it is gone now". */
+  private async gone(run: () => Promise<void>): Promise<void> {
+    let retry = false;
+    await this.withReopen(async () => {
+      const second = retry;
+      retry = true;
+      try {
+        await run();
+      } catch (error) {
+        if (!second || !isNoSuchFile(apiErrorMessage(error))) throw error;
+      }
+    });
+  }
+  /** withReopen for a request that renames `from` onto `to` (RENAME, and the
+   *  posix-rename behind a replacing commit). It is NOT repeated blindly: if
+   *  the reply was lost after the server acted, `from` is gone and a second
+   *  request would fail with "no such file" although the move happened — and
+   *  the caller would report a failed move, or copy what is no longer there.
+   *  So after the reopen the outcome is looked at first: `from` gone and `to`
+   *  present means the first request landed, and nothing is sent again. With
+   *  `from` still in place the first request did nothing a second one cannot
+   *  redo: posix-rename is atomic, and a plain RENAME that stopped between its
+   *  link and unlink makes the second one fail on the existing `to`, which is
+   *  the truth.
+   *
+   *  The two halves of that test do not weigh the same. For a replacing commit
+   *  `to` was there before the request, so "`to` present" is no evidence at
+   *  all; the proof is only "`from` gone", and it rests on nothing else taking
+   *  `from` away in the meantime — every caller passes a path of its own (a
+   *  staged `.unissh-*.part`, or an entry the user is moving right now). "`to`
+   *  present" only guards the case where both are gone, which is no rename. */
+  private async moved(from: string, to: string, run: () => Promise<void>): Promise<void> {
+    let retry = false;
+    await this.withReopen(async () => {
+      if (retry && await this.lstat(from) === null && await this.lstat(to) !== null) return;
+      retry = true;
+      await run();
+    });
   }
   async list(path: string, signal?: AbortSignal): Promise<Entry[]> {
     let list: SftpEntry[];
@@ -185,7 +305,7 @@ class RemoteSource implements FileSource {
     try {
       const s = await this.withReopen(() => follow ? api.sftpStat(this.id, path, this.cancelId) : api.sftpLstat(this.id, path, this.cancelId));
       return {
-        name: baseName(path),
+        name: baseName(path, false),
         isDir: s.isDir,
         isSymlink: (s.mode & 0o170000) === 0o120000,
         size: s.size,
@@ -197,7 +317,7 @@ class RemoteSource implements FileSource {
     } catch (error) {
       // Only SSH_FX_NO_SUCH_FILE means absent. Treating permission/network/
       // generic status-4 errors as absence bypassed the overwrite decision.
-      if (/\bstatus 2\b/.test(apiErrorMessage(error))) return null;
+      if (isNoSuchFile(apiErrorMessage(error))) return null;
       throw error;
     }
   }
@@ -220,7 +340,7 @@ class RemoteSource implements FileSource {
     return api.sftpCreateNewFile(this.id, path, this.cancelId);
   }
   remove(path: string): Promise<void> {
-    return api.sftpRemove(this.id, path);
+    return this.gone(() => api.sftpRemove(this.id, path));
   }
   rmdir(path: string): Promise<void> {
     // Recursive — SFTP RMDIR only removes empty dirs (a non-empty one returns
@@ -228,12 +348,17 @@ class RemoteSource implements FileSource {
     return api.sftpRmdirRecursive(this.id, path);
   }
   removeEmptyDir(path: string): Promise<void> {
-    return api.sftpRmdir(this.id, path);
+    return this.gone(() => api.sftpRmdir(this.id, path));
   }
   rename(from: string, to: string): Promise<void> {
-    return api.sftpRename(this.id, from, to);
+    return this.moved(from, to, () => api.sftpRename(this.id, from, to));
   }
-  commit(from: string, to: string, replace: boolean): Promise<void> { return api.sftpCommit(this.id, from, to, replace, this.cancelId); }
+  commit(from: string, to: string, replace: boolean): Promise<void> {
+    return this.moved(from, to, () => api.sftpCommit(this.id, from, to, replace, this.cancelId));
+  }
+  renameNeedsCopy(error: unknown): boolean {
+    return remoteRenameNeedsCopy(apiErrorMessage(error));
+  }
   setMetadata(path: string, mode?: number, mtime?: number): Promise<void> { return api.sftpSetMetadata(this.id, path, mode === undefined ? undefined : mode & 0o777, mtime, this.cancelId); }
   chmod(path: string, mode: number): Promise<void> {
     return api.sftpChmod(this.id, path, mode);
@@ -272,6 +397,7 @@ class LocalSource implements FileSource {
   readonly kind = "local" as const;
   readonly id = "local";
   readonly label: string;
+  readonly windows = isWindows();
   constructor(label: string, private readonly cancelId?: string) {
     this.label = label;
   }
@@ -285,7 +411,7 @@ class LocalSource implements FileSource {
   }
   async stat(path: string): Promise<Entry | null> {
     const s = await api.localStat(path);
-    return s ? { name: baseName(path), isDir: s.isDir, size: s.size, mtime: s.mtime || undefined } : null;
+    return s ? { name: baseName(path, this.windows), isDir: s.isDir, size: s.size, mtime: s.mtime || undefined } : null;
   }
   async lstat(path: string): Promise<Entry | null> {
     const entry = await api.localLstat(path);
@@ -303,6 +429,9 @@ class LocalSource implements FileSource {
   realpath(path: string): Promise<string> { return api.localRealpath(path); }
   sameFile(from: string, to: string): Promise<boolean> { return api.localSameFile(from, to); }
   commit(from: string, to: string, replace: boolean): Promise<void> { return api.localCommit(from, to, replace); }
+  renameNeedsCopy(error: unknown, exclusive: boolean): boolean {
+    return localRenameNeedsCopy(apiErrorMessage(error), this.windows, exclusive);
+  }
   setMetadata(path: string, mode?: number, mtime?: number): Promise<void> { return api.localSetMetadata(path, mode === undefined ? undefined : mode & 0o777, mtime); }
   async mkdir(path: string): Promise<void> {
     await api.localMkdir(path);
@@ -346,7 +475,7 @@ class LocalSource implements FileSource {
   }
   async join(base: string, name: string): Promise<string> {
     if (name === "..") return this.parent(base);
-    if (!isSafeName(name) || (/^[a-z]:|\\/i.test(base) && !isPortableWindowsName(name))) throw new Error(`Unsupported destination filename: ${name}`);
+    if (!isSafeName(name) || (this.windows && !isPortableWindowsName(name))) throw new Error(`Unsupported destination filename: ${name}`);
     return join(base, name);
   }
   async parent(path: string): Promise<string> {
@@ -357,9 +486,10 @@ class LocalSource implements FileSource {
     }
   }
   crumbs(path: string): Crumb[] {
-    // Windows paths lead with a drive ("C:\…"); unix paths lead with "/".
-    const win = path.includes("\\");
-    const parts = path.split(/[\\/]/).filter(Boolean);
+    // Windows paths lead with a drive ("C:\…"); unix paths lead with "/". Which
+    // it is comes from the platform: on unix a backslash is part of a name.
+    const win = this.windows;
+    const parts = path.split(win ? /[\\/]/ : "/").filter(Boolean);
     const crumbs: Crumb[] = [];
     if (!win) {
       crumbs.push({ label: "/", path: "/" });
