@@ -32,6 +32,8 @@ starts with `0.`:
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-11
+
 ### Added
 
 - Inline images in the terminal: sixel and iTerm2 inline-image output renders in
