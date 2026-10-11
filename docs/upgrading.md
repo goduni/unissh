@@ -111,6 +111,14 @@ the item, which stays on the device until the limit is raised and you press
 Vault format and server protocol are unchanged; the server receives it like any
 new Cloud vault.
 
+Placing a vault in a space reserves its id on the server before the vault is
+moved or created there. If the move or the creation then fails, the client keeps
+that id and a retry into the same space uses it again. If you choose a different
+space or **Personal** instead, or never retry, the id stays reserved in the first
+space as a vault with no data: it is listed, empty and without a name, among the
+vaults of that server, holds nothing and gives nobody access to anything. 0.6 has
+no way to remove such a reservation; it is safe to leave.
+
 ## Server operators: size limits in 0.6
 
 Session recordings are vault items of up to 17 MiB, and 0.6 is the first release
