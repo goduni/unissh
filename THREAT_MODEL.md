@@ -87,6 +87,21 @@ vault key, and holding a vault-admin grant confers no server-side privilege.
 Collapsing them would let a server compromise escalate into decryption — which
 must never happen.
 
+**Personal and space vaults.** The server registers a cloud vault either as a
+*personal* vault of one account or as a vault *of a space*. The difference lives
+entirely on the server-trusted plane: invitations that carry access to a
+personal vault can be issued only by its owning account, and to a space vault by
+any admin of that space — including admins other than the vault's creator, and
+the creator only for as long as they remain one. It does not touch the
+cryptographic plane: either way, reading needs a grant wrapped to the reader's
+key, which only a device holding the Vault Key can publish. Clients up to 0.5
+created personal vaults only; from 0.6 a vault is placed in a space only when
+the user picks one explicitly, and personal stays the default. Existing vaults
+are not migrated, so an instance holds both kinds. Which kind a vault is, is
+server state: a malicious server could misreport it, with the consequences of
+the server-trusted class above (the wrong account could queue an invitation) and
+no more (it still cannot mint a grant).
+
 ### First-boot claim window
 
 An unclaimed instance prints a one-time **setup code** to its log on first boot
