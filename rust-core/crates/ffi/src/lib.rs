@@ -3349,6 +3349,9 @@ impl Core {
                     cert_openssh.as_bytes(),
                 )
                 .map_err(FfiError::other)?;
+            // The loaded copy still carries the previous certificate (or none):
+            // drop it, so the next use reloads the key with this one.
+            state.agent.remove(&agent_key_id(&vault_id, &key_item_id));
             Ok(())
         })
     }
