@@ -191,7 +191,7 @@ impl<'a> Reader<'a> {
         self.b = t;
         Ok(h)
     }
-    fn u32(&mut self) -> Result<u32, SyncError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, SyncError> {
         let s = self.take(4)?;
         let mut a = [0_u8; 4];
         a.copy_from_slice(s);
@@ -262,7 +262,81 @@ fn role_from(v: u8) -> Result<MemberRole, SyncError> {
     MemberRole::from_i64(i64::from(v)).ok_or(SyncError::Format)
 }
 
+/// Encoded size of a length-prefixed field ([`put_bytes`]).
+const fn prefixed(b: &[u8]) -> usize {
+    b.len().saturating_add(4)
+}
+
+/// Encoded size of an object with these field sizes: the tag byte and the fields.
+fn encoded_total(fields: &[usize]) -> usize {
+    fields.iter().fold(1, |n, f| n.saturating_add(*f))
+}
+
 impl SyncObject {
+    /// The length of [`Self::to_bytes`]' output, from the field lengths alone —
+    /// for sizing a request without serializing the object a second time. Kept
+    /// next to `to_bytes`: the two change together.
+    pub fn encoded_len(&self) -> usize {
+        // Fixed-width fields are counted by their width: u64/i64 = 8, u32 = 4,
+        // a flag or an enum byte = 1.
+        match self {
+            Self::Vault(v) => encoded_total(&[
+                prefixed(&v.vault_id),
+                1,
+                prefixed(&v.name_blob),
+                prefixed(&v.wrapped_vk),
+                8,
+                1,
+                prefixed(&v.signature),
+                prefixed(&v.author_pubkey),
+                8,
+                1,
+            ]),
+            Self::Item(i) => encoded_total(&[
+                prefixed(&i.vault_id),
+                prefixed(&i.item_id),
+                4,
+                prefixed(&i.content_blob),
+                prefixed(&i.wrapped_item_key),
+                8,
+                1,
+                prefixed(&i.signature),
+                prefixed(&i.author_pubkey),
+                8,
+            ]),
+            Self::MembershipManifest(m) => encoded_total(&[
+                prefixed(&m.vault_id),
+                8,
+                prefixed(&m.manifest_blob),
+                prefixed(&m.signature),
+                prefixed(&m.author_pubkey),
+            ]),
+            Self::MembershipGrant(g) => encoded_total(&[
+                prefixed(&g.vault_id),
+                prefixed(&g.member_pubkey),
+                8,
+                1,
+                8,
+                prefixed(&g.wrapped_vk),
+                prefixed(&g.signature),
+                prefixed(&g.author_pubkey),
+            ]),
+            Self::Audit(a) => encoded_total(&[
+                prefixed(&a.vault_id),
+                prefixed(&a.entry_blob),
+                prefixed(&a.signature),
+                prefixed(&a.author_pubkey),
+            ]),
+            Self::Keyset(b) => encoded_total(&[prefixed(b)]),
+            Self::AccountState(a) => encoded_total(&[
+                8,
+                prefixed(&a.payload),
+                prefixed(&a.signature),
+                prefixed(&a.author_pubkey),
+            ]),
+        }
+    }
+
     /// Serializes the object into self-describing bytes (tag + length-prefixed fields).
     pub fn to_bytes(&self) -> Result<Vec<u8>, SyncError> {
         let mut out = Vec::new();

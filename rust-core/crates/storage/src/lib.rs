@@ -31,7 +31,7 @@ mod store;
 pub use error::StorageError;
 pub use records::{
     AccountStateRecord, AuditEntry, CachePolicy, ConsistencyIssue, ConsistencyKind,
-    ConsistencyReport, ItemRecord, KnownHost, MemberRole, MembershipGrant, MembershipManifest,
-    PinnedMemberKey, SyncTarget, VaultRecord, VaultTrustAnchor,
+    ConsistencyReport, ItemRecord, ItemVersion, KnownHost, MemberRole, MembershipGrant,
+    MembershipManifest, PinnedMemberKey, SyncTarget, VaultRecord, VaultTrustAnchor,
 };
 pub use store::{Storage, DB_KEY_LEN};

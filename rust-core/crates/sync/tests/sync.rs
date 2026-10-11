@@ -79,6 +79,45 @@ fn happy_path_two_devices() {
     assert_eq!(sb.list_items(b"vault-1").unwrap().len(), 1);
 }
 
+/// A transport that hands the delta over one object per call, as a server that
+/// cuts its pages by size does.
+struct PagedServer(InMemoryTransport);
+
+impl SyncTransport for PagedServer {
+    fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError> {
+        self.0.push_objects(objects)
+    }
+    fn delta_since(&self, cursor: u64) -> Vec<(u64, SyncObject)> {
+        self.0.delta_since(cursor).into_iter().take(1).collect()
+    }
+    fn report_version(&self) -> u64 {
+        self.0.report_version()
+    }
+}
+
+#[test]
+fn pull_follows_a_delta_handed_over_in_pages() {
+    // The pull took one `delta_since` answer as the whole delta, so a transport
+    // had to buffer every page before the engine saw any of it. It now asks
+    // again from the cursor until nothing is left.
+    let (sa, ka) = account(&[1_u8; 32]);
+    let sb = Storage::open_in_memory(&[2_u8; 32]).unwrap();
+    seed_vault(&sa, &ka);
+    let mut t = PagedServer(InMemoryTransport::new());
+    sync_push(&mut t, &sa, TENANT).unwrap();
+
+    let r = sync_pull(&mut t, &sb, &ctx(&ka)).unwrap();
+
+    assert!(r.rejected.is_empty(), "rejected={:?}", r.rejected);
+    assert_eq!(
+        sb.get_sync_cursor(&pull_cursor_key(b"oracle-tenant"))
+            .unwrap(),
+        Some(t.0.real_max_seq()),
+        "the cursor reached the end of the delta"
+    );
+    assert_eq!(sb.list_items(b"vault-1").unwrap().len(), 1);
+}
+
 #[test]
 fn dirty_tracking_pushes_only_changes() {
     // The regression this feature fixes: sync_push used to re-send the whole bound
@@ -793,9 +832,13 @@ fn item_too_large_for_the_server_is_reported_and_does_not_block_the_rest() {
     assert_eq!(report.too_large.len(), 1);
     let refused = &report.too_large[0];
     assert_eq!(
-        (refused.vault_id.as_slice(), refused.item_id.as_slice()),
-        (b"vault-1".as_slice(), b"big".as_slice()),
-        "the refused item is named"
+        (
+            refused.vault_id.as_slice(),
+            refused.item_id.as_slice(),
+            refused.item_type
+        ),
+        (b"vault-1".as_slice(), b"big".as_slice(), 1),
+        "the refused item is named, with its type"
     );
     assert!(refused.bytes > 64 * 1024);
 }
@@ -803,14 +846,18 @@ fn item_too_large_for_the_server_is_reported_and_does_not_block_the_rest() {
 #[test]
 fn refused_item_is_not_uploaded_again_but_stays_reported() {
     let (s, _k, mut server) = vault_with_an_oversize_item(&[34_u8; 32]);
-    sync_push(&mut server, &s, TENANT).unwrap();
+    let first = sync_push(&mut server, &s, TENANT).unwrap();
     let requests = server.requests.len();
 
     let again = sync_push(&mut server, &s, TENANT).unwrap();
 
     assert_eq!(server.requests.len(), requests, "no request was sent");
     assert_eq!(again.pushed, 0);
-    assert_eq!(again.too_large.len(), 1, "still reported as not uploaded");
+    assert_eq!(first.too_large.len(), 1);
+    assert_eq!(
+        again.too_large, first.too_large,
+        "still reported as not uploaded, with everything the first report said"
+    );
 }
 
 #[test]

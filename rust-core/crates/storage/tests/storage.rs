@@ -78,7 +78,8 @@ fn binding_an_already_synced_vault_redirties_it_for_push() {
     s.put_item(&item(b"vb", b"i1", 1, false)).unwrap();
 
     // Simulate a completed push to A: the whole vault is clean.
-    s.clear_dirty_for_tenant(b"tenant-A").unwrap();
+    s.clear_vault_dirty(b"vb").unwrap();
+    s.clear_item_dirty(b"vb", b"i1").unwrap();
     assert!(
         s.list_dirty_bound_vaults(b"tenant-A").unwrap().is_empty(),
         "clean after the push to A"
@@ -91,7 +92,7 @@ fn binding_an_already_synced_vault_redirties_it_for_push() {
     let vaults = s.list_dirty_bound_vaults(b"tenant-B").unwrap();
     assert_eq!(vaults.len(), 1, "the bound vault record is dirty for B");
     assert_eq!(vaults[0].vault_id, b"vb".to_vec());
-    let items = s.list_dirty_bound_items(b"tenant-B").unwrap();
+    let items = s.list_dirty_bound_item_versions(b"tenant-B").unwrap();
     assert_eq!(items.len(), 1, "the bound vault's item is dirty for B");
 }
 

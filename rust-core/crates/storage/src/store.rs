@@ -13,8 +13,8 @@ use zeroize::Zeroizing;
 use crate::error::StorageError;
 use crate::records::{
     AccountStateRecord, AuditEntry, CachePolicy, ConsistencyIssue, ConsistencyKind,
-    ConsistencyReport, ItemRecord, KnownHost, MemberRole, MembershipGrant, MembershipManifest,
-    PinnedMemberKey, SyncTarget, VaultRecord, VaultTrustAnchor,
+    ConsistencyReport, ItemRecord, ItemVersion, KnownHost, MemberRole, MembershipGrant,
+    MembershipManifest, PinnedMemberKey, SyncTarget, VaultRecord, VaultTrustAnchor,
 };
 use crate::schema::{migrate, SCHEMA_VERSION};
 
@@ -500,9 +500,10 @@ impl Storage {
     /// deletion is a record with `tombstone = true` and an incremented version.
     pub fn put_item(&self, it: &ItemRecord) -> Result<(), StorageError> {
         let version = checked_version(it.version)?;
-        // Timestamps are storage-owned: created_at is set only on insert
-        // (preserved on conflict), updated_at is always refreshed. Values from
-        // the passed-in record are ignored.
+        // Timestamps are stamped here, not taken from the record: created_at is
+        // set only on insert (preserved on conflict), updated_at is always
+        // refreshed. The one way to give an item other times is
+        // `set_item_timestamps`, for a copy that must keep its source's.
         let now = now_secs();
         let key_epoch = checked_version(it.key_epoch)?;
         let changed = self.conn.execute(
@@ -1003,15 +1004,27 @@ impl Storage {
         Ok(rows)
     }
 
-    /// Dirty items of vaults bound to `tenant`.
-    pub fn list_dirty_bound_items(&self, tenant: &[u8]) -> Result<Vec<ItemRecord>, StorageError> {
+    /// The dirty items of vaults bound to `tenant`, by id and version only (in
+    /// `vault_id`, `item_id` order). The content is not read: a push skips the
+    /// items it will not send without loading them, and fetches the rest one by
+    /// one with [`Self::get_item`].
+    pub fn list_dirty_bound_item_versions(
+        &self,
+        tenant: &[u8],
+    ) -> Result<Vec<ItemVersion>, StorageError> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT i.vault_id, i.item_id, i.item_type, i.content_blob, i.wrapped_item_key, i.version, i.tombstone, i.signature, i.author_pubkey, i.created_at, i.updated_at, i.key_epoch
+            "SELECT i.vault_id, i.item_id, i.version
              FROM items i JOIN vaults v ON i.vault_id = v.vault_id
              WHERE v.sync_tenant = ?1 AND v.sync_target = ?2 AND i.dirty = 1 ORDER BY i.vault_id, i.item_id",
         )?;
         let rows = stmt
-            .query_map(params![tenant, SyncTarget::Cloud.to_i64()], map_item_row)?
+            .query_map(params![tenant, SyncTarget::Cloud.to_i64()], |row| {
+                Ok(ItemVersion {
+                    vault_id: row.get(0)?,
+                    item_id: row.get(1)?,
+                    version: get_u64(row, 2)?,
+                })
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -1049,26 +1062,6 @@ impl Storage {
             .query_map(params![tenant, SyncTarget::Cloud.to_i64()], map_grant_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
-    }
-
-    /// Clears the dirty flag on all objects of vaults bound to `tenant` — after
-    /// a successful push. The bulk clear is safe: local edits and sync run under
-    /// the same lock, and nothing mutates between list+push and clear.
-    pub fn clear_dirty_for_tenant(&self, tenant: &[u8]) -> Result<(), StorageError> {
-        self.conn.execute(
-            "UPDATE vaults SET dirty = 0 WHERE sync_tenant = ?1",
-            params![tenant],
-        )?;
-        for table in ["items", "membership_manifests", "membership_grants"] {
-            self.conn.execute(
-                &format!(
-                    "UPDATE {table} SET dirty = 0 WHERE vault_id IN \
-                     (SELECT vault_id FROM vaults WHERE sync_tenant = ?1)"
-                ),
-                params![tenant],
-            )?;
-        }
-        Ok(())
     }
 
     /// Clears the dirty flag of ONE vault record — after the transport accepted it.
@@ -1882,7 +1875,7 @@ mod purge_tests {
         s.mark_vault_dirty(&local).unwrap();
         s.mark_item_dirty(&local, b"item").unwrap();
         assert!(s.list_dirty_bound_vaults(b"").unwrap().is_empty());
-        assert!(s.list_dirty_bound_items(b"").unwrap().is_empty());
+        assert!(s.list_dirty_bound_item_versions(b"").unwrap().is_empty());
     }
 
     #[test]

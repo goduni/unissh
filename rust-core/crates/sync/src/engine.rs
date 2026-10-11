@@ -54,8 +54,10 @@ fn acct_push_cursor_key(tenant: &[u8]) -> String {
 }
 
 /// Meta-key prefix for the items a tenant's server refused as too large (see
-/// [`sync_push`]).
-const PUSH_REFUSED_PREFIX: &str = "sync:pushrefused";
+/// [`sync_push`]). `.v1` is the version of the value's layout ([`save_refused`]):
+/// a different layout takes a new suffix, and the old slot is then just ignored
+/// (the items are offered to the server once more).
+const PUSH_REFUSED_PREFIX: &str = "sync:pushrefused.v1";
 fn push_refused_key(tenant: &[u8]) -> String {
     format!("{PUSH_REFUSED_PREFIX}:{}", hex_lower(tenant))
 }
@@ -83,6 +85,12 @@ const PUSH_BATCH_MAX_BYTES: usize = 1024 * 1024;
 /// but `"` and `\`). The remaining 1 MiB is headroom for the recording's
 /// metadata and for what the vault and the sync framing add (AEAD tag and
 /// nonce, the wrapped item key, the signature, the ids) — a few hundred bytes.
+///
+/// Two crates, one number each: `unissh-ffi` owns the recording cap, and this
+/// crate owns the bound derived from it — the server reads it from here, and
+/// does not depend on the FFI facade. The `8 MiB` below therefore restates the
+/// cap; a compile-time assertion next to `RECORDING_MAX_BYTES` fails the build
+/// if the cap outgrows this bound.
 pub const LARGEST_CLIENT_OBJECT_BYTES: usize = 2 * 8 * 1024 * 1024 + 1024 * 1024;
 
 /// Increments a report counter. Saturating: a count of objects can only reach
@@ -176,6 +184,8 @@ pub struct TooLarge {
     pub vault_id: Vec<u8>,
     /// The item's id.
     pub item_id: Vec<u8>,
+    /// The item's type (open metadata), so it can be named by kind.
+    pub item_type: u32,
     /// The refused version of the item.
     pub version: u64,
     /// Size of the encoded sync object, in bytes.
@@ -197,10 +207,12 @@ pub struct PushReport {
 ///
 /// 1. `last = get_sync_cursor(PULL_CURSOR).unwrap_or(0)`.
 /// 2. anti-rollback: `transport.report_version() < last` → [`SyncError::TransportRollback`].
-/// 3. the delta is sorted by `server_seq` ASC (tie-break by the object's bytes).
-/// 4. for each object in seq order: below-cursor → REJECTED; otherwise verify
-///    (Task 7) → apply/skip/conflict/reject; the cursor is raised to seq
-///    after processing (see D-SEQ-ORDER).
+/// 3. the delta is taken page by page ([`SyncTransport::delta_since`] from the
+///    cursor, until a page is empty or moves nothing); each page is sorted by
+///    `server_seq` ASC (tie-break by the object's bytes).
+/// 4. for each object in seq order: at or below the cursor the page was asked
+///    from → REJECTED; otherwise verify (Task 7) → apply/skip/conflict/reject;
+///    the cursor is raised to seq after processing (see D-SEQ-ORDER).
 pub fn sync_pull(
     transport: &mut dyn SyncTransport,
     storage: &Storage,
@@ -215,29 +227,44 @@ pub fn sync_pull(
         });
     }
 
-    let mut delta = transport.delta_since(last);
-    // We do not trust the transport's order: we sort it ourselves.
-    // Key = (server_seq ASC, object bytes ASC as tie-break); `sort_by_cached_key`
-    // serializes each object once instead of on every comparison. Total order is
-    // identical to the previous `sort_by`, so the apply order is unchanged.
-    delta.sort_by_cached_key(|(seq, obj)| (*seq, obj.to_bytes().unwrap_or_default()));
-
     let mut report = SyncReport::default();
     let mut cursor = last;
-    for (seq, obj) in delta {
-        if seq <= last {
-            report.rejected.push(Rejected {
-                server_seq: seq,
-                vault_id: obj.vault_id().map(<[u8]>::to_vec),
-                reason: RejectReason::BelowCursor,
-            });
-            continue; // below-cursor does NOT move the cursor
+    // A transport may hand the delta over in pages (the server cuts them by
+    // count and by bytes), so it is asked again from wherever the cursor got to,
+    // and each page is verified, applied and dropped before the next one is
+    // fetched — a first sync of a large vault is never held in memory whole.
+    // The loop ends on an empty page, and on one that moved nothing: asking
+    // again from the same cursor could only return the same objects.
+    loop {
+        let floor = cursor;
+        let mut delta = transport.delta_since(floor);
+        if delta.is_empty() {
+            break;
         }
-        process_object(storage, ctx, &obj, seq, &mut report)?;
-        // the object at seq was processed (applied/skip/conflict/reject-verify) →
-        // advance the cursor (monotonically forward).
-        if seq > cursor {
-            advance_cursor(storage, &cursor_key, &mut cursor, seq)?;
+        // We do not trust the transport's order: we sort it ourselves.
+        // Key = (server_seq ASC, object bytes ASC as tie-break); `sort_by_cached_key`
+        // serializes each object once instead of on every comparison. Total order is
+        // identical to the previous `sort_by`, so the apply order is unchanged.
+        delta.sort_by_cached_key(|(seq, obj)| (*seq, obj.to_bytes().unwrap_or_default()));
+
+        for (seq, obj) in delta {
+            if seq <= floor {
+                report.rejected.push(Rejected {
+                    server_seq: seq,
+                    vault_id: obj.vault_id().map(<[u8]>::to_vec),
+                    reason: RejectReason::BelowCursor,
+                });
+                continue; // below-cursor does NOT move the cursor
+            }
+            process_object(storage, ctx, &obj, seq, &mut report)?;
+            // the object at seq was processed (applied/skip/conflict/reject-verify) →
+            // advance the cursor (monotonically forward).
+            if seq > cursor {
+                advance_cursor(storage, &cursor_key, &mut cursor, seq)?;
+            }
+        }
+        if cursor == floor {
+            break;
         }
     }
     // Counts only — never the objects' (encrypted) contents or keys.
@@ -928,26 +955,31 @@ impl Push<'_> {
         // The queue is cut into requests in this order and they are sent one after
         // another, so the order holds across requests too.
         for m in storage.list_dirty_bound_manifests(target_tenant)? {
-            self.out
-                .add(SyncObject::MembershipManifest(m), Sent::Dirty)?;
+            self.out.add(SyncObject::MembershipManifest(m), Sent::Dirty);
         }
         for v in storage.list_dirty_bound_vaults(target_tenant)? {
-            self.out.add(SyncObject::Vault(v), Sent::Dirty)?;
+            self.out.add(SyncObject::Vault(v), Sent::Dirty);
         }
         for g in storage.list_dirty_bound_grants(target_tenant)? {
-            self.out.add(SyncObject::MembershipGrant(g), Sent::Dirty)?;
+            self.out.add(SyncObject::MembershipGrant(g), Sent::Dirty);
         }
         // An item the server already refused as too large is not sent again while
         // it is unchanged: it would be refused again, at the cost of uploading it
         // on every sync. It stays dirty and is reported every time instead.
+        // The dirty items are listed by id and version first and only the ones
+        // to send are loaded: a refused item is as large as items get, and this
+        // runs on every background sync.
         let remembered = load_refused(storage, &self.refused_key)?;
-        for it in storage.list_dirty_bound_items(target_tenant)? {
+        for head in storage.list_dirty_bound_item_versions(target_tenant)? {
             let known = remembered.iter().find(|r| {
-                r.vault_id == it.vault_id && r.item_id == it.item_id && r.version == it.version
+                r.vault_id == head.vault_id
+                    && r.item_id == head.item_id
+                    && r.version == head.version
             });
-            match known {
-                Some(r) => self.too_large.push(r.clone()),
-                None => self.out.add(SyncObject::Item(it), Sent::Dirty)?,
+            if let Some(r) = known {
+                self.too_large.push(r.clone());
+            } else if let Some(it) = storage.get_item(&head.vault_id, &head.item_id)? {
+                self.out.add(SyncObject::Item(it), Sent::Dirty);
             }
         }
         // Entries whose item was edited, deleted or pushed since are dropped.
@@ -970,7 +1002,7 @@ impl Push<'_> {
                         signature: st.signature,
                     }),
                     Sent::Account,
-                )?;
+                );
             }
         }
 
@@ -988,7 +1020,7 @@ impl Push<'_> {
                     author_pubkey: entry.author_pubkey,
                 }),
                 Sent::Audit(entry.seq),
-            )?;
+            );
         }
         Ok(())
     }
@@ -1039,6 +1071,7 @@ impl Push<'_> {
         self.too_large.push(TooLarge {
             vault_id: it.vault_id.clone(),
             item_id: it.item_id.clone(),
+            item_type: it.item_type,
             version: it.version,
             bytes: *bytes as u64,
         });
@@ -1109,11 +1142,12 @@ struct Outgoing {
 }
 
 impl Outgoing {
-    fn add(&mut self, object: SyncObject, sent: Sent) -> Result<(), SyncError> {
-        self.sizes.push(object.to_bytes()?.len());
+    fn add(&mut self, object: SyncObject, sent: Sent) {
+        // The size is known from the field lengths: serializing here only to
+        // measure would copy every object once more than the request does.
+        self.sizes.push(object.encoded_len());
         self.objects.push(object);
         self.sent.push(sent);
-        Ok(())
     }
 
     /// Cuts the list, in order, into runs of at most [`PUSH_BATCH_MAX_OBJECTS`]
@@ -1179,6 +1213,7 @@ fn read_refused(r: &mut Reader<'_>) -> Result<TooLarge, SyncError> {
     Ok(TooLarge {
         vault_id: r.bytes()?,
         item_id: r.bytes()?,
+        item_type: r.u32()?,
         version: r.u64()?,
         bytes: r.u64()?,
     })
@@ -1189,6 +1224,7 @@ fn save_refused(storage: &Storage, key: &str, refused: &[TooLarge]) -> Result<()
     for r in refused {
         put_bytes(&mut out, &r.vault_id)?;
         put_bytes(&mut out, &r.item_id)?;
+        out.extend_from_slice(&r.item_type.to_be_bytes());
         out.extend_from_slice(&r.version.to_be_bytes());
         out.extend_from_slice(&r.bytes.to_be_bytes());
     }
