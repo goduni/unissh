@@ -10,7 +10,8 @@ use unissh_keychain::{create_account, UnlockedKeyset};
 use unissh_storage::{Storage, SyncTarget};
 use unissh_sync::{
     apply_pulled_objects, forget_push_refusals, pull_cursor_key, reset_pull_cursor, sync_pull,
-    sync_push, InMemoryTransport, RejectReason, SyncContext, SyncError, SyncObject, SyncTransport,
+    sync_push, sync_push_vault_data, InMemoryTransport, RejectReason, SyncContext, SyncError,
+    SyncObject, SyncTransport,
 };
 use unissh_vault::{sign_account_state, Vault};
 
@@ -671,6 +672,44 @@ fn sync_push_emits_local_account_state() {
             .any(|(_, o)| matches!(o, SyncObject::AccountState(a) if a.version == 7)),
         "sync_push must hand off the local account-state"
     );
+}
+
+/// The first upload of a vault under a second space label of a server must not
+/// hand that server the account state and the audit log once more: both are
+/// tracked per label, so they stay with the label the device syncs.
+#[test]
+fn vault_data_push_leaves_account_state_and_audit_to_the_regular_push() {
+    let (sa, ka) = account(&[10_u8; 32]);
+    seed_vault(&sa, &ka);
+    let author = genesis(&ka);
+    let payload = b"sealed-blob".to_vec();
+    let sig = sign_account_state(&ka, 7, &payload).unwrap();
+    sa.set_account_state(&author, 7, &payload, &sig).unwrap();
+    sa.append_audit(b"entry", &[1_u8; 67], &author).unwrap();
+    let account_wide = |t: &InMemoryTransport| {
+        t.delta_since(0)
+            .iter()
+            .filter(|(_, o)| matches!(o, SyncObject::AccountState(_) | SyncObject::Audit(_)))
+            .count() as u64
+    };
+    let mut t = InMemoryTransport::new();
+
+    sync_push_vault_data(&mut t, &sa, TENANT).unwrap();
+
+    assert_eq!(
+        pushed_vault_ids(&t),
+        vec![b"vault-1".to_vec()],
+        "the vault itself was uploaded"
+    );
+    assert_eq!(account_wide(&t), 0, "no account state, no audit entry");
+    // Their cursors did not move: the regular push still owes both, and now
+    // sends nothing else (the vault data is clean).
+    let regular = sync_push(&mut t, &sa, TENANT).unwrap();
+    assert!(
+        account_wide(&t) >= 2,
+        "the account state and the audit entry"
+    );
+    assert_eq!(regular.pushed, account_wide(&t));
 }
 
 /// A server with push limits: a request over them is refused whole with

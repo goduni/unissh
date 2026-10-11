@@ -5,6 +5,8 @@
 //! after the corresponding seq is processed. Every object goes through
 //! verify-before-apply (Task 7); violations are report entries, not a panic.
 
+use std::collections::VecDeque;
+
 use unissh_storage::{ItemRecord, Storage, VaultRecord};
 use unissh_vault::{
     check_item_record, check_vault_record, verify_record_authority, IntegrityFailure,
@@ -878,6 +880,9 @@ fn item_content_eq(a: &ItemRecord, b: &ItemRecord) -> bool {
 /// request for all of it would exceed the server's limits. Each accepted request
 /// is settled at once (dirty flags cleared, cursors advanced), so a failure
 /// later in the push returns the error without re-sending what was delivered.
+/// Items — the only objects that can be large — are listed by id and loaded
+/// request by request, so a vault full of recordings is never held in memory
+/// whole.
 ///
 /// **Too large for the server** ([`SyncError::PayloadTooLarge`] from the
 /// transport): the request is halved until the object that does not fit is
@@ -891,17 +896,50 @@ pub fn sync_push(
     storage: &Storage,
     target_tenant: &[u8],
 ) -> Result<PushReport, SyncError> {
+    run_push(transport, storage, target_tenant, true)
+}
+
+/// [`sync_push`] of the vault data alone: the dirty vault records, items,
+/// membership manifests and grants of the vaults bound to `target_tenant`. The
+/// account states and the audit entries are not sent, and their cursors for
+/// this tenant do not move.
+///
+/// For the first upload of a vault under a space label the device does not
+/// otherwise sync. Those two kinds are tracked per label, not per server: a
+/// push under a second label of the same server would hand it every account
+/// state and the whole audit log once more. They reach the server with the
+/// ordinary sync of the label the device does sync.
+pub fn sync_push_vault_data(
+    transport: &mut dyn SyncTransport,
+    storage: &Storage,
+    target_tenant: &[u8],
+) -> Result<PushReport, SyncError> {
+    run_push(transport, storage, target_tenant, false)
+}
+
+/// The push behind [`sync_push`] (`account_wide`) and [`sync_push_vault_data`].
+fn run_push(
+    transport: &mut dyn SyncTransport,
+    storage: &Storage,
+    target_tenant: &[u8],
+    account_wide: bool,
+) -> Result<PushReport, SyncError> {
     let mut push = Push {
         storage,
         refused_key: push_refused_key(target_tenant),
         acct_key: acct_push_cursor_key(target_tenant),
         audit_key: push_cursor_key(target_tenant),
-        out: Outgoing::default(),
+        before_items: VecDeque::new(),
+        items: VecDeque::new(),
+        after_items: VecDeque::new(),
         too_large: Vec::new(),
         acct_left: 0,
         acct_version: None,
     };
     push.queue(target_tenant)?;
+    if account_wide {
+        push.queue_account_wide()?;
+    }
     let pushed = push.send(transport)?;
 
     // Counts only — the pushed objects are encrypted blobs; never log their content.
@@ -918,6 +956,10 @@ pub fn sync_push(
 }
 
 /// One [`sync_push`] in progress.
+///
+/// What is still to send is three queues, sent in this order: the objects the
+/// items depend on, the items, and the account-wide objects. Only the items
+/// are queued by id — see [`Self::take_next`].
 struct Push<'a> {
     storage: &'a Storage,
     /// Meta key of the tenant's remembered refusals.
@@ -926,7 +968,12 @@ struct Push<'a> {
     acct_key: String,
     /// Cursor key of the tenant's pushed audit seq.
     audit_key: String,
-    out: Outgoing,
+    /// Membership manifests, vault records and grants, loaded: they are small.
+    before_items: VecDeque<(SyncObject, Sent)>,
+    /// The `(vault_id, item_id)` of the dirty items to send, not loaded yet.
+    items: VecDeque<(Vec<u8>, Vec<u8>)>,
+    /// Account states and audit entries, loaded: they are small.
+    after_items: VecDeque<(SyncObject, Sent)>,
     /// Refused items: remembered ones first, then this push's.
     too_large: Vec<TooLarge>,
     /// Queued account states the server has not accepted yet.
@@ -936,8 +983,8 @@ struct Push<'a> {
 }
 
 impl Push<'_> {
-    /// Collects what the tenant's server is missing, in the order it must
-    /// receive it.
+    /// Collects the vault data the tenant's server is missing, in the order it
+    /// must receive it.
     fn queue(&mut self, target_tenant: &[u8]) -> Result<(), SyncError> {
         let storage = self.storage;
         // Only DIRTY objects of vaults bound to target_tenant (the 1:1 binding is already in
@@ -955,20 +1002,23 @@ impl Push<'_> {
         // The queue is cut into requests in this order and they are sent one after
         // another, so the order holds across requests too.
         for m in storage.list_dirty_bound_manifests(target_tenant)? {
-            self.out.add(SyncObject::MembershipManifest(m), Sent::Dirty);
+            self.before_items
+                .push_back((SyncObject::MembershipManifest(m), Sent::Dirty));
         }
         for v in storage.list_dirty_bound_vaults(target_tenant)? {
-            self.out.add(SyncObject::Vault(v), Sent::Dirty);
+            self.before_items
+                .push_back((SyncObject::Vault(v), Sent::Dirty));
         }
         for g in storage.list_dirty_bound_grants(target_tenant)? {
-            self.out.add(SyncObject::MembershipGrant(g), Sent::Dirty);
+            self.before_items
+                .push_back((SyncObject::MembershipGrant(g), Sent::Dirty));
         }
         // An item the server already refused as too large is not sent again while
         // it is unchanged: it would be refused again, at the cost of uploading it
         // on every sync. It stays dirty and is reported every time instead.
-        // The dirty items are listed by id and version first and only the ones
-        // to send are loaded: a refused item is as large as items get, and this
-        // runs on every background sync.
+        // The dirty items are listed by id and version only: a refused item is
+        // as large as items get, and this runs on every background sync. The
+        // ones to send are loaded when their request is built.
         let remembered = load_refused(storage, &self.refused_key)?;
         for head in storage.list_dirty_bound_item_versions(target_tenant)? {
             let known = remembered.iter().find(|r| {
@@ -978,15 +1028,22 @@ impl Push<'_> {
             });
             if let Some(r) = known {
                 self.too_large.push(r.clone());
-            } else if let Some(it) = storage.get_item(&head.vault_id, &head.item_id)? {
-                self.out.add(SyncObject::Item(it), Sent::Dirty);
+            } else {
+                self.items.push_back((head.vault_id, head.item_id));
             }
         }
         // Entries whose item was edited, deleted or pushed since are dropped.
         if self.too_large != remembered {
             save_refused(storage, &self.refused_key, &self.too_large)?;
         }
+        Ok(())
+    }
 
+    /// Collects what the tenant's server is missing of the objects that belong
+    /// to the account, not to a vault: the account states and the audit log.
+    /// Nothing depends on them, so they follow the items.
+    fn queue_account_wide(&mut self) -> Result<(), SyncError> {
+        let storage = self.storage;
         // A3: account-state is broadcast to EVERY server, so it is not covered by
         // the dirty flag (which is single-server-bound) — we track it per-tenant by the version cursor.
         let last_acct = storage.get_sync_cursor(&self.acct_key)?.unwrap_or(0);
@@ -994,7 +1051,7 @@ impl Push<'_> {
             if st.version > last_acct {
                 self.acct_version = self.acct_version.max(Some(st.version));
                 self.acct_left = self.acct_left.saturating_add(1);
-                self.out.add(
+                self.after_items.push_back((
                     SyncObject::AccountState(crate::object::AccountStateObject {
                         author_pubkey: st.author_pubkey,
                         version: st.version,
@@ -1002,7 +1059,7 @@ impl Push<'_> {
                         signature: st.signature,
                     }),
                     Sent::Account,
-                );
+                ));
             }
         }
 
@@ -1012,7 +1069,7 @@ impl Push<'_> {
             // The audit's vault_id is open metadata; the storage AuditEntry carries no
             // vault_id field → in v1 we send an empty vault_id (audit is instance-level).
             // When the audit crate adds vault-scoping, extend this.
-            self.out.add(
+            self.after_items.push_back((
                 SyncObject::Audit(crate::object::AuditObject {
                     vault_id: Vec::new(),
                     entry_blob: entry.entry_blob,
@@ -1020,51 +1077,108 @@ impl Push<'_> {
                     author_pubkey: entry.author_pubkey,
                 }),
                 Sent::Audit(entry.seq),
-            );
+            ));
         }
         Ok(())
     }
 
-    /// Sends the queue, request by request; returns how many objects the
+    /// Takes the next object to send off the queues, in dependency order. An
+    /// item is read from storage here and not before, so that only the items
+    /// of the request being built are in memory. (A queued item that is no
+    /// longer in storage has nothing to send and is passed over.)
+    fn take_next(&mut self) -> Result<Option<(SyncObject, Sent)>, SyncError> {
+        if let Some(queued) = self.before_items.pop_front() {
+            return Ok(Some(queued));
+        }
+        while let Some((vault_id, item_id)) = self.items.pop_front() {
+            if let Some(item) = self.storage.get_item(&vault_id, &item_id)? {
+                return Ok(Some((SyncObject::Item(item), Sent::Dirty)));
+            }
+        }
+        Ok(self.after_items.pop_front())
+    }
+
+    /// Sends the queues, request by request; returns how many objects the
     /// transport accepted. Nothing queued → no request (the point of
     /// dirty-tracking: a run with no edits makes no round-trip).
+    ///
+    /// A request is a run of at most [`PUSH_BATCH_MAX_OBJECTS`] objects and
+    /// [`PUSH_BATCH_MAX_BYTES`] encoded bytes; an object over the byte budget is
+    /// a request of its own. It is built, sent, settled and dropped before the
+    /// next one is read from storage.
     fn send(&mut self, transport: &mut dyn SyncTransport) -> Result<u64, SyncError> {
         let mut pushed = 0_u64;
-        // Requests still to send, last first (popped from the end): the initial
-        // batches in order, then the halves of a batch the server refused.
-        let mut pending = self.out.batches();
-        pending.reverse();
-        while let Some(batch) = pending.pop() {
-            let Some(objects) = self.out.objects.get(batch.clone()) else {
+        // The object that did not fit the request before: it opens the next one.
+        let mut carried: Option<(SyncObject, Sent)> = None;
+        loop {
+            let mut request = Outgoing::default();
+            loop {
+                if carried.is_none() {
+                    carried = self.take_next()?;
+                }
+                let Some((object, sent)) = carried.take() else {
+                    break;
+                };
+                let size = object.encoded_len();
+                let full = request.objects.len() >= PUSH_BATCH_MAX_OBJECTS
+                    || request.bytes.saturating_add(size) > PUSH_BATCH_MAX_BYTES;
+                if full && !request.objects.is_empty() {
+                    carried = Some((object, sent));
+                    break;
+                }
+                request.add(object, sent, size);
+            }
+            if request.objects.is_empty() {
+                return Ok(pushed);
+            }
+            pushed = pushed.saturating_add(self.send_request(transport, &request)?);
+        }
+    }
+
+    /// Sends one request; returns how many of its objects the transport
+    /// accepted. A request the server refuses as too large is sent again in
+    /// halves, in order.
+    fn send_request(
+        &mut self,
+        transport: &mut dyn SyncTransport,
+        request: &Outgoing,
+    ) -> Result<u64, SyncError> {
+        let mut pushed = 0_u64;
+        // Parts still to send, last first (popped from the end): the whole
+        // request, then the halves of a part the server refused.
+        let whole = 0..request.objects.len();
+        let mut pending = vec![whole];
+        while let Some(part) = pending.pop() {
+            let Some(objects) = request.objects.get(part.clone()) else {
                 continue;
             };
             match transport.push_objects(objects) {
                 Ok(_) => {
-                    self.settle(&batch)?;
-                    pushed = pushed.saturating_add(batch.len() as u64);
+                    self.settle(request, &part)?;
+                    pushed = pushed.saturating_add(part.len() as u64);
                 }
                 // The server's limits are its own (and an older server's are
-                // lower than these batches assume): a refused batch is halved
+                // lower than these requests assume): a refused part is halved
                 // until the object that does not fit is alone.
-                Err(SyncError::PayloadTooLarge) if batch.len() > 1 => {
-                    let mid = batch.start.saturating_add(batch.len() / 2);
-                    pending.push(mid..batch.end);
-                    pending.push(batch.start..mid);
+                Err(SyncError::PayloadTooLarge) if part.len() > 1 => {
+                    let mid = part.start.saturating_add(part.len() / 2);
+                    pending.push(mid..part.end);
+                    pending.push(part.start..mid);
                 }
-                Err(SyncError::PayloadTooLarge) => self.refuse(batch.start)?,
+                Err(SyncError::PayloadTooLarge) => self.refuse(request, part.start)?,
                 Err(e) => return Err(e),
             }
         }
         Ok(pushed)
     }
 
-    /// The server will not take the object at `index` even alone. An item
-    /// depends on nothing that follows it, so the push goes on without it; it is
-    /// remembered (see [`Self::queue`]) and reported, never dropped quietly. Any
-    /// other object is a dependency of later ones: the push stops.
-    fn refuse(&mut self, index: usize) -> Result<(), SyncError> {
+    /// The server will not take the object at `index` of `request` even alone.
+    /// An item depends on nothing that follows it, so the push goes on without
+    /// it; it is remembered (see [`Self::queue`]) and reported, never dropped
+    /// quietly. Any other object is a dependency of later ones: the push stops.
+    fn refuse(&mut self, request: &Outgoing, index: usize) -> Result<(), SyncError> {
         let (Some(SyncObject::Item(it)), Some(bytes)) =
-            (self.out.objects.get(index), self.out.sizes.get(index))
+            (request.objects.get(index), request.sizes.get(index))
         else {
             return Err(SyncError::PayloadTooLarge);
         };
@@ -1078,13 +1192,18 @@ impl Push<'_> {
         save_refused(self.storage, &self.refused_key, &self.too_large)
     }
 
-    /// The transport accepted `batch`: clears its dirty flags and advances the
-    /// cursors now, so a failure later in the push does not send it again.
-    fn settle(&mut self, batch: &std::ops::Range<usize>) -> Result<(), SyncError> {
+    /// The transport accepted `part` of `request`: clears its dirty flags and
+    /// advances the cursors now, so a failure later in the push does not send
+    /// it again.
+    fn settle(
+        &mut self,
+        request: &Outgoing,
+        part: &std::ops::Range<usize>,
+    ) -> Result<(), SyncError> {
         let storage = self.storage;
         let (Some(objects), Some(sent)) = (
-            self.out.objects.get(batch.clone()),
-            self.out.sent.get(batch.clone()),
+            request.objects.get(part.clone()),
+            request.sent.get(part.clone()),
         ) else {
             return Ok(());
         };
@@ -1096,7 +1215,7 @@ impl Push<'_> {
                     Sent::Dirty => clear_dirty(storage, obj)?,
                     Sent::Account => accounts = accounts.saturating_add(1),
                     // Audit entries are queued in seq order, so the last one
-                    // of a batch is its highest.
+                    // of a part is its highest.
                     Sent::Audit(seq) => audit_seq = Some(*seq),
                 }
             }
@@ -1133,44 +1252,25 @@ enum Sent {
     Audit(u64),
 }
 
-/// The objects of one push, in dependency order, with their encoded sizes.
+/// The objects of one request, in dependency order, with their encoded sizes.
 #[derive(Default)]
 struct Outgoing {
     objects: Vec<SyncObject>,
     sent: Vec<Sent>,
     sizes: Vec<usize>,
+    /// The sum of `sizes`.
+    bytes: usize,
 }
 
 impl Outgoing {
-    fn add(&mut self, object: SyncObject, sent: Sent) {
-        // The size is known from the field lengths: serializing here only to
-        // measure would copy every object once more than the request does.
-        self.sizes.push(object.encoded_len());
+    /// Appends `object`, whose encoded size is `size`. The size is known from
+    /// the field lengths ([`SyncObject::encoded_len`]): serializing only to
+    /// measure would copy every object once more than the request does.
+    fn add(&mut self, object: SyncObject, sent: Sent, size: usize) {
+        self.bytes = self.bytes.saturating_add(size);
+        self.sizes.push(size);
         self.objects.push(object);
         self.sent.push(sent);
-    }
-
-    /// Cuts the list, in order, into runs of at most [`PUSH_BATCH_MAX_OBJECTS`]
-    /// objects and [`PUSH_BATCH_MAX_BYTES`] encoded bytes; an object over the
-    /// byte budget is a run of its own.
-    fn batches(&self) -> Vec<std::ops::Range<usize>> {
-        let mut batches = Vec::new();
-        let mut start = 0_usize;
-        let mut bytes = 0_usize;
-        for (i, size) in self.sizes.iter().enumerate() {
-            let full = i.saturating_sub(start) >= PUSH_BATCH_MAX_OBJECTS
-                || bytes.saturating_add(*size) > PUSH_BATCH_MAX_BYTES;
-            if full && i > start {
-                batches.push(start..i);
-                start = i;
-                bytes = 0;
-            }
-            bytes = bytes.saturating_add(*size);
-        }
-        if start < self.sizes.len() {
-            batches.push(start..self.sizes.len());
-        }
-        batches
     }
 }
 

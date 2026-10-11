@@ -49,7 +49,8 @@ use unissh_ssh_transport::{
 };
 use unissh_storage::{CachePolicy, MemberRole, Storage, SyncTarget};
 use unissh_sync::{
-    reset_pull_cursor, sync_pull, sync_push, SyncContext, SyncObject, SyncReport, SyncTransport,
+    reset_pull_cursor, sync_pull, sync_push, sync_push_vault_data, SyncContext, SyncObject,
+    SyncReport, SyncTransport,
 };
 use unissh_vault::{
     member_fingerprint, open_account_payload, pin_and_verify_member, pin_and_verify_vault_anchor,
@@ -1447,11 +1448,14 @@ pub struct FfiTooLargeItem {
 pub enum FfiSyncMode {
     /// Push, then pull: an ordinary sync.
     Full,
-    /// Push only. For the first upload of a vault just bound to a space the
-    /// device does not otherwise sync (a local-to-cloud move into a non-primary
-    /// space): a pull under that label would start from an empty cursor,
-    /// re-read the server's whole history and stamp the label on every unbound
-    /// cloud vault it finds there — including one the user unbound on purpose.
+    /// Push only, and vault data only. For the first upload of a vault just
+    /// bound to a space the device does not otherwise sync (a local-to-cloud
+    /// move into a non-primary space): a pull under that label would start from
+    /// an empty cursor, re-read the server's whole history and stamp the label
+    /// on every unbound cloud vault it finds there — including one the user
+    /// unbound on purpose. And the account state and the audit log, which are
+    /// tracked per label, would be handed to the same server a second time:
+    /// they are left to the ordinary sync of the label the device does sync.
     PushOnly,
 }
 
@@ -2805,7 +2809,8 @@ impl Core {
     /// is pushed and the item is named in [`FfiSyncReport::too_large`].
     ///
     /// `mode` is [`FfiSyncMode::Full`] for all of the above;
-    /// [`FfiSyncMode::PushOnly`] stops after the push (the pull counts of the
+    /// [`FfiSyncMode::PushOnly`] pushes the vault data alone — no account state,
+    /// no audit entries — and stops after the push (the pull counts of the
     /// report are then zero).
     pub fn sync_now(
         &self,
@@ -2824,7 +2829,7 @@ impl Core {
                 push_err: Mutex::new(None),
             };
 
-            let push = push_to_tenant(state, &mut adapter, &tenant_b64);
+            let push = push_to_tenant(state, &mut adapter, &tenant_b64, mode);
             let pull = match mode {
                 FfiSyncMode::Full => {
                     sync_pull(&mut adapter, &state.storage, &ctx).map_err(map_sync_err)
@@ -7812,12 +7817,20 @@ fn map_sync_err(e: unissh_sync::SyncError) -> FfiError {
 /// The push half of a sync for `tenant_b64`: the number of objects the server
 /// accepted and the items it refused as too large, named for the UI. If the
 /// transport callback failed, its own error is returned (not masked as Format).
+/// `mode` selects what is pushed: everything the server is missing, or (for
+/// [`FfiSyncMode::PushOnly`]) the vault data alone.
 fn push_to_tenant(
     state: &CoreState,
     adapter: &mut ForeignTransportAdapter,
     tenant_b64: &str,
+    mode: FfiSyncMode,
 ) -> Result<(u64, Vec<FfiTooLargeItem>), FfiError> {
-    let report = sync_push(adapter, &state.storage, tenant_b64.as_bytes()).map_err(|e| {
+    let tenant = tenant_b64.as_bytes();
+    let outcome = match mode {
+        FfiSyncMode::Full => sync_push(adapter, &state.storage, tenant),
+        FfiSyncMode::PushOnly => sync_push_vault_data(adapter, &state.storage, tenant),
+    };
+    let report = outcome.map_err(|e| {
         // A push that failed on the transport reports what the transport said
         // (for a size refusal: the server's own message). Any other failure is
         // the engine's, whatever an earlier request left in the adapter.
