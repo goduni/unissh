@@ -91,9 +91,36 @@ pub fn clear_stale_socket(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Whether a failed `accept` leaves the listener usable. The process or the
+/// system being out of descriptors or memory, a client that hung up while
+/// still in the backlog and an interrupted call all pass; anything else (a
+/// listener that is no longer a listening socket) does not.
+pub fn accept_error_is_transient(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        [
+            libc::ECONNABORTED,
+            libc::EMFILE,
+            libc::ENFILE,
+            libc::ENOBUFS,
+            libc::ENOMEM,
+            libc::EINTR,
+            libc::EAGAIN,
+        ]
+        .contains(&code)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn running_out_of_descriptors_does_not_end_the_listener_but_a_dead_socket_does() {
+        let exhausted = io::Error::from_raw_os_error(libc::EMFILE);
+        assert!(accept_error_is_transient(&exhausted));
+        let dead = io::Error::from_raw_os_error(libc::EBADF);
+        assert!(!accept_error_is_transient(&dead));
+    }
 
     #[test]
     fn socket_path_prefers_the_runtime_dir() {

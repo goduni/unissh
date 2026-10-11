@@ -21,6 +21,10 @@
 //! * **Every signature is confirmed.** A request that is not approved is
 //!   refused. Silent use is the actual risk; a prompt is what turns it into
 //!   something you can see.
+//! * **A request ends with its channel.** The remote host opens an agent
+//!   channel per connection to its socket; when one closes, or the session
+//!   does, the request it was waiting on is withdrawn rather than left for
+//!   someone to approve.
 //!
 //! The system agent ([`LocalAgent`]) offers a list of keys to programs on this
 //! machine, and confirms every signature the same way, naming the key and the
@@ -45,6 +49,8 @@
 //!   `ssh-rsa` signature, which the core never makes: it is refused before
 //!   anyone is asked to approve it.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use unissh_ssh_agent::RsaHash;
 
@@ -65,6 +71,22 @@ mod flag {
     pub const RSA_SHA2_512: u32 = 4;
 }
 
+/// Whether a request has been refused for asking an RSA key for SHA-1 since
+/// the last one that got as far as the policy ([`AgentKeys::sign`]); the
+/// refusal is logged when this turns true.
+///
+/// This and the two below are the refusals whoever can reach an agent decides
+/// the number of. Each is logged once per streak, and a streak ends only at a
+/// request that is put to the policy, which for every agent here means a
+/// person is asked: nothing a caller can do by itself starts a new one.
+static SHA1_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// The same, for a signature request naming a key that is not offered.
+static UNOFFERED_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// The same, for a request of a type that is never served.
+static KIND_REFUSED: AtomicBool = AtomicBool::new(false);
+
 /// A frame longer than this is refused rather than allocated. The remote side
 /// declares the length, so without a ceiling it decides how much memory we
 /// commit. OpenSSH's own agent uses the same limit.
@@ -78,8 +100,18 @@ const MAX_FRAME: usize = 256 * 1024;
 pub trait AgentApproval: Send + Sync {
     /// `host` is where the request came from; `blob` is the data to be signed,
     /// so an implementation may inspect it (an SSH authentication request names
-    /// the host it logs into).
+    /// the host it logs into). Called on a blocking thread; it may wait for a
+    /// person.
     fn approve(&self, host: &str, blob: &[u8]) -> bool;
+    /// A fresh approval for one more agent channel of the same session. The
+    /// remote host opens a channel per connection to its socket, and each
+    /// gets its own, so that [`Self::abandon`] reaches that channel's request
+    /// and no other.
+    fn for_channel(&self) -> std::sync::Arc<dyn AgentApproval>;
+    /// The channel this approval was made for closed, or its session did:
+    /// withdraw a pending prompt (it must then answer `false`) and refuse any
+    /// later one.
+    fn abandon(&self) {}
 }
 
 /// One identity an agent offers.
@@ -154,11 +186,45 @@ pub struct ForwardedAgent {
     pub public_openssh: String,
     /// Host label, for the confirmation prompt.
     pub host: String,
-    /// Who approves each signature.
+    /// Who approves each signature. For the agent given to a session this is
+    /// only where each channel's own approval comes from
+    /// ([`AgentApproval::for_channel`]).
     pub approval: std::sync::Arc<dyn AgentApproval>,
 }
 
+/// Withdraws an agent channel's request when its serving ends, whichever way:
+/// the remote side closed the channel, the session ended, or the serving
+/// future was dropped.
+struct Withdraw(std::sync::Arc<dyn AgentApproval>);
+
+impl Drop for Withdraw {
+    fn drop(&mut self) {
+        self.0.abandon();
+    }
+}
+
 impl ForwardedAgent {
+    /// Serves the agent protocol on one agent channel of the session until the
+    /// channel closes; a closing session closes its channels. The channel gets
+    /// an approval of its own, and whichever way serving ends, a request still
+    /// waiting for an answer is withdrawn ([`AgentApproval::abandon`]) and its
+    /// answer discarded.
+    pub async fn serve_channel<S>(&self, stream: S)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let approval = self.approval.for_channel();
+        let _withdraw = Withdraw(approval.clone());
+        let channel = std::sync::Arc::new(Self {
+            keys: self.keys.clone(),
+            key_id: self.key_id.clone(),
+            public_openssh: self.public_openssh.clone(),
+            host: self.host.clone(),
+            approval,
+        });
+        serve(channel, stream).await;
+    }
+
     fn comment(&self) -> String {
         self.public_openssh
             .split_whitespace()
@@ -190,6 +256,12 @@ impl AgentKeys for ForwardedAgent {
                 None
             }
         }
+    }
+
+    /// Only ever reached on a channel's own agent ([`Self::serve_channel`]),
+    /// whose approval is that channel's alone.
+    fn hang_up(&self) {
+        self.approval.abandon();
     }
 }
 
@@ -338,7 +410,9 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
                 .find(|key| key.blob().as_deref() == Some(want_blob))
             else {
                 // A key we do not offer. Refused rather than substituted.
-                log::warn!("agent: signature requested for a key we do not offer");
+                if !UNOFFERED_REFUSED.swap(true, Ordering::Relaxed) {
+                    log::warn!("agent: signature requested for a key we do not offer");
+                }
                 return None;
             };
             let rsa = if flags & flag::RSA_SHA2_256 != 0 {
@@ -349,11 +423,26 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
                 // A SHA-1 `ssh-rsa` signature. The core never makes one, and
                 // answering with another hash would hand the client a signature
                 // of a type it did not ask for. Refused before any prompt.
-                log::info!("agent: refusing an ssh-rsa (SHA-1) signature request");
+                // Said loudly and precisely: all the client reports is "agent
+                // refused operation", and this line is the only place that says
+                // why. No key, caller or payload in it. Once per run of such
+                // requests: whoever can reach the agent decides how many there
+                // are, and must not get to fill the log with them.
+                if !SHA1_REFUSED.swap(true, Ordering::Relaxed) {
+                    log::warn!(
+                        "agent: signature refused: the client asked for a SHA-1 (ssh-rsa) \
+                         signature with an RSA key, which is never made; it must request \
+                         rsa-sha2-256 or rsa-sha2-512 (an old client, or one forced to ssh-rsa)"
+                    );
+                }
                 return None;
             } else {
                 RsaHash::default() // not an RSA key: no hash to choose
             };
+            // Put to the policy: every streak of refusals ends here.
+            SHA1_REFUSED.store(false, Ordering::Relaxed);
+            UNOFFERED_REFUSED.store(false, Ordering::Relaxed);
+            KIND_REFUSED.store(false, Ordering::Relaxed);
             let (algorithm, signature) = agent.sign(&key, data, rsa)?;
             let mut inner = Vec::new();
             put_string(&mut inner, algorithm.as_bytes())?;
@@ -365,7 +454,9 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
         // Everything else — add, remove, lock, unlock, extensions. Whoever can
         // reach the socket does not get to reshape what the agent holds.
         other => {
-            log::warn!("agent: refusing request type {other}");
+            if !KIND_REFUSED.swap(true, Ordering::Relaxed) {
+                log::warn!("agent: refusing request type {other}");
+            }
             None
         }
     }
@@ -380,33 +471,76 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
 /// it runs the stream is still read, so a client that hangs up is noticed at
 /// once ([`AgentKeys::hang_up`]) rather than after the prompt times out. Bytes
 /// a client sends ahead are kept for the next request.
-pub async fn serve<A, S>(agent: std::sync::Arc<A>, mut stream: S)
+pub async fn serve<A, S>(agent: std::sync::Arc<A>, stream: S)
 where
+    A: AgentKeys + ?Sized + 'static,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    serve_inner(agent, stream, None).await;
+}
+
+/// [`serve`], for an endpoint any local program can connect to: a client that
+/// does not deliver a complete request within `idle` of connecting, or of its
+/// last reply, is hung up on, so connections left open cannot pile up. The time
+/// a request takes to answer (a person deciding) does not count. Needs the
+/// runtime's time driver.
+pub async fn serve_until_idle<A, S>(agent: std::sync::Arc<A>, stream: S, idle: std::time::Duration)
+where
+    A: AgentKeys + ?Sized + 'static,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    serve_inner(agent, stream, Some(idle)).await;
+}
+
+/// Reads until `inbox` starts with one whole frame and returns its length,
+/// prefix included. `None` when the far end closed or declared a frame that is
+/// refused.
+async fn next_frame<S: tokio::io::AsyncRead + Unpin>(
+    stream: &mut S,
+    inbox: &mut Vec<u8>,
+) -> Option<usize> {
+    fill(stream, inbox, 4).await.ok()?;
+    // `fill` returned Ok, so the 4-byte length prefix is there.
+    let head = *inbox.first_chunk::<4>()?;
+    let len = u32::from_be_bytes(head) as usize;
+    if len == 0 || len > MAX_FRAME {
+        log::warn!("agent: refusing a {len}-byte frame");
+        return None;
+    }
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "len <= MAX_FRAME (256 KiB) is checked just above, so 4 + len cannot overflow"
+    )]
+    let frame_len = 4 + len;
+    fill(stream, inbox, frame_len).await.ok()?;
+    Some(frame_len)
+}
+
+async fn serve_inner<A, S>(
+    agent: std::sync::Arc<A>,
+    mut stream: S,
+    idle: Option<std::time::Duration>,
+) where
     A: AgentKeys + ?Sized + 'static,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let mut inbox: Vec<u8> = Vec::new();
     loop {
-        if fill(&mut stream, &mut inbox, 4).await.is_err() {
-            return; // the far end closed
-        }
-        // `fill` returned Ok, so the 4-byte length prefix is there.
-        let Some(&head) = inbox.first_chunk::<4>() else {
-            return;
+        let frame = match idle {
+            Some(limit) => {
+                match tokio::time::timeout(limit, next_frame(&mut stream, &mut inbox)).await {
+                    Ok(frame) => frame,
+                    Err(_) => {
+                        log::debug!("agent: closing an idle connection");
+                        None
+                    }
+                }
+            }
+            None => next_frame(&mut stream, &mut inbox).await,
         };
-        let len = u32::from_be_bytes(head) as usize;
-        if len == 0 || len > MAX_FRAME {
-            log::warn!("agent: refusing a {len}-byte frame");
-            return;
-        }
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "len <= MAX_FRAME (256 KiB) is checked just above, so 4 + len cannot overflow"
-        )]
-        let frame_len = 4 + len;
-        if fill(&mut stream, &mut inbox, frame_len).await.is_err() {
-            return;
-        }
+        let Some(frame_len) = frame else {
+            return; // the far end closed, or was hung up on
+        };
         let body: Vec<u8> = inbox.drain(..frame_len).skip(4).collect();
         let policy = agent.clone();
         let mut job = tokio::task::spawn_blocking(move || answer(&*policy, &body));
@@ -503,9 +637,17 @@ mod tests {
         fn approve(&self, _host: &str, _blob: &[u8]) -> bool {
             self.0
         }
+        fn for_channel(&self) -> Arc<dyn AgentApproval> {
+            Arc::new(Self(self.0))
+        }
     }
 
     fn agent(approve: bool) -> (Arc<ForwardedAgent>, Arc<FixedKey>) {
+        agent_asking(Arc::new(Approval(approve)))
+    }
+
+    /// A session's forwarded agent whose signatures `approval` decides.
+    fn agent_asking(approval: Arc<dyn AgentApproval>) -> (Arc<ForwardedAgent>, Arc<FixedKey>) {
         let keys = Arc::new(FixedKey {
             signed: std::sync::Mutex::new(Vec::new()),
         });
@@ -519,7 +661,7 @@ mod tests {
                 key_id: b"k".to_vec(),
                 public_openssh: public,
                 host: "bastion".to_owned(),
-                approval: Arc::new(Approval(approve)),
+                approval,
             }),
             keys,
         )
@@ -935,16 +1077,35 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
         );
     }
 
+    #[tokio::test]
+    async fn a_connection_that_sends_no_request_is_closed_once_idle() {
+        use tokio::io::AsyncReadExt;
+
+        let (agent, _keys, _prompt) = local(true);
+        let (mut client, server) = tokio::io::duplex(1024);
+        let idle = std::time::Duration::from_millis(50);
+        let served = tokio::spawn(serve_until_idle(Arc::new(agent), server, idle));
+
+        // The client keeps its end open and stays silent; the server leaves.
+        let mut byte = [0_u8; 1];
+        let read = tokio::time::timeout(std::time::Duration::from_secs(5), client.read(&mut byte))
+            .await
+            .expect("the idle connection is closed");
+        assert_eq!(read.unwrap(), 0, "end of stream");
+        served.await.unwrap();
+    }
+
     /// Keeps the prompt open until the connection is abandoned, then refuses.
     #[derive(Default)]
     struct HeldOpen {
-        asked: std::sync::atomic::AtomicBool,
+        asked: AtomicBool,
         abandoned: std::sync::Mutex<bool>,
         wake: std::sync::Condvar,
     }
-    impl LocalApproval for HeldOpen {
-        fn approve(&self, _key: &OfferedKey, _caller: &AgentCaller, _blob: &[u8]) -> bool {
-            self.asked.store(true, std::sync::atomic::Ordering::SeqCst);
+    impl HeldOpen {
+        /// The prompt: open until [`Self::release`] (or the bound below).
+        fn hold(&self) {
+            self.asked.store(true, Ordering::SeqCst);
             let abandoned = self.abandoned.lock().unwrap();
             // Bounded, so a regression fails the test instead of hanging it.
             // Released right away: the answer is `false` whether abandoned or timed out.
@@ -953,11 +1114,35 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
                     .wait_timeout_while(abandoned, std::time::Duration::from_secs(10), |a| !*a)
                     .unwrap(),
             );
+        }
+        fn release(&self) {
+            *self.abandoned.lock().unwrap() = true;
+            self.wake.notify_all();
+        }
+    }
+    impl LocalApproval for HeldOpen {
+        fn approve(&self, _key: &OfferedKey, _caller: &AgentCaller, _blob: &[u8]) -> bool {
+            self.hold();
             false
         }
         fn abandon(&self) {
-            *self.abandoned.lock().unwrap() = true;
-            self.wake.notify_all();
+            self.release();
+        }
+    }
+
+    /// One agent channel's approval over a prompt every channel of the test's
+    /// session shares.
+    struct HeldChannel(Arc<HeldOpen>);
+    impl AgentApproval for HeldChannel {
+        fn approve(&self, _host: &str, _blob: &[u8]) -> bool {
+            self.0.hold();
+            false
+        }
+        fn for_channel(&self) -> Arc<dyn AgentApproval> {
+            Arc::new(Self(self.0.clone()))
+        }
+        fn abandon(&self) {
+            self.0.release();
         }
     }
 
@@ -976,7 +1161,7 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
         let served = tokio::spawn(serve(agent, server));
         let request = sign_request(&keys.keys[0].blob().unwrap(), b"to-sign");
         client.write_all(&framed(&request).unwrap()).await.unwrap();
-        while !prompt.asked.load(std::sync::atomic::Ordering::SeqCst) {
+        while !prompt.asked.load(Ordering::SeqCst) {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
@@ -984,6 +1169,33 @@ otqRUgfM3Hf3sdwr66X6ltp1sQlzggaVlhH3pBsCWTPQ6nBzWEgiPA==
         tokio::time::timeout(std::time::Duration::from_secs(5), served)
             .await
             .expect("serving ends as soon as the client is gone")
+            .unwrap();
+        assert!(
+            *prompt.abandoned.lock().unwrap(),
+            "the prompt was withdrawn"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_agent_channel_that_closes_withdraws_its_pending_forwarded_prompt() {
+        use tokio::io::AsyncWriteExt;
+
+        let prompt = Arc::new(HeldOpen::default());
+        let (session, _keys) = agent_asking(Arc::new(HeldChannel(prompt.clone())));
+        let request = sign_request(&key_blob(&session.public_openssh).unwrap(), b"to-sign");
+        let (mut remote, channel) = tokio::io::duplex(64 * 1024);
+        let served = tokio::spawn(async move {
+            session.serve_channel(channel).await;
+        });
+        remote.write_all(&framed(&request).unwrap()).await.unwrap();
+        while !prompt.asked.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        drop(remote);
+        tokio::time::timeout(std::time::Duration::from_secs(5), served)
+            .await
+            .expect("serving ends as soon as the channel is closed")
             .unwrap();
         assert!(
             *prompt.abandoned.lock().unwrap(),

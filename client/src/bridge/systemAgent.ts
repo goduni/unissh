@@ -1,14 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type SystemAgentError =
-  | "unsupported"
   | "in_use"
   | "bind_failed"
   | "path_too_long"
   | "save_failed"
   | "listener_failed";
 
-/** Desktop-only. `supported` is false where the platform has no listener yet. */
+/**
+ * Desktop-only. `supported` is false when the endpoint could not be worked
+ * out (no app data directory; on Windows, no user SID for the pipe name):
+ * nothing can listen then, and `error` is `bind_failed` from the start.
+ */
 export interface SystemAgentStatus {
   supported: boolean;
   enabled: boolean;
@@ -35,22 +38,49 @@ function shellQuote(value: string): string {
 }
 
 /**
+ * What Git for Windows must run instead of its bundled ssh; see below. The
+ * usual place, not a certain one: Windows may live on another drive, and an
+ * OpenSSH installed with winget or the MSI is under Program Files. The
+ * webview cannot ask, so the UI says to adjust it (`setupDescWindows`).
+ */
+const WINDOWS_OPENSSH = "C:/Windows/System32/OpenSSH/ssh.exe";
+
+export interface SystemAgentSetup {
+  /** Sets SSH_AUTH_SOCK for the current shell session. */
+  shell: string;
+  /** The `IdentityAgent` line for a Host block. */
+  sshConfig: string;
+  /** Windows: saves SSH_AUTH_SOCK for the user account (cmd or PowerShell). */
+  persist?: string;
+  /** Windows: points Git for Windows at Windows OpenSSH. */
+  git?: string;
+}
+
+/**
  * The copy-ready setup lines for the agent's endpoint: a Unix socket path, or
  * on Windows (`windows`) the named pipe.
  *
- * Windows: the shell line is PowerShell (Win32-OpenSSH reads a pipe path from
- * SSH_AUTH_SOCK), and the ssh_config line spells the pipe with forward slashes,
- * because newer Win32-OpenSSH reads backslashes in ssh_config as escapes and
- * `\\.\pipe\…` would no longer name the pipe.
+ * Windows, for Win32-OpenSSH (the ssh in C:\Windows\System32\OpenSSH):
+ * - SSH_AUTH_SOCK takes the pipe path as is (`\\.\pipe\…`): an environment
+ *   value is not parsed, only handed to CreateFile.
+ * - ssh_config spells it with forward slashes, in quotes. Since 8.9
+ *   Win32-OpenSSH reads `\\` in ssh_config as an escaped backslash, so
+ *   `\\.\pipe\…` there names `\.\pipe\…`, which is not a pipe; the doubled
+ *   form that fixes it breaks the older ssh still shipped with Windows 10.
+ *   `//./pipe/…` is read the same by both and Windows resolves it to the same
+ *   pipe. (JGit's ssh-agent notes recommend forward slashes in ~/.ssh/config
+ *   for the same reason. None of this was run against a Windows ssh here.)
+ * - Git for Windows bundles an MSYS2 ssh, which speaks Unix sockets only and
+ *   cannot open a named pipe at all; `core.sshCommand` hands git the Windows
+ *   one.
  */
-export function systemAgentSetup(
-  endpoint: string,
-  windows = false,
-): { shell: string; sshConfig: string } {
+export function systemAgentSetup(endpoint: string, windows = false): SystemAgentSetup {
   if (windows) {
     return {
       shell: `$env:SSH_AUTH_SOCK = '${endpoint.replace(/'/g, "''")}'`,
-      sshConfig: `IdentityAgent ${endpoint.replace(/\\/g, "/")}`,
+      persist: `setx SSH_AUTH_SOCK "${endpoint}"`,
+      sshConfig: `IdentityAgent "${endpoint.replace(/\\/g, "/")}"`,
+      git: `git config --global core.sshCommand "${WINDOWS_OPENSSH}"`,
     };
   }
   return {

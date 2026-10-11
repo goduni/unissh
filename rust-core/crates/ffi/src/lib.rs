@@ -56,6 +56,7 @@ use unissh_vault::{
     seal_account_payload, sign_account_state, verify_chain_to_epoch, Member, Vault,
 };
 
+mod approvals;
 pub mod automation;
 pub mod automation_recording;
 mod key_rotation;
@@ -63,6 +64,7 @@ mod ssh_include;
 mod system_agent;
 mod terminal_workspace;
 
+use approvals::{Approvals, Asker, Connection};
 pub use key_rotation::KeyRotationLink;
 pub use system_agent::{SharedAgentKey, SystemAgent};
 pub use unissh_ssh_transport::AgentCaller;
@@ -1525,10 +1527,11 @@ pub struct Core {
     // *fresh* one-time code, so it must be able to ask again. Outside CoreState
     // on purpose — locking the core must not detach the UI's prompt handler.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
-    /// Who approves signatures a forwarded agent is asked for. Registered once,
-    /// like the prompter; without one, forwarding refuses every signature rather
-    /// than granting them unseen.
-    approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    /// Who approves signatures a forwarded agent or the system agent is asked
+    /// for, and the one line those requests wait in ([`approvals`]). Registered
+    /// once, like the prompter; without one, every signature is refused rather
+    /// than granted unseen.
+    approver: Arc<Approvals>,
     /// Where this process's own system agent listens, if the host runs one.
     /// "System agent" auth refuses it rather than ask itself for a vault key.
     own_system_agent: OwnSystemAgent,
@@ -1578,7 +1581,7 @@ impl Core {
                     .expect("tokio runtime"),
             ),
             prompter: Arc::new(Mutex::new(None)),
-            approver: Arc::new(Mutex::new(None)),
+            approver: Arc::new(Approvals::new()),
             own_system_agent: Arc::new(Mutex::new(None)),
         })
     }
@@ -1588,7 +1591,7 @@ impl Core {
     /// direction, since the alternative is signing on someone's behalf with
     /// nobody watching.
     pub fn set_agent_approver(&self, approver: Option<Arc<dyn AgentApprover>>) {
-        *lock_recover(&self.approver) = approver;
+        self.approver.set(approver);
     }
 
     /// Registers who to ask when a server wants something only the person at the
@@ -1756,6 +1759,20 @@ impl Core {
     }
 
     /// Locks the instance (in-memory secrets are zeroized on Drop).
+    ///
+    /// Every signature request waiting for approval, of a forwarded agent or
+    /// of the system agent, is refused and the prompt on screen is withdrawn
+    /// at the approver: nothing asked before a lock is shown after the unlock
+    /// that follows it.
+    ///
+    /// Lock order: the state lock is released before the approval line is
+    /// taken (the two are never held together). The line is emptied, and its
+    /// lock epoch moved, after the state is gone, not before: whatever joined
+    /// while the core was still unlocked is in the line when it is emptied,
+    /// and a request that saw the core unlocked but reaches the line later
+    /// carries the old epoch and is refused there. One that reads the new
+    /// epoch finds the core locked. So no request from before a lock, or
+    /// from while the core is locked, is ever put to the approver.
     #[expect(
         clippy::significant_drop_tightening,
         reason = "the guard must cover the epoch bump, the state reset and the hand-off of the SFTP sessions atomically"
@@ -1769,6 +1786,9 @@ impl Core {
             *state = None;
             std::mem::take(&mut *lock_recover(&self.sftp_sessions))
         };
+        // Before the sessions are closed: that may take a while, and a prompt
+        // must not stay up meanwhile.
+        self.approver.refuse_all();
         for session in sessions.into_iter().filter_map(|session| session.upgrade()) {
             session.close();
         }
@@ -6821,7 +6841,7 @@ fn connect_with_state(
     state: &Arc<Mutex<Option<CoreState>>>,
     rt: &tokio::runtime::Runtime,
     prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
-    approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    approver: &Arc<Approvals>,
     own_system_agent: &OwnSystemAgent,
     auth: &AuthMethod,
     jumps: &[JumpHost],
@@ -6856,7 +6876,7 @@ fn connect_with_policy(
     state: &Arc<Mutex<Option<CoreState>>>,
     rt: &tokio::runtime::Runtime,
     prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
-    approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    approver: &Arc<Approvals>,
     own_system_agent: &OwnSystemAgent,
     auth: &AuthMethod,
     jumps: &[JumpHost],
@@ -6895,7 +6915,7 @@ fn connect_with_options(
     state: &Arc<Mutex<Option<CoreState>>>,
     rt: &tokio::runtime::Runtime,
     prompter: &Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
-    approver: &Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    approver: &Arc<Approvals>,
     own_system_agent: &OwnSystemAgent,
     auth: &AuthMethod,
     jumps: &[JumpHost],
@@ -6999,14 +7019,14 @@ fn connect_with_options(
     // whole agent; that hands the remote host a list of every key you hold — a
     // map of everywhere you log in — and lets it ask for a signature with any.
     if agent_forward {
-        let approver = lock_recover(approver).clone();
+        let registered = approver.registered();
         // Copied out first: attaching the forward consumes `target`.
         let forwardable_key = match &target.auth {
             Auth::Agent { key_id } => Some(key_id.clone()),
             Auth::Password { .. } | Auth::SystemAgent { .. } => None,
         };
-        match (forwardable_key, approver) {
-            (Some(key_id), Some(approver)) => {
+        match (forwardable_key, registered) {
+            (Some(key_id), true) => {
                 let keys: Arc<dyn unissh_ssh_transport::KeySource> = Arc::new(StateKeySource {
                     state: Arc::clone(state),
                     policy: policy.cloned(),
@@ -7018,14 +7038,17 @@ fn connect_with_options(
                             key_id,
                             public_openssh: public,
                             host,
-                            approval: Arc::new(ApprovalBridge { inner: approver }),
+                            approval: Arc::new(ApprovalBridge::new(
+                                Arc::clone(approver),
+                                Arc::clone(state),
+                            )),
                         }));
                 }
             }
             // Password auth has no key to forward, and without an approver every
             // signature would be refused anyway — so the request is simply not
             // made, rather than opening a socket that answers nothing.
-            (Some(_), None) => {
+            (Some(_), false) => {
                 log::warn!("agent forwarding requested for {host} but no approver is registered");
             }
             _ => log::warn!("agent forwarding requested for {host} but it has no key to forward"),
@@ -8586,6 +8609,11 @@ pub struct AgentSignRequest {
     /// log in as — parsed out so the prompt can say where the signature goes
     /// rather than only that one was asked for. Empty when it is something else.
     pub target: String,
+    /// How many more requests were waiting for an answer when this one was
+    /// handed to the approver. The approver is asked about one request at a
+    /// time; this is the line behind it at that moment, and requests arriving
+    /// while it is open are not added to it. Set by the core.
+    pub waiting: u32,
 }
 
 /// Approves, or refuses, each signature a forwarded agent or the system agent
@@ -8598,11 +8626,16 @@ pub struct AgentSignRequest {
 #[uniffi::export(with_foreign)]
 pub trait AgentApprover: Send + Sync {
     /// Return `true` to sign. Called on a blocking thread, so it may wait for a
-    /// person.
+    /// person. The core asks about one request at a time, whatever its origin:
+    /// the next call comes only after this one has returned, so a timeout
+    /// counted from here is a timeout the person saw the whole of.
     fn approve(&self, request: AgentSignRequest) -> bool;
-    /// The request `id` is no longer wanted (its client hung up): withdraw the
-    /// prompt and let `approve` return `false`. May arrive before `approve`
-    /// has registered `id`, or after it returned.
+    /// The request `id` is no longer wanted (its client hung up, or the system
+    /// agent was revoked): withdraw the prompt and let `approve` return
+    /// `false`. May arrive before `approve` has registered `id`, or after it
+    /// returned. Only ever sent for the request whose turn it is: once
+    /// `approve` has been called for another request, `id` will not be handed
+    /// over any more, so a cancel remembered for it can be forgotten.
     fn cancel(&self, id: u64);
 }
 
@@ -8613,28 +8646,102 @@ fn next_agent_sign_id() -> u64 {
 }
 
 /// Adapts the UI approver to the transport's, and pulls the target out of an SSH
-/// authentication blob so the prompt can name it.
+/// authentication blob so the prompt can name it. Asks through the core's one
+/// line ([`approvals`]), so a forwarded request's prompt and its minute start
+/// only when every request ahead of it, forwarded or local, is over.
+///
+/// The one given to a session only makes the others: every agent channel the
+/// remote host opens gets its own (`for_channel`), so that a channel
+/// that closes (or whose session does) takes its own request out of the line,
+/// or its prompt off the screen, and nobody else's.
+///
+/// Lock order: the line (for its lock epoch) and then the core's `state` are
+/// each taken alone and released, before the request joins the line.
 struct ApprovalBridge {
-    inner: Arc<dyn AgentApprover>,
+    approvals: Arc<Approvals>,
+    /// Only to see whether the core is unlocked before asking.
+    state: Arc<Mutex<Option<CoreState>>>,
+    /// This channel's request in the line, and whether the channel closed.
+    channel: Connection,
+}
+
+impl ApprovalBridge {
+    fn new(approvals: Arc<Approvals>, state: Arc<Mutex<Option<CoreState>>>) -> Self {
+        Self {
+            approvals,
+            state,
+            channel: Connection::default(),
+        }
+    }
+}
+
+/// The approval line's lock epoch for a request about to be asked, or `None`
+/// if the core is locked, when the request is refused without asking: nothing
+/// can be signed then, and a prompt raised while locked must not be waiting
+/// for the person when they unlock.
+///
+/// The epoch is read first and the core checked second, so a lock that falls
+/// anywhere after this check has moved the epoch by the time the request
+/// reaches the line, which then refuses it ([`Asker`]).
+///
+/// Lock order: `line` alone and released, then `state` alone and released.
+fn approval_epoch_if_unlocked(
+    approvals: &Approvals,
+    state: &Mutex<Option<CoreState>>,
+) -> Option<u64> {
+    let locks = approvals.lock_epoch();
+    lock_recover(state).is_some().then_some(locks)
 }
 
 impl unissh_ssh_transport::AgentApproval for ApprovalBridge {
     fn approve(&self, host: &str, blob: &[u8]) -> bool {
+        let Some(locks) = approval_epoch_if_unlocked(&self.approvals, &self.state) else {
+            log::info!("forwarded agent: signature refused (vault locked)");
+            return false;
+        };
+        let id = next_agent_sign_id();
+        // Named before it joins the line, so that `abandon` can take it out
+        // of the line as well as off the screen.
+        if !self.channel.begin(id) {
+            return false;
+        }
         let login = userauth_login(blob);
-        self.inner.approve(AgentSignRequest {
-            id: next_agent_sign_id(),
-            origin: AgentSignOrigin::Forwarded,
-            host: host.to_owned(),
-            key: String::new(),
-            vault: String::new(),
-            user: login
-                .as_ref()
-                .map(|(user, _)| user.clone())
-                .unwrap_or_default(),
-            target: login
-                .map(|(user, service)| format!("{user}@{service}"))
-                .unwrap_or_default(),
-        })
+        // Blocks until this request is at the front of the line and answered.
+        let approved = self.approvals.ask(
+            AgentSignRequest {
+                id,
+                origin: AgentSignOrigin::Forwarded,
+                host: host.to_owned(),
+                key: String::new(),
+                vault: String::new(),
+                user: login
+                    .as_ref()
+                    .map(|(user, _)| user.clone())
+                    .unwrap_or_default(),
+                target: login
+                    .map(|(user, service)| format!("{user}@{service}"))
+                    .unwrap_or_default(),
+                waiting: 0,
+            },
+            Asker::Forwarded {
+                locks,
+                gone: &|| self.channel.closed(),
+            },
+        );
+        self.channel.finish();
+        approved
+    }
+
+    fn for_channel(&self) -> Arc<dyn unissh_ssh_transport::AgentApproval> {
+        Arc::new(Self::new(
+            Arc::clone(&self.approvals),
+            Arc::clone(&self.state),
+        ))
+    }
+
+    fn abandon(&self) {
+        // Waiting in line, it gives up its place; on screen, it is withdrawn.
+        self.channel.close(&self.approvals);
     }
 }
 
@@ -9205,7 +9312,7 @@ pub struct ReconnectingSession {
     // A reconnect is a brand-new authentication: if the host wants a one-time
     // code, the old one is spent and a fresh one must be asked for.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
-    approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    approver: Arc<Approvals>,
     own_system_agent: OwnSystemAgent,
     /// Carried across reconnects: the host's setting does not change because the
     /// link dropped.
@@ -9696,7 +9803,7 @@ pub struct SftpFfi {
     // Same reason as on ReconnectingSession: a full reconnect re-authenticates,
     // and a spent one-time code cannot be replayed.
     prompter: Arc<Mutex<Option<Arc<dyn AuthPrompter>>>>,
-    approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    approver: Arc<Approvals>,
     own_system_agent: OwnSystemAgent,
     /// Carried across reconnects: the host's setting does not change because the
     /// link dropped.
@@ -10740,7 +10847,7 @@ mod sftp_pool_tests {
             ),
             state: Arc::new(Mutex::new(None)),
             prompter: Arc::new(Mutex::new(None)),
-            approver: Arc::new(Mutex::new(None)),
+            approver: Arc::new(Approvals::new()),
             own_system_agent: Arc::new(Mutex::new(None)),
             agent_forward: false,
             host: String::new(),

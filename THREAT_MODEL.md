@@ -369,7 +369,8 @@ boundary, so what crosses it is spelled out here.
   same id is not offered until it is shared again. macOS, Linux and Windows.
 - **The endpoint's permissions are the access control.** On macOS and Linux it
   is a Unix socket in a `0700` directory, itself `0600`. On Windows it is the
-  named pipe `\\.\pipe\unissh-agent` with a protected DACL holding a single
+  named pipe `\\.\pipe\unissh-agent-<SID>`, named after the user's own SID so
+  that each Windows account has its own, with a protected DACL holding a single
   entry: the current user's own SID (read from the process token, not the
   owner-rights alias, which under an elevated token would mean the
   Administrators group). Remote pipe clients are rejected, and the default
@@ -414,18 +415,47 @@ boundary, so what crosses it is spelled out here.
   whoever is asking. For an interpreter the executable is the interpreter
   (`python3`), not the script. The identity helps a person judge a request;
   it is not what grants access.
-- **Prompts are bounded.** At most four signature prompts are open at once,
-  across every connection. Beyond that a request is refused immediately rather
-  than stacking dialogs. A client that disconnects withdraws its open prompt.
-  A client that only half-closes its side (`shutdown(SHUT_WR)` after sending)
-  counts as gone too, so its prompt is withdrawn. OpenSSH's own clients keep
-  the stream open and are unaffected.
+- **One prompt at a time, for every agent; connections are bounded.** The
+  core puts one signature request to the window at a time, whether it came
+  through the system agent or through a forwarded agent of an SSH session;
+  the others wait in a single line. The 60-second timeout of a request starts
+  when its prompt is shown, not while it waits, so none expires unseen; the
+  prompt says how many were waiting behind it when it appeared. Waiting itself
+  is not timed: a request waits at most 60 seconds for each request ahead of
+  it. The line holds at most one request per system-agent connection (64, see
+  below) and 64 forwarded requests, beyond which a forwarded request is
+  refused immediately, so the worst case is a little over two hours, reached
+  only if 127 requests ahead are each left to time out. A new prompt ignores
+  input for its first half second, so a click meant for the previous one
+  cannot answer it. A client that disconnects withdraws its open prompt or
+  gives up its place in line, and so does a connection the listener cuts. A
+  forwarded request does the same when the remote host closes the agent
+  channel it came in on, or when its SSH session ends. A client that only half-closes its side
+  (`shutdown(SHUT_WR)` after sending) counts as gone too, so its prompt is
+  withdrawn. OpenSSH's own clients keep the stream open and are unaffected.
+  At most 64 connections are served at once (one beyond that is closed
+  unanswered), and a connection that sends no request for ten minutes is
+  closed. The identity list is resolved from the vaults once and reused only
+  while nothing it was resolved from has changed (the set of shared keys, and
+  any vault, item or certificate, a sync pull included; a lock discards it); a
+  signature never relies on that list, it resolves the key again.
 - **No unlocked vault, no agent.** A locked vault lists no identities and signs
   nothing. The listener stops on vault lock, screen lock, sleep and exit,
-  cutting open connections and withdrawing open prompts. It comes back after
+  cutting open connections, withdrawing the open prompt and refusing every
+  request still waiting in line, so none of them is shown afterwards. It comes back after
   the next unlock, however it is made (password, Secret Key, or the biometric
   unlock above), or wake if the vault is still unlocked, when the setting is
-  on. A prompt answered in the instant before it is withdrawn still yields
+  on. A vault lock does the same to forwarded agents' requests, in the core
+  itself and so on every platform: the open prompt is withdrawn and every
+  request in line is refused, whichever agent it came through, and a request
+  arriving while the vault is locked (on an SSH session that outlived the
+  lock) is refused without a prompt, so nothing asked before or during a lock
+  is shown after the unlock that follows. A screen lock or
+  sleep that leaves the vault unlocked (the "lock with the screen" setting off,
+  or its grace period still running) stops only the system agent: SSH sessions
+  stay up, and a forwarded request is still put to the window, which the
+  operating system's lock screen covers; unanswered, it is refused after its
+  60 seconds. A prompt answered in the instant before it is withdrawn still yields
   nothing. After the approval the core re-checks that it is unlocked and that
   the key is still shared and unchanged, and an answer for a connection that
   was cut is discarded.
@@ -440,8 +470,14 @@ boundary, so what crosses it is spelled out here.
   the caller's identity is written to the log.
 
 Not protected, and not claimed to be: a process running as the same user can
-connect, list the shared public keys and raise approval prompts (up to the cap)
-as often as it likes. Any signature the user approves is that process's to use,
+connect, list the shared public keys and raise approval prompts (one at a time,
+up to the line's length) as often as it likes, and by holding every connection
+slot or filling the line it can keep the user's own tools from being served,
+or make them wait behind its prompts. A remote host given agent forwarding can
+fill its share of the same line and delay local requests the same way; its
+prompts name that host; refusing them, and closing the session so that no more
+arrive, is the remedy.
+Any signature the user approves is that process's to use,
 including a login signature for a server other than the one the user had in
 mind, since the prompt can name only the user, not the host. A process running
 as the same user can also attack the app directly (debugging it, reading its
@@ -449,7 +485,8 @@ memory, driving its UI) without going through the agent at all. Root or an
 administrator is outside this boundary entirely. The system agent assumes a
 trusted desktop session, as the MCP listener does.
 
-On Windows, another user's process can create `\\.\pipe\unissh-agent`
+On Windows, another user's process can create the user's pipe (the name is
+per user but not secret: a SID can be looked up)
 while UniSSH's agent is not listening (locked, disabled, or not started yet),
 since the name disappears with the last instance. The user's tools then talk
 to that process: it receives their agent requests and can offer its own

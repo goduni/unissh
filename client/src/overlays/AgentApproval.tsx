@@ -10,7 +10,7 @@
 // closing, Escape, a timeout, a dead window. Defaulting the other way would make
 // the prompt decorative.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "@/i18n";
@@ -19,7 +19,7 @@ import { MONO, rem, TEXT } from "@/theme/tokens";
 import { Modal } from "@/components/Modal";
 import { Btn } from "@/components/primitives";
 
-interface ApprovalRequest {
+export interface ApprovalRequest {
   id: number;
   origin: "forwarded" | "system";
   /** Forwarded: the session's host. */
@@ -32,6 +32,10 @@ interface ApprovalRequest {
   executable: string | null;
   /** The user an SSH login would log in as; empty otherwise. Never the server. */
   user: string;
+  /** How many more requests were waiting for an answer when this one was put
+   *  on screen. The core asks about one at a time and does not update this
+   *  while the prompt is open, so it is a floor, not a live count. */
+  waiting: number;
 }
 
 async function answer(id: number, approved: boolean) {
@@ -44,10 +48,12 @@ async function answer(id: number, approved: boolean) {
 }
 
 export function AgentApproval() {
-  // Queued, not dropped: a single `git fetch` can ask more than once, and a
-  // request nobody sees is a request that quietly times out. The first one is
-  // on screen. One the core withdraws (timed out, its client hung up, the
-  // agent stopped) is removed wherever it is — it can no longer be answered.
+  // The core hands over one request at a time and keeps the rest in its own
+  // line (their minute starts when they get here), so this normally holds one
+  // entry. It stays a queue all the same, so that nothing is dropped if two
+  // ever arrive together. One the core withdraws (timed out, its client hung
+  // up, the agent stopped) is removed wherever it is — it can no longer be
+  // answered.
   const [queue, setQueue] = useState<ApprovalRequest[]>([]);
 
   useEffect(() => {
@@ -73,7 +79,7 @@ export function AgentApproval() {
   if (!req) return null;
 
   return (
-    <Dialog
+    <ApprovalDialog
       key={req.id}
       req={req}
       onDone={() => setQueue((q) => q.filter((r) => r.id !== req.id))}
@@ -81,14 +87,39 @@ export function AgentApproval() {
   );
 }
 
-function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
+/** How long a prompt that has just appeared ignores every answer. */
+export const ARM_DELAY_MS = 500;
+
+/**
+ * Whether a prompt takes an answer at `now`. `shownAt` is when it appeared
+ * (`null` until it has). Every way of answering goes through this: both
+ * buttons, Enter and Space on them, Escape and the backdrop.
+ */
+export function takesAnswer(shownAt: number | null, now: number, busy: boolean): boolean {
+  return !busy && shownAt !== null && now - shownAt >= ARM_DELAY_MS;
+}
+
+export function ApprovalDialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
   const { t } = useTranslation();
   const p = usePalette();
   const [busy, setBusy] = useState(false);
+  // A queued prompt takes the place of the one just answered, button under the
+  // same pointer: the second click of a double-click (or a held Enter) would
+  // approve a request nobody has read. So a fresh prompt starts disarmed, and
+  // that covers Escape and the backdrop too, which would otherwise dismiss it
+  // unseen. The clock decides (`takesAnswer`); `armed` only makes the buttons
+  // look the part.
+  const shownAt = useRef<number | null>(null);
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    shownAt.current = performance.now();
+    const timer = setTimeout(() => setArmed(true), ARM_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
   const system = req.origin === "system";
 
   const finish = (approved: boolean) => {
-    if (busy) return;
+    if (!takesAnswer(shownAt.current, performance.now(), busy)) return;
     setBusy(true);
     void answer(req.id, approved).then(onDone);
   };
@@ -104,10 +135,10 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
       zIndex={500}
       footer={
         <div style={{ display: "flex", gap: rem(8), justifyContent: "flex-end" }}>
-          <Btn variant="ghost" onClick={() => finish(false)} disabled={busy}>
+          <Btn variant="ghost" onClick={() => finish(false)} disabled={busy || !armed}>
             {t("agentApproval.deny")}
           </Btn>
-          <Btn onClick={() => finish(true)} disabled={busy}>
+          <Btn onClick={() => finish(true)} disabled={busy || !armed}>
             {t("agentApproval.allow")}
           </Btn>
         </div>
@@ -151,6 +182,13 @@ function Dialog({ req, onDone }: { req: ApprovalRequest; onDone: () => void }) {
           // Not an SSH login — a git signature, say. Saying so is better than
           // showing nothing, because "we could not tell" is itself information.
           <div style={{ fontSize: TEXT.small, color: p.txt3 }}>{t("agentApproval.unknownUse")}</div>
+        )}
+        {req.waiting > 0 && (
+          // Without this a line of requests looks like one prompt that keeps
+          // coming back.
+          <div role="status" style={{ fontSize: TEXT.small, color: p.txt2 }}>
+            {t("agentApproval.moreWaiting", { count: req.waiting })}
+          </div>
         )}
       </div>
     </Modal>

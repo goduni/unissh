@@ -442,9 +442,10 @@ impl Handler for ClientHandler {
         };
         reply.accept().await;
         // One task per channel: the remote side opens a fresh one for every
-        // connection to the socket, and they run concurrently.
+        // connection to the socket, and they run concurrently. Each
+        // one's request is withdrawn when it closes, or when the session does.
         tokio::spawn(async move {
-            crate::forward::serve(agent, channel.into_stream()).await;
+            agent.serve_channel(channel.into_stream()).await;
         });
         Ok(())
     }

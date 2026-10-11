@@ -1,9 +1,14 @@
 //! Windows: the system agent's named pipe, who may open it, and who did.
 //!
-//! The pipe is `\\.\pipe\unissh-agent`. The default OpenSSH pipe
-//! (`\\.\pipe\openssh-ssh-agent`) is deliberately left alone: UniSSH's own
-//! "system agent" host auth dials that one, so it keeps reaching the real
-//! OpenSSH agent and can never loop back here.
+//! The pipe is `\\.\pipe\unissh-agent-<SID>`, the SID being the current
+//! user's ([`name`]). Pipe names are machine-wide, so a fixed one could be
+//! held by one Windows account at a time and every other account's UniSSH
+//! would report it in use for as long as the first was running. The SID is
+//! unique per account on the machine, stable across restarts, and plain
+//! ASCII, so the name needs no quoting beyond what a pipe path needs anyway.
+//! The default OpenSSH pipe (`\\.\pipe\openssh-ssh-agent`) is deliberately
+//! left alone: UniSSH's own "system agent" host auth dials that one, so it
+//! keeps reaching the real OpenSSH agent and can never loop back here.
 //!
 //! Access control is the pipe's DACL, the Windows counterpart of the Unix
 //! socket's `0700` directory and `0600` mode. It is protected (nothing
@@ -34,7 +39,9 @@ use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use unissh_ffi::AgentCaller;
 use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, HANDLE,
+    CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_COMMITMENT_LIMIT, ERROR_NOT_ENOUGH_MEMORY,
+    ERROR_NOT_ENOUGH_QUOTA, ERROR_NO_SYSTEM_RESOURCES, ERROR_OUTOFMEMORY, ERROR_PIPE_BUSY,
+    ERROR_TOO_MANY_OPEN_FILES, HANDLE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -49,9 +56,16 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-/// The pipe the system agent listens on. Pipe names are case-insensitive; this
-/// one must stay distinct from `openssh-ssh-agent` (see the module docs).
-pub const NAME: &str = r"\\.\pipe\unissh-agent";
+/// The fixed part of the pipe's name; the user's SID follows. Pipe names are
+/// case-insensitive; this one must stay distinct from `openssh-ssh-agent` (see
+/// the module docs).
+const NAME_PREFIX: &str = r"\\.\pipe\unissh-agent-";
+
+/// The pipe this user's system agent listens on:
+/// `\\.\pipe\unissh-agent-S-1-5-21-…`. The same on every run.
+pub fn name() -> io::Result<String> {
+    Ok(format!("{NAME_PREFIX}{}", current_user_sid()?))
+}
 
 /// A self-relative security descriptor granting the current user, and no one
 /// else, access to the pipe. Owned; freed on drop.
@@ -153,8 +167,10 @@ fn current_user_sid() -> io::Result<String> {
 /// later instance joins the pipe it already owns). Must run inside the tokio
 /// runtime: the instance is registered with its reactor here.
 pub fn create(name: &OsStr, security: &Security, first: bool) -> io::Result<NamedPipeServer> {
+    let length =
+        u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>()).map_err(io::Error::other)?;
     let mut attributes = SECURITY_ATTRIBUTES {
-        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        nLength: length,
         lpSecurityDescriptor: security.descriptor,
         bInheritHandle: 0,
     };
@@ -172,8 +188,34 @@ pub fn create(name: &OsStr, security: &Security, first: bool) -> io::Result<Name
 /// With `FILE_FLAG_FIRST_PIPE_INSTANCE` an existing pipe gives access denied;
 /// one at its instance limit gives pipe busy.
 pub fn in_use(error: &io::Error) -> bool {
-    matches!(error.raw_os_error(), Some(code)
-        if code as u32 == ERROR_ACCESS_DENIED || code as u32 == ERROR_PIPE_BUSY)
+    // Win32 error codes are unsigned and `raw_os_error` hands them back as
+    // `i32`; one that does not convert is not one of these two.
+    error
+        .raw_os_error()
+        .and_then(|code| u32::try_from(code).ok())
+        .is_some_and(|code| code == ERROR_ACCESS_DENIED || code == ERROR_PIPE_BUSY)
+}
+
+/// Whether a failed creation of a further instance leaves the listener usable:
+/// the process or the system being out of memory, handles or quota, or every
+/// instance of the pipe being busy, all pass with time. Anything else (access
+/// denied, a name that is no longer this listener's pipe) does not.
+pub fn create_error_is_transient(error: &io::Error) -> bool {
+    let code = error
+        .raw_os_error()
+        .and_then(|code| u32::try_from(code).ok());
+    code.is_some_and(|code| {
+        [
+            ERROR_PIPE_BUSY,
+            ERROR_NOT_ENOUGH_MEMORY,
+            ERROR_OUTOFMEMORY,
+            ERROR_NO_SYSTEM_RESOURCES,
+            ERROR_NOT_ENOUGH_QUOTA,
+            ERROR_COMMITMENT_LIMIT,
+            ERROR_TOO_MANY_OPEN_FILES,
+        ]
+        .contains(&code)
+    })
 }
 
 /// Who connected to this pipe instance, as far as Windows says.
@@ -201,13 +243,13 @@ fn executable(pid: u32) -> Option<String> {
         }
         let process = Owned(process);
         let mut buf = vec![0u16; 32_768];
-        let mut len = buf.len() as u32;
+        let mut len = u32::try_from(buf.len()).ok()?;
         if QueryFullProcessImageNameW(process.0, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len)
             == 0
         {
             return None;
         }
-        buf.truncate(len as usize);
+        buf.truncate(usize::try_from(len).ok()?);
         Some(String::from_utf16_lossy(&buf))
     }
 }
