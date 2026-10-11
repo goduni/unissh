@@ -6353,17 +6353,16 @@ impl Core {
             automation_recordings: HashMap::new(),
             recording_retention: Mutex::new(HashMap::new()),
         };
-        let installed = {
-            let mut state = self.locked_state();
-            if self.lock_epoch() != lock_epoch {
-                Err(FfiError::Locked)
-            } else if state.is_some() {
-                Ok(false)
-            } else {
-                *state = Some(fresh);
-                Ok(true)
-            }
+        let mut state = self.locked_state();
+        let installed = if self.lock_epoch() != lock_epoch {
+            Err(FfiError::Locked)
+        } else if state.is_some() {
+            Ok(false)
+        } else {
+            *state = Some(fresh);
+            Ok(true)
         };
+        drop(state);
         if installed? {
             log::info!("instance unlocked");
         } else {

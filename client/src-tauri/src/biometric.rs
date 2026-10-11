@@ -171,12 +171,13 @@ impl UnlockAttempts {
     #[cfg(any(target_os = "macos", target_os = "windows", test))]
     fn showing(&self, id: u64, dismiss: Dismiss) -> Option<Dismiss> {
         let mut current = held(&self.current);
-        if current.id == id {
-            current.dismiss = Some(dismiss);
-            None
-        } else {
-            Some(dismiss)
+        if current.id != id {
+            drop(current);
+            return Some(dismiss);
         }
+        current.dismiss = Some(dismiss);
+        drop(current);
+        None
     }
 
     /// The prompt of attempt `id` has answered: nothing is left to take down.
@@ -1101,7 +1102,7 @@ mod tests {
         assert!(!blob.exists());
 
         // A blob that cannot be removed: a directory with something in it.
-        std::fs::create_dir(&blob).unwrap();
+        std::fs::create_dir_all(&blob).unwrap();
         std::fs::write(blob.join("held"), b"").unwrap();
         assert_eq!(
             forget_after_keyset_change(Some(&platform), &blob),
