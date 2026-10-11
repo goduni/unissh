@@ -376,26 +376,27 @@ export function App() {
 
   // Anything that changes this device's keyset (a password change, a recovery,
   // a pairing, a new account) erases the password stored for biometric unlock.
-  // When that erase fails Rust says so with one event, whichever screen asked
-  // and whether or not the change itself went through — so it is heard here,
-  // once, rather than by each of those screens.
+  // Two things about that no screen can learn from its own call, so Rust says
+  // them with an event each and they are heard here, once: the erase failed
+  // (whether or not the change itself went through), and a change that failed
+  // had already rewritten the keyset, so biometric unlock is off all the same.
   useEffect(() => {
-    let dispose: (() => void) | undefined;
+    const disposers: (() => void)[] = [];
     let alive = true;
-    void (async () => {
+    const hear = async (event: string, key: "settings.biometricWipeFailed" | "settings.biometricTurnedOff") => {
       try {
-        const un = await listen("biometric-wipe-failed", () =>
-          toast(i18n.t("settings.biometricWipeFailed", { method: biometricMethod() }), "warn"),
-        );
-        if (alive) dispose = un;
+        const un = await listen(event, () => toast(i18n.t(key, { method: biometricMethod() }), "warn"));
+        if (alive) disposers.push(un);
         else un();
       } catch {
         /* no Tauri context */
       }
-    })();
+    };
+    void hear("biometric-wipe-failed", "settings.biometricWipeFailed");
+    void hear("biometric-turned-off", "settings.biometricTurnedOff");
     return () => {
       alive = false;
-      dispose?.();
+      for (const dispose of disposers) dispose();
     };
   }, []);
 

@@ -1648,6 +1648,7 @@ export const en = {
     "biometricStranded": "Touch ID can't be used right now (no fingerprint enrolled, no sensor reachable, or the lid is closed), so Touch ID unlock is off. The encrypted password is still stored on this Mac: forget it here, or it may work again once Touch ID is back.",
     "biometricStrandedWindows": "Windows Hello is not available for this Windows account right now, so Windows Hello unlock is off. The encrypted password is still stored on this PC: forget it here, or it may work again once Windows Hello is back.",
     "biometricForget": "Forget",
+    "biometricTurnedOff": "That change reported an error, but this device's keys had already been rewritten, so {{method}} unlock was turned off and its stored password erased. To use it again, turn it on in Settings → Security.",
     "biometricWipeFailed": "This device's keys changed, but the master password stored for {{method}} unlock could not be erased. It is still on this device: remove it in Settings → Security (turn {{method}} unlock off, or choose Forget).",
     "biometricLeftover": "This vault has no master password now, but one stored earlier for {{method}} unlock is still on this device, encrypted. Nothing uses it any more: forget it.",
     "biometricReenable": "Your master password changed, so {{method}} unlock was turned off and its stored password erased. Turn it on again with the new password.",
