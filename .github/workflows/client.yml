@@ -367,6 +367,17 @@ jobs:
         run: cargo test --locked --release --lib biometric::tests
         working-directory: client/src-tauri
 
+      # The two pure decisions of the Touch ID adapter, which only compiles on
+      # macOS: which reason the prompt is given (an empty one aborts the app)
+      # and what an evaluation error means. They touch neither the Keychain
+      # nor LocalAuthentication; the filter does not match the shared
+      # `biometric::tests`, which stay Linux-only (see above). Reuses the test
+      # binary built above.
+      - name: Test Touch ID adapter logic (Tauri crate)
+        if: matrix.os == 'macos'
+        run: cargo test --locked --release --lib biometric::macos::tests
+        working-directory: client/src-tauri
+
       - name: Build & bundle (Tauri)
         uses: tauri-apps/tauri-action@v1
         env:

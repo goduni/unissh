@@ -46,10 +46,10 @@
 //! context is invalidated: `-[LAContext invalidate]` cancels the pending
 //! evaluation — the sheet closes and the reply arrives with `LAErrorAppCancel`
 //! — and a context invalidated before it was asked refuses with
-//! `LAErrorInvalidContext`. Both read as a cancel. The shared code drops the
-//! result of a superseded attempt unread either way, so nothing here is what
-//! keeps a late Touch ID from unlocking; this only stops the sheet from
-//! lingering.
+//! `LAErrorInvalidContext`. Both read as a cancel. The shared code discards the
+//! result of a superseded attempt either way (a released secret is zeroized
+//! unused), so nothing here is what keeps a late Touch ID from unlocking; this
+//! only stops the sheet from lingering.
 //!
 //! The raw `SecItem*` calls are used instead of security-framework's `passwords`
 //! helpers because those cannot attach an authentication context or return the
@@ -64,8 +64,10 @@
 //! app with a keychain-access-group entitlement, which an unsigned or ad-hoc
 //! bundle does not have — the feature is then `Unsupported` and not offered).
 //!
-//! None of this is unit-testable — every path ends in a system prompt or a
-//! Keychain the test runner does not have. It is checked by hand on a Mac.
+//! Almost none of this is unit-testable — every path ends in a system prompt
+//! or a Keychain the test runner does not have — and it is checked by hand on a
+//! Mac. The two pure decisions are tested (`tests`, run by CI on macOS): which
+//! reason the prompt is given, and what an evaluation error means.
 
 use std::ffi::c_void;
 use std::sync::mpsc;
@@ -147,7 +149,9 @@ unsafe impl Send for Invalidate {}
 impl Invalidate {
     fn run(self) {
         // SAFETY: `invalidate` has no preconditions and is idempotent.
-        unsafe { self.0.invalidate() };
+        unsafe {
+            self.0.invalidate();
+        }
     }
 }
 
@@ -262,6 +266,16 @@ fn enrolment_changed(stored: Option<&[u8]>, current: Option<&[u8]>) -> bool {
     }
 }
 
+/// The reason the prompt is given: the caller's, or [`FALLBACK_REASON`] when
+/// that is empty or blank.
+fn prompt_reason(reason: &str) -> &str {
+    if reason.trim().is_empty() {
+        FALLBACK_REASON
+    } else {
+        reason
+    }
+}
+
 /// What a failed evaluation means. Unavailable (no password, no sensor or lid
 /// closed, nothing enrolled) is not a cancel: the setting says why instead.
 fn evaluation_error(code: isize) -> SecretError {
@@ -297,12 +311,7 @@ fn evaluate(ctx: &Retained<LAContext>, reason: &str, prompt: &Prompt<'_>) -> Res
             log::debug!("biometric: Touch ID reply arrived after the waiter left");
         }
     });
-    let reason = if reason.trim().is_empty() {
-        FALLBACK_REASON
-    } else {
-        reason
-    };
-    let reason = NSString::from_str(reason);
+    let reason = NSString::from_str(prompt_reason(reason));
     let invalidate = Invalidate(ctx.clone());
     prompt.wait(Box::new(move || invalidate.run()), || {
         // SAFETY: the reply block is `Send`-safe (it only owns an mpsc Sender), as
@@ -461,5 +470,34 @@ impl DeviceSecretStore for TouchId {
     /// The prompt and nothing else: no Keychain item is made or read.
     fn confirm_presence(&self, reason: &str, prompt: &Prompt<'_>) -> Result<(), SecretError> {
         evaluate(&new_context(), reason, prompt).map_err(evaluation_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An empty `localizedReason` makes `evaluatePolicy` raise, which aborts the
+    // process: whatever the webview sends, the prompt is given some words.
+    #[test]
+    fn blank_reason_is_replaced_before_it_reaches_the_prompt() {
+        assert_eq!(prompt_reason(""), FALLBACK_REASON);
+        assert_eq!(prompt_reason(" \n\t"), FALLBACK_REASON);
+        assert_eq!(prompt_reason("open the vault"), "open the vault");
+    }
+
+    // A Magic Keyboard whose sensor is unpaired (-12) or out of reach (-13) is
+    // "Touch ID cannot be used here now", like a closed lid (-6): the setting
+    // says why, nothing is wiped, and it is not reported as an error.
+    #[test]
+    fn unpaired_or_disconnected_sensor_reads_as_unavailable() {
+        for code in [-12, -13, -6] {
+            assert!(
+                matches!(evaluation_error(code), SecretError::Unsupported),
+                "LAError {code}"
+            );
+        }
+        // Not a catch-all: a dismissed prompt is still a cancel.
+        assert!(matches!(evaluation_error(-2), SecretError::Cancelled));
     }
 }
