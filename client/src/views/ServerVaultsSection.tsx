@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import * as api from "@/bridge/api";
+import { tooLargeSummary } from "@/bridge/syncReport";
 import { apiErrorMessage, type ServerVault } from "@/bridge/types";
 import { useTranslation } from "@/i18n";
 import { Btn, Icon, Spinner, Tag } from "@/components/primitives";
@@ -75,7 +76,11 @@ export function ServerVaultsSection({
     setBusy(v.vaultId);
     try {
       const r = await api.serverBindAndPushVault(v.vaultId, serverId ?? undefined);
-      toast(t("serverVaults.pushed", { count: r.pushed }), "ok");
+      // Items the server refused as too large are named, as after any other
+      // sync, instead of being counted out of "pushed".
+      const notUploaded = tooLargeSummary(r.tooLarge);
+      if (notUploaded) toast(t("serverCloud.syncTooLarge", { items: notUploaded }), "warn");
+      else toast(t("serverVaults.pushed", { count: r.pushed }), "ok");
       await load();
     } catch (e) {
       toast(t("serverVaults.pushFailed", { error: apiErrorMessage(e) }), "err");
