@@ -130,6 +130,23 @@ fn unlock_while_unlocked_keeps_the_open_session() {
     assert_eq!(cast(&core, "kept")["unissh_mcp"]["outcome"], "completed");
 }
 
+// A lock that lands after an unlock began wins, however long the unlock takes
+// to derive its keys: nothing is installed. Also when the instance was locked
+// all along (the unlock screen is up and the OS locks the screen).
+#[test]
+fn lock_since_the_unlock_began_wins() {
+    let (_dir, core, kit) = setup();
+    core.lock();
+    let began = core.lock_epoch();
+    core.lock();
+    let overtaken = core.unlock_unless_locked_since(began, None, kit.clone());
+    assert!(matches!(overtaken, Err(unissh_ffi::FfiError::Locked)));
+    assert!(!core.is_unlocked());
+    // The next attempt, begun after that lock, is not held to it.
+    core.unlock(None, kit).unwrap();
+    assert!(core.is_unlocked());
+}
+
 #[test]
 fn preference_limits_and_failure_outcomes() {
     let (_dir, core, _) = setup();

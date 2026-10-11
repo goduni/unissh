@@ -1475,6 +1475,10 @@ impl std::fmt::Debug for McpRecordingMeta {
 /// Root core object for the UI. Manages a single local instance.
 #[derive(uniffi::Object)]
 pub struct Core {
+    /// Counts the locks: bumped by every [`Core::lock`], under the state mutex.
+    /// Named for its first user (an SFTP connection that outlived a lock is
+    /// refused); an unlock reads it the same way, so that a lock which lands
+    /// while it derives keys wins (see [`Core::unlock_unless_locked_since`]).
     sftp_epoch: std::sync::atomic::AtomicU64,
     sftp_sessions: Mutex<Vec<std::sync::Weak<SftpFfi>>>,
     db_path: PathBuf,
@@ -1615,6 +1619,10 @@ impl Core {
             }
         }
 
+        // Unlike `unlock`, this installs unconditionally — no "already open" and no
+        // "locked since" check. Neither can apply: the keyset file was created just
+        // above with O_EXCL, so no instance existed for a session to be open on or
+        // for a lock to have closed.
         *self.locked_state() = Some(CoreState {
             storage,
             keyset: unlocked,
@@ -1632,95 +1640,13 @@ impl Core {
 
     /// Unlocks the instance with a password (if needed) and the Secret Key (hex from the Emergency Kit).
     ///
-    /// On an instance that is already unlocked the credentials are still verified
-    /// (wrong ones fail as always), but the open session is kept, not replaced.
+    /// The credentials are always verified against the on-disk keyset: wrong ones
+    /// fail whether or not the instance is already open. On an instance that is
+    /// already unlocked the open session is kept, not replaced. A [`Self::lock`]
+    /// that lands after this call began wins: nothing is installed and the call
+    /// fails with [`FfiError::Locked`].
     pub fn unlock(&self, password: Option<String>, secret_key_hex: String) -> Result<(), FfiError> {
-        let password = password.map(Zeroizing::new);
-        let (enc, secret_key) = self.open_keyset_inputs(Zeroizing::new(secret_key_hex))?;
-
-        // migrate-on-open: a keyset written by an old scheme (before round 2) is opened
-        // via a probe and returned re-wrapped under the current scheme (`migrated`). This
-        // fixes "invalid secret key/master password" for those who created an account on
-        // earlier builds. Persisting the re-wrap is below, AFTER opening storage and the floor check.
-        let (unlocked, migrated) =
-            unlock_account_migrating(&enc, password.as_deref().map(String::as_bytes), &secret_key)
-                .map_err(map_keychain_err)?;
-
-        let db_key = derive_db_key(&unlocked);
-        let storage = Storage::open(&self.db_path, &db_key[..]).map_err(FfiError::other)?;
-
-        // anti-rollback (server-tz §13.13b): the local sidecar is also under floor protection.
-        // An attacker with disk access could swap the keyset file for an OLD
-        // (lower-generation) blob — after a password change that is a downgrade. The same
-        // logic as in unlock_from_server_blob: we REJECT a generation below the floor BEFORE
-        // setting state (the floor lives in storage-meta, available only after
-        // unlock+open). We read/raise the floor with the same keychain helper.
-        let floor = unissh_keychain::keyset_gen_floor(&storage)
-            .map_err(map_keychain_err)?
-            .unwrap_or(0);
-        let attempted = u64::from(enc.generation);
-        if attempted < floor {
-            // Security event: an on-disk keyset older than the recorded floor — a
-            // possible downgrade attack. Generations are counters, not secrets.
-            log::warn!(
-                "keyset generation rollback rejected (attempted={attempted}, floor={floor})"
-            );
-            return Err(map_keychain_err(
-                unissh_keychain::KeychainError::GenerationRollback { attempted, floor },
-            ));
-        }
-        // The order is brick-safe: first atomically persist the re-wrapped keyset,
-        // and ONLY then raise the floor to its (new, +1) generation. If the write fails
-        // the floor is not raised — the old blob (generation=attempted) will still open on
-        // the next launch and the migration will repeat. On success the old blob drops
-        // below the floor — a downgrade to the old/weaker scheme will no longer pass.
-        let accepted_gen = if let Some(new_enc) = migrated {
-            // Back up the old sidecar before overwriting (logs the path) — reversibility.
-            backup_keyset_sidecar(&self.keyset_path);
-            let new_bytes = new_enc.to_bytes().map_err(FfiError::other)?;
-            write_keyset_atomic(&self.keyset_path, &new_bytes)?;
-            log::info!(
-                "keyset migrated to current scheme (generation {} -> {})",
-                attempted,
-                new_enc.generation
-            );
-            u64::from(new_enc.generation)
-        } else {
-            attempted
-        };
-        // Accepted: raise the floor to the accepted generation (TOFU; cannot lower — idempotent).
-        unissh_keychain::raise_keyset_gen_floor(&storage, accepted_gen)
-            .map_err(map_keychain_err)?;
-
-        // The credentials were checked above without the state lock (Argon2id runs
-        // for a second), so another unlock may have finished first: a typed password
-        // racing a biometric prompt that was answered late. The session that is
-        // already open then stays exactly as it is — replacing it would drop its
-        // in-memory agent, its caches and the recordings in progress. The credentials
-        // just verified open this same keyset, so `Ok` is still the honest answer.
-        let fresh = CoreState {
-            storage,
-            keyset: unlocked,
-            agent: InMemoryAgent::new(),
-            vault_names: HashMap::new(),
-            automation_recordings: HashMap::new(),
-            recording_retention: Mutex::new(HashMap::new()),
-        };
-        let kept = {
-            let mut state = self.locked_state();
-            if state.is_some() {
-                true
-            } else {
-                *state = Some(fresh);
-                false
-            }
-        };
-        if kept {
-            log::info!("unlock: already unlocked, the open session is kept");
-        } else {
-            log::info!("instance unlocked");
-        }
-        Ok(())
+        self.unlock_unless_locked_since(self.lock_epoch(), password, secret_key_hex)
     }
 
     /// Whether the instance is unlocked.
@@ -1741,6 +1667,9 @@ impl Core {
     }
 
     /// Locks the instance (in-memory secrets are zeroized on Drop).
+    ///
+    /// Every call counts as a lock, also on an instance that is already locked:
+    /// an unlock that began before it installs nothing (see [`Self::unlock`]).
     #[expect(
         clippy::significant_drop_tightening,
         reason = "the guard must cover the epoch bump, the state reset and the hand-off of the SFTP sessions atomically"
@@ -2446,6 +2375,12 @@ impl Core {
         unissh_keychain::raise_keyset_gen_floor(&storage, accepted_gen)
             .map_err(map_keychain_err)?;
 
+        // Unlike `unlock`, this replaces a session that is already open, on purpose:
+        // the blob just accepted is this device's keyset from now on (a recovery or
+        // a pairing may bring a different one), and a session opened under the old
+        // record must not outlive it. Nor does it need `unlock`'s "locked since"
+        // check: the state guard is held for the whole method, so a lock cannot
+        // land in the middle — it waits, and then locks what is installed here.
         *guard = Some(CoreState {
             storage,
             keyset: unlocked,
@@ -6302,6 +6237,173 @@ impl Core {
             }
             Ok(created)
         })
+    }
+
+    /// How many times the instance has been locked. Rust-only (not exported to the
+    /// mobile bindings): a caller whose unlock begins before it reaches the core —
+    /// the desktop shell waits on a biometric prompt first — reads it at that
+    /// moment and hands it to [`Self::unlock_unless_locked_since`].
+    pub fn lock_epoch(&self) -> u64 {
+        self.sftp_epoch.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// [`Self::unlock`] for an attempt that began when [`Self::lock_epoch`] read
+    /// `lock_epoch`. Rust-only (not exported to the mobile bindings).
+    ///
+    /// The contract, for every caller:
+    /// * The credentials are verified against the on-disk keyset first, always.
+    ///   Wrong ones are `InvalidCredentials`, open instance or not.
+    /// * A [`Self::lock`] since `lock_epoch` wins: nothing is installed and the
+    ///   answer is [`FfiError::Locked`] — also when another unlock has opened the
+    ///   instance again meanwhile (that session is left alone).
+    /// * Otherwise `Ok`: the instance is unlocked. A session that was already open
+    ///   is kept as it is, not replaced.
+    ///
+    /// The state lock is not held while keys are derived (Argon2id runs for about
+    /// a second); it is taken twice, briefly, and both times the lock epoch is
+    /// read under it — [`Self::lock`] bumps the epoch under that same lock, so a
+    /// lock is either seen here or comes after the session is installed and
+    /// closes it.
+    pub fn unlock_unless_locked_since(
+        &self,
+        lock_epoch: u64,
+        password: Option<String>,
+        secret_key_hex: String,
+    ) -> Result<(), FfiError> {
+        let password = password.map(Zeroizing::new);
+        let (enc, secret_key) = self.open_keyset_inputs(Zeroizing::new(secret_key_hex))?;
+
+        // migrate-on-open: a keyset written by an old scheme (before round 2) is opened
+        // via a probe and returned re-wrapped under the current scheme (`migrated`). This
+        // fixes "invalid secret key/master password" for those who created an account on
+        // earlier builds. Persisting the re-wrap is below, AFTER opening storage and the floor check.
+        let (unlocked, migrated) =
+            unlock_account_migrating(&enc, password.as_deref().map(String::as_bytes), &secret_key)
+                .map_err(map_keychain_err)?;
+
+        // The credentials are good. If a session is already open (a typed password
+        // racing a biometric prompt that was answered late) there is nothing left to
+        // do: no second SQLCipher connection, no migration, no keyset rewrite. Only
+        // the rollback check is kept, against the open session's storage, so that a
+        // swapped-in stale record is refused here as it is on a locked instance.
+        let already_open = {
+            let state = self.locked_state();
+            if self.lock_epoch() != lock_epoch {
+                return Err(FfiError::Locked);
+            }
+            match state.as_ref() {
+                Some(open) => {
+                    Self::keyset_generation_above_floor(&open.storage, &enc)?;
+                    true
+                }
+                None => false,
+            }
+        };
+        if already_open {
+            log::info!("unlock: already unlocked, the open session is kept");
+            return Ok(());
+        }
+
+        let db_key = derive_db_key(&unlocked);
+        let storage = Storage::open(&self.db_path, &db_key[..]).map_err(FfiError::other)?;
+
+        // anti-rollback (server-tz §13.13b): the local sidecar is also under floor protection.
+        // An attacker with disk access could swap the keyset file for an OLD
+        // (lower-generation) blob — after a password change that is a downgrade. The same
+        // logic as in unlock_from_server_blob: we REJECT a generation below the floor BEFORE
+        // setting state (the floor lives in storage-meta, available only after
+        // unlock+open). We read/raise the floor with the same keychain helper.
+        let attempted = Self::keyset_generation_above_floor(&storage, &enc)?;
+        // The order is brick-safe: first atomically persist the re-wrapped keyset,
+        // and ONLY then raise the floor to its (new, +1) generation. If the write fails
+        // the floor is not raised — the old blob (generation=attempted) will still open on
+        // the next launch and the migration will repeat. On success the old blob drops
+        // below the floor — a downgrade to the old/weaker scheme will no longer pass.
+        let accepted_gen = if let Some(new_enc) = migrated {
+            // Back up the old sidecar before overwriting (logs the path) — reversibility.
+            backup_keyset_sidecar(&self.keyset_path);
+            let new_bytes = new_enc.to_bytes().map_err(FfiError::other)?;
+            write_keyset_atomic(&self.keyset_path, &new_bytes)?;
+            log::info!(
+                "keyset migrated to current scheme (generation {} -> {})",
+                attempted,
+                new_enc.generation
+            );
+            u64::from(new_enc.generation)
+        } else {
+            attempted
+        };
+        // Accepted: raise the floor to the accepted generation (TOFU; cannot lower — idempotent).
+        unissh_keychain::raise_keyset_gen_floor(&storage, accepted_gen)
+            .map_err(map_keychain_err)?;
+
+        // Everything above ran without the state lock, so the answer to "may this
+        // session be installed" is taken now, under it, together with the install:
+        // * a lock since this unlock began wins — nothing is installed, and `fresh`
+        //   (keys and the DB connection) is dropped after the guard is released;
+        // * another unlock finished first — its session stays exactly as it is
+        //   (replacing it would drop its in-memory agent, its caches and the
+        //   recordings in progress); the credentials verified above open the same
+        //   keyset, so `Ok` is still the honest answer.
+        let fresh = CoreState {
+            storage,
+            keyset: unlocked,
+            agent: InMemoryAgent::new(),
+            vault_names: HashMap::new(),
+            automation_recordings: HashMap::new(),
+            recording_retention: Mutex::new(HashMap::new()),
+        };
+        let installed = {
+            let mut state = self.locked_state();
+            if self.lock_epoch() != lock_epoch {
+                Err(FfiError::Locked)
+            } else if state.is_some() {
+                Ok(false)
+            } else {
+                *state = Some(fresh);
+                Ok(true)
+            }
+        };
+        if installed? {
+            log::info!("instance unlocked");
+        } else {
+            log::info!("unlock: already unlocked, the open session is kept");
+        }
+        Ok(())
+    }
+
+    /// The generation of the on-disk keyset record `enc`, or a rollback error when
+    /// it is below the floor recorded in `storage` (an old record put back on disk).
+    fn keyset_generation_above_floor(
+        storage: &Storage,
+        enc: &EncryptedKeyset,
+    ) -> Result<u64, FfiError> {
+        let floor = unissh_keychain::keyset_gen_floor(storage)
+            .map_err(map_keychain_err)?
+            .unwrap_or(0);
+        let attempted = u64::from(enc.generation);
+        if attempted < floor {
+            // Security event: an on-disk keyset older than the recorded floor — a
+            // possible downgrade attack. Generations are counters, not secrets.
+            log::warn!(
+                "keyset generation rollback rejected (attempted={attempted}, floor={floor})"
+            );
+            return Err(map_keychain_err(
+                unissh_keychain::KeychainError::GenerationRollback { attempted, floor },
+            ));
+        }
+        Ok(attempted)
+    }
+
+    /// SHA-256 of the keyset record on disk, or `None` when there is none or it
+    /// cannot be read. Rust-only (not exported to the mobile bindings): lets the
+    /// desktop shell tell whether a call that failed had already rewritten the
+    /// record, without knowing where the record lives or how it is written. The
+    /// record is ciphertext and the digest says nothing more about it.
+    pub fn keyset_record_digest(&self) -> Option<[u8; 32]> {
+        use sha2::Digest as _;
+        let record = std::fs::read(&self.keyset_path).ok()?;
+        Some(Sha256::digest(&record).into())
     }
 
     /// Checks a master password against the on-disk keyset while the instance is
