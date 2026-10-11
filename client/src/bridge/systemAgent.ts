@@ -1,14 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type SystemAgentError =
-  | "unsupported"
   | "in_use"
   | "bind_failed"
   | "path_too_long"
   | "save_failed"
   | "listener_failed";
 
-/** Desktop-only. `supported` is false where the platform has no listener yet. */
+/**
+ * Desktop-only. `supported` is false when the endpoint could not be worked
+ * out (no app data directory; on Windows, no user SID for the pipe name):
+ * nothing can listen then, and `error` is `bind_failed` from the start.
+ */
 export interface SystemAgentStatus {
   supported: boolean;
   enabled: boolean;
@@ -34,7 +37,12 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** What Git for Windows must run instead of its bundled ssh; see below. */
+/**
+ * What Git for Windows must run instead of its bundled ssh; see below. The
+ * usual place, not a certain one: Windows may live on another drive, and an
+ * OpenSSH installed with winget or the MSI is under Program Files. The
+ * webview cannot ask, so the UI says to adjust it (`setupDescWindows`).
+ */
 const WINDOWS_OPENSSH = "C:/Windows/System32/OpenSSH/ssh.exe";
 
 export interface SystemAgentSetup {
@@ -60,7 +68,8 @@ export interface SystemAgentSetup {
  *   `\\.\pipe\…` there names `\.\pipe\…`, which is not a pipe; the doubled
  *   form that fixes it breaks the older ssh still shipped with Windows 10.
  *   `//./pipe/…` is read the same by both and Windows resolves it to the same
- *   pipe (PuTTY's Pageant and JGit write it this way for the same reason).
+ *   pipe. (JGit's ssh-agent notes recommend forward slashes in ~/.ssh/config
+ *   for the same reason. None of this was run against a Windows ssh here.)
  * - Git for Windows bundles an MSYS2 ssh, which speaks Unix sockets only and
  *   cannot open a named pipe at all; `core.sshCommand` hands git the Windows
  *   one.

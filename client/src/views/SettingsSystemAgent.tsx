@@ -25,7 +25,6 @@ import { isWindows } from "@/bridge/platform";
 import { SectionLabel, SettingRow } from "./ViewSettings";
 
 const ERROR_KEY = {
-  unsupported: "systemAgent.errorUnsupported",
   in_use: "systemAgent.errorInUse",
   bind_failed: "systemAgent.errorBindFailed",
   path_too_long: "systemAgent.errorPathTooLong",
@@ -93,6 +92,16 @@ export function SettingsSystemAgent() {
     };
   }, []);
 
+  // Switched on but not listening, with nothing wrong: the listener is on its
+  // way back after an unlock or a wake. Look again shortly, so the chip does
+  // not go on saying "paused" under a running agent.
+  const paused = !!status && status.enabled && !status.running && !status.error;
+  useEffect(() => {
+    if (!paused) return;
+    const timer = setInterval(() => void refresh().catch(() => {}), 1500);
+    return () => clearInterval(timer);
+  }, [paused]);
+
   // A failed toggle is worded from the typed code the controller records, not
   // from the command's message; the status is re-read either way.
   const onToggle = (enabled: boolean) => {
@@ -121,7 +130,9 @@ export function SettingsSystemAgent() {
     ? { tone: "good" as const, label: t("systemAgent.statusRunning") }
     : status.error
       ? { tone: "danger" as const, label: t(ERROR_KEY[status.error]) }
-      : { tone: "neutral" as const, label: t("systemAgent.statusOff") };
+      : // On, but not listening right now: "Off" beside a switch that is on
+        // would be a lie.
+        { tone: "neutral" as const, label: t(status.enabled ? "systemAgent.statusPaused" : "systemAgent.statusOff") };
 
   return (
     <>
