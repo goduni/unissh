@@ -316,6 +316,10 @@ pub struct AgentApprovalEvent {
     /// what turns the prompt from "something wants a signature" into "this would
     /// log in as X".
     pub target: String,
+    /// How many more requests were waiting for an answer when this one was
+    /// put on screen (the core asks about one at a time). Not updated while
+    /// the prompt is open.
+    pub waiting: u32,
 }
 
 /// One prompt waiting for a person.
@@ -437,6 +441,7 @@ impl AgentApprover for AppApprover {
             executable,
             user: request.user,
             target: request.target,
+            waiting: request.waiting,
         };
         if self.app.emit("agent-approval", event).is_err() {
             lock_map(&self.state).pending.remove(&id);

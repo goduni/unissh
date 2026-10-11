@@ -5333,7 +5333,7 @@ fn system_agent_request(agent: &SystemAgent, request: &[u8], caller: AgentCaller
             client.read_exact(&mut body).await.unwrap();
             body // dropping `client` ends the server loop
         };
-        tokio::join!(agent.serve(server, caller), ask).1
+        tokio::join!(agent.serve(server, |_| caller), ask).1
     })
 }
 
@@ -5348,7 +5348,13 @@ fn take_ssh_string(input: &mut &[u8]) -> Vec<u8> {
 /// Asks the system agent for its identities, the way `ssh-add -l` does, and
 /// returns `(key blob, comment)` per identity.
 fn system_agent_identities(core: &Core) -> Vec<(Vec<u8>, String)> {
-    let reply = system_agent_request(&core.system_agent(), &[11], AgentCaller::default()); // REQUEST_IDENTITIES
+    identities_through(&core.system_agent())
+}
+
+/// [`system_agent_identities`], asked of `agent`: the same agent again reuses
+/// the listing it kept, as one listener does across connections.
+fn identities_through(agent: &SystemAgent) -> Vec<(Vec<u8>, String)> {
+    let reply = system_agent_request(agent, &[11], AgentCaller::default()); // REQUEST_IDENTITIES
     assert_eq!(reply[0], 12, "IDENTITIES_ANSWER");
     let count = u32::from_be_bytes(reply[1..5].try_into().unwrap());
     let mut rest = &reply[5..];
@@ -5401,6 +5407,42 @@ fn system_agent_offers_the_shared_keys_follows_a_toggle_and_empties_when_locked(
     // A locked core offers nothing — an empty list, not an error.
     core.lock();
     assert_eq!(system_agent_identities(&core), vec![]);
+}
+
+/// One listener keeps its last listing and reuses it only while nothing it was
+/// resolved from has changed: an unshare, a key replaced inside the vault and
+/// a lock each show in the very next listing through the same agent.
+#[test]
+fn system_agent_listing_kept_by_one_agent_follows_every_change_at_once() {
+    let (core, _dir, work) = core_sharing_work();
+    let agent = core.system_agent();
+    let offered = vec![(openssh_blob(&work), "work".to_owned())];
+    assert_eq!(identities_through(&agent), offered);
+    assert_eq!(identities_through(&agent), offered, "asked again");
+
+    core.set_system_agent_shared("v".to_owned(), "work".to_owned(), false)
+        .unwrap();
+    assert_eq!(identities_through(&agent), vec![], "unshared");
+
+    core.set_system_agent_shared("v".to_owned(), "work".to_owned(), true)
+        .unwrap();
+    assert_eq!(identities_through(&agent), offered, "shared again");
+    // The share list is as it was; only the item changed.
+    core.generate_ssh_key("v".to_owned(), "work".to_owned())
+        .unwrap();
+    assert_eq!(identities_through(&agent), vec![], "replaced in the vault");
+
+    let replaced = core
+        .generate_ssh_key("v".to_owned(), "other".to_owned())
+        .unwrap();
+    core.set_system_agent_shared("v".to_owned(), "other".to_owned(), true)
+        .unwrap();
+    assert_eq!(
+        identities_through(&agent),
+        vec![(openssh_blob(&replaced), "other".to_owned())]
+    );
+    core.lock();
+    assert_eq!(identities_through(&agent), vec![], "locked");
 }
 
 /// Approves every signature and keeps what each prompt was shown, and the ids
@@ -5711,7 +5753,7 @@ fn system_agent_withdraws_the_prompt_of_a_client_that_hangs_up() {
             drop(client);
         };
         tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(agent.serve(server, AgentCaller::default()), hang_up)
+            tokio::join!(agent.serve(server, |_| AgentCaller::default()), hang_up)
         })
         .await
         .expect("serving ends as soon as the client is gone");
@@ -5760,7 +5802,7 @@ fn system_agent_withdraws_the_prompt_of_a_connection_the_listener_drops() {
         };
         // The client stays connected; serving is dropped once the prompt is up.
         tokio::select! {
-            () = agent.serve(server, AgentCaller::default()) => panic!("served to the end"),
+            () = agent.serve(server, |_| AgentCaller::default()) => panic!("served to the end"),
             () = prompt_opened => {}
         }
         drop(client);

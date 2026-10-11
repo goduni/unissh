@@ -39,7 +39,9 @@ use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use unissh_ffi::AgentCaller;
 use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, HANDLE,
+    CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_COMMITMENT_LIMIT, ERROR_NOT_ENOUGH_MEMORY,
+    ERROR_NOT_ENOUGH_QUOTA, ERROR_NO_SYSTEM_RESOURCES, ERROR_OUTOFMEMORY, ERROR_PIPE_BUSY,
+    ERROR_TOO_MANY_OPEN_FILES, HANDLE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -186,6 +188,28 @@ pub fn create(name: &OsStr, security: &Security, first: bool) -> io::Result<Name
 pub fn in_use(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(code)
         if code as u32 == ERROR_ACCESS_DENIED || code as u32 == ERROR_PIPE_BUSY)
+}
+
+/// Whether a failed creation of a further instance leaves the listener usable:
+/// the process or the system being out of memory, handles or quota, or every
+/// instance of the pipe being busy, all pass with time. Anything else (access
+/// denied, a name that is no longer this listener's pipe) does not.
+pub fn create_error_is_transient(error: &io::Error) -> bool {
+    let code = error
+        .raw_os_error()
+        .and_then(|code| u32::try_from(code).ok());
+    code.is_some_and(|code| {
+        [
+            ERROR_PIPE_BUSY,
+            ERROR_NOT_ENOUGH_MEMORY,
+            ERROR_OUTOFMEMORY,
+            ERROR_NO_SYSTEM_RESOURCES,
+            ERROR_NOT_ENOUGH_QUOTA,
+            ERROR_COMMITMENT_LIMIT,
+            ERROR_TOO_MANY_OPEN_FILES,
+        ]
+        .contains(&code)
+    })
 }
 
 /// Who connected to this pipe instance, as far as Windows says.
