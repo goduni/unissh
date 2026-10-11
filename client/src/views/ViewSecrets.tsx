@@ -25,7 +25,7 @@ import { isDesktopOs } from "@/bridge/platform";
 import { systemAgentSetShared, systemAgentSharedKeys, systemAgentStatus } from "@/bridge/systemAgent";
 import { guard } from "@/store/action";
 import { isKeyOld, keyUsage, keyUsageCount } from "@/support/keyHygiene";
-import { confirmFinishRotation } from "@/overlays/finishRotation";
+import { keyRowRotationActions, type KeyRowRotationAction } from "@/support/keyRotation";
 import { useFmt } from "@/i18n/format";
 
 type SecretTab = "keys" | "passwords" | "notes" | "identities";
@@ -213,7 +213,12 @@ function RevealField({
  *  plus candidates synced from a device that started the rotation — those
  *  carry `startedElsewhere` and can only be abandoned here):
  *  `original` — this key has a live candidate; `candidate` — this key IS one. */
-type RotationRole = { role: "original" | "candidate"; link: KeyRotationLink };
+type RotationRole = {
+  role: "original" | "candidate";
+  link: KeyRotationLink;
+  /** Whether the ORIGINAL key of the pair carries a certificate. */
+  originalHasCertificate: boolean;
+};
 
 function KeyRow({
   item,
@@ -299,24 +304,21 @@ function KeyRow({
   };
 
   // Guided rotation: the dialog shows the plan, creates the candidate key on
-  // confirm, and moves each machine over (deploy → verify → remove). Continuing
-  // reopens it for the candidate this device already began.
+  // confirm, and moves each machine over (deploy → verify → remove → confirm).
+  // Continuing reopens it for the candidate this device already began — from
+  // either row of the pair, always for the original key. It is also the only
+  // way to finish: the row itself cannot know which machines already take the
+  // new key (see `keyRowRotationActions`).
   const onStartRotation = () =>
     ctx.openModal({ kind: "keyRotation", keyItemId: item.itemId, hasCertificate: item.hasCertificate });
   const onContinueRotation = () => {
     if (!rotation) return;
     ctx.openModal({
       kind: "keyRotation",
-      keyItemId: item.itemId,
-      hasCertificate: item.hasCertificate,
+      keyItemId: rotation.link.keyId,
+      hasCertificate: rotation.originalHasCertificate,
       candidateId: rotation.link.candidateId,
     });
-  };
-
-  const onFinishRotation = () => {
-    if (!vault || !rotation) return;
-    const { keyId, candidateId } = rotation.link;
-    confirmFinishRotation(ctx, { vault, keyId, candidateId });
   };
 
   const onAbandonRotation = () => {
@@ -369,6 +371,13 @@ function KeyRow({
         }
       },
     });
+  };
+
+  const rotationMenu: Record<KeyRowRotationAction, { label: string; icon: "refresh" | "x"; onClick: () => void }> = {
+    start: { label: t("secrets.startRotation"), icon: "refresh", onClick: onStartRotation },
+    replace: { label: t("secrets.rotateKey"), icon: "refresh", onClick: onRotate },
+    continue: { label: t("secrets.continueRotation"), icon: "refresh", onClick: onContinueRotation },
+    abandon: { label: t("secrets.abandonRotation"), icon: "x", onClick: onAbandonRotation },
   };
 
   const onDelete = () => {
@@ -540,25 +549,7 @@ function KeyRow({
                     ctx.openModal({ kind: "copyKeyToServer", openssh, keyItemId: item.itemId });
                 },
               },
-              ...(rotation
-                ? [
-                    // Finishing overwrites key material, so it is offered only
-                    // on the device that started the rotation and holds the link.
-                    ...(rotation.link.startedElsewhere
-                      ? []
-                      : [
-                          // Continue runs the plan for the original key, so it lives on that row.
-                          ...(rotation.role === "original"
-                            ? [{ label: t("secrets.continueRotation"), icon: "refresh" as const, onClick: onContinueRotation }]
-                            : []),
-                          { label: t("secrets.finishRotation"), icon: "check" as const, onClick: onFinishRotation },
-                        ]),
-                    { label: t("secrets.abandonRotation"), icon: "x" as const, onClick: onAbandonRotation },
-                  ]
-                : [
-                    { label: t("secrets.startRotation"), icon: "refresh" as const, onClick: onStartRotation },
-                    { label: t("secrets.rotateKey"), icon: "refresh" as const, onClick: onRotate },
-                  ]),
+              ...keyRowRotationActions(rotation?.link).map((a) => rotationMenu[a]),
               { label: t("secrets.exportPrivateKey"), icon: "download", onClick: onExport },
             ]}
           />
@@ -680,10 +671,15 @@ function KeysTab({ keys, isMobile }: { keys: ItemInfo[]; isMobile: boolean }) {
   }, [vault, keySig]);
 
   const rotationOf = (itemId: string): RotationRole | undefined => {
+    const role = (role: RotationRole["role"], link: KeyRotationLink): RotationRole => ({
+      role,
+      link,
+      originalHasCertificate: keys.find((k) => k.itemId === link.keyId)?.hasCertificate ?? false,
+    });
     const asOriginal = links.find((l) => l.keyId === itemId);
-    if (asOriginal) return { role: "original", link: asOriginal };
+    if (asOriginal) return role("original", asOriginal);
     const asCandidate = links.find((l) => l.candidateId === itemId);
-    return asCandidate ? { role: "candidate", link: asCandidate } : undefined;
+    return asCandidate ? role("candidate", asCandidate) : undefined;
   };
 
   // A candidate sits right under its original, so the pair reads as one. It

@@ -84,6 +84,11 @@ impl From<FfiError> for ApiError {
             FfiError::PublickeyOnlyNeedsKey => {
                 Self::other("A key-only login needs key authentication.")
             }
+            // Read off `MultiExecResult::key_login` where they matter (a key
+            // rotation); anywhere else they are an SSH failure like any other.
+            e @ (FfiError::KeyRefused | FfiError::KeyAcceptedMoreAuthRequired) => {
+                Self::Ssh { msg: e.to_string() }
+            }
             FfiError::Ssh { msg } => Self::Ssh { msg },
             FfiError::Other { msg } => Self::Other { msg },
         }

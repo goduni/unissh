@@ -249,6 +249,15 @@ pub enum FfiError {
     /// that is not a key: a password would stand in for the key it must prove.
     #[error("a key-only login needs key authentication")]
     PublickeyOnlyNeedsKey,
+    /// A key-only login (`publickey_only`) was refused: the server did not
+    /// accept the key — neither its certificate, when it has one, nor the plain
+    /// key. Says nothing about any other way into the account.
+    #[error("the server refused the key")]
+    KeyRefused,
+    /// A key-only login got as far as the server accepting the key and asking
+    /// for a further factor. The login was not completed; the key is authorized.
+    #[error("the server accepted the key but requires further authentication")]
+    KeyAcceptedMoreAuthRequired,
     /// SSH error.
     #[error("ssh error: {msg}")]
     Ssh {
@@ -1285,6 +1294,31 @@ pub struct GroupTargetPlan {
     pub status: ResolveStatus,
 }
 
+/// What a key-only login ([`MultiExecTarget::publickey_only`]) that did not
+/// establish a session learned about the key. Any other failure — a hop, the
+/// network, a locked core — says nothing about the key and carries no value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum KeyLoginFailure {
+    /// The server did not accept the key ([`FfiError::KeyRefused`]).
+    Refused,
+    /// The server accepted the key and wants a further factor
+    /// ([`FfiError::KeyAcceptedMoreAuthRequired`]).
+    AcceptedNeedsMore,
+}
+
+impl KeyLoginFailure {
+    /// The key-login outcome a connect error stands for, if it is one.
+    const fn of(e: &FfiError) -> Option<Self> {
+        if matches!(e, FfiError::KeyRefused) {
+            Some(Self::Refused)
+        } else if matches!(e, FfiError::KeyAcceptedMoreAuthRequired) {
+            Some(Self::AcceptedNeedsMore)
+        } else {
+            None
+        }
+    }
+}
+
 /// Result of multi-exec for a single host.
 #[derive(uniffi::Record)]
 pub struct MultiExecResult {
@@ -1303,6 +1337,9 @@ pub struct MultiExecResult {
     /// The command exceeded the per-host timeout (`timeout_secs`). In that case `error`
     /// is also set and `exit_status == -1`.
     pub timed_out: bool,
+    /// Set when the target was a key-only login that failed with an answer
+    /// about the key itself; `None` for every other result, failed or not.
+    pub key_login: Option<KeyLoginFailure>,
 }
 
 // === Milestone 2: FFI types (cloud/membership/identity/cache/audit/sync) ===
@@ -2715,7 +2752,13 @@ impl Core {
                     }
                 })?;
             // pull
-            let pull = sync_pull(&mut adapter, &state.storage, &ctx).map_err(map_sync_err)?;
+            let pull = sync_pull(&mut adapter, &state.storage, &ctx);
+            // Before the error leaves: a pull that fails part-way has applied the
+            // objects ahead of the failure, and no later pull applies them again.
+            if !matches!(&pull, Ok(report) if report.applied == 0) {
+                evict_replaced_agent_keys(state);
+            }
+            let pull = pull.map_err(map_sync_err)?;
 
             Ok(FfiSyncReport {
                 applied: pull.applied,
@@ -2750,8 +2793,13 @@ impl Core {
                 .enumerate()
                 .filter_map(|(i, b)| SyncObject::from_bytes(b).ok().map(|o| (i as u64 + 1, o)))
                 .collect();
-            let report = unissh_sync::apply_pulled_objects(&state.storage, &ctx, parsed)
-                .map_err(map_sync_err)?;
+            let report = unissh_sync::apply_pulled_objects(&state.storage, &ctx, parsed);
+            // Before the error leaves, as in `sync_now`: the objects ahead of a
+            // failure are applied.
+            if !matches!(&report, Ok(report) if report.applied == 0) {
+                evict_replaced_agent_keys(state);
+            }
+            let report = report.map_err(map_sync_err)?;
             Ok(FfiSyncReport {
                 applied: report.applied,
                 skipped_stale: report.skipped_stale,
@@ -3200,8 +3248,9 @@ impl Core {
             .map_err(FfiError::other)?;
             let public = store_new_ssh_key(&state.storage, &vault, &vault_id, &item_id)?;
             // The key material was replaced under the same id → unload the previous private key from
-            // the agent (namespaced), otherwise connects in this session will keep signing
-            // with the OLD key (load_key_into_agent short-circuits on agent.contains).
+            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
+            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
+            // reloads the key from the item anyway, see load_key_into_agent.)
             state.agent.remove(&agent_key_id(&vault_id, &item_id));
             Ok(public)
         })
@@ -3255,8 +3304,9 @@ impl Core {
                 .put_item(item_id.as_bytes(), ITEM_TYPE_SSH_KEY, normalized.as_bytes())
                 .map_err(FfiError::other)?;
             // The key material was replaced under the same id → unload the previous private key from
-            // the agent (namespaced), otherwise connects in this session will keep signing
-            // with the OLD key (load_key_into_agent short-circuits on agent.contains).
+            // the agent (namespaced), otherwise whatever signs straight from the agent by id — a
+            // forwarded agent in a live session — keeps signing with the OLD key. (A connect
+            // reloads the key from the item anyway, see load_key_into_agent.)
             state.agent.remove(&agent_key_id(&vault_id, &item_id));
             Ok(public)
         })
@@ -3299,6 +3349,9 @@ impl Core {
                     cert_openssh.as_bytes(),
                 )
                 .map_err(FfiError::other)?;
+            // The loaded copy still carries the previous certificate (or none):
+            // drop it, so the next use reloads the key with this one.
+            state.agent.remove(&agent_key_id(&vault_id, &key_item_id));
             Ok(())
         })
     }
@@ -3397,8 +3450,9 @@ impl Core {
             // next connect and cert authentication would silently break.
             drop_certificate(&vault, &item_id)?;
             // Unload the old key from the in-memory agent (like delete_item/rename_item),
-            // otherwise connects in this session would keep using the previous pair, since
-            // `load_key_into_agent` short-circuits on `agent.contains()`.
+            // otherwise whatever signs straight from the agent by id — a forwarded agent in a
+            // live session — would keep using the previous pair. (A connect reloads the key
+            // from the item anyway, see `load_key_into_agent`.)
             // A4a namespace: the agent stores the key under agent_key_id(vault_id,item_id), not
             // under the bare item_id — it must be unloaded with the same key, otherwise remove is a no-op and
             // a revoked/rotated private key stays alive in the agent until the end of the session.
@@ -3828,6 +3882,7 @@ impl Core {
                     error: Some(e.to_string()),
                     duration_ms: 0,
                     timed_out: false,
+                    key_login: KeyLoginFailure::of(&e),
                 }),
             }
         }
@@ -3880,6 +3935,7 @@ impl Core {
                     error: None,
                     duration_ms,
                     timed_out: false,
+                    key_login: None,
                 }),
                 Some(Err(e)) => results.push(MultiExecResult {
                     host,
@@ -3889,6 +3945,7 @@ impl Core {
                     error: Some(e.to_string()),
                     duration_ms,
                     timed_out: false,
+                    key_login: None,
                 }),
                 None => results.push(MultiExecResult {
                     host,
@@ -3898,6 +3955,7 @@ impl Core {
                     error: Some(format!("command timed out after {timeout_secs}s")),
                     duration_ms,
                     timed_out: true,
+                    key_login: None,
                 }),
             }
         }
@@ -4493,6 +4551,7 @@ impl Core {
                 error: Some(msg.to_owned()),
                 duration_ms: 0,
                 timed_out: false,
+                key_login: None,
             });
         }
         Ok(results)
@@ -7344,6 +7403,12 @@ fn map_transport_err(e: unissh_ssh_transport::TransportError) -> FfiError {
         // with Locked, and dressing it as an SSH failure would send them looking
         // at the host.
         unissh_ssh_transport::TransportError::CoreLocked => FfiError::Locked,
+        // The two answers a key-only login exists to get: kept as variants so a
+        // caller reads the outcome off the type, never off the message.
+        unissh_ssh_transport::TransportError::KeyRefused => FfiError::KeyRefused,
+        unissh_ssh_transport::TransportError::KeyAcceptedMoreAuthRequired => {
+            FfiError::KeyAcceptedMoreAuthRequired
+        }
         unissh_ssh_transport::TransportError::HostKeyMismatch {
             host,
             port,
@@ -10427,8 +10492,9 @@ impl Drop for SftpFfi {
 /// A key identifier in the embedded agent, NAMESPACED by `(vault_id, item_id)`
 /// (A4, sec-review): the agent survives vault switches and connects, while item_ids are not
 /// unique across vaults (e.g. everyone names a key `id_ed25519`). Without a namespace the second
-/// `load` would short-circuit on `contains()` and sign with the WRONG key. The length
-/// prefix on vault_id guarantees uniqueness. The same id builds `Auth::Agent`.
+/// `load` would replace the first vault's key, and a session still holding that id would sign
+/// with the WRONG key. The length prefix on vault_id guarantees uniqueness. The same id builds
+/// `Auth::Agent`.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "a vault id is a short identifier, far below 4 GiB; the u32 prefix is the agent key-id format"
@@ -10455,15 +10521,84 @@ fn unload_vault_keys(agent: &mut InMemoryAgent, vault_id: &str) {
     }
 }
 
+/// The `(vault_id, key_item_id)` an agent key id was built from — the inverse
+/// of [`agent_key_id`]. `None` for an id of any other shape.
+fn split_agent_key_id(id: &[u8]) -> Option<(&str, &str)> {
+    let (len, rest) = id.split_first_chunk::<4>()?;
+    let len = usize::try_from(u32::from_be_bytes(*len)).ok()?;
+    let (vault_id, key_item_id) = rest.split_at_checked(len)?;
+    Some((
+        std::str::from_utf8(vault_id).ok()?,
+        std::str::from_utf8(key_item_id).ok()?,
+    ))
+}
+
+/// Unloads every key the agent holds that its vault item no longer backs as
+/// loaded: the item was replaced with other material, deleted, or its vault is
+/// gone — or the certificate attached to it was replaced, removed or added.
+/// Keys that still match their item, certificate included, stay loaded.
+///
+/// For after a sync pull, which changes items without passing through any of
+/// the facade calls that unload a key. A connect reloads its key anyway (see
+/// [`load_key_into_agent`]), but a live session with a forwarded agent answers
+/// straight from the agent by id ([`StateKeySource`]) and would go on signing
+/// with a key retired on another device, or offering a certificate replaced
+/// there. Unloading everything instead would cut forwarding in every live
+/// session on each pull, hence the comparison.
+fn evict_replaced_agent_keys(state: &mut CoreState) {
+    let CoreState {
+        storage,
+        keyset,
+        agent,
+        ..
+    } = state;
+    let (storage, keyset) = (&*storage, &*keyset);
+    for id in agent.list() {
+        let Some((vault_id, key_item_id)) = split_agent_key_id(&id) else {
+            continue;
+        };
+        let current = Vault::open(storage, keyset, &resolve_vid(storage, vault_id))
+            .ok()
+            .is_some_and(|vault| {
+                // `current_public` drops a loaded key that differs from the
+                // item's; `None` is an item that is no longer a usable key.
+                if system_agent::current_public(&vault, agent, vault_id, key_item_id).is_none() {
+                    return false;
+                }
+                let Some(loaded) = agent.public_key(&id) else {
+                    return false;
+                };
+                // The certificate a connect would attach now (the same rule and
+                // the same parse as `load_key_into_agent`) against the loaded one.
+                let attached = attached_certificate(&vault, key_item_id, loaded.key_data())
+                    .and_then(|line| {
+                        unissh_ssh_agent::ssh_key::Certificate::from_openssh(&line).ok()
+                    });
+                agent.certificate(&id) == attached
+            });
+        if !current {
+            agent.remove(&id);
+        }
+    }
+}
+
+/// Loads the key `key_item_id` of `vault_id` into the embedded agent for a
+/// connect — always from the vault item as it is now, replacing whatever the
+/// agent held under that id.
+///
+/// The agent is not trusted as a cache: a key's material changes under the same
+/// id without this device doing anything (a rotation finished elsewhere arrives
+/// in a sync pull), and a copy kept from before would go on signing with the
+/// old private key. Reading the item here makes it the source of truth for
+/// every connect, for the key and for its certificate alike. It does nothing
+/// for a session that is already up: a forwarded agent signs from the agent by
+/// id, which is why a pull also runs [`evict_replaced_agent_keys`].
 fn load_key_into_agent(
     state: &mut CoreState,
     vault_id: &str,
     key_item_id: &str,
 ) -> Result<(), FfiError> {
     let akid = agent_key_id(vault_id, key_item_id);
-    if state.agent.contains(&akid) {
-        return Ok(());
-    }
     // The vault borrows storage/keyset only; the agent is a separate field.
     let vault = Vault::open(
         &state.storage,
@@ -10471,10 +10606,14 @@ fn load_key_into_agent(
         &resolve_vid(&state.storage, vault_id),
     )
     .map_err(FfiError::other)?;
-    let key_item = vault
+    let Some(key_item) = vault
         .get_item(key_item_id.as_bytes())
         .map_err(FfiError::other)?
-        .ok_or(FfiError::NotFound)?;
+    else {
+        // Deleted (here or in a pull): nothing may sign under its id any more.
+        state.agent.remove(&akid);
+        return Err(FfiError::NotFound);
+    };
     state
         .agent
         .add_from_item(akid.clone(), &key_item)

@@ -318,7 +318,13 @@ export interface MultiExecResult {
   error?: string | null;
   durationMs: number;
   timedOut: boolean;
+  /** Set when the target was a key-only login (`publickeyOnly`) that failed
+   *  with an answer about the key itself: the server refused it, or accepted it
+   *  and asked for a second factor. Absent for every other result. */
+  keyLogin?: KeyLoginFailure | null;
 }
+
+export type KeyLoginFailure = "refused" | "acceptedNeedsMore";
 
 export type ResolveStatus =
   | "ok"
