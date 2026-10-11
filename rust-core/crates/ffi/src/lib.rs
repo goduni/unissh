@@ -10530,16 +10530,18 @@ fn split_agent_key_id(id: &[u8]) -> Option<(&str, &str)> {
     ))
 }
 
-/// Unloads every key the agent holds whose vault item no longer holds that key:
-/// the item was replaced with other material, deleted, or its vault is gone.
-/// Keys that still match their item stay loaded.
+/// Unloads every key the agent holds that its vault item no longer backs as
+/// loaded: the item was replaced with other material, deleted, or its vault is
+/// gone — or the certificate attached to it was replaced, removed or added.
+/// Keys that still match their item, certificate included, stay loaded.
 ///
 /// For after a sync pull, which changes items without passing through any of
 /// the facade calls that unload a key. A connect reloads its key anyway (see
-/// [`load_key_into_agent`]), but a live session with a forwarded agent signs
-/// straight from the agent by id ([`StateKeySource`]) and would go on answering
-/// with a key retired on another device. Unloading everything instead would cut
-/// forwarding in every live session on each pull, hence the comparison.
+/// [`load_key_into_agent`]), but a live session with a forwarded agent answers
+/// straight from the agent by id ([`StateKeySource`]) and would go on signing
+/// with a key retired on another device, or offering a certificate replaced
+/// there. Unloading everything instead would cut forwarding in every live
+/// session on each pull, hence the comparison.
 fn evict_replaced_agent_keys(state: &mut CoreState) {
     let CoreState {
         storage,
@@ -10552,12 +10554,26 @@ fn evict_replaced_agent_keys(state: &mut CoreState) {
         let Some((vault_id, key_item_id)) = split_agent_key_id(&id) else {
             continue;
         };
-        // `current_public` drops a loaded key that differs from the item's;
-        // `None` is an item that is no longer a usable key at all.
         let current = Vault::open(storage, keyset, &resolve_vid(storage, vault_id))
             .ok()
-            .and_then(|vault| system_agent::current_public(&vault, agent, vault_id, key_item_id));
-        if current.is_none() {
+            .is_some_and(|vault| {
+                // `current_public` drops a loaded key that differs from the
+                // item's; `None` is an item that is no longer a usable key.
+                if system_agent::current_public(&vault, agent, vault_id, key_item_id).is_none() {
+                    return false;
+                }
+                let Some(loaded) = agent.public_key(&id) else {
+                    return false;
+                };
+                // The certificate a connect would attach now (the same rule and
+                // the same parse as `load_key_into_agent`) against the loaded one.
+                let attached = attached_certificate(&vault, key_item_id, loaded.key_data())
+                    .and_then(|line| {
+                        unissh_ssh_agent::ssh_key::Certificate::from_openssh(&line).ok()
+                    });
+                agent.certificate(&id) == attached
+            });
+        if !current {
             agent.remove(&id);
         }
     }

@@ -353,7 +353,8 @@ impl Core {
 mod tests {
     use super::*;
     use crate::{
-        evict_replaced_agent_keys, load_key_into_agent, map_transport_err, KeyLoginFailure,
+        cert_item_id, evict_replaced_agent_keys, load_key_into_agent, map_transport_err,
+        KeyLoginFailure, ITEM_TYPE_SSH_CERT,
     };
     use unissh_ssh_transport::TransportError;
 
@@ -442,6 +443,76 @@ mod tests {
         // The retired key can no longer sign for a live forwarded agent; the
         // untouched one still serves the sessions that forward it.
         assert_eq!(loaded, [false, true]);
+    }
+
+    #[test]
+    fn a_pull_unloads_a_key_whose_certificate_changed() {
+        use unissh_ssh_agent::ssh_key::{certificate, PrivateKey};
+
+        let dir = tempfile::tempdir().unwrap();
+        let core = fixture(dir.path());
+        let akid = agent_key_id("v", "key");
+        // What a connect does: the key and its certificate as the items hold them.
+        let connect = || {
+            core.with_state_mut(|state| load_key_into_agent(state, "v", "key"))
+                .unwrap();
+        };
+        let loaded_after_a_pull = || {
+            core.with_state_mut(|state| {
+                evict_replaced_agent_keys(state);
+                Ok(state.agent.contains(&akid))
+            })
+            .unwrap()
+        };
+        connect();
+        let subject = core
+            .with_state_mut(|state| Ok(state.agent.public_key(&akid)))
+            .unwrap()
+            .unwrap();
+        let (ca, _) = unissh_ssh_agent::generate_ed25519_openssh().unwrap();
+        let ca = PrivateKey::from_openssh(ca.as_bytes()).unwrap();
+        // A certificate for the key; the nonce alone tells two of them apart.
+        let signed = |nonce: u8| {
+            let mut builder = certificate::Builder::new(
+                vec![nonce; 32],
+                subject.key_data().clone(),
+                0,
+                4_000_000_000,
+            )
+            .unwrap();
+            builder.valid_principal("root").unwrap();
+            builder.sign(&ca).unwrap().to_openssh().unwrap()
+        };
+        let cert_id = cert_item_id("key");
+        let pull_certificate = |line: &str| {
+            behind_the_facade(&core, |vault| {
+                vault
+                    .put_item(cert_id.as_bytes(), ITEM_TYPE_SSH_CERT, line.as_bytes())
+                    .unwrap();
+            });
+        };
+
+        // Attached on another device while the key is loaded without one.
+        pull_certificate(&signed(1));
+        let after_attach = loaded_after_a_pull();
+        // A pull that touches neither the key nor its certificate.
+        connect();
+        let after_nothing = loaded_after_a_pull();
+        // Replaced by a renewed certificate for the same key.
+        pull_certificate(&signed(2));
+        let after_replace = loaded_after_a_pull();
+        connect();
+        behind_the_facade(&core, |vault| {
+            vault.delete_item(cert_id.as_bytes()).unwrap();
+        });
+        let after_removal = loaded_after_a_pull();
+
+        // Only the pull that left the certificate alone keeps the key serving a
+        // live forwarded agent; the others would have it offer a stale one.
+        assert_eq!(
+            [after_attach, after_nothing, after_replace, after_removal],
+            [false, true, false, false]
+        );
     }
 
     #[test]
