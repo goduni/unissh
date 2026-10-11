@@ -67,6 +67,7 @@ import {
   type PairingPayload,
   type ServerStatus,
   type SpaceInfo,
+  type SyncReport,
   type VaultInfo,
   type DbConsistencyReport,
   type VaultIntegrityReport,
@@ -2055,6 +2056,14 @@ function SettingsVaults() {
   // server that isn't linked here. They don't sync until (re)bound.
   const unboundVaults = cloudVaults.filter((v) => vaultServer(v, servers) == null);
 
+  // The toast after a bind and its first push: items the server refused as too
+  // large are named here as after any other sync, instead of "done".
+  const boundToast = (report: SyncReport | null, done: string) => {
+    const notUploaded = tooLargeSummary(report?.tooLarge ?? []);
+    if (notUploaded) toast(t("serverCloud.syncTooLarge", { items: notUploaded }), "warn");
+    else toast(done, "ok");
+  };
+
   // Bind an unbound vault to a server AND push it right away, so it lands on the
   // server immediately instead of waiting for the next sync. The bind is a local
   // label change (always succeeds); the follow-up sync is best-effort — with no
@@ -2068,13 +2077,14 @@ function SettingsVaults() {
     }
     setPickerVault(null);
     setBindSel(null);
+    let report: SyncReport | null = null;
     try {
-      await api.serverSyncNow(serverId);
+      report = await api.serverSyncNow(serverId);
     } catch {
       /* bound; the push happens on the next sync */
     }
     void reload();
-    toast(t("vault.boundDone"), "ok");
+    boundToast(report, t("vault.boundDone"));
   };
 
   // (Re)bind a vault to `s`. A MOVE (it was already bound to a linked server) is
@@ -2095,11 +2105,11 @@ function SettingsVaults() {
         await guard(async () => {
           await api.serverBindCloudVault(v.vaultId, s.serverId!);
           // Push to the new server right away (best-effort — bound regardless).
-          await api.serverSyncNow(s.serverId!).catch(() => {});
+          const report = await api.serverSyncNow(s.serverId!).catch(() => null);
           await reload();
           setPickerVault(null);
           setBindSel(null);
-          toast(t("vault.moveDone"), "ok");
+          boundToast(report, t("vault.moveDone"));
         });
       },
     });
@@ -2625,10 +2635,10 @@ function SettingsVaults() {
 }
 
 /** "Move to server…" confirmation for a local vault: target server (picked when
- *  several are signed in) and space (picked when the server has more than one you
- *  administer, fetched live as cloud-vault creation does; the vault is registered
- *  in that space on the server, or — with no space you administer — becomes a
- *  personal vault of the account), item counts by kind, and what the move does. "Export backup first" opens the regular backup export
+ *  several are signed in), placement (a personal vault of the account unless a
+ *  space you administer is picked — the spaces are fetched live, as cloud-vault
+ *  creation does, and a picked one is where the vault is registered on the
+ *  server), item counts by kind, and what the move does. "Export backup first" opens the regular backup export
  *  for this vault and comes back here (picks kept) when it closes. Confirm
  *  converts the vault in the core and runs the first push; a failed push leaves
  *  the move in place. */
@@ -2656,7 +2666,7 @@ function MoveToServerModal({
   const [serverId, setServerId] = useState<string | null>(null);
   const [spaceId, setSpaceId] = useState("");
   // Live space list of the target server: null while loading; a failed fetch
-  // yields [] (→ primary space).
+  // yields [] (→ no space to pick: the vault stays personal).
   const [spaces, setSpaces] = useState<SpaceInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
   // The backup export replaces this dialog while it is open; this component stays
@@ -2808,17 +2818,23 @@ function MoveToServerModal({
           <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>{target ? serverShortLabel(target) : ""}</div>
         )}
       </Field>
-      <Field label={t("vault.toServerSpace")} hint={space ? t("vault.toServerSpaceHint") : undefined}>
+      {/* Personal is the default and always offered: placing the vault in a space
+          hands its administration to that space's admins, so it is never picked
+          for the user — and the hint says what they gain. */}
+      <Field label={t("vault.toServerSpace")}>
         {plan.needsSpacePicker ? (
           <NHSelect
             value={space?.spaceId ?? ""}
             onChange={setSpaceId}
-            options={plan.spaces.map((sp) => ({ value: sp.spaceId, label: sp.name || sp.spaceId }))}
+            options={[
+              { value: "", label: t("vault.placePersonal") },
+              ...plan.spaces.map((sp) => ({ value: sp.spaceId, label: sp.name || sp.spaceId })),
+            ]}
             empty=""
           />
         ) : (
           <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>
-            {spaces === null ? <Spinner size={14} /> : space ? space.name || space.spaceId : t("vault.toServerNoSpace")}
+            {spaces === null ? <Spinner size={14} /> : t("vault.placePersonal")}
           </div>
         )}
       </Field>
@@ -2838,6 +2854,7 @@ function MoveToServerModal({
       <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5 }}>
         <p style={{ margin: `0 0 ${rem(6)}` }}>{t("vault.toServerReplaces", { name: vault.name })}</p>
         <p style={{ margin: 0 }}>{t("vault.toServerHistory")}</p>
+        {space && <p style={{ margin: `${rem(6)} 0 0` }}>{t("vault.placeSpaceHint")}</p>}
         {plan.nonPrimarySpace && space && (
           <p style={{ margin: `${rem(6)} 0 0`, color: p.amber }}>
             {t("vault.toServerNotPrimary", { space: space.name || space.spaceId })}

@@ -373,8 +373,9 @@ export const en = {
     namePlaceholder: "e.g. Work identities",
     location: "Where to keep it",
     localDesc: "on this device",
-    cloudDesc: "in your Space on a server",
+    cloudDesc: "in your account on a server",
     space: "Space",
+    spacesUnavailable: "A space — unavailable: the server cannot be reached",
     newSpace: "＋ New space",
     newSpaceHint:
       "Creates a new space on {{server}}, then puts the vault in it. The space is yours — the server's admin can't read it.",
@@ -490,9 +491,9 @@ export const en = {
       "Sign in to a server in the “Cloud” section first — moving a vault needs a live session.",
     toServerServer: "Server",
     toServerSpace: "Space",
-    toServerNoSpace: "None — a personal vault of your account",
-    toServerSpaceHint:
-      "The vault is registered in this space on the server. Its members can open it only after you share it with them.",
+    placePersonal: "Personal — only your account administers it",
+    placeSpaceHint:
+      "The vault is registered in this space on the server. Admins of the space can then invite people to this vault; they cannot read it.",
     toServerContents: "What moves",
     toServerEmpty: "The vault is empty — only its name moves.",
     toServerReplaces:
@@ -504,7 +505,7 @@ export const en = {
     toServerPushFailed:
       "Vault moved, but the first upload failed ({{reason}}). It is on this device only until a sync with this server succeeds; every sync tries again.",
     toServerTooLarge:
-      "“{{name}}” moved, but the server refused these items as too large, so they are on this device only: {{items}}. Everything else is uploaded. Raise limits.max_object_bytes on the server, then press “Sync now”.",
+      "“{{name}}” moved, but the server refused these items as too large, so they are on this device only: {{items}}. Everything else is uploaded. Raise limits.max_object_bytes on the server — or, if a reverse proxy in front of it refused the upload, the proxy's body limit (client_max_body_size in nginx) — then press “Sync now”.",
     toServerTooLargeSpace:
       "“{{name}}” moved, but the server refused these items as too large, so they are on this device only: {{items}}. Everything else is uploaded.",
     toServerPausesMcp:
@@ -2169,7 +2170,22 @@ export const en = {
     "syncReportConflicts": "{{count}} conflicts",
     "syncReportRejected": "{{count}} rejected",
     "syncReportSkipped": "{{count}} skipped (stale)",
-    "syncTooLarge": "Not uploaded — too large for this server: {{items}}. Everything else is synced. Raise limits.max_object_bytes on the server, then press “Sync now”.",
+    "syncTooLarge": "Not uploaded — too large for this server: {{items}}. Everything else is synced. Raise limits.max_object_bytes on the server — or, if a reverse proxy in front of it refused the upload, the proxy's body limit (client_max_body_size in nginx) — then press “Sync now”.",
+    "tooLargeItem": "{{kind}} “{{item}}” ({{vault}}, {{size}})",
+    "tooLargeMore": "{{items}} and {{count}} more",
+    "itemKind": {
+      "sshKey": "key",
+      "certificate": "certificate",
+      "host": "host",
+      "password": "password",
+      "group": "group",
+      "note": "note",
+      "identity": "identity",
+      "binding": "identity binding",
+      "snippet": "snippet",
+      "recording": "session recording",
+      "other": "item",
+    },
     "refreshSession": "Refresh session",
     "sessionRefreshed": "Session refreshed",
     "signInAgain": "Sign in again",

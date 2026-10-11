@@ -649,11 +649,14 @@ export interface SyncReport {
   tooLarge: TooLargeItem[];
 }
 
-/** An item the sync server refuses as too large (over its `limits.max_object_bytes`). */
+/** An item the sync server refuses as too large: over its `limits.max_object_bytes`,
+ *  or over the body limit of a reverse proxy in front of it. */
 export interface TooLargeItem {
   vaultId: string;
   vaultName: string;
   itemId: string;
+  /** The core's item type ({@link ItemType}), to name the item by kind. */
+  itemType: number;
   /** Size of the refused sync object, in bytes. */
   bytes: number;
 }
