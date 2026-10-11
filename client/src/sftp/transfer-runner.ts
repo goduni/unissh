@@ -8,7 +8,7 @@ import { apiErrorMessage } from "@/bridge/types";
 import { useApp } from "@/store/app";
 import type { Entry, Transfer } from "@/store/sftp-types";
 import { sourceFor, type FileSource } from "@/bridge/sources";
-import { abortable, collectTree, emptiedDirs, isWithin, mapWorkers, renameNeedsCopy, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
+import { abortable, collectTree, emptiedDirs, isWithin, mapWorkers, Semaphore, Speedometer, type WalkItem } from "@/sftp/transfer-engine";
 import { dedupeName } from "@/sftp/paths";
 import { i18n } from "@/i18n";
 
@@ -151,9 +151,6 @@ function unchanged(a: Entry | null, b: Entry | null): boolean {
     && !!a.isSymlink === !!b.isSymlink && a.isDir === b.isDir;
 }
 
-/** A local Windows path: a drive letter or a backslash. */
-const isWindowsPath = (src: FileSource, path: string): boolean => src.kind === "local" && /^[a-z]:|\\/i.test(path);
-
 /** Move only, asked just before a staged copy replaces `plan.existing`: can the
  *  file about to be replaced be the source itself, under another path? The two
  *  panes may show one directory — a bind mount or a network share of the server
@@ -190,7 +187,7 @@ async function mayBeSameFile(from: FileSource, to: FileSource, fromPath: string,
 /** Reject same-object and descendant copies at the shared entry point. */
 async function validateTarget(t: Transfer, from: FileSource, to: FileSource): Promise<void> {
   if (from.kind !== to.kind || (from.identity ?? from.id) !== (to.identity ?? to.id)) return;
-  const windows = isWindowsPath(from, t.fromPath);
+  const windows = !!from.windows;
   const name = t.fromPath.split(windows ? /[\\/]/ : /\//).pop()!;
   const source = t.isSymlink
     ? await from.join(await from.realpath(await from.parent(t.fromPath)), name)
@@ -236,7 +233,8 @@ async function removeMovedSource(from: FileSource, to: FileSource, path: string,
  *  false when that is not possible, and the caller moves it the long way (copy,
  *  then remove the source) — a rename across filesystems fails on every platform,
  *  and a folder landing on an existing folder is a per-file merge. A rename that
- *  failed for any other reason fails the move: see renameNeedsCopy. Never
+ *  failed for any other reason fails the move: the source decides which is
+ *  which (FileSource.renameNeedsCopy). Never
  *  replaces a destination the user was not asked about. */
 async function renameInPlace(t: Transfer, src: FileSource, resolver: ConflictResolver, ctrl: Control): Promise<boolean> {
   ctrl.patch({ state: "active" });
@@ -270,7 +268,7 @@ async function renameInPlace(t: Transfer, src: FileSource, resolver: ConflictRes
   } catch (error) {
     // A pause or cancel is not a refused rename: nothing more may start.
     if (ctrl.abort.signal.aborted) throw error;
-    if (!renameNeedsCopy(apiErrorMessage(error), src.kind, isWindowsPath(src, t.fromPath))) throw error;
+    if (!src.renameNeedsCopy(error, t.kind === "file" && !replace)) throw error;
     // Carry the decision over, so the copy path does not ask a second time.
     if (t.kind === "file") ctrl.manifest.set(t.fromPath, { path: target, existing: replace ? existing : null, completed: false });
     return false;

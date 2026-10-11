@@ -5,7 +5,7 @@ const { api } = vi.hoisted(() => ({
   api: { sftpRename: vi.fn(), sftpCommit: vi.fn(), sftpRemove: vi.fn(), sftpRmdir: vi.fn(), sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), localRemove: vi.fn(), sftpReopen: vi.fn(), sftpListDirCancel: vi.fn(), cancelNew: vi.fn(), cancelTrigger: vi.fn(), cancelDispose: vi.fn() },
 }));
 vi.mock("@/bridge/api", () => api);
-import { sourceFor } from "./sources";
+import { localRenameNeedsCopy, remoteRenameNeedsCopy, sourceFor } from "./sources";
 
 const remote = () => sourceFor({ kind: "remote", sessionId: "s" }, [{ id: "s", label: "server", host: "server", user: "user", port: 22 } as SftpSession]);
 beforeEach(() => { vi.resetAllMocks(); });
@@ -25,6 +25,43 @@ describe("conflict metadata failures", () => {
     const error = { kind: "ssh", msg: "connection failed" };
     api.sftpReopen.mockRejectedValue(error);
     await expect(remote().stat("/target")).rejects.toEqual(error);
+  });
+});
+
+describe("an SFTP status", () => {
+  it("is not read out of the text the server sends after it", async () => {
+    const error = { kind: "ssh", msg: "sftp error: status 4: cannot open status 2" };
+    api.sftpLstat.mockRejectedValue(error);
+    await expect(remote().lstat("/target")).rejects.toEqual(error);
+  });
+});
+
+describe("a refused rename", () => {
+  it.each([
+    ["Invalid cross-device link (os error 18)", false, false, true],
+    ["The system cannot move the file to a different disk drive. (os error 17)", true, false, true],
+    ["File exists (os error 17)", false, true, false],
+    ["Permission denied (os error 13)", false, true, false],
+    // link(2) refused by a filesystem without hard links: only a commit onto a
+    // free name is made of one, and never on Windows.
+    ["Operation not permitted (os error 1)", false, true, true],
+    ["Too many links (os error 31)", false, true, true],
+    ["Operation not supported (os error 45)", false, true, true],
+    ["Operation not supported (os error 95)", false, true, true],
+    ["Operation not permitted (os error 1)", false, false, false],
+    ["Incorrect function. (os error 1)", true, true, false],
+  ] as const)("%s locally (windows: %s, onto a free name: %s) needs a copy: %s", (message, windows, exclusive, expected) => {
+    expect(localRenameNeedsCopy(message, windows, exclusive)).toBe(expected);
+  });
+  it.each([
+    ["sftp error: status 4: Failure", true],
+    ["sftp error: status 8: Operation unsupported", true],
+    ["sftp error: server does not support atomic replacement (posix-rename)", false],
+    ["sftp error: status 3: Permission denied", false],
+    ["sftp error: status 2: No such file", false],
+    ["channel closed", false],
+  ] as const)("%s on a server needs a copy: %s", (message, expected) => {
+    expect(remoteRenameNeedsCopy(message)).toBe(expected);
   });
 });
 

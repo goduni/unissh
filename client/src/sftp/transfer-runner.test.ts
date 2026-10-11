@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Transfer } from "@/store/sftp-types";
 import type { FileSource } from "@/bridge/sources";
 import * as sources from "@/bridge/sources";
+import { apiErrorMessage } from "@/bridge/types";
 
 const { state, api } = vi.hoisted(() => {
   const state = {
@@ -37,6 +38,9 @@ const source = (kind: "local" | "remote"): FileSource => {
   const landed = (p: string) => p.startsWith("/dst") ? commit.mock.calls.some((call) => call[1] === p) : !p.includes("/.unissh-");
   return {
   kind, id: kind, label: kind, join: async (a: string, b: string) => `${a}/${b}`,
+  renameNeedsCopy: (error: unknown, exclusive: boolean) => kind === "local"
+    ? sources.localRenameNeedsCopy(apiErrorMessage(error), false, exclusive)
+    : sources.remoteRenameNeedsCopy(apiErrorMessage(error)),
   realpath: vi.fn(async (p: string) => p), parent: vi.fn(async (p: string) => p.slice(0, p.lastIndexOf("/"))),
   commit, createNew: vi.fn().mockResolvedValue(undefined), setMetadata: vi.fn().mockResolvedValue(undefined),
   stat: vi.fn().mockResolvedValue(null), lstat: vi.fn(async (p: string) => landed(p) ? { name: "file", isDir: false, size: 100 } : null),
@@ -832,6 +836,25 @@ describe("moving within one location", () => {
     await startTransfer(moving(), from, to, resolver);
     expect(to.commit).toHaveBeenCalledWith(expect.stringContaining(".unissh-"), "/dst/file", false);
     expect(from.remove).toHaveBeenCalledExactlyOnceWith("/file");
+    expect(current().state).toBe("done");
+  });
+
+  it("copies and then removes the source when the filesystem cannot hard-link the file onto its new name", async () => {
+    const from = source("local"), to = source("local");
+    vi.mocked(from.commit).mockRejectedValue(new Error("Operation not permitted (os error 1)"));
+    api.localCopyPrepared.mockResolvedValueOnce(100);
+    await startTransfer(moving(), from, to, resolver);
+    expect(to.commit).toHaveBeenCalledWith(expect.stringContaining(".unissh-"), "/dst/file", false);
+    expect(from.remove).toHaveBeenCalledExactlyOnceWith("/file");
+    expect(current().state).toBe("done");
+  });
+
+  it("does not take a unix path that holds a backslash for a Windows one", async () => {
+    // "File" and "file" are two names here; folding case would call them one.
+    const from = source("local"), to = source("local");
+    const t = transfer(); t.fromPath = "/a\\b/File"; t.toDir = "/a\\b";
+    api.localCopyPrepared.mockResolvedValue(100);
+    await startTransfer(t, from, to, resolver);
     expect(current().state).toBe("done");
   });
 

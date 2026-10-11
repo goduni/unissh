@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FileSource } from "@/bridge/sources";
 import type { Entry } from "@/store/sftp-types";
-import { abortable, collectTree, renameNeedsCopy, Semaphore, Speedometer, walk } from "./transfer-engine";
+import { abortable, collectTree, Semaphore, Speedometer, walk } from "./transfer-engine";
 
 describe("directory scanning", () => {
   it("scans 10,000 local files with one listing and no per-file path IPC", async () => {
@@ -137,22 +137,5 @@ describe("scanner integrity", () => {
   it("reports invalid names instead of silently dropping entries", async () => {
     const src = { list: async () => [{ name: "escape/path", size: 1, isDir: false }] } as unknown as FileSource;
     await expect(collectTree(src, "/", new Semaphore(1))).rejects.toThrow("Invalid filename");
-  });
-});
-
-describe("a refused rename", () => {
-  it.each([
-    ["Invalid cross-device link (os error 18)", "local", false, true],
-    ["The system cannot move the file to a different disk drive. (os error 17)", "local", true, true],
-    ["File exists (os error 17)", "local", false, false],
-    ["Permission denied (os error 13)", "local", false, false],
-    ["sftp error: status 4: Failure", "remote", false, true],
-    ["sftp error: status 8: Operation unsupported", "remote", false, true],
-    ["sftp error: server does not support atomic replacement (posix-rename)", "remote", false, true],
-    ["sftp error: status 3: Permission denied", "remote", false, false],
-    ["sftp error: status 2: No such file", "remote", false, false],
-    ["channel closed", "remote", false, false],
-  ] as const)("%s on a %s source (windows: %s) needs a copy: %s", (message, kind, windows, expected) => {
-    expect(renameNeedsCopy(message, kind, windows)).toBe(expected);
   });
 });
