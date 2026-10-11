@@ -62,6 +62,35 @@ export type InstallResult =
    */
   | { status: "manual"; message: string };
 
+/**
+ * Where an install currently is. One "Installing…" label used to cover all of
+ * it, so a slow download was indistinguishable from a hang.
+ */
+export type InstallProgress =
+  /** Revoking MCP access; nothing has been requested from the network yet. */
+  | { phase: "preparing" }
+  /**
+   * `total` is null when the server sent no Content-Length. `stalled` is set
+   * once no bytes have arrived for `STALL_AFTER_MS` and cleared by the next
+   * chunk — the download is not aborted, the UI only stops pretending.
+   */
+  | { phase: "downloading"; received: number; total: number | null; stalled: boolean }
+  /** The payload is on disk and verified; the platform installer is running. */
+  | { phase: "installing" }
+  | { phase: "restarting" };
+
+/** What the updater plugin reports while it downloads. */
+export type DownloadEvent =
+  | { event: "Started"; data: { contentLength?: number } }
+  | { event: "Progress"; data: { chunkLength: number } }
+  | { event: "Finished" };
+
+/** A download with no bytes for this long is shown as stalled. */
+export const STALL_AFTER_MS = 30_000;
+
+/** Floor between two byte-count reports, so a fast link does not re-render per chunk. */
+export const PROGRESS_REPORT_GAP_MS = 200;
+
 // ── Pure decision logic (unit-tested) ──────────────────────────────────
 
 /**
@@ -90,6 +119,38 @@ export function shouldCheckNow(args: {
   // otherwise wedge checks off until real time caught up with the stale stamp.
   if (lastCheckedAt > now) return true;
   return now - lastCheckedAt >= MIN_CHECK_GAP_MS;
+}
+
+/** Fold one plugin event into the install progress. */
+export function applyDownloadEvent(prev: InstallProgress, ev: DownloadEvent): InstallProgress {
+  switch (ev.event) {
+    case "Started": {
+      const len = ev.data.contentLength;
+      return {
+        phase: "downloading",
+        received: 0,
+        total: typeof len === "number" && len > 0 ? len : null,
+        stalled: false,
+      };
+    }
+    case "Progress": {
+      const base = prev.phase === "downloading" ? prev : { received: 0, total: null };
+      return {
+        phase: "downloading",
+        received: base.received + ev.data.chunkLength,
+        total: base.total,
+        stalled: false,
+      };
+    }
+    case "Finished":
+      return { phase: "installing" };
+  }
+}
+
+/** Whole percent downloaded, or null when the total is unknown. Never 100 early. */
+export function downloadPercent(received: number, total: number | null): number | null {
+  if (total === null || total <= 0) return null;
+  return Math.min(99, Math.floor((received / total) * 100));
 }
 
 // ── Preference storage ─────────────────────────────────────────────────
@@ -147,7 +208,7 @@ type UpdateHandle = {
   currentVersion: string;
   body?: string;
   date?: string;
-  downloadAndInstall: () => Promise<void>;
+  downloadAndInstall: (onEvent?: (ev: DownloadEvent) => void) => Promise<void>;
   /** `Update` extends Tauri's `Resource`; dropping a handle without this leaks
    *  the Rust-side resource it owns. */
   close: () => Promise<void>;
@@ -244,20 +305,60 @@ export async function checkForUpdateIfDue(): Promise<CheckResult | null> {
  * which installs can succeed, we attempt it and translate any failure into the
  * manual path.
  */
-export async function installUpdate(): Promise<InstallResult> {
+export async function installUpdate(
+  onProgress: (p: InstallProgress) => void = () => {},
+): Promise<InstallResult> {
   if (!pending) return { status: "manual", message: "no pending update" };
+
+  let progress: InstallProgress = { phase: "preparing" };
+  let lastChunkAt = 0;
+  let lastReportAt = 0;
+  const report = (next: InstallProgress) => {
+    progress = next;
+    lastReportAt = Date.now();
+    onProgress(next);
+  };
+  report(progress);
+
+  // The plugin reports chunks only, so silence is detected here.
+  const stallWatch = setInterval(() => {
+    if (progress.phase !== "downloading" || progress.stalled) return;
+    if (Date.now() - lastChunkAt < STALL_AFTER_MS) return;
+    logInfo(`updater: no data for ${STALL_AFTER_MS / 1000}s at ${progress.received} bytes`);
+    report({ ...progress, stalled: true });
+  }, 1000);
 
   try {
     // Revoke natively before an installer can terminate this process.
     await mcpRevoke();
-    await pending.downloadAndInstall();
+    // Shown until the first byte: a server that never answers is a stall too.
+    lastChunkAt = Date.now();
+    report({ phase: "downloading", received: 0, total: null, stalled: false });
+    await pending.downloadAndInstall((ev) => {
+      const prev = progress;
+      const next = applyDownloadEvent(prev, ev);
+      lastChunkAt = Date.now();
+      if (ev.event === "Started") logInfo(`updater: downloading ${ev.data.contentLength ?? "?"} bytes`);
+      if (ev.event === "Finished") logInfo("updater: download finished, installing");
+      // Byte counts are throttled; a phase change or a recovery from a stall is not.
+      const sameKind =
+        prev.phase === "downloading" && next.phase === "downloading" && !prev.stalled;
+      if (sameKind && lastChunkAt - lastReportAt < PROGRESS_REPORT_GAP_MS) {
+        progress = next;
+        return;
+      }
+      report(next);
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     logError(`updater: in-place install unavailable — ${message}`);
     return { status: "manual", message };
+  } finally {
+    clearInterval(stallWatch);
   }
 
   pending = null;
+  report({ phase: "restarting" });
   try {
     const { relaunch } = await import("@tauri-apps/plugin-process");
     // The process is replaced here, so the close handler that removes the

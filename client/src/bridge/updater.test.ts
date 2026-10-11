@@ -11,6 +11,8 @@ import {
   AUTO_CHECK_KEY,
   LAST_CHECK_KEY,
   MIN_CHECK_GAP_MS,
+  applyDownloadEvent,
+  downloadPercent,
   isAutoCheckEnabled,
   lastCheckedAt,
   setAutoCheckEnabled,
@@ -128,5 +130,47 @@ describe("preferences", () => {
     expect(lastCheckedAt()).toBeNull();
     store.set(LAST_CHECK_KEY, "not-a-number");
     expect(lastCheckedAt()).toBeNull();
+  });
+});
+
+describe("applyDownloadEvent", () => {
+  it("starts a download with the announced size", () => {
+    const next = applyDownloadEvent(
+      { phase: "preparing" },
+      { event: "Started", data: { contentLength: 1000 } },
+    );
+    expect(next).toEqual({ phase: "downloading", received: 0, total: 1000, stalled: false });
+  });
+
+  it("keeps the total unknown when the server sent no length", () => {
+    const next = applyDownloadEvent({ phase: "preparing" }, { event: "Started", data: {} });
+    expect(next).toEqual({ phase: "downloading", received: 0, total: null, stalled: false });
+  });
+
+  it("adds each chunk and clears a stall", () => {
+    const next = applyDownloadEvent(
+      { phase: "downloading", received: 300, total: 1000, stalled: true },
+      { event: "Progress", data: { chunkLength: 200 } },
+    );
+    expect(next).toEqual({ phase: "downloading", received: 500, total: 1000, stalled: false });
+  });
+
+  it("moves to installing when the download finishes", () => {
+    const next = applyDownloadEvent(
+      { phase: "downloading", received: 1000, total: 1000, stalled: false },
+      { event: "Finished" },
+    );
+    expect(next).toEqual({ phase: "installing" });
+  });
+});
+
+describe("downloadPercent", () => {
+  it("is null without a total", () => {
+    expect(downloadPercent(500, null)).toBeNull();
+  });
+
+  it("never reaches 100 while the download phase lasts", () => {
+    expect(downloadPercent(500, 1000)).toBe(50);
+    expect(downloadPercent(1000, 1000)).toBe(99);
   });
 });

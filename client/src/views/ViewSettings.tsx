@@ -85,7 +85,7 @@ import { useTranslation, setLang, currentLang, tDyn, LANGS, LANG_LABELS } from "
 import type { Lang } from "@/i18n";
 import { useFmt } from "@/i18n/format";
 import { useIsMobile, useNarrow } from "@/store/responsive";
-import { useUpdate } from "@/store/update";
+import { installProgressLabel, useUpdate } from "@/store/update";
 import { updatesSupported } from "@/bridge/updater";
 import { biometricMethod, isDesktopOs, isMac, isWindows, osPlatform } from "@/bridge/platform";
 import { SettingsShortcuts } from "./SettingsShortcuts";
@@ -1971,6 +1971,7 @@ function SettingsUpdates() {
   const state = useUpdate((s) => s.state);
   const info = useUpdate((s) => s.info);
   const installing = useUpdate((s) => s.installing);
+  const progress = useUpdate((s) => s.progress);
   const autoCheck = useUpdate((s) => s.autoCheck);
   const setAutoCheck = useUpdate((s) => s.setAutoCheck);
   const check = useUpdate((s) => s.check);
@@ -1978,8 +1979,9 @@ function SettingsUpdates() {
 
   if (!updatesSupported(osPlatform())) return null;
 
-  const status =
-    state === "checking"
+  const status = installing
+    ? installProgressLabel(progress)
+    : state === "checking"
       ? t("update.checking")
       : info
         ? t("update.available", { version: info.version })
@@ -1995,7 +1997,7 @@ function SettingsUpdates() {
       <SettingRow title={t("update.statusTitle")} desc={status}>
         {info ? (
           <Btn size="sm" icon="download" onClick={() => void install()} disabled={installing}>
-            {installing ? t("update.installing") : t("update.install")}
+            {installing ? t("update.working") : t("update.install")}
           </Btn>
         ) : (
           <Btn

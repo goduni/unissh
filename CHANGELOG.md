@@ -32,6 +32,13 @@ starts with `0.`:
 
 ## [Unreleased]
 
+### Changed
+
+- The desktop updater says where an update is: contacting the download server,
+  downloading (bytes and percent), installing, restarting. A download that
+  receives nothing for 30 seconds is marked as stalled and offers the release
+  page instead of an indefinite "Installing…".
+
 ## [0.6.0] — 2026-10-11
 
 ### Added
