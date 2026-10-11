@@ -4,7 +4,9 @@
 //
 // Each command is handed to `sh -c`: the exec channel runs it through the
 // account's login shell, and a fish or csh login shell would not parse POSIX
-// `{ …; }`, `$?` or `$(…)`.
+// `{ …; }`, `$?` or `$(…)`. That login shell still reads the whole line first,
+// and csh/tcsh expand `!word` as history even inside single quotes — so the
+// scripts never write `!` in front of anything but a blank.
 
 /** Single-quote a string for a POSIX shell. */
 function shQuote(s: string): string {
@@ -19,9 +21,12 @@ const quoteKey = (openssh: string) => shQuote(openssh.trim());
 const posix = (script: string) => `sh -c ${shQuote(script)}`;
 
 /** Exit status of `authorizedKeysRemoveCmd` when the old key's plain lines are
- *  gone but the key is still authorized in a form this command does not touch
- *  (a line with an options prefix such as `from=…` or `command=…`). Nothing
- *  else was changed; that line has to be removed by hand. */
+ *  gone but its blob is still somewhere in the file, in a form this command
+ *  does not touch: a line with an options prefix (`from=…`, `command=…`), which
+ *  still authorizes the key; the same blob under another key type name; or a
+ *  commented-out line, which authorizes nothing but cannot be told apart by
+ *  the check (it errs on the side of reporting). Nothing else was changed;
+ *  what is left has to be looked at and removed by hand. */
 export const REMOVE_EXIT_STILL_PRESENT = 3;
 /** Exit status of `authorizedKeysRemoveCmd` when there is no authorized_keys. */
 export const REMOVE_EXIT_NO_FILE = 4;
@@ -89,12 +94,12 @@ export function authorizedKeysRemoveCmd(oldOpenssh: string, keepOpenssh: string)
       `while [ -L "$f" ]; do ` +
       `l=$(readlink "$f") || { echo 'cannot resolve the authorized_keys symlink; old key left in place' >&2; exit 1; }; ` +
       `case $l in /*) f=$l ;; *) f=$(dirname "$f")/$l ;; esac; done; ` +
-      `has() { awk -v t="$1" -v b="$2" '${AWK_KEY_LINE} { found = 1 } END { exit !found }' "$3"; }; ` +
+      `has() { awk -v t="$1" -v b="$2" '${AWK_KEY_LINE} { found = 1 } END { exit found ? 0 : 1 }' "$3"; }; ` +
       `has ${k.type} ${k.blob} "$f" || { echo 'new key is not in authorized_keys; old key left in place' >&2; exit 1; }; ` +
       `t=$(mktemp "$f.XXXXXX") || exit 1; ` +
       `cp -p "$f" "$t" && ` +
       `awk -v t=${o.type} -v b=${o.blob} '${AWK_KEY_LINE} { next } { print }' "$f" > "$t" && ` +
       `has ${k.type} ${k.blob} "$t" && mv -f "$t" "$f" || { rm -f "$t"; exit 1; }; ` +
-      `if grep -qF ${o.blob} "$f"; then echo 'old key still present in another form' >&2; exit ${REMOVE_EXIT_STILL_PRESENT}; fi`,
+      `if grep -qF ${o.blob} "$f"; then echo 'old key data still in authorized_keys: a line with options, another key type, or a commented-out line' >&2; exit ${REMOVE_EXIT_STILL_PRESENT}; fi`,
   );
 }

@@ -59,6 +59,14 @@ const run = (home: string, cmd: string) => spawnSync(SH, ["-c", cmd], { env: { .
 
 const mode = (p: string) => fs.statSync(p).mode & 0o777;
 
+describe("authorized_keys commands", () => {
+  it("survive a csh login shell: no `!` that it would expand as history", () => {
+    // csh/tcsh expand `!` even inside single quotes, unless a blank follows it.
+    const cmds = [authorizedKeysAppendCmd(CAND), authorizedKeysRemoveCmd(OLD, CAND)];
+    expect(cmds.map((c) => c.match(/![^ \t\n]/g))).toEqual([null, null]);
+  });
+});
+
 describe.skipIf(!hasSh)("authorizedKeysAppendCmd under /bin/sh", () => {
   it("puts the key on its own line when the file has no trailing newline", () => {
     withHome("ssh-ed25519 AAAAOLD old", (home, file) => {
