@@ -445,7 +445,15 @@ boundary, so what crosses it is spelled out here.
   request still waiting in line, so none of them is shown afterwards. It comes back after
   the next unlock, however it is made (password, Secret Key, or the biometric
   unlock above), or wake if the vault is still unlocked, when the setting is
-  on. A prompt answered in the instant before it is withdrawn still yields
+  on. A vault lock does the same to forwarded agents' requests, in the core
+  itself and so on every platform: the open prompt is withdrawn and every
+  request in line is refused, whichever agent it came through, so nothing
+  asked before a lock is shown after the unlock that follows. A screen lock or
+  sleep that leaves the vault unlocked (the "lock with the screen" setting off,
+  or its grace period still running) stops only the system agent: SSH sessions
+  stay up, and a forwarded request is still put to the window, which the
+  operating system's lock screen covers; unanswered, it is refused after its
+  60 seconds. A prompt answered in the instant before it is withdrawn still yields
   nothing. After the approval the core re-checks that it is unlocked and that
   the key is still shared and unchanged, and an answer for a connection that
   was cut is discarded.
