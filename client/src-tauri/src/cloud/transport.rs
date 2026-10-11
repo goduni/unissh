@@ -7,6 +7,8 @@
 //! nothing and lets the engine re-verify what it did receive. Ported from the
 //! server's byte-compat oracle (`server/tests/oracle_sync.rs::HttpTransport`).
 
+use std::sync::Mutex;
+
 use serde_json::{json, Value};
 use unissh_ffi::{FfiError, FfiSyncTransport, SyncDeltaItem};
 
@@ -29,9 +31,15 @@ fn idempotency_key(objects: &[Vec<u8>]) -> String {
     client::b64(&digest)
 }
 
+/// One instance serves one sync (see `drained_at`).
 pub struct HttpSyncTransport {
     base_url: String,
     bearer: String,
+    /// Set once the server answered a delta request with "nothing follows":
+    /// the `server_seq` its answer ended at. The core asks again after every
+    /// page that moved its cursor; asked from exactly this point, the answer is
+    /// already known and no request is made.
+    drained_at: Mutex<Option<u64>>,
 }
 
 /// One entry of the server vault catalog (`GET /v1/vaults`).
@@ -44,7 +52,11 @@ pub struct CatalogEntry {
 
 impl HttpSyncTransport {
     pub const fn new(base_url: String, bearer: String) -> Self {
-        Self { base_url, bearer }
+        Self {
+            base_url,
+            bearer,
+            drained_at: Mutex::new(None),
+        }
     }
 
     /// `GET /v1/vaults` — the member-facing catalog of vaults this caller can access.
@@ -184,9 +196,14 @@ impl FfiSyncTransport for HttpSyncTransport {
         Ok(seqs)
     }
 
+    /// One page per call: the core verifies and applies it, then asks again from
+    /// its cursor, so a first sync of a large vault is never held in memory
+    /// whole. (A page is bounded by the server: by count, and from 0.6 by size.)
     fn delta_since(&self, cursor: u64) -> Vec<SyncDeltaItem> {
+        if self.drained_at.lock().is_ok_and(|at| *at == Some(cursor)) {
+            return Vec::new();
+        }
         let http = client::http();
-        let mut out = Vec::new();
         let mut cur = cursor;
         loop {
             let path = format!("/v1/sync/delta?cursor={cur}&limit={DELTA_LIMIT}");
@@ -197,29 +214,39 @@ impl FfiSyncTransport for HttpSyncTransport {
             .send()
             {
                 Ok(r) if r.status().is_success() => r,
-                // Untrusted transport: stop on any error; the engine verifies what
-                // it has and the next sync resumes from the persisted cursor.
-                _ => break,
+                // Untrusted transport: stop on any error; the engine verified
+                // what it got and the next sync resumes from the persisted cursor.
+                _ => return Vec::new(),
             };
-            let v: Value = match resp.json() {
-                Ok(v) => v,
-                Err(_) => break,
+            let Ok(v) = resp.json::<Value>() else {
+                return Vec::new();
             };
-            out.extend(items_of(&v).filter_map(|item| {
-                let seq = item.get("server_seq").and_then(Value::as_u64)?;
-                let obj_b64 = item.get("object").and_then(Value::as_str)?;
-                let object = client::unb64(obj_b64).ok()?;
-                Some(SyncDeltaItem {
-                    server_seq: seq,
-                    object,
+            let items: Vec<SyncDeltaItem> = items_of(&v)
+                .filter_map(|item| {
+                    let seq = item.get("server_seq").and_then(Value::as_u64)?;
+                    let obj_b64 = item.get("object").and_then(Value::as_str)?;
+                    let object = client::unb64(obj_b64).ok()?;
+                    Some(SyncDeltaItem {
+                        server_seq: seq,
+                        object,
+                    })
                 })
-            }));
+                .collect();
             match next_page(&v, cur) {
-                Some(next) => cur = next,
-                None => break,
+                // A page with nothing usable in it is not the end of the delta:
+                // an empty answer would stop the core, so the next page is
+                // fetched here.
+                Some(next) if items.is_empty() => cur = next,
+                Some(_) => return items,
+                None => {
+                    let end = items.iter().map(|i| i.server_seq).max().unwrap_or(cur);
+                    if let Ok(mut at) = self.drained_at.lock() {
+                        *at = Some(end);
+                    }
+                    return items;
+                }
             }
         }
-        out
     }
 
     fn report_version(&self) -> u64 {
@@ -268,8 +295,8 @@ fn items_of(page: &Value) -> impl Iterator<Item = &Value> {
 ///
 /// A `next_cursor` that does not advance past `cur` stops the same way: the
 /// server returns rows with `server_seq > cursor` in ascending order and sets
-/// `has_more` only on a full page, so an honest `next_cursor` is always greater
-/// than the cursor that was requested.
+/// `has_more` only when a row follows the page, so an honest `next_cursor` is
+/// always greater than the cursor that was requested.
 fn next_page(page: &Value, cur: u64) -> Option<u64> {
     let has_more = page
         .get("has_more")

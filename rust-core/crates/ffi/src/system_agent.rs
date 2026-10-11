@@ -153,10 +153,22 @@ pub(crate) fn forget(state: &CoreState, vault_id: &str, item_id: Option<&str>) {
 /// Re-points the entries of a vault that changed id (a local vault moved to a
 /// server: `old` is the id it was shared under, `new` the cloud vault's). The
 /// keys are the same keys under the same item ids, so they stay shared. Run
-/// inside the move's transaction; unlike [`forget`] a failure is returned, so
-/// the move rolls back instead of dropping the shares.
+/// inside the move's transaction; unlike [`forget`] a storage failure is
+/// returned, so the move rolls back instead of dropping the shares.
+///
+/// A list that does not parse is another matter: it is damaged device-local
+/// state with nothing in it to re-point, and it must not block the move for
+/// good. It is left as it is and the move goes on.
 pub(crate) fn rehome(state: &CoreState, old: &str, new: &str) -> Result<(), FfiError> {
-    let mut entries = read_entries(state)?;
+    let Some(bytes) = state.storage.get_meta(KEY).map_err(FfiError::other)? else {
+        return Ok(());
+    };
+    let Ok(mut entries) = serde_json::from_slice::<Vec<Entry>>(&bytes) else {
+        log::warn!(
+            "system agent: the list of shared keys is unreadable; a moved vault's keys are not carried over"
+        );
+        return Ok(());
+    };
     let mut changed = false;
     for entry in entries.iter_mut().filter(|e| e.vault_id == old) {
         new.clone_into(&mut entry.vault_id);

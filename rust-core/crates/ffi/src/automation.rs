@@ -86,12 +86,20 @@ const ACCESS_KEY: &str = "mcp.access.v1";
 /// the user confirms them again; this keeps the selection they confirm from
 /// pointing at a vault that no longer exists. Edits the JSON in place, so
 /// fields this code does not know survive. Run inside the move's transaction.
+///
+/// The layout edited here is not this crate's: it is `unissh_automation`'s
+/// `SavedAccess` (a list of them, each with `targets[].vault_id`), which is
+/// where the coupling is recorded — a change to that layout must change this.
 pub(super) fn rehome_access(storage: &Storage, old: &str, new: &str) -> Result<(), FfiError> {
     let Some(bytes) = storage.get_meta(ACCESS_KEY)? else {
         return Ok(());
     };
-    // A blob the broker itself could not read is not this operation's to fix.
+    // A blob the broker itself could not read is not this operation's to fix,
+    // and must not block the move.
     let Ok(mut saved) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        log::warn!(
+            "MCP access: the saved selection is unreadable; a moved vault's hosts are not re-pointed"
+        );
         return Ok(());
     };
     let mut changed = false;

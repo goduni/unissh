@@ -713,6 +713,8 @@ pub struct TooLargeItem {
     pub vault_id: String,
     pub vault_name: String,
     pub item_id: String,
+    /// The core's item type (as in `ItemInfo`), so the UI can name the kind.
+    pub item_type: u32,
     /// Size of the refused sync object, in bytes.
     pub bytes: u64,
 }
@@ -722,6 +724,7 @@ impl From<ffi::FfiTooLargeItem> for TooLargeItem {
             vault_id: t.vault_id,
             vault_name: t.vault_name,
             item_id: t.item_id,
+            item_type: t.item_type,
             bytes: t.bytes,
         }
     }

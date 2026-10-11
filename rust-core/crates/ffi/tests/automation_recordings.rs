@@ -110,6 +110,31 @@ fn lock_flushes_partial_capture_and_late_handle_cannot_write_after_unlock() {
         .is_err());
 }
 
+/// A command recording is saved when the command ends, into the vault it was
+/// started for. If that vault was moved to a server in between, it has a new
+/// id: the recording follows it there instead of failing to save.
+#[test]
+fn recording_of_a_command_running_during_a_move_is_saved_to_the_moved_vault() {
+    let (_dir, core, _) = setup();
+    let target = core.automation_target("v".into(), "h".into()).unwrap();
+    let rec = core
+        .automation_recording(&target, "move", "Agent", "uptime", None)
+        .unwrap()
+        .unwrap();
+    rec.data(false, b"before the move");
+
+    let moved = core
+        .convert_vault_to_cloud("v".into(), "dGVuYW50".into(), None)
+        .unwrap();
+    rec.exited(Some(0));
+    rec.finish("completed");
+
+    assert_eq!(rec.status(), "saved");
+    let recordings = core.list_recordings(moved).unwrap();
+    assert_eq!(recordings.len(), 1);
+    assert_eq!(recordings[0].recording_id, "mcp-move");
+}
+
 #[test]
 fn preference_limits_and_failure_outcomes() {
     let (_dir, core, _) = setup();

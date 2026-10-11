@@ -729,24 +729,32 @@ pub fn list_spaces(http: &Client, base_url: &str, access: &str) -> ApiResult<Vec
 /// BEFORE the vault's first push. The push then lands in a vault of that space
 /// (selective access: other members get in only through grants the owner
 /// publishes); without the claim the server materialises a pushed vault as a
-/// personal vault of the pushing account. Repeating it for the same owner is a
-/// no-op. Nothing secret is sent: the id is a random UUID.
+/// personal vault of the pushing account. Nothing secret is sent: the id is a
+/// random UUID.
+///
+/// Returns whether the id was claimed by THIS call (the server's `claimed`).
+/// `false` means the caller had claimed it before — the retry of an attempt
+/// that did not finish — and the id stays where that first claim placed it, so
+/// an id must only ever be claimed again for the space it was first claimed in.
+/// An id another owner holds is an error (409), not `false`.
 pub fn claim_vault(
     http: &Client,
     base_url: &str,
     access: &str,
     vault_id_b64: &str,
     space_id: &str,
-) -> ApiResult<()> {
+) -> ApiResult<bool> {
     let body = json!({ "vault_id": vault_id_b64, "space_id": space_id });
-    client::send_json(
+    let resp = client::send_json(
         client::headers(
             http.post(client::url(base_url, "/v1/vaults/claim")),
             Some(access),
         )
         .json(&body),
     )?;
-    Ok(())
+    resp.get("claimed")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| ApiError::other("vault claim: response missing 'claimed'"))
 }
 
 /// `POST /v1/spaces` (Bearer, owner) — create a space; the creator becomes its admin.

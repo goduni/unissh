@@ -95,9 +95,24 @@ fn save_links(
 /// local vault moved to a server keeps its item ids and key material, so each
 /// link still names its candidate and that candidate's fingerprint). Without
 /// it the candidate would read as started on another device — abandon-only.
-/// Run inside the move's transaction.
+/// Run inside the move's transaction: a storage failure is returned and rolls
+/// the move back. Links that do not parse are damaged device-local state with
+/// nothing to carry over; they are left where they are and the move goes on
+/// (the candidate then reads as started elsewhere).
 pub(super) fn rehome(state: &CoreState, old_vid: &[u8], new_vid: &[u8]) -> Result<(), FfiError> {
-    let links = load_links(state, old_vid)?;
+    let Some(bytes) = state
+        .storage
+        .get_meta(&meta_key(old_vid))
+        .map_err(FfiError::other)?
+    else {
+        return Ok(());
+    };
+    let Ok(links) = serde_json::from_slice::<BTreeMap<String, Link>>(&bytes) else {
+        log::warn!(
+            "key rotation: the links of a moved vault are unreadable and are not carried over"
+        );
+        return Ok(());
+    };
     if links.is_empty() {
         return Ok(());
     }
