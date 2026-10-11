@@ -609,6 +609,8 @@ describe("transfer integrity regressions", () => {
 
 describe("moving between locations", () => {
   const skip = async () => ({ choice: "skip" as const, applyAll: true });
+  // The row of a move refused because its destination is the source itself.
+  const SAME = "Not moved: /file: the destination is this very file, so nothing was copied and it was left as it is";
 
   it("removes the source file once its copy is committed", async () => {
     const from = source("local"), to = source("remote");
@@ -752,7 +754,24 @@ describe("moving between locations", () => {
     expect(to.commit).not.toHaveBeenCalled();
     expect(to.remove).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^\/dst\/\.unissh-.*\.part$/));
     expect(from.remove).not.toHaveBeenCalled();
-    expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file: the destination looked like the same file" });
+    expect(current()).toMatchObject({ state: "error", error: SAME });
+    // Retry finds the same file again: it still says so instead of "done".
+    const lookup = vi.spyOn(sources, "sourceFor").mockImplementation((ref) => ref.kind === "local" ? from : to);
+    try { await resumeTransfer("t"); } finally { lookup.mockRestore(); }
+    expect(to.commit).not.toHaveBeenCalled();
+    expect(from.remove).not.toHaveBeenCalled();
+    expect(current()).toMatchObject({ state: "error", error: SAME });
+  });
+
+  it("names a staged copy it could not take away again after refusing the move", async () => {
+    const from = source("local"), to = source("remote");
+    vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: false, size: 100, mtime: 9 });
+    vi.mocked(from.lstat).mockResolvedValue({ name: "file", isDir: false, size: 100, mtime: 5 });
+    vi.mocked(to.remove).mockRejectedValue(new Error("read-only"));
+    await startTransfer(moving(), from, to, resolver);
+    expect(to.remove).toHaveBeenCalledOnce();
+    expect(current().error?.replace(/\.unissh-[^.]+\.part/, ".unissh-<id>.part"))
+      .toBe(`${SAME}; a temporary file was left at the destination (/dst/.unissh-<id>.part: read-only)`);
   });
 
   it("removes the source once the replaced file is shown to be another one", async () => {
@@ -776,7 +795,7 @@ describe("moving between locations", () => {
     expect(to.commit).not.toHaveBeenCalled();
     expect(from.remove).not.toHaveBeenCalled();
     expect(from.removeEmptyDir).not.toHaveBeenCalled();
-    expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file/a: the destination looked like the same file" });
+    expect(current()).toMatchObject({ state: "error", error: SAME.replace("/file:", "/file/a:") });
   });
 
   it("moves a local file onto an equal-looking one that file identity shows to be another file", async () => {
@@ -930,6 +949,17 @@ describe("moving within one location", () => {
     expect(to.commit).toHaveBeenCalledWith(expect.stringContaining(".unissh-"), "/dst/file", false);
     expect(from.remove).toHaveBeenCalledExactlyOnceWith("/file");
     expect(current().state).toBe("done");
+  });
+
+  it("says that the file is under both names when it was linked into place but its old name could not be removed", async () => {
+    // What a non-replacing local commit leaves when its second step fails.
+    const from = Object.assign(source("local"), { sameFile: vi.fn().mockResolvedValue(true) }), to = source("local");
+    vi.mocked(from.commit).mockRejectedValue(new Error("Operation not permitted (os error 1)"));
+    await startTransfer(moving(), from, to, resolver);
+    expect(from.sameFile).toHaveBeenCalledExactlyOnceWith("/file", "/dst/file");
+    expect(current()).toMatchObject({ state: "error", error: "The file is now at /dst/file as well, but its old name could not be removed (Operation not permitted (os error 1)). Both names are one file; nothing was copied." });
+    expect(to.createNew).not.toHaveBeenCalled();
+    expect(from.remove).not.toHaveBeenCalled();
   });
 
   it("does not take a unix path that holds a backslash for a Windows one", async () => {

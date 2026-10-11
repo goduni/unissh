@@ -37,6 +37,10 @@ interface PlannedLeaf {
    *  were positively shown to be one file the commit was withheld as well, so
    *  `completed` then only means "there is nothing left to do here". */
   aliased?: boolean;
+  /** Move only: the destination was positively shown to be the source itself,
+   *  so nothing was committed and the file is exactly as it was. Implies
+   *  `aliased`; kept apart because the row must not say "copied" then. */
+  same?: boolean;
   /** Move only: the destination that was replaced was proved to be another file
    *  — which includes that its directory is not the source's directory. */
   distinct?: boolean;
@@ -64,6 +68,10 @@ interface Control {
   /** Move only: sources that arrived but could not be removed. They are
    *  reported when the transfer settles; none of them stops the others. */
   kept: string[];
+  /** Move only: sources left exactly as they were because the destination is
+   *  the very same file. Nothing was copied, so they are reported apart from
+   *  `kept`, whose wording says a copy exists. */
+  untouched: string[];
   /** One native flag covers every file in this transfer. Keep it alive until
    * all writes settle; creating/discarding a token per file adds two IPCs. */
   cancelId?: string;
@@ -272,6 +280,17 @@ async function validateTarget(t: Transfer, from: FileSource, to: FileSource): Pr
   if (existing && !t.isSymlink && !existing.isSymlink && (await to.realpath(target) === source || await from.sameFile?.(t.fromPath, target))) throw new Error(`Cannot ${verb} a file onto itself`);
 }
 
+/** Report a source whose destination is the source itself: no copy was made
+ *  and the file was not touched. `left` names a staged copy that could not be
+ *  taken away again (path and reason). */
+function reportUntouched(path: string, ctrl: Control, left?: string): void {
+  const why = [
+    i18n.t("sftp.moveError.sameFileUntouched"),
+    ...(left === undefined ? [] : [i18n.t("sftp.moveError.probeLeft", { detail: left })]),
+  ];
+  ctrl.untouched.push(`${path}: ${why.join("; ")}`);
+}
+
 /** The second half of a move, for one file. Its only callers are the places in
  *  transferLeaf where `plan.completed` is known to be true — the copy has been
  *  committed at the destination, or was withheld because the destination is the
@@ -283,6 +302,8 @@ async function validateTarget(t: Transfer, from: FileSource, to: FileSource): Pr
 async function removeMovedSource(from: FileSource, to: FileSource, path: string, plan: PlannedLeaf, isSymlink: boolean, ctrl: Control): Promise<void> {
   // After pause/cancel nothing more is deleted; a resume picks this file up again.
   if (!ctrl.move || ctrl.abort.signal.aborted) return;
+  // A retry of a refused move: still the same file, still nothing to remove.
+  if (plan.same) { reportUntouched(path, ctrl); return; }
   try {
     // Removing a source that is the destination under another name removes the only copy.
     if (plan.aliased) throw new Error(i18n.t("sftp.moveError.sameFile"));
@@ -298,6 +319,20 @@ async function removeMovedSource(from: FileSource, to: FileSource, path: string,
   } catch (error) {
     ctrl.kept.push(`${path}: ${apiErrorMessage(error)}`);
   }
+}
+
+/** A refused commit of `from` onto the free name `target`: did it stop half
+ *  way? An exclusive local commit is link(2) and then removing the old name
+ *  (`local_commit` in client/src-tauri/src/commands.rs), and it reports a
+ *  failure of either step the same way. `target` was free a moment ago, so if
+ *  it now is the very file being moved, the link was made and it is the removal
+ *  that failed: the file is under both names. Copying would only end in "File
+ *  exists", and there is nothing to copy — the error to report says so.
+ *  Undefined when that cannot be shown (no file identity on this source, or
+ *  `target` is not there), and the caller goes by the error it got. */
+async function linkedNotRemoved(src: FileSource, from: string, target: string, error: unknown): Promise<Error | undefined> {
+  if (!await src.sameFile?.(from, target).catch(() => false)) return undefined;
+  return new Error(i18n.t("sftp.moveError.linkedNotRemoved", { target, detail: apiErrorMessage(error) }));
 }
 
 /** A move inside one session needs no copy: rename the entry into place. Returns
@@ -339,7 +374,10 @@ async function renameInPlace(t: Transfer, src: FileSource, resolver: ConflictRes
   } catch (error) {
     // A pause or cancel is not a refused rename: nothing more may start.
     if (ctrl.abort.signal.aborted) throw error;
-    if (!src.renameNeedsCopy(error, t.kind === "file" && !replace)) throw error;
+    const exclusive = t.kind === "file" && !replace;
+    const half = exclusive ? await linkedNotRemoved(src, t.fromPath, target, error) : undefined;
+    if (half) throw half;
+    if (!src.renameNeedsCopy(error, exclusive)) throw error;
     // Carry the decision over, so the copy path does not ask a second time.
     if (t.kind === "file") ctrl.manifest.set(t.fromPath, { path: target, existing: replace ? existing : null, completed: false });
     return false;
@@ -440,11 +478,15 @@ async function transferLeaf(
       const verdict = await sameFileVerdict(from, to, fromPath, source, plan, stageName);
       if (verdict === "same") {
         // Proved to be the source itself: it is left exactly as it is. Nothing
-        // is committed; the staged copy is dropped on the way out.
+        // is committed, and the staged copy is dropped here rather than on the
+        // way out, so that one that cannot be removed is named in the row.
         plan.aliased = true;
+        plan.same = true;
         plan.completed = true;
         plan.source = source;
-        await removeMovedSource(from, to, fromPath, plan, isSymlink, ctrl);
+        const stuck = await (isSymlink ? to.unlink(stage) : to.remove(stage)).then(() => undefined, (error: unknown) => error);
+        created = false;
+        reportUntouched(fromPath, ctrl, stuck === undefined ? undefined : `${stage}: ${apiErrorMessage(stuck)}`);
         return true;
       }
       if (verdict === "distinct") plan.distinct = true;
@@ -887,7 +929,7 @@ export async function startTransfer(
   const ctrl: Control = {
     id: t.id, manifest: manifests.get(t.id) ?? new Map(),
     paused: false, cancelled: false, abort: new AbortController(),
-    moved: 0, pendingConflicts: 0, lastProgressAt: now(), move: !!t.move, kept: [],
+    moved: 0, pendingConflicts: 0, lastProgressAt: now(), move: !!t.move, kept: [], untouched: [],
     legs: from.kind === "remote" && to.kind === "remote" ? 2 : 1,
     patch: (patch) => {
       if (controls.get(t.id) === ctrl && !ctrl.abort.signal.aborted) patchTransfer(t.id, patch);
@@ -934,10 +976,13 @@ export async function startTransfer(
     if (renamed) { /* moved without copying */ }
     else if (t.kind === "file") await runFile(t, from, to, resolver, ctrl, sem);
     else await runDir(t, from, to, resolver, ctrl, sem);
-    if (ctrl.kept.length) {
-      failure = ctrl.kept.length > 1
-        ? i18n.t("sftp.moveError.keptMore", { detail: ctrl.kept[0], more: ctrl.kept.length - 1 })
-        : i18n.t("sftp.moveError.kept", { detail: ctrl.kept[0] });
+    // A source that was copied and kept leads: that row is the one to act on.
+    const left = [...ctrl.kept, ...ctrl.untouched];
+    if (left.length) {
+      const key = ctrl.kept.length ? "kept" : "untouched";
+      failure = left.length > 1
+        ? i18n.t(`sftp.moveError.${key}More`, { detail: left[0], more: left.length - 1 })
+        : i18n.t(`sftp.moveError.${key}`, { detail: left[0] });
     }
   } catch (e) {
     if (!ctrl.cancelled && !ctrl.paused) failure = apiErrorMessage(e);
