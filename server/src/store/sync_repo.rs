@@ -88,6 +88,90 @@ fn req_u64(o: Option<u64>, what: &str) -> AppResult<i64> {
     i64::try_from(v).map_err(|e| AppError::malformed(format!("{what} exceeds i64: {e}")))
 }
 
+/// One page of the delta ([`Store::delta_page`]).
+#[derive(Debug)]
+pub struct DeltaPage {
+    /// The page's rows, `server_seq` ASC.
+    pub rows: Vec<DeltaRow>,
+    /// A row visible to the reader remains after this page.
+    pub has_more: bool,
+    /// The cursor to ask from next: past this page, or the request's own cursor
+    /// when nothing follows it.
+    pub next_cursor: i64,
+}
+
+/// A delta row as the page is planned: its sequence and the size of its object.
+#[derive(FromRow)]
+struct DeltaSize {
+    server_seq: i64,
+    blob_len: i64,
+}
+
+/// A1 visibility of the whole object stream, as a SQL condition on `objects`.
+/// Binds, in order: member, member, now, member.
+const DELTA_VISIBLE: &str = "( \
+     ((objects.vault_id IS NULL OR length(objects.vault_id) = 0) \
+        AND objects.object_tag IN (5, 6)) \
+     OR EXISTS (SELECT 1 FROM vaults v \
+                WHERE v.vault_id = objects.vault_id \
+                  AND v.owner_pubkey = ?) \
+     OR EXISTS (SELECT 1 FROM membership_grants g \
+                WHERE g.vault_id = objects.vault_id \
+                  AND g.member_pubkey = ? AND g.revoked = 0 \
+                  AND (g.not_after IS NULL OR g.not_after > ?) \
+                  AND g.key_epoch = (SELECT MAX(m.key_epoch) FROM membership_manifests m \
+                                     WHERE m.vault_id = objects.vault_id)) \
+     OR (objects.object_tag = 7 AND objects.author_pubkey = ?) \
+   )";
+
+/// A1 visibility restricted to ONE vault, as a SQL condition on `objects`.
+/// Binds, in order: vault_id, member, member, now.
+const DELTA_VISIBLE_IN_VAULT: &str = "objects.vault_id = ? AND ( \
+     EXISTS (SELECT 1 FROM vaults v \
+             WHERE v.vault_id = objects.vault_id AND v.owner_pubkey = ?) \
+     OR EXISTS (SELECT 1 FROM membership_grants g \
+                WHERE g.vault_id = objects.vault_id \
+                  AND g.member_pubkey = ? AND g.revoked = 0 \
+                  AND (g.not_after IS NULL OR g.not_after > ?) \
+                  AND g.key_epoch = (SELECT MAX(m.key_epoch) FROM membership_manifests m \
+                                     WHERE m.vault_id = objects.vault_id)) \
+   )";
+
+/// The visibility condition of a delta and its bind values: the whole stream,
+/// or one vault.
+fn delta_filter(vault: Option<&[u8]>, member: &[u8], now: i64) -> (&'static str, Vec<Val>) {
+    match vault {
+        None => (
+            DELTA_VISIBLE,
+            vec![Val::b(member), Val::b(member), Val::I(now), Val::b(member)],
+        ),
+        Some(vault_id) => (
+            DELTA_VISIBLE_IN_VAULT,
+            vec![
+                Val::b(vault_id),
+                Val::b(member),
+                Val::b(member),
+                Val::I(now),
+            ],
+        ),
+    }
+}
+
+/// How many of the planned rows one page takes: at most `limit`, and only while
+/// their sizes together fit `max_bytes` — but always the first.
+fn page_len(sizes: impl Iterator<Item = i64>, limit: usize, max_bytes: usize) -> usize {
+    let mut total = 0_usize;
+    let mut taken = 0_usize;
+    for size in sizes.take(limit) {
+        total = total.saturating_add(usize::try_from(size).unwrap_or(usize::MAX));
+        if taken > 0 && total > max_bytes {
+            break;
+        }
+        taken = taken.saturating_add(1);
+    }
+    taken
+}
+
 impl Store {
     /// report_version: the maximum assigned server_seq == instance.next_seq (§5.1).
     pub async fn report_version(&self) -> AppResult<i64> {
@@ -103,6 +187,9 @@ impl Store {
     /// object ONLY if it is the vault owner OR holds an active grant for the LATEST
     /// manifest epoch. Non-vault objects (Audit(5)/Keyset(6)) are visible to all;
     /// AccountState(7) only to its author.
+    ///
+    /// Bounded by row count only — the HTTP delta goes through
+    /// [`Self::delta_page`], which also bounds the bytes.
     pub async fn delta_since(
         &self,
         cursor: i64,
@@ -110,34 +197,98 @@ impl Store {
         member: &[u8],
         now: i64,
     ) -> AppResult<Vec<DeltaRow>> {
-        self.fetch_all_as::<DeltaRow>(
+        self.delta_rows(cursor, i64::MAX, limit, member, now, None)
+            .await
+    }
+
+    /// One page of the delta as `GET /v1/sync/delta` serves it: the rows after
+    /// `cursor` visible to `member` (in ONE vault when `vault` is given — see
+    /// [`Self::delta_since`] / [`Self::delta_since_vault`] for the visibility
+    /// rules), at most `limit` of them and at most `max_bytes` of object bytes
+    /// together. A row is never split and the first one always travels, so an
+    /// object larger than the whole budget is a page of its own and the cursor
+    /// still moves.
+    ///
+    /// The page is planned on the rows' sizes alone, one row past `limit`: that
+    /// bounds what is read into memory (objects reach 17 MiB, so a page of 500
+    /// could otherwise be gigabytes), and it tells `has_more` from "a row
+    /// remains" rather than "the page came back full".
+    pub async fn delta_page(
+        &self,
+        cursor: i64,
+        limit: i64,
+        max_bytes: usize,
+        member: &[u8],
+        now: i64,
+        vault: Option<&[u8]>,
+    ) -> AppResult<DeltaPage> {
+        let (visible, filter) = delta_filter(vault, member, now);
+        // CAST: `length(bytea)` is a 32-bit integer in Postgres.
+        let sql = format!(
+            "SELECT server_seq, CAST(LENGTH(object_bytes) AS BIGINT) AS blob_len FROM objects \
+             WHERE server_seq > ? AND {visible} \
+             ORDER BY server_seq ASC LIMIT ?"
+        );
+        let mut vals = vec![Val::I(cursor)];
+        vals.extend(filter);
+        vals.push(Val::I(limit.saturating_add(1)));
+        let mut plan = self.fetch_all_as::<DeltaSize>(&sql, vals).await?;
+
+        let keep = page_len(
+            plan.iter().map(|r| r.blob_len),
+            usize::try_from(limit).unwrap_or(usize::MAX),
+            max_bytes,
+        );
+        let planned_more = plan.len() > keep;
+        plan.truncate(keep);
+        let Some(upto) = plan.last().map(|r| r.server_seq) else {
+            return Ok(DeltaPage {
+                rows: Vec::new(),
+                has_more: false,
+                next_cursor: cursor,
+            });
+        };
+
+        // The bytes of exactly the planned range. Visibility is evaluated again
+        // here, so a grant that changed since the plan shows: rows that became
+        // invisible are simply absent (the cursor still moves past them), and if
+        // rows became visible the page stops at the planned COUNT, short of
+        // `upto`, and says there is more.
+        let rows = self
+            .delta_rows(cursor, upto, count_i64(plan.len())?, member, now, vault)
+            .await?;
+        let next_cursor = if rows.len() < plan.len() {
+            upto
+        } else {
+            rows.last().map_or(upto, |r| r.server_seq)
+        };
+        Ok(DeltaPage {
+            rows,
+            has_more: planned_more || next_cursor < upto,
+            next_cursor,
+        })
+    }
+
+    /// The rows of a delta with `cursor < server_seq <= upto`, ASC, at most `limit`.
+    async fn delta_rows(
+        &self,
+        cursor: i64,
+        upto: i64,
+        limit: i64,
+        member: &[u8],
+        now: i64,
+        vault: Option<&[u8]>,
+    ) -> AppResult<Vec<DeltaRow>> {
+        let (visible, filter) = delta_filter(vault, member, now);
+        let sql = format!(
             "SELECT server_seq, object_bytes FROM objects \
-             WHERE server_seq > ? \
-               AND ( \
-                 ((objects.vault_id IS NULL OR length(objects.vault_id) = 0) \
-                    AND objects.object_tag IN (5, 6)) \
-                 OR EXISTS (SELECT 1 FROM vaults v \
-                            WHERE v.vault_id = objects.vault_id \
-                              AND v.owner_pubkey = ?) \
-                 OR EXISTS (SELECT 1 FROM membership_grants g \
-                            WHERE g.vault_id = objects.vault_id \
-                              AND g.member_pubkey = ? AND g.revoked = 0 \
-                              AND (g.not_after IS NULL OR g.not_after > ?) \
-                              AND g.key_epoch = (SELECT MAX(m.key_epoch) FROM membership_manifests m \
-                                                 WHERE m.vault_id = objects.vault_id)) \
-                 OR (objects.object_tag = 7 AND objects.author_pubkey = ?) \
-               ) \
-             ORDER BY server_seq ASC LIMIT ?",
-            vec![
-                Val::I(cursor),
-                Val::b(member),
-                Val::b(member),
-                Val::I(now),
-                Val::b(member),
-                Val::I(limit),
-            ],
-        )
-        .await
+             WHERE server_seq > ? AND server_seq <= ? AND {visible} \
+             ORDER BY server_seq ASC LIMIT ?"
+        );
+        let mut vals = vec![Val::I(cursor), Val::I(upto)];
+        vals.extend(filter);
+        vals.push(Val::I(limit));
+        self.fetch_all_as::<DeltaRow>(&sql, vals).await
     }
 
     /// Catalog (member-facing): every vault the `member` can access — owner OR an
@@ -182,30 +333,8 @@ impl Store {
         now: i64,
         vault_id: &[u8],
     ) -> AppResult<Vec<DeltaRow>> {
-        self.fetch_all_as::<DeltaRow>(
-            "SELECT server_seq, object_bytes FROM objects \
-             WHERE server_seq > ? AND objects.vault_id = ? \
-               AND ( \
-                 EXISTS (SELECT 1 FROM vaults v \
-                         WHERE v.vault_id = objects.vault_id AND v.owner_pubkey = ?) \
-                 OR EXISTS (SELECT 1 FROM membership_grants g \
-                            WHERE g.vault_id = objects.vault_id \
-                              AND g.member_pubkey = ? AND g.revoked = 0 \
-                              AND (g.not_after IS NULL OR g.not_after > ?) \
-                              AND g.key_epoch = (SELECT MAX(m.key_epoch) FROM membership_manifests m \
-                                                 WHERE m.vault_id = objects.vault_id)) \
-               ) \
-             ORDER BY server_seq ASC LIMIT ?",
-            vec![
-                Val::I(cursor),
-                Val::b(vault_id),
-                Val::b(member),
-                Val::b(member),
-                Val::I(now),
-                Val::I(limit),
-            ],
-        )
-        .await
+        self.delta_rows(cursor, i64::MAX, limit, member, now, Some(vault_id))
+            .await
     }
 
     /// Atomic push (§5.1/§7.2): idempotency-replay OR {assign monotonic

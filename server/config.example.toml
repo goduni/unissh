@@ -27,6 +27,7 @@ max_object_bytes = 17825792       # 17 MiB: the largest client object (a full se
 max_objects_per_push = 1000
 delta_page_size = 500
 delta_max_page_size = 1000
+delta_max_page_bytes = 8388608    # 8 MiB of objects per delta page (a page always holds at least one)
 rate_limit_per_ip_rps = 20
 rate_limit_burst = 40
 

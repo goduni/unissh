@@ -54,6 +54,11 @@ impl SyncTransport for HttpTransport {
             .json(&serde_json::json!({ "objects": objs }))
             .send()
             .map_err(|_| SyncError::Format)?;
+        // The `push_objects` contract: a refusal for size is its own error, so
+        // the engine can split the request.
+        if resp.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            return Err(SyncError::PayloadTooLarge);
+        }
         if !resp.status().is_success() {
             return Err(SyncError::Format);
         }

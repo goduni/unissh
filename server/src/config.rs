@@ -63,6 +63,10 @@ pub struct LimitsConfig {
     pub max_objects_per_push: usize,
     pub delta_page_size: u32,
     pub delta_max_page_size: u32,
+    /// Most object bytes one delta page carries. A page is cut before the row
+    /// that would exceed it, but always holds at least one row, so an object
+    /// larger than this still travels (alone).
+    pub delta_max_page_bytes: usize,
     pub rate_limit_per_ip_rps: u32,
     pub rate_limit_burst: u32,
 }
@@ -498,6 +502,7 @@ impl Default for LimitsConfig {
             max_objects_per_push: 1000,
             delta_page_size: 500,
             delta_max_page_size: 1000,
+            delta_max_page_bytes: 8 * 1024 * 1024,
             rate_limit_per_ip_rps: 20,
             rate_limit_burst: 40,
         }

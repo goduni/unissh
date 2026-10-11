@@ -14,10 +14,16 @@ use unissh_storage::{CachePolicy, SyncTarget, VaultRecord};
 use unissh_sync::{AuditObject, SyncObject};
 
 fn audit_b64(tag: u8) -> String {
+    audit_sized_b64(tag, 1)
+}
+
+/// An audit object whose entry blob is `blob_len` bytes of `tag`: 116 bytes of
+/// framing, signature and author on top of the blob.
+fn audit_sized_b64(tag: u8, blob_len: usize) -> String {
     ids::b64(
         &SyncObject::Audit(AuditObject {
             vault_id: vec![],
-            entry_blob: vec![tag],
+            entry_blob: vec![tag; blob_len],
             signature: vec![1_u8; 67],
             author_pubkey: vec![2_u8; 32],
         })
@@ -323,4 +329,117 @@ async fn default_limits_admit_the_largest_client_object_and_nothing_bigger() {
             .status();
         assert_eq!(status, expected, "an object of {len} bytes");
     }
+}
+
+/// Only the push route takes a body up to `limits.max_body_bytes`; a route that
+/// answers without a session stops at the framework's 2 MiB. Regression: the
+/// large limit was set on the whole router, so anyone could make the server
+/// buffer 24 MiB per request.
+#[tokio::test]
+async fn unauthenticated_route_refuses_a_body_over_the_default_limit() {
+    let app = spawn().await;
+    // One byte over 2 MiB, in a field the handler would read.
+    let (head, tail) = ("{\"device_id\":\"", "\"}");
+    let fill = 2 * 1024 * 1024 + 1 - head.len() - tail.len();
+    let body = format!("{head}{}{tail}", "A".repeat(fill));
+
+    let r = app
+        .client
+        .post(format!("{}/v1/auth/challenge", app.base))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 413);
+}
+
+/// A delta page is cut at `limits.delta_max_page_bytes`, never below one row, and
+/// `has_more` / `next_cursor` lead a reader through all of it. Regression: pages
+/// were bounded by row count only, so a page of large objects had no size bound.
+#[tokio::test]
+async fn delta_page_is_cut_at_the_byte_budget() {
+    // Room for two small objects (117 bytes each), not three.
+    let app = spawn_with(|c| c.limits.delta_max_page_bytes = 250).await;
+    let s = app.seed_session("personal").await;
+    let bearer = format!("Bearer {}", s.access_token_b64);
+    let objects = json!({ "objects": [
+        audit_sized_b64(1, 300), // over the budget on its own
+        audit_b64(2),
+        audit_b64(3),
+        audit_b64(4),
+    ] });
+    let r = app
+        .client
+        .post(format!("{}/v1/sync/push", app.base))
+        .header("Authorization", &bearer)
+        .json(&objects)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let mut pages = Vec::new();
+    let mut cursor = 0_u64;
+    loop {
+        let d: serde_json::Value = app
+            .client
+            .get(format!("{}/v1/sync/delta?cursor={cursor}", app.base))
+            .header("Authorization", &bearer)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let seqs: Vec<u64> = d["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["server_seq"].as_u64().unwrap())
+            .collect();
+        pages.push(seqs);
+        if d["has_more"] != true {
+            break;
+        }
+        cursor = d["next_cursor"].as_u64().unwrap();
+        assert!(pages.len() < 10, "the cursor does not advance");
+    }
+    assert_eq!(
+        pages,
+        [vec![1], vec![2, 3], vec![4]],
+        "the oversize object alone, then pages within the budget"
+    );
+}
+
+/// `has_more` means a row remains, not "the page came back full": a final page
+/// that happens to hold exactly `limit` rows ends the delta.
+#[tokio::test]
+async fn delta_final_page_does_not_claim_more() {
+    let app = spawn().await;
+    let s = app.seed_session("personal").await;
+    let bearer = format!("Bearer {}", s.access_token_b64);
+    let r = app
+        .client
+        .post(format!("{}/v1/sync/push", app.base))
+        .header("Authorization", &bearer)
+        .json(&json!({ "objects": [audit_b64(1), audit_b64(2)] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let d: serde_json::Value = app
+        .client
+        .get(format!("{}/v1/sync/delta?cursor=0&limit=2", app.base))
+        .header("Authorization", &bearer)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(d["items"].as_array().unwrap().len(), 2);
+    assert_eq!(d["has_more"], false);
+    assert_eq!(d["next_cursor"], 2);
 }

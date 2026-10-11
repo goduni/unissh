@@ -300,11 +300,12 @@ async fn objects_list(
         Some(v) => Some(ids::unb64(v)?),
         None => None,
     };
-    let rows = state
+    // One row past the page: it only tells whether anything follows.
+    let mut rows = state
         .store
-        .admin_list_objects(q.tag, vault.as_deref(), cursor, limit)
+        .admin_list_objects(q.tag, vault.as_deref(), cursor, limit.saturating_add(1))
         .await?;
-    let (has_more, next_cursor) = crate::http::page(&rows, limit, cursor, |r| r.server_seq);
+    let (has_more, next_cursor) = crate::http::page(&mut rows, limit, cursor, |r| r.server_seq);
     let out: Vec<Value> = rows
         .into_iter()
         .map(|o| {
@@ -395,6 +396,7 @@ async fn config_get(_owner: OwnerCtx, State(state): State<AppState>) -> AppResul
             "max_objects_per_push": state.max_objects_per_push(),
             "delta_page_size": c.limits.delta_page_size,
             "delta_max_page_size": c.limits.delta_max_page_size,
+            "delta_max_page_bytes": c.limits.delta_max_page_bytes,
             "rate_limit_per_ip_rps": c.limits.rate_limit_per_ip_rps,
             "rate_limit_burst": c.limits.rate_limit_burst,
         },
