@@ -282,19 +282,27 @@ neither offered nor attempted.
   pulled from a server, a new account) and resetting the instance — also when
   such a change fails after the keyset on disk was already rewritten. A password
   the keyset no longer accepts is also wiped when it is next tried. Turning the
-  setting off wipes both halves at once. A wipe that fails is not passed over:
-  the app says so, and Settings offers to forget whatever is still stored,
-  including on a vault that no longer has a password (which never tries the
-  biometric again, so nothing else would remove it).
+  setting off wipes both halves at once. A wipe that leaves the sealed password
+  on disk is not passed over: the app says so, and Settings offers to forget
+  whatever is still stored, including on a vault that no longer has a password
+  (which never tries the biometric again, so nothing else would remove it). If
+  only the device secret could not be deleted, the sealed password is gone and
+  the leftover secret opens nothing.
 - **A prompt answered after you moved on.** A biometric result counts only for
   the attempt that asked for it. Choosing the password instead, a typed unlock,
-  a lock and a newer prompt each end the attempt before them: its answer is
-  dropped unread, so a Touch ID or Hello confirmation that arrives late cannot
-  reopen a vault you have locked again, or replace a session opened with the
-  password. On macOS the abandoned evaluation is cancelled, which closes its
-  sheet; on Windows the request is cancelled too, but Windows does not promise
-  to close the Hello dialog — one left on screen is harmless, its answer goes
-  nowhere.
+  a lock, a reset and a newer prompt each end the attempt before them. Whatever
+  its prompt answers afterwards is discarded: nothing is unlocked, nothing is
+  wiped, and a secret the prompt released is zeroized unused — so a Touch ID or
+  Hello confirmation that arrives late cannot replace a session opened with the
+  password. That a lock wins is enforced in the core, for every kind of unlock
+  (typed, remembered-key and biometric alike): an unlock that began before a
+  lock installs nothing, however long its prompt or its key derivation took, so
+  it cannot reopen a vault you have locked again. On macOS the abandoned
+  evaluation is cancelled, which closes its sheet; on Windows the request is
+  cancelled too, but Windows does not promise to close the Hello dialog. One
+  left on screen cannot unlock anything — its answer is discarded as above —
+  but it can get in the way: it may sit in front of the next Hello dialog, or
+  keep that one from appearing until it is dismissed.
 
 **Does not protect against:**
 
