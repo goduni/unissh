@@ -339,7 +339,9 @@ impl DeviceSecretStore for TouchId {
         let current = domain_hash(&ctx);
         let probe = new_context();
         // SAFETY: setter on a fresh context we own.
-        unsafe { probe.setInteractionNotAllowed(true) };
+        unsafe {
+            probe.setInteractionNotAllowed(true);
+        }
         let mut query = with_context(item(), &probe);
         // SAFETY: reading an `extern` static exported by Security.framework.
         yes(&mut query, unsafe { kSecReturnAttributes });
