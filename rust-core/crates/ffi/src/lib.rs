@@ -8545,9 +8545,12 @@ pub trait AgentApprover: Send + Sync {
     /// the next call comes only after this one has returned, so a timeout
     /// counted from here is a timeout the person saw the whole of.
     fn approve(&self, request: AgentSignRequest) -> bool;
-    /// The request `id` is no longer wanted (its client hung up): withdraw the
-    /// prompt and let `approve` return `false`. May arrive before `approve`
-    /// has registered `id`, or after it returned.
+    /// The request `id` is no longer wanted (its client hung up, or the system
+    /// agent was revoked): withdraw the prompt and let `approve` return
+    /// `false`. May arrive before `approve` has registered `id`, or after it
+    /// returned. Only ever sent for the request whose turn it is: once
+    /// `approve` has been called for another request, `id` will not be handed
+    /// over any more, so a cancel remembered for it can be forgotten.
     fn cancel(&self, id: u64);
 }
 

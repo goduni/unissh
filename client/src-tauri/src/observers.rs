@@ -8,7 +8,7 @@
 //! [`AppPrompter`] is the exception: interactive authentication needs an answer
 //! back, so it emits an app-wide event and blocks until the dialog replies.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Mutex;
@@ -346,8 +346,33 @@ pub struct AppApprover {
 #[derive(Default)]
 struct ApprovalState {
     pending: HashMap<u64, PendingApproval>,
-    /// Cancellations that arrived before their `approve` registered the id.
-    cancelled_early: std::collections::HashSet<u64>,
+    cancelled_early: EarlyCancels,
+}
+
+/// Cancellations that arrived with no prompt registered under their id: the
+/// request has not been handed over yet, or is already over.
+///
+/// The core hands requests over one at a time and cancels only the request
+/// whose turn it is ([`AgentApprover`]). So when a request is handed over,
+/// every other id remembered here had its turn before and will never arrive:
+/// that is when they are forgotten. An early cancel therefore lasts exactly
+/// until its request comes, or until it no longer can; nothing that still
+/// matters is ever dropped, and no more than a turn's worth is held.
+#[derive(Default)]
+struct EarlyCancels(HashSet<u64>);
+
+impl EarlyCancels {
+    fn remember(&mut self, id: u64) {
+        self.0.insert(id);
+    }
+
+    /// The request `id` is being handed over. Returns whether it was cancelled
+    /// before it got here, and forgets everything remembered so far.
+    fn handed_over(&mut self, id: u64) -> bool {
+        let cancelled = self.0.contains(&id);
+        self.0.clear();
+        cancelled
+    }
 }
 
 impl AppApprover {
@@ -423,7 +448,7 @@ impl AgentApprover for AppApprover {
         let (tx, rx) = sync_channel(1);
         {
             let mut state = lock_map(&self.state);
-            if state.cancelled_early.remove(&id) {
+            if state.cancelled_early.handed_over(id) {
                 return false;
             }
             state
@@ -480,16 +505,35 @@ impl AgentApprover for AppApprover {
             let pending = state.pending.remove(&id);
             if pending.is_none() {
                 // Not registered yet (or already over). Remember it so a late
-                // `approve` refuses without showing anything; an id that is
-                // over never comes back, so this only holds the rare early ones.
-                if state.cancelled_early.len() >= 64 {
-                    // Only ever ids that lost a race; never let them pile up.
-                    state.cancelled_early.clear();
-                }
-                state.cancelled_early.insert(id);
+                // `approve` refuses without showing anything.
+                state.cancelled_early.remember(id);
             }
             pending
         };
         self.refuse(id, pending);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EarlyCancels;
+
+    #[test]
+    fn an_early_cancel_refuses_its_request_however_many_stale_ones_came_after() {
+        let mut early = EarlyCancels::default();
+        early.remember(7);
+        // Cancels of requests that were already over: they never arrive.
+        for stale in 100..300 {
+            early.remember(stale);
+        }
+        assert!(early.handed_over(7), "the request is refused on arrival");
+    }
+
+    #[test]
+    fn an_early_cancel_is_forgotten_once_another_request_is_handed_over() {
+        let mut early = EarlyCancels::default();
+        early.remember(7);
+        assert!(!early.handed_over(8), "another request is not affected");
+        assert!(!early.handed_over(7), "7 had its turn before 8: forgotten");
     }
 }
