@@ -479,9 +479,11 @@ impl Default for DbConfig {
     }
 }
 /// Default `limits.max_object_bytes`: the largest object a client legitimately
-/// pushes (a full session recording, 17 MiB — see the constant's derivation).
-/// A lower limit refuses such an item, which then stays on its device only.
-const DEFAULT_MAX_OBJECT_BYTES: usize = unissh_sync::LARGEST_CLIENT_OBJECT_BYTES;
+/// pushes (a full session recording, 17 MiB). The number is owned by the sync
+/// crate (`unissh_sync::LARGEST_CLIENT_OBJECT_BYTES`), which the server does
+/// not link; `tests/sync_http.rs` holds this default to it. A lower limit
+/// refuses such an item, which then stays on its device only.
+const DEFAULT_MAX_OBJECT_BYTES: usize = 17 * 1024 * 1024;
 
 /// Default `limits.max_body_bytes`: 24 MiB. A push carries its objects
 /// base64-encoded in JSON, so the largest object travelling alone is a request
