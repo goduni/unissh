@@ -269,7 +269,7 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
         session_a.access_token.clone(),
     ));
     let report_a = core_a
-        .sync_now(transport_a, space.clone())
+        .sync_now(transport_a, space.clone(), unissh_ffi::FfiSyncMode::Full)
         .expect("A sync_now should succeed");
     assert!(
         report_a.pushed >= 1,
@@ -288,7 +288,7 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
         session_b.access_token.clone(),
     ));
     let report_b = core_b
-        .sync_now(transport_b, space.clone())
+        .sync_now(transport_b, space.clone(), unissh_ffi::FfiSyncMode::Full)
         .expect("B sync_now should succeed");
     // The membership grant makes B's server-side delta include the shared vault's
     // objects (server delta visibility is grant-scoped at the latest epoch), and B
@@ -332,7 +332,7 @@ fn live_e2e_claim_invite_join_and_two_device_sync() {
         session_a2.access_token,
     ));
     let report_a2 = core_a2
-        .sync_now(transport_a2, space)
+        .sync_now(transport_a2, space, unissh_ffi::FfiSyncMode::Full)
         .expect("A2 sync_now should succeed");
     assert!(
         report_a2.applied >= 1,
@@ -503,7 +503,7 @@ fn live_e2e_escrow_recovery() {
         session_a.access_token.clone(),
     ));
     let report_a = core_a
-        .sync_now(transport_a, space.clone())
+        .sync_now(transport_a, space.clone(), unissh_ffi::FfiSyncMode::Full)
         .expect("A sync_now should succeed");
     assert!(
         report_a.pushed >= 1,
@@ -583,7 +583,7 @@ fn live_e2e_escrow_recovery() {
     let transport_c: Arc<dyn unissh_ffi::FfiSyncTransport> =
         Arc::new(HttpSyncTransport::new(base.clone(), session_c.access_token));
     let report_c = core_c
-        .sync_now(transport_c, space)
+        .sync_now(transport_c, space, unissh_ffi::FfiSyncMode::Full)
         .expect("C sync_now should succeed");
     assert!(
         report_c.applied >= 1,

@@ -13,8 +13,8 @@ use zeroize::Zeroizing;
 use crate::error::StorageError;
 use crate::records::{
     AccountStateRecord, AuditEntry, CachePolicy, ConsistencyIssue, ConsistencyKind,
-    ConsistencyReport, ItemRecord, KnownHost, MemberRole, MembershipGrant, MembershipManifest,
-    PinnedMemberKey, SyncTarget, VaultRecord, VaultTrustAnchor,
+    ConsistencyReport, ItemRecord, ItemVersion, KnownHost, MemberRole, MembershipGrant,
+    MembershipManifest, PinnedMemberKey, SyncTarget, VaultRecord, VaultTrustAnchor,
 };
 use crate::schema::{migrate, SCHEMA_VERSION};
 
@@ -500,9 +500,10 @@ impl Storage {
     /// deletion is a record with `tombstone = true` and an incremented version.
     pub fn put_item(&self, it: &ItemRecord) -> Result<(), StorageError> {
         let version = checked_version(it.version)?;
-        // Timestamps are storage-owned: created_at is set only on insert
-        // (preserved on conflict), updated_at is always refreshed. Values from
-        // the passed-in record are ignored.
+        // Timestamps are stamped here, not taken from the record: created_at is
+        // set only on insert (preserved on conflict), updated_at is always
+        // refreshed. The one way to give an item other times is
+        // `set_item_timestamps`, for a copy that must keep its source's.
         let now = now_secs();
         let key_epoch = checked_version(it.key_epoch)?;
         let changed = self.conn.execute(
@@ -542,6 +543,25 @@ impl Storage {
             });
         }
         Ok(())
+    }
+
+    /// Overwrites an item's storage-owned timestamps. They are local metadata
+    /// (not signed, not synced) that [`Self::put_item`] stamps with the current
+    /// time; a copy of an item into another vault uses this to keep the
+    /// original's, so the item does not look newly created. Returns whether the
+    /// item exists.
+    pub fn set_item_timestamps(
+        &self,
+        vault_id: &[u8],
+        item_id: &[u8],
+        created_at: i64,
+        updated_at: i64,
+    ) -> Result<bool, StorageError> {
+        let n = self.conn.execute(
+            "UPDATE items SET created_at = ?3, updated_at = ?4 WHERE vault_id = ?1 AND item_id = ?2",
+            params![vault_id, item_id, created_at, updated_at],
+        )?;
+        Ok(n > 0)
     }
 
     /// Returns an item by (vault_id, item_id), including tombstoned ones.
@@ -984,15 +1004,27 @@ impl Storage {
         Ok(rows)
     }
 
-    /// Dirty items of vaults bound to `tenant`.
-    pub fn list_dirty_bound_items(&self, tenant: &[u8]) -> Result<Vec<ItemRecord>, StorageError> {
+    /// The dirty items of vaults bound to `tenant`, by id and version only (in
+    /// `vault_id`, `item_id` order). The content is not read: a push skips the
+    /// items it will not send without loading them, and fetches the rest one by
+    /// one with [`Self::get_item`].
+    pub fn list_dirty_bound_item_versions(
+        &self,
+        tenant: &[u8],
+    ) -> Result<Vec<ItemVersion>, StorageError> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT i.vault_id, i.item_id, i.item_type, i.content_blob, i.wrapped_item_key, i.version, i.tombstone, i.signature, i.author_pubkey, i.created_at, i.updated_at, i.key_epoch
+            "SELECT i.vault_id, i.item_id, i.version
              FROM items i JOIN vaults v ON i.vault_id = v.vault_id
              WHERE v.sync_tenant = ?1 AND v.sync_target = ?2 AND i.dirty = 1 ORDER BY i.vault_id, i.item_id",
         )?;
         let rows = stmt
-            .query_map(params![tenant, SyncTarget::Cloud.to_i64()], map_item_row)?
+            .query_map(params![tenant, SyncTarget::Cloud.to_i64()], |row| {
+                Ok(ItemVersion {
+                    vault_id: row.get(0)?,
+                    item_id: row.get(1)?,
+                    version: get_u64(row, 2)?,
+                })
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -1032,23 +1064,51 @@ impl Storage {
         Ok(rows)
     }
 
-    /// Clears the dirty flag on all objects of vaults bound to `tenant` — after
-    /// a successful push. The bulk clear is safe: local edits and sync run under
-    /// the same lock, and nothing mutates between list+push and clear.
-    pub fn clear_dirty_for_tenant(&self, tenant: &[u8]) -> Result<(), StorageError> {
+    /// Clears the dirty flag of ONE vault record — after the transport accepted it.
+    /// `sync_push` clears batch by batch, so what a partly-failed push did deliver
+    /// is not sent again.
+    pub fn clear_vault_dirty(&self, vault_id: &[u8]) -> Result<(), StorageError> {
         self.conn.execute(
-            "UPDATE vaults SET dirty = 0 WHERE sync_tenant = ?1",
-            params![tenant],
+            "UPDATE vaults SET dirty = 0 WHERE vault_id = ?1",
+            params![vault_id],
         )?;
-        for table in ["items", "membership_manifests", "membership_grants"] {
-            self.conn.execute(
-                &format!(
-                    "UPDATE {table} SET dirty = 0 WHERE vault_id IN \
-                     (SELECT vault_id FROM vaults WHERE sync_tenant = ?1)"
-                ),
-                params![tenant],
-            )?;
-        }
+        Ok(())
+    }
+
+    /// Clears the dirty flag of ONE item (see [`Self::clear_vault_dirty`]).
+    pub fn clear_item_dirty(&self, vault_id: &[u8], item_id: &[u8]) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE items SET dirty = 0 WHERE vault_id = ?1 AND item_id = ?2",
+            params![vault_id, item_id],
+        )?;
+        Ok(())
+    }
+
+    /// Clears the dirty flag of ONE membership manifest (see [`Self::clear_vault_dirty`]).
+    pub fn clear_manifest_dirty(
+        &self,
+        vault_id: &[u8],
+        key_epoch: u64,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE membership_manifests SET dirty = 0 WHERE vault_id = ?1 AND key_epoch = ?2",
+            params![vault_id, checked_version(key_epoch)?],
+        )?;
+        Ok(())
+    }
+
+    /// Clears the dirty flag of ONE membership grant (see [`Self::clear_vault_dirty`]).
+    pub fn clear_grant_dirty(
+        &self,
+        vault_id: &[u8],
+        member_pubkey: &[u8],
+        key_epoch: u64,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE membership_grants SET dirty = 0
+             WHERE vault_id = ?1 AND member_pubkey = ?2 AND key_epoch = ?3",
+            params![vault_id, member_pubkey, checked_version(key_epoch)?],
+        )?;
         Ok(())
     }
 
@@ -1815,7 +1875,7 @@ mod purge_tests {
         s.mark_vault_dirty(&local).unwrap();
         s.mark_item_dirty(&local, b"item").unwrap();
         assert!(s.list_dirty_bound_vaults(b"").unwrap().is_empty());
-        assert!(s.list_dirty_bound_items(b"").unwrap().is_empty());
+        assert!(s.list_dirty_bound_item_versions(b"").unwrap().is_empty());
     }
 
     #[test]

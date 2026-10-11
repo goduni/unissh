@@ -8,15 +8,21 @@ use crate::ids;
 use crate::state::AppState;
 use crate::store::sync_repo::PushObj;
 use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-pub fn routes() -> Router<AppState> {
+/// `max_body` (`limits.max_body_bytes`) is the body limit of the push route — the
+/// one route that carries objects. Every other route keeps the framework's 2 MiB
+/// default, so the large limit is never reachable without a session: `AuthCtx`
+/// is extracted before `push` reads its body.
+pub fn routes(max_body: usize) -> Router<AppState> {
     Router::new()
         .route("/v1/sync/push", post(push))
+        .layer(DefaultBodyLimit::max(max_body))
         .route("/v1/sync/delta", get(delta))
         .route("/v1/sync/version", get(version))
 }
@@ -135,10 +141,13 @@ async fn push(
     // pubkey): the idem lookup is key-only, so without this a key collision across
     // accounts/devices could replay ANOTHER principal's stored response. Same
     // principal+body still hashes stable → legitimate retries stay idempotent.
-    let mut hin = Vec::with_capacity(auth.device_ed25519().len() + body.len());
-    hin.extend_from_slice(auth.device_ed25519());
-    hin.extend_from_slice(&body);
-    let req_hash = ids::sha256(&hin);
+    // Hashed in two updates — the same digest as over the concatenation, without
+    // a second copy of a body that may be `max_body_bytes` long.
+    let req_hash: [u8; 32] = Sha256::new()
+        .chain_update(auth.device_ed25519())
+        .chain_update(&body)
+        .finalize()
+        .into();
     let res = state
         .store
         .push_objects(idem.as_deref(), &req_hash, items, state.now())
@@ -174,6 +183,12 @@ struct DeltaResp {
 }
 
 /// `GET /v1/sync/delta` → delta_since (§5.1): seq>cursor, ASC, pagination.
+///
+/// `has_more` says a row remains after this page (which may be shorter than
+/// `limit`: it is also cut at a byte budget, though never below one row), and
+/// `next_cursor` is then greater than the request's `cursor` — a client that
+/// follows the two terminates. Without more rows `next_cursor` is the last row
+/// of the page, or the request's cursor on an empty page.
 async fn delta(
     auth: AuthCtx,
     State(state): State<AppState>,
@@ -187,25 +202,28 @@ async fn delta(
     // A1: membership-scoped — a device sees only vaults where it is owner/member.
     // Instance-admin is NOT a bypass (delta does not consult is_instance_admin).
     // With `?vault=<hex>`, the same scope is applied but restricted to one vault.
-    let rows = match q.vault.as_deref() {
-        Some(vhex) => {
-            let vid = hex::decode(vhex.trim()).map_err(|e| {
+    let vault =
+        match q.vault.as_deref() {
+            Some(vhex) => Some(hex::decode(vhex.trim()).map_err(|e| {
                 AppError::malformed(format!("invalid vault id (expected hex): {e}"))
-            })?;
-            state
-                .store
-                .delta_since_vault(cursor, limit, auth.device_ed25519(), state.now(), &vid)
-                .await?
-        }
-        None => {
-            state
-                .store
-                .delta_since(cursor, limit, auth.device_ed25519(), state.now())
-                .await?
-        }
-    };
-    let (has_more, next_cursor) = crate::http::page(&rows, limit, cursor, |r| r.server_seq);
-    let items = rows
+            })?),
+            None => None,
+        };
+    // A page is cut by rows AND by bytes (`limits.delta_max_page_bytes`): objects
+    // reach `max_object_bytes`, so a row count alone does not bound a response.
+    let page = state
+        .store
+        .delta_page(
+            cursor,
+            limit,
+            state.config.limits.delta_max_page_bytes,
+            auth.device_ed25519(),
+            state.now(),
+            vault.as_deref(),
+        )
+        .await?;
+    let items = page
+        .rows
         .into_iter()
         .map(|r| DeltaItem {
             server_seq: r.server_seq,
@@ -215,8 +233,8 @@ async fn delta(
     metrics::counter!("unissh_delta_requests_total").increment(1);
     Ok(Json(DeltaResp {
         items,
-        has_more,
-        next_cursor,
+        has_more: page.has_more,
+        next_cursor: page.next_cursor,
     }))
 }
 

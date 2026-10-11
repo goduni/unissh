@@ -1,4 +1,6 @@
-//! Shared installation for escrow and Emergency-Kit recovery. Call on a blocking thread.
+//! Shared installation for escrow and Emergency-Kit recovery. Call on a blocking thread,
+//! inside `biometric::installing_keyset`: a recovered keyset may be wrapped under another
+//! password, and nothing sealed for the one it replaced may stay behind.
 
 use crate::error::{ApiError, ApiResult};
 use unissh_ffi::Core;
@@ -9,15 +11,11 @@ pub(super) fn install_keyset(
     password: Option<String>,
     secret_key_hex: String,
     save_secret_key: impl FnOnce(&str) -> ApiResult<()>,
-    biometric_blob: &std::path::Path,
 ) -> ApiResult<()> {
     // Authenticate and open storage FIRST. A wrong credential or another
     // identity's DB must not replace this device's remembered Secret Key.
     core.unlock_from_server_blob(blob, password, secret_key_hex.clone())
         .map_err(ApiError::from)?;
-    // A recovered keyset may be wrapped under another password: nothing sealed
-    // for the one it replaced may stay behind (see `biometric`).
-    crate::biometric::forget_after_keyset_change(biometric_blob);
     // Save before device enrollment/login: a network failure after installation
     // must still leave an instance that can unlock after a restart. As with
     // pairing, an unavailable keychain requires manual entry, not a DB rollback.
@@ -59,7 +57,6 @@ mod tests {
                 saved = Some(key.to_owned());
                 Ok(())
             },
-            &target.path().join("biometric-unlock.bin"),
         )
         .unwrap();
         assert_eq!(saved.as_deref(), Some(secret.as_str()));
@@ -76,7 +73,6 @@ mod tests {
             Some("wrong".into()),
             secret,
             |_| { panic!("must not overwrite keychain on failed authentication") },
-            &clean.path().join("biometric-unlock.bin"),
         )
         .is_err());
         assert!(!clean.path().join("instance.db").exists());
@@ -89,14 +85,9 @@ mod tests {
         let blob = std::fs::read(source.path().join("instance.keyset.bin")).unwrap();
         let target = tempfile::tempdir().unwrap();
         let recovered = core(target.path());
-        install_keyset(
-            &recovered,
-            blob,
-            None,
-            secret.clone(),
-            |_| Err(ApiError::other("unavailable")),
-            &target.path().join("biometric-unlock.bin"),
-        )
+        install_keyset(&recovered, blob, None, secret.clone(), |_| {
+            Err(ApiError::other("unavailable"))
+        })
         .unwrap();
         recovered.lock();
         drop(recovered);

@@ -19,8 +19,12 @@
 //! (which loads the new key). The cache is also where a stale key would
 //! otherwise have survived until the next lock.
 //!
-//! The set is resolved from the unlocked core on every request, so a toggle
-//! takes effect on the next `ssh-add -l` and a locked core offers nothing.
+//! The set is resolved from the unlocked core, so a toggle takes effect on the
+//! next `ssh-add -l` and a locked core offers nothing. A listing is reused
+//! for exactly as long as nothing it was resolved from has changed (the share
+//! list, and the storage's revision of vaults, items and certificates), so a
+//! program asking in a loop cannot keep the core's lock busy reopening vaults;
+//! a signature never relies on a reused listing (it resolves again, below).
 //!
 //! A shared key with an attached certificate (`<key>.cert`) is offered twice:
 //! the key, then the certificate, so certificate logins work from the shell.
@@ -29,18 +33,22 @@
 //! certify this key is not offered.
 //!
 //! Every signature is approved first ([`LocalAgent`]): the registered
-//! [`AgentApprover`] is asked with the key and its vault, the user the payload
+//! [`AgentApprover`](crate::AgentApprover) is asked with the key and its
+//! vault, the user the payload
 //! would log in as and the calling process (as the OS reported it; advisory).
-//! At most [`MAX_PENDING_PROMPTS`] prompts are open at once, and a client that
-//! hangs up withdraws its prompt. Only then is the key loaded into the embedded
-//! agent (if it is not cached already) and the signature made there; the
-//! private key never leaves it. The share is checked again after the approval,
-//! so a key unshared, replaced or locked away while the prompt was open is not
-//! used.
+//! One prompt is open at a time, forwarded agents' included, and further
+//! requests wait their turn in the core's one line (`crate::approvals`); a
+//! connection that ends, however it ends, withdraws its prompt or gives up its
+//! place, and a revoke ([`Core::revoke_system_agent_requests`]) ends every
+//! request there is ([`limits`] bounds the connections). Only once approved
+//! is the key loaded into the embedded agent (if it is not cached already) and
+//! the signature made there; the private key never leaves it. The share is
+//! checked again after the approval, so a key unshared, replaced or locked
+//! away while the prompt was open is not used.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -49,19 +57,18 @@ use unissh_ssh_transport::{
 };
 
 use super::{
-    agent_key_id, attached_certificate, load_key_into_agent, lock_recover, next_agent_sign_id,
-    resolve_vid, userauth_login, AgentApprover, AgentSignOrigin, AgentSignRequest, Core, CoreState,
-    FfiError, InMemoryAgent, Vault, ITEM_TYPE_SSH_KEY,
+    agent_key_id, approval_epoch_if_unlocked, attached_certificate, load_key_into_agent,
+    lock_recover, next_agent_sign_id, resolve_vid, userauth_login, AgentSignOrigin,
+    AgentSignRequest, Approvals, Asker, Connection, Core, CoreState, FfiError, InMemoryAgent,
+    Vault, ITEM_TYPE_SSH_KEY,
 };
+
+mod limits;
+
+use limits::{ConnectionSlot, Stamped};
 
 // Keep the storage slot stable; a format change gets a new key.
 const KEY: &str = "system_agent.shared.v1";
-
-/// How many signature prompts the system agent may have open at once, across
-/// all connections. Any local program can open connections; beyond this a
-/// request is refused at once instead of holding a thread and stacking yet
-/// another dialog on the person.
-const MAX_PENDING_PROMPTS: usize = 4;
 
 /// One shared key, as stored.
 #[derive(Clone, Serialize, Deserialize)]
@@ -99,7 +106,7 @@ fn write_entries(state: &CoreState, entries: &[Entry]) -> Result<(), FfiError> {
 /// once loaded, and a key replaced by a sync pull would still answer from that
 /// cache. A cached copy that no longer matches the item is evicted here, so
 /// nothing later signs with the old key either.
-fn current_public(
+pub(crate) fn current_public(
     vault: &Vault,
     agent: &mut InMemoryAgent,
     vault_id: &str,
@@ -148,6 +155,36 @@ pub(crate) fn forget(state: &CoreState, vault_id: &str, item_id: Option<&str>) {
     if entries.len() != before && write_entries(state, &entries).is_err() {
         log::warn!("system agent: could not drop the entry of a deleted key");
     }
+}
+
+/// Re-points the entries of a vault that changed id (a local vault moved to a
+/// server: `old` is the id it was shared under, `new` the cloud vault's). The
+/// keys are the same keys under the same item ids, so they stay shared. Run
+/// inside the move's transaction; unlike [`forget`] a storage failure is
+/// returned, so the move rolls back instead of dropping the shares.
+///
+/// A list that does not parse is another matter: it is damaged device-local
+/// state with nothing in it to re-point, and it must not block the move for
+/// good. It is left as it is and the move goes on.
+pub(crate) fn rehome(state: &CoreState, old: &str, new: &str) -> Result<(), FfiError> {
+    let Some(bytes) = state.storage.get_meta(KEY).map_err(FfiError::other)? else {
+        return Ok(());
+    };
+    let Ok(mut entries) = serde_json::from_slice::<Vec<Entry>>(&bytes) else {
+        log::warn!(
+            "system agent: the list of shared keys is unreadable; a moved vault's keys are not carried over"
+        );
+        return Ok(());
+    };
+    let mut changed = false;
+    for entry in entries.iter_mut().filter(|e| e.vault_id == old) {
+        new.clone_into(&mut entry.vault_id);
+        changed = true;
+    }
+    if changed {
+        write_entries(state, &entries)?;
+    }
+    Ok(())
 }
 
 /// A shared entry whose key is still the one it was shared for.
@@ -205,43 +242,70 @@ fn resolve(state: &mut CoreState) -> Vec<Resolved> {
 /// nothing while locked.
 struct SharedKeys {
     state: Arc<Mutex<Option<CoreState>>>,
+    /// The last listing, stamped with what it was resolved from: the stored
+    /// share list and the storage's revision.
+    listed: Stamped<(Vec<u8>, [u64; 2]), Vec<OfferedKey>>,
+}
+
+/// The identities `shared` amounts to: each key, then its certificate.
+fn identities(shared: Vec<Resolved>) -> Vec<OfferedKey> {
+    let mut offered = Vec::new();
+    for Resolved {
+        entry,
+        public,
+        certificate,
+    } in shared
+    {
+        let key_id = agent_key_id(&entry.vault_id, &entry.item_id);
+        offered.push(OfferedKey {
+            key_id: key_id.clone(),
+            public_openssh: public,
+            comment: entry.item_id.clone(),
+        });
+        if let Some(certificate) = certificate {
+            offered.push(OfferedKey {
+                key_id,
+                public_openssh: certificate,
+                comment: entry.item_id,
+            });
+        }
+    }
+    offered
+}
+
+impl SharedKeys {
+    /// The identities offered by the unlocked core `state`, resolved from its
+    /// vaults unless nothing that resolution reads has changed since the last
+    /// one.
+    fn listing(&self, state: &mut CoreState) -> Vec<OfferedKey> {
+        // Two cheap reads cover every input of `resolve`. The stored share
+        // list is a `meta` row, which the revision does not count, so it is
+        // part of the stamp itself: a toggle is never served stale. The
+        // revision moves with every write to a vault, an item or a
+        // certificate's record (a verified sync pull included), and belongs to
+        // this unlock alone: after a lock and an unlock nothing matches.
+        let stamp = state
+            .storage
+            .get_meta(KEY)
+            .ok()
+            .zip(state.storage.automation_revision().ok());
+        let Some((shared, revision)) = stamp else {
+            return identities(resolve(state));
+        };
+        self.listed
+            .get_or((shared.unwrap_or_default(), revision), || {
+                identities(resolve(state))
+            })
+    }
 }
 
 impl AgentKeys for SharedKeys {
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "the guard must cover the unlocked check and the shared-key resolution atomically"
-    )]
+    /// Under the core's lock from the unlocked check to the end of the
+    /// resolution; a locked core offers nothing, whatever was listed before.
     fn offered(&self) -> Vec<OfferedKey> {
-        let shared = {
-            let mut guard = lock_recover(&self.state);
-            let Some(state) = guard.as_mut() else {
-                return Vec::new();
-            };
-            resolve(state)
-        };
-        let mut offered = Vec::new();
-        for Resolved {
-            entry,
-            public,
-            certificate,
-        } in shared
-        {
-            let key_id = agent_key_id(&entry.vault_id, &entry.item_id);
-            offered.push(OfferedKey {
-                key_id: key_id.clone(),
-                public_openssh: public,
-                comment: entry.item_id.clone(),
-            });
-            if let Some(certificate) = certificate {
-                offered.push(OfferedKey {
-                    key_id,
-                    public_openssh: certificate,
-                    comment: entry.item_id,
-                });
-            }
-        }
-        offered
+        lock_recover(&self.state)
+            .as_mut()
+            .map_or_else(Vec::new, |state| self.listing(state))
     }
 
     /// Signs with a key that is still shared, still the same key (or still
@@ -283,39 +347,18 @@ impl AgentKeys for SharedKeys {
 
 /// Puts each system-agent signature of one connection to the registered
 /// approver, without holding any core lock while the person decides.
+///
+/// Lock order: the line (for its lock epoch) and then the core's `state` are
+/// each taken alone and released, before the request joins the line;
+/// `connection` has its own rule ([`Connection`]).
 struct SystemApproval {
-    approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
+    /// The approver and the line every request waits in for the one prompt.
+    approvals: Arc<Approvals>,
+    /// The line's system-agent epoch when this connection's listener started.
+    epoch: u64,
     state: Arc<Mutex<Option<CoreState>>>,
-    /// Prompts open across every connection; see [`MAX_PENDING_PROMPTS`].
-    in_flight: Arc<AtomicUsize>,
-    connection: Mutex<Connection>,
-}
-
-/// This connection's open prompt, if any, and whether its client left.
-#[derive(Default)]
-struct Connection {
-    closed: bool,
-    pending: Option<u64>,
-}
-
-/// One of the [`MAX_PENDING_PROMPTS`] slots, given back on drop.
-struct PromptSlot<'a>(&'a AtomicUsize);
-
-impl<'a> PromptSlot<'a> {
-    fn take(in_flight: &'a AtomicUsize) -> Option<Self> {
-        in_flight
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < MAX_PENDING_PROMPTS).then_some(n + 1)
-            })
-            .ok()
-            .map(|_| Self(in_flight))
-    }
-}
-
-impl Drop for PromptSlot<'_> {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
+    /// This connection's request in the line, and whether its client left.
+    connection: Connection,
 }
 
 impl SystemApproval {
@@ -349,54 +392,59 @@ impl SystemApproval {
 
 impl LocalApproval for SystemApproval {
     fn approve(&self, key: &OfferedKey, caller: &AgentCaller, blob: &[u8]) -> bool {
-        let Some(approver) = lock_recover(&self.approver).clone() else {
+        if !self.approvals.registered() {
             log::info!("system agent: no approver registered; signature refused");
             return false;
-        };
-        let Some(_slot) = PromptSlot::take(&self.in_flight) else {
-            log::warn!("system agent: too many signature prompts pending; request refused");
+        }
+        // A listener may outlive a lock of the core (only its host stops it).
+        let Some(locks) = approval_epoch_if_unlocked(&self.approvals, &self.state) else {
+            log::info!("system agent: signature refused (vault locked)");
             return false;
         };
         let vault = self.vault_name(key);
         let id = next_agent_sign_id();
-        {
-            let mut connection = lock_recover(&self.connection);
-            if connection.closed {
-                return false;
-            }
-            connection.pending = Some(id);
+        // Named before it joins the line, so that `abandon` can take it out
+        // of the line as well as off the screen.
+        if !self.connection.begin(id) {
+            return false;
         }
         let login = userauth_login(blob);
-        let approved = approver.approve(AgentSignRequest {
-            id,
-            origin: AgentSignOrigin::SystemAgent {
-                pid: caller.pid,
-                executable: caller.executable.clone(),
+        // Blocks until this request is at the front of the line and answered.
+        // `gone` closes the gap between the check above and joining: `abandon`
+        // marks the connection closed before it withdraws, so a request it
+        // did not find in the line finds the connection closed at the door.
+        let approved = self.approvals.ask(
+            AgentSignRequest {
+                id,
+                origin: AgentSignOrigin::SystemAgent {
+                    pid: caller.pid,
+                    executable: caller.executable.clone(),
+                },
+                host: String::new(),
+                key: key.comment.clone(),
+                vault,
+                user: login
+                    .as_ref()
+                    .map(|(user, _)| user.clone())
+                    .unwrap_or_default(),
+                target: login
+                    .map(|(user, service)| format!("{user}@{service}"))
+                    .unwrap_or_default(),
+                waiting: 0,
             },
-            host: String::new(),
-            key: key.comment.clone(),
-            vault,
-            user: login
-                .as_ref()
-                .map(|(user, _)| user.clone())
-                .unwrap_or_default(),
-            target: login
-                .map(|(user, service)| format!("{user}@{service}"))
-                .unwrap_or_default(),
-        });
-        lock_recover(&self.connection).pending = None;
+            Asker::System {
+                epoch: self.epoch,
+                locks,
+                gone: &|| self.connection.closed(),
+            },
+        );
+        self.connection.finish();
         approved
     }
 
     fn abandon(&self) {
-        let pending = {
-            let mut connection = lock_recover(&self.connection);
-            connection.closed = true;
-            connection.pending.take()
-        };
-        if let (Some(id), Some(approver)) = (pending, lock_recover(&self.approver).clone()) {
-            approver.cancel(id);
-        }
+        // Waiting in line, it gives up its place; on screen, it is withdrawn.
+        self.connection.close(&self.approvals);
     }
 }
 
@@ -405,42 +453,99 @@ impl LocalApproval for SystemApproval {
 #[derive(Clone)]
 pub struct SystemAgent {
     keys: Arc<SharedKeys>,
-    approver: Arc<Mutex<Option<Arc<dyn AgentApprover>>>>,
-    in_flight: Arc<AtomicUsize>,
+    approvals: Arc<Approvals>,
+    /// The line's system-agent epoch when this handle was made: its requests
+    /// are refused once [`Core::revoke_system_agent_requests`] has moved it.
+    epoch: u64,
+    /// Connections being served; see [`limits::MAX_CONNECTIONS`].
+    connections: Arc<AtomicUsize>,
+    /// Whether the last connection was turned away for want of a slot, so
+    /// that a burst of them is logged once.
+    crowded: Arc<AtomicBool>,
+}
+
+/// Withdraws a connection's prompt when its serving ends, whichever way: the
+/// client closed, went idle, or the listener dropped the connection mid-prompt
+/// (a lock, a stop), which no read on the stream would ever report.
+struct Withdraw(Arc<SystemApproval>);
+
+impl Drop for Withdraw {
+    fn drop(&mut self) {
+        self.0.abandon();
+    }
 }
 
 impl SystemAgent {
-    /// Serves one client connection until it closes. `caller` is what the
-    /// listener learned about the program on the other end; it is shown in
-    /// every approval prompt of this connection.
-    pub async fn serve<S>(&self, stream: S, caller: AgentCaller)
+    /// Serves one client connection until it closes, goes idle (ten minutes
+    /// without a request) or this future is dropped; any of them withdraws a
+    /// prompt it has open or its place in line. `caller` says what the
+    /// listener can learn about the program on the other end of `stream`; the
+    /// answer is shown in every approval prompt of this connection. Returns at
+    /// once, serving nothing and without asking `caller`, when too many
+    /// connections are open already: the listener then closes the stream.
+    /// Needs the runtime's time driver.
+    pub async fn serve<S>(&self, stream: S, caller: impl FnOnce(&S) -> AgentCaller)
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {
+        let Some(_slot) = ConnectionSlot::take(&self.connections, limits::MAX_CONNECTIONS) else {
+            if !self.crowded.swap(true, Ordering::Relaxed) {
+                log::warn!(
+                    "system agent: too many open connections; closing new ones until one ends"
+                );
+            }
+            return;
+        };
+        self.crowded.store(false, Ordering::Relaxed);
+        // Only now: looking the caller up costs system calls, which a
+        // connection that is turned away must not be able to spend.
+        let caller = caller(&stream);
+        let approval = Arc::new(SystemApproval {
+            approvals: self.approvals.clone(),
+            epoch: self.epoch,
+            state: self.keys.state.clone(),
+            connection: Connection::default(),
+        });
+        let _withdraw = Withdraw(approval.clone());
         let policy = Arc::new(LocalAgent {
             keys: self.keys.clone(),
-            approval: Arc::new(SystemApproval {
-                approver: self.approver.clone(),
-                state: self.keys.state.clone(),
-                in_flight: self.in_flight.clone(),
-                connection: Mutex::new(Connection::default()),
-            }),
+            approval,
             caller,
         });
-        unissh_ssh_transport::serve_agent(policy, stream).await;
+        unissh_ssh_transport::serve_agent_until_idle(policy, stream, limits::IDLE_TIMEOUT).await;
     }
 }
 
 impl Core {
-    /// The system agent over this core. Cheap; resolves keys per request.
+    /// The system agent over this core, with its own connection limit: one
+    /// per listener, made when the listener starts. Its signature requests
+    /// wait in the core's one line with everyone else's, and are refused once
+    /// [`Core::revoke_system_agent_requests`] has been called after it was
+    /// made. Cheap.
     pub fn system_agent(&self) -> SystemAgent {
         SystemAgent {
             keys: Arc::new(SharedKeys {
                 state: self.state.clone(),
+                listed: Stamped::new(),
             }),
-            approver: self.approver.clone(),
-            in_flight: Arc::new(AtomicUsize::new(0)),
+            approvals: self.approver.clone(),
+            epoch: self.approver.system_epoch(),
+            connections: Arc::new(AtomicUsize::new(0)),
+            crowded: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Ends every signature request of the system agent, at once: the prompt
+    /// on screen is withdrawn at the approver, the requests waiting behind it
+    /// are refused without ever being shown, and any further request of a
+    /// [`SystemAgent`] made before this call is refused too. For the host to
+    /// call when its listener stops (vault lock, screen lock, sleep, exit, the
+    /// agent switched off); the next listener takes a fresh
+    /// [`Core::system_agent`]. Forwarded agents' requests are not affected;
+    /// [`Core::lock`] ends those too.
+    /// Does not take the core's lock, so it is safe to call ahead of a lock.
+    pub fn revoke_system_agent_requests(&self) {
+        self.approver.revoke_system();
     }
 
     /// Tells the core where this process's own system agent listens (or

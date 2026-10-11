@@ -9,7 +9,6 @@ import type {
   AuthMethod,
   BiometricStatus,
   BiometricUnlockOutcome,
-  KeysetWipe,
   PresenceCheck,
   BroadcastEvent,
   ConnectionProfile,
@@ -109,11 +108,15 @@ export const unlock = (password: string | null, secretKeyHex: string) =>
   invoke<void>("unlock", { password, secretKeyHex });
 export const lock = () => invoke<void>("lock");
 export const isUnlocked = () => invoke<boolean>("is_unlocked");
+/** Resolves to whether biometric unlock was on and has been turned off by the
+ *  change (its stored password belonged to the old one). What this cannot say
+ *  — the stored password could not be erased, or a change that failed had
+ *  already turned it off — arrives as an event instead (see App.tsx). */
 export const changePassword = (
   oldPassword: string | null,
   newPassword: string | null,
   secretKeyHex: string,
-) => invoke<KeysetWipe>("change_password", { oldPassword, newPassword, secretKeyHex });
+) => invoke<boolean>("change_password", { oldPassword, newPassword, secretKeyHex });
 export const accountId = () => invoke<string>("account_id");
 
 // ── vaults ─────────────────────────────────────────────────────
@@ -778,19 +781,29 @@ export const keychainDeleteSecretKey = () => invoke<void>("keychain_delete_secre
 // it). It never comes back out: the biometric unlock reads, unseals and uses it
 // entirely in Rust.
 /** `withSecretKey`: also say whether the Secret Key is remembered when nothing
- *  is stored (Settings, the presence gate). Without it the password unlock
- *  screen never waits on a keychain read it does not need. */
+ *  is stored (Settings, the presence gate). Without it — the password unlock
+ *  screen's question — nothing stored is answered without asking the platform
+ *  or the keychain at all, and everything but `stored` then reads false. */
 export const biometricStatus = (withSecretKey: boolean) =>
   invoke<BiometricStatus>("biometric_status", { withSecretKey });
 export const biometricEnable = (password: string) => invoke<void>("biometric_enable", { password });
 export const biometricDisable = () => invoke<void>("biometric_disable");
-/** `reason` is the localised line the system prompt shows under the app name. */
-export const biometricUnlock = (reason: string) =>
-  invoke<BiometricUnlockOutcome>("biometric_unlock", { reason });
+/** Before a prompt is asked for: Rust ends the attempt before it and names the
+ *  new one. The number is Rust's — it is only handed back, to the prompt and,
+ *  if the user gives up on it, to `biometricCancel`. */
+export const biometricBegin = () => invoke<number>("biometric_begin");
+/** `attempt` is from `biometricBegin`; `reason` is the localised line the
+ *  system prompt shows under the app name. */
+export const biometricUnlock = (attempt: number, reason: string) =>
+  invoke<BiometricUnlockOutcome>("biometric_unlock", { attempt, reason });
+/** End that biometric attempt ("use the password instead"): its result is
+ *  discarded in Rust and its prompt is closed where the OS can — or never
+ *  shown, if it was not up yet. An attempt that replaced it is left alone. */
+export const biometricCancel = (attempt: number) => invoke<void>("biometric_cancel", { attempt });
 /** The Secret-Key-only startup gate: the presence prompt, then the remembered-
  *  key unlock, both in Rust. Nothing is stored behind the prompt. */
-export const biometricPresenceUnlock = (reason: string) =>
-  invoke<BiometricUnlockOutcome>("biometric_presence_unlock", { reason });
+export const biometricPresenceUnlock = (attempt: number, reason: string) =>
+  invoke<BiometricUnlockOutcome>("biometric_presence_unlock", { attempt, reason });
 /** Show the presence prompt once, before the startup gate is turned on.
  *  Unlocks and stores nothing. */
 export const biometricConfirmPresence = (reason: string) =>
@@ -899,8 +912,10 @@ export const serverBindCloudVault = (vaultId: string, serverId?: string) =>
 // its data stay on this device; any server-side copy is left as-is.
 export const serverUnbindCloudVault = (vaultId: string) =>
   invoke<boolean>("server_unbind_cloud_vault", { vaultId });
-export const serverSyncNow = (serverId?: string) =>
-  invoke<SyncReport>("server_sync_now", { serverId: serverId ?? null });
+/** `retryRefused` (a sync the user asked for by hand) offers the server again the
+ *  items it refused as too large; background syncs leave it off. */
+export const serverSyncNow = (serverId?: string, retryRefused = false) =>
+  invoke<SyncReport>("server_sync_now", { serverId: serverId ?? null, retryRefused });
 /** Full re-pull: reset the pull cursor then sync — recovers vaults that an
  *  incremental sync can't (rejected under a prior identity, cursor already past them). */
 export const serverRepull = (serverId?: string) =>

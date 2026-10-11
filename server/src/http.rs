@@ -15,13 +15,22 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
-/// Cursor-pagination tail shared by `sync::delta` and `admin::objects_list`: given
-/// the fetched page and the requested `limit`, decide `has_more` (the page came back
-/// full) and `next_cursor` (the last row's sequence, or the incoming `cursor` when the
-/// page is empty). The clamp bounds differ per call site (the two MAX limits differ)
-/// and stay at the call site — only this identical tail is shared.
-pub(crate) fn page<T>(rows: &[T], limit: i64, cursor: i64, key: impl Fn(&T) -> i64) -> (bool, i64) {
-    let has_more = i64::try_from(rows.len()) == Ok(limit);
+/// Cursor-pagination tail of `admin::objects_list`. The caller fetches ONE row
+/// more than `limit`; this cuts `rows` back to `limit` and decides `has_more` (a
+/// row remains after the page — not "the page came back full", which sends a
+/// reader after an empty page whenever the total is a multiple of `limit`) and
+/// `next_cursor` (the last row's sequence, or the incoming `cursor` when the page
+/// is empty). `sync::delta` pages the same way, with a byte budget on top — see
+/// `Store::delta_page`.
+pub(crate) fn page<T>(
+    rows: &mut Vec<T>,
+    limit: i64,
+    cursor: i64,
+    key: impl Fn(&T) -> i64,
+) -> (bool, i64) {
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let has_more = rows.len() > limit;
+    rows.truncate(limit);
     let next_cursor = rows.last().map(key).unwrap_or(cursor);
     (has_more, next_cursor)
 }
@@ -56,7 +65,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(modules::oidc::routes())
         .merge(modules::escrow::routes())
         .merge(modules::spaces::routes())
-        .merge(modules::sync::routes())
+        .merge(modules::sync::routes(max_body))
         .merge(modules::vault_meta::routes())
         .merge(modules::policy::routes())
         .merge(modules::pending::routes())
@@ -76,6 +85,10 @@ pub fn build_router(state: AppState) -> Router {
             HeaderName::from_static("unissh-api-version"),
             HeaderValue::from_static("1"),
         ))
+        // The outer cap on any request body. Under it the extractors (`Bytes`,
+        // `Json`) apply axum's own 2 MiB default; only the push route raises
+        // that to `limits.max_body_bytes` (see `modules::sync::routes`), so the
+        // routes that answer without a session never buffer more than 2 MiB.
         .layer(RequestBodyLimitLayer::new(max_body))
         .layer(TraceLayer::new_for_http())
         .with_state(state);

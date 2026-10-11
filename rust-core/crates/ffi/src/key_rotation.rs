@@ -91,6 +91,35 @@ fn save_links(
         .map_err(FfiError::other)
 }
 
+/// Carries this device's rotation links over to a vault that changed id (a
+/// local vault moved to a server keeps its item ids and key material, so each
+/// link still names its candidate and that candidate's fingerprint). Without
+/// it the candidate would read as started on another device — abandon-only.
+/// Run inside the move's transaction: a storage failure is returned and rolls
+/// the move back. Links that do not parse are damaged device-local state with
+/// nothing to carry over; they are left where they are and the move goes on
+/// (the candidate then reads as started elsewhere).
+pub(super) fn rehome(state: &CoreState, old_vid: &[u8], new_vid: &[u8]) -> Result<(), FfiError> {
+    let Some(bytes) = state
+        .storage
+        .get_meta(&meta_key(old_vid))
+        .map_err(FfiError::other)?
+    else {
+        return Ok(());
+    };
+    let Ok(links) = serde_json::from_slice::<BTreeMap<String, Link>>(&bytes) else {
+        log::warn!(
+            "key rotation: the links of a moved vault are unreadable and are not carried over"
+        );
+        return Ok(());
+    };
+    if links.is_empty() {
+        return Ok(());
+    }
+    save_links(state, new_vid, &links)?;
+    save_links(state, old_vid, &BTreeMap::new())
+}
+
 /// SHA256 fingerprint of an SSH key item's public half.
 fn public_fingerprint(item: &DecryptedItem) -> Result<String, FfiError> {
     let mut tmp = InMemoryAgent::new();
@@ -144,6 +173,11 @@ impl Core {
                 });
             }
             store_new_ssh_key(&state.storage, &vault, &vault_id, &candidate_id)?;
+            // The candidate's id is derived, so an earlier candidate of this key
+            // had the same one. If that one is still loaded (it was deleted by a
+            // pull, which unloads nothing), drop it: the verify logins of this
+            // rotation must prove the key just generated.
+            state.agent.remove(&agent_key_id(&vault_id, &candidate_id));
             let fingerprint = public_fingerprint(&require_ssh_key(&vault, &candidate_id)?)?;
             let mut links = load_links(state, &vid)?;
             links.insert(
@@ -202,8 +236,9 @@ impl Core {
                     save_links(state, &vid, &links)
                 });
             // The original's material changed whatever happened after the write:
-            // unload both ids, otherwise this session keeps signing with the old
-            // pair (`load_key_into_agent` short-circuits on `agent.contains`).
+            // unload both ids, so nothing that signs straight from the agent (a
+            // forwarded agent, the system agent) goes on using the old pair. A
+            // connect reloads the key from the item anyway.
             state.agent.remove(&agent_key_id(&vault_id, &key_id));
             state.agent.remove(&agent_key_id(&vault_id, &candidate_id));
             rest
@@ -340,5 +375,218 @@ impl Core {
             out.append(&mut elsewhere);
             Ok(out)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        cert_item_id, evict_replaced_agent_keys, load_key_into_agent, map_transport_err,
+        KeyLoginFailure, ITEM_TYPE_SSH_CERT,
+    };
+    use unissh_ssh_transport::TransportError;
+
+    /// An unlocked core with vault `v` holding the SSH key `key`.
+    fn fixture(dir: &std::path::Path) -> std::sync::Arc<Core> {
+        let core = Core::new(
+            dir.join("i.db").to_string_lossy().into_owned(),
+            dir.join("i.keyset").to_string_lossy().into_owned(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("v".to_owned(), "V".to_owned()).unwrap();
+        core.generate_ssh_key("v".to_owned(), "key".to_owned())
+            .unwrap();
+        core
+    }
+
+    /// Runs `f` on the vault `v` the way a sync pull writes to it: through the
+    /// vault layer, past every facade call that would unload a key.
+    fn behind_the_facade(core: &Core, f: impl FnOnce(&Vault)) {
+        core.with_state_mut(|state| {
+            let vid = resolve_vid(&state.storage, "v");
+            f(&Vault::open(&state.storage, &state.keyset, &vid).map_err(FfiError::other)?);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_connect_signs_with_the_material_the_key_item_holds_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = fixture(dir.path());
+        // Fingerprint of the key a connect would sign with, after loading it.
+        let connect_key = || {
+            core.with_state_mut(|state| {
+                load_key_into_agent(state, "v", "key")?;
+                Ok(state
+                    .agent
+                    .public_key(&agent_key_id("v", "key"))
+                    .map(|k| k.fingerprint(HashAlg::Sha256).to_string()))
+            })
+            .unwrap()
+        };
+        let before = connect_key();
+
+        // A rotation finished on another device arrives: new material, same id.
+        let mut pulled = None;
+        behind_the_facade(&core, |vault| {
+            let (private, _) = unissh_ssh_agent::generate_ed25519_openssh().unwrap();
+            vault
+                .put_item(b"key", ITEM_TYPE_SSH_KEY, private.as_bytes())
+                .unwrap();
+            let item = vault.get_item(b"key").unwrap().unwrap();
+            pulled = Some(public_fingerprint(&item).unwrap());
+        });
+
+        assert_ne!(pulled, before);
+        assert_eq!(connect_key(), pulled);
+    }
+
+    #[test]
+    fn a_pull_unloads_only_the_keys_whose_item_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = fixture(dir.path());
+        core.generate_ssh_key("v".to_owned(), "other".to_owned())
+            .unwrap();
+        core.with_state_mut(|state| {
+            load_key_into_agent(state, "v", "key")?;
+            load_key_into_agent(state, "v", "other")
+        })
+        .unwrap();
+
+        // A rotation finished on another device arrives: new material, same id.
+        behind_the_facade(&core, |vault| {
+            let (private, _) = unissh_ssh_agent::generate_ed25519_openssh().unwrap();
+            vault
+                .put_item(b"key", ITEM_TYPE_SSH_KEY, private.as_bytes())
+                .unwrap();
+        });
+        let loaded = core
+            .with_state_mut(|state| {
+                evict_replaced_agent_keys(state);
+                Ok(["key", "other"].map(|id| state.agent.contains(&agent_key_id("v", id))))
+            })
+            .unwrap();
+
+        // The retired key can no longer sign for a live forwarded agent; the
+        // untouched one still serves the sessions that forward it.
+        assert_eq!(loaded, [false, true]);
+    }
+
+    #[test]
+    fn a_pull_unloads_a_key_whose_certificate_changed() {
+        use unissh_ssh_agent::ssh_key::{certificate, PrivateKey};
+
+        let dir = tempfile::tempdir().unwrap();
+        let core = fixture(dir.path());
+        let akid = agent_key_id("v", "key");
+        // What a connect does: the key and its certificate as the items hold them.
+        let connect = || {
+            core.with_state_mut(|state| load_key_into_agent(state, "v", "key"))
+                .unwrap();
+        };
+        let loaded_after_a_pull = || {
+            core.with_state_mut(|state| {
+                evict_replaced_agent_keys(state);
+                Ok(state.agent.contains(&akid))
+            })
+            .unwrap()
+        };
+        connect();
+        let subject = core
+            .with_state_mut(|state| Ok(state.agent.public_key(&akid)))
+            .unwrap()
+            .unwrap();
+        let (ca, _) = unissh_ssh_agent::generate_ed25519_openssh().unwrap();
+        let ca = PrivateKey::from_openssh(ca.as_bytes()).unwrap();
+        // A certificate for the key; the nonce alone tells two of them apart.
+        let signed = |nonce: u8| {
+            let mut builder = certificate::Builder::new(
+                vec![nonce; 32],
+                subject.key_data().clone(),
+                0,
+                4_000_000_000,
+            )
+            .unwrap();
+            builder.valid_principal("root").unwrap();
+            builder.sign(&ca).unwrap().to_openssh().unwrap()
+        };
+        let cert_id = cert_item_id("key");
+        let pull_certificate = |line: &str| {
+            behind_the_facade(&core, |vault| {
+                vault
+                    .put_item(cert_id.as_bytes(), ITEM_TYPE_SSH_CERT, line.as_bytes())
+                    .unwrap();
+            });
+        };
+
+        // Attached on another device while the key is loaded without one.
+        pull_certificate(&signed(1));
+        let after_attach = loaded_after_a_pull();
+        // A pull that touches neither the key nor its certificate.
+        connect();
+        let after_nothing = loaded_after_a_pull();
+        // Replaced by a renewed certificate for the same key.
+        pull_certificate(&signed(2));
+        let after_replace = loaded_after_a_pull();
+        connect();
+        behind_the_facade(&core, |vault| {
+            vault.delete_item(cert_id.as_bytes()).unwrap();
+        });
+        let after_removal = loaded_after_a_pull();
+
+        // Only the pull that left the certificate alone keeps the key serving a
+        // live forwarded agent; the others would have it offer a stale one.
+        assert_eq!(
+            [after_attach, after_nothing, after_replace, after_removal],
+            [false, true, false, false]
+        );
+    }
+
+    #[test]
+    fn a_key_only_login_failure_carries_its_outcome_as_a_value() {
+        let outcome = |e| KeyLoginFailure::of(&map_transport_err(e));
+        assert_eq!(
+            [
+                outcome(TransportError::KeyRefused),
+                outcome(TransportError::KeyAcceptedMoreAuthRequired),
+                // A failure that says nothing about the key.
+                outcome(TransportError::AuthFailed),
+            ],
+            [
+                Some(KeyLoginFailure::Refused),
+                Some(KeyLoginFailure::AcceptedNeedsMore),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn begin_unloads_an_earlier_candidate_left_in_the_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = fixture(dir.path());
+        let first = core
+            .begin_key_rotation("v".to_owned(), "key".to_owned())
+            .unwrap();
+        let akid = agent_key_id("v", &first);
+        let loaded = || {
+            core.with_state_mut(|state| Ok(state.agent.contains(&akid)))
+                .unwrap()
+        };
+        core.with_state_mut(|state| load_key_into_agent(state, "v", &first))
+            .unwrap();
+        // Abandoned on another device: the tombstone arrives in a pull.
+        behind_the_facade(&core, |vault| {
+            vault.delete_item(first.as_bytes()).unwrap();
+        });
+        assert!(loaded());
+
+        let second = core
+            .begin_key_rotation("v".to_owned(), "key".to_owned())
+            .unwrap();
+
+        assert_eq!(second, first);
+        assert!(!loaded());
     }
 }

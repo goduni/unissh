@@ -2,10 +2,15 @@ import { describe, it, expect } from "vitest";
 import {
   beginStep,
   cancelRun,
+  finishOutlook,
+  hasSharedEndpoint,
+  keyRowRotationActions,
   planRotation,
   recordStep,
   retryTarget,
+  rotationCommitted,
   runSettled,
+  runStep,
   startableSteps,
   startRun,
   stepConnect,
@@ -13,7 +18,7 @@ import {
   type RotationStep,
   type StepResult,
 } from "./keyRotation";
-import type { ConnectionProfile, JumpHost, ProfileAuth } from "@/bridge/types";
+import type { ConnectionProfile, JumpHost, MultiExecResult, ProfileAuth } from "@/bridge/types";
 
 const KEY: ProfileAuth = { type: "key", keyItemId: "k" };
 
@@ -66,9 +71,9 @@ describe("planRotation", () => {
         host("bastion", KEY),
         // hop-only through the saved bastion profile → follows the bastion
         host("db", { type: "promptPassword" }, [refHop("bastion")]),
-        // inline hop with the key, behind an unrelated first hop → that endpoint, over the prefix
-        host("app", { type: "vaultPassword", passwordItemId: "p" }, [inlineHop("edge", "x"), inlineHop("jump", "k")]),
-        // the same inline endpoint again → one target
+        // inline hop with the key, reached directly
+        host("app", { type: "vaultPassword", passwordItemId: "p" }, [inlineHop("jump", "k")]),
+        // the same inline endpoint over the same (empty) route again → one target
         host("cache", { type: "personal" }, [inlineHop("jump", "k")]),
         // a direct host that also hops with the key is a target, not a dependent
         host("web", KEY, [inlineHop("jump", "k")]),
@@ -77,16 +82,49 @@ describe("planRotation", () => {
       "k",
     );
     const J = "ops@jump.example:22";
-    expect(plan.targets.map((t) => [t.id, t.profile?.label ?? null, t.jumps.map((j) => j.host)])).toEqual([
-      ["root@bastion.example:22", "bastion", []],
-      ["root@web.example:22", "web", ["jump.example"]],
-      [J, null, ["edge.example"]],
+    expect(plan.targets.map((t) => [t.id, t.profile?.label ?? null, t.via?.label ?? null])).toEqual([
+      ["root@bastion.example:22", "bastion", null],
+      [`root@web.example:22 via ${J}`, "web", null],
+      [J, null, "app"],
     ]);
     expect(plan.dependents.map((d) => [d.host.label, d.targetIds])).toEqual([
       ["db", ["root@bastion.example:22"]],
       ["app", [J]],
       ["cache", [J]],
     ]);
+    expect(hasSharedEndpoint(plan)).toBe(false);
+  });
+
+  it("keeps the same login behind different routes as separate machines, and one route as one", () => {
+    const at = (name: string, extra: Partial<ConnectionProfile>): ConnectionProfile => ({
+      ...host(name, KEY),
+      host: "10.0.0.5",
+      ...extra,
+    });
+    const socks = { kind: "socks5" as const, host: "px", port: 1080 };
+    const plan = planRotation(
+      [
+        at("prod-db", { jumps: [inlineHop("prod-bastion", "x")] }),
+        at("stage-db", { jumps: [inlineHop("stage-bastion", "x")] }),
+        at("office-db", { proxy: socks }),
+        // the same login over the very route prod-db uses → the same machine
+        at("prod-db-alias", { jumps: [inlineHop("prod-bastion", "x")] }),
+        // the key as a hop: the same hop login behind different first hops
+        host("app", { type: "promptPassword" }, [inlineHop("prod-bastion", "x"), inlineHop("inner", "k")]),
+        host("stage-app", { type: "promptPassword" }, [inlineHop("stage-bastion", "x"), inlineHop("inner", "k")]),
+      ],
+      "v",
+      "k",
+    );
+    expect(plan.targets.map((t) => [t.id, t.profile?.label ?? t.via?.label, t.jumps.map((j) => j.host), t.proxy])).toEqual([
+      ["root@10.0.0.5:22 via ops@prod-bastion.example:22", "prod-db", ["prod-bastion.example"], null],
+      ["root@10.0.0.5:22 via ops@stage-bastion.example:22", "stage-db", ["stage-bastion.example"], null],
+      ["root@10.0.0.5:22 proxy socks5://px:1080", "office-db", [], socks],
+      ["ops@inner.example:22 via ops@prod-bastion.example:22", "app", ["prod-bastion.example"], null],
+      ["ops@inner.example:22 via ops@stage-bastion.example:22", "stage-app", ["stage-bastion.example"], null],
+    ]);
+    // The dialog says so: one machine reached two ways is reported per route.
+    expect(hasSharedEndpoint(plan)).toBe(true);
   });
 
   it("skips hosts that log in with Personal, the system agent or a password, naming the reason", () => {
@@ -112,7 +150,7 @@ describe("planRotation", () => {
 });
 
 describe("rotation run", () => {
-  it("switches every target through deploy, verify and remove", () => {
+  it("switches every target through deploy, verify, remove and confirm", () => {
     const run = drive(startRun(twoHosts()), () => OK);
     expect([kinds(run), runSettled(run)]).toEqual([{ [A]: "switched", [B]: "switched" }, true]);
   });
@@ -154,11 +192,38 @@ describe("rotation run", () => {
     run = recordStep(run, d, "verify", OK);
     expect(kinds(run)).toEqual({ [a]: "switched", [b]: "keptOld", [c]: "failed:deploy", [d]: "keptOld" });
     // b was waiting to remove, d's verify landed after the cancel: both passed verify.
-    expect([run.states[b], run.states[d]]).toEqual([
+    expect([run.states[b], run.states[d], run.verified[d]]).toEqual([
       { kind: "keptOld", after: "verify" },
       { kind: "keptOld", after: "verify" },
+      true,
     ]);
     expect([runSettled(run), retryTarget(run, c)]).toEqual([true, run]);
+  });
+
+  it("does not call a host switched until the old key was seen refused", () => {
+    const stillAccepted: StepResult = { ok: false, error: "old key still accepted" };
+    let run = drive(startRun(twoHosts()), (id, step) => (id === A && step === "confirm" ? stillAccepted : OK));
+    expect([run.states[A], run.verified[A], run.states[B]]).toEqual([
+      { kind: "failed", step: "confirm", error: "old key still accepted" },
+      true,
+      { kind: "switched" },
+    ]);
+    // The retry runs the check again, not the remove.
+    const seen: string[] = [];
+    run = drive(retryTarget(run, A), (id, step) => (seen.push(`${id}:${step}`), OK));
+    expect([seen, run.states[A]]).toEqual([[`${A}:confirm`], { kind: "switched" }]);
+  });
+
+  it("leaves a host unconfirmed when the run is cancelled between remove and the old-key check", () => {
+    // a's check is waiting to be retried, b's remove lands after the cancel
+    let run = startRun(twoHosts());
+    for (const step of ["deploy", "verify"] as const)
+      for (const id of [A, B]) run = recordStep(beginStep(run, id), id, step, OK);
+    run = recordStep(beginStep(run, A), A, "remove", OK);
+    run = recordStep(beginStep(run, A), A, "confirm", { ok: false, error: "x" });
+    run = beginStep(retryTarget(run, A), B);
+    run = recordStep(cancelRun(run), B, "remove", OK);
+    expect(kinds(run)).toEqual({ [A]: "unconfirmed", [B]: "unconfirmed" });
   });
 
   it("resumes a retried host at the step that failed", () => {
@@ -173,7 +238,7 @@ describe("rotation run", () => {
     failVerify = false;
     seen.length = 0;
     run = drive(retryTarget(run, A), answer);
-    expect([seen, run.states[A]]).toEqual([[`${A}:verify`, `${A}:remove`], { kind: "switched" }]);
+    expect([seen, run.states[A]]).toEqual([[`${A}:verify`, `${A}:remove`, `${A}:confirm`], { kind: "switched" }]);
   });
 
   it("never lets a host reach remove without a passed verify, whatever the results", () => {
@@ -216,6 +281,127 @@ describe("rotation run", () => {
   });
 });
 
+describe("finishing", () => {
+  it("counts a machine as safe to finish only once the candidate logged in there", () => {
+    const plan = planRotation([host("a", KEY), host("b", KEY), host("c", KEY)], "v", "k");
+    const [a, b, c] = plan.targets;
+    const run = drive(startRun(plan), (id, step) =>
+      (id === a.id && step === "deploy") || (id === c.id && step === "confirm") ? { ok: false, error: "x" } : OK,
+    );
+    expect([run.states[b.id], finishOutlook(plan, run)]).toEqual([
+      { kind: "switched" },
+      { unproven: [a], oldNotRefused: [c] },
+    ]);
+  });
+
+  it("offers a key in a rotation only the way back into the dialog or abandon, never finish or replace", () => {
+    expect([
+      keyRowRotationActions(undefined),
+      keyRowRotationActions({ startedElsewhere: false }),
+      keyRowRotationActions({ startedElsewhere: true }),
+    ]).toEqual([["start", "replace"], ["continue", "abandon"], ["abandon"]]);
+  });
+
+  it("recognises an interrupted finish: the key item already holds the candidate's key", () => {
+    expect([
+      rotationCommitted("ssh-ed25519 AAAANEW user@laptop", "ssh-ed25519 AAAANEW rotation\n"),
+      rotationCommitted("ssh-ed25519 AAAAOLD user@laptop", "ssh-ed25519 AAAANEW rotation\n"),
+    ]).toEqual([true, false]);
+  });
+});
+
+describe("runStep", () => {
+  const res = (over: Partial<MultiExecResult> = {}): MultiExecResult => ({
+    host: "h",
+    stdout: "",
+    stderr: "",
+    exitStatus: 0,
+    durationMs: 0,
+    timedOut: false,
+    ...over,
+  });
+  const failedLogin = (error: string, keyLogin?: MultiExecResult["keyLogin"]) => res({ exitStatus: -1, error, keyLogin });
+  const REFUSED = failedLogin("the server refused the key", "refused");
+  const NEEDS_MORE = failedLogin("the server accepted the key but requires further authentication", "acceptedNeedsMore");
+  // A hop that failed, the network, a lock: says nothing about the key.
+  const UNREACHABLE = failedLogin("connection reset");
+  const KEYS = { old: "ssh-ed25519 AAAAOLD", cand: "ssh-ed25519 AAAACAND" };
+  const PASSED = { ok: true };
+  const fails = (failure: object) => ({ ok: false, failure });
+
+  /** Run `step`, answering each exec by the login it was made with. */
+  async function run(step: RotationStep, answers: Partial<Record<RotationStep, MultiExecResult>>, resumed = false) {
+    const logins: RotationStep[] = [];
+    const out = await runStep(step, KEYS, {
+      resumed,
+      exec: async (as) => {
+        logins.push(as);
+        return answers[as] ?? null;
+      },
+    });
+    return { out, logins };
+  }
+
+  it("counts the candidate as proven when the server takes it and asks for a second factor", async () => {
+    const verify = async (r: MultiExecResult) => (await run("verify", { verify: r })).out;
+    expect([await verify(res()), await verify(NEEDS_MORE), await verify(REFUSED)]).toEqual([
+      PASSED,
+      PASSED,
+      fails({ kind: "error", message: "the server refused the key" }),
+    ]);
+  });
+
+  it("says what a remove left behind, and makes no old-key login of its own", async () => {
+    const remove = async (r: MultiExecResult) => run("remove", { remove: r });
+    const clean = await remove(res());
+    expect([
+      clean.out,
+      clean.logins,
+      (await remove(res({ exitStatus: 3 }))).out,
+      (await remove(res({ exitStatus: 4 }))).out,
+      (await remove(res({ exitStatus: 1, stderr: "new key is not in authorized_keys\n" }))).out,
+    ]).toEqual([
+      PASSED,
+      ["remove"],
+      fails({ kind: "oldKeyStillPresent" }),
+      fails({ kind: "noAuthorizedKeys" }),
+      fails({ kind: "error", message: "new key is not in authorized_keys" }),
+    ]);
+  });
+
+  it("on a host that wants a second factor, passes remove only once the old key is refused", async () => {
+    const remove = async (oldKey: MultiExecResult) => (await run("remove", { remove: NEEDS_MORE, confirm: oldKey })).out;
+    expect([await remove(REFUSED), await remove(NEEDS_MORE), await remove(UNREACHABLE)]).toEqual([
+      PASSED,
+      fails({ kind: "removeNeedsSecondFactor" }),
+      // Not "remove it by hand": nobody learned whether the old key still works.
+      fails({ kind: "oldKeyCheckFailed", message: "connection reset" }),
+    ]);
+  });
+
+  it("passes the old-key check only on a refusal, and tells a key still accepted from a check that did not run", async () => {
+    const confirm = async (r: MultiExecResult) => (await run("confirm", { confirm: r })).out;
+    expect([await confirm(REFUSED), await confirm(res()), await confirm(NEEDS_MORE), await confirm(UNREACHABLE)]).toEqual([
+      PASSED,
+      fails({ kind: "oldKeyStillAccepted" }),
+      fails({ kind: "oldKeyStillAccepted" }),
+      fails({ kind: "oldKeyCheckFailed", message: "connection reset" }),
+    ]);
+  });
+
+  it("when continuing, deploys with the old key only where the candidate is not accepted yet", async () => {
+    expect([
+      await run("deploy", { verify: NEEDS_MORE }, true),
+      await run("deploy", { verify: REFUSED, deploy: res() }, true),
+      await run("deploy", { deploy: res() }),
+    ]).toEqual([
+      { out: PASSED, logins: ["verify"] },
+      { out: PASSED, logins: ["verify", "deploy"] },
+      { out: PASSED, logins: ["deploy"] },
+    ]);
+  });
+});
+
 describe("stepConnect", () => {
   it("reaches a target through hops that already verified with the candidate, and proves the candidate key-only", () => {
     const bastion = { ...host("bastion", KEY), proxy: { kind: "socks5" as const, host: "px", port: 1080 } };
@@ -224,9 +410,9 @@ describe("stepConnect", () => {
       "v",
       "k",
     );
-    const DB = "root@db.example:22";
+    const DB = "root@db.example:22 via root@bastion.example:22 > ops@mid.example:22 proxy socks5://px:1080";
     let run = startRun(plan);
-    run = { ...run, verified: { "root@bastion.example:22": true } };
+    run = { ...run, verified: { "root@bastion.example:22 proxy socks5://px:1080": true } };
     const old = { type: "agent", vaultId: "v", keyItemId: "k" };
     const cand = { type: "agent", vaultId: "v", keyItemId: "cand" };
     const deploy = stepConnect(plan, run, DB, "deploy", "cand");
@@ -246,5 +432,16 @@ describe("stepConnect", () => {
     ]);
     const verify = stepConnect(plan, run, DB, "verify", "cand");
     expect([verify.auth, verify.publickeyOnly]).toEqual([cand, true]);
+  });
+
+  it("checks the old key by a key-only login with it, through hops that already switched", () => {
+    const plan = planRotation([host("bastion", KEY), host("db", KEY, [refHop("bastion")])], "v", "k");
+    const run = { ...startRun(plan), verified: { "root@bastion.example:22": true as const } };
+    const confirm = stepConnect(plan, run, "root@db.example:22 via root@bastion.example:22", "confirm", "cand");
+    expect([confirm.auth, confirm.publickeyOnly, confirm.jumps.map((j) => j.auth)]).toEqual([
+      { type: "agent", vaultId: "v", keyItemId: "k" },
+      true,
+      [{ type: "agent", vaultId: "v", keyItemId: "cand" }],
+    ]);
   });
 });

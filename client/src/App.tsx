@@ -16,12 +16,13 @@ import { designPx, rem, ROOT_FONT_PX, rootFontPx, TEXT } from "@/theme/tokens";
 import * as api from "@/bridge/api";
 import { useApp, flushTerminalWorkspace } from "@/store/app";
 import { useCtx } from "@/store/ctx";
-import { useTranslation } from "@/i18n";
+import { toast } from "@/store/toast";
+import { i18n, useTranslation } from "@/i18n";
 import { Icon } from "@/components/primitives";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { Sidebar, TitleBar, WindowControls } from "@/shell/Shell";
 import { ResizeEdges, useWindowControls } from "@/shell/WindowChrome";
-import { isDesktopOs, osPlatform } from "@/bridge/platform";
+import { biometricMethod, isDesktopOs, osPlatform } from "@/bridge/platform";
 import { chromeBarHeight } from "@/shell/windowControls";
 import { handleAppShortcut } from "@/support/appShortcuts";
 import { createSystemLockWatcher, handleSystemLockEvent } from "@/support/systemLock";
@@ -138,7 +139,47 @@ function LockWarnBanner({ sec, onStay }: { sec: number; onStay: () => void }) {
   );
 }
 
+/**
+ * The prompts something outside the window is blocked on: a signature an agent
+ * was asked for, a command an MCP client wants to run, a one-time code a
+ * server wants mid-connection. Each waits on a timer for an answer only this
+ * window can give, so a prompt that is not mounted is a request refused
+ * unseen.
+ *
+ * Mounted once, beside the shell rather than inside it: the phone and the
+ * desktop shell are two separate trees, and a host listed in one and
+ * forgotten in the other is exactly how desktop once lost the agent prompt.
+ *
+ * Under `unlocked`, not `unlocked && !overlay` like the app itself: a request
+ * must also be answerable while an entry overlay (the Emergency Kit) covers
+ * the app. Locking clears `unlocked` in the same store update that raises the
+ * lock screen, so none of them is ever shown over it. They sit above the
+ * overlays and above Settings (390–500 on the ladder in SettingsOverlay).
+ */
+function PromptHosts() {
+  const unlocked = useApp((s) => s.unlocked);
+  if (!unlocked) return null;
+  return (
+    <>
+      {isDesktopOs() && <McpApproval />}
+      <AuthPrompt />
+      <AgentApproval />
+    </>
+  );
+}
+
 export function App() {
+  return (
+    <>
+      {/* First, as these hosts always were in the shells: dialogs of the same
+          z-index that come later in the tree stay on top of them. */}
+      <PromptHosts />
+      <AppShell />
+    </>
+  );
+}
+
+function AppShell() {
   const p = usePalette();
   const { uiScale } = useTheme();
   const { t } = useTranslation();
@@ -372,6 +413,32 @@ export function App() {
   useEffect(() => {
     sysLockRef.current?.setGrace(osLockGrace);
   }, [osLockGrace]);
+
+  // Anything that changes this device's keyset (a password change, a recovery,
+  // a pairing, a new account) erases the password stored for biometric unlock.
+  // Two things about that no screen can learn from its own call, so Rust says
+  // them with an event each and they are heard here, once: the erase failed
+  // (whether or not the change itself went through), and a change that failed
+  // had already rewritten the keyset, so biometric unlock is off all the same.
+  useEffect(() => {
+    const disposers: (() => void)[] = [];
+    let alive = true;
+    const hear = async (event: string, key: "settings.biometricWipeFailed" | "settings.biometricTurnedOff") => {
+      try {
+        const un = await listen(event, () => toast(i18n.t(key, { method: biometricMethod() }), "warn"));
+        if (alive) disposers.push(un);
+        else un();
+      } catch {
+        /* no Tauri context */
+      }
+    };
+    void hear("biometric-wipe-failed", "settings.biometricWipeFailed");
+    void hear("biometric-turned-off", "settings.biometricTurnedOff");
+    return () => {
+      alive = false;
+      for (const dispose of disposers) dispose();
+    };
+  }, []);
 
   useEffect(() => {
     sysLockRef.current?.setUnlocked(unlocked);
@@ -608,9 +675,6 @@ export function App() {
         {showApp && <MobileApp />}
         <EntryOverlays />
         {showApp && <Modals />}
-        {showApp && isDesktopOs() && <McpApproval />}
-        {showApp && <AuthPrompt />}
-        {showApp && <AgentApproval />}
         {showApp && <CommandPalette />}
         {showApp && <ImportPreview />}
         {showApp && <GroupsModal />}
@@ -696,8 +760,6 @@ export function App() {
       {/* overlays */}
       <EntryOverlays />
       {showApp && <Modals />}
-      {showApp && isDesktopOs() && <McpApproval />}
-        {showApp && <AuthPrompt />}
       {showApp && <CommandPalette />}
       {showApp && <SettingsOverlay />}
       {showApp && <ImportPreview />}

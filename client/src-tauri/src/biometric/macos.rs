@@ -41,6 +41,16 @@
 //! Everything else — a closed lid, a lockout, `errSecMissingEntitlement`, an
 //! unmapped status — never wipes (see the module note in `biometric.rs`).
 //!
+//! **Taking the prompt down.** When an attempt is superseded (the user chose
+//! the password, the vault was locked, a newer prompt was asked for) its
+//! context is invalidated: `-[LAContext invalidate]` cancels the pending
+//! evaluation — the sheet closes and the reply arrives with `LAErrorAppCancel`
+//! — and a context invalidated before it was asked refuses with
+//! `LAErrorInvalidContext`. Both read as a cancel. The shared code discards the
+//! result of a superseded attempt either way (a released secret is zeroized
+//! unused), so nothing here is what keeps a late Touch ID from unlocking; this
+//! only stops the sheet from lingering.
+//!
 //! The raw `SecItem*` calls are used instead of security-framework's `passwords`
 //! helpers because those cannot attach an authentication context or return the
 //! attributes alongside the data. `keyring` is untouched and keeps serving the
@@ -54,8 +64,10 @@
 //! app with a keychain-access-group entitlement, which an unsigned or ad-hoc
 //! bundle does not have — the feature is then `Unsupported` and not offered).
 //!
-//! None of this is unit-testable — every path ends in a system prompt or a
-//! Keychain the test runner does not have. It is checked by hand on a Mac.
+//! Almost none of this is unit-testable — every path ends in a system prompt
+//! or a Keychain the test runner does not have — and it is checked by hand on a
+//! Mac. The two pure decisions are tested (`tests`, run by CI on macOS): which
+//! reason the prompt is given, and what an evaluation error means.
 
 use std::ffi::c_void;
 use std::sync::mpsc;
@@ -81,7 +93,7 @@ use security_framework_sys::item::{
 use security_framework_sys::keychain_item::{SecItemAdd, SecItemCopyMatching, SecItemDelete};
 use zeroize::Zeroizing;
 
-use super::{DeviceSecretStore, SecretError, SecretState};
+use super::{DeviceSecretStore, Prompt, SecretError, SecretState};
 
 // `kSecAttrGeneric` (user-defined data on a generic password) is exported by
 // Security.framework but not declared by security-framework-sys 2.17.
@@ -103,15 +115,45 @@ const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25_308;
 const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34_018;
 
 /// `LAError` codes meaning "this Mac cannot do Touch ID right now": no login
-/// password (-5), no sensor reachable — including a closed lid — (-6), nothing
-/// enrolled (-7). Never a reason to wipe.
-const LA_ERROR_UNAVAILABLE: [isize; 3] = [-5, -6, -7];
+/// password (`passcodeNotSet`, -5), no sensor reachable — including a closed
+/// lid — (`biometryNotAvailable`, -6), nothing enrolled (`biometryNotEnrolled`,
+/// -7), and the two a desktop Mac with a Magic Keyboard gives: the keyboard's
+/// sensor is not paired (`biometryNotPaired`, -12) or is out of reach
+/// (`biometryDisconnected`, -13). Never a reason to wipe. The values are
+/// `kLAError*` in `LAPublicDefines.h`; -11 is `watchNotAvailable`, which the
+/// biometrics-only policy used here does not return.
+const LA_ERROR_UNAVAILABLE: [isize; 5] = [-5, -6, -7, -12, -13];
+
+/// The prompt's reason when the caller sent none. `evaluatePolicy` raises an
+/// Objective-C exception on an empty `localizedReason` — it "must be non-empty"
+/// — and an exception unwinding into Rust aborts the process, so an empty or
+/// blank string from the webview (a missing translation) must never reach it.
+/// Shown after "UniSSH is trying to".
+const FALLBACK_REASON: &str = "unlock your vault";
 
 /// Domain-state tags: which API produced a stored hash.
 const TAG_LEGACY: u8 = 0;
 const TAG_DOMAIN_STATE: u8 = 1;
 
 pub(super) struct TouchId;
+
+/// A context to invalidate from the thread that supersedes its attempt.
+struct Invalidate(Retained<LAContext>);
+
+// SAFETY: the wrapper is only ever used to send `-[LAContext invalidate]` and
+// to release its reference. `invalidate` exists to be called while another
+// thread waits on the same context's evaluation, and Objective-C reference
+// counting is atomic; no other state of the context is touched through it.
+unsafe impl Send for Invalidate {}
+
+impl Invalidate {
+    fn run(self) {
+        // SAFETY: `invalidate` has no preconditions and is idempotent.
+        unsafe {
+            self.0.invalidate();
+        }
+    }
+}
 
 /// `kSec*` keys are `CFStringRef` statics; wrap one for a dictionary.
 fn key(k: CFStringRef) -> CFString {
@@ -224,6 +266,16 @@ fn enrolment_changed(stored: Option<&[u8]>, current: Option<&[u8]>) -> bool {
     }
 }
 
+/// The reason the prompt is given: the caller's, or [`FALLBACK_REASON`] when
+/// that is empty or blank.
+fn prompt_reason(reason: &str) -> &str {
+    if reason.trim().is_empty() {
+        FALLBACK_REASON
+    } else {
+        reason
+    }
+}
+
 /// What a failed evaluation means. Unavailable (no password, no sensor or lid
 /// closed, nothing enrolled) is not a cancel: the setting says why instead.
 fn evaluation_error(code: isize) -> SecretError {
@@ -231,14 +283,18 @@ fn evaluation_error(code: isize) -> SecretError {
         c if LA_ERROR_UNAVAILABLE.contains(&c) => SecretError::Unsupported,
         // Failed match (-1), cancel (-2), fallback (-3), system/app cancel
         // (-4, -9), lockout (-8): the password, this time; keep everything.
-        -1 | -2 | -3 | -4 | -8 | -9 => SecretError::Cancelled,
+        // Invalid context (-10) is our own `invalidate` winning the race with
+        // the evaluation — a superseded attempt, a cancel like -9.
+        -1 | -2 | -3 | -4 | -8 | -9 | -10 => SecretError::Cancelled,
         c => SecretError::Failed(format!("Touch ID evaluation failed: LAError {c}")),
     }
 }
 
 /// Show the Touch ID prompt with `reason` on `ctx` and wait for the answer.
 /// Called on a blocking thread; the reply arrives on a LocalAuthentication queue.
-fn evaluate(ctx: &LAContext, reason: &str) -> Result<(), isize> {
+/// If the attempt `prompt` stands for is superseded, `ctx` is invalidated,
+/// which ends the wait with a cancel.
+fn evaluate(ctx: &Retained<LAContext>, reason: &str, prompt: &Prompt<'_>) -> Result<(), isize> {
     let (tx, rx) = mpsc::channel::<Result<(), isize>>();
     let reply = RcBlock::new(move |ok: Bool, err: *mut NSError| {
         let result = if ok.as_bool() {
@@ -255,16 +311,20 @@ fn evaluate(ctx: &LAContext, reason: &str) -> Result<(), isize> {
             log::debug!("biometric: Touch ID reply arrived after the waiter left");
         }
     });
-    // SAFETY: the reply block is `Send`-safe (it only owns an mpsc Sender), as
-    // the method requires; the reason is a valid NSString.
-    unsafe {
-        ctx.evaluatePolicy_localizedReason_reply(
-            LAPolicy::DeviceOwnerAuthenticationWithBiometrics,
-            &NSString::from_str(reason),
-            &reply,
-        );
-    }
-    rx.recv().unwrap_or(Err(0))
+    let reason = NSString::from_str(prompt_reason(reason));
+    let invalidate = Invalidate(ctx.clone());
+    prompt.wait(Box::new(move || invalidate.run()), || {
+        // SAFETY: the reply block is `Send`-safe (it only owns an mpsc Sender), as
+        // the method requires; the reason is a valid, non-empty NSString.
+        unsafe {
+            ctx.evaluatePolicy_localizedReason_reply(
+                LAPolicy::DeviceOwnerAuthenticationWithBiometrics,
+                &reason,
+                &reply,
+            );
+        }
+        rx.recv().unwrap_or(Err(0))
+    })
 }
 
 impl DeviceSecretStore for TouchId {
@@ -279,7 +339,9 @@ impl DeviceSecretStore for TouchId {
         let current = domain_hash(&ctx);
         let probe = new_context();
         // SAFETY: setter on a fresh context we own.
-        unsafe { probe.setInteractionNotAllowed(true) };
+        unsafe {
+            probe.setInteractionNotAllowed(true);
+        }
         let mut query = with_context(item(), &probe);
         // SAFETY: reading an `extern` static exported by Security.framework.
         yes(&mut query, unsafe { kSecReturnAttributes });
@@ -349,7 +411,7 @@ impl DeviceSecretStore for TouchId {
         }
     }
 
-    fn read(&self, reason: &str) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+    fn read(&self, reason: &str, prompt: &Prompt<'_>) -> Result<Zeroizing<Vec<u8>>, SecretError> {
         // No prompt for an item that is provably dead or cannot be used here.
         match self.state() {
             SecretState::Unsupported => return Err(SecretError::Unsupported),
@@ -357,7 +419,7 @@ impl DeviceSecretStore for TouchId {
             SecretState::Present | SecretState::Unknown => {}
         }
         let ctx = new_context();
-        evaluate(&ctx, reason).map_err(evaluation_error)?;
+        evaluate(&ctx, reason, prompt).map_err(evaluation_error)?;
         let current = domain_hash(&ctx);
         let mut query = with_context(item(), &ctx);
         // SAFETY: reading an `extern` static exported by Security.framework.
@@ -408,7 +470,36 @@ impl DeviceSecretStore for TouchId {
     }
 
     /// The prompt and nothing else: no Keychain item is made or read.
-    fn confirm_presence(&self, reason: &str) -> Result<(), SecretError> {
-        evaluate(&new_context(), reason).map_err(evaluation_error)
+    fn confirm_presence(&self, reason: &str, prompt: &Prompt<'_>) -> Result<(), SecretError> {
+        evaluate(&new_context(), reason, prompt).map_err(evaluation_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An empty `localizedReason` makes `evaluatePolicy` raise, which aborts the
+    // process: whatever the webview sends, the prompt is given some words.
+    #[test]
+    fn blank_reason_is_replaced_before_it_reaches_the_prompt() {
+        assert_eq!(prompt_reason(""), FALLBACK_REASON);
+        assert_eq!(prompt_reason(" \n\t"), FALLBACK_REASON);
+        assert_eq!(prompt_reason("open the vault"), "open the vault");
+    }
+
+    // A Magic Keyboard whose sensor is unpaired (-12) or out of reach (-13) is
+    // "Touch ID cannot be used here now", like a closed lid (-6): the setting
+    // says why, nothing is wiped, and it is not reported as an error.
+    #[test]
+    fn unpaired_or_disconnected_sensor_reads_as_unavailable() {
+        for code in [-12, -13, -6] {
+            assert!(
+                matches!(evaluation_error(code), SecretError::Unsupported),
+                "LAError {code}"
+            );
+        }
+        // Not a catch-all: a dismissed prompt is still a cancel.
+        assert!(matches!(evaluation_error(-2), SecretError::Cancelled));
     }
 }

@@ -619,12 +619,19 @@ pub async fn server_account_profile(
 // ---------- cloud vaults + sync ----------
 
 /// Create a cloud (server-synced) vault, BOUND 1:1 to a server (defaults to the
-/// active server) by a `space_id`. This is a LOCAL operation — the vault is marked
-/// Cloud in local storage, bound to the chosen space, and propagates to THAT server
-/// on the next `server_sync_now`. `space_id` selects the bound space (an existing
-/// space the caller admins, or one just created); when `None` it defaults to the
-/// link's primary space. Requires a linked server: with none, `require_config` errors
-/// (the UI also gates the Cloud option behind a session). Returns the vault id (hex).
+/// active server) by a space label, and propagated to THAT server on the next
+/// `server_sync_now`. Requires a linked server: with none, `require_config` errors
+/// (the UI offers the Cloud option for a linked server, signed in or not, and a
+/// space only with a session). Returns the vault id (hex).
+///
+/// - `space_id: None` — a LOCAL operation: the vault is created bound to the
+///   link's primary space label, and its first push makes it a personal vault of
+///   the account on the server.
+/// - `space_id: Some(space)` — the vault is to live IN that space (one the caller
+///   admins, or just created): its id is claimed there on the server first (see
+///   [`claim_in_space`]), which needs a live session, and only then is the vault
+///   created locally, bound to that space's label. A refused or failed claim
+///   creates nothing.
 #[tauri::command]
 pub async fn server_create_cloud_vault(
     server_id: Option<String>,
@@ -634,11 +641,53 @@ pub async fn server_create_cloud_vault(
 ) -> ApiResult<String> {
     let cfg = require_config(&state, server_id.as_deref())?;
     let core = state.core.clone();
-    // Bind to the caller-chosen space when supplied; otherwise the link's primary.
-    // The binding is a local label — the server enforces space authority at sync time
-    // via the Bearer + space membership, so a stale/foreign pick can't leak the vault.
-    let space = space_id.unwrap_or(cfg.space_id);
-    blocking_api(move || core.create_cloud_vault(name, space).map_err(ApiError::from)).await
+    let Some(space) = space_id else {
+        return blocking_api(move || {
+            core.create_cloud_vault(name, cfg.space_id)
+                .map_err(ApiError::from)
+        })
+        .await;
+    };
+    let access = require_access(&state, server_id.as_deref())?;
+    blocking_api(move || {
+        let new_id = claim_in_space(&core, &cfg.base_url, &access, &space, None)?;
+        core.create_cloud_vault_as(name, space, new_id)
+            .map_err(ApiError::from)
+    })
+    .await
+}
+
+/// Reserves a cloud vault id in the core and claims it in `space` on the server
+/// (`POST /v1/vaults/claim`), so the vault's first push lands in that space
+/// instead of becoming a personal vault of the account. Done BEFORE the vault
+/// exists locally: a refusal (not a member of the space) or a network failure
+/// then changes nothing on this device but the reservation.
+///
+/// The claim cannot be taken back, which is why the id is the core's to keep
+/// (`reserve_cloud_vault_id`): it is stored before the claim is sent, and the
+/// same id comes back for the same space — and the same `source_vault_id`,
+/// when a local vault is being moved — until a vault was created with it. A
+/// retry after a failure therefore claims the same id again (a no-op on the
+/// server) instead of leaving one more claimed, empty vault there. With a
+/// source the core also refuses here what the move itself would refuse, so
+/// nothing is claimed for a move that cannot happen.
+///
+/// Returns the raw id for `create_cloud_vault_as` / `convert_vault_to_cloud`.
+fn claim_in_space(
+    core: &unissh_ffi::Core,
+    base_url: &str,
+    access: &str,
+    space: &str,
+    source_vault_id: Option<&str>,
+) -> ApiResult<Vec<u8>> {
+    let id = core
+        .reserve_cloud_vault_id(space.to_owned(), source_vault_id.map(str::to_owned))
+        .map_err(ApiError::from)?;
+    let newly = identity::claim_vault(client::http(), base_url, access, &client::b64(&id), space)?;
+    if !newly {
+        log::info!("cloud: the vault id was already claimed by an earlier attempt; reusing it");
+    }
+    Ok(id)
 }
 
 /// Bind every still-unbound (legacy) cloud vault to a server's `space_id`
@@ -694,11 +743,19 @@ pub async fn server_unbind_cloud_vault(
 }
 
 /// Run a full sync against a linked server (defaults to active): push local cloud
-/// objects, then pull + verify the delta. Requires an active session. Returns a
-/// report of what changed.
+/// objects, then pull + verify the delta (the pull runs even when the push
+/// failed; the push failure is then the error). Requires an active session.
+/// Returns a report of what changed, including the items the server refused as
+/// too large.
+///
+/// `retry_refused` (a sync the user asked for by hand) offers those refused
+/// items to the server again — the way to upload them once its limit was raised.
+/// Background syncs leave it unset, so a refused item is not re-uploaded on
+/// every pass.
 #[tauri::command]
 pub async fn server_sync_now(
     server_id: Option<String>,
+    retry_refused: Option<bool>,
     state: State<'_, AppState>,
 ) -> ApiResult<dto::SyncReport> {
     let cfg = require_config(&state, server_id.as_deref())?;
@@ -709,9 +766,14 @@ pub async fn server_sync_now(
         // space. Sync scopes to base_url + Bearer on the wire; the space is the
         // local binding label selecting which vaults participate.
         let space = cfg.space_id.clone();
+        if retry_refused == Some(true) {
+            core.retry_refused_uploads(space.clone())
+                .map_err(ApiError::from)?;
+        }
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
             Arc::new(HttpSyncTransport::new(cfg.base_url, access));
-        core.sync_now(transport, space).map_err(ApiError::from)
+        core.sync_now(transport, space, unissh_ffi::FfiSyncMode::Full)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(report.into())
@@ -737,7 +799,8 @@ pub async fn server_repull(
             .map_err(ApiError::from)?;
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
             Arc::new(HttpSyncTransport::new(cfg.base_url, access));
-        core.sync_now(transport, space).map_err(ApiError::from)
+        core.sync_now(transport, space, unissh_ffi::FfiSyncMode::Full)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(report.into())
@@ -766,7 +829,8 @@ pub async fn server_restore_deleted_vaults(
             .map_err(ApiError::from)?;
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
             Arc::new(HttpSyncTransport::new(cfg.base_url, access));
-        core.sync_now(transport, space).map_err(ApiError::from)?;
+        core.sync_now(transport, space, unissh_ffi::FfiSyncMode::Full)
+            .map_err(ApiError::from)?;
         Ok(restored)
     })
     .await?;
@@ -814,7 +878,9 @@ pub async fn server_list_vaults(
 
 /// **Pull ONE vault** (by hex id) from a server (defaults to active) onto this device:
 /// targeted fetch of just that vault's objects + verify-before-apply, WITHOUT advancing
-/// the pull cursor. Requires a session.
+/// the pull cursor. The vault is fetched and applied page by page, in the server's
+/// order, so it is never held in memory whole; the report is the sum over the pages.
+/// Requires a session.
 #[tauri::command]
 pub async fn server_pull_vault(
     vault_id: String,
@@ -827,9 +893,32 @@ pub async fn server_pull_vault(
     let report = blocking_api(move || {
         let space = cfg.space_id.clone();
         let transport = HttpSyncTransport::new(cfg.base_url, access);
-        let objects = transport.delta_for_vault(&vault_id);
-        core.apply_pulled_vault(space, objects)
-            .map_err(ApiError::from)
+        let mut total = unissh_ffi::FfiSyncReport {
+            applied: 0,
+            skipped_stale: 0,
+            conflicts: 0,
+            rejected: 0,
+            pushed: 0,
+            too_large: Vec::new(),
+        };
+        let mut cursor = 0_u64;
+        loop {
+            let (objects, next) = transport.vault_delta_page(&vault_id, cursor);
+            if !objects.is_empty() {
+                let page = core
+                    .apply_pulled_vault(space.clone(), objects)
+                    .map_err(ApiError::from)?;
+                total.applied = total.applied.saturating_add(page.applied);
+                total.skipped_stale = total.skipped_stale.saturating_add(page.skipped_stale);
+                total.conflicts = total.conflicts.saturating_add(page.conflicts);
+                total.rejected = total.rejected.saturating_add(page.rejected);
+            }
+            match next {
+                Some(next) => cursor = next,
+                None => break,
+            }
+        }
+        Ok(total)
     })
     .await?;
     Ok(report.into())
@@ -857,21 +946,34 @@ pub async fn server_bind_and_push_vault(
             .map_err(ApiError::from)?;
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
             Arc::new(HttpSyncTransport::new(cfg.base_url, access));
-        core.sync_now(transport, space).map_err(ApiError::from)
+        core.sync_now(transport, space, unissh_ffi::FfiSyncMode::Full)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(report.into())
 }
 
 /// **Move a LOCAL vault to a server** (the "Move to server…" action; the server
-/// defaults to the active one). Converts the vault in the core
-/// (`convert_vault_to_cloud`: a re-keyed copy into a new cloud vault bound to
-/// `space_id` — or the link's primary space when `None` — with the local vault
-/// tombstoned, all in one transaction), then runs the first push (`sync_now` for
-/// that space). Requires a live session up front, so a signed-out server refuses
-/// before anything changes. A failed push does NOT undo the conversion: the vault
-/// stays bound and dirty, the next sync uploads it, and the failure comes back in
-/// `push_error` next to the new vault id.
+/// defaults to the active one). Requires a live session up front, so a signed-out
+/// server refuses before anything changes.
+///
+/// 1. With `space_id: Some(space)` the vault is to live IN that space: a vault
+///    id is reserved in the core and claimed there on the server first (see
+///    [`claim_in_space`]). A refused or failed claim stops here with the vault
+///    untouched. With `None` there is no claim: the vault is bound to the link's
+///    primary space label and its first push makes it a personal vault of the
+///    account, like a cloud vault created without a space.
+/// 2. The core converts the vault (`convert_vault_to_cloud`: a re-keyed copy
+///    into the new cloud vault, the local vault tombstoned, all in one
+///    transaction). If it fails, the vault is untouched and the claimed id is
+///    kept: a retry into the same space claims and uses the same id.
+/// 3. The first push runs — a push only (`FfiSyncMode::PushOnly`), not a full sync: a
+///    pull under a space label this device does not otherwise sync would start
+///    from an empty cursor and bind every unbound cloud vault it meets to that
+///    space. It carries the vault data alone: the account state and the audit
+///    log go with the ordinary sync of the primary space. A failed push does NOT undo the conversion: the vault stays bound and
+///    dirty, a later sync of its space uploads it, and the failure comes back in
+///    `push_error` next to the new vault id.
 #[tauri::command]
 pub async fn server_move_vault_to_server(
     vault_id: String,
@@ -883,13 +985,28 @@ pub async fn server_move_vault_to_server(
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
     blocking_api(move || {
+        // The claim cannot be taken back: the core refuses, before anything is
+        // claimed, what the conversion would refuse (a locked core, a vault
+        // that is gone or is already a cloud vault), and keeps the claimed id
+        // for a retry if the conversion then fails.
+        let reserved = match space_id.as_deref() {
+            Some(space) => Some(claim_in_space(
+                &core,
+                &cfg.base_url,
+                &access,
+                space,
+                Some(vault_id.as_str()),
+            )?),
+            None => None,
+        };
         let space = space_id.unwrap_or(cfg.space_id);
         let new_id = core
-            .convert_vault_to_cloud(vault_id, space.clone())
+            .convert_vault_to_cloud(vault_id, space.clone(), reserved)
             .map_err(ApiError::from)?;
         let transport: Arc<dyn unissh_ffi::FfiSyncTransport> =
             Arc::new(HttpSyncTransport::new(cfg.base_url, access));
-        let (push, push_error) = match core.sync_now(transport, space) {
+        let pushed = core.sync_now(transport, space, unissh_ffi::FfiSyncMode::PushOnly);
+        let (push, push_error) = match pushed {
             Ok(report) => (Some(report.into()), None),
             Err(e) => (None, Some(ApiError::from(e))),
         };
@@ -1264,12 +1381,16 @@ pub async fn server_keyset_pull_and_unlock(
     let access = require_access(&state, server_id.as_deref())?;
     let core = state.core.clone();
     // The installed keyset may be wrapped under another password.
-    blocking_api(crate::biometric::installing_keyset(&state, move || {
-        let http = client::http();
-        let (blob, _generation) = identity::keyset_get(http, &cfg.base_url, &access)?;
-        core.unlock_from_server_blob(blob, password, secret_key_hex)
-            .map_err(ApiError::from)
-    }))
+    blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || {
+            let http = client::http();
+            let (blob, _generation) = identity::keyset_get(http, &cfg.base_url, &access)?;
+            core.unlock_from_server_blob(blob, password, secret_key_hex)
+                .map_err(ApiError::from)
+        },
+    ))
     .await?;
     crate::commands::resume_after_unlock(&app);
     Ok(())
@@ -1400,10 +1521,10 @@ pub async fn server_escrow_fetch_and_unlock(
     let core = state.core.clone();
     let base = base_url.clone();
     let hd = handle.clone();
-    let bio_blob = crate::biometric::blob_path(&state);
 
     // Recover + unlock the keyset in one blocking pass, then hand off to the shared tail.
-    let account_id = blocking_api(move || {
+    // The recovered keyset may be wrapped under another password (see `installing_keyset`).
+    let install = crate::biometric::installing_keyset(&app, &state, move || {
         let http = client::http();
         // 1–2. Enrolled Argon2id params → re-derive K_auth with THOSE params (enroll/fetch
         //       symmetry). password/secret_key only enter the core here.
@@ -1427,11 +1548,10 @@ pub async fn server_escrow_fetch_and_unlock(
             password,
             secret_key_hex,
             crate::keychain::save_secret_key_now,
-            &bio_blob,
         )?;
         Ok(account_id)
-    })
-    .await?;
+    });
+    let (account_id, _) = blocking_api(install).await?;
 
     // Keep escrow's fetched account id as the link identity and its handle on the link.
     crate::commands::resume_after_unlock(&app);
@@ -1460,20 +1580,23 @@ pub async fn server_import_keyset_and_unlock(
 ) -> ApiResult<ServerStatus> {
     client::validate_base_url(&base_url)?;
     let core = state.core.clone();
-    let bio_blob = crate::biometric::blob_path(&state);
     // Install + unlock the keyset from the file blob (blocking; the raw bytes + credentials enter
     // ONLY the core here). Unlike escrow there is no fetch to learn the account id from — the
     // follow-up self-enroll returns it (the same keyset resolves the same account).
-    blocking_api(move || {
-        super::recovery::install_keyset(
-            &core,
-            keyset_blob,
-            password,
-            secret_key_hex,
-            crate::keychain::save_secret_key_now,
-            &bio_blob,
-        )
-    })
+    // The imported keyset may be wrapped under another password (see `installing_keyset`).
+    blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || {
+            super::recovery::install_keyset(
+                &core,
+                keyset_blob,
+                password,
+                secret_key_hex,
+                crate::keychain::save_secret_key_now,
+            )
+        },
+    ))
     .await?;
     // Offline import carries no handle (escrow keys off one); the account's handle syncs later.
     crate::commands::resume_after_unlock(&app);
@@ -1551,6 +1674,7 @@ pub async fn server_onboard_complete(
     reason = "a #[tauri::command]'s parameters are the named fields of the frontend's invoke payload; a params struct would change that IPC contract"
 )]
 pub async fn server_onboard_join(
+    app: tauri::AppHandle,
     base_url: String,
     instance_id: String,
     space_id: String,
@@ -1569,12 +1693,16 @@ pub async fn server_onboard_join(
     let base = base_url.clone();
     let channel = channel_id.clone();
     // A keyset from another device: nothing sealed here before may open it.
-    blocking_api(crate::biometric::installing_keyset(&state, move || {
-        let http = client::http();
-        let code = client::unb64(&oob_code)?;
-        onboard::responder_join(&core_pake, http, &base, &channel, code, password)?;
-        Ok(())
-    }))
+    blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || {
+            let http = client::http();
+            let code = client::unb64(&oob_code)?;
+            onboard::responder_join(&core_pake, http, &base, &channel, code, password)?;
+            Ok(())
+        },
+    ))
     .await?;
 
     // 2) Persist a cloud link for the new device and make it active. Idempotent:

@@ -132,10 +132,25 @@ pub struct ConnectOptions {
     pub own_system_agent: Option<std::path::PathBuf>,
     /// Never escalate past the first method to keyboard-interactive (so no
     /// stored-password answer and no prompt to the user); a refusal of `auth`
-    /// is final, `AuthFailed`. It changes escalation only: `auth` itself is
-    /// still used as configured, so a password auth still sends its password.
-    /// Pair it with key auth for a login whose whole point is to prove that one
-    /// key is accepted, such as the verify step of a key rotation.
+    /// is final. `auth` itself is still used as configured, so a password auth
+    /// still sends its password.
+    ///
+    /// Pair it with key auth for a login whose whole point is to learn whether
+    /// one key is accepted, such as the verify and old-key steps of a key
+    /// rotation. Such a login differs from an ordinary one in two ways.
+    ///
+    /// A key with a certificate attached is offered both ways — the certificate
+    /// first, then the plain public key — because the server may take either,
+    /// and "refused" has to mean neither.
+    ///
+    /// A failure says which way it went: [`TransportError::KeyRefused`] when
+    /// the publickey step was not accepted (which is all it says — the account
+    /// may still open some other way), or
+    /// [`TransportError::KeyAcceptedMoreAuthRequired`] when the server took the
+    /// key and asked for a second factor. The login is not completed either
+    /// way.
+    ///
+    /// With any other auth the failure stays `AuthFailed`.
     pub publickey_only: bool,
 }
 
@@ -427,9 +442,10 @@ impl Handler for ClientHandler {
         };
         reply.accept().await;
         // One task per channel: the remote side opens a fresh one for every
-        // connection to the socket, and they run concurrently.
+        // connection to the socket, and they run concurrently. Each
+        // one's request is withdrawn when it closes, or when the session does.
         tokio::spawn(async move {
-            crate::forward::serve(agent, channel.into_stream()).await;
+            agent.serve_channel(channel.into_stream()).await;
         });
         Ok(())
     }
@@ -1444,52 +1460,7 @@ async fn authenticate(
     };
     let result = timeout(deadline, async {
         let first: AuthResult = match &opts.auth {
-            Auth::Agent { key_id } => {
-                // The private key does NOT leave the agent: the agent itself signs via
-                // russh::auth::Signer. Out of the agent — only the public key /
-                // certificate (bridged into russh::keys via the stable OpenSSH format,
-                // since ssh-agent is on ssh-key 0.6 and russh is on 0.7).
-                let public_openssh = agent
-                    .public_key_openssh(key_id)
-                    .ok_or_else(|| TransportError::KeyEncoding("key not in agent".into()))?;
-                let russh_public = PublicKey::from_openssh(&public_openssh)
-                    .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
-
-                // RSA is signed with rsa-sha2-512 (as ssh-key does); everything else — without a hash.
-                let hash_alg = russh_public.algorithm().is_rsa().then_some(HashAlg::Sha512);
-
-                let mut signer = AgentSigner {
-                    agent,
-                    key_id: key_id.clone(),
-                };
-
-                // If a certificate is attached to the key — cert-based authentication
-                // (also via Signer, the key does not leave the agent).
-                match agent.certificate_openssh(key_id) {
-                    Some(cert_openssh) => {
-                        let russh_cert = russh::keys::Certificate::from_openssh(&cert_openssh)
-                            .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
-                        handle
-                            .authenticate_certificate_with(
-                                opts.user.clone(),
-                                russh_cert,
-                                hash_alg,
-                                &mut signer,
-                            )
-                            .await?
-                    }
-                    None => {
-                        handle
-                            .authenticate_publickey_with(
-                                opts.user.clone(),
-                                russh_public,
-                                hash_alg,
-                                &mut signer,
-                            )
-                            .await?
-                    }
-                }
-            }
+            Auth::Agent { key_id } => authenticate_agent_key(handle, opts, agent, key_id).await?,
             Auth::SystemAgent { public_key } => {
                 // The OS agent holds the key; we only say which one and hand it
                 // the bytes. Nothing here ever sees private material — that is
@@ -1572,9 +1543,95 @@ async fn authenticate(
                 partial_success,
                 remaining_methods,
             );
-            Err(TransportError::AuthFailed)
+            let key_only = opts.publickey_only
+                && matches!(opts.auth, Auth::Agent { .. } | Auth::SystemAgent { .. });
+            Err(auth_failure(key_only, partial_success))
         }
     }
+}
+
+/// The publickey step with a key held by the embedded agent.
+///
+/// The private key does NOT leave the agent: the agent itself signs via
+/// `russh::auth::Signer`. Out of the agent — only the public key / certificate
+/// (bridged into `russh::keys` via the stable OpenSSH format, since ssh-agent is
+/// on ssh-key 0.6 and russh is on 0.7).
+///
+/// A key with a certificate attached authenticates with the certificate (also
+/// via `Signer`). A key-only login goes on to the plain public key when the
+/// server turns the certificate down, see [`offers_plain_key_too`].
+async fn authenticate_agent_key(
+    handle: &mut Handle<ClientHandler>,
+    opts: &ConnectOptions,
+    agent: &dyn KeySource,
+    key_id: &[u8],
+) -> Result<AuthResult, TransportError> {
+    let public_openssh = agent
+        .public_key_openssh(key_id)
+        .ok_or_else(|| TransportError::KeyEncoding("key not in agent".into()))?;
+    let russh_public = PublicKey::from_openssh(&public_openssh)
+        .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
+
+    // RSA is signed with rsa-sha2-512 (as ssh-key does); everything else — without a hash.
+    let hash_alg = russh_public.algorithm().is_rsa().then_some(HashAlg::Sha512);
+
+    let mut signer = AgentSigner {
+        agent,
+        key_id: key_id.to_vec(),
+    };
+
+    let Some(cert_openssh) = agent.certificate_openssh(key_id) else {
+        return handle
+            .authenticate_publickey_with(opts.user.clone(), russh_public, hash_alg, &mut signer)
+            .await;
+    };
+    let russh_cert = russh::keys::Certificate::from_openssh(&cert_openssh)
+        .map_err(|e| TransportError::KeyEncoding(e.to_string()))?;
+    let with_certificate = handle
+        .authenticate_certificate_with(opts.user.clone(), russh_cert, hash_alg, &mut signer)
+        .await?;
+    // A key-only login asks whether the server takes this key at all. A server
+    // that turns the certificate down may still accept the plain key from
+    // authorized_keys, so that is asked as well, and its answer is the one
+    // reported.
+    if offers_plain_key_too(&with_certificate, opts.publickey_only) {
+        return handle
+            .authenticate_publickey_with(opts.user.clone(), russh_public, hash_alg, &mut signer)
+            .await;
+    }
+    Ok(with_certificate)
+}
+
+/// The error for an authentication the server did not complete.
+///
+/// A key-only login exists to learn whether the server takes one key, so its
+/// failure says which way it went: `partial_success` after the publickey step
+/// means the signature was verified and the key is authorized — the server only
+/// wants a further factor, which a key-only login never supplies — and anything
+/// else is the key being refused. Every other login keeps the plain
+/// `AuthFailed`.
+const fn auth_failure(key_only: bool, partial_success: bool) -> TransportError {
+    match (key_only, partial_success) {
+        (false, _) => TransportError::AuthFailed,
+        (true, true) => TransportError::KeyAcceptedMoreAuthRequired,
+        (true, false) => TransportError::KeyRefused,
+    }
+}
+
+/// Whether a login whose certificate did not open the account goes on to offer
+/// the plain public key: only a key-only login does, and only when the server
+/// refused the certificate outright. After a partial success the key is already
+/// known to be accepted, and an ordinary login keeps authenticating with the
+/// certificate alone, as before.
+const fn offers_plain_key_too(with_certificate: &AuthResult, publickey_only: bool) -> bool {
+    publickey_only
+        && matches!(
+            with_certificate,
+            AuthResult::Failure {
+                partial_success: false,
+                ..
+            }
+        )
 }
 
 /// Whether a first auth attempt that did not finish the job goes on to
@@ -2020,8 +2077,8 @@ mod tests {
     #[cfg(unix)]
     use super::refuse_own_agent;
     use super::{
-        answer_from_password, require_loopback, should_escalate, AlgorithmPolicy, ClientHandler,
-        PromptField,
+        answer_from_password, auth_failure, offers_plain_key_too, require_loopback,
+        should_escalate, AlgorithmPolicy, ClientHandler, PromptField,
     };
     use crate::error::TransportError;
     use russh::client::AuthResult;
@@ -2050,6 +2107,37 @@ mod tests {
         };
         assert!(should_escalate(&offered(), false));
         assert!(!should_escalate(&offered(), true));
+    }
+
+    #[test]
+    fn key_only_failure_says_whether_the_key_was_accepted() {
+        assert!(matches!(
+            auth_failure(true, false),
+            TransportError::KeyRefused
+        ));
+        assert!(matches!(
+            auth_failure(true, true),
+            TransportError::KeyAcceptedMoreAuthRequired
+        ));
+        // Any other login keeps the generic failure, partial success or not.
+        assert!(matches!(
+            auth_failure(false, true),
+            TransportError::AuthFailed
+        ));
+    }
+
+    #[test]
+    fn key_only_login_offers_the_plain_key_after_a_refused_certificate() {
+        let failed = |partial_success| AuthResult::Failure {
+            remaining_methods: MethodSet::from(&[MethodKind::PublicKey][..]),
+            partial_success,
+        };
+        assert!(offers_plain_key_too(&failed(false), true));
+        // The certificate was taken (a second factor is pending): nothing to add.
+        assert!(!offers_plain_key_too(&failed(true), true));
+        assert!(!offers_plain_key_too(&AuthResult::Success, true));
+        // An ordinary login authenticates with the certificate alone.
+        assert!(!offers_plain_key_too(&failed(false), false));
     }
 
     #[test]

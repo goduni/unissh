@@ -54,11 +54,19 @@ pub struct DbConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimitsConfig {
+    /// Largest request body accepted, in bytes. Must admit `max_object_bytes`
+    /// base64-encoded (4/3) in a push of its own; a reverse proxy in front
+    /// needs at least the same limit.
     pub max_body_bytes: usize,
+    /// Largest single sync object accepted by a push, in bytes.
     pub max_object_bytes: usize,
     pub max_objects_per_push: usize,
     pub delta_page_size: u32,
     pub delta_max_page_size: u32,
+    /// Most object bytes one delta page carries. A page is cut before the row
+    /// that would exceed it, but always holds at least one row, so an object
+    /// larger than this still travels (alone).
+    pub delta_max_page_bytes: usize,
     pub rate_limit_per_ip_rps: u32,
     pub rate_limit_burst: u32,
 }
@@ -470,14 +478,33 @@ impl Default for DbConfig {
         }
     }
 }
+/// Default `limits.max_object_bytes`: the largest object a client legitimately
+/// pushes (a full session recording, 17 MiB). The number is owned by the sync
+/// crate (`unissh_sync::LARGEST_CLIENT_OBJECT_BYTES`), which the server does
+/// not link; `tests/sync_http.rs` holds this default to it. A lower limit
+/// refuses such an item, which then stays on its device only.
+const DEFAULT_MAX_OBJECT_BYTES: usize = 17 * 1024 * 1024;
+
+/// Default `limits.max_body_bytes`: 24 MiB. A push carries its objects
+/// base64-encoded in JSON, so the largest object travelling alone is a request
+/// of 4/3 its size (22.7 MiB) plus the envelope; the assertion below keeps the
+/// two defaults consistent.
+const DEFAULT_MAX_BODY_BYTES: usize = 24 * 1024 * 1024;
+
+const _: () = assert!(
+    DEFAULT_MAX_BODY_BYTES >= DEFAULT_MAX_OBJECT_BYTES.div_ceil(3) * 4 + 64 * 1024,
+    "the default body limit must admit the largest object in a request of its own"
+);
+
 impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
-            max_body_bytes: 16 * 1024 * 1024,
-            max_object_bytes: 1024 * 1024,
+            max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+            max_object_bytes: DEFAULT_MAX_OBJECT_BYTES,
             max_objects_per_push: 1000,
             delta_page_size: 500,
             delta_max_page_size: 1000,
+            delta_max_page_bytes: 8 * 1024 * 1024,
             rate_limit_per_ip_rps: 20,
             rate_limit_burst: 40,
         }

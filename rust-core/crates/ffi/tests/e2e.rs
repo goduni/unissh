@@ -5316,7 +5316,9 @@ fn automation_managed_connection_reuse_stdin_and_revision_invalidation() {
 /// socket would, on behalf of `caller`; returns the reply's body.
 fn system_agent_request(agent: &SystemAgent, request: &[u8], caller: AgentCaller) -> Vec<u8> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // With the time driver: serving bounds how long a connection may sit idle.
     let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
         .build()
         .unwrap();
     let mut frame = u32::try_from(request.len()).unwrap().to_be_bytes().to_vec();
@@ -5331,7 +5333,7 @@ fn system_agent_request(agent: &SystemAgent, request: &[u8], caller: AgentCaller
             client.read_exact(&mut body).await.unwrap();
             body // dropping `client` ends the server loop
         };
-        tokio::join!(agent.serve(server, caller), ask).1
+        tokio::join!(agent.serve(server, |_| caller), ask).1
     })
 }
 
@@ -5346,7 +5348,13 @@ fn take_ssh_string(input: &mut &[u8]) -> Vec<u8> {
 /// Asks the system agent for its identities, the way `ssh-add -l` does, and
 /// returns `(key blob, comment)` per identity.
 fn system_agent_identities(core: &Core) -> Vec<(Vec<u8>, String)> {
-    let reply = system_agent_request(&core.system_agent(), &[11], AgentCaller::default()); // REQUEST_IDENTITIES
+    identities_through(&core.system_agent())
+}
+
+/// [`system_agent_identities`], asked of `agent`: the same agent again reuses
+/// the listing it kept, as one listener does across connections.
+fn identities_through(agent: &SystemAgent) -> Vec<(Vec<u8>, String)> {
+    let reply = system_agent_request(agent, &[11], AgentCaller::default()); // REQUEST_IDENTITIES
     assert_eq!(reply[0], 12, "IDENTITIES_ANSWER");
     let count = u32::from_be_bytes(reply[1..5].try_into().unwrap());
     let mut rest = &reply[5..];
@@ -5399,6 +5407,42 @@ fn system_agent_offers_the_shared_keys_follows_a_toggle_and_empties_when_locked(
     // A locked core offers nothing — an empty list, not an error.
     core.lock();
     assert_eq!(system_agent_identities(&core), vec![]);
+}
+
+/// One listener keeps its last listing and reuses it only while nothing it was
+/// resolved from has changed: an unshare, a key replaced inside the vault and
+/// a lock each show in the very next listing through the same agent.
+#[test]
+fn system_agent_listing_kept_by_one_agent_follows_every_change_at_once() {
+    let (core, _dir, work) = core_sharing_work();
+    let agent = core.system_agent();
+    let offered = vec![(openssh_blob(&work), "work".to_owned())];
+    assert_eq!(identities_through(&agent), offered);
+    assert_eq!(identities_through(&agent), offered, "asked again");
+
+    core.set_system_agent_shared("v".to_owned(), "work".to_owned(), false)
+        .unwrap();
+    assert_eq!(identities_through(&agent), vec![], "unshared");
+
+    core.set_system_agent_shared("v".to_owned(), "work".to_owned(), true)
+        .unwrap();
+    assert_eq!(identities_through(&agent), offered, "shared again");
+    // The share list is as it was; only the item changed.
+    core.generate_ssh_key("v".to_owned(), "work".to_owned())
+        .unwrap();
+    assert_eq!(identities_through(&agent), vec![], "replaced in the vault");
+
+    let replaced = core
+        .generate_ssh_key("v".to_owned(), "other".to_owned())
+        .unwrap();
+    core.set_system_agent_shared("v".to_owned(), "other".to_owned(), true)
+        .unwrap();
+    assert_eq!(
+        identities_through(&agent),
+        vec![(openssh_blob(&replaced), "other".to_owned())]
+    );
+    core.lock();
+    assert_eq!(identities_through(&agent), vec![], "locked");
 }
 
 /// Approves every signature and keeps what each prompt was shown, and the ids
@@ -5597,23 +5641,23 @@ fn system_agent_refuses_a_key_unshared_while_its_prompt_was_open() {
     assert_eq!(reply[0], 5, "FAILURE");
 }
 
-/// Any local program can open connections. Once the cap of open prompts is
-/// reached, a further request is refused at once rather than stacking a
-/// dialog, and the ones already open are unaffected.
+/// Requests arriving together (a parallel `git fetch`, an `ansible` run) are
+/// not refused for being many: they wait in line and are put to the person one
+/// at a time, each prompt opening only when the one before it is over.
 #[test]
-fn system_agent_refuses_a_sign_request_beyond_the_open_prompt_cap() {
-    const CAP: usize = 4;
+fn system_agent_queues_simultaneous_sign_requests_and_asks_one_at_a_time() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const REQUESTS: usize = 6;
     let (core, _dir, work) = core_sharing_work();
-    let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
-    let held = gate.clone();
+    let open = std::sync::Arc::new(AtomicUsize::new(0));
+    let most = std::sync::Arc::new(AtomicUsize::new(0));
+    let (opened, peak) = (open, most.clone());
     let approver = RecordingApprover::new(move || {
-        let (open, wake) = &*held;
-        let open = open.lock().unwrap();
-        // Wait for the gate, then release its lock straight away.
-        drop(
-            wake.wait_timeout_while(open, Duration::from_secs(30), |open| !*open)
-                .unwrap(),
-        );
+        peak.fetch_max(opened.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+        // Long enough for the other requests to arrive behind this prompt.
+        std::thread::sleep(Duration::from_millis(50));
+        opened.fetch_sub(1, Ordering::SeqCst);
     });
     core.set_agent_approver(Some(approver.clone()));
     let agent = core.system_agent();
@@ -5623,23 +5667,14 @@ fn system_agent_refuses_a_sign_request_beyond_the_open_prompt_cap() {
         let (agent, request) = (agent.clone(), request.clone());
         std::thread::spawn(move || system_agent_request(&agent, &request, AgentCaller::default()))
     })
-    .take(CAP)
+    .take(REQUESTS)
     .collect();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while approver.asked.lock().unwrap().len() < CAP {
-        assert!(Instant::now() < deadline, "the first prompts never opened");
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    let refused = system_agent_request(&agent, &request, AgentCaller::default());
-    assert_eq!(refused[0], 5, "FAILURE");
-    assert_eq!(approver.asked.lock().unwrap().len(), CAP, "no extra prompt");
-
-    *gate.0.lock().unwrap() = true;
-    gate.1.notify_all();
     for reply in pending {
         assert_eq!(reply.join().unwrap()[0], 14, "SIGN_RESPONSE");
     }
+
+    assert_eq!(approver.asked.lock().unwrap().len(), REQUESTS, "all asked");
+    assert_eq!(most.load(Ordering::SeqCst), 1, "one prompt at a time");
 }
 
 /// A key replaced under the same id (generated anew as `work`) is not offered:
@@ -5718,10 +5753,59 @@ fn system_agent_withdraws_the_prompt_of_a_client_that_hangs_up() {
             drop(client);
         };
         tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(agent.serve(server, AgentCaller::default()), hang_up)
+            tokio::join!(agent.serve(server, |_| AgentCaller::default()), hang_up)
         })
         .await
         .expect("serving ends as soon as the client is gone");
+    });
+    released.store(true, Ordering::SeqCst);
+
+    let asked = approver.asked.lock().unwrap()[0].id;
+    assert_eq!(*approver.cancelled.lock().unwrap(), vec![asked]);
+}
+
+/// A connection the listener cuts while its prompt is open (the vault or the
+/// screen locking, the agent being switched off) withdraws that prompt: the
+/// client did not hang up, so nothing else would.
+#[test]
+fn system_agent_withdraws_the_prompt_of_a_connection_the_listener_drops() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::AsyncWriteExt;
+
+    let (core, _dir, work) = core_sharing_work();
+    let released = std::sync::Arc::new(AtomicBool::new(false));
+    let held = released.clone();
+    let approver = RecordingApprover::new(move || {
+        // Bounded, so a regression fails the test instead of hanging it.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !held.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    core.set_agent_approver(Some(approver.clone()));
+    let agent = core.system_agent();
+    let request = sign_request(&work, b"to-sign");
+    let mut frame = u32::try_from(request.len()).unwrap().to_be_bytes().to_vec();
+    frame.extend_from_slice(&request);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        client.write_all(&frame).await.unwrap();
+        let prompt_opened = async {
+            while approver.asked.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        // The client stays connected; serving is dropped once the prompt is up.
+        tokio::select! {
+            () = agent.serve(server, |_| AgentCaller::default()) => panic!("served to the end"),
+            () = prompt_opened => {}
+        }
+        drop(client);
     });
     released.store(true, Ordering::SeqCst);
 

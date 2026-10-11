@@ -19,7 +19,9 @@ pub trait SyncTransport {
     /// the input objects.
     fn push_objects(&mut self, objects: &[SyncObject]) -> Result<Vec<u64>, SyncError>;
 
-    /// Hands off everything with `server_seq > cursor`, in `seq` ASC order. (The mock may
+    /// Hands off what follows `cursor` (`server_seq > cursor`, in `seq` ASC order):
+    /// all of it, or a first page of it — the engine asks again from wherever its
+    /// cursor got to, until an answer is empty or moves nothing. (The mock may
     /// violate order/values — the engine re-sorts and verifies.)
     fn delta_since(&self, cursor: u64) -> Vec<(u64, SyncObject)>;
 

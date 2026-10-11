@@ -32,6 +32,8 @@ starts with `0.`:
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-11
+
 ### Added
 
 - Inline images in the terminal: sixel and iTerm2 inline-image output renders in
@@ -50,17 +52,28 @@ starts with `0.`:
   it and the hosts that reach a bastion with it; keys older than a device-local
   threshold (Settings → Security, default one year) carry a quiet chip. Staged
   rotation: Start creates a candidate key, a guided flow deploys it to every
-  host that uses the key, verifies the login with the candidate only, then
-  removes the exact old line; Finish writes the new material into the key (old
-  material stays in local history), Abandon drops the candidate. The in-place
-  Replace key now says the old material is discarded immediately.
+  machine that uses the key (the same address behind a different bastion or
+  proxy is a separate machine), verifies the login with the candidate only,
+  removes the old key's line — whatever its comment or line ending; a line
+  with options stays for you to remove — and then tries the old key and expects
+  a refusal: a machine is "Switched" only once the old key is really refused.
+  Finish writes the new material into the key (old material stays in local
+  history) and is reached through the rotation dialog, which names the machines
+  that would be locked out; Abandon drops the candidate. Hosts that need a
+  second factor can be rotated. The in-place Replace key now says the old
+  material is discarded immediately. After a rotation the key has to be offered
+  to the system agent again.
 - **Move to server…** for local vaults (Settings → Vaults): converts a local
   vault into a Cloud vault on a signed-in server and space, keeping its name,
   groups, items and host identities, then pushes it. The conversion is a
   re-keyed copy under a new vault id in one transaction; host jumps and
   Personal-identity bindings that referred to the vault follow it, and the
-  account's Personal vault stays the Personal vault. The confirmation shows what
-  moves and offers **Export backup first**. Item version history starts fresh on
+  account's Personal vault stays the Personal vault. Keys offered to the system
+  agent, a key rotation in progress, MCP host selections, item dates (on this
+  device) and the recordings of sessions open during the move follow the vault.
+  The vault is personal unless you pick a space; picking one places it there on
+  the server, where that space's admins can invite people to it but cannot read
+  it. The confirmation shows what moves and offers **Export backup first**. Item version history starts fresh on
   the server. See [upgrading](docs/upgrading.md#moving-a-local-vault-to-a-server).
 - Audit log export for self-hosted servers: an owner-only JSON Lines download
   from the admin audit screen (whole log or a sequence range) carries every field
@@ -75,7 +88,9 @@ starts with `0.`:
   current-user named pipe on Windows — so `ssh`, `git` and other tools list the
   keys you share and every signature opens UniSSH's approval prompt naming the
   key, vault, user and the calling process. The agent follows the vault's lock
-  state and stops on screen lock, sleep and exit. Certificates are offered with
+  state and stops on screen lock, sleep and exit. Requests are asked one at a
+  time and the prompt says how many are waiting; locking the vault refuses all
+  of them. On Windows the pipe is per user. Certificates are offered with
   their keys; RSA signatures honour the SHA-2 flags; a host profile that would
   loop through UniSSH's own agent is refused with a clear error.
 - Biometric unlock (desktop, opt-in): Windows Hello on Windows, and Touch ID on
@@ -87,21 +102,80 @@ starts with `0.`:
   Secret Key unlocks at startup. See THREAT_MODEL.md for what it does and does
   not protect against.
 
+- SFTP: move between the two panes (`F6`, "Move to …"). One confirmation; each
+  item is removed from the source only after it has arrived, and never when the
+  destination may be the same file or folder (a bind mount, a share of the
+  server, a second session) — that item is left untouched and the row says so.
+  Within one location a move is a rename; across filesystems it falls back to
+  copy-then-delete.
+- SFTP: keyboard shortcuts for file operations — a rebindable `sftp` scope in
+  Settings (switch pane, parent folder, rename, edit, copy, move, new folder,
+  delete, select all).
+- SFTP: "Calculate size" for folders (row menu, `Alt+Enter`), and "Find files"
+  — a recursive search by name or glob below the current folder (`Alt+F7`),
+  locally or over SFTP.
+- Hosts: an "Ungrouped" filter, sorting by group and a Group column in the list
+  layout.
+
 ### Fixed
 
+- Agent signature prompts never appeared on desktop: every signature through a
+  forwarded agent (since 0.2.0) was refused after 60 seconds. The prompt is now
+  shown on desktop too, above Settings and the Emergency Kit; a new prompt takes
+  no answer for half a second, and a request is withdrawn when its client or
+  session goes away. MCP approvals and server auth prompts are no longer lost
+  while the Emergency Kit is open.
+- The local SFTP pane can rename, create, delete and edit outside the home
+  directory.
+- An idle SFTP channel no longer breaks rename, delete or the last step of a
+  transfer; it is reopened. Server-to-server transfers show the file's size, not
+  twice it.
 - Cloud sync no longer loops forever when a server reports more pages without a
   usable or advancing cursor; it stops and resumes on the next sync.
+- Cloud sync uploads in several requests instead of one, and a failed upload no
+  longer stops the device from receiving. An item the server refuses as too
+  large is named and stays on this device — "Sync now" retries it — instead of
+  blocking everything else.
+- A key or certificate rotated or replaced on another device stops being used
+  here as soon as the change syncs, including by agent forwarding in open
+  sessions.
+- A backup restored after a move resolves its bastion jumps and its own
+  Personal bindings.
+- The unlock screen no longer waits on Touch ID or Windows Hello checks when
+  biometric unlock was never enabled, and never holds the password field back
+  for more than a moment.
 
 ### Security
 
 - Server: the first-boot setup code is printed once on stdout (`SETUP CODE:`)
   and no longer repeated in the structured log, and `unissh-server setup-code`
   masks the password of the database URL it reports.
+- A lock always wins over an unlock in progress, and a biometric prompt answered
+  late can neither unlock a vault that was locked again nor replace an open
+  session. Locking reliably stops MCP and system-agent access.
+- The stored biometric password is wiped whenever the keyset on disk may have
+  changed, including when a password change or recovery fails part-way;
+  Settings always offers Forget for leftover material.
 
 ### Compatibility
 
-**Vault format and server protocol are unchanged** — the conversion writes an
+**Vault format and server protocol are unchanged.** Moving a vault writes an
 ordinary Cloud vault, and the server receives it like any new Cloud vault.
+
+Server operators — see [upgrading](docs/upgrading.md):
+
+- The server adds one table for the audit sinks' cursors on first start
+  (migration `0005`); nothing to do.
+- `limits.max_object_bytes` now defaults to 17 MiB and `limits.max_body_bytes`
+  to 24 MiB, and the body limit is really applied to `POST /v1/sync/push` — it
+  was 2 MiB in practice whatever the setting said. A reverse proxy in front
+  needs `client_max_body_size 24m`. A config file that sets
+  `max_object_bytes` explicitly keeps its value.
+- `GET /v1/sync/delta` cuts a page at the new `limits.delta_max_page_bytes`
+  (8 MiB by default). The response shape is unchanged and 0.5 clients keep
+  syncing.
+- A 0.6 client against a 0.5 server uploads in requests of at most 1 MiB and
+  reports larger items instead of syncing them.
 
 ## [0.5.0] — 2026-10-02
 

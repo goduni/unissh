@@ -48,14 +48,25 @@ Request and object bounds, plus a per-IP rate limit.
 
 ```toml
 [limits]
-max_body_bytes = 16777216        # 16 MiB
-max_object_bytes = 1048576       # 1 MiB
+max_body_bytes = 25165824        # 24 MiB
+max_object_bytes = 17825792      # 17 MiB
 max_objects_per_push = 1000
 delta_page_size = 500
 delta_max_page_size = 1000
+delta_max_page_bytes = 8388608   # 8 MiB
 rate_limit_per_ip_rps = 20
 rate_limit_burst = 40
 ```
+
+`max_object_bytes` is the largest single object a push may carry. The default admits the largest object a client produces: a full session recording (an 8 MiB capture, up to twice that once stored, plus headroom). With a lower value such an item is refused; the client then keeps it on the device, uploads everything else and names the item in its sync report.
+
+`max_body_bytes` is the largest request body. Objects travel base64-encoded, so it must be at least 4/3 of `max_object_bytes`; the defaults satisfy that. A reverse proxy in front of the server needs the same limit (`client_max_body_size 24m` in nginx).
+
+`delta_page_size` and `delta_max_page_size` are the default and the largest number of objects in one page of a pull; `delta_max_page_bytes` bounds the same page by size. A page is cut before the object that would exceed it and always carries at least one, so an object larger than the budget still syncs, in a page of its own. Clients follow the paging on their own, including clients older than 0.6.
+
+Only uploads (`POST /v1/sync/push`) accept a body up to `max_body_bytes`. Every other route, including the ones that answer before sign-in, stops at 2 MiB.
+
+Servers up to 0.5 defaulted to 1 MiB objects and, whatever `max_body_bytes` said, accepted request bodies of at most 2 MiB. A configuration file written for them that sets `max_object_bytes = 1048576` keeps that limit after an upgrade: raise it (or drop the line) to let recordings sync.
 
 ### `[sync]`
 

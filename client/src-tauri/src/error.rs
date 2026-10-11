@@ -77,12 +77,23 @@ impl From<FfiError> for ApiError {
                 port,
                 fingerprint,
             },
+            // Reaches the UI only for an object a push cannot continue
+            // without; an item that is too large comes back in the sync report.
+            FfiError::PayloadTooLarge { msg } => Self::Server {
+                code: "payload_too_large".into(),
+                message: msg,
+            },
             FfiError::RotationInProgress { candidate_id } => {
                 Self::RotationInProgress { candidate_id }
             }
             FfiError::RotationPartlyFinished { key_id } => Self::RotationPartlyFinished { key_id },
             FfiError::PublickeyOnlyNeedsKey => {
                 Self::other("A key-only login needs key authentication.")
+            }
+            // Read off `MultiExecResult::key_login` where they matter (a key
+            // rotation); anywhere else they are an SSH failure like any other.
+            e @ (FfiError::KeyRefused | FfiError::KeyAcceptedMoreAuthRequired) => {
+                Self::Ssh { msg: e.to_string() }
             }
             FfiError::Ssh { msg } => Self::Ssh { msg },
             FfiError::Other { msg } => Self::Other { msg },

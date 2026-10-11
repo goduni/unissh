@@ -15,6 +15,15 @@ export function serverShortLabel(s: ServerStatus): string {
   return "server";
 }
 
+/** The linked servers a PERSONAL cloud vault can be created on. Creating one is
+ *  a local operation of the core: the vault is born bound to the link's Space
+ *  label and a later sync uploads it. So it takes a link that has that label —
+ *  not a live session, and not the network. Placing a vault IN a Space is what
+ *  needs the session, and that is gated where a Space is picked. */
+export function cloudVaultServers(servers: ServerStatus[]): ServerStatus[] {
+  return servers.filter((s) => s.connected && !!s.serverId && !!s.spaceId);
+}
+
 /** Resolve which linked server + Space a cloud vault is bound to. A cloud vault's
  *  `syncTenant` is its bound Space id (base64); we find the link whose `spaces`
  *  (the caller's spaces on that server) contains it. null for local/unbound vaults

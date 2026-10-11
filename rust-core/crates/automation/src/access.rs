@@ -3,6 +3,13 @@ use super::*;
 
 /// A user's saved consent for one integration, persisted by the executor and
 /// restored into a live grant after unlock when its targets are unchanged.
+///
+/// The serialized list of these (the `mcp.access.v1` meta value) is also
+/// edited from outside this crate: `unissh-ffi`'s `automation::rehome_access`
+/// rewrites `targets[].vault_id` in the stored JSON when a local vault is moved
+/// to a server and changes id. It works on the raw JSON, not on this type, so
+/// renaming `targets` or a target's `vault_id`, or nesting them differently,
+/// must be mirrored there (its test: `moved_vault_keeps_the_hosts_picked_for_an_mcp_integration`).
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SavedAccess {

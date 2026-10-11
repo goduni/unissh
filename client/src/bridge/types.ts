@@ -188,6 +188,9 @@ export interface VaultIntegrityReport {
  *  Mac that cannot do Touch ID or whose build may not use the protected
  *  Keychain, and on Windows without Windows Hello set up. */
 export interface BiometricStatus {
+  /** A sealed password is on disk, usable or not: there is something Settings
+   *  can forget, whatever the vault's password state is now. */
+  stored: boolean;
   supported: boolean;
   /** The sealed password is stored and its biometric-gated device secret
    *  still exists (as far as the platform says without a prompt). */
@@ -214,13 +217,11 @@ export interface BiometricStatus {
  *  The gate is stored only on "confirmed". */
 export type PresenceCheck = "confirmed" | "cancelled" | "unavailable";
 
-/** What a password change did to biometric unlock: nothing was stored, the
- *  stored password was erased, or erasing it failed (it opens nothing any
- *  more and goes at the next biometric attempt). */
-export type KeysetWipe = "nothing" | "erased" | "failed";
-
-/** How `biometric_unlock` ended. Anything but "unlocked" shows the password. */
-export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated" | "noSecretKey";
+/** How `biometric_unlock` ended. "unlocked": the vault is open. "superseded":
+ *  nobody is waiting for that prompt any more (the password was chosen, a
+ *  newer prompt was asked for, the vault was locked) — the unlock screen
+ *  ignores it. Anything else shows the password. */
+export type BiometricUnlockOutcome = "unlocked" | "cancelled" | "invalidated" | "noSecretKey" | "superseded";
 
 export type DbConsistencyKind =
   | "orphanItem"
@@ -318,7 +319,13 @@ export interface MultiExecResult {
   error?: string | null;
   durationMs: number;
   timedOut: boolean;
+  /** Set when the target was a key-only login (`publickeyOnly`) that failed
+   *  with an answer about the key itself: the server refused it, or accepted it
+   *  and asked for a second factor. Absent for every other result. */
+  keyLogin?: KeyLoginFailure | null;
 }
+
+export type KeyLoginFailure = "refused" | "acceptedNeedsMore";
 
 export type ResolveStatus =
   | "ok"
@@ -644,11 +651,27 @@ export interface SyncReport {
   conflicts: number;
   rejected: number;
   pushed: number;
+  /** Items the server refuses as too large: NOT uploaded (everything else was).
+   *  Reported by every sync until the item changes or a manual sync gets it through. */
+  tooLarge: TooLargeItem[];
+}
+
+/** An item the sync server refuses as too large: over its `limits.max_object_bytes`,
+ *  or over the body limit of a reverse proxy in front of it. */
+export interface TooLargeItem {
+  vaultId: string;
+  vaultName: string;
+  itemId: string;
+  /** The core's item type ({@link ItemType}), to name the item by kind. */
+  itemType: number;
+  /** Size of the refused sync object, in bytes. */
+  bytes: number;
 }
 
 /** Result of moving a local vault to a server: the new cloud vault id (hex) and the
- *  first push — `push` on success, `pushError` when it failed (the move stands; the
- *  vault is bound and uploads on the next sync). */
+ *  first push — `push` on success (it may still name items the server refused as
+ *  too large), `pushError` when it failed (the move stands; the vault stays bound
+ *  and a later sync of its space uploads it). */
 export interface MovedVault {
   vaultId: string;
   push: SyncReport | null;

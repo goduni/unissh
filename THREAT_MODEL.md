@@ -87,6 +87,21 @@ vault key, and holding a vault-admin grant confers no server-side privilege.
 Collapsing them would let a server compromise escalate into decryption — which
 must never happen.
 
+**Personal and space vaults.** The server registers a cloud vault either as a
+*personal* vault of one account or as a vault *of a space*. The difference lives
+entirely on the server-trusted plane: invitations that carry access to a
+personal vault can be issued only by its owning account, and to a space vault by
+any admin of that space — including admins other than the vault's creator, and
+the creator only for as long as they remain one. It does not touch the
+cryptographic plane: either way, reading needs a grant wrapped to the reader's
+key, which only a device holding the Vault Key can publish. Clients up to 0.5
+created personal vaults only; from 0.6 a vault is placed in a space only when
+the user picks one explicitly, and personal stays the default. Existing vaults
+are not migrated, so an instance holds both kinds. Which kind a vault is, is
+server state: a malicious server could misreport it, with the consequences of
+the server-trusted class above (the wrong account could queue an invitation) and
+no more (it still cannot mint a grant).
+
 ### First-boot claim window
 
 An unclaimed instance prints a one-time **setup code** to its log on first boot
@@ -279,9 +294,34 @@ neither offered nor attempted.
 - **Stale material outliving the password.** Changing, adding or removing the
   master password wipes the material, as does any path that replaces this
   device's keyset (Emergency-Kit or escrow recovery, device pairing, a keyset
-  pulled from a server, a new account) and resetting the instance. A password
+  pulled from a server, a new account) and resetting the instance — also when
+  such a change fails after the keyset on disk was already rewritten, and also
+  when the change lands while biometric unlock is being turned on: the setting
+  is then not turned on, and nothing stays stored. A password
   the keyset no longer accepts is also wiped when it is next tried. Turning the
-  setting off wipes both halves at once.
+  setting off wipes both halves at once. A wipe that leaves the sealed password
+  on disk is not passed over: the app says so, and Settings offers to forget
+  whatever is still stored, including on a vault that no longer has a password
+  (which never tries the biometric again, so nothing else would remove it). If
+  only the device secret could not be deleted, the sealed password is gone and
+  the leftover secret opens nothing.
+- **A prompt answered after you moved on.** A biometric result counts only for
+  the attempt that asked for it. Choosing the password instead, a typed unlock,
+  a lock, a reset and a newer prompt each end the attempt before them. Whatever
+  its prompt answers afterwards is discarded: nothing is unlocked, nothing is
+  wiped, and a secret the prompt released is zeroized unused — so a Touch ID or
+  Hello confirmation that arrives late cannot replace a session opened with the
+  password. Choosing the password also holds for a prompt that had not come up
+  yet: the screen names the attempt it gives up on, and no prompt is shown for
+  it afterwards. That a lock wins is enforced in the core, for every kind of unlock
+  (typed, remembered-key and biometric alike): an unlock that began before a
+  lock installs nothing, however long its prompt or its key derivation took, so
+  it cannot reopen a vault you have locked again. On macOS the abandoned
+  evaluation is cancelled, which closes its sheet; on Windows the request is
+  cancelled too, but Windows does not promise to close the Hello dialog. One
+  left on screen cannot unlock anything — its answer is discarded as above —
+  but it can get in the way: it may sit in front of the next Hello dialog, or
+  keep that one from appearing until it is dismissed.
 
 **Does not protect against:**
 
@@ -369,7 +409,8 @@ boundary, so what crosses it is spelled out here.
   same id is not offered until it is shared again. macOS, Linux and Windows.
 - **The endpoint's permissions are the access control.** On macOS and Linux it
   is a Unix socket in a `0700` directory, itself `0600`. On Windows it is the
-  named pipe `\\.\pipe\unissh-agent` with a protected DACL holding a single
+  named pipe `\\.\pipe\unissh-agent-<SID>`, named after the user's own SID so
+  that each Windows account has its own, with a protected DACL holding a single
   entry: the current user's own SID (read from the process token, not the
   owner-rights alias, which under an elevated token would mean the
   Administrators group). Remote pipe clients are rejected, and the default
@@ -414,18 +455,47 @@ boundary, so what crosses it is spelled out here.
   whoever is asking. For an interpreter the executable is the interpreter
   (`python3`), not the script. The identity helps a person judge a request;
   it is not what grants access.
-- **Prompts are bounded.** At most four signature prompts are open at once,
-  across every connection. Beyond that a request is refused immediately rather
-  than stacking dialogs. A client that disconnects withdraws its open prompt.
-  A client that only half-closes its side (`shutdown(SHUT_WR)` after sending)
-  counts as gone too, so its prompt is withdrawn. OpenSSH's own clients keep
-  the stream open and are unaffected.
+- **One prompt at a time, for every agent; connections are bounded.** The
+  core puts one signature request to the window at a time, whether it came
+  through the system agent or through a forwarded agent of an SSH session;
+  the others wait in a single line. The 60-second timeout of a request starts
+  when its prompt is shown, not while it waits, so none expires unseen; the
+  prompt says how many were waiting behind it when it appeared. Waiting itself
+  is not timed: a request waits at most 60 seconds for each request ahead of
+  it. The line holds at most one request per system-agent connection (64, see
+  below) and 64 forwarded requests, beyond which a forwarded request is
+  refused immediately, so the worst case is a little over two hours, reached
+  only if 127 requests ahead are each left to time out. A new prompt ignores
+  input for its first half second, so a click meant for the previous one
+  cannot answer it. A client that disconnects withdraws its open prompt or
+  gives up its place in line, and so does a connection the listener cuts. A
+  forwarded request does the same when the remote host closes the agent
+  channel it came in on, or when its SSH session ends. A client that only half-closes its side
+  (`shutdown(SHUT_WR)` after sending) counts as gone too, so its prompt is
+  withdrawn. OpenSSH's own clients keep the stream open and are unaffected.
+  At most 64 connections are served at once (one beyond that is closed
+  unanswered), and a connection that sends no request for ten minutes is
+  closed. The identity list is resolved from the vaults once and reused only
+  while nothing it was resolved from has changed (the set of shared keys, and
+  any vault, item or certificate, a sync pull included; a lock discards it); a
+  signature never relies on that list, it resolves the key again.
 - **No unlocked vault, no agent.** A locked vault lists no identities and signs
   nothing. The listener stops on vault lock, screen lock, sleep and exit,
-  cutting open connections and withdrawing open prompts. It comes back after
+  cutting open connections, withdrawing the open prompt and refusing every
+  request still waiting in line, so none of them is shown afterwards. It comes back after
   the next unlock, however it is made (password, Secret Key, or the biometric
   unlock above), or wake if the vault is still unlocked, when the setting is
-  on. A prompt answered in the instant before it is withdrawn still yields
+  on. A vault lock does the same to forwarded agents' requests, in the core
+  itself and so on every platform: the open prompt is withdrawn and every
+  request in line is refused, whichever agent it came through, and a request
+  arriving while the vault is locked (on an SSH session that outlived the
+  lock) is refused without a prompt, so nothing asked before or during a lock
+  is shown after the unlock that follows. A screen lock or
+  sleep that leaves the vault unlocked (the "lock with the screen" setting off,
+  or its grace period still running) stops only the system agent: SSH sessions
+  stay up, and a forwarded request is still put to the window, which the
+  operating system's lock screen covers; unanswered, it is refused after its
+  60 seconds. A prompt answered in the instant before it is withdrawn still yields
   nothing. After the approval the core re-checks that it is unlocked and that
   the key is still shared and unchanged, and an answer for a connection that
   was cut is discarded.
@@ -440,8 +510,14 @@ boundary, so what crosses it is spelled out here.
   the caller's identity is written to the log.
 
 Not protected, and not claimed to be: a process running as the same user can
-connect, list the shared public keys and raise approval prompts (up to the cap)
-as often as it likes. Any signature the user approves is that process's to use,
+connect, list the shared public keys and raise approval prompts (one at a time,
+up to the line's length) as often as it likes, and by holding every connection
+slot or filling the line it can keep the user's own tools from being served,
+or make them wait behind its prompts. A remote host given agent forwarding can
+fill its share of the same line and delay local requests the same way; its
+prompts name that host; refusing them, and closing the session so that no more
+arrive, is the remedy.
+Any signature the user approves is that process's to use,
 including a login signature for a server other than the one the user had in
 mind, since the prompt can name only the user, not the host. A process running
 as the same user can also attack the app directly (debugging it, reading its
@@ -449,7 +525,8 @@ memory, driving its UI) without going through the agent at all. Root or an
 administrator is outside this boundary entirely. The system agent assumes a
 trusted desktop session, as the MCP listener does.
 
-On Windows, another user's process can create `\\.\pipe\unissh-agent`
+On Windows, another user's process can create the user's pipe (the name is
+per user but not secret: a SID can be looked up)
 while UniSSH's agent is not listening (locked, disabled, or not started yet),
 since the name disappears with the last instance. The user's tools then talk
 to that process: it receives their agent requests and can offer its own

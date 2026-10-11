@@ -62,6 +62,14 @@ pub(crate) fn resume_after_unlock(app: &tauri::AppHandle) {
 
 /// The counterpart for lock, reset, screen lock and sleep: pause MCP and
 /// system-agent access.
+///
+/// A resume acts only on an open vault, and only if no revoke came after it
+/// was asked for. So whoever locks the core revokes twice, on either side of
+/// it (`lock`, `reset_instance`): the first so that nothing is served while
+/// the vault closes, the second for a resume that was asked for after the
+/// first and saw the vault still open — it is undone, or stands down on
+/// finding a revoke newer than itself. Once that second revoke has returned,
+/// a resume finds the vault locked and does nothing.
 pub(crate) fn revoke_agent_access(app: &tauri::AppHandle) {
     #[cfg(desktop)]
     {
@@ -196,20 +204,51 @@ fn remove_if_present(path: &std::path::Path) {
 #[tauri::command]
 pub async fn reset_instance(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
     revoke_agent_access(&app);
-    // Never wipe an instance the caller can actually open. Check synchronously
-    // (no `.await` before it) so there is no unlocked->reset race window.
     let core = state.core.clone();
-    if blocking_ok(move || core.is_unlocked()).await? {
+    let attempts = state.unlock_attempts.clone();
+    let db_path = state.db_path.clone();
+    let keyset_path = state.keyset_path.clone();
+    let unlocked = blocking_ok(move || {
+        // First of all, before anything is deleted: a biometric prompt still up
+        // belongs to the instance that is about to go, and its answer must not
+        // open it.
+        attempts.supersede();
+        // Never wipe an instance the caller can actually open.
+        if core.is_unlocked() {
+            return true;
+        }
+        // Locked, and it stays so: counted as a lock, so that an unlock already
+        // deriving its keys (biometric or typed) installs nothing.
+        core.lock();
+        // The files go while no unlock is under way. One that had read the
+        // keyset and was still deriving its keys would otherwise open — that
+        // is, create — the database after it was removed, and leave an empty
+        // one behind (it installs nothing, but the file stays); the core has
+        // it finish first, and one that comes later finds no keyset and
+        // creates nothing.
+        core.while_no_unlock_runs(|| {
+            // An unlock that began after the lock above and got through
+            // before the files could go: the instance is open, and stays.
+            if core.is_unlocked() {
+                return true;
+            }
+            remove_if_present(&db_path);
+            remove_if_present(&keyset_path);
+            // The pre-migration keyset backup (`<keyset>.pre-migration.bak`), if present.
+            let mut bak = keyset_path.into_os_string();
+            bak.push(".pre-migration.bak");
+            remove_if_present(&std::path::PathBuf::from(bak));
+            false
+        })
+    })
+    .await?;
+    if unlocked {
         return Err(ApiError::other(
             "refusing to reset an unlocked instance — lock it first",
         ));
     }
-    remove_if_present(&state.db_path);
-    remove_if_present(&state.keyset_path);
-    // The pre-migration keyset backup (`<keyset>.pre-migration.bak`), if present.
-    let mut bak = state.keyset_path.clone().into_os_string();
-    bak.push(".pre-migration.bak");
-    remove_if_present(&std::path::PathBuf::from(bak));
+    // Again, now that the core is locked for good: see `revoke_agent_access`.
+    revoke_agent_access(&app);
     // Forget cloud links + the stale keychain Secret Key so re-onboarding is clean.
     // `clear_all` wipes every registry even when a lock is poisoned; any error it
     // reports is returned after the remaining best-effort steps have run, so one
@@ -343,14 +382,17 @@ pub fn reveal_log_dir(_app: tauri::AppHandle) -> ApiResult<()> {
 
 #[tauri::command]
 pub async fn create_account(
+    app: tauri::AppHandle,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> ApiResult<String> {
     let core = state.core.clone();
     // A new keyset: nothing left from an earlier instance may unlock it.
-    let (secret_key, _) = blocking_api(crate::biometric::installing_keyset(&state, move || {
-        Ok(core.create_account(password)?)
-    }))
+    let (secret_key, _) = blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || Ok(core.create_account(password)?),
+    ))
     .await?;
     Ok(secret_key)
 }
@@ -363,7 +405,16 @@ pub async fn unlock(
     state: State<'_, AppState>,
 ) -> ApiResult<()> {
     let core = state.core.clone();
-    blocking(move || core.unlock(password, secret_key_hex)).await?;
+    let attempts = state.unlock_attempts.clone();
+    blocking(move || {
+        // The user took the typed path: a biometric prompt still up is over,
+        // whatever it answers later and whether or not this unlock succeeds.
+        attempts.supersede();
+        // `Ok` only with the vault open: a lock that landed while the keys were
+        // being derived wins in the core, and this fails as `Locked`.
+        core.unlock(password, secret_key_hex)
+    })
+    .await?;
     resume_after_unlock(&app);
     Ok(())
 }
@@ -378,7 +429,15 @@ pub async fn lock(app: tauri::AppHandle, state: State<'_, AppState>) -> ApiResul
     state.broadcasts.clear();
     state.exec_handles.clear();
     let core = state.core.clone();
-    let result = blocking_ok(move || core.lock()).await;
+    let attempts = state.unlock_attempts.clone();
+    // A biometric prompt answered after this lock must not undo it: its attempt
+    // is ended, the core is locked, and only then is the prompt taken down. An
+    // unlock of any kind that is already deriving keys is refused by the core
+    // (see `Core::unlock`).
+    let result = blocking_ok(move || attempts.locking(|| core.lock())).await;
+    // Again, now that the core is locked: a resume asked for since the revoke
+    // above saw the vault still open (see `revoke_agent_access`).
+    revoke_agent_access(&app);
     invalidate_sftp(&state);
     result
 }
@@ -491,23 +550,30 @@ pub async fn set_algorithm_policy(modern: bool, state: State<'_, AppState>) -> A
     Ok(())
 }
 
-/// Change, add or remove the master password. On success the biometric unlock
-/// material sealed for the old password is wiped; the answer says whether there
-/// was any and whether the wipe worked, so Settings can ask for it to be turned
-/// on again (with the new password, in this session) or say it failed.
+/// Change, add or remove the master password. The biometric unlock material
+/// sealed for the old password is wiped — also when the change fails after the
+/// keyset was already rewritten. The answer is whether biometric unlock was
+/// turned off by it, so Settings can ask for it to be turned on again (with
+/// the new password, in this session). What the answer cannot carry — a wipe
+/// that failed, or one done by a change that itself failed — reaches the
+/// window as an event from `installing_keyset`, like for every other keyset
+/// install.
 #[tauri::command]
 pub async fn change_password(
+    app: tauri::AppHandle,
     old_password: Option<String>,
     new_password: Option<String>,
     secret_key_hex: String,
     state: State<'_, AppState>,
-) -> ApiResult<crate::biometric::KeysetWipe> {
+) -> ApiResult<bool> {
     let core = state.core.clone();
-    let ((), wipe) = blocking_api(crate::biometric::installing_keyset(&state, move || {
-        Ok(core.change_password(old_password, new_password, secret_key_hex)?)
-    }))
+    let ((), wipe) = blocking_api(crate::biometric::installing_keyset(
+        &app,
+        &state,
+        move || Ok(core.change_password(old_password, new_password, secret_key_hex)?),
+    ))
     .await?;
-    Ok(wipe)
+    Ok(wipe == crate::biometric::KeysetWipe::Erased)
 }
 
 // ---------- vaults ----------

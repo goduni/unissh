@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SftpSession } from "@/store/sftp-types";
 
 const { api } = vi.hoisted(() => ({
-  api: { sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), localRemove: vi.fn(), sftpReopen: vi.fn(), sftpListDirCancel: vi.fn(), cancelNew: vi.fn(), cancelTrigger: vi.fn(), cancelDispose: vi.fn() },
+  api: { sftpRename: vi.fn(), sftpCommit: vi.fn(), sftpRemove: vi.fn(), sftpRmdir: vi.fn(), sftpStat: vi.fn(), sftpLstat: vi.fn(), sftpListDir: vi.fn(), localListDir: vi.fn(), localLstat: vi.fn(), localStat: vi.fn(), localRemove: vi.fn(), sftpReopen: vi.fn(), sftpListDirCancel: vi.fn(), cancelNew: vi.fn(), cancelTrigger: vi.fn(), cancelDispose: vi.fn() },
 }));
 vi.mock("@/bridge/api", () => api);
-import { sourceFor } from "./sources";
+vi.mock("@tauri-apps/api/path", () => ({ join: async (...parts: string[]) => parts.join("/"), dirname: async (path: string) => path.slice(0, path.lastIndexOf("/")) }));
+import { localRenameNeedsCopy, remoteRenameNeedsCopy, sourceFor } from "./sources";
 
 const remote = () => sourceFor({ kind: "remote", sessionId: "s" }, [{ id: "s", label: "server", host: "server", user: "user", port: 22 } as SftpSession]);
 beforeEach(() => { vi.resetAllMocks(); });
@@ -28,6 +29,43 @@ describe("conflict metadata failures", () => {
   });
 });
 
+describe("an SFTP status", () => {
+  it("is not read out of the text the server sends after it", async () => {
+    const error = { kind: "ssh", msg: "sftp error: status 4: cannot open status 2" };
+    api.sftpLstat.mockRejectedValue(error);
+    await expect(remote().lstat("/target")).rejects.toEqual(error);
+  });
+});
+
+describe("a refused rename", () => {
+  it.each([
+    ["Invalid cross-device link (os error 18)", false, false, true],
+    ["The system cannot move the file to a different disk drive. (os error 17)", true, false, true],
+    ["File exists (os error 17)", false, true, false],
+    ["Permission denied (os error 13)", false, true, false],
+    // link(2) refused by a filesystem without hard links: only a commit onto a
+    // free name is made of one, and never on Windows.
+    ["Operation not permitted (os error 1)", false, true, true],
+    ["Too many links (os error 31)", false, true, true],
+    ["Operation not supported (os error 45)", false, true, true],
+    ["Operation not supported (os error 95)", false, true, true],
+    ["Operation not permitted (os error 1)", false, false, false],
+    ["Incorrect function. (os error 1)", true, true, false],
+  ] as const)("%s locally (windows: %s, onto a free name: %s) needs a copy: %s", (message, windows, exclusive, expected) => {
+    expect(localRenameNeedsCopy(message, windows, exclusive)).toBe(expected);
+  });
+  it.each([
+    ["sftp error: status 4: Failure", true],
+    ["sftp error: status 8: Operation unsupported", true],
+    ["sftp error: server does not support atomic replacement (posix-rename)", false],
+    ["sftp error: status 3: Permission denied", false],
+    ["sftp error: status 2: No such file", false],
+    ["channel closed", false],
+  ] as const)("%s on a server needs a copy: %s", (message, expected) => {
+    expect(remoteRenameNeedsCopy(message)).toBe(expected);
+  });
+});
+
 describe("a reaped channel", () => {
   it("is reopened once under a cancellable listing, which then succeeds on its own token", async () => {
     api.cancelNew.mockResolvedValue("token");
@@ -36,6 +74,42 @@ describe("a reaped channel", () => {
     expect(api.sftpReopen).toHaveBeenCalledExactlyOnceWith("s");
     expect(api.sftpListDirCancel.mock.calls).toEqual([["s", "/dir", "token"], ["s", "/dir", "token"]]);
     expect(api.cancelDispose).toHaveBeenCalledExactlyOnceWith("token");
+  });
+});
+
+describe("a channel that dies under a request that changes the server", () => {
+  const dead = { kind: "ssh", msg: "channel closed" };
+  const absent = { kind: "ssh", msg: "sftp error: status 2: No such file" };
+  const file = { isDir: false, size: 1, mode: 0o100644 };
+
+  it.each([
+    ["rename", () => remote().rename("/a", "/b"), api.sftpRename],
+    ["commit", () => remote().commit("/a", "/b", true), api.sftpCommit],
+  ] as const)("sends a %s again after the reopen while its source is still in place", async (_name, run, request) => {
+    request.mockRejectedValueOnce(dead).mockResolvedValueOnce(undefined);
+    api.sftpLstat.mockResolvedValue(file);
+    await run();
+    expect(api.sftpReopen).toHaveBeenCalledExactlyOnceWith("s");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+  it("does not repeat a rename that landed before its reply was lost", async () => {
+    api.sftpRename.mockRejectedValue(dead);
+    api.sftpLstat.mockImplementation(async (_id, path) => { if (path === "/a") throw absent; return file; });
+    await remote().rename("/a", "/b");
+    expect(api.sftpRename).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ["file", () => remote().remove("/a"), api.sftpRemove],
+    ["folder", () => remote().removeEmptyDir("/a"), api.sftpRmdir],
+  ] as const)("takes a %s that is already gone on the second try as removed", async (_name, run, request) => {
+    request.mockRejectedValueOnce(dead).mockRejectedValueOnce(absent);
+    await run();
+    expect(api.sftpReopen).toHaveBeenCalledExactlyOnceWith("s");
+  });
+  it("still reports a file that was never there", async () => {
+    api.sftpRemove.mockRejectedValue(absent);
+    await expect(remote().remove("/a")).rejects.toEqual(absent);
+    expect(api.sftpReopen).not.toHaveBeenCalled();
   });
 });
 
@@ -70,5 +144,20 @@ describe("removing an emptied local folder", () => {
     api.localLstat.mockResolvedValue({ name: "moved", isDir: true, isSymlink: true, size: 3, mtime: 0 });
     await expect(sourceFor({ kind: "local" }, []).removeEmptyDir("/src/moved")).rejects.toThrow("Not a directory");
     expect(api.localRemove).not.toHaveBeenCalled();
+  });
+});
+
+describe("a local unix path that holds a backslash", () => {
+  it("is not taken for a Windows path", async () => {
+    // Not on Windows here: the backslash is part of a folder's name, and a
+    // name Windows reserves is an ordinary one.
+    const local = sourceFor({ kind: "local" }, []);
+    expect(local.crumbs("/srv/a\\b")).toEqual([{ label: "/", path: "/" }, { label: "srv", path: "/srv" }, { label: "a\\b", path: "/srv/a\\b" }]);
+    expect(await local.join("/srv/a\\b", "con")).toBe("/srv/a\\b/con");
+  });
+
+  it("keeps the backslash in the file's name", async () => {
+    api.localStat.mockResolvedValue({ isDir: false, size: 1, mtime: 0 });
+    expect((await sourceFor({ kind: "local" }, []).stat("/srv/a\\b"))?.name).toBe("a\\b");
   });
 });

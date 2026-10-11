@@ -78,7 +78,7 @@ export interface Transfer {
   move?: boolean;
   bytesDone: number;
   bytesTotal: number;
-  sourceSize?: number; // original file size, before accounting for relay legs
+  sourceSize?: number; // the size the listing gave; a retry starts its total from it again
   filesDone: number;
   filesTotal: number;
   speedBps: number;
