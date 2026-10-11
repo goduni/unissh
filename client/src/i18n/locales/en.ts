@@ -376,6 +376,7 @@ export const en = {
     cloudDesc: "in your account on a server",
     space: "Space",
     spacesUnavailable: "A space — unavailable: the server cannot be reached",
+    spacesNeedSession: "A space — unavailable: sign in to the server first",
     newSpace: "＋ New space",
     newSpaceHint:
       "Creates a new space on {{server}}, then puts the vault in it. The space is yours — the server's admin can't read it.",

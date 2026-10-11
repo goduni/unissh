@@ -621,7 +621,8 @@ pub async fn server_account_profile(
 /// Create a cloud (server-synced) vault, BOUND 1:1 to a server (defaults to the
 /// active server) by a space label, and propagated to THAT server on the next
 /// `server_sync_now`. Requires a linked server: with none, `require_config` errors
-/// (the UI also gates the Cloud option behind a session). Returns the vault id (hex).
+/// (the UI offers the Cloud option for a linked server, signed in or not, and a
+/// space only with a session). Returns the vault id (hex).
 ///
 /// - `space_id: None` — a LOCAL operation: the vault is created bound to the
 ///   link's primary space label, and its first push makes it a personal vault of

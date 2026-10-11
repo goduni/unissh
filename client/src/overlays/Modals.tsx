@@ -45,7 +45,7 @@ import { useCtx } from "@/store/ctx";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType, profileToAuth } from "@/bridge/types";
-import { isOwnedCloud, serverShortLabel, vaultLoc } from "@/bridge/vaults";
+import { cloudVaultServers, isOwnedCloud, serverShortLabel, vaultLoc } from "@/bridge/vaults";
 import type {
   ConnectionProfile,
   Identity,
@@ -2428,8 +2428,9 @@ function NewVaultModal({
   const servers = useApp((s) => s.servers);
   const activeServerId = useApp((s) => s.activeServerId);
   const [name, setName] = useState(edit?.name ?? "");
-  // A cloud vault can be created on ANY linked server with a live session — pick which.
-  const cloudServers = servers.filter((s) => s.connected && s.hasSession && s.serverId);
+  // A cloud vault made here is a personal one, created locally and uploaded by a
+  // later sync: ANY linked server will do, signed in or not — pick which.
+  const cloudServers = cloudVaultServers(servers);
   const cloudReady = cloudServers.length > 0;
   const [target, setTarget] = useState<SyncTarget>("local");
   const [cloudServer, setCloudServer] = useState<string>(() =>
@@ -2572,11 +2573,10 @@ function IdentityVaultModal({
   const activeServerId = useApp((s) => s.activeServerId);
 
   // The linked account (server) a cloud identity vault can live on — prefer the
-  // active one, else any connected+authenticated link. Spaces are scoped to it.
-  const account =
-    servers.find((s) => s.serverId === activeServerId && s.connected && s.hasSession) ??
-    servers.find((s) => s.connected && s.hasSession && s.serverId) ??
-    null;
+  // active one, else any linked one. A personal vault needs no live session (it
+  // is created locally); the Spaces, scoped to the account, do.
+  const linked = cloudVaultServers(servers);
+  const account = linked.find((s) => s.serverId === activeServerId) ?? linked[0] ?? null;
   const cloudReady = !!account;
   const PERSONAL = "";
   const NEW_SPACE = "__new__";
@@ -2585,8 +2585,9 @@ function IdentityVaultModal({
   // The caller's Spaces on the account where they're an admin — a Space an
   // identity vault is placed in must be one you control (never a shared team
   // Space, which would leak). Null = the list could not be fetched: the server
-  // is not reachable, so nothing can be placed in a Space right now.
-  const [spaces, setSpaces] = useState<SpaceInfo[] | null>([]);
+  // is not reachable (or not signed in to), so nothing can be placed in a Space
+  // right now.
+  const [spaces, setSpaces] = useState<SpaceInfo[] | null>(account?.hasSession ? [] : null);
 
   const [name, setName] = useState<string>(t("identityVault.nameDefault"));
   const [target, setTarget] = useState<SyncTarget>(cloudReady ? "cloud" : "local");
@@ -2594,7 +2595,7 @@ function IdentityVaultModal({
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!account) return;
+    if (!account?.hasSession) return;
     let alive = true;
     api
       .serverListSpaces(account.serverId ?? undefined)
@@ -2611,8 +2612,7 @@ function IdentityVaultModal({
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account?.serverId]);
+  }, [account?.serverId, account?.hasSession]);
 
   const newSpace = target === "cloud" && space === NEW_SPACE;
 
@@ -2726,7 +2726,15 @@ function IdentityVaultModal({
             options={[
               { value: PERSONAL, label: t("vault.placePersonal") },
               ...(spaces === null
-                ? [{ value: UNAVAILABLE, label: t("identityVault.spacesUnavailable"), disabled: true }]
+                ? [
+                    {
+                      value: UNAVAILABLE,
+                      label: account.hasSession
+                        ? t("identityVault.spacesUnavailable")
+                        : t("identityVault.spacesNeedSession"),
+                      disabled: true,
+                    },
+                  ]
                 : [
                     ...spaces.map((sp) => ({ value: sp.spaceId, label: sp.name || sp.spaceId })),
                     { value: NEW_SPACE, label: t("identityVault.newSpace") },
