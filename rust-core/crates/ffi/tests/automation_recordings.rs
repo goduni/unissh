@@ -147,6 +147,30 @@ fn lock_since_the_unlock_began_wins() {
     assert!(core.is_unlocked());
 }
 
+// Removing the instance's files leaves nothing behind, also with an unlock on
+// its way: the unlock waits for the removal, then finds no keyset record and
+// fails before it could create an empty database in place of the removed one.
+#[test]
+fn unlock_racing_a_reset_leaves_no_database_behind() {
+    let (dir, core, kit) = setup();
+    core.lock();
+    let (db, keyset) = (dir.path().join("db"), dir.path().join("keyset"));
+    let racing = core.while_no_unlock_runs(|| {
+        let racing = std::thread::spawn({
+            let core = core.clone();
+            move || core.unlock(None, kit)
+        });
+        // Ample time for an unlock that did not wait to read the keyset record.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::fs::remove_file(&db).unwrap();
+        std::fs::remove_file(&keyset).unwrap();
+        racing
+    });
+    assert!(racing.join().unwrap().is_err());
+    assert!(!core.is_unlocked());
+    assert!(!db.exists() && !keyset.exists());
+}
+
 #[test]
 fn preference_limits_and_failure_outcomes() {
     let (_dir, core, _) = setup();

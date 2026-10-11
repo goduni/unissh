@@ -1480,6 +1480,11 @@ pub struct Core {
     /// refused); an unlock reads it the same way, so that a lock which lands
     /// while it derives keys wins (see [`Core::unlock_unless_locked_since`]).
     sftp_epoch: std::sync::atomic::AtomicU64,
+    /// Held by an unlock from start to finish, and by whoever must be sure that
+    /// no unlock is under way ([`Core::while_no_unlock_runs`]). Lock order: this
+    /// one first, `state` inside it. [`Core::lock`] never takes it — a lock does
+    /// not wait for a key derivation.
+    unlocking: Mutex<()>,
     sftp_sessions: Mutex<Vec<std::sync::Weak<SftpFfi>>>,
     db_path: PathBuf,
     keyset_path: PathBuf,
@@ -1534,6 +1539,7 @@ impl Core {
     pub fn new(db_path: String, keyset_path: String) -> Arc<Self> {
         Arc::new(Self {
             sftp_epoch: std::sync::atomic::AtomicU64::new(0),
+            unlocking: Mutex::new(()),
             sftp_sessions: Mutex::new(Vec::new()),
             db_path: PathBuf::from(db_path),
             keyset_path: PathBuf::from(keyset_path),
@@ -6264,7 +6270,44 @@ impl Core {
     /// read under it — [`Self::lock`] bumps the epoch under that same lock, so a
     /// lock is either seen here or comes after the session is installed and
     /// closes it.
+    ///
+    /// One unlock runs at a time (see [`Self::while_no_unlock_runs`]): a second
+    /// one waits for the first and then finds the session it opened.
     pub fn unlock_unless_locked_since(
+        &self,
+        lock_epoch: u64,
+        password: Option<String>,
+        secret_key_hex: String,
+    ) -> Result<(), FfiError> {
+        self.while_no_unlock_runs(|| {
+            self.install_unless_locked_since(lock_epoch, password, secret_key_hex)
+        })
+    }
+
+    /// Runs `f` while no unlock is under way: every unlock in flight has
+    /// finished, and one that arrives waits until `f` returns. Rust-only (not
+    /// exported to the mobile bindings).
+    ///
+    /// For whoever removes the instance's files (the desktop shell's reset). An
+    /// unlock reads the keyset record first and opens the database a key
+    /// derivation later, and opening creates the file when it is missing — so
+    /// files removed in between would leave a new, empty database behind. Inside
+    /// `f` that cannot happen, and an unlock that starts afterwards finds no
+    /// keyset record and fails before it touches the database.
+    ///
+    /// Lock order: the unlock gate, then (inside `f`, if it asks the core
+    /// anything) the state lock. `f` must not call an unlock: the gate is not
+    /// re-entrant. Nothing here prompts the user; an unlock that waits behind a
+    /// prompt (a biometric) calls the core only after the prompt has answered.
+    pub fn while_no_unlock_runs<T>(&self, f: impl FnOnce() -> T) -> T {
+        let gate = lock_recover(&self.unlocking);
+        let out = f();
+        drop(gate);
+        out
+    }
+
+    /// [`Self::unlock_unless_locked_since`], inside the unlock gate.
+    fn install_unless_locked_since(
         &self,
         lock_epoch: u64,
         password: Option<String>,
