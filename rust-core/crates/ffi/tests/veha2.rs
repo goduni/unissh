@@ -11,7 +11,7 @@
 )]
 
 use std::sync::Arc;
-use unissh_ffi::{Core, FfiMemberRole};
+use unissh_ffi::{Core, FfiMemberRole, FfiSyncMode};
 
 /// base64 `tenant_id` of the test server that cloud vaults bind to
 /// (1:1 binding). `sync_now`/`sync_push` filter the push by it.
@@ -597,11 +597,15 @@ fn sync_round_trip_via_callback_transport() {
     });
 
     // A push
-    let rep_a = core_a.sync_now(backend.clone(), TENANT.to_owned()).unwrap();
+    let rep_a = core_a
+        .sync_now(backend.clone(), TENANT.to_owned(), FfiSyncMode::Full)
+        .unwrap();
     assert!(rep_a.pushed >= 1, "A must push at least the vault record");
 
     // B pull → sees A's vault
-    let rep_b = core_b.sync_now(backend.clone(), TENANT.to_owned()).unwrap();
+    let rep_b = core_b
+        .sync_now(backend.clone(), TENANT.to_owned(), FfiSyncMode::Full)
+        .unwrap();
     assert!(rep_b.applied >= 1, "B must apply >=1 object: {rep_b:?}");
     let vaults_b = core_b.list_vaults().unwrap();
     assert!(vaults_b.iter().any(|v| v.name == "Synced"));
@@ -609,7 +613,7 @@ fn sync_round_trip_via_callback_transport() {
     // locked negative
     core_a.lock();
     assert!(matches!(
-        core_a.sync_now(backend, TENANT.to_owned()),
+        core_a.sync_now(backend, TENANT.to_owned(), FfiSyncMode::Full),
         Err(unissh_ffi::FfiError::Locked)
     ));
 }
@@ -1020,7 +1024,9 @@ fn sync_push_skips_vault_bound_to_other_tenant() {
         inner: Mutex::new(InMemoryTransport::new()),
     });
     let other = "b3RoZXItdGVuYW50"; // base64("other-tenant")
-    let rep = core.sync_now(backend, other.to_owned()).unwrap();
+    let rep = core
+        .sync_now(backend, other.to_owned(), FfiSyncMode::Full)
+        .unwrap();
     assert_eq!(
         rep.pushed, 0,
         "vault bound to TENANT must NOT push to other tenant"
@@ -1299,7 +1305,7 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     let uids_before = uids_of(LOCAL);
 
     let new_id = core
-        .convert_vault_to_cloud(s(LOCAL), TENANT.to_owned())
+        .convert_vault_to_cloud(s(LOCAL), TENANT.to_owned(), None)
         .unwrap();
 
     // A cloud vault with a 16-byte UUID id, bound to the server, same name; the
@@ -1388,7 +1394,8 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     let backend = Arc::new(AppTransport {
         inner: Mutex::new(InMemoryTransport::new()),
     });
-    core.sync_now(backend.clone(), TENANT.to_owned()).unwrap();
+    core.sync_now(backend.clone(), TENANT.to_owned(), FfiSyncMode::Full)
+        .unwrap();
     let new_raw = hex::decode(&new_id).unwrap();
     let mut vault_pushed = false;
     let mut pushed_items = BTreeMap::new();
@@ -1420,25 +1427,24 @@ fn local_vault_moves_to_server_with_every_item_and_reference() {
     // moving the Personal vault re-points it at the new id in the same step.
     assert_eq!(core.get_personal_vault().unwrap().as_deref(), Some(ME));
     let new_me = core
-        .convert_vault_to_cloud(s(ME), TENANT.to_owned())
+        .convert_vault_to_cloud(s(ME), TENANT.to_owned(), None)
         .unwrap();
     assert_eq!(core.get_personal_vault().unwrap(), Some(new_me));
 }
 
-/// Identity, binding and Personal-auth host all in one local vault: the binding
-/// is copied under the id derived from the NEW vault id, its pin follows the
-/// moved bastion hop, and the host still resolves its identity after the move.
-#[test]
-fn moved_vault_rekeys_its_own_binding() {
+/// The local vault built by [`solo_vault_with_its_own_binding`].
+const SOLO: &str = "solo";
+
+/// Builds local vault [`SOLO`] holding an identity, a bastion, and a
+/// Personal-auth host `db` that is reached through the bastion (a saved hop
+/// naming the vault by id) and bound to the identity IN THE SAME vault.
+/// Returns `db`'s uid.
+fn solo_vault_with_its_own_binding(core: &Core) -> String {
     use unissh_ffi::{
         AuthMethod, ConnectionProfile, HopRef, Identity, IdentityBinding, JumpHost, ProfileAuth,
     };
 
-    const SOLO: &str = "solo";
     let s = |x: &str| x.to_owned();
-    let dir = tempfile::tempdir().unwrap();
-    let core = new_core(dir.path());
-    core.create_account(None).unwrap();
     core.create_vault(s(SOLO), s("Solo")).unwrap();
     core.save_password(s(SOLO), s("my-pw"), s("mine")).unwrap();
     core.save_identity(
@@ -1491,15 +1497,6 @@ fn moved_vault_rekeys_its_own_binding() {
         host("db", ProfileAuth::Personal, vec![via_bastion]),
     )
     .unwrap();
-    let destination = |p: &ConnectionProfile| {
-        core.personal_destination(
-            p.host.clone(),
-            p.port,
-            p.username_template.clone(),
-            p.jumps.clone(),
-            p.proxy.clone(),
-        )
-    };
     let db = core.get_connection(s(SOLO), s("db")).unwrap();
     core.set_binding(
         s(SOLO),
@@ -1507,26 +1504,91 @@ fn moved_vault_rekeys_its_own_binding() {
             team_vault_id: s(SOLO),
             profile_uid: db.uid.clone(),
             identity_item_id: s("alice"),
-            destination_pin: destination(&db),
+            destination_pin: destination_of(core, &db),
         },
         false,
     )
     .unwrap();
+    db.uid
+}
+
+/// The destination a Personal binding of `p` is pinned to.
+fn destination_of(core: &Core, p: &unissh_ffi::ConnectionProfile) -> String {
+    core.personal_destination(
+        p.host.clone(),
+        p.port,
+        p.username_template.clone(),
+        p.jumps.clone(),
+        p.proxy.clone(),
+    )
+}
+
+/// The user host `db` of `vault_id` logs in as through its Personal binding.
+fn personal_user_of_db(core: &Core, vault_id: &str) -> String {
+    let db = core
+        .get_connection(vault_id.to_owned(), "db".to_owned())
+        .unwrap();
+    core.resolve_personal_auth(
+        vault_id.to_owned(),
+        db.uid.clone(),
+        destination_of(core, &db),
+        "root".to_owned(),
+    )
+    .unwrap()
+    .user
+}
+
+/// Identity, binding and Personal-auth host all in one local vault: the binding
+/// is copied under the id derived from the NEW vault id, its pin follows the
+/// moved bastion hop, and the host still resolves its identity after the move.
+#[test]
+fn moved_vault_rekeys_its_own_binding() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    let db_uid = solo_vault_with_its_own_binding(&core);
 
     let new_id = core
-        .convert_vault_to_cloud(s(SOLO), TENANT.to_owned())
+        .convert_vault_to_cloud(SOLO.to_owned(), TENANT.to_owned(), None)
         .unwrap();
 
     let binding = core
-        .get_binding(new_id.clone(), new_id.clone(), db.uid)
+        .get_binding(new_id.clone(), new_id.clone(), db_uid)
         .unwrap()
         .expect("the binding is keyed by the new vault id");
     assert_eq!(binding.team_vault_id, new_id);
-    let db = core.get_connection(new_id.clone(), s("db")).unwrap();
-    let personal = core
-        .resolve_personal_auth(new_id, db.uid.clone(), destination(&db), s("root"))
+    assert_eq!(personal_user_of_db(&core, &new_id), "alice");
+}
+
+/// A backup is restored under a new vault id, while its items name the id it
+/// was exported from: the saved-bastion hop and the vault's own Personal
+/// binding must follow, or the restored host cannot jump or log in.
+#[test]
+fn restored_backup_points_its_own_hops_and_bindings_at_the_new_vault() {
+    const RESTORED: &str = "restored";
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    let db_uid = solo_vault_with_its_own_binding(&core);
+    let backup = core
+        .export_vault(SOLO.to_owned(), "passphrase".to_owned())
         .unwrap();
-    assert_eq!(personal.user, "alice");
+
+    core.import_vault(backup, "passphrase".to_owned(), RESTORED.to_owned())
+        .unwrap();
+
+    let db = core
+        .get_connection(RESTORED.to_owned(), "db".to_owned())
+        .unwrap();
+    assert_eq!(db.uid, db_uid, "the host keeps its uid");
+    let hop = db.jumps[0].hop_ref.as_ref().unwrap();
+    assert_eq!(hop.vault_id, RESTORED, "the hop names the restored vault");
+    let binding = core
+        .get_binding(RESTORED.to_owned(), RESTORED.to_owned(), db_uid)
+        .unwrap()
+        .expect("the binding is keyed by the restored vault's id");
+    assert_eq!(binding.team_vault_id, RESTORED);
+    assert_eq!(personal_user_of_db(&core, RESTORED), "alice");
 }
 
 #[test]
@@ -1545,16 +1607,16 @@ fn move_to_server_refusals_leave_the_vault_untouched() {
         .unwrap();
 
     assert!(matches!(
-        core.convert_vault_to_cloud("loc".to_owned(), String::new()),
+        core.convert_vault_to_cloud("loc".to_owned(), String::new(), None),
         Err(FfiError::NoServer)
     ));
     assert!(matches!(
-        core.convert_vault_to_cloud(cloud.clone(), TENANT.to_owned()),
+        core.convert_vault_to_cloud(cloud.clone(), TENANT.to_owned(), None),
         Err(FfiError::AlreadyCloud)
     ));
     core.lock();
     assert!(matches!(
-        core.convert_vault_to_cloud("loc".to_owned(), TENANT.to_owned()),
+        core.convert_vault_to_cloud("loc".to_owned(), TENANT.to_owned(), None),
         Err(FfiError::Locked)
     ));
     core.unlock(Some("pw".to_owned()), secret).unwrap();
@@ -1570,4 +1632,578 @@ fn move_to_server_refusals_leave_the_vault_untouched() {
     );
     let still_cloud = vaults.iter().find(|v| v.vault_id == cloud).unwrap();
     assert_eq!(still_cloud.sync_tenant.as_deref(), Some(TENANT));
+}
+
+/// A sync transport over a shared in-memory server that misbehaves on demand.
+mod picky_backend {
+    use super::sync_backend::AppTransport;
+    use std::sync::Arc;
+    use unissh_ffi::{FfiError, FfiSyncTransport, SyncDeltaItem};
+    use unissh_sync::SyncObject;
+
+    /// What the server does with a push.
+    pub enum Push {
+        /// Fails every push with a transport error.
+        Fails,
+        /// Refuses as too large (HTTP 413) every request.
+        RefusesEverything,
+        /// Refuses as too large (HTTP 413) every request that holds the item
+        /// with this id, whatever else is in it.
+        RefusesItem(&'static str),
+    }
+
+    /// What a server says when it refuses a request for size.
+    pub const TOO_LARGE: &str =
+        "sync push rejected (payload_too_large): object exceeds max_object_bytes";
+
+    pub struct PickyTransport {
+        pub server: Arc<AppTransport>,
+        pub push: Push,
+    }
+
+    impl FfiSyncTransport for PickyTransport {
+        fn push_objects(&self, objects: Vec<Vec<u8>>) -> Result<Vec<u64>, FfiError> {
+            let holds = |id: &str| {
+                objects.iter().any(|o| {
+                    matches!(
+                        SyncObject::from_bytes(o),
+                        Ok(SyncObject::Item(item)) if item.item_id == id.as_bytes()
+                    )
+                })
+            };
+            let refused = match self.push {
+                Push::Fails => {
+                    return Err(FfiError::Other {
+                        msg: "upload refused".to_owned(),
+                    })
+                }
+                Push::RefusesEverything => true,
+                Push::RefusesItem(id) => holds(id),
+            };
+            if refused {
+                return Err(FfiError::PayloadTooLarge {
+                    msg: TOO_LARGE.to_owned(),
+                });
+            }
+            self.server.push_objects(objects)
+        }
+        fn delta_since(&self, cursor: u64) -> Vec<SyncDeltaItem> {
+            self.server.delta_since(cursor)
+        }
+        fn report_version(&self) -> u64 {
+            self.server.report_version()
+        }
+    }
+}
+
+/// A fresh in-memory sync server.
+fn sync_server() -> Arc<sync_backend::AppTransport> {
+    Arc::new(sync_backend::AppTransport {
+        inner: std::sync::Mutex::new(unissh_sync::InMemoryTransport::new()),
+    })
+}
+
+/// Regression: `sync_now` returned on a push failure BEFORE pulling, so a
+/// device whose upload kept failing stopped receiving from that server.
+#[test]
+fn sync_pulls_even_when_the_push_fails() {
+    use picky_backend::{PickyTransport, Push};
+    use unissh_ffi::FfiError;
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let core_a = new_core(dir_a.path());
+    let secret = core_a.create_account(Some("pw".to_owned())).unwrap();
+    let keyset_blob = std::fs::read(dir_a.path().join("keyset.bin")).unwrap();
+    core_a
+        .create_cloud_vault("From A".to_owned(), TENANT.to_owned())
+        .unwrap();
+    let server = sync_server();
+    core_a
+        .sync_now(server.clone(), TENANT.to_owned(), FfiSyncMode::Full)
+        .unwrap();
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let core_b = new_core(dir_b.path());
+    core_b
+        .unlock_from_server_blob(keyset_blob, Some("pw".to_owned()), secret)
+        .unwrap();
+    // Something of B's own to upload, so there is a push to fail.
+    core_b
+        .create_cloud_vault("From B".to_owned(), TENANT.to_owned())
+        .unwrap();
+
+    let err = core_b
+        .sync_now(
+            Arc::new(PickyTransport {
+                server,
+                push: Push::Fails,
+            }),
+            TENANT.to_owned(),
+            FfiSyncMode::Full,
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(&err, FfiError::Other { msg } if msg == "upload refused"),
+        "the push failure is what the sync reports: {err:?}"
+    );
+    assert!(
+        core_b
+            .list_vaults()
+            .unwrap()
+            .iter()
+            .any(|v| v.name == "From A"),
+        "the pull still ran"
+    );
+}
+
+/// A cloud vault "Ops" holding a note `runbook` and a password `db-pw`.
+fn core_with_a_note_and_a_password(dir: &std::path::Path) -> (Arc<Core>, String) {
+    let core = new_core(dir);
+    core.create_account(None).unwrap();
+    let vid = core
+        .create_cloud_vault("Ops".to_owned(), TENANT.to_owned())
+        .unwrap();
+    core.save_note(
+        vid.clone(),
+        "runbook".to_owned(),
+        "restart nginx".to_owned(),
+    )
+    .unwrap();
+    core.save_password(vid.clone(), "db-pw".to_owned(), "hunter2".to_owned())
+        .unwrap();
+    (core, vid)
+}
+
+/// What the FFI adds to the engine's report of an item the server refuses as
+/// too large: the vault the way `list_vaults` names it (hex id, decrypted
+/// name), the item's id as text and its type.
+#[test]
+fn sync_report_names_a_refused_item_the_way_the_ui_addresses_it() {
+    use picky_backend::{PickyTransport, Push};
+    // The core's item type of a note.
+    const NOTE: u32 = 6;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (core, vid) = core_with_a_note_and_a_password(dir.path());
+
+    let report = core
+        .sync_now(
+            Arc::new(PickyTransport {
+                server: sync_server(),
+                push: Push::RefusesItem("runbook"),
+            }),
+            TENANT.to_owned(),
+            FfiSyncMode::Full,
+        )
+        .unwrap();
+
+    assert_eq!(report.too_large.len(), 1);
+    let refused = &report.too_large[0];
+    assert_eq!(
+        (
+            refused.vault_id.as_str(),
+            refused.vault_name.as_str(),
+            refused.item_id.as_str(),
+            refused.item_type,
+        ),
+        (vid.as_str(), "Ops", "runbook", NOTE)
+    );
+    assert!(refused.bytes > 0);
+}
+
+/// An item the server refused is not offered to it again by later syncs — until
+/// the user asks for it (after the server's limit was raised).
+#[test]
+fn retry_refused_uploads_offers_a_refused_item_to_the_server_again() {
+    use picky_backend::{PickyTransport, Push};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _vid) = core_with_a_note_and_a_password(dir.path());
+    let server = sync_server();
+    core.sync_now(
+        Arc::new(PickyTransport {
+            server: server.clone(),
+            push: Push::RefusesItem("runbook"),
+        }),
+        TENANT.to_owned(),
+        FfiSyncMode::Full,
+    )
+    .unwrap();
+
+    // The server takes everything now, and the user asks for a retry.
+    core.retry_refused_uploads(TENANT.to_owned()).unwrap();
+    let report = core
+        .sync_now(server, TENANT.to_owned(), FfiSyncMode::Full)
+        .unwrap();
+
+    assert!(report.too_large.is_empty(), "{:?}", report.too_large);
+    assert!(report.pushed >= 1, "the refused item was uploaded");
+}
+
+/// A size refusal of an object the push cannot go on without (anything but an
+/// item) fails the push — with what the server said, not a message of the
+/// core's own.
+#[test]
+fn push_refused_for_size_reports_what_the_server_said() {
+    use picky_backend::{PickyTransport, Push, TOO_LARGE};
+    use unissh_ffi::FfiError;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _vid) = core_with_a_note_and_a_password(dir.path());
+
+    let err = core
+        .sync_now(
+            Arc::new(PickyTransport {
+                server: sync_server(),
+                push: Push::RefusesEverything,
+            }),
+            TENANT.to_owned(),
+            FfiSyncMode::Full,
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(&err, FfiError::PayloadTooLarge { msg } if msg == TOO_LARGE),
+        "{err:?}"
+    );
+}
+
+/// "Pull this vault" hands the vault to the core page by page. A later page
+/// verifies against what the earlier calls applied (the manifest and the
+/// vault record reach the server first), so the vault arrives whole — here
+/// with the smallest pages there are, one object each.
+#[test]
+fn a_vault_pulled_page_by_page_arrives_whole() {
+    use unissh_ffi::FfiSyncTransport;
+    use unissh_sync::SyncObject;
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let core_a = new_core(dir_a.path());
+    let secret = core_a.create_account(Some("pw".to_owned())).unwrap();
+    let keyset_blob = std::fs::read(dir_a.path().join("keyset.bin")).unwrap();
+    let vid = core_a
+        .create_cloud_vault("Paged".to_owned(), TENANT.to_owned())
+        .unwrap();
+    core_a
+        .save_note(
+            vid.clone(),
+            "runbook".to_owned(),
+            "restart nginx".to_owned(),
+        )
+        .unwrap();
+    let server = sync_server();
+    core_a
+        .sync_now(server.clone(), TENANT.to_owned(), FfiSyncMode::Full)
+        .unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let core_b = new_core(dir_b.path());
+    core_b
+        .unlock_from_server_blob(keyset_blob, Some("pw".to_owned()), secret)
+        .unwrap();
+    // What `GET /v1/sync/delta?vault=<id>` serves: that vault's objects, in
+    // the order the server received them.
+    let raw_vid = hex::decode(&vid).unwrap();
+    let pages: Vec<Vec<u8>> = server
+        .delta_since(0)
+        .into_iter()
+        .map(|item| item.object)
+        .filter(|o| {
+            SyncObject::from_bytes(o).is_ok_and(|o| o.vault_id() == Some(raw_vid.as_slice()))
+        })
+        .collect();
+    assert!(pages.len() >= 2, "the vault record and the note at least");
+
+    for page in pages {
+        core_b
+            .apply_pulled_vault(TENANT.to_owned(), vec![page])
+            .unwrap();
+    }
+
+    let items = core_b.list_items(vid).unwrap();
+    assert!(
+        items.iter().any(|i| i.item_id == "runbook"),
+        "the note of the last page verified against the earlier pages"
+    );
+}
+
+/// The first upload of a vault moved into a space the device does not sync
+/// must not pull under that space's label: the pull would start from an empty
+/// cursor and stamp the label on a cloud vault the user unbound on purpose.
+#[test]
+fn first_push_after_a_move_does_not_rebind_an_unbound_vault() {
+    const OTHER_SPACE: &str = "b3RoZXItc3BhY2U="; // base64("other-space")
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    let server = sync_server();
+    // A cloud vault that reached the server, then was unbound by the user.
+    let unbound = core
+        .create_cloud_vault("Unbound".to_owned(), TENANT.to_owned())
+        .unwrap();
+    core.sync_now(server.clone(), TENANT.to_owned(), FfiSyncMode::Full)
+        .unwrap();
+    assert!(core.unbind_cloud_vault(unbound.clone()).unwrap());
+    core.create_vault("loc".to_owned(), "Local".to_owned())
+        .unwrap();
+
+    let moved = core
+        .convert_vault_to_cloud("loc".to_owned(), OTHER_SPACE.to_owned(), None)
+        .unwrap();
+    let report = core
+        .sync_now(server, OTHER_SPACE.to_owned(), FfiSyncMode::PushOnly)
+        .unwrap();
+
+    assert!(report.pushed >= 1, "the moved vault was uploaded");
+    let vaults = core.list_vaults().unwrap();
+    let find = |id: &str| vaults.iter().find(|v| v.vault_id == id).unwrap();
+    assert_eq!(find(&moved).sync_tenant.as_deref(), Some(OTHER_SPACE));
+    assert_eq!(find(&unbound).sync_tenant, None, "still unbound");
+}
+
+/// The move goes into the id reserved for it (so the server can be told where
+/// the vault belongs before anything changes locally); an id already in use
+/// is refused and the local vault stays.
+#[test]
+fn move_into_a_reserved_id_uses_it_and_refuses_a_used_one() {
+    use unissh_ffi::{FfiError, FfiSyncTarget};
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("one".to_owned(), "One".to_owned())
+        .unwrap();
+    core.create_vault("two".to_owned(), "Two".to_owned())
+        .unwrap();
+    let reserved = core
+        .reserve_cloud_vault_id(TENANT.to_owned(), Some("one".to_owned()))
+        .unwrap();
+
+    let moved = core
+        .convert_vault_to_cloud("one".to_owned(), TENANT.to_owned(), Some(reserved.clone()))
+        .unwrap();
+    let again =
+        core.convert_vault_to_cloud("two".to_owned(), TENANT.to_owned(), Some(reserved.clone()));
+
+    assert_eq!(moved, hex::encode(&reserved));
+    assert!(matches!(again, Err(FfiError::AlreadyExists)), "{again:?}");
+    let vaults = core.list_vaults().unwrap();
+    let two = vaults.iter().find(|v| v.vault_id == "two").unwrap();
+    assert_eq!(two.sync_target, FfiSyncTarget::Local);
+}
+
+/// A vault created in a space gets the id reserved (and claimed on the server)
+/// for it. The reservation is kept until the vault exists, so a failed attempt
+/// claims the same id again, and is used up by the creation.
+#[test]
+fn create_cloud_vault_as_uses_the_reserved_id_once() {
+    use unissh_ffi::FfiError;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    let reserve = || {
+        core.reserve_cloud_vault_id(TENANT.to_owned(), None)
+            .unwrap()
+    };
+    let reserved = reserve();
+    assert_eq!(reserve(), reserved, "kept until a vault is created with it");
+
+    let created = core
+        .create_cloud_vault_as("Ops".to_owned(), TENANT.to_owned(), reserved.clone())
+        .unwrap();
+
+    assert_eq!(created, hex::encode(&reserved));
+    let vaults = core.list_vaults().unwrap();
+    let vault = vaults.iter().find(|v| v.vault_id == created).unwrap();
+    assert_eq!(vault.sync_tenant.as_deref(), Some(TENANT));
+    let again = core.create_cloud_vault_as("Again".to_owned(), TENANT.to_owned(), reserved.clone());
+    assert!(matches!(again, Err(FfiError::AlreadyExists)), "{again:?}");
+    assert_ne!(reserve(), reserved, "a used id is not handed out again");
+}
+
+/// Keys offered to the system ssh-agent are remembered by vault id: after a
+/// move they must be offered under the new id, not silently dropped.
+#[test]
+fn moved_vault_keeps_its_keys_shared_with_the_system_agent() {
+    use unissh_ffi::SharedAgentKey;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("loc".to_owned(), "Local".to_owned())
+        .unwrap();
+    core.generate_ssh_key("loc".to_owned(), "deploy".to_owned())
+        .unwrap();
+    core.set_system_agent_shared("loc".to_owned(), "deploy".to_owned(), true)
+        .unwrap();
+
+    let new_id = core
+        .convert_vault_to_cloud("loc".to_owned(), TENANT.to_owned(), None)
+        .unwrap();
+
+    assert_eq!(
+        core.system_agent_shared().unwrap(),
+        vec![SharedAgentKey {
+            vault_id: new_id,
+            item_id: "deploy".to_owned(),
+        }]
+    );
+}
+
+/// A staged key rotation's link is kept per vault id on this device: after a
+/// move the candidate must still be this device's, so it can be finished.
+#[test]
+fn moved_vault_can_finish_a_key_rotation_started_before_the_move() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("loc".to_owned(), "Local".to_owned())
+        .unwrap();
+    core.generate_ssh_key("loc".to_owned(), "deploy".to_owned())
+        .unwrap();
+    let candidate = core
+        .begin_key_rotation("loc".to_owned(), "deploy".to_owned())
+        .unwrap();
+
+    let new_id = core
+        .convert_vault_to_cloud("loc".to_owned(), TENANT.to_owned(), None)
+        .unwrap();
+
+    let rotations = core.list_key_rotations(new_id.clone()).unwrap();
+    assert_eq!(rotations.len(), 1);
+    assert!(
+        !rotations[0].started_elsewhere,
+        "the rotation is still this device's"
+    );
+    core.finish_key_rotation(new_id, "deploy".to_owned(), candidate)
+        .unwrap();
+}
+
+/// The hosts picked for a local MCP integration are saved as (vault id, host
+/// id): after a move the saved pick must name the new vault id — and only
+/// the moved vault's hosts.
+#[test]
+fn moved_vault_keeps_the_hosts_picked_for_an_mcp_integration() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("loc".to_owned(), "Local".to_owned())
+        .unwrap();
+    let saved = |vault: &str| {
+        serde_json::json!([{
+            "integration_id": "it-1",
+            "label": "Agent",
+            "targets": [
+                { "vault_id": vault, "profile_id": "web" },
+                { "vault_id": "elsewhere", "profile_id": "web" },
+            ],
+        }])
+    };
+    core.automation_access_save(&serde_json::to_vec(&saved("loc")).unwrap())
+        .unwrap();
+
+    let new_id = core
+        .convert_vault_to_cloud("loc".to_owned(), TENANT.to_owned(), None)
+        .unwrap();
+
+    let after: serde_json::Value =
+        serde_json::from_slice(&core.automation_access_load().unwrap().unwrap()).unwrap();
+    assert_eq!(after, saved(&new_id));
+}
+
+/// The copies are the same items: a key created a year ago must not look
+/// newly created after the move.
+#[test]
+fn moved_items_keep_their_timestamps() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("loc".to_owned(), "Local".to_owned())
+        .unwrap();
+    core.save_password("loc".to_owned(), "db-pw".to_owned(), "hunter2".to_owned())
+        .unwrap();
+    let stamps = |vault: &str| {
+        let items = core.list_items(vault.to_owned()).unwrap();
+        let item = items.iter().find(|i| i.item_id == "db-pw").unwrap();
+        (item.created_at, item.updated_at)
+    };
+    let before = stamps("loc");
+    // Timestamps are whole seconds: make sure "now" has moved past them.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    let new_id = core
+        .convert_vault_to_cloud("loc".to_owned(), TENANT.to_owned(), None)
+        .unwrap();
+
+    assert_eq!(stamps(&new_id), before);
+}
+
+/// A session opened before the move still names the old vault id when it
+/// ends: its recording must land in the vault the old one became.
+#[cfg(unix)]
+#[test]
+fn recording_of_a_session_open_during_the_move_is_saved_to_the_moved_vault() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    struct Obs {
+        seen: std::sync::Mutex<Vec<u8>>,
+        closed: AtomicBool,
+    }
+    impl unissh_ffi::SessionObserver for Obs {
+        fn on_data(&self, data: Vec<u8>) {
+            self.seen.lock().unwrap().extend_from_slice(&data);
+        }
+        fn on_close(&self, _exit_status: i32) {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = new_core(dir.path());
+    core.create_account(None).unwrap();
+    core.create_vault("loc".to_owned(), "Local".to_owned())
+        .unwrap();
+    let obs = Arc::new(Obs {
+        seen: std::sync::Mutex::new(Vec::new()),
+        closed: AtomicBool::new(false),
+    });
+    let session = core
+        .open_local_session(
+            unissh_ffi::LocalSpec {
+                program: "/bin/sh".to_owned(),
+                args: vec![
+                    "-c".to_owned(),
+                    // `read` is the shell itself waiting on the terminal: no
+                    // child is left behind when the session is dropped.
+                    "echo before-the-move; read line".to_owned(),
+                ],
+                cwd: None,
+            },
+            80,
+            24,
+            obs.clone(),
+            Some(unissh_ffi::RecordingRequest {
+                vault_id: "loc".to_owned(),
+                recording_id: "rec-moved".to_owned(),
+                label: "sh".to_owned(),
+            }),
+        )
+        .expect("a local session must open on a desktop platform");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !contains(&obs.seen.lock().unwrap(), b"before-the-move") {
+        assert!(Instant::now() <= deadline, "the shell never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let new_id = core
+        .convert_vault_to_cloud("loc".to_owned(), TENANT.to_owned(), None)
+        .unwrap();
+    // A local session writes its recording before the close returns.
+    drop(session);
+
+    let recordings = core.list_recordings(new_id).unwrap();
+    assert_eq!(recordings.len(), 1, "the recording was dropped");
+    assert_eq!(recordings[0].recording_id, "rec-moved");
 }

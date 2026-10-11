@@ -1007,7 +1007,8 @@ export function NHSelect({
 }: {
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  /** `disabled`: shown but not selectable — its label says why. */
+  options: { value: string; label: string; disabled?: boolean }[];
   empty: string;
 }) {
   const p = usePalette();
@@ -1041,7 +1042,7 @@ export function NHSelect({
       >
         {options.length === 0 && <option value="">{empty}</option>}
         {options.map((o) => (
-          <option key={o.value} value={o.value}>
+          <option key={o.value} value={o.value} disabled={o.disabled}>
             {o.label}
           </option>
         ))}

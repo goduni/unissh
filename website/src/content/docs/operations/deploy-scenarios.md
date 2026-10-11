@@ -169,7 +169,7 @@ docker rm "$cid"
 
 - **One origin for panel and API.** The panel calls the API with a relative base. Two hostnames means enabling `cors_allowed_origins` and a weaker CSP.
 - **`application/wasm`.** The panel's crypto module is loaded with `WebAssembly.instantiateStreaming`, which rejects any other content type. Older `mime.types` files have no `wasm` entry, and the only symptom is a panel that never unlocks.
-- **`client_max_body_size 16m`.** At least the server's `limits.max_body_bytes`, or a legal push is 413'd before the server sees it.
+- **`client_max_body_size 24m`.** At least the server's `limits.max_body_bytes`, or a legal push is 413'd before the server sees it.
 - **`X-Forwarded-For`.** The server reads the rightmost element; `$proxy_add_x_forwarded_for` appends the real peer there, so a client-supplied header cannot displace it. A proxy that *overwrites* XFF with a client-controlled value hands every user a way past the rate limit.
 
 </details>
@@ -196,7 +196,7 @@ The integration is four labels — router rule, entrypoint, TLS, and the contain
 Cloudflare with proxied DNS, or a `cloudflared` tunnel with no inbound ports at all, is often the easiest answer for a host with no public IP. Route it exactly like 3a — forward everything to `127.0.0.1:8080` — and be deliberate about two things:
 
 - **Whoever terminates TLS sees session tokens.** Not vault contents: those are ciphertext the server itself cannot read, so the zero-knowledge guarantee is unaffected. But an access token is enough to act as a device, so terminating TLS at a third party is a real trust decision. Terminating at your own edge keeps it to yourself.
-- **Allow a 16 MiB request body, and do not cache `/v1`.** The panel's hashed assets are safe to cache.
+- **Allow a 24 MiB request body, and do not cache `/v1`.** The panel's hashed assets are safe to cache.
 
 ---
 
@@ -345,7 +345,7 @@ Create the user first (`sudo useradd -r -s /usr/sbin/nologin unissh`) and make t
 | The panel loads but never unlocks | The `.wasm` file is served with the wrong content type. `curl -I …/assets/*.wasm` must show `application/wasm` ([3b](#3b--your-proxy-replaces-caddy)). |
 | The panel is a version behind the server | A docroot copy that wasn't refreshed after an upgrade ([3b](#3b--your-proxy-replaces-caddy)). |
 | Everything 404s through your proxy | The proxy forwards only `/v1`, or `UNISSH_DOMAIN` is still a hostname instead of `:80` in [3a](#3a--your-proxy-does-tls-only-start-here). Forward every path; check `docker compose logs caddy`. |
-| Pushes fail with 413 | The proxy's body limit is below `limits.max_body_bytes` (16 MiB). |
+| Pushes fail with 413 | The proxy's body limit is below `limits.max_body_bytes` (24 MiB). |
 | Rate limiting hits the wrong client | Either `trust_proxy` is true with nothing in front, or you are two hops deep ([3a](#3a--your-proxy-does-tls-only-start-here)). |
 
 ## See also

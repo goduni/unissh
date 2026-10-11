@@ -81,12 +81,69 @@ if it was the account's Personal vault it remains the Personal vault. A referenc
 re-pointed inside another Cloud vault is an ordinary edit to that vault and
 reaches your other devices when that vault syncs. It is a
 re-keyed copy under a new vault id, made in one transaction: the local copy is
-replaced, item version history starts fresh on the server, and the first sync
-pushes the vault. If that push fails, the move is kept: a vault moved into the
-server's primary space uploads on the next sync; one moved into another space is
-not covered by automatic sync and stays on this device until it is uploaded.
+replaced, item version history starts fresh on the server, and the vault is
+pushed right away. On the device that makes the move, items keep their created
+and changed dates; those dates are not part of what syncs, so every other device
+stamps an item when it first receives it. Keys shared with
+the system SSH agent, a key rotation in progress and recordings of sessions still
+open follow the vault to its new id; hosts selected for a local MCP integration
+stay selected, but that access is paused until you confirm it again, as after any
+vault change.
+
+The vault becomes a **personal** vault of your account — only your account
+administers it on the server — unless you pick one of the spaces you administer
+in the confirmation. Nothing is picked for you. In a space, the admins of that
+space can invite people to the vault, and you keep administering it only while
+you are one of them; they cannot read it, in either case reading takes access you
+grant. Cloud vaults made by 0.5 are personal and stay personal: nothing is
+migrated, and a server holds both kinds side by side. The same choice, with the
+same default, applies when you create a Cloud vault. Placing a vault in a space
+needs the server reachable at that moment; a personal vault does not.
+
+If the first push fails, the move is kept: a vault moved into the server's
+primary space is retried by every sync until it is uploaded; one moved into
+another space is not covered by automatic sync and stays on this device until it
+is uploaded. An item the server refuses as too large (a long session recording
+against a server older than 0.6, or one whose `limits.max_object_bytes` is set
+low) does not hold the rest back: everything else uploads and the client names
+the item, which stays on the device until the limit is raised and you press
+**Sync now**.
 Vault format and server protocol are unchanged; the server receives it like any
 new Cloud vault.
+
+Placing a vault in a space reserves its id on the server before the vault is
+moved or created there. If the move or the creation then fails, the client keeps
+that id and a retry into the same space uses it again. If you choose a different
+space or **Personal** instead, or never retry, the id stays reserved in the first
+space as a vault with no data: it is listed, empty and without a name, among the
+vaults of that server, holds nothing and gives nobody access to anything. 0.6 has
+no way to remove such a reservation; it is safe to leave.
+
+## Server operators: size limits in 0.6
+
+Session recordings are vault items of up to 17 MiB, and 0.6 is the first release
+that syncs them whole. Three things to check when you upgrade:
+
+- **Reverse proxy body limit.** The shipped nginx configurations now say
+  `client_max_body_size 24m`. A proxy you configured for an earlier release with
+  `client_max_body_size 16m` answers `413` to any object over about 12 MiB
+  (objects travel base64-encoded) before the server sees it. Raise it to `24m`,
+  or to whatever you set `limits.max_body_bytes` to.
+- **An explicit `max_object_bytes`.** The default rose from 1 MiB to 17 MiB, but a
+  configuration file that says `max_object_bytes = 1048576` keeps saying it.
+  Remove the line or raise the value, or recordings over 1 MiB stay on the
+  device that made them.
+- **A 0.6 client against a 0.5 server** uploads in requests of at most about
+  1 MiB of objects, which that server accepts, and reports any larger item as not
+  uploaded instead of syncing it. Upgrade the server to sync those items.
+
+In each case the client does not fail the sync: it uploads everything else, names
+the items the server (or the proxy) refused, and offers them again when you press
+**Sync now**.
+
+Pulls are paged by size as well as by count from 0.6 (`limits.delta_max_page_bytes`,
+8 MiB by default). Older clients follow the paging unchanged. The limits are
+listed in [`server/config.example.toml`](../server/config.example.toml).
 
 ## If verification fails
 

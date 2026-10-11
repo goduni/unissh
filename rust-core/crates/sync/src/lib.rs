@@ -43,8 +43,9 @@ mod object;
 mod transport;
 
 pub use engine::{
-    apply_pulled_objects, pull_cursor_key, push_cursor_key, reset_pull_cursor, sync_pull,
-    sync_push, Conflict, PushReport, RejectReason, Rejected, SyncContext, SyncReport,
+    apply_pulled_objects, forget_push_refusals, pull_cursor_key, push_cursor_key,
+    reset_pull_cursor, sync_pull, sync_push, sync_push_vault_data, Conflict, PushReport,
+    RejectReason, Rejected, SyncContext, SyncReport, TooLarge, LARGEST_CLIENT_OBJECT_BYTES,
 };
 pub use error::SyncError;
 pub use object::{AccountStateObject, AuditObject, ObjectTag, SyncObject};

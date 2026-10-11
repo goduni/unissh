@@ -49,6 +49,8 @@ import { guard } from "@/store/action";
 import * as api from "@/bridge/api";
 import { isOwnedCloud, serverShortLabel, vaultServer } from "@/bridge/vaults";
 import { planMoveToServer } from "@/bridge/moveToServer";
+import { tooLargeSummary } from "@/bridge/syncReport";
+import { mcpStatus } from "@/bridge/mcp";
 import {
   apiErrorMessage,
   isServerErrorCode,
@@ -65,6 +67,7 @@ import {
   type PairingPayload,
   type ServerStatus,
   type SpaceInfo,
+  type SyncReport,
   type VaultInfo,
   type DbConsistencyReport,
   type VaultIntegrityReport,
@@ -2097,6 +2100,14 @@ function SettingsVaults() {
   // server that isn't linked here. They don't sync until (re)bound.
   const unboundVaults = cloudVaults.filter((v) => vaultServer(v, servers) == null);
 
+  // The toast after a bind and its first push: items the server refused as too
+  // large are named here as after any other sync, instead of "done".
+  const boundToast = (report: SyncReport | null, done: string) => {
+    const notUploaded = tooLargeSummary(report?.tooLarge ?? []);
+    if (notUploaded) toast(t("serverCloud.syncTooLarge", { items: notUploaded }), "warn");
+    else toast(done, "ok");
+  };
+
   // Bind an unbound vault to a server AND push it right away, so it lands on the
   // server immediately instead of waiting for the next sync. The bind is a local
   // label change (always succeeds); the follow-up sync is best-effort — with no
@@ -2110,13 +2121,14 @@ function SettingsVaults() {
     }
     setPickerVault(null);
     setBindSel(null);
+    let report: SyncReport | null = null;
     try {
-      await api.serverSyncNow(serverId);
+      report = await api.serverSyncNow(serverId);
     } catch {
       /* bound; the push happens on the next sync */
     }
     void reload();
-    toast(t("vault.boundDone"), "ok");
+    boundToast(report, t("vault.boundDone"));
   };
 
   // (Re)bind a vault to `s`. A MOVE (it was already bound to a linked server) is
@@ -2137,11 +2149,11 @@ function SettingsVaults() {
         await guard(async () => {
           await api.serverBindCloudVault(v.vaultId, s.serverId!);
           // Push to the new server right away (best-effort — bound regardless).
-          await api.serverSyncNow(s.serverId!).catch(() => {});
+          const report = await api.serverSyncNow(s.serverId!).catch(() => null);
           await reload();
           setPickerVault(null);
           setBindSel(null);
-          toast(t("vault.moveDone"), "ok");
+          boundToast(report, t("vault.moveDone"));
         });
       },
     });
@@ -2150,9 +2162,12 @@ function SettingsVaults() {
   const syncNow = (s: ServerStatus) => {
     if (!s.serverId) return;
     void guard(async () => {
-      await api.serverSyncNow(s.serverId!);
+      // Asked for by hand: items the server refused as too large are offered again.
+      const r = await api.serverSyncNow(s.serverId!, true);
       await reload();
-      toast(t("vault.syncDone"), "ok");
+      const notUploaded = tooLargeSummary(r.tooLarge);
+      if (notUploaded) toast(t("serverCloud.syncTooLarge", { items: notUploaded }), "warn");
+      else toast(t("vault.syncDone"), "ok");
     });
   };
 
@@ -2664,9 +2679,10 @@ function SettingsVaults() {
 }
 
 /** "Move to server…" confirmation for a local vault: target server (picked when
- *  several are signed in) and space (picked when the server has more than one you
- *  administer, fetched live as cloud-vault creation does), item counts by kind,
- *  and what the move does. "Export backup first" opens the regular backup export
+ *  several are signed in), placement (a personal vault of the account unless a
+ *  space you administer is picked — the spaces are fetched live, as cloud-vault
+ *  creation does, and a picked one is where the vault is registered on the
+ *  server), item counts by kind, and what the move does. "Export backup first" opens the regular backup export
  *  for this vault and comes back here (picks kept) when it closes. Confirm
  *  converts the vault in the core and runs the first push; a failed push leaves
  *  the move in place. */
@@ -2694,12 +2710,29 @@ function MoveToServerModal({
   const [serverId, setServerId] = useState<string | null>(null);
   const [spaceId, setSpaceId] = useState("");
   // Live space list of the target server: null while loading; a failed fetch
-  // yields [] (→ primary space).
+  // yields [] (→ no space to pick: the vault stays personal).
   const [spaces, setSpaces] = useState<SpaceInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
   // The backup export replaces this dialog while it is open; this component stays
   // mounted underneath, so the server/space picks survive the round trip.
   const [exporting, setExporting] = useState(false);
+  // Hosts of this vault are picked for a local MCP integration: its access is
+  // paused by the move (as by any vault change) until it is confirmed again.
+  const [mcpAffected, setMcpAffected] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    mcpStatus()
+      .then((st) => {
+        const picked = [...(st.activity.saved_access ?? []), ...st.activity.grants];
+        if (alive) setMcpAffected(picked.some((a) => a.targets.some((tg) => tg.vault_id === vault.vaultId)));
+      })
+      .catch(() => {
+        /* MCP unavailable on this platform or never enabled: nothing to pause */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [vault.vaultId]);
 
   const plan = planMoveToServer(items, servers, { serverId, activeServerId, spaces, spaceId });
   const target = plan.server;
@@ -2755,12 +2788,22 @@ function MoveToServerModal({
     } catch (e) {
       toast(t("vault.toServerRefreshFailed", { reason: apiErrorMessage(e) }), "warn");
     }
+    const notUploaded = tooLargeSummary(res.push?.tooLarge ?? []);
     if (res.pushError) {
       const reason = apiErrorMessage(res.pushError);
       toast(
         nonPrimary && space
           ? t("vault.toServerPushFailedSpace", { reason, space: space.name || space.spaceId })
           : t("vault.toServerPushFailed", { reason }),
+        "warn",
+      );
+    } else if (notUploaded) {
+      // Everything else is on the server; these items are named, not dropped.
+      toast(
+        t(nonPrimary ? "vault.toServerTooLargeSpace" : "vault.toServerTooLarge", {
+          name: vault.name,
+          items: notUploaded,
+        }),
         "warn",
       );
     } else {
@@ -2819,17 +2862,23 @@ function MoveToServerModal({
           <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>{target ? serverShortLabel(target) : ""}</div>
         )}
       </Field>
+      {/* Personal is the default and always offered: placing the vault in a space
+          hands its administration to that space's admins, so it is never picked
+          for the user — and the hint says what they gain. */}
       <Field label={t("vault.toServerSpace")}>
         {plan.needsSpacePicker ? (
           <NHSelect
             value={space?.spaceId ?? ""}
             onChange={setSpaceId}
-            options={plan.spaces.map((sp) => ({ value: sp.spaceId, label: sp.name || sp.spaceId }))}
+            options={[
+              { value: "", label: t("vault.placePersonal") },
+              ...plan.spaces.map((sp) => ({ value: sp.spaceId, label: sp.name || sp.spaceId })),
+            ]}
             empty=""
           />
         ) : (
           <div style={{ fontSize: TEXT.base, fontWeight: 600 }}>
-            {spaces === null ? <Spinner size={14} /> : space ? space.name || space.spaceId : t("vault.toServerPrimarySpace")}
+            {spaces === null ? <Spinner size={14} /> : t("vault.placePersonal")}
           </div>
         )}
       </Field>
@@ -2849,6 +2898,7 @@ function MoveToServerModal({
       <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5 }}>
         <p style={{ margin: `0 0 ${rem(6)}` }}>{t("vault.toServerReplaces", { name: vault.name })}</p>
         <p style={{ margin: 0 }}>{t("vault.toServerHistory")}</p>
+        {space && <p style={{ margin: `${rem(6)} 0 0` }}>{t("vault.placeSpaceHint")}</p>}
         {plan.nonPrimarySpace && space && (
           <p style={{ margin: `${rem(6)} 0 0`, color: p.amber }}>
             {t("vault.toServerNotPrimary", { space: space.name || space.spaceId })}
@@ -2859,6 +2909,7 @@ function MoveToServerModal({
             {t("vault.toServerClosesSessions", { count: openCount })}
           </p>
         )}
+        {mcpAffected && <p style={{ margin: `${rem(6)} 0 0`, color: p.amber }}>{t("vault.toServerPausesMcp")}</p>}
       </div>
     </Modal>
   );
@@ -4913,9 +4964,12 @@ function SettingsCloud() {
 
   const doSync = async () => {
     await guard(async () => {
-      await syncNow();
+      await syncNow({ retryRefused: true });
       const r = useApp.getState().syncStatus.lastReport;
-      if (r) {
+      const notUploaded = tooLargeSummary(r?.tooLarge ?? []);
+      if (notUploaded) {
+        toast(t("serverCloud.syncTooLarge", { items: notUploaded }), "warn");
+      } else if (r) {
         toast(
           t("serverCloud.syncDone", {
             applied: r.applied,
@@ -5139,6 +5193,11 @@ function SettingsCloud() {
           <span>{t("serverCloud.syncReportConflicts", { count: syncStatus.lastReport.conflicts })}</span>
           <span>{t("serverCloud.syncReportRejected", { count: syncStatus.lastReport.rejected })}</span>
           <span>{t("serverCloud.syncReportSkipped", { count: syncStatus.lastReport.skippedStale })}</span>
+        </div>
+      )}
+      {!!syncStatus.lastReport?.tooLarge.length && (
+        <div role="status" style={{ fontSize: TEXT.small, color: p.amber, marginTop: rem(6), lineHeight: 1.5 }}>
+          {t("serverCloud.syncTooLarge", { items: tooLargeSummary(syncStatus.lastReport.tooLarge) })}
         </div>
       )}
 

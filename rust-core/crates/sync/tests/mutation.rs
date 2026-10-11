@@ -235,3 +235,43 @@ fn sync_object_from_bytes_never_panics_on_mutated_input() {
         check_decoder(&valid, |b| SyncObject::from_bytes(b).is_ok());
     }
 }
+
+/// A push sizes its requests with `encoded_len` instead of serializing every
+/// object a second time, so the two must agree for every kind of object.
+#[test]
+fn encoded_len_is_the_length_of_the_serialized_object() {
+    for object in objects() {
+        assert_eq!(
+            object.encoded_len(),
+            object.to_bytes().unwrap().len(),
+            "{:?}",
+            object.tag()
+        );
+    }
+}
+
+/// The items a server refused as too large are remembered in the instance's
+/// `meta` table and read back by every `sync_push`. A damaged value must count
+/// as "nothing remembered", not stop the device from syncing.
+#[test]
+fn sync_push_never_panics_on_a_mutated_refusal_memo() {
+    const TENANT: &[u8] = b"t";
+    // The engine's meta key for the tenant: its prefix + the tenant in hex.
+    let key = format!("sync:pushrefused.v1:{}", hex(TENANT));
+    // One entry: vault_id, item_id (length-prefixed), item type, version, size.
+    let mut valid = Vec::new();
+    for field in [b"vault".as_slice(), b"item".as_slice()] {
+        valid.extend_from_slice(&u32::try_from(field.len()).unwrap().to_be_bytes());
+        valid.extend_from_slice(field);
+    }
+    valid.extend_from_slice(&10_u32.to_be_bytes());
+    valid.extend_from_slice(&3_u64.to_be_bytes());
+    valid.extend_from_slice(&4096_u64.to_be_bytes());
+
+    let storage = unissh_storage::Storage::open_in_memory(&[5_u8; 32]).unwrap();
+    check_decoder(&valid, |bytes| {
+        storage.set_meta(&key, bytes).unwrap();
+        let mut transport = unissh_sync::InMemoryTransport::new();
+        unissh_sync::sync_push(&mut transport, &storage, TENANT).is_ok()
+    });
+}

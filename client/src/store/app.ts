@@ -455,7 +455,9 @@ interface AppStore {
   reloadServerStatus: () => Promise<void>;
   setActiveServer: (serverId: string) => Promise<void>;
   maybeBindLegacyCloudVaults: () => Promise<void>;
-  syncNow: () => Promise<void>;
+  /** `retryRefused`: a sync the user asked for by hand — offer the server again
+   *  the items it refused as too large. */
+  syncNow: (opts?: { retryRefused?: boolean }) => Promise<void>;
   /** Full re-pull of ONE server (defaults to active): reset its pull cursor, then
    *  sync. Recovers vaults an incremental sync can't — ones rejected under a prior
    *  identity whose seqs the cursor already advanced past. Shares the `syncing` flag. */
@@ -1493,7 +1495,7 @@ export const useApp = create<AppStore>((set, get) => ({
     }
   },
 
-  syncNow: async () => {
+  syncNow: async (opts) => {
     if (get().syncStatus.syncing) return;
     set((s) => ({ syncStatus: { ...s.syncStatus, syncing: true, lastError: null } }));
     try {
@@ -1504,13 +1506,14 @@ export const useApp = create<AppStore>((set, get) => ({
       const ids: (string | undefined)[] = targets.length
         ? targets.map((sv) => sv.serverId as string)
         : [undefined];
-      const agg = { applied: 0, skippedStale: 0, conflicts: 0, rejected: 0, pushed: 0 };
+      const agg: SyncReport = { applied: 0, skippedStale: 0, conflicts: 0, rejected: 0, pushed: 0, tooLarge: [] };
       // Isolate per-server failures: one unreachable/erroring server must not abort
       // syncing the others (each cloud vault is bound 1:1 to its own server).
       const errors: string[] = [];
       for (const id of ids) {
         try {
-          const r = await api.serverSyncNow(id);
+          const r = await api.serverSyncNow(id, opts?.retryRefused);
+          agg.tooLarge.push(...r.tooLarge);
           agg.applied += r.applied;
           agg.skippedStale += r.skippedStale;
           agg.conflicts += r.conflicts;

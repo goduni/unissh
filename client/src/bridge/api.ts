@@ -912,8 +912,10 @@ export const serverBindCloudVault = (vaultId: string, serverId?: string) =>
 // its data stay on this device; any server-side copy is left as-is.
 export const serverUnbindCloudVault = (vaultId: string) =>
   invoke<boolean>("server_unbind_cloud_vault", { vaultId });
-export const serverSyncNow = (serverId?: string) =>
-  invoke<SyncReport>("server_sync_now", { serverId: serverId ?? null });
+/** `retryRefused` (a sync the user asked for by hand) offers the server again the
+ *  items it refused as too large; background syncs leave it off. */
+export const serverSyncNow = (serverId?: string, retryRefused = false) =>
+  invoke<SyncReport>("server_sync_now", { serverId: serverId ?? null, retryRefused });
 /** Full re-pull: reset the pull cursor then sync — recovers vaults that an
  *  incremental sync can't (rejected under a prior identity, cursor already past them). */
 export const serverRepull = (serverId?: string) =>

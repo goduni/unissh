@@ -39,6 +39,13 @@ pub enum SyncError {
     #[error("malformed sync object")]
     Format,
 
+    /// The server refused a push request as too large (an object over its
+    /// `max_object_bytes`, too many objects, or a request body over its limit).
+    /// Returned by a transport; [`crate::sync_push`] answers it by halving the
+    /// request, and surfaces it only for an object that cannot be left out.
+    #[error("the server refused the push as too large")]
+    PayloadTooLarge,
+
     /// A vault-layer error (verify/authority).
     #[error(transparent)]
     Vault(#[from] VaultError),

@@ -389,22 +389,25 @@ impl CommandRecording {
         };
         let result = (|| -> Result<(), FfiError> {
             let json = Zeroizing::new(serde_json::to_vec(&stored).map_err(FfiError::other)?);
+            // A vault moved to a server since capture started is written to
+            // under its new id.
+            let vault_key = follow_vault_move(&state.storage, self.vault_key.clone());
             // Never overwrite an item created/synced since capture started,
             // including a tombstone that expresses a user's deletion.
             if state
                 .storage
-                .get_item(&self.vault_key, self.recording_id.as_bytes())
+                .get_item(&vault_key, self.recording_id.as_bytes())
                 .map_err(FfiError::other)?
                 .is_some()
             {
                 return Err(FfiError::AlreadyExists);
             }
-            let vault = Vault::open(&state.storage, &state.keyset, &self.vault_key)
-                .map_err(FfiError::other)?;
+            let vault =
+                Vault::open(&state.storage, &state.keyset, &vault_key).map_err(FfiError::other)?;
             vault
                 .put_item(self.recording_id.as_bytes(), ITEM_TYPE_RECORDING, &json)
                 .map_err(FfiError::other)?;
-            if prune(state, &vault, &self.vault_key).is_err() {
+            if prune(state, &vault, &vault_key).is_err() {
                 log::warn!("MCP recording retention cleanup failed");
             }
             Ok(())

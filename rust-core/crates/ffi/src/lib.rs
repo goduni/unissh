@@ -49,7 +49,8 @@ use unissh_ssh_transport::{
 };
 use unissh_storage::{CachePolicy, MemberRole, Storage, SyncTarget};
 use unissh_sync::{
-    reset_pull_cursor, sync_pull, sync_push, SyncContext, SyncObject, SyncTransport,
+    reset_pull_cursor, sync_pull, sync_push, sync_push_vault_data, SyncContext, SyncObject,
+    SyncReport, SyncTransport,
 };
 use unissh_vault::{
     member_fingerprint, open_account_payload, pin_and_verify_member, pin_and_verify_vault_anchor,
@@ -231,6 +232,15 @@ pub enum FfiError {
         port: u16,
         /// SHA256 fingerprint of the key the server ACTUALLY presented.
         fingerprint: String,
+    },
+    /// The sync server refused an upload as too large (HTTP 413: an object over
+    /// its `limits.max_object_bytes`, too many objects in one push, or a request
+    /// over its body limit). A sync transport returns this so the engine can
+    /// split the push and single out the item that does not fit.
+    #[error("the server refused the upload as too large: {msg}")]
+    PayloadTooLarge {
+        /// What the server (or the proxy in front of it) answered.
+        msg: String,
     },
     /// A staged key rotation is already in progress for this key: its live
     /// candidate must be finished or abandoned before another begins.
@@ -1444,8 +1454,48 @@ pub struct FfiSyncReport {
     pub conflicts: u32,
     /// How many untrusted objects were rejected (verify/floor/cursor fail).
     pub rejected: u32,
-    /// How many objects were handed off for push.
+    /// How many objects the server accepted from this device.
     pub pushed: u64,
+    /// Items the server refuses as too large: they are NOT on the server (the
+    /// rest of the push went through). Listed by every sync until the item
+    /// changes or the upload is retried ([`Core::retry_refused_uploads`]) and
+    /// accepted.
+    pub too_large: Vec<FfiTooLargeItem>,
+}
+
+/// An item the sync server refuses as too large (see
+/// [`FfiSyncReport::too_large`]). Open identifiers only.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiTooLargeItem {
+    /// The item's vault, as `list_vaults` names it.
+    pub vault_id: String,
+    /// That vault's name (empty when it cannot be read).
+    pub vault_name: String,
+    /// The item's id.
+    pub item_id: String,
+    /// The item's type (the core's `item_type` value, as `list_items` reports
+    /// it), so the UI can say what kind of item it is. The item's own name is
+    /// inside its encrypted content — for a recording that is the whole
+    /// recording — and is deliberately not read here on every sync.
+    pub item_type: u32,
+    /// Size of the encoded sync object the server refused, in bytes.
+    pub bytes: u64,
+}
+
+/// What a [`Core::sync_now`] call does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiSyncMode {
+    /// Push, then pull: an ordinary sync.
+    Full,
+    /// Push only, and vault data only. For the first upload of a vault just
+    /// bound to a space the device does not otherwise sync (a local-to-cloud
+    /// move into a non-primary space): a pull under that label would start from
+    /// an empty cursor, re-read the server's whole history and stamp the label
+    /// on every unbound cloud vault it finds there — including one the user
+    /// unbound on purpose. And the account state and the audit log, which are
+    /// tracked per label, would be handed to the same server a second time:
+    /// they are left to the ordinary sync of the label the device does sync.
+    PushOnly,
 }
 
 /// Audit entry for the UI (FFI mirror of `storage::AuditEntry`; blobs are opaque).
@@ -1771,11 +1821,26 @@ impl Core {
     /// pass an active server). Returns `vault_id` as a hex string (a UUIDv4 is non-UTF8 bytes; cloud methods
     /// accept hex).
     pub fn create_cloud_vault(&self, name: String, tenant_b64: String) -> Result<String, FfiError> {
+        self.create_cloud_vault_as(name, tenant_b64, unissh_vault::new_vault_id())
+    }
+
+    /// [`Self::create_cloud_vault`] under the raw id
+    /// [`Self::reserve_cloud_vault_id`] returned for `tenant_b64` — so the id can
+    /// be claimed on the server (placed in a space) BEFORE the vault exists
+    /// locally and its first push materialises it there. Creating the vault
+    /// uses the reservation up. [`FfiError::AlreadyExists`] if a vault (live or
+    /// deleted) already has the id; an id that is not 16 bytes is refused.
+    pub fn create_cloud_vault_as(
+        &self,
+        name: String,
+        tenant_b64: String,
+        new_vault_id: Vec<u8>,
+    ) -> Result<String, FfiError> {
         if tenant_b64.is_empty() {
             return Err(FfiError::NoServer);
         }
         self.with_state_mut(|state| {
-            let vid = unissh_vault::new_vault_id();
+            let vid = unused_cloud_vault_id(&state.storage, new_vault_id)?;
             // Born bound: the same routine as the backup import and the local-to-cloud
             // move, with no items; it binds ONLY this vault (1:1), so other unbound
             // legacy cloud vaults are left for their own server.
@@ -1788,11 +1853,56 @@ impl Core {
                     SyncTarget::Cloud,
                     Some(tenant_b64.as_bytes()),
                     std::iter::empty(),
-                )
+                )?;
+                release_reserved_vault_id(&state.storage, &tenant_b64, None, &vid)
             })?;
             let vid_hex = hex::encode(&vid);
             state.vault_names.insert(vid, name);
             Ok(vid_hex)
+        })
+    }
+
+    /// **Reserves the id of a cloud vault that is about to be claimed on a
+    /// server** (placed in a space) before it exists locally: the vault a
+    /// local-to-cloud move of `source_vault_id` into `tenant_b64` will create,
+    /// or — with no source — the next vault created in `tenant_b64`
+    /// ([`Self::create_cloud_vault_as`]). Returns the raw 16-byte id.
+    ///
+    /// The id is written to device-local storage BEFORE it is returned, and the
+    /// same call returns the same id until the move or the creation has used
+    /// it. A server-side claim cannot be taken back, so an attempt that fails
+    /// after claiming (a source item that does not verify, a storage error, a
+    /// crash) must claim the SAME id when it is retried, instead of leaving one
+    /// more claimed, empty vault on the server per attempt. (The server's claim
+    /// is idempotent for the same owner.)
+    ///
+    /// With a source, what the move would refuse is refused here, before
+    /// anything is claimed: [`FfiError::NotFound`], [`FfiError::AlreadyCloud`].
+    /// [`FfiError::NoServer`] for an empty tenant. Requires unlock.
+    pub fn reserve_cloud_vault_id(
+        &self,
+        tenant_b64: String,
+        source_vault_id: Option<String>,
+    ) -> Result<Vec<u8>, FfiError> {
+        if tenant_b64.is_empty() {
+            return Err(FfiError::NoServer);
+        }
+        self.with_state(|state| {
+            let source = match &source_vault_id {
+                Some(id) => Some(movable_local_vault(&state.storage, id)?),
+                None => None,
+            };
+            let key = reserved_vault_id_key(&tenant_b64, source.as_deref());
+            // An id whose vault exists was used after all (the slot is cleared
+            // with the vault's creation, so this is belt and braces).
+            if let Some(vid) = state.storage.get_meta(&key)? {
+                if vid.len() == CLOUD_VAULT_ID_LEN && state.storage.get_vault(&vid)?.is_none() {
+                    return Ok(vid);
+                }
+            }
+            let vid = unissh_vault::new_vault_id();
+            state.storage.set_meta(&key, &vid)?;
+            Ok(vid)
         })
     }
 
@@ -2709,10 +2819,24 @@ impl Core {
     /// other servers are not sent. An empty `tenant_b64` pushes nothing (the push
     /// selects cloud vaults only; local vaults also carry an empty label) but still
     /// pulls — a link whose stored space id is empty keeps syncing down.
+    ///
+    /// The pull runs whether or not the push succeeded: a device that cannot
+    /// upload must still receive. A push failure is then returned as the error
+    /// (what the pull applied stays applied); a pull failure is the error only
+    /// when the push went through.
+    ///
+    /// An item the server refuses as too large does not fail the sync: the rest
+    /// is pushed and the item is named in [`FfiSyncReport::too_large`].
+    ///
+    /// `mode` is [`FfiSyncMode::Full`] for all of the above;
+    /// [`FfiSyncMode::PushOnly`] pushes the vault data alone — no account state,
+    /// no audit entries — and stops after the push (the pull counts of the
+    /// report are then zero).
     pub fn sync_now(
         &self,
         transport: Arc<dyn FfiSyncTransport>,
         tenant_b64: String,
+        mode: FfiSyncMode,
     ) -> Result<FfiSyncReport, FfiError> {
         self.with_state_mut(|state| {
             let genesis_owner = state.keyset.signing.verifying.to_bytes().to_vec();
@@ -2725,31 +2849,42 @@ impl Core {
                 push_err: Mutex::new(None),
             };
 
-            // push: if the callback threw — propagate its error (don't mask it as Format).
-            let push =
-                sync_push(&mut adapter, &state.storage, tenant_b64.as_bytes()).map_err(|e| {
-                    if let Some(fe) = lock_recover(&adapter.push_err).take() {
-                        fe
-                    } else {
-                        map_sync_err(e)
+            let push = push_to_tenant(state, &mut adapter, &tenant_b64, mode);
+            let pull = match mode {
+                FfiSyncMode::Full => {
+                    let pull = sync_pull(&mut adapter, &state.storage, &ctx);
+                    // Before the error leaves: a pull that fails part-way has
+                    // applied the objects ahead of the failure, and no later
+                    // pull applies them again.
+                    if !matches!(&pull, Ok(report) if report.applied == 0) {
+                        evict_replaced_agent_keys(state);
                     }
-                })?;
-            // pull
-            let pull = sync_pull(&mut adapter, &state.storage, &ctx);
-            // Before the error leaves: a pull that fails part-way has applied the
-            // objects ahead of the failure, and no later pull applies them again.
-            if !matches!(&pull, Ok(report) if report.applied == 0) {
-                evict_replaced_agent_keys(state);
-            }
-            let pull = pull.map_err(map_sync_err)?;
+                    pull.map_err(map_sync_err)
+                }
+                FfiSyncMode::PushOnly => Ok(SyncReport::default()),
+            };
+            let (pushed, too_large) = push?;
+            let pull = pull?;
 
             Ok(FfiSyncReport {
                 applied: pull.applied,
                 skipped_stale: pull.skipped_stale,
                 conflicts: count_u32(pull.conflicts.len()),
                 rejected: count_u32(pull.rejected.len()),
-                pushed: push.pushed,
+                pushed,
+                too_large,
             })
+        })
+    }
+
+    /// Makes the next push to `tenant_b64` offer again the items its server
+    /// refused as too large (see [`FfiSyncReport::too_large`]) — for an explicit
+    /// "sync now" after the server's limit was raised. Without it they are not
+    /// uploaded again while unchanged. Requires unlock.
+    pub fn retry_refused_uploads(&self, tenant_b64: String) -> Result<(), FfiError> {
+        self.with_state(|state| {
+            unissh_sync::forget_push_refusals(&state.storage, tenant_b64.as_bytes())
+                .map_err(map_sync_err)
         })
     }
 
@@ -2789,6 +2924,7 @@ impl Core {
                 conflicts: count_u32(report.conflicts.len()),
                 rejected: count_u32(report.rejected.len()),
                 pushed: 0,
+                too_large: Vec::new(),
             })
         })
     }
@@ -5733,7 +5869,10 @@ impl Core {
     /// Imports a backup into a new vault `new_vault_id` of the current instance: decryption
     /// with the passphrase key, items are re-encrypted under the new VK and re-signed
     /// by the current owner. A wrong passphrase/corruption → an error. Does not overwrite
-    /// an existing vault.
+    /// an existing vault. References inside the backup to its own hosts under the
+    /// vault id it was exported from (saved-bastion hops, the vault's own Personal
+    /// bindings) are re-pointed at `new_vault_id`, so they resolve in the restored
+    /// vault.
     #[expect(
         clippy::map_err_ignore,
         reason = "FfiError is a uniffi contract; adding a source field changes the generated bindings"
@@ -5777,6 +5916,36 @@ impl Core {
             let content = Zeroizing::new(br.bytes()?.to_vec());
             items.push((item_id, item_type, content));
         }
+
+        // The vault is restored under a NEW id, and the items still name the id
+        // it was exported from: a saved-bastion hop to one of its own hosts, a
+        // Personal binding of one of its own hosts. Those are re-pointed exactly
+        // as a local-to-cloud move re-points them (see [`rehome_reference`]); a
+        // reference to any other vault is left alone.
+        let orig_label = String::from_utf8_lossy(orig_vault_id).into_owned();
+        let profile_uids: std::collections::HashSet<String> = items
+            .iter()
+            .filter(|(_, item_type, _)| *item_type == ITEM_TYPE_CONNECTION)
+            .map(|(item_id, _, content)| profile_uid_in(content, &orig_label, item_id))
+            .collect();
+        let restored = VaultMove {
+            old: &orig_label,
+            new: &new_vault_id,
+            profile_uids: &profile_uids,
+        };
+        let items = items
+            .into_iter()
+            .map(
+                |(item_id, item_type, content)| -> Result<CopiedItem, FfiError> {
+                    Ok(
+                        match rehome_reference(item_type, &item_id, &content, &restored, true)? {
+                            Some((item_id, content)) => (item_id, item_type, content),
+                            None => (item_id, item_type, content),
+                        },
+                    )
+                },
+            )
+            .collect::<Result<Vec<CopiedItem>, FfiError>>()?;
 
         self.with_state_mut(|state| {
             // Any existing volume-id (live OR tombstone) is taken: creating over it
@@ -5822,7 +5991,15 @@ impl Core {
     /// References to the vault BY ID are re-pointed at the new id — host hops and
     /// Personal-identity bindings, in the moved vault and in every other vault on
     /// this device (see [`rehome_reference`], [`rehome_references`]). Item version
-    /// history is not copied — the copies start at version 1. The local vault is
+    /// history is not copied — the copies start at version 1 — but each copy keeps
+    /// its source's created/updated times on this device (they are local
+    /// metadata, not synced: another device stamps the items when it first
+    /// pulls them). What this device keeps by vault id
+    /// moves to the new id too: the keys shared with the system agent, a staged
+    /// key rotation's link, the hosts selected for a local MCP integration (its
+    /// access is paused by the change, as by any vault change, until it is
+    /// confirmed again), and the recordings of sessions still open under the old
+    /// id, which are saved into the new vault. The local vault is
     /// tombstoned and disappears from `list_vaults`; its keys are unloaded from the
     /// agent. When it was the account's Personal vault, the Personal pointer moves
     /// to the new id; any other vault leaves the pointer untouched. Creating,
@@ -5836,31 +6013,33 @@ impl Core {
     /// Refusals: [`FfiError::Locked`] (core locked), [`FfiError::NoServer`] (empty
     /// tenant), [`FfiError::NotFound`] (no such live vault), [`FfiError::AlreadyCloud`]
     /// (the vault is already a cloud vault).
+    ///
+    /// `new_vault_id` is the raw id [`Self::reserve_cloud_vault_id`] returned for
+    /// this vault and tenant — so the id can be claimed on the server (placed in
+    /// a space) BEFORE anything changes locally; the move uses the reservation
+    /// up, in the same transaction. [`FfiError::AlreadyExists`] if a vault (live
+    /// or deleted) already has the id; an id that is not 16 bytes is refused.
+    /// `None` mints a fresh id (nothing was claimed: the first push makes the
+    /// vault a personal vault of the account).
     pub fn convert_vault_to_cloud(
         &self,
         vault_id: String,
         tenant_b64: String,
+        new_vault_id: Option<Vec<u8>>,
     ) -> Result<String, FfiError> {
         self.with_state_mut(|state| {
             if tenant_b64.is_empty() {
                 return Err(FfiError::NoServer);
             }
-            let old_vid = resolve_vid(&state.storage, &vault_id);
-            let record = state
-                .storage
-                .get_vault(&old_vid)?
-                .filter(|r| !r.tombstone)
-                .ok_or(FfiError::NotFound)?;
-            match record.sync_target {
-                SyncTarget::Local => {}
-                SyncTarget::Cloud => return Err(FfiError::AlreadyCloud),
-                _ => return Err(FfiError::other("unsupported vault sync target")),
-            }
+            let old_vid = movable_local_vault(&state.storage, &vault_id)?;
             let source =
                 Vault::open(&state.storage, &state.keyset, &old_vid).map_err(map_vault_err)?;
             let name = source.name().to_vec();
             let metas = source.list_items().map_err(map_vault_err)?;
-            let new_vid = unissh_vault::new_vault_id();
+            let new_vid = match new_vault_id {
+                Some(reserved) => unused_cloud_vault_id(&state.storage, reserved)?,
+                None => unissh_vault::new_vault_id(),
+            };
             let new_hex = hex::encode(&new_vid);
             // A local vault id is the UTF-8 string the UI addresses it by — the form
             // stored in hop references and hashed into legacy profile uids.
@@ -5876,10 +6055,16 @@ impl Core {
                 // Items are read from the local vault one at a time as they are copied,
                 // so at most one plaintext is held at once; a source item that fails to
                 // verify or decrypt aborts the copy and rolls everything back.
+                // Each copy's id (a binding's changes) with its source's timestamps.
+                let stamps = std::cell::RefCell::new(Vec::with_capacity(metas.len()));
                 let items = metas
                     .iter()
                     .filter_map(|m| match source.get_item(&m.item_id) {
-                        Ok(Some(item)) => Some(rehome_item(item, &moved)),
+                        Ok(Some(item)) => Some(rehome_item(item, &moved).inspect(|copy| {
+                            stamps
+                                .borrow_mut()
+                                .push((copy.0.clone(), m.created_at, m.updated_at));
+                        })),
                         Ok(None) => None,
                         Err(e) => Some(Err(map_vault_err(e))),
                     });
@@ -5892,10 +6077,40 @@ impl Core {
                     Some(tenant_b64.as_bytes()),
                     items,
                 )?;
+                // The copies are the same items, not new ones: they keep the times
+                // they were created and last changed at (the age shown on a key
+                // counts from there). Storage metadata — not signed, not synced.
+                for (item_id, created_at, updated_at) in stamps.into_inner() {
+                    // Every stamped id was written a moment ago in this
+                    // transaction: one that is missing means the copy is not
+                    // what it was meant to be, and the move rolls back.
+                    if !state
+                        .storage
+                        .set_item_timestamps(&new_vid, &item_id, created_at, updated_at)?
+                    {
+                        return Err(FfiError::other(
+                            "local-to-cloud move: a copied item is missing from the new vault",
+                        ));
+                    }
+                }
                 // `Vault::delete` is itself transactional; nested here it runs under a
                 // savepoint, so this outer transaction still decides the whole move.
                 source.delete().map_err(map_vault_err)?;
                 rehome_references(&state.storage, &state.keyset, &new_vid, &moved)?;
+                // Device-local state kept by vault id follows the vault, in the
+                // same transaction (the `meta` table is part of it): the keys
+                // shared with the system agent, a key rotation in progress, the
+                // hosts picked for a local MCP integration, and the forwarding
+                // address that sessions still open under the old id save their
+                // recording through.
+                system_agent::rehome(state, &old_label, &new_hex)?;
+                key_rotation::rehome(state, &old_vid, &new_vid)?;
+                automation::rehome_access(&state.storage, &old_label, &new_hex)?;
+                state
+                    .storage
+                    .set_meta(&moved_vault_key(&old_vid), &new_vid)?;
+                // The id reserved for this move (if it was) is used up.
+                release_reserved_vault_id(&state.storage, &tenant_b64, Some(&old_vid), &new_vid)?;
                 // The account's Personal vault stays the Personal vault under its
                 // new id; for any other vault the pointer is left alone (and not
                 // re-signed).
@@ -6006,8 +6221,7 @@ impl VaultMove<'_> {
     }
 }
 
-/// The uids of the host profiles in the vault being moved (stored, or for a
-/// legacy profile the one derived from `old_vault` — see [`legacy_profile_uid`]).
+/// The uids of the host profiles in the vault being moved (see [`profile_uid_in`]).
 fn moved_profile_uids(
     source: &Vault,
     metas: &[unissh_vault::ItemMeta],
@@ -6018,15 +6232,105 @@ fn moved_profile_uids(
         let Some(item) = source.get_item(&m.item_id).map_err(map_vault_err)? else {
             continue;
         };
-        let stored = serde_json::from_slice::<serde_json::Value>(&item.content)
-            .ok()
-            .and_then(|v| v.get("uid").and_then(|u| u.as_str()).map(str::to_owned))
-            .filter(|u| !u.is_empty());
-        uids.insert(stored.unwrap_or_else(|| {
-            legacy_profile_uid(old_vault, &String::from_utf8_lossy(&m.item_id))
-        }));
+        uids.insert(profile_uid_in(&item.content, old_vault, &m.item_id));
     }
     Ok(uids)
+}
+
+/// The uid of the host profile stored as `content` under `item_id` in vault
+/// `vault`: the stored one, or for a legacy profile the one derived from the
+/// vault id — see [`legacy_profile_uid`].
+fn profile_uid_in(content: &[u8], vault: &str, item_id: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(content)
+        .ok()
+        .and_then(|v| v.get("uid").and_then(|u| u.as_str()).map(str::to_owned))
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| legacy_profile_uid(vault, &String::from_utf8_lossy(item_id)))
+}
+
+/// Length of a cloud vault id: a UUIDv4's 16 raw bytes.
+const CLOUD_VAULT_ID_LEN: usize = 16;
+
+/// `vid` when it is a well-formed cloud vault id no vault of this instance
+/// (live or tombstoned) uses yet.
+fn unused_cloud_vault_id(storage: &Storage, vid: Vec<u8>) -> Result<Vec<u8>, FfiError> {
+    if vid.len() != CLOUD_VAULT_ID_LEN {
+        return Err(FfiError::other("a cloud vault id is 16 bytes"));
+    }
+    if storage.get_vault(&vid)?.is_some() {
+        return Err(FfiError::AlreadyExists);
+    }
+    Ok(vid)
+}
+
+/// The raw id of the vault `vault_id` names when it can be moved to a server: a
+/// live local vault. Otherwise the refusal of [`Core::convert_vault_to_cloud`]
+/// — shared with [`Core::reserve_cloud_vault_id`], so nothing is claimed on a
+/// server for a move that would be refused.
+fn movable_local_vault(storage: &Storage, vault_id: &str) -> Result<Vec<u8>, FfiError> {
+    let vid = resolve_vid(storage, vault_id);
+    let record = storage
+        .get_vault(&vid)?
+        .filter(|r| !r.tombstone)
+        .ok_or(FfiError::NotFound)?;
+    match record.sync_target {
+        SyncTarget::Local => Ok(vid),
+        SyncTarget::Cloud => Err(FfiError::AlreadyCloud),
+        _ => Err(FfiError::other("unsupported vault sync target")),
+    }
+}
+
+/// Meta slot of the cloud vault id reserved ([`Core::reserve_cloud_vault_id`])
+/// for the move of the local vault with raw id `source` into `tenant_b64`, or —
+/// without a source — for the next vault created there. The value is the raw
+/// reserved id; empty once it was used. Device-local, never synced.
+fn reserved_vault_id_key(tenant_b64: &str, source: Option<&[u8]>) -> String {
+    format!(
+        "vault.reserved.v1:{}:{}",
+        hex::encode(tenant_b64),
+        source.map_or_else(String::new, hex::encode)
+    )
+}
+
+/// Empties the reservation slot once `used` — the id it holds — became a vault.
+/// A slot holding another id (or nothing) is left alone: the vault was then
+/// created under an id that was not reserved through it.
+fn release_reserved_vault_id(
+    storage: &Storage,
+    tenant_b64: &str,
+    source: Option<&[u8]>,
+    used: &[u8],
+) -> Result<(), FfiError> {
+    let key = reserved_vault_id_key(tenant_b64, source);
+    if storage.get_meta(&key)?.as_deref() == Some(used) {
+        storage.set_meta(&key, &[])?;
+    }
+    Ok(())
+}
+
+/// Meta slot recording that the local vault with raw id `old_vid` was moved to a
+/// server; the value is the raw id of the cloud vault it became. Device-local,
+/// written inside the move's transaction.
+///
+/// The slot is never removed, and stays true, because the id it is keyed by
+/// cannot come back: the moved vault's row remains as a tombstone, and a vault
+/// id that exists — even tombstoned — cannot be created again. That in turn
+/// depends on tombstoned LOCAL vaults never being purged: `purge_vault` takes a
+/// cloud vault's hex id and opens a live vault. If local tombstones are ever
+/// purged, this slot must be removed with them.
+fn moved_vault_key(old_vid: &[u8]) -> String {
+    format!("vault.moved.v1:{}", hex::encode(old_vid))
+}
+
+/// Where to write for a vault addressed by raw id `vid`: the cloud vault it was
+/// moved to ([`Core::convert_vault_to_cloud`]), or `vid` itself. For writers
+/// that captured a vault id before the move and finish after it — a session
+/// recording is saved when its session ends.
+fn follow_vault_move(storage: &Storage, vid: Vec<u8>) -> Vec<u8> {
+    match storage.get_meta(&moved_vault_key(&vid)) {
+        Ok(Some(new_vid)) => new_vid,
+        _ => vid,
+    }
 }
 
 /// A rewritten item: `(item_id, plaintext content)` — the id changes only for a
@@ -7754,7 +8058,69 @@ fn map_keychain_err(e: unissh_keychain::KeychainError) -> FfiError {
 
 /// Mapping of sync errors: fatal ones → Other with a message (details are in the report, not here).
 fn map_sync_err(e: unissh_sync::SyncError) -> FfiError {
+    if matches!(e, unissh_sync::SyncError::PayloadTooLarge) {
+        // Only an object the push cannot go on without gets this far (an item
+        // that is too large is left out and reported instead). A transport's
+        // own message replaces this one where there is one (`push_to_tenant`).
+        return FfiError::PayloadTooLarge {
+            msg: "an object the push cannot continue without".into(),
+        };
+    }
     FfiError::Other { msg: e.to_string() }
+}
+
+/// The push half of a sync for `tenant_b64`: the number of objects the server
+/// accepted and the items it refused as too large, named for the UI. If the
+/// transport callback failed, its own error is returned (not masked as Format).
+/// `mode` selects what is pushed: everything the server is missing, or (for
+/// [`FfiSyncMode::PushOnly`]) the vault data alone.
+fn push_to_tenant(
+    state: &CoreState,
+    adapter: &mut ForeignTransportAdapter,
+    tenant_b64: &str,
+    mode: FfiSyncMode,
+) -> Result<(u64, Vec<FfiTooLargeItem>), FfiError> {
+    let tenant = tenant_b64.as_bytes();
+    let outcome = match mode {
+        FfiSyncMode::Full => sync_push(adapter, &state.storage, tenant),
+        FfiSyncMode::PushOnly => sync_push_vault_data(adapter, &state.storage, tenant),
+    };
+    let report = outcome.map_err(|e| {
+        // A push that failed on the transport reports what the transport said
+        // (for a size refusal: the server's own message). Any other failure is
+        // the engine's, whatever an earlier request left in the adapter.
+        let from_transport = matches!(
+            e,
+            unissh_sync::SyncError::Format | unissh_sync::SyncError::PayloadTooLarge
+        );
+        if from_transport {
+            if let Some(fe) = lock_recover(&adapter.push_err).take() {
+                return fe;
+            }
+        }
+        map_sync_err(e)
+    })?;
+    let too_large = report
+        .too_large
+        .into_iter()
+        .map(|t| FfiTooLargeItem {
+            // The same id form `list_vaults` returns: hex for a cloud vault.
+            vault_id: hex::encode(&t.vault_id),
+            vault_name: state
+                .vault_names
+                .get(&t.vault_id)
+                .cloned()
+                .or_else(|| {
+                    let vault = Vault::open(&state.storage, &state.keyset, &t.vault_id).ok()?;
+                    Some(String::from_utf8_lossy(vault.name()).into_owned())
+                })
+                .unwrap_or_default(),
+            item_id: String::from_utf8_lossy(&t.item_id).into_owned(),
+            item_type: t.item_type,
+            bytes: t.bytes,
+        })
+        .collect();
+    Ok((report.pushed, too_large))
 }
 
 /// Decodes a hex `vault_id` (a cloud UUIDv4) into raw bytes. Broken hex → Other.
@@ -9015,6 +9381,16 @@ fn unix_now() -> u64 {
 /// "we stopped listening".
 const RECORDING_MAX_BYTES: usize = 8 * 1024 * 1024;
 
+// This crate owns the cap; `unissh-sync` owns the bound servers default their
+// object limit to (the server depends on that crate, not on this one) and has
+// to restate the cap to derive it. This ties the two at compile time: a stored
+// recording is at most twice the capped body (see the bound's derivation), and
+// the megabyte on top is the headroom that derivation leaves for the rest.
+const _: () = assert!(
+    2 * RECORDING_MAX_BYTES + 1024 * 1024 <= unissh_sync::LARGEST_CLIENT_OBJECT_BYTES,
+    "RECORDING_MAX_BYTES outgrew unissh_sync::LARGEST_CLIENT_OBJECT_BYTES: raise that bound with it"
+);
+
 /// Accumulates an [asciicast v2] document for one session.
 ///
 /// asciicast rather than a private format on purpose: a recording that can only
@@ -9192,11 +9568,10 @@ impl RecordingSaver {
             log::warn!("session recording dropped: the core locked before it could be written");
             return;
         };
-        let vault = match Vault::open(
-            &st.storage,
-            &st.keyset,
-            &resolve_vid(&st.storage, &self.vault_id),
-        ) {
+        // A vault moved to a server while the session was open is written to
+        // under its new id — the recording follows the host it belongs to.
+        let vid = follow_vault_move(&st.storage, resolve_vid(&st.storage, &self.vault_id));
+        let vault = match Vault::open(&st.storage, &st.keyset, &vid) {
             Ok(v) => v,
             Err(e) => {
                 log::warn!("session recording dropped: {e}");
@@ -9801,8 +10176,15 @@ impl unissh_ssh_transport::SftpCancel for CancelBridge {
 #[uniffi::export(with_foreign)]
 pub trait FfiSyncTransport: Send + Sync {
     /// Hands objects to the server; returns the assigned `server_seq` in input order.
+    /// One call is one request: the core cuts a large push into several calls. A
+    /// server refusal for size (HTTP 413) must come back as
+    /// [`FfiError::PayloadTooLarge`], so the core can split the call further.
     fn push_objects(&self, objects: Vec<Vec<u8>>) -> Result<Vec<u64>, FfiError>;
-    /// Returns everything with `server_seq > cursor` (order not guaranteed — the core sorts).
+    /// Returns what follows `cursor` (`server_seq > cursor`; order not guaranteed
+    /// — the core sorts): all of it, or one page of it. The core calls again
+    /// from wherever its cursor got to until a call returns nothing or moves
+    /// nothing, so an implementation should hand over one server page per call
+    /// instead of buffering the whole delta.
     fn delta_since(&self, cursor: u64) -> Vec<SyncDeltaItem>;
     /// Reports the maximum assigned `server_seq` (informational, not trusted).
     fn report_version(&self) -> u64;
@@ -9827,24 +10209,49 @@ impl SyncTransport for ForeignTransportAdapter {
         for o in objects {
             blobs.push(o.to_bytes().map_err(|_| unissh_sync::SyncError::Format)?);
         }
+        // The callback's own error is kept for the caller: the engine sees only
+        // its kind. A size refusal it answers itself (it splits the request) —
+        // unless the object cannot be left out, and then what the server said
+        // is the push's error. An accepted request clears what was kept.
         match self.inner.push_objects(blobs) {
-            Ok(seqs) => Ok(seqs),
+            Ok(seqs) => {
+                *lock_recover(&self.push_err) = None;
+                Ok(seqs)
+            }
             Err(e) => {
+                let too_large = matches!(e, FfiError::PayloadTooLarge { .. });
                 *lock_recover(&self.push_err) = Some(e);
-                Err(unissh_sync::SyncError::Format)
+                Err(if too_large {
+                    unissh_sync::SyncError::PayloadTooLarge
+                } else {
+                    unissh_sync::SyncError::Format
+                })
             }
         }
     }
     fn delta_since(&self, cursor: u64) -> Vec<(u64, SyncObject)> {
-        self.inner
-            .delta_since(cursor)
-            .into_iter()
-            .filter_map(|item| {
-                SyncObject::from_bytes(&item.object)
-                    .ok()
-                    .map(|o| (item.server_seq, o))
-            })
-            .collect()
+        let mut cursor = cursor;
+        loop {
+            let page = self.inner.delta_since(cursor);
+            let last = page.iter().map(|item| item.server_seq).max();
+            let objects: Vec<(u64, SyncObject)> = page
+                .into_iter()
+                .filter_map(|item| {
+                    SyncObject::from_bytes(&item.object)
+                        .ok()
+                        .map(|o| (item.server_seq, o))
+                })
+                .collect();
+            // The engine stops at an empty answer. A page holding only objects
+            // this build cannot read (a kind a newer client added) is not the
+            // end of the delta: the transport is asked for what follows it.
+            // Only the question moves — the engine's own cursor advances on
+            // nothing but objects it processed.
+            match last {
+                Some(last) if objects.is_empty() && last > cursor => cursor = last,
+                Some(_) | None => return objects,
+            }
+        }
     }
     fn report_version(&self) -> u64 {
         self.inner.report_version()
@@ -11120,7 +11527,7 @@ mod sftp_pool_tests {
 
 #[cfg(test)]
 mod recorder_tests {
-    use super::{split_utf8, SessionRecorder, RECORDING_MAX_BYTES};
+    use super::{split_utf8, SessionRecorder, StoredRecording, RECORDING_MAX_BYTES};
 
     /// A character split across two chunks must survive intact. A PTY writes
     /// whatever fits, so this happens on any non-ASCII output — and a
@@ -11198,6 +11605,58 @@ mod recorder_tests {
             body.len() < RECORDING_MAX_BYTES + 64 * 1024,
             "document grew to {} bytes, past the {RECORDING_MAX_BYTES} cap",
             body.len()
+        );
+    }
+
+    /// A recording is the largest item a vault holds, and it has to sync: the
+    /// server's default object limit is `LARGEST_CLIENT_OBJECT_BYTES`, derived
+    /// from "a stored recording is at most twice its capped body". This builds
+    /// that worst case from the recorder's own cap and checks the derivation.
+    /// Regression: the limit was 1 MiB, so any longer recording blocked its
+    /// vault's uploads.
+    #[test]
+    fn the_largest_recording_fits_the_server_object_limit() {
+        // Output in pieces small against the cap: a piece that does not fit is
+        // dropped whole (and ends the recording), so the body stops within one
+        // event of the cap.
+        const CHUNK: usize = RECORDING_MAX_BYTES / 1024;
+        // One event as the body holds it: a backslash is the worst case twice
+        // over — it doubles inside the asciicast event, and each of those
+        // doubles again when the document is stored as a JSON string — plus
+        // the event's own framing (time, type, quotes, newline).
+        const EVENT: usize = 2 * CHUNK + 64;
+        let rec = SessionRecorder::new(80, 24, "t", 0);
+        let chunk = vec![b'\\'; CHUNK];
+        // More events than the cap holds, whatever the framing adds.
+        for _ in 0..=RECORDING_MAX_BYTES / (2 * CHUNK) {
+            rec.record(&chunk);
+        }
+        let (asciicast, truncated, duration_secs) = rec.finish();
+        assert!(truncated, "the cap must have been reached");
+        assert!(
+            asciicast.len() + EVENT > RECORDING_MAX_BYTES,
+            "not the worst case: a body of {} bytes is more than one event short of the cap",
+            asciicast.len()
+        );
+        let item = serde_json::to_vec(&StoredRecording {
+            label: "t".to_owned(),
+            host: "h".to_owned(),
+            user: "u".to_owned(),
+            started_unix: 0,
+            duration_secs,
+            truncated,
+            mcp: None,
+            asciicast,
+            extra: std::collections::BTreeMap::new(),
+        })
+        .unwrap();
+        // The body can be one event longer than this one (stored: twice its
+        // size), and the vault and the sync framing add a few hundred bytes
+        // (AEAD nonce and tag, the wrapped item key, the signature, the ids).
+        assert!(
+            item.len() + 2 * EVENT + 64 * 1024 <= unissh_sync::LARGEST_CLIENT_OBJECT_BYTES,
+            "a full recording is {} bytes stored, over the server's default object limit",
+            item.len()
         );
     }
 }
@@ -12758,7 +13217,7 @@ mod tests {
         let before = snapshot();
 
         let err = core
-            .convert_vault_to_cloud("loc".into(), "dGVuYW50".into())
+            .convert_vault_to_cloud("loc".into(), "dGVuYW50".into(), None)
             .unwrap_err();
         assert!(matches!(err, FfiError::Other { .. }), "{err:?}");
         assert_eq!(snapshot(), before, "local vault record and items untouched");
@@ -12777,5 +13236,93 @@ mod tests {
             storage.list_tombstoned_cloud_vaults().unwrap().is_empty(),
             "not even a tombstoned cloud vault row"
         );
+    }
+
+    /// A local vault that cannot be moved yet: its last item (by id order, the
+    /// copy order) is tampered, so the conversion fails part-way and rolls back.
+    fn core_with_an_unmovable_vault(dir: &std::path::Path) -> Arc<Core> {
+        let core = Core::new(
+            dir.join("i.db").to_string_lossy().to_string(),
+            dir.join("i.keyset").to_string_lossy().to_string(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("loc".into(), "Local".into()).unwrap();
+        core.save_note("loc".into(), "zz-note".into(), "n".into())
+            .unwrap();
+        core.with_state(|state| {
+            let mut rec = state
+                .storage
+                .get_item(b"loc", b"zz-note")?
+                .ok_or(FfiError::NotFound)?;
+            rec.version += 1;
+            state.storage.put_item(&rec)?;
+            Ok(())
+        })
+        .unwrap();
+        core
+    }
+
+    /// The id claimed on the server for a move cannot be unclaimed, so a move
+    /// that fails after the claim must claim the same id when it is retried.
+    /// Regression: every attempt minted a fresh id and left one more claimed,
+    /// empty vault on the server.
+    #[test]
+    fn a_failed_move_reserves_the_same_cloud_vault_id_again() {
+        const SPACE: &str = "c3BhY2UtYQ==";
+        let dir = tempfile::tempdir().unwrap();
+        let core = core_with_an_unmovable_vault(dir.path());
+
+        let reserved = core
+            .reserve_cloud_vault_id(SPACE.into(), Some("loc".into()))
+            .unwrap();
+        core.convert_vault_to_cloud("loc".into(), SPACE.into(), Some(reserved.clone()))
+            .unwrap_err();
+
+        assert_eq!(
+            core.reserve_cloud_vault_id(SPACE.into(), Some("loc".into()))
+                .unwrap(),
+            reserved,
+            "the retry claims the id the failed attempt claimed"
+        );
+        assert_ne!(
+            core.reserve_cloud_vault_id("c3BhY2UtYg==".into(), Some("loc".into()))
+                .unwrap(),
+            reserved,
+            "an id claimed in one space is not offered for another"
+        );
+    }
+
+    /// The lists this device keeps by vault id follow a moved vault; one that
+    /// no longer parses has nothing to carry over and must not make the vault
+    /// unmovable for good.
+    #[test]
+    fn unreadable_device_local_lists_do_not_block_a_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(
+            dir.path().join("i.db").to_string_lossy().to_string(),
+            dir.path().join("i.keyset").to_string_lossy().to_string(),
+        );
+        core.create_account(None).unwrap();
+        core.create_vault("loc".into(), "Local".into()).unwrap();
+        core.with_state(|state| {
+            let rotation_links = format!("key.rotation.v2:{}", hex::encode("loc"));
+            for key in [
+                "system_agent.shared.v1",
+                rotation_links.as_str(),
+                "mcp.access.v1",
+            ] {
+                state.storage.set_meta(key, b"{ not json")?;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let moved = core
+            .convert_vault_to_cloud("loc".into(), "dGVuYW50".into(), None)
+            .unwrap();
+
+        let vaults = core.list_vaults().unwrap();
+        assert_eq!(vaults.len(), 1, "the local vault became the cloud vault");
+        assert_eq!(vaults[0].vault_id, moved);
     }
 }

@@ -31,14 +31,17 @@ export interface MovePlan {
   needsServerPicker: boolean;
   /** The target server: the chosen one, else the active one, else the first. */
   server: ServerStatus | null;
-  /** Spaces on that server the caller administers — where the vault may land
-   *  (from the live `serverListSpaces` of that server, like cloud-vault creation).
-   *  Empty = the link's primary space (the core binds to it by default). */
+  /** Spaces on that server the caller administers — where the vault may be placed
+   *  instead of staying personal (from the live `serverListSpaces` of that server,
+   *  like cloud-vault creation). */
   spaces: SpaceInfo[];
+  /** There is a choice to show: "Personal" and at least one space. */
   needsSpacePicker: boolean;
-  /** Where the vault lands: the chosen space, else the server link's primary space
-   *  when it is offered, else the first offered one. Null = no admin space listed
-   *  (the core binds to the link's primary space). */
+  /** The space the vault is placed in — only one the user picked. Null = a
+   *  personal vault of the account (the default, and what 0.5 always made): only
+   *  that account administers it. A space is never chosen for the user, because
+   *  it changes who holds authority over the vault on the server (the admins of
+   *  the space, who can then invite people to it). */
   space: SpaceInfo | null;
   /** The vault lands outside the link's primary space, which is all automatic sync
    *  covers — the confirmation must say so. */
@@ -68,11 +71,7 @@ export function planMoveToServer(
     targets[0] ??
     null;
   const spaces = (pick.spaces ?? []).filter((sp) => sp.role === "admin");
-  const space =
-    spaces.find((sp) => sp.spaceId === pick.spaceId) ??
-    spaces.find((sp) => sp.spaceId === server?.spaceId) ??
-    spaces[0] ??
-    null;
+  const space = spaces.find((sp) => sp.spaceId === pick.spaceId) ?? null;
   const tally = new Map<MoveKind, number>();
   for (const it of items) {
     const kind = KIND_OF[it.itemType] ?? "other";
@@ -83,7 +82,7 @@ export function planMoveToServer(
     needsServerPicker: targets.length > 1,
     server,
     spaces,
-    needsSpacePicker: spaces.length > 1,
+    needsSpacePicker: spaces.length > 0,
     space,
     nonPrimarySpace: space != null && space.spaceId !== server?.spaceId,
     counts: MOVE_KINDS.filter((k) => tally.has(k)).map((kind) => ({

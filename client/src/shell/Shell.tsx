@@ -9,6 +9,7 @@ import { usePalette, useTheme } from "@/theme/ThemeProvider";
 import { MONO, rem, TEXT } from "@/theme/tokens";
 import { BTN_RESET, Icon, IconName, Logo, ResizeHandle, VaultBadge } from "@/components/primitives";
 import { FlatAvatar, SyncBadge } from "@/components/mono";
+import { tooLargeSummary } from "@/bridge/syncReport";
 import { useExternalEdits } from "@/sftp/external-edit";
 import { useMenu } from "@/components/a11y";
 import { useApp, HOST_FILTER_ALL, HOST_FILTER_UNGROUPED } from "@/store/app";
@@ -527,6 +528,10 @@ function VaultSwitcher() {
   const vaultId = useApp((s) => s.vaultId);
   const servers = useApp((s) => s.servers);
   const syncStatus = useApp((s) => s.syncStatus);
+  // A sync that left items behind (too large for the server) is not "synced".
+  const syncNotUploaded = tooLargeSummary(syncStatus.lastReport?.tooLarge ?? []);
+  const syncProblem =
+    syncStatus.lastError ?? (syncNotUploaded ? t("serverCloud.syncTooLarge", { items: syncNotUploaded }) : null);
   const setVault = useApp((s) => s.setVault);
   const menuRef = useRef<HTMLDivElement>(null);
   // outside click / Escape close + ArrowUp/Down over the vault rows
@@ -605,15 +610,15 @@ function VaultSwitcher() {
             {unboundCloud(v) && <Icon name="alert" size={11} color={p.amber} />}
             {v.syncTarget === "cloud" && !unboundCloud(v) && (
               <SyncBadge
-                state={syncStatus.syncing ? "syncing" : syncStatus.lastError ? "error" : "synced"}
+                state={syncStatus.syncing ? "syncing" : syncProblem ? "error" : "synced"}
                 label={
                   syncStatus.syncing
                     ? t("shell.syncing")
-                    : syncStatus.lastError
+                    : syncProblem
                       ? t("shell.syncError")
                       : t("shell.synced")
                 }
-                title={syncStatus.lastError ?? undefined}
+                title={syncProblem ?? undefined}
               />
             )}
           </span>

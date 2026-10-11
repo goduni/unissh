@@ -45,7 +45,7 @@ import { useCtx } from "@/store/ctx";
 import { useIsMobile, useNarrow } from "@/store/responsive";
 import * as api from "@/bridge/api";
 import { apiErrorMessage, ItemType, profileToAuth } from "@/bridge/types";
-import { isOwnedCloud, serverShortLabel, vaultLoc } from "@/bridge/vaults";
+import { cloudVaultServers, isOwnedCloud, serverShortLabel, vaultLoc } from "@/bridge/vaults";
 import type {
   ConnectionProfile,
   Identity,
@@ -2428,8 +2428,9 @@ function NewVaultModal({
   const servers = useApp((s) => s.servers);
   const activeServerId = useApp((s) => s.activeServerId);
   const [name, setName] = useState(edit?.name ?? "");
-  // A cloud vault can be created on ANY linked server with a live session — pick which.
-  const cloudServers = servers.filter((s) => s.connected && s.hasSession && s.serverId);
+  // A cloud vault made here is a personal one, created locally and uploaded by a
+  // later sync: ANY linked server will do, signed in or not — pick which.
+  const cloudServers = cloudVaultServers(servers);
   const cloudReady = cloudServers.length > 0;
   const [target, setTarget] = useState<SyncTarget>("local");
   const [cloudServer, setCloudServer] = useState<string>(() =>
@@ -2550,11 +2551,13 @@ function NewVaultModal({
   );
 }
 
-/** Purpose-built "create a vault to hold identities" flow. Under the one-account /
- *  many-spaces model, an identity vault lives either on this device (local) or in
- *  one of YOUR Spaces on the linked account — picked from the real Space list, or a
- *  new Space created inline (no server URL / enrollment grant any more). Never
- *  touches the global active vault. */
+/** Purpose-built "create a vault to hold identities" flow. An identity vault lives
+ *  either on this device (local) or on the linked account. On the account it is a
+ *  personal vault — only the account administers it — unless a Space is picked:
+ *  one of YOUR Spaces from the real Space list, or a new Space created inline. A
+ *  Space is never picked for the user (it hands the vault's administration to the
+ *  Space's admins), and placing a vault in one needs the server reachable right
+ *  now, which a personal vault does not. Never touches the global active vault. */
 function IdentityVaultModal({
   onCreated,
   onClose,
@@ -2570,49 +2573,48 @@ function IdentityVaultModal({
   const activeServerId = useApp((s) => s.activeServerId);
 
   // The linked account (server) a cloud identity vault can live on — prefer the
-  // active one, else any connected+authenticated link. Spaces are scoped to it.
-  const account =
-    servers.find((s) => s.serverId === activeServerId && s.connected && s.hasSession) ??
-    servers.find((s) => s.connected && s.hasSession && s.serverId) ??
-    null;
+  // active one, else any linked one. A personal vault needs no live session (it
+  // is created locally); the Spaces, scoped to the account, do.
+  const linked = cloudVaultServers(servers);
+  const account = linked.find((s) => s.serverId === activeServerId) ?? linked[0] ?? null;
   const cloudReady = !!account;
+  const PERSONAL = "";
   const NEW_SPACE = "__new__";
+  const UNAVAILABLE = "__unavailable__";
 
-  // The caller's Spaces on the account where they're an admin — an identity vault
-  // must live in a Space you control (never a shared team Space, which would leak).
-  const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
-  const seeded = useRef(false);
+  // The caller's Spaces on the account where they're an admin — a Space an
+  // identity vault is placed in must be one you control (never a shared team
+  // Space, which would leak). Null = the list could not be fetched: the server
+  // is not reachable (or not signed in to), so nothing can be placed in a Space
+  // right now.
+  const [spaces, setSpaces] = useState<SpaceInfo[] | null>(account?.hasSession ? [] : null);
 
   const [name, setName] = useState<string>(t("identityVault.nameDefault"));
   const [target, setTarget] = useState<SyncTarget>(cloudReady ? "cloud" : "local");
-  const [space, setSpace] = useState<string>(NEW_SPACE);
+  const [space, setSpace] = useState<string>(PERSONAL);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!account) return;
+    if (!account?.hasSession) return;
     let alive = true;
     api
       .serverListSpaces(account.serverId ?? undefined)
       .then((list) => {
-        if (!alive) return;
-        const mine = list.filter((sp) => sp.role === "admin");
-        setSpaces(mine);
-        // Seed the picker to the first existing Space once (don't clobber a user pick).
-        if (!seeded.current && mine.length) {
-          seeded.current = true;
-          setSpace(mine[0].spaceId);
-        }
+        if (alive) setSpaces(list.filter((sp) => sp.role === "admin"));
       })
       .catch(() => {
-        if (alive) setSpaces([]);
+        if (!alive) return;
+        // Placing a vault in a Space claims it on the server first: without the
+        // server there is only the personal vault, which is created locally.
+        setSpaces(null);
+        setSpace(PERSONAL);
       });
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account?.serverId]);
+  }, [account?.serverId, account?.hasSession]);
 
-  const newSpace = target === "cloud" && (spaces.length === 0 || space === NEW_SPACE);
+  const newSpace = target === "cloud" && space === NEW_SPACE;
 
   const save = async () => {
     const nm = name.trim();
@@ -2630,18 +2632,17 @@ function IdentityVaultModal({
         await useApp.getState().reloadVaults();
       } else {
         const serverId = account?.serverId ?? undefined;
-        // Resolve the Space to bind the vault into: a freshly-created one, the chosen
-        // existing Space, or (fallback) the link's primary Space. Threaded through to
-        // serverCreateCloudVault so the picker's choice is honoured — not silently
-        // dropped into the primary Space.
+        // Resolve the Space to place the vault in: a freshly-created one or the
+        // chosen existing Space. None (the default) = a personal vault of the
+        // account, bound to the link's primary Space label and created locally.
         let boundSpace: string | undefined;
         if (newSpace) {
           // Create a NEW Space on this account, then bind the vault into it — the
           // in-flow "make my own Space" path (no separate server link needed).
           boundSpace = await api.serverCreateSpace(nm, serverId);
           await useApp.getState().reloadServerStatus();
-        } else if (space && space !== NEW_SPACE) {
-          // Bind into the specific existing Space the user picked (may differ from
+        } else if (space !== PERSONAL) {
+          // Place into the specific existing Space the user picked (may differ from
           // the link's primary Space).
           boundSpace = space;
         }
@@ -2717,24 +2718,41 @@ function IdentityVaultModal({
           ]}
         />
       </Field>
-      {target === "cloud" && account && spaces.length > 0 && (
+      {target === "cloud" && account && (
         <Field label={t("identityVault.space")}>
           <NHSelect
             value={space}
             onChange={setSpace}
             options={[
-              ...spaces.map((sp) => ({ value: sp.spaceId, label: sp.name || sp.spaceId })),
-              { value: NEW_SPACE, label: t("identityVault.newSpace") },
+              { value: PERSONAL, label: t("vault.placePersonal") },
+              ...(spaces === null
+                ? [
+                    {
+                      value: UNAVAILABLE,
+                      label: account.hasSession
+                        ? t("identityVault.spacesUnavailable")
+                        : t("identityVault.spacesNeedSession"),
+                      disabled: true,
+                    },
+                  ]
+                : [
+                    ...spaces.map((sp) => ({ value: sp.spaceId, label: sp.name || sp.spaceId })),
+                    { value: NEW_SPACE, label: t("identityVault.newSpace") },
+                  ]),
             ]}
             empty=""
           />
         </Field>
       )}
-      {target === "cloud" && newSpace && (
+      {target === "cloud" && account && space !== PERSONAL && (
         <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5, padding: `0 ${rem(2)}` }}>
-          {account
-            ? t("identityVault.newSpaceHint", { server: serverShortLabel(account) })
-            : t("identityVault.needAccount")}
+          {newSpace && `${t("identityVault.newSpaceHint", { server: serverShortLabel(account) })} `}
+          {t("vault.placeSpaceHint")}
+        </div>
+      )}
+      {target === "cloud" && !account && (
+        <div style={{ fontSize: TEXT.small, color: p.txt3, lineHeight: 1.5, padding: `0 ${rem(2)}` }}>
+          {t("identityVault.needAccount")}
         </div>
       )}
     </Modal>

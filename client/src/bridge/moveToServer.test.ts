@@ -33,14 +33,24 @@ describe("planMoveToServer", () => {
     ]);
   });
 
-  it("asks for a space only when the server has more than one space you administer, defaulting to the primary", () => {
+  it("keeps the vault personal unless a space is picked, even when the primary space is yours", () => {
     const member: SpaceInfo = { spaceId: "team", name: "Team", role: "member" };
     const servers = [{ ...server("a", true), spaceId: "lab" }];
-    expect(planMoveToServer([], servers, { spaces: [admin("own"), member] }).needsSpacePicker).toBe(false);
-    const two = planMoveToServer([], servers, { spaces: [admin("own"), admin("lab"), member] });
-    expect(two.needsSpacePicker).toBe(true);
-    expect(two.spaces.map((sp) => sp.spaceId)).toEqual(["own", "lab"]);
-    expect({ space: two.space?.spaceId, nonPrimary: two.nonPrimarySpace }).toEqual({ space: "lab", nonPrimary: false });
+    const spaces = [admin("own"), admin("lab"), member];
+    const byDefault = planMoveToServer([], servers, { spaces });
+    expect({ space: byDefault.space, nonPrimary: byDefault.nonPrimarySpace }).toEqual({ space: null, nonPrimary: false });
+    const picked = planMoveToServer([], servers, { spaces, spaceId: "own" });
+    expect({ space: picked.space?.spaceId, nonPrimary: picked.nonPrimarySpace }).toEqual({ space: "own", nonPrimary: true });
+  });
+
+  it("offers a space choice only among the spaces you administer", () => {
+    const member: SpaceInfo = { spaceId: "team", name: "Team", role: "member" };
+    const servers = [server("a", true)];
+    expect(planMoveToServer([], servers, { spaces: [member] }).needsSpacePicker).toBe(false);
+    const one = planMoveToServer([], servers, { spaces: [admin("own"), member] });
+    expect(one.needsSpacePicker).toBe(true);
+    expect(one.spaces.map((sp) => sp.spaceId)).toEqual(["own"]);
+    expect(planMoveToServer([], servers, { spaces: [member], spaceId: "team" }).space).toBeNull();
   });
 
   it("offers only signed-in servers, defaulting to the active one", () => {
