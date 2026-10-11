@@ -752,9 +752,9 @@ pub fn claim_vault(
         )
         .json(&body),
     )?;
-    resp.get("claimed")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| ApiError::other("vault claim: response missing 'claimed'"))
+    // The request succeeded either way; an answer without the field is read as
+    // a fresh claim rather than failing a claim the server accepted.
+    Ok(resp.get("claimed").and_then(Value::as_bool).unwrap_or(true))
 }
 
 /// `POST /v1/spaces` (Bearer, owner) — create a space; the creator becomes its admin.
