@@ -45,6 +45,8 @@
 //!   `ssh-rsa` signature, which the core never makes: it is refused before
 //!   anyone is asked to approve it.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use unissh_ssh_agent::RsaHash;
 
@@ -64,6 +66,10 @@ mod flag {
     pub const RSA_SHA2_256: u32 = 2;
     pub const RSA_SHA2_512: u32 = 4;
 }
+
+/// Whether the last signature request for an offered key was refused for
+/// asking an RSA key for SHA-1; the refusal is logged when this turns true.
+static SHA1_REFUSED: AtomicBool = AtomicBool::new(false);
 
 /// A frame longer than this is refused rather than allocated. The remote side
 /// declares the length, so without a ceiling it decides how much memory we
@@ -351,16 +357,21 @@ fn reply<A: AgentKeys + ?Sized>(agent: &A, request: &[u8]) -> Option<Vec<u8>> {
                 // of a type it did not ask for. Refused before any prompt.
                 // Said loudly and precisely: all the client reports is "agent
                 // refused operation", and this line is the only place that says
-                // why. No key, caller or payload in it.
-                log::warn!(
-                    "agent: signature refused: the client asked for a SHA-1 (ssh-rsa) signature \
-                     with an RSA key, which is never made; it must request rsa-sha2-256 or \
-                     rsa-sha2-512 (an old client, or one forced to ssh-rsa)"
-                );
+                // why. No key, caller or payload in it. Once per run of such
+                // requests: whoever can reach the agent decides how many there
+                // are, and must not get to fill the log with them.
+                if !SHA1_REFUSED.swap(true, Ordering::Relaxed) {
+                    log::warn!(
+                        "agent: signature refused: the client asked for a SHA-1 (ssh-rsa) \
+                         signature with an RSA key, which is never made; it must request \
+                         rsa-sha2-256 or rsa-sha2-512 (an old client, or one forced to ssh-rsa)"
+                    );
+                }
                 return None;
             } else {
                 RsaHash::default() // not an RSA key: no hash to choose
             };
+            SHA1_REFUSED.store(false, Ordering::Relaxed);
             let (algorithm, signature) = agent.sign(&key, data, rsa)?;
             let mut inner = Vec::new();
             put_string(&mut inner, algorithm.as_bytes())?;
