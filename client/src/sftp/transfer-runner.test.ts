@@ -143,8 +143,16 @@ describe("accounting and failed parallel work", () => {
   it("shows a relayed file at its own size, and restarts a retry from the source size", async () => {
     const t = transfer(); t.bytesTotal = 200; t.sourceSize = 100;
     const from = source("remote"); const to = source("remote");
+    // The relay counts both of its legs; the row never does, not even midway.
+    let midway: Partial<Transfer> = {};
+    api.sftpRelay.mockImplementation(async (_id, _toId, _from, _to, progress) => {
+      progress({ transferred: 200, total: 200 });
+      midway = { ...current() };
+      return true;
+    });
     await startTransfer(t, from, to, resolver);
     expect(api.sftpRelay).toHaveBeenCalledOnce();
+    expect(midway).toMatchObject({ state: "active", bytesDone: 100, bytesTotal: 100 });
     expect(current()).toMatchObject({ state: "done", bytesDone: 100, bytesTotal: 100 });
   });
   it("cancels sibling writes on error and waits before exposing retry", async () => {
@@ -722,10 +730,11 @@ describe("moving between locations", () => {
   });
 
   it.each([
-    ["local", "remote"], ["remote", "local"], ["remote", "remote"],
+    ["local", "remote"], ["remote", "local"], ["remote", "remote"], ["local", "local"],
   ] as const)("keeps the source of a %s → %s move when the file it replaced cannot be told apart from it", async (src, dst) => {
     const from = source(src), to = Object.assign(source(dst), { id: "other" });
     vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: false, size: 100 });
+    api.localCopyPrepared.mockResolvedValue(100);
     await startTransfer(moving(), from, to, resolver);
     expect(to.commit).toHaveBeenCalledWith(expect.stringContaining(".unissh-"), "/dst/file", true);
     expect(from.remove).not.toHaveBeenCalled();
@@ -739,6 +748,9 @@ describe("moving between locations", () => {
     vi.mocked(from.lstat).mockResolvedValue({ name: "file", isDir: false, size: 100, mtime: 5 });
     await startTransfer(moving(), from, to, resolver);
     expect(from.lstat).toHaveBeenCalledWith(expect.stringMatching(/^\/\.unissh-.*\.part$/));
+    // Shown to be the source itself: it is not even replaced by its own copy.
+    expect(to.commit).not.toHaveBeenCalled();
+    expect(to.remove).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^\/dst\/\.unissh-.*\.part$/));
     expect(from.remove).not.toHaveBeenCalled();
     expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file: the destination looked like the same file" });
   });
@@ -761,10 +773,81 @@ describe("moving between locations", () => {
     vi.mocked(to.lstat).mockImplementation(async (path) => path === "/dst/file" ? { name: "file", isDir: true, size: 0 } : { name: "a", isDir: false, size: 100, mtime: 9 });
     api.localCopyPrepared.mockResolvedValue(100);
     await startTransfer(moving("dir"), from, to, resolver);
-    expect(to.commit).toHaveBeenCalledWith(expect.stringContaining(".unissh-"), "/dst/file/a", true);
+    expect(to.commit).not.toHaveBeenCalled();
     expect(from.remove).not.toHaveBeenCalled();
     expect(from.removeEmptyDir).not.toHaveBeenCalled();
     expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file/a: the destination looked like the same file" });
+  });
+
+  it("moves a local file onto an equal-looking one that file identity shows to be another file", async () => {
+    const from = Object.assign(source("local"), { sameFile: vi.fn().mockResolvedValue(false) });
+    const to = Object.assign(source("local"), { id: "other" });
+    const twin = { name: "file", isDir: false, size: 100, mtime: 5 };
+    vi.mocked(to.lstat).mockResolvedValue(twin);
+    vi.mocked(from.lstat).mockImplementation(async (path) => path === "/file" ? twin : null);
+    api.localCopyPrepared.mockResolvedValue(100);
+    await startTransfer(moving(), from, to, resolver);
+    expect(to.commit).toHaveBeenCalledWith(expect.stringContaining(".unissh-"), "/dst/file", true);
+    expect(from.remove).toHaveBeenCalledExactlyOnceWith("/file");
+    expect(current().state).toBe("done");
+  });
+
+  // A folder move into an existing folder: /file holds `entries`, /dst/file is there.
+  const merging = (from: FileSource, to: FileSource, entries: { name: string; isDir: boolean; size: number; mtime?: number }[]) => {
+    vi.mocked(from.list).mockImplementation(async (path) => path === "/file" ? entries : []);
+    vi.mocked(to.mkdir).mockRejectedValue(new Error("exists"));
+    vi.mocked(to.list).mockResolvedValue([]);
+  };
+
+  it("keeps an empty local folder that is its destination folder, without writing a probe into it", async () => {
+    const from = Object.assign(source("local"), { sameFile: vi.fn(async (a: string, b: string) => a === "/file/empty" && b === "/dst/file/empty") });
+    const to = Object.assign(source("local"), { id: "other" });
+    merging(from, to, [{ name: "empty", isDir: true, size: 0 }]);
+    vi.mocked(from.lstat).mockImplementation(async (path) => path.includes("/.unissh-") ? null : { name: "file", isDir: true, size: 0 });
+    vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: true, size: 0 });
+    await startTransfer(moving("dir"), from, to, resolver);
+    expect(to.createNew).not.toHaveBeenCalledWith(expect.stringMatching(/^\/dst\/file\/empty\//));
+    expect(from.removeEmptyDir).not.toHaveBeenCalled();
+    expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file/empty: the destination is the same folder" });
+  });
+
+  it("does not probe a folder again after a file moved out of it showed the two folders apart", async () => {
+    const from = source("local"), to = source("remote");
+    merging(from, to, [{ name: "a", isDir: false, size: 100, mtime: 5 }]);
+    vi.mocked(to.list).mockResolvedValue([{ name: "a", isDir: false, size: 100, mtime: 9 }]);
+    vi.mocked(from.lstat).mockImplementation(async (path) => path.includes("/.unissh-") ? null : { name: "a", isDir: false, size: 100, mtime: 5 });
+    vi.mocked(to.lstat).mockImplementation(async (path) => path === "/dst/file" ? { name: "file", isDir: true, size: 0 } : { name: "a", isDir: false, size: 100, mtime: 9 });
+    await startTransfer(moving("dir"), from, to, resolver);
+    // The one staged copy was the probe; no second file is made at the destination.
+    expect(to.createNew).toHaveBeenCalledOnce();
+    expect(vi.mocked(from.removeEmptyDir).mock.calls).toEqual([["/file"]]);
+    expect(current().state).toBe("done");
+  });
+
+  it.each([
+    ["the probe cannot be created", "createNew", "could not check that the destination is another folder (/dst/file/.unissh-<id>.part: read-only)"],
+    ["the probe cannot be removed again", "remove", "a temporary file was left at the destination (/dst/file/.unissh-<id>.part: read-only)"],
+  ] as const)("keeps an empty source folder and names the destination path when %s", async (_what, failing, why) => {
+    const from = source("remote"), to = Object.assign(source("remote"), { id: "other" });
+    merging(from, to, []);
+    vi.mocked(from.lstat).mockImplementation(async (path) => path.includes("/.unissh-") ? null : { name: "file", isDir: true, size: 0 });
+    vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: true, size: 0 });
+    vi.mocked(to[failing]).mockRejectedValue(new Error("read-only"));
+    await startTransfer(moving("dir"), from, to, resolver);
+    expect(from.removeEmptyDir).not.toHaveBeenCalled();
+    expect(current().error?.replace(/\.unissh-[^.]+\.part/, ".unissh-<id>.part")).toBe(`Copied, but the source was not removed: /file: ${why}`);
+  });
+
+  it("still reports the same folder when its probe cannot be removed from the destination, and removes it through the source", async () => {
+    const from = source("remote"), to = Object.assign(source("remote"), { id: "other" });
+    merging(from, to, []);
+    vi.mocked(from.lstat).mockImplementation(async (path) => path.includes("/.unissh-") ? { name: "probe", isDir: false, size: 0 } : { name: "file", isDir: true, size: 0 });
+    vi.mocked(to.lstat).mockResolvedValue({ name: "file", isDir: true, size: 0 });
+    vi.mocked(to.remove).mockRejectedValue(new Error("read-only"));
+    await startTransfer(moving("dir"), from, to, resolver);
+    expect(from.remove).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^\/file\/\.unissh-.*\.part$/));
+    expect(from.removeEmptyDir).not.toHaveBeenCalled();
+    expect(current()).toMatchObject({ state: "error", error: "Copied, but the source was not removed: /file: the destination is the same folder" });
   });
 
   it.each([

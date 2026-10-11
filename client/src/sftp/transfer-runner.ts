@@ -32,10 +32,14 @@ interface PlannedLeaf {
   source?: Entry;
   /** Move only: the source is gone, so there is nothing left to verify or redo. */
   removed?: boolean;
-  /** Move only: nothing proved that the destination that was replaced is another
-   *  file than the source, so the two paths may name one file. The source is
-   *  never removed. */
+  /** Move only: the destination is the source itself under another path, or
+   *  nothing proved that it is not. The source is never removed. When the two
+   *  were positively shown to be one file the commit was withheld as well, so
+   *  `completed` then only means "there is nothing left to do here". */
   aliased?: boolean;
+  /** Move only: the destination that was replaced was proved to be another file
+   *  — which includes that its directory is not the source's directory. */
+  distinct?: boolean;
 }
 const manifests = new Map<string, Map<string, PlannedLeaf>>();
 const reservedPaths = new Map<string, string>();
@@ -151,37 +155,103 @@ function unchanged(a: Entry | null, b: Entry | null): boolean {
     && !!a.isSymlink === !!b.isSymlink && a.isDir === b.isDir;
 }
 
-/** Move only, asked just before a staged copy replaces `plan.existing`: can the
- *  file about to be replaced be the source itself, under another path? The two
- *  panes may show one directory — a bind mount or a network share of the server
- *  in the local pane, two sessions to one host, a case-insensitive filesystem —
- *  and no path comparison sees that. Once the commit has happened an aliased
- *  source IS the new file and passes every later check, so its removal would
- *  delete the only copy. Anything but a proof of two files answers true:
+/** Do `fromDir` on `from` and `toDir` on `to` name one directory? The two panes
+ *  may show the same place — a bind mount or a network share of the server in
+ *  the local pane, two sessions to one host — and no path comparison sees that.
+ *  The one test that works for every pair of sources: an entry that exists in
+ *  `toDir` under a random name is looked up in `fromDir`. `staged` names such
+ *  an entry that is already there (a transfer's staged copy); without it an
+ *  empty probe file is created in `toDir` and removed again.
  *
- *  1. A differing size or modification time is the only evidence the listings
- *     give. Equal ones prove nothing either way (mtime is whole seconds), so
- *     they count as "may be the same". Mode is deliberately not consulted: a
- *     local Windows mode is synthetic and never equals the remote one.
- *  2. Two local paths are compared by file identity.
- *  3. The staged copy sits in the destination's directory under a random name.
- *     If that name also shows up beside the source, the two directories are one,
- *     whatever the listings said (two views of one file may disagree on its
- *     times). This holds for every pair of sources.
+ *  The contract, which every caller's decision to delete rests on:
+ *  - PRESENT is proof of one directory. Nothing else can put a 122-bit random
+ *    name beside the source.
+ *  - ABSENT is evidence of two directories, and weaker: a network mount that
+ *    caches lookups may not show a new entry at once. It is enough to remove a
+ *    source whose listing also differs from the destination's; it is not enough
+ *    on its own when a remote side is involved (see sameFileVerdict).
+ *  - A probe that could not be made or looked up proves nothing, and throws
+ *    with the path it failed on; the caller keeps the source.
  *
- *  Two hard links to one inode are two directory entries: replacing one leaves
- *  the other intact, so they need no protection and (1) and (3) do not flag them. */
-async function mayBeSameFile(from: FileSource, to: FileSource, fromPath: string, source: Entry, plan: PlannedLeaf, stageName: string): Promise<boolean> {
+ *  Two local directories are first compared by identity, which writes nothing:
+ *  `local_same_file` opens both paths and compares device and inode (volume and
+ *  file index on Windows, where the same-file crate opens with
+ *  FILE_FLAG_BACKUP_SEMANTICS, so directories work there too). Only its "same"
+ *  is taken. "Different" still runs the probe: one directory reached directly
+ *  and through a network mount of this very machine has two device numbers.
+ *
+ *  `left` reports a probe that could not be removed again (path and reason).
+ *  If the destination refuses, and the probe is visible from the source side,
+ *  it is removed through that side: it is this call's own empty file. */
+async function sharesDirectory(from: FileSource, fromDir: string, to: FileSource, toDir: string, staged?: string): Promise<{ shared: boolean; left?: string }> {
+  if (staged === undefined && from.kind === "local" && to.kind === "local" && from.sameFile
+    && await from.sameFile(fromDir, toDir).catch(() => false)) return { shared: true };
+  const name = staged ?? `.unissh-${crypto.randomUUID()}.part`;
+  const probe = await to.join(toDir, name);
+  const mirror = await from.join(fromDir, name);
+  if (staged === undefined) {
+    await to.createNew(probe).catch((error: unknown) => { throw new Error(`${probe}: ${apiErrorMessage(error)}`); });
+  }
+  let seen: Entry | null = null;
+  let failure: string | undefined;
+  try {
+    seen = await from.lstat(mirror);
+  } catch (error) {
+    failure = `${mirror}: ${apiErrorMessage(error)}`;
+  }
+  let left: string | undefined;
+  if (staged === undefined) {
+    let stuck = await to.remove(probe).then(() => undefined, (error: unknown) => error);
+    if (stuck !== undefined && seen) stuck = await from.remove(mirror).then(() => undefined, () => stuck);
+    if (stuck !== undefined) left = `${probe}: ${apiErrorMessage(stuck)}`;
+  }
+  if (failure !== undefined) {
+    throw new Error(left === undefined ? failure : `${failure}; ${i18n.t("sftp.moveError.probeLeft", { detail: left })}`);
+  }
+  return { shared: seen !== null, left };
+}
+
+/** Move only, asked just before a staged copy replaces `plan.existing`: is the
+ *  file about to be replaced the source itself, under another path? Once the
+ *  commit has happened an aliased source IS the new file and passes every later
+ *  check, so its removal would delete the only copy.
+ *
+ *  "same" — positively one file: two local paths with one file identity, or
+ *  the staged copy showing up beside the source (sharesDirectory). The caller
+ *  must not even commit: the file would only be replaced by a copy of itself,
+ *  under a new inode and without its owner, group and special bits.
+ *
+ *  "distinct" — proved to be two files, and only then may the source go. The
+ *  staged copy must NOT show up beside the source, and on top of that either
+ *  - the two listings differ in size or modification time, or
+ *  - both sides are local and file identity says they are two files. That is
+ *    what lets "copy A to B, later move A onto B" finish: the two then agree in
+ *    size and time down to the second.
+ *
+ *  "unknown" — everything else: equal size and time with a remote side
+ *  involved (or with no usable identity). Equal listings prove nothing either
+ *  way, the times are whole seconds, and the probe's absence alone is too weak
+ *  there. The file is replaced as the user asked, and the source is kept.
+ *
+ *  Mode is deliberately not consulted: a local Windows mode is synthetic and
+ *  never equals the remote one. Two hard links to one inode count as "same":
+ *  replacing one would in fact leave the other intact, but identity cannot tell
+ *  a second link from a second path to the same entry, so the move is refused
+ *  rather than guessed at. */
+async function sameFileVerdict(from: FileSource, to: FileSource, fromPath: string, source: Entry, plan: PlannedLeaf, stageName: string): Promise<"same" | "distinct" | "unknown"> {
   const existing = plan.existing;
-  if (!existing) return false;
-  const sizesDiffer = source.sizeKnown !== false && existing.sizeKnown !== false && source.size !== existing.size;
-  const timesDiffer = source.mtime !== undefined && existing.mtime !== undefined && source.mtime !== existing.mtime;
-  if (!sizesDiffer && !timesDiffer) return true;
+  if (!existing) return "distinct";
   // Identity needs both files opened, which blocks on a FIFO and follows a link.
   const regular = (e: Entry): boolean => !e.isDir && !e.isSymlink && (e.mode === undefined || (e.mode & 0o170000) === 0o100000);
-  if (from.kind === to.kind && from.sameFile && regular(source) && regular(existing)
-    && await from.sameFile(fromPath, plan.path).catch(() => false)) return true;
-  return await from.lstat(await from.join(await from.parent(fromPath), stageName)) !== null;
+  let identity: boolean | undefined;
+  if (from.kind === "local" && to.kind === "local" && from.sameFile && regular(source) && regular(existing)) {
+    identity = await from.sameFile(fromPath, plan.path).then((same) => same, () => undefined);
+  }
+  if (identity) return "same";
+  if ((await sharesDirectory(from, await from.parent(fromPath), to, await to.parent(plan.path), stageName)).shared) return "same";
+  const sizesDiffer = source.sizeKnown !== false && existing.sizeKnown !== false && source.size !== existing.size;
+  const timesDiffer = source.mtime !== undefined && existing.mtime !== undefined && source.mtime !== existing.mtime;
+  return sizesDiffer || timesDiffer || identity === false ? "distinct" : "unknown";
 }
 
 /** Reject same-object and descendant copies at the shared entry point. */
@@ -202,10 +272,11 @@ async function validateTarget(t: Transfer, from: FileSource, to: FileSource): Pr
   if (existing && !t.isSymlink && !existing.isSymlink && (await to.realpath(target) === source || await from.sameFile?.(t.fromPath, target))) throw new Error(`Cannot ${verb} a file onto itself`);
 }
 
-/** The second half of a move, for one file. Its only callers are the two places
- *  in transferLeaf where `plan.completed` is known to be true — the copy has been
- *  committed at the destination — so nothing that failed, was cancelled before
- *  its commit, or was skipped can reach it. `plan.completed` is only a memory of
+/** The second half of a move, for one file. Its only callers are the places in
+ *  transferLeaf where `plan.completed` is known to be true — the copy has been
+ *  committed at the destination, or was withheld because the destination is the
+ *  source itself (`plan.aliased`, which keeps the source) — so nothing that
+ *  failed, was cancelled before its commit, or was skipped can reach it. `plan.completed` is only a memory of
  *  that commit, and a retry may come much later, so the copy is looked at again
  *  here. Never throws: a source that cannot be removed is a copy, which is
  *  reported but must not stop the other files. */
@@ -365,7 +436,20 @@ async function transferLeaf(
       await to.setMetadata(stage, source.mode, source.mtime);
     }
     // Decided here, while the staged copy still sits beside the destination.
-    if (ctrl.move && await mayBeSameFile(from, to, fromPath, source, plan, stageName)) plan.aliased = true;
+    if (ctrl.move && plan.existing) {
+      const verdict = await sameFileVerdict(from, to, fromPath, source, plan, stageName);
+      if (verdict === "same") {
+        // Proved to be the source itself: it is left exactly as it is. Nothing
+        // is committed; the staged copy is dropped on the way out.
+        plan.aliased = true;
+        plan.completed = true;
+        plan.source = source;
+        await removeMovedSource(from, to, fromPath, plan, isSymlink, ctrl);
+        return true;
+      }
+      if (verdict === "distinct") plan.distinct = true;
+      else plan.aliased = true;
+    }
     ctrl.abort.signal.throwIfAborted();
     if (plan.existing && !unchanged(plan.existing, await to.lstat(plan.path))) throw new Error("Destination changed after the conflict decision");
     await to.commit(stage, plan.path, plan.existing !== null);
@@ -696,31 +780,41 @@ async function runDir(
   }), ctrl.abort.signal), ctrl.abort.signal);
   // 4. Move only: drop the source directories that are now empty, children
   //    before parents — unless one may BE its destination directory (see
-  //    mayBeSameFile for how that happens). Files are guarded one by one in
+  //    sharesDirectory for how that happens). Files are guarded one by one in
   //    transferLeaf and an aliased file keeps its folder, but a folder without
   //    files has no such guard, and removing it would remove the very folder
   //    that was just "moved" into place. So a source directory goes only when
-  //    its destination is proved to be another directory: one this run created
-  //    is new; one that already existed is probed the way a file is — an entry
-  //    made in it under a random name must not show up in the source directory.
-  //    A probe that fails proves nothing, and the directory stays. Probed
-  //    before the metadata pass, which restores the times a probe disturbs.
+  //    its destination is proved to be another directory:
+  //    - one this run created is new;
+  //    - one from which a file was moved over an existing file that was proved
+  //      distinct has been through the very same probe already (`distinct`; a
+  //      file that merely landed on a free name proves nothing about its
+  //      folder — "keep both" lands beside its own source);
+  //    - any other is probed now. A probe that fails proves nothing, and one
+  //      that could not be removed again is reason enough to touch nothing
+  //      else there: either way the directory stays, and the row says why,
+  //      naming the destination path it happened on.
+  //    Probed before the metadata pass, which restores the times a probe
+  //    disturbs.
   const stayed = files.filter((file) => !ctrl.manifest.get(file.relPath)?.removed).map((file) => file.relPath);
   const unproven = new Map<string, string>();
   if (ctrl.move) {
-    const merged = emptiedDirs(dirs, stayed).filter((rel) => !fresh.has(rel));
+    const proven = new Set<string>();
+    for (const file of files) {
+      const leaf = ctrl.manifest.get(file.relPath);
+      if (leaf?.removed && leaf.distinct) proven.add(file.relPath.slice(0, Math.max(0, file.relPath.lastIndexOf("/"))));
+    }
+    const merged = emptiedDirs(dirs, stayed).filter((rel) => !fresh.has(rel) && !proven.has(rel));
     await mapWorkers(merged, sem.capacity, (rel) => sem.run(async () => {
       try {
-        const name = `.unissh-${crypto.randomUUID()}.part`;
-        const probe = await to.join(await targetPath(rel), name);
-        await to.createNew(probe);
-        try {
-          if (await from.lstat(await from.join(await sourcePath(rel), name))) unproven.set(rel, i18n.t("sftp.moveError.sameFolder"));
-        } finally {
-          await to.remove(probe);
-        }
+        const { shared, left } = await sharesDirectory(from, await sourcePath(rel), to, await targetPath(rel));
+        const why = [
+          ...(shared ? [i18n.t("sftp.moveError.sameFolder")] : []),
+          ...(left === undefined ? [] : [i18n.t("sftp.moveError.probeLeft", { detail: left })]),
+        ];
+        if (why.length) unproven.set(rel, why.join("; "));
       } catch (error) {
-        unproven.set(rel, apiErrorMessage(error));
+        unproven.set(rel, i18n.t("sftp.moveError.folderUnchecked", { detail: apiErrorMessage(error) }));
       }
     }, ctrl.abort.signal), ctrl.abort.signal);
   }
