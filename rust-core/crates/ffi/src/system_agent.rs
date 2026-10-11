@@ -503,7 +503,8 @@ impl Core {
     /// [`SystemAgent`] made before this call is refused too. For the host to
     /// call when its listener stops (vault lock, screen lock, sleep, exit, the
     /// agent switched off); the next listener takes a fresh
-    /// [`Core::system_agent`]. Forwarded agents' requests are not affected.
+    /// [`Core::system_agent`]. Forwarded agents' requests are not affected;
+    /// [`Core::lock`] ends those too.
     /// Does not take the core's lock, so it is safe to call ahead of a lock.
     pub fn revoke_system_agent_requests(&self) {
         self.approver.revoke_system();

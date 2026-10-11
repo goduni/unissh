@@ -21,6 +21,11 @@
 //! requests and closes it to every listener that existed until then, so
 //! nothing of theirs is handed to the approver afterwards.
 //!
+//! A lock of the core ([`Approvals::refuse_all`]) empties the line of
+//! everything, forwarded requests included: nothing can be signed without the
+//! unlocked state, and a request the person was asked about before they locked
+//! must not be put to them again once they unlock.
+//!
 //! A request belongs to a [`Connection`] (a system-agent connection, or one
 //! agent channel of a forwarded session), which withdraws it when it closes:
 //! waiting, the request leaves the line; on screen, its prompt is cancelled.
@@ -29,7 +34,8 @@
 //! and nothing else. A `Connection`'s lock is otherwise taken alone, never
 //! while it asks the line for anything. The approver slot is locked only with
 //! `line` released, and the approver itself is called with neither held. The
-//! core's state lock is never taken here.
+//! core's state lock is never taken here, and the core calls
+//! [`Approvals::refuse_all`] with that lock released.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -209,8 +215,9 @@ impl Approvals {
     ///
     /// `false` without the approver ever seeing the request when: its
     /// connection is gone, the system agent was revoked since its listener
-    /// started, it was withdrawn or revoked while it waited, too many
-    /// forwarded requests are waiting already, or no approver is registered.
+    /// started, it was withdrawn or revoked while it waited, the core was
+    /// locked while it waited, too many forwarded requests are waiting
+    /// already, or no approver is registered.
     ///
     /// The request is handed over with [`AgentSignRequest::waiting`] set to
     /// the number of requests behind it at that moment.
@@ -250,8 +257,8 @@ impl Approvals {
             return false;
         }
 
-        // Until it is at the front, or no longer in the line at all (withdrawn
-        // or revoked, each of which wakes every waiter).
+        // Until it is at the front, or no longer in the line at all (withdrawn,
+        // revoked or refused by a lock, each of which wakes every waiter).
         let line = self
             .moved
             .wait_while(lock_recover(&self.line), |line: &mut Line| {
@@ -318,6 +325,31 @@ impl Approvals {
             if let Some(front) = front {
                 line.waiting.push_front(front);
             }
+            drop(line);
+            shown
+        };
+        self.moved.notify_all();
+        if let Some(id) = shown {
+            self.cancel(id);
+        }
+    }
+
+    /// The core has locked: ends every request there is, whoever asked. The
+    /// ones waiting leave the line refused and the one on screen is cancelled
+    /// at the approver, so nothing that joined the line before a lock is put
+    /// to the person after the unlock that follows it. The line stays open: a
+    /// request arriving later joins it as usual, and is signed only if the
+    /// core is unlocked by the time it is approved.
+    ///
+    /// Lock order: `line` alone, then the approver slot with `line` released.
+    /// The caller must not hold the core's state lock.
+    pub(crate) fn refuse_all(&self) {
+        let shown = {
+            let mut line = lock_recover(&self.line);
+            // The front stays where it is: its `Turn` takes it out, so that
+            // nothing else is handed over before the approver has let go of it.
+            line.waiting.truncate(1);
+            let shown = line.waiting.front().map(|front| front.id);
             drop(line);
             shown
         };
@@ -539,6 +571,23 @@ mod tests {
                 "a listener started afterwards is served"
             );
         });
+    }
+
+    #[test]
+    fn a_lock_refuses_the_forwarded_request_on_screen_and_the_one_waiting_behind_it() {
+        let (approvals, desk) = desk();
+        std::thread::scope(|scope| {
+            let shown = scope.spawn(|| ask_forwarded(&approvals, 1));
+            desk.wait_handed(&[1]);
+            let behind = scope.spawn(|| ask_forwarded(&approvals, 2));
+            wait_for_line(&approvals, 2);
+
+            approvals.refuse_all();
+
+            assert!(!shown.join().unwrap(), "the prompt on screen is cancelled");
+            assert!(!behind.join().unwrap(), "the one in line is refused");
+        });
+        assert_eq!(desk.handed(), [1], "the one in line was never shown");
     }
 
     #[test]

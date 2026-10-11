@@ -1722,6 +1722,17 @@ impl Core {
     }
 
     /// Locks the instance (in-memory secrets are zeroized on Drop).
+    ///
+    /// Every signature request waiting for approval, of a forwarded agent or
+    /// of the system agent, is refused and the prompt on screen is withdrawn
+    /// at the approver: nothing asked before a lock is shown after the unlock
+    /// that follows it.
+    ///
+    /// Lock order: the state lock is released before the approval line is
+    /// taken (the two are never held together). The line is emptied after the
+    /// state is gone, not before, so that a request slipping in between the
+    /// two steps cannot outlive the lock: whatever joined while the core was
+    /// still unlocked is in the line when it is emptied.
     #[expect(
         clippy::significant_drop_tightening,
         reason = "the guard must cover the epoch bump, the state reset and the hand-off of the SFTP sessions atomically"
@@ -1735,6 +1746,9 @@ impl Core {
             *state = None;
             std::mem::take(&mut *lock_recover(&self.sftp_sessions))
         };
+        // Before the sessions are closed: that may take a while, and a prompt
+        // must not stay up meanwhile.
+        self.approver.refuse_all();
         for session in sessions.into_iter().filter_map(|session| session.upgrade()) {
             session.close();
         }
