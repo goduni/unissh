@@ -2752,10 +2752,13 @@ impl Core {
                     }
                 })?;
             // pull
-            let pull = sync_pull(&mut adapter, &state.storage, &ctx).map_err(map_sync_err)?;
-            if pull.applied > 0 {
+            let pull = sync_pull(&mut adapter, &state.storage, &ctx);
+            // Before the error leaves: a pull that fails part-way has applied the
+            // objects ahead of the failure, and no later pull applies them again.
+            if !matches!(&pull, Ok(report) if report.applied == 0) {
                 evict_replaced_agent_keys(state);
             }
+            let pull = pull.map_err(map_sync_err)?;
 
             Ok(FfiSyncReport {
                 applied: pull.applied,
@@ -2790,11 +2793,13 @@ impl Core {
                 .enumerate()
                 .filter_map(|(i, b)| SyncObject::from_bytes(b).ok().map(|o| (i as u64 + 1, o)))
                 .collect();
-            let report = unissh_sync::apply_pulled_objects(&state.storage, &ctx, parsed)
-                .map_err(map_sync_err)?;
-            if report.applied > 0 {
+            let report = unissh_sync::apply_pulled_objects(&state.storage, &ctx, parsed);
+            // Before the error leaves, as in `sync_now`: the objects ahead of a
+            // failure are applied.
+            if !matches!(&report, Ok(report) if report.applied == 0) {
                 evict_replaced_agent_keys(state);
             }
+            let report = report.map_err(map_sync_err)?;
             Ok(FfiSyncReport {
                 applied: report.applied,
                 skipped_stale: report.skipped_stale,
