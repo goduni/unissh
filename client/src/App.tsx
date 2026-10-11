@@ -138,7 +138,47 @@ function LockWarnBanner({ sec, onStay }: { sec: number; onStay: () => void }) {
   );
 }
 
+/**
+ * The prompts something outside the window is blocked on: a signature an agent
+ * was asked for, a command an MCP client wants to run, a one-time code a
+ * server wants mid-connection. Each waits on a timer for an answer only this
+ * window can give, so a prompt that is not mounted is a request refused
+ * unseen.
+ *
+ * Mounted once, beside the shell rather than inside it: the phone and the
+ * desktop shell are two separate trees, and a host listed in one and
+ * forgotten in the other is exactly how desktop once lost the agent prompt.
+ *
+ * Under `unlocked`, not `unlocked && !overlay` like the app itself: a request
+ * must also be answerable while an entry overlay (the Emergency Kit) covers
+ * the app. Locking clears `unlocked` in the same store update that raises the
+ * lock screen, so none of them is ever shown over it. They sit above the
+ * overlays and above Settings (390–500 on the ladder in SettingsOverlay).
+ */
+function PromptHosts() {
+  const unlocked = useApp((s) => s.unlocked);
+  if (!unlocked) return null;
+  return (
+    <>
+      {isDesktopOs() && <McpApproval />}
+      <AuthPrompt />
+      <AgentApproval />
+    </>
+  );
+}
+
 export function App() {
+  return (
+    <>
+      {/* First, as these hosts always were in the shells: dialogs of the same
+          z-index that come later in the tree stay on top of them. */}
+      <PromptHosts />
+      <AppShell />
+    </>
+  );
+}
+
+function AppShell() {
   const p = usePalette();
   const { uiScale } = useTheme();
   const { t } = useTranslation();
@@ -608,10 +648,6 @@ export function App() {
         {showApp && <MobileApp />}
         <EntryOverlays />
         {showApp && <Modals />}
-        {showApp && isDesktopOs() && <McpApproval />}
-        {showApp && <AuthPrompt />}
-        {/* Under `unlocked`, not `showApp`: see the desktop shell below. */}
-        {unlocked && <AgentApproval />}
         {showApp && <CommandPalette />}
         {showApp && <ImportPreview />}
         {showApp && <GroupsModal />}
@@ -697,14 +733,6 @@ export function App() {
       {/* overlays */}
       <EntryOverlays />
       {showApp && <Modals />}
-      {showApp && isDesktopOs() && <McpApproval />}
-      {showApp && <AuthPrompt />}
-      {/* BOTH shells mount this (App.shells.test.ts): without it every agent
-          signature request waits out its minute unseen and is refused. Under
-          `unlocked`, not `showApp`: a request must also be answerable while an
-          entry overlay (the Emergency Kit) covers the app. It sits above them
-          and above Settings (500 on the ladder in SettingsOverlay). */}
-      {unlocked && <AgentApproval />}
       {showApp && <CommandPalette />}
       {showApp && <SettingsOverlay />}
       {showApp && <ImportPreview />}
