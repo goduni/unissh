@@ -71,7 +71,8 @@ pub enum TransportError {
     AuthFailed,
 
     /// A key-only login ([`publickey_only`](crate::ConnectOptions::publickey_only))
-    /// was refused: the server does not accept this key for this user.
+    /// was refused: the publickey step was not accepted for this key and this
+    /// user — neither its certificate, when it has one, nor the plain key.
     ///
     /// Told apart from [`AuthFailed`](Self::AuthFailed) because such a login is
     /// made to learn exactly this — a key rotation reads it as proof that the
